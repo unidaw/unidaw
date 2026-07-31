@@ -3225,19 +3225,24 @@ fn build_set_row_ops(body: &str) -> Option<Result<UiSetRowOpsPayload, &'static s
     if mask <= 0 { return Some(Err("setrowops with an empty mask would change nothing")); }
     let note = parse_num(body, "\"note\"").unwrap_or(0).max(0) as u64;
     if note == 0 { return Some(Err("setrowops needs the note it edits")); }
-    if note > u32::MAX as u64 { return Some(Err("that note id does not fit the command")); }
     Some(Ok(UiSetRowOpsPayload {
         command_type: UiCommandType::SetRowOps as u16,
         mask: mask as u16,
         track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
         clip_id: parse_num(body, "\"clip\"").unwrap_or(0).max(0) as u32,
-        note_id: note as u32,
+        // SPLIT, not truncated. EventId packs the AUTHOR into bits 48+ and each author counts
+        // independently, so a 32-bit id drops the author and agent note (1, 5) collides with
+        // human note (0, 5) — an edit that lands on a different note and says nothing. Backend
+        // widened the field after this was reported; the halves are what that looks like.
+        note_id_lo: (note & 0xFFFF_FFFF) as u32,
+        note_id_hi: (note >> 32) as u32,
         delay_nanoticks: parse_num(body, "\"delay\"").unwrap_or(0).max(0) as u32,
         sound: parse_num(body, "\"sound\"").unwrap_or(0).clamp(0, 65535) as u16,
         sound_offset: parse_num(body, "\"offset\"").unwrap_or(0).clamp(0, 65535) as u16,
         retrigger: parse_num(body, "\"ret\"").unwrap_or(0).clamp(0, 255) as u8,
         probability: parse_num(body, "\"prob\"").unwrap_or(0).clamp(0, 255) as u8,
-        reserved: [0u8; 14],
+        pad0: [0u8; 2],
+        reserved: [0u8; 8],
     }))
 }
 
@@ -3684,7 +3689,7 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                 Ok(p) => match handle.send_set_row_ops(p) {
                                     Ok(()) => format!(
                                         "{{\"ok\":true,\"setrowops\":{},\"mask\":{}}}",
-                                        p.note_id, p.mask),
+                                        p.note_id_lo, p.mask),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                                 },
                             };

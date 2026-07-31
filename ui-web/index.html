@@ -1484,16 +1484,19 @@ let samplerKitAsked = null;
 function writeRowOps(track, clipId, noteId, text) {
   if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
   /*
-   * A NOTE THIS COMMAND CANNOT ADDRESS.
+   * THE FULL 64-BIT ID GOES OUT.
    *
-   * `UiSetRowOpsPayload::noteId` is u32; an authored EventId is u64 with the AUTHOR in its top
-   * 16 bits, so anything an agent or an import wrote is >= 2^48. Truncating would drop the
-   * author and land the edit on whichever human-authored note shares the counter — a silent
-   * edit of the wrong note, which is far worse than a refusal. Reported to backend; the fix is
-   * one field width. Until then this says no.
+   * This used to refuse anything over 2^32, because the payload's noteId was u32 while an
+   * authored EventId is u64 with the AUTHOR in bits 48+ — truncating dropped the author and
+   * landed the edit on whichever human note shared the counter, which is a silent edit of the
+   * WRONG note and far worse than a refusal. Backend split the field lo/hi after that was
+   * reported, so the refusal is gone and agent-authored notes are editable.
+   *
+   * Still guarded on being a safe integer: JSON carries it as a double, and past 2^53 an id
+   * would arrive already wrong, which no amount of splitting downstream can fix.
    */
-  if (!Number.isSafeInteger(noteId) || noteId <= 0 || noteId > 0xFFFFFFFF) {
-    state.reject = 'that note was written by an agent or an import and cannot be addressed yet';
+  if (!Number.isSafeInteger(noteId) || noteId <= 0) {
+    state.reject = 'that note has no id this command can address';
     schedule();
     return false;
   }

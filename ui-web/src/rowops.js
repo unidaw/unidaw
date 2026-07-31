@@ -71,28 +71,25 @@ export const ROW_OPS = [
   { prefix: 'o', field: 'soundOffset', summary: 'start N/256 into the sample (the 9xx seek)',
     example: 'o80',
     /*
-     * THE NOTATION IS COARSER THAN THE STORAGE, and this is where that shows.
+     * SPELLED BACK EXACTLY, in whichever of the two forms is exact.
      *
-     * The wire carries a u16 fraction of the slot's extent — 65536 positions — while the
-     * notation is `o80` in 1/256ths, which is 256. So the token can only name one position in
-     * every 256 the format can hold, and spelling a stored value back is lossy: an offset a
-     * pointer drag placed between two typeable values renders as the nearer one.
+     * A multiple of 256 came from `o80` and goes back as `o80` — the form a tracker's hands
+     * expect. Anything else came from a fraction, and rendering it as the nearest 1/256th would
+     * be a token that parses back to a DIFFERENT offset: `o1/3` is 21845 and `o85` is 21760.
+     * The text form has one contract and it is that it round-trips.
      *
-     * Rendering the nearest typeable token rather than inventing a finer spelling, because the
-     * text form's contract is that it PARSES BACK — a spelling `parse_row_ops` would reject is
-     * worse than a rounded one. Raised with backend; if the notation gains the resolution the
-     * storage already has, only this function changes.
+     * `v / 65535` reduced, because 65535 is the scale the parser uses — a third is exactly
+     * 21845/65535, so the fraction that made a value is the fraction that comes back.
+     *
+     * (This rendered HEX once, on the assumption that `o80` was 9xx muscle memory all the way
+     * down. It is not: the parser reads it with a decimal `parse::<u32>()`. Same failure as
+     * above, found the same way.)
      */
-    /*
-     * DECIMAL, 0..255, and the stored value is `n * 256`.
-     *
-     * An earlier version rendered this as HEX, on the assumption that `o80` was 9xx muscle
-     * memory all the way down. It is not: `parse_row_ops` reads it with `rest.parse::<u32>()`,
-     * which is decimal, so `o80` is eighty two-hundred-fifty-sixths and not half. Rendering it
-     * as hex produced a token that parsed back to a DIFFERENT offset — the one failure a text
-     * form must not have.
-     */
-    text: (v) => String(Math.round(v / 256)) },
+    text: (v) => {
+      if (v % 256 === 0) return String(v / 256);
+      const [n, d] = reduce(v, 65535);
+      return `${n}/${d}`;
+    } },
 ];
 
 /** The mark for one op. Explicit `glyph` wins; otherwise the token's first character. */
@@ -215,12 +212,40 @@ export function parseOps(text) {
       }
       ops.sound = n; field = 'sound';
     } else if (token[0] === 'o') {
-      const n = int(token.slice(1));
-      if (n === null) return { error: `bad sample offset in "${token}"` };
-      if (n > 255) return { error: `sample offset is 0..255 (in 1/256ths) in "${token}"` };
-      // Written in 1/256ths, stored at full u16 resolution — the coarse notation is for muscle
-      // memory, not a limit on what can be expressed.
-      ops.soundOffset = n * 256; field = 'soundOffset';
+      /*
+       * TWO FORMS, ONE FIELD, mirroring `rowop.rs`.
+       *
+       * `o80` is 1/256ths — what 9xx taught everyone's hands. `o<N>/<M>` is a plain fraction
+       * reaching the full u16, so the notation can say what the storage has always been able to
+       * hold. The storage was never the narrow part; the parser was.
+       *
+       * THE SCALE IS 65535, NOT 65536, and it has to be exactly that or the two surfaces
+       * disagree in the last bit. Rounded, not truncated, for the same reason.
+       */
+      const orest = token.slice(1);
+      const oslash = orest.indexOf('/');
+      if (oslash >= 0) {
+        const num = int(orest.slice(0, oslash)), den = int(orest.slice(oslash + 1));
+        if (num === null) return { error: `bad offset numerator in "${token}"` };
+        if (den === null) return { error: `bad offset denominator in "${token}"` };
+        if (den === 0) return { error: `offset denominator must not be zero in "${token}"` };
+        if (den > 65535) return { error: `offset denominator is at most 65535 in "${token}"` };
+        if (num >= den) {
+          // An offset of the WHOLE extent starts at the end and plays nothing, and past it is
+          // not a position at all. Refused rather than clamped: `o5/4` is a typo, and a note
+          // that silently vanishes for an unstated reason is the worse outcome.
+          return { error: `offset must be less than the whole extent in "${token}" (N < M)` };
+        }
+        ops.soundOffset = Math.floor((num * 65535 + Math.floor(den / 2)) / den);
+      } else {
+        const n = int(orest);
+        if (n === null) return { error: `bad sample offset in "${token}"` };
+        if (n > 255) {
+          return { error: `sample offset is 0..255 in 1/256ths, or a fraction like o1/3, in "${token}"` };
+        }
+        ops.soundOffset = n * 256;
+      }
+      field = 'soundOffset';
     } else if (token[0] === 'p') {
       const n = int(token.slice(1));
       if (n === null) return { error: `bad probability in "${token}"` };

@@ -194,35 +194,32 @@ const cells = await opsCells();
 }
 
 // ---------------------------------------------------------------------------
-// THE GAP, ASSERTED. A note LOADED from a project cannot have its ops set.
+// A NOTE LOADED FROM A PROJECT can have its ops set.
 //
-// Recorded as a check rather than left out, so it fails the day it is fixed and this file stops
-// claiming a limitation that no longer exists. The reason it matters: editing a project you
-// opened is the ordinary case, and this is exactly backwards from it.
+// THIS CHECK WAS THE INVERSE UNTIL BACKEND FIXED IT. `applySetRowOps` searched `ownedClips`
+// only, so a loaded project's notes — which live in SOURCE clips — came back `no_such_note`.
+// Editing a project you opened is the ordinary case and that was backwards from it.
+//
+// It was asserted AS A GAP rather than left untested, precisely so it would fail the day it
+// started working. It failed on the next merge. That is the whole argument for writing a
+// limitation down as a check instead of a comment: a comment goes stale silently and a check
+// tells you the moment it is wrong.
 // ---------------------------------------------------------------------------
 {
   await page.evaluate(() => window.__uni.run('goto 0 0'));
   await page.keyboard.press('ArrowRight');
   await page.keyboard.press('ArrowRight');
   await page.waitForTimeout(400);
-  const before = await page.evaluate(() => window.__uni.opsTextAtCursor());
-  check(before === 'ret3 p60 d1/6', 'the loaded note still reads its authored ops', before);
+  check(await page.evaluate(() => window.__uni.opsTextAtCursor()) === 'ret3 p60 d1/6',
+        'the loaded note reads its authored ops');
   await page.evaluate(() => window.__uni.run('ops ret9'));
   await page.waitForTimeout(2000);
   const after = await page.evaluate(() => window.__uni.opsTextAtCursor());
-  check(after === before,
-        'KNOWN GAP: a note loaded from a project is rejected with no_such_note — '
-        + '`applySetRowOps` searches ownedClips and a loaded note is in a SOURCE clip. '
-        + 'Reported. This check inverts the day it is fixed.', after);
-  /*
-   * AND THE REFUSAL IS INVISIBLE, which is the half that is mine. `rowops.rejected` is a LOG
-   * event, so the sidecar acks ok, the engine rejects into its own log, the cell does not
-   * change, and the person is told nothing. Asked backend to put it on the UiDiff event ring
-   * the way `clip-rejected` already is; until then this asserts the silence rather than
-   * pretending it is not there.
-   */
-  check(await page.evaluate(() => window.__uni.state().reject) === null,
-        'and nothing on screen says why — the rejection never leaves the engine log');
+  check(after === 'ret9',
+        'and its ops can be SET — a note loaded from a project is reachable now', after);
+  // ...and the full mask cleared the other two, on a loaded note as on a fresh one.
+  check(!/p\d|d\d/.test(after), 'with the ops it did not name cleared, as everywhere else',
+        after);
 }
 
 // ---------------------------------------------------------------------------

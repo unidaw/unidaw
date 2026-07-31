@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { lcmGrid, ZOOM_LEVELS, buildViewModel, createBuffer } from '../src/viewmodel.js';
-import { ROW_OPS, opGlyph, opsRun, opsText } from '../src/rowops.js';
+import { ROW_OPS, opGlyph, opsRun, opsText, parseOps } from '../src/rowops.js';
 import { DEVICE_KINDS } from '../src/chainmodel.js';
 import {
   parseToken, parseChord, pitchOf, pitchToToken, hexValue, shiftDigit, NOTE_KEYS,
@@ -2520,6 +2520,15 @@ const ENGINE_UNUSED = {
   SaveModule: 'gap — a module is a saved chain; it wants a browser entry before a verb',
   LoadModule: 'gap — with SaveModule',
   SamplerSetEnvelope: 'gap — an ADSR wants the drawable envelope, not four numbers on a line',
+  /*
+   * The sampler's LFOs. With the envelope, and for the same reason: a modulator wants to be seen
+   * moving, and four numbers on a command line is the half of it that is not worth having alone.
+   *
+   * Backend found tonight that every LFO in the file format was rendered by NOTHING — of the
+   * sampler's five modulation targets and two kinds, only two combinations ever reached the
+   * audio. So this is newly worth drawing rather than newly existing.
+   */
+  SamplerSetLfo: 'gap — with SamplerSetEnvelope; a modulator wants to be seen moving',
   BulkChunk: 'gap — a carrier for payloads over 40 bytes; nothing here needs one yet',
   SamplerSetEnvelopePoints: 'gap — with SamplerSetEnvelope, and rides BulkChunk',
   SamplerLoad: 'gap — the sampler wants its kit drawn before its commands are reachable',
@@ -2693,4 +2702,63 @@ test('the device-kind table matches the engine enum', async () => {
   assert.equal(DEVICE_KINDS.length, names.length,
     `every kind is named: engine has ${JSON.stringify(names.map((n) => n[0]))}, `
     + `this side has ${JSON.stringify(DEVICE_KINDS)}`);
+});
+
+test('the JS op parser agrees with the Rust one on every case Rust tests', async () => {
+  /*
+   * THEIR TESTS, RUN AGAINST MY PARSER.
+   *
+   * The prefix ratchet above holds the op LIST equal and is blind to everything else. It proved
+   * that the hard way: backend added `o<N>/<M>` to `parse_row_ops` — a whole second form for an
+   * existing op, with its own bounds and its own rounding — and the ratchet passed, because no
+   * prefix changed. They expected it to fail and it did not.
+   *
+   * So this reads the literals out of rowop.rs's own test module and asserts my parser reaches
+   * the same verdict on each. It costs nothing to maintain: a case they add is a case I run,
+   * and a rule they change breaks here without anyone deciding to check.
+   *
+   * ACCEPT-OR-REJECT is the claim, plus the VALUE wherever their assertion states one. That is
+   * the whole of what a mirror can get wrong.
+   */
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(
+    new URL('../../ui/daw-bridge/src/rowop.rs', import.meta.url), 'utf8');
+  const tests = src.slice(src.indexOf('mod tests'));
+  assert.ok(tests.length > 200, 'found the Rust test module');
+
+  // `parse_row_ops("...")` plus enough of what follows to tell a rejection from an acceptance,
+  // and to catch `.unwrap().field, value` where one is asserted.
+  const RE = /parse_row_ops\("([^"]*)"\)\s*(\.is_err\(\)|\.unwrap\(\)(?:\.([a-z_]+))?)?/g;
+  // Rust spells them snake_case; this side is camel.
+  const FIELD = { sound_offset: 'soundOffset', sound: 'sound',
+                  retrigger: 'retrigger', probability: 'probability' };
+
+  let n = 0, checkedValues = 0;
+  for (const m of tests.matchAll(RE)) {
+    const [whole, tokens, tail, field] = m;
+    const r = parseOps(tokens);
+    n++;
+    if (tail === '.is_err()') {
+      assert.ok(r.error, `Rust rejects ${JSON.stringify(tokens)} and this parser accepted it`);
+      continue;
+    }
+    assert.ok(!r.error,
+      `Rust accepts ${JSON.stringify(tokens)} and this parser refused it: ${r.error}`);
+    if (!field || !FIELD[field]) continue;
+    /*
+     * The expected value, when the assertion states one. Their expressions are plain numbers or
+     * a simple product (`128 * 256`), so this reads exactly those two shapes and skips anything
+     * else rather than evaluating arbitrary Rust — a ratchet that guesses is worse than one that
+     * checks less.
+     */
+    const after = tests.slice(m.index + whole.length);
+    const val = /^\s*,\s*(\d+)\s*(?:\*\s*(\d+))?\s*\)/.exec(after);
+    if (!val) continue;
+    const want = Number(val[1]) * (val[2] ? Number(val[2]) : 1);
+    assert.equal(r.ops[FIELD[field]], want,
+      `${JSON.stringify(tokens)}: Rust says ${field} is ${want}`);
+    checkedValues++;
+  }
+  assert.ok(n >= 15, `ran a meaningful number of their cases: ${n}`);
+  assert.ok(checkedValues >= 3, `and checked real values, not just accept/reject: ${checkedValues}`);
 });
