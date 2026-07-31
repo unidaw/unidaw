@@ -2574,7 +2574,22 @@ const WAVE_MAX_INFLIGHT = 4;
  * still being waited on. A pan that outruns the engine drops requests here rather
  * than corrupting answers there.
  */
-function requestWaveform(sourceId, decimation, firstFrame, columns, mask) {
+/**
+ * @param {{track:number, device:number}=} at  A SAMPLER source's address, when the id is one.
+ *
+ * A sampler's source id is a per-DEVICE counter and the clip path's is interned by PATH, so the
+ * two are different id spaces and a bare number does not say which. `at` is what says. Absent
+ * means the clip space, which is every existing caller.
+ *
+ * THE KEY DOES NOT CARRY IT YET, and that is a known hole rather than an oversight. `onWaveform`
+ * files an answer under what the ANSWER describes — source, decimation, first frame — because
+ * the request id is the sidecar's and this side never learns it. So a key with the address in it
+ * would never be matched by an answer that does not echo one, and local id 1 of one sampler
+ * collides with local id 1 of another. Asked backend what the region echoes for a sampler
+ * source; until that is answered the collision is real and bounded to two samplers holding
+ * different files at the same local id, which no fixture here builds.
+ */
+function requestWaveform(sourceId, decimation, firstFrame, columns, mask, at) {
   const key = sourceId + ':' + decimation + ':' + firstFrame;
   if (waveCache.has(key) || waveAsked.has(key)) return false;
   // The fixture answers its own questions, in place, from the same key the real
@@ -2583,9 +2598,12 @@ function requestWaveform(sourceId, decimation, firstFrame, columns, mask) {
   if (waveSynth) return synthWaveform(key, sourceId, decimation, firstFrame, columns);
   if (waveAsked.size >= WAVE_MAX_INFLIGHT) return false;
   if (!conn || !conn.canSend()) return false;
-  const ok = conn.send({ type: 'waveform', source: sourceId, decim: decimation,
-                         frame: firstFrame, cols: columns,
-                         mask: mask === undefined ? 3 : mask });
+  const msg = { type: 'waveform', source: sourceId, decim: decimation,
+                frame: firstFrame, cols: columns,
+                mask: mask === undefined ? 3 : mask };
+  // BOTH or NEITHER — the sidecar refuses half an address rather than resolving it somewhere.
+  if (at) { msg.track = at.track; msg.device = at.device; }
+  const ok = conn.send(msg);
   if (ok) waveAsked.set(key, Date.now());
   return ok;
 }

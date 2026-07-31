@@ -93,6 +93,11 @@ const SAMPLER_SLOT_NAME_BYTES: usize = 40;
 /// constant by a ratchet in unit.mjs.
 const PATCHER_NODE_TYPE_MAX: u32 = 7;
 
+/// `kWaveformRequestSamplerSource` — UiWaveformRequestPayload.flags bit 1. The source id is a
+/// sampler's per-device LOCAL id, and reserved0/reserved1 carry the track and device that give
+/// it meaning. Bit 0 is the existing force-rebuild flag.
+const WAVEFORM_REQUEST_SAMPLER_SOURCE: u16 = 1 << 1;
+
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
 /// are likely, and multiplexing them onto this one socket is two bytes of header
@@ -3269,10 +3274,36 @@ fn build_waveform_request(body: &str) -> Option<Result<UiWaveformRequestPayload,
     // 1 = channel 0, 3 = both. Defaulting to both and letting the engine clamp to
     // what the source has is friendlier than making every caller ask first.
     let mask = parse_num(body, "\"mask\"").unwrap_or(3).clamp(1, 3);
+    /*
+     * A SAMPLER SOURCE IS ADDRESSED BY (track, device, LOCAL id), not by the path-interned id
+     * the clip path uses.
+     *
+     * They are different id spaces and always were: the waveform store interns BY PATH and only
+     * the audio-clip path interns, while a sampler's `sourceLocalId` is a per-device counter. So
+     * a sampler source id sent as a plain source id addressed nothing and answered nothing —
+     * which is indistinguishable from a file that failed to decode, and is why the sample view
+     * could be complete in every other respect and draw nothing.
+     *
+     * `kWaveformRequestSamplerSource` (flags bit 1) says which space the id is in, and the two
+     * reserved words carry the rest of the address. The engine resolves it to the source's PATH
+     * and then uses the same path-keyed store, so a break loaded into a sampler and placed as an
+     * audio clip is still ONE pyramid — the property worth having, arrived at without growing
+     * UiSamplerSlotEntry past the static_assert that keeps it at 80 bytes.
+     *
+     * BOTH or NEITHER: a track without a device is not an address, and sending half of one would
+     * be a request that resolves somewhere arbitrary rather than one that is refused.
+     */
+    let track = parse_num(body, "\"track\"");
+    let device = parse_num(body, "\"device\"");
+    if track.is_some() != device.is_some() {
+        return Some(Err("a sampler waveform needs both track and device, or neither — half an \
+                         address resolves somewhere rather than being refused".into()));
+    }
+    let sampler_bit = if track.is_some() { WAVEFORM_REQUEST_SAMPLER_SOURCE } else { 0 };
     let seq = WAVEFORM_SEQ.fetch_add(1, Ordering::Relaxed);
     Some(Ok(UiWaveformRequestPayload {
         command_type: UiCommandType::RequestWaveform as u16,
-        flags: if body.contains("\"force\":true") { 1 } else { 0 },
+        flags: (if body.contains("\"force\":true") { 1 } else { 0 }) | sampler_bit,
         request_seq: seq,
         source_id: source as u32,
         decimation: decim as u32,
@@ -3280,8 +3311,11 @@ fn build_waveform_request(body: &str) -> Option<Result<UiWaveformRequestPayload,
         first_frame_hi: ((frame as u64) >> 32) as u32,
         columns: cols as u32,
         channel_mask: mask as u32,
-        reserved0: 0,
-        reserved1: 0,
+        // Both reserved words carry the sampler address when bit 1 is set, and are what they
+        // have always been (zero) otherwise — which is why this needed no version bump: an
+        // engine that does not know the flag reads two fields that read as they always did.
+        reserved0: track.unwrap_or(0) as u32,
+        reserved1: device.unwrap_or(0) as u32,
     }))
 }
 
