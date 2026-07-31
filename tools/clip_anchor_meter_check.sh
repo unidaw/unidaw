@@ -92,16 +92,50 @@ ENG=$!
 wait_for_boot "$TMP/eng.log" "$ENG" 40
 mcli() { env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$SHM" "$CLI" "$@"; }
 
+# WAITS FOR THE EDIT TO LAND, rather than sleeping and hoping. daw-cli sends a note with the
+# clip version it read a moment earlier, so a second note issued before the first has been APPLIED
+# carries a stale base and is REFUSED — silently, from the caller's point of view. A fixed sleep
+# is long enough on an idle machine and not under a parallel ctest, which is exactly how this
+# check failed once in a full run and passed alone. Task #106's lesson one level up: wait for the
+# state, not for a duration.
+track_clip_version() {
+  mcli get tracks 2>/dev/null | python3 -c "
+import json, sys
+try: print(json.load(sys.stdin)['tracks'][0].get('clip_version', 0))
+except Exception: print(-1)"
+}
+
+send_note() {  # send_note <tick> <pitch> <what>
+  local before after i
+  before="$(track_clip_version)"
+  mcli do note --track 0 --nanotick "$1" --pitch "$2" >/dev/null 2>&1
+  for i in $(seq 1 80); do
+    after="$(track_clip_version)"
+    if [ "$after" != "$before" ] && [ "$after" != "-1" ]; then
+      return 0
+    fi
+    kill -0 "$ENG" 2>/dev/null || \
+      fail "the engine exited while waiting for $3 to land — see $TMP/eng.log"
+    sleep 0.25
+  done
+  fail "$3 never landed: track 0's clip_version stayed at $before for 20s. A note sent with a
+        stale base version is refused without any sign at the caller, so this is what that looks
+        like from outside — check $TMP/eng.log for a rejection"
+}
+
 # ---- CONTROL: a note in bar 1, where 4/4 still rules and both computations say 4Q.
-mcli do note --track 0 --nanotick "$((5 * Q))" --pitch 60 >/dev/null 2>&1
-sleep 0.5
+send_note "$((5 * Q))" 60 "the control note at 5Q"
 # ---- RULER: a note in bar 5, which starts at 18.5Q under 7/8. The old form says 16Q, which is
 # not a bar start anywhere in this song.
-mcli do note --track 0 --nanotick "$((19 * Q))" --pitch 64 >/dev/null 2>&1
-sleep 0.5
+send_note "$((19 * Q))" 64 "the note at 19Q"
 
 mcli do save out >/dev/null 2>&1
-sleep 1.5
+# The save is a file appearing, so wait for the engine to SAY it wrote one.
+for _ in $(seq 1 60); do
+  grep -q '"event":"project.save"' "$TMP/eng.log" 2>/dev/null && break
+  kill -0 "$ENG" 2>/dev/null || break
+  sleep 0.25
+done
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 [ -f "$TMP/out.uniproj.json" ] || fail "the engine did not save — see $TMP/eng.log"
 

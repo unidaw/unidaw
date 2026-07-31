@@ -16,6 +16,7 @@
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tools/lib/engine_wait.sh"
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 Q=960000
@@ -105,16 +106,15 @@ run_capture() {  # $1=name  $2=take
       DAW_PROJECT_DIR="$TMP" DAW_CAPTURE_WAV="$take" DAW_CAPTURE_SECONDS=20 \
       ./daw_engine --run-seconds 16 >"$log" 2>&1 ) &
   local engine=$!
-  local i
-  for i in $(seq 1 120); do
-    if grep -q 'starting threads' "$log" 2>/dev/null; then break; fi
-    sleep 0.25
-  done
+  # BOTH WAITS ASSERT, and both watch the pid. This engine lives 16 seconds and these loops used
+  # to be willing to wait 30 and 20 — so a slow start under a parallel ctest meant waiting out a
+  # corpse and then carrying on to `do play` against a process that was already gone, which
+  # surfaces as an empty capture rather than as "it never started". Task #106.
+  wait_for_boot "$log" "$engine" 120 "starting threads"
   DAW_UI_SHM_NAME="$shm" "$CLI" do load "$name" --force >/dev/null 2>&1 || true
-  for i in $(seq 1 80); do
-    if grep -q '"event":"project.load"' "$log" 2>/dev/null; then break; fi
-    sleep 0.25
-  done
+  # This engine starts with NO project, so the load below is the FIRST one — but count it rather
+  # than grep for it, so the wait stays correct if a boot project is ever added.
+  wait_for_loads "$log" "$engine" 1 80
   sleep 1.5   # let the host finish bringing up its buses before the key is expected
   DAW_UI_SHM_NAME="$shm" "$CLI" do play --force >/dev/null 2>&1 || true
   wait "$engine"
