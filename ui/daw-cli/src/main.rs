@@ -1199,6 +1199,7 @@ fn get_audio_sources(handle: &EngineHandle) -> i32 {
 }
 
 // get waveform <sourceId> <decimation> <firstFrame> <columns> [channelMask]
+//                    [--track N [--device D]]  <- sourceId is then a SAMPLER LOCAL id
 // Sends RequestWaveform and reads the seqlocked answer slot back.
 /// v32: asks the engine to publish one sampler device's kit and prints the answer.
 ///
@@ -1293,12 +1294,34 @@ fn get_sampler_kit(handle: &EngineHandle, args: &[String]) -> i32 {
     1
 }
 
-fn get_waveform(handle: &EngineHandle, args: &[&str]) -> i32 {
+// TAKES BOTH LISTS, and it has to. `positional` is built by FILTERING OUT every "--" argument,
+// so a flag's NAME is gone from it while its VALUE is still there as a stray positional — read
+// flags from `positional` and --track is invisible, which is exactly how the sampler form
+// silently sent flags=0 and got badrequest back. `all` is the unfiltered argv, the same list
+// get_automation_points reads for the same reason.
+fn get_waveform(handle: &EngineHandle, args: &[&str], all: &[String]) -> i32 {
     let source_id: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
     let decimation: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(64);
     let first_frame: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
     let columns: u32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(16);
     let channel_mask: u32 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(1);
+    // ADDRESSING A SAMPLER'S SOURCE. Without --track the first argument is a waveform-store id,
+    // exactly as it always was; with it, the first argument is the sampler source's LOCAL id (the
+    // "source" the kit read-back gives you) and the engine translates the triple on its side.
+    //
+    // Two id spaces was the whole bug: the store interns by resolved PATH and a sampler's local
+    // id is a per-device counter, so a sample view's request addressed nothing and answered
+    // nothing while its model looked perfect.
+    let track = flag_u64(all, "--track", None).ok();
+    let device = flag_u64(all, "--device", Some(0)).unwrap_or(0) as u32;
+    let (flags, reserved0, reserved1) = match track {
+        Some(t) => (
+            daw_bridge::layout::WAVEFORM_REQUEST_SAMPLER_SOURCE,
+            t as u32,
+            device,
+        ),
+        None => (0u16, 0u32, 0u32),
+    };
     // Was a CONSTANT 0x7A5E, which is the trap documented in get_clip: the echo then matches on
     // every call after the first, so a query for source 2 can take delivery of source 1's answer.
     // Unique per invocation, and the echoed sourceId is checked too.
@@ -1314,7 +1337,7 @@ fn get_waveform(handle: &EngineHandle, args: &[&str]) -> i32 {
     let slot_index = (request_seq as usize) % 4; // K_UI_WAVEFORM_SLOTS
     let payload = UiWaveformRequestPayload {
         command_type: UiCommandType::RequestWaveform as u16,
-        flags: 0,
+        flags,
         request_seq,
         source_id,
         decimation,
@@ -1322,8 +1345,8 @@ fn get_waveform(handle: &EngineHandle, args: &[&str]) -> i32 {
         first_frame_hi: (first_frame >> 32) as u32,
         columns,
         channel_mask,
-        reserved0: 0,
-        reserved1: 0,
+        reserved0,
+        reserved1,
     };
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -1688,7 +1711,7 @@ fn main() {
         }
         Some((&"get", rest)) if rest.first() == Some(&"waveform") => {
             match EngineHandle::attach(&name, true) {
-                Ok(handle) => get_waveform(&handle, rest),
+                Ok(handle) => get_waveform(&handle, rest, &args),
                 Err(err) => {
                     eprintln!("daw-cli: {err}");
                     1

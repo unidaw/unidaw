@@ -5917,6 +5917,40 @@ struct TrackRuntime {
     return rec ? base.lexically_normal().string() : canon.string();
   };
 
+  // REGISTER A DECODED FILE FOR WAVEFORM DISPLAY — one definition, two callers.
+  //
+  // `decodeAudioFile` already BUILDS the min/max pyramid; the clip path interned it and the
+  // sampler path decoded the same way and dropped it on the floor. So a sampler's audio existed,
+  // was drawable, and had no entry in the store — which is why RequestWaveform could not answer
+  // for a pad no matter what id was sent (the web-UI agent found it from the outside: the request
+  // went out, no window ever landed, and the model was perfect throughout, which is exactly what
+  // a source that failed to decode looks like from there).
+  //
+  // KEYED BY RESOLVED PATH, which is the property worth keeping: a break loaded into a sampler
+  // AND placed as an audio clip is ONE entry and ONE pyramid. The content key folds in size and
+  // mtime, so a file re-bounced in place invalidates rather than serving a stale picture.
+  auto internDecodedForWaveform = [&](const std::string& resolvedPath,
+                                      const daw::DecodedAudio& dec) -> uint32_t {
+    uint64_t fileSize = 0, mtimeNs = 0;
+    std::error_code sec;
+    auto sz = std::filesystem::file_size(resolvedPath, sec);
+    if (!sec) fileSize = static_cast<uint64_t>(sz);
+    std::error_code tec;
+    auto ft = std::filesystem::last_write_time(resolvedPath, tec);
+    if (!tec) {
+      mtimeNs = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(ft.time_since_epoch()).count());
+    }
+    const uint64_t contentKey = daw::computeWaveformContentKey(
+        resolvedPath, fileSize, mtimeNs, dec.frames, dec.sampleRate, dec.sourceChannels,
+        daw::kDecoderVersion, daw::kWaveformFormatVersion);
+    const auto& py = dec.pyramid;
+    return waveformStore.internReady(resolvedPath, contentKey, dec.sourceChannels, dec.frames,
+                                     dec.sampleRate, py ? py->absPeak : 0.0f,
+                                     py ? py->levelMask : 0u, py && py->channelsTruncated,
+                                     py && py->clipped, py);
+  };
+
   // THE SAMPLER'S SNAPSHOT. Decodes every source the device names and flattens the document into
   // the immutable form the producer thread reads (docs/SAMPLER_DESIGN.md §3.5).
   //
@@ -5949,6 +5983,10 @@ struct TrackRuntime {
             .field("path", path);
         continue;
       }
+      // REGISTERED FOR DISPLAY BEFORE THE CHANNELS ARE MOVED OUT — the pyramid rides on `dec`
+      // and this is the last moment it is whole. Without this a pad's audio plays and cannot be
+      // DRAWN: the sample view had every extent it needed and no waveform to put them on.
+      internDecodedForWaveform(path, dec);
       auto audio = std::make_shared<daw::SamplerSourceAudio>();
       audio->channels = std::move(dec.channels);
       audio->frames = dec.frames;
@@ -6110,28 +6148,10 @@ struct TrackRuntime {
 
         // Register the pyramid for waveform display, keyed on a content hash of the
         // file's identity + decoded shape (contract §5), so two placements share one
-        // entry and a re-bounce in place invalidates it.
-        uint64_t fileSize = 0, mtimeNs = 0;
-        std::error_code sec;
-        auto sz = std::filesystem::file_size(resolvedPath, sec);
-        if (!sec) fileSize = static_cast<uint64_t>(sz);
-        std::error_code tec;
-        auto ft = std::filesystem::last_write_time(resolvedPath, tec);
-        if (!tec) {
-          mtimeNs = static_cast<uint64_t>(
-              std::chrono::duration_cast<std::chrono::nanoseconds>(
-                  ft.time_since_epoch())
-                  .count());
-        }
-        const uint64_t contentKey = daw::computeWaveformContentKey(
-            resolvedPath, fileSize, mtimeNs, dec.frames, dec.sampleRate,
-            dec.sourceChannels, daw::kDecoderVersion,
-            daw::kWaveformFormatVersion);
+        // entry and a re-bounce in place invalidates it. Shared with the sampler's
+        // decode — see internDecodedForWaveform for why that is one definition.
         const auto& py = dec.pyramid;
-        const uint32_t sourceId = waveformStore.internReady(
-            resolvedPath, contentKey, dec.sourceChannels, dec.frames,
-            dec.sampleRate, py ? py->absPeak : 0.0f, py ? py->levelMask : 0u,
-            py && py->channelsTruncated, py && py->clipped, py);
+        const uint32_t sourceId = internDecodedForWaveform(resolvedPath, dec);
         DAW_EVENT("audio.source_ready")
             .field("sourceId", sourceId)
             .field("frames", dec.frames)
@@ -14059,10 +14079,57 @@ struct TrackRuntime {
       const uint64_t firstFrame = static_cast<uint64_t>(req.firstFrameLo) |
                                   (static_cast<uint64_t>(req.firstFrameHi) << 32);
 
+      // A SAMPLER SOURCE IS ADDRESSED BY (track, device, localId) AND TRANSLATED HERE, once, into
+      // the store id the rest of this handler already understands. The translation lives on this
+      // side of the wire so the sampler's per-device counter never has to become a public id —
+      // and so both kinds of source end up in the SAME path-keyed store, which is what makes one
+      // file loaded two ways share one pyramid.
+      uint32_t storeId = req.sourceId;
+      if ((req.flags & daw::kWaveformRequestSamplerSource) != 0) {
+        storeId = 0;
+        TrackRuntime* rt = nullptr;
+        {
+          std::lock_guard<std::mutex> lock(tracksMutex);
+          if (req.reserved0 < tracks.size()) {
+            rt = tracks[req.reserved0].get();
+          }
+        }
+        if (rt) {
+          std::lock_guard<std::mutex> lock(rt->trackMutex);
+          for (const auto& d : rt->track.chain.devices) {
+            if (d.kind != daw::DeviceKind::Sampler || !d.hasSampler) {
+              continue;
+            }
+            // deviceId 0 = the first sampler on the track, the same rule every other sampler
+            // command uses. One addressing convention, not a second one for drawing.
+            if (req.reserved1 != 0 && d.id != req.reserved1) {
+              continue;
+            }
+            for (const auto& src : d.sampler.sources) {
+              if (src.localId == req.sourceId) {
+                storeId = waveformStore.sourceIdForPath(resolveSourcePath(src.path));
+                break;
+              }
+            }
+            break;
+          }
+        }
+        if (storeId == 0) {
+          // 0 is "not interned", which lookup below reports as badrequest — the honest answer.
+          // Logged because "the pad names a source the store never saw" and "you asked for a
+          // track that is not there" are different mistakes and the caller cannot tell them
+          // apart from a status code.
+          DAW_EVENT("waveform.sampler_source_unresolved")
+              .field("track", req.reserved0)
+              .field("device", req.reserved1)
+              .field("local", req.sourceId);
+        }
+      }
+
       // Resolve the source + its pyramid (a copy of the entry keeps the pyramid
       // alive past a concurrent beginLoad).
       daw::WaveformSourceEntry entryCopy{};
-      const bool known = waveformStore.lookup(req.sourceId, entryCopy);
+      const bool known = waveformStore.lookup(storeId, entryCopy);
 
       // Which published channels the mask actually selects, in ascending order.
       uint32_t sel[2] = {0, 0};

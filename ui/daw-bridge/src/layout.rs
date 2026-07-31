@@ -1466,6 +1466,14 @@ pub struct UiSetParamPayload {
     pub reserved: [u8; 8],
 }
 
+/// `flags` bit 1: `source_id` is a SAMPLER source's per-device LOCAL id, and reserved0/reserved1
+/// name its track and device. The waveform store interns by resolved PATH while a sampler's local
+/// id is a per-device counter — two id spaces — so without this a sample view's requests address
+/// nothing and answer nothing, forever. The engine translates the triple to the same path-keyed
+/// store, so one file loaded into a sampler AND placed as an audio clip is one pyramid. The reply
+/// echoes the id that was SENT, so existing keying keeps working.
+pub const WAVEFORM_REQUEST_SAMPLER_SOURCE: u16 = 1 << 1;
+
 /// A windowed waveform query (UiCommandType::RequestWaveform). Mirrors the C++
 /// UiWaveformRequestPayload (40 bytes). requestSeq is sidecar-allocated; slot =
 /// requestSeq % kUiWaveformSlots. decimation is a power of two >= 1.

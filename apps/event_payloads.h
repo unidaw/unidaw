@@ -1434,18 +1434,32 @@ static_assert(sizeof(UiSetParamPayload) == 40,
 // requestSeq is allocated by the sidecar (single process-wide counter) and echoed in
 // the reply; slot = requestSeq % kUiWaveformSlots. decimation is a power of two >= 1
 // (1 = raw samples). firstFrame is split lo/hi. channelMask bit c selects channel c.
+// ADDRESSING A SAMPLER'S SOURCE (flags bit 1). The waveform store interns BY RESOLVED PATH, and
+// a sampler's `localId` is a per-device counter — two different id spaces, so every request a
+// sample view sent addressed nothing and answered nothing, forever. The model was complete
+// throughout, which is precisely what a source that failed to decode looks like from the UI.
+//
+// With this bit set, `sourceId` is the sampler source's LOCAL id and reserved0/reserved1 name the
+// track and device it belongs to. The engine resolves that triple to the source's PATH and then
+// uses the same path-keyed store as the clip path — so a break loaded into a sampler AND placed
+// as an audio clip is one entry and one pyramid, and the sampler's ids stay private to it.
+//
+// TOOK TWO WORDS THAT WERE ALREADY THERE AND ALREADY ZERO, so an engine that does not know the
+// bit reads fields exactly as it always did: no payload growth, no opcode, no kShmVersion bump.
+inline constexpr uint16_t kWaveformRequestSamplerSource = 1u << 1;
+
 struct UiWaveformRequestPayload {
   uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);
-  uint16_t flags = 0;           // bit0 = force rebuild (re-stat, re-decode, re-key)
+  uint16_t flags = 0;           // bit0 = force rebuild; bit1 = sourceId is a SAMPLER local id
   uint32_t requestSeq = 0;
-  uint32_t sourceId = 0;
+  uint32_t sourceId = 0;        // store id, or the sampler's local id when bit1 is set
   uint32_t decimation = 0;      // power of two >= 1
   uint32_t firstFrameLo = 0;
   uint32_t firstFrameHi = 0;
   uint32_t columns = 0;         // requested columns per channel
   uint32_t channelMask = 0;     // bit0 = ch0, bit1 = ch1
-  uint32_t reserved0 = 0;
-  uint32_t reserved1 = 0;
+  uint32_t reserved0 = 0;       // bit1 set: trackId
+  uint32_t reserved1 = 0;       // bit1 set: deviceId (0 = the first sampler on the track)
 };
 static_assert(sizeof(UiWaveformRequestPayload) == 40,
               "UiWaveformRequestPayload must fit EventEntry payload");

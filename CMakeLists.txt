@@ -675,6 +675,14 @@ add_test(NAME sampler_loop
 )
 set_tests_properties(sampler_loop PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# A sampler's audio is addressable for drawing, and it is the RIGHT audio. The load-bearing
+# property is the source NO audio clip names: every other assertion here passes with the sampler's
+# interning deleted, because the clip path covers for it.
+add_test(NAME sampler_waveform
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_waveform_check.sh
+)
+set_tests_properties(sampler_waveform PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # Entering a note over a sounding one no longer has to destroy it. The last property renders the
 # default-NNA case on purpose: turning the lane flag on and testing with a Cut slot sounds like no
 # change at all, which is the false negative this check exists to pin down.
