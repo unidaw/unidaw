@@ -688,3 +688,42 @@ Two decisions were raised BY the work rather than by this list and are still the
     half-second row play all of it. A slice is short and one-shot is genuinely right for it; a
     loaded file is a different gesture wearing the same command.*
   - **What fill state an offline bounce renders under**, once FILL exists (task #107).
+  - **Does per-track `lines_per_beat` have a future, or is it being replaced?** Raised
+    2026-07-31 by two documents in this tree disagreeing, and the disagreement is now load-bearing
+    because a command was built on one of them. `docs/per-lane-grids.md` item 2 called a
+    set-lane-subdivision command *"the one new command needed"* for a feature otherwise complete,
+    and `SetTrackLinesPerBeat = 92` was built to it. `tools/persisted_field_reach_check.sh` says
+    of the same field: *"legacy — superseded by the per-extent grid and on its way out (task #43).
+    A new writer would entrench it."* That new writer is opcode 92.
+
+    Redirecting it is not a smaller change: the per-extent grid lives in `UiClipExtent`'s flags
+    with `linesPerBeat` packed into five bits, so a per-EXTENT command is a different addressing
+    model, a different payload and a different UI gesture — not the same command with a different
+    target. The command as built is tested and green; nothing is lost by answering this late,
+    but a header control should not be wired on it until the answer exists, or the UI work gets
+    done twice.
+
+  - **Should a sampler track MIX audio routed into it, or keep replacing it?** The engine
+    currently REPLACES: a sampler feeds the head of the chain, so a track that is both an
+    instrument and a bus destination silently loses everything routed in. That is already flagged
+    in the code and reported as `sampler.discarded_routed_input` rather than swallowed, precisely
+    because Live and Renoise both mix and the answer is a decision about what a track IS. Task
+    #92, unchanged and deliberately not decided by the work.
+
+  - **How does a note on a CHILD track address the parent's kit?** This is the whole content of
+    "MIDI-per-bus for the kit", the last optional item, and it cannot be built without the answer.
+    For a hosted multitimbral plugin the rule is settled and shipped: an aux child's notes are
+    tagged with its bus's MIDI channel and rendered into the parent host's ring, so channel k
+    drives output bus k. A sampler has no host ring — it reads `samplerEvents` — and a child's
+    notes currently land in the CHILD's `samplerEvents`, which nothing renders.
+
+    Making them reach the parent's sampler is mechanical. What is not mechanical is what the note
+    then MEANS, and there are two coherent answers:
+      (a) the child's note plays the kit normally and its audio is forced to stem k, overriding
+          whatever `outputStem` the chosen slot carries — the child track IS that bus, so
+          anything played "on" it belongs there; or
+      (b) the child's note only selects slots whose `outputStem` is already k, so the stem stays
+          a property of the SLOT and the child is a filtered view of the kit rather than a router.
+    (a) makes a child a place to play from; (b) makes it a place to look at. They differ audibly
+    the moment one kit slot is routed to a stem and another is not, so this is R1's question one
+    level down and not one to settle by picking the easier code path.
