@@ -22,8 +22,9 @@
 # is exactly the interval, created but not yet loaded, when a UI most wants to say "here it is,
 # put something in it".
 #
-# THREE PROPERTIES:
+# FOUR PROPERTIES:
 #   EXISTS      a freshly added sampler reports found, before anything is loaded into it
+#   RESOLVES    a bare name reaches the project's sibling audio/ directory
 #   COVERS      chopping into N yields N slices, the first beginning at frame 0
 #   PLAYS       the first slice makes sound. Ids that exist and play nothing would satisfy the
 #               property above and still lose the downbeat
@@ -42,6 +43,11 @@ CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || { echo "build daw-cli first"; exit 2; }
 
 TMP="$(mktemp -d)"
+# THE REPO'S OWN LAYOUT: projects in one directory, samples in a sibling `audio/`. Every project
+# in presets/ references its audio as "../audio/<name>", and that nine-byte prefix eats most of
+# the load command's twenty-four name bytes — so the sample here is reachable only if a bare name
+# also looks in the project's audio directory.
+mkdir -p "$TMP/projects" "$TMP/audio"
 ENG=""
 cleanup() { [ -n "$ENG" ] && kill "$ENG" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
@@ -51,7 +57,7 @@ fail() { echo "  FAIL: $*"; exit 1; }
 # fixture: if the first slice is unreachable, playing slice 1 gives you the quiet material and
 # the peak collapses. A file of eight identical hits would sound the same either way and prove
 # nothing at all.
-python3 - "$TMP/s.wav" "$PARTS" <<'PY'
+python3 - "$TMP/audio/s.wav" "$PARTS" <<'PY'
 import sys, wave, struct, math
 sr = 48000
 parts = int(sys.argv[2])
@@ -69,7 +75,7 @@ for i in range(n):
 w.writeframes(b''.join(fr)); w.close()
 PY
 
-python3 - "$TMP/c.uniproj.json" "$Q" <<'PY'
+python3 - "$TMP/projects/c.uniproj.json" "$Q" <<'PY'
 import json, sys
 out, Q = sys.argv[1], int(sys.argv[2])
 r = lambda k="none": {"kind": k, "track_id": 0, "input_id": 0}
@@ -84,14 +90,14 @@ json.dump({"schema_version": 4, "meta": {"name": "c"}, "nanoticks_per_quarter": 
            "clips": [], "tracks": [tr]}, open(out, "w"))
 PY
 
-export DAW_UI_SHM_NAME="/chopreach_$$" DAW_PROJECT_DIR="$TMP"
-( cd "$BUILD" && ./daw_engine --project c --run-seconds 30 >"$TMP/eng.log" 2>&1 ) &
+export DAW_UI_SHM_NAME="/chopreach_$$" DAW_PROJECT_DIR="$TMP/projects"
+( cd "$BUILD" && ./daw_engine --project c --run-seconds 30 >"$TMP/projects/eng.log" 2>&1 ) &
 ENG=$!
 for _ in $(seq 1 120); do
-  grep -q 'starting threads' "$TMP/eng.log" 2>/dev/null && break
+  grep -q 'starting threads' "$TMP/projects/eng.log" 2>/dev/null && break
   sleep 0.25
 done
-grep -q 'starting threads' "$TMP/eng.log" 2>/dev/null || fail "the engine never came up"
+grep -q 'starting threads' "$TMP/projects/eng.log" 2>/dev/null || fail "the engine never came up"
 
 kit() { "$CLI" get sampler-kit --track 0 2>/dev/null; }
 waitfor() {  # waitfor <grep-pattern>
@@ -110,15 +116,26 @@ waitfor '"found": true' || \
         instrument was never installed on the audio thread at all"
 echo "  a freshly added sampler reports found, with nothing in it yet"
 
-# ---- COVERS.
+
+# ---- RESOLVES. The name is bare and the file is in the sibling audio/ directory, which is
+# where every project in this repo keeps its samples. "../audio/" is nine of the twenty-four name
+# bytes the command has, leaving fifteen for a filename — so without the audio-directory fallback
+# the repo's own sample cannot be named by this command at all.
 "$CLI" do sampler-load --track 0 --file s.wav --root 60 >/dev/null 2>&1
-waitfor '"slot": 1' || fail "the sample never loaded — see $TMP/eng.log"
+waitfor '"slot": 1' || fail "the sample never loaded — see $TMP/projects/eng.log"
+grep -q '"event":"sampler.source_missing"' "$TMP/projects/eng.log" && \
+  fail "a bare name did not resolve to the project's sibling audio/ directory, so the slot exists
+        and is silent. That directory is where every project here keeps its audio, and naming it
+        inline costs nine of the command's twenty-four name bytes"
+echo "  a bare name resolved to the sibling audio/ directory"
+
+# ---- COVERS.
 "$CLI" do sampler-slice --track 0 --source 1 --mode equal --count "$PARTS" >/dev/null 2>&1
 # --slots is not passed: it now defaults ON, and this check is one of the things that says so.
 sleep 1.5
-MADE="$(grep -oE '"event":"sampler.sliced"[^}]*' "$TMP/eng.log" | tail -1 |
+MADE="$(grep -oE '"event":"sampler.sliced"[^}]*' "$TMP/projects/eng.log" | tail -1 |
         grep -oE '"made":[0-9]+' | grep -oE '[0-9]+')"
-SLOTS="$(grep -oE '"event":"sampler.sliced"[^}]*' "$TMP/eng.log" | tail -1 |
+SLOTS="$(grep -oE '"event":"sampler.sliced"[^}]*' "$TMP/projects/eng.log" | tail -1 |
          grep -oE '"slots":[0-9]+' | grep -oE '[0-9]+')"
 [ "${MADE:-0}" = "$PARTS" ] || \
   fail "chopping into $PARTS made ${MADE:-0} slices. divideEqually returned the INTERIOR
@@ -136,7 +153,7 @@ kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 # Rendered from a project the CHECK writes with the chop already in it, rather than by driving
 # the engine mid-render: an offline render does not wait for commands, and editing while voices
 # sound is its own subject (tools/sampler_edit_while_playing_check.sh).
-python3 - "$TMP/p.uniproj.json" "$Q" "$PARTS" <<'PY'
+python3 - "$TMP/projects/p.uniproj.json" "$Q" "$PARTS" <<'PY'
 import json, sys
 out, Q, parts = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 BAR = Q * 4
@@ -182,12 +199,12 @@ json.dump({"schema_version": 4, "meta": {"name": "p"}, "nanoticks_per_quarter": 
            "tracks": [tr]}, open(out, "w"))
 PY
 
-( cd "$BUILD" && env DAW_UI_SHM_NAME="/chopplay_$$" DAW_PROJECT_DIR="$TMP" \
+( cd "$BUILD" && env DAW_UI_SHM_NAME="/chopplay_$$" DAW_PROJECT_DIR="$TMP/projects" \
     ./daw_engine --project p --render first --run-seconds 5 --block-size 256 \
-    >"$TMP/play.log" 2>&1 ) || fail "the render exited non-zero — see $TMP/play.log"
-[ -s "$TMP/first.wav" ] || fail "the render wrote no output"
+    >"$TMP/projects/play.log" 2>&1 ) || fail "the render exited non-zero — see $TMP/projects/play.log"
+[ -s "$TMP/projects/first.wav" ] || fail "the render wrote no output"
 
-PEAK="$(python3 - "$TMP/first.wav" <<'PY'
+PEAK="$(python3 - "$TMP/projects/first.wav" <<'PY'
 import sys, wave, struct
 w = wave.open(sys.argv[1], 'rb')
 ch, n = w.getnchannels(), w.getnframes()

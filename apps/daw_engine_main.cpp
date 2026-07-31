@@ -5492,6 +5492,32 @@ struct TrackRuntime {
     std::filesystem::path base = sp.is_absolute() || loadedProjectDir.empty()
                                      ? sp
                                      : std::filesystem::path(loadedProjectDir) / sp;
+    // A BARE NAME ALSO LOOKS IN THE PROJECT'S SIBLING audio/ DIRECTORY, which is where samples
+    // actually live: projects sit in presets/projects/ and every one references its audio as
+    // "../audio/<name>".
+    //
+    // That prefix is NINE of the load command's TWENTY-FOUR name bytes, leaving fifteen for a
+    // filename — so "../audio/waveform_probe.wav" is twenty-seven and the repo's own sample could
+    // not be named by the command at all. The web-UI agent hit it building a load verb and worked
+    // around it by copying a wav next to the project, saying in a comment that it was a
+    // workaround rather than a test.
+    //
+    // A PURE FALLBACK, tried only when the primary does not exist, so nothing that resolves today
+    // resolves anywhere else tomorrow. It is a search path and not a claim that two directories
+    // are equivalent: ambiguity is settled by ORDER, project directory first.
+    //
+    // This does not remove the 24-byte cap, it moves it off the common case. A long enough
+    // filename still will not fit, and the general answer is to carry the path over the bulk
+    // carrier (opcode 83) the way SamplerSetEnvelopePoints does.
+    std::error_code exists_ec;
+    if (!sp.is_absolute() && !loadedProjectDir.empty() &&
+        !std::filesystem::exists(base, exists_ec)) {
+      const std::filesystem::path alt =
+          std::filesystem::path(loadedProjectDir) / ".." / "audio" / sp;
+      if (std::filesystem::exists(alt, exists_ec)) {
+        base = alt;
+      }
+    }
     std::error_code rec;
     std::filesystem::path canon = std::filesystem::weakly_canonical(base, rec);
     return rec ? base.lexically_normal().string() : canon.string();

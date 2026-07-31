@@ -111,10 +111,28 @@ if command -v unzip >/dev/null 2>&1; then
   unzip -t "$HOME_DIR/song.uni" >/dev/null 2>&1 || \
     fail "the system unzip REJECTS song.uni. A container only our own reader accepts is not a
         module, and the failure would surface at the worst possible moment — after sending it"
-  unzip -l "$HOME_DIR/song.uni" 2>/dev/null | grep -q 'samples/tone.wav' || \
-    fail "the module does not contain samples/tone.wav — the sample is not IN the file"
-  unzip -l "$HOME_DIR/song.uni" 2>/dev/null | grep -q 'project.json' || \
-    fail "the module does not contain project.json"
+  # LISTED ONCE, INTO A VARIABLE, AND stderr IS KEPT.
+  #
+  # This ran `unzip -l ... 2>/dev/null | grep -q` twice, which cannot tell "the entry is missing"
+  # from "unzip printed nothing this time" — the two produce the identical empty pipe, and the
+  # message asserted the first. That is how the module check failed once in a full-suite run with
+  # "the module does not contain project.json" about an archive whose project.json is written
+  # FIRST, into a file built beside the target and renamed atomically. The claim was not credible
+  # and the check had no way to say so (task #91).
+  #
+  # Under `ctest -j8` this reproduces about one run in ten. Whatever makes unzip fail under that
+  # load, the check's job is to report what it actually saw.
+  LISTING="$(unzip -l "$HOME_DIR/song.uni" 2>&1)"
+  [ -n "$LISTING" ] || fail "unzip -l printed NOTHING for song.uni. That is not the same as a
+        missing entry — it is the lister failing, and the archive is $(wc -c < "$HOME_DIR/song.uni" |
+        tr -d ' ') bytes that unzip -t accepted a moment ago"
+  printf '%s' "$LISTING" | grep -q 'samples/tone.wav' || \
+    fail "the module does not contain samples/tone.wav — the sample is not IN the file. Listing:
+$LISTING"
+  printf '%s' "$LISTING" | grep -q 'project.json' || \
+    fail "the module does not contain project.json, which is written FIRST into a file that is
+        renamed into place atomically — so an archive without it should not be reachable. Listing:
+$LISTING"
   echo "  real zip: the system unzip accepts it, and it holds project.json + samples/tone.wav"
 else
   echo "  note: unzip not present, skipping the third-party reader check"

@@ -37,6 +37,7 @@ CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || { echo "build daw-cli first"; exit 2; }
 
 TMP="$(mktemp -d)"
+mkdir -p "$TMP/projects"
 ENG=""
 cleanup() { [ -n "$ENG" ] && kill "$ENG" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
@@ -45,7 +46,7 @@ fail() { echo "  FAIL: $*"; exit 1; }
 # A SAWTOOTH, because a low-pass has to have something to remove. A sine at the fundamental would
 # pass a low-pass unchanged and this whole check would compare two identical files — the trap that
 # an earlier filter fixture in this repo actually fell into.
-python3 - "$TMP/saw.wav" <<'PY'
+python3 - "$TMP/projects/saw.wav" <<'PY'
 import sys, wave, struct
 sr = 48000
 n = sr
@@ -57,7 +58,7 @@ w.writeframes(b''.join(
 w.close()
 PY
 
-python3 - "$TMP/f.uniproj.json" "$Q" <<'PY'
+python3 - "$TMP/projects/f.uniproj.json" "$Q" <<'PY'
 import json, sys
 out, Q = sys.argv[1], int(sys.argv[2])
 BAR = Q * 4
@@ -110,19 +111,19 @@ json.dump({"schema_version": 4, "meta": {"name": "f"}, "nanoticks_per_quarter": 
            "tempo_map": [{"nanotick": 0, "bpm": 120.0}], "harmony_timeline": [],
            "clips": [clip], "tracks": [tr]}, open(out, "w"))
 PY
-cp "$TMP/saw.wav" "$TMP/s.wav"
+cp "$TMP/projects/saw.wav" "$TMP/projects/s.wav"
 
 SHM="/filtchk_$$"
-export DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP"
+export DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP/projects"
 
 up() {  # bring the engine up and wait for it
-  ( cd "$BUILD" && ./daw_engine --project f --run-seconds 30 >"$TMP/eng.log" 2>&1 ) &
+  ( cd "$BUILD" && ./daw_engine --project f --run-seconds 30 >"$TMP/projects/eng.log" 2>&1 ) &
   ENG=$!
   for _ in $(seq 1 120); do
-    grep -q 'starting threads' "$TMP/eng.log" 2>/dev/null && return 0
+    grep -q 'starting threads' "$TMP/projects/eng.log" 2>/dev/null && return 0
     sleep 0.25
   done
-  fail "the engine never came up — see $TMP/eng.log"
+  fail "the engine never came up — see $TMP/projects/eng.log"
 }
 up
 
@@ -191,30 +192,71 @@ kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 # ---- AUDIBLE, and the BASE VALUE moves it. Three renders of the same project, differing only in
 # the filter command sent beforehand. Measured as high-frequency energy, because that is what a
 # low-pass is for.
-render() {  # render <name> <filterArgs...>
-  local name="$1"; shift
-  export DAW_UI_SHM_NAME="/filtchk_${$}_$name"
-  ( cd "$BUILD" && ./daw_engine --project f --render "$name" --run-seconds 6 --block-size 256 \
-      >"$TMP/$name.log" 2>&1 ) &
-  ENG=$!
-  for _ in $(seq 1 120); do
-    grep -q 'starting threads' "$TMP/$name.log" 2>/dev/null && break
-    sleep 0.25
-  done
-  if [ "$#" -gt 0 ]; then
-    "$CLI" do sampler-filter --track 0 "$@" >/dev/null 2>&1
-    sleep 0.6
-  fi
-  wait "$ENG" 2>/dev/null; ENG=""
-  [ -s "$TMP/$name.wav" ] || fail "the '$name' render wrote no output — see $TMP/$name.log"
+# render <name> <filterType> <cutoffMilli>  — writes a project with the filter ALREADY SET and
+# renders it. No command is sent during the render, deliberately.
+#
+# It used to send sampler-filter after a fixed sleep, and an offline render does not wait for
+# commands: under `ctest -j8` the render was past the notes before the command landed, so the
+# "dark" take came out bright and the check reported that cutoff 100 and cutoff 900 sound the
+# same. A real failure message about a fixture race — the exact thing this suite keeps catching
+# in its own fixtures, this time in one I had just written.
+#
+# THE TWO HALVES PROVE THE TWO LINKS. The interactive phase above proves the COMMAND reaches the
+# model, by reading filter_type back. This proves the MODEL reaches the voice, by rendering. A
+# timing-dependent test of both at once proved neither reliably.
+render() {  # render <name> <filterType> <cutoffMilli>
+  python3 - "$TMP/projects/$1.uniproj.json" "$Q" "$2" "$3" <<'PYP'
+import json, sys
+out, Q, ftype, cutoff = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+BAR = Q * 4
+r = lambda k="none": {"kind": k, "track_id": 0, "input_id": 0}
+slot = {"id": 1, "name": "saw", "source_local_id": 1, "slice_id": 0,
+        "start_frame": 0, "end_frame": 0,
+        "loop_start_frame": 0, "loop_end_frame": 0, "loop_xfade_frames": 0,
+        "loop_mode": 0, "sustain_loop": 0,
+        "key_low": 0, "key_high": 127, "root_key": 60,
+        "pitch_track_milli": 1000, "tune_cents": 0,
+        "vel_low": 0, "vel_high": 127, "layer_group": 0, "select_mode": 0,
+        "gate": 1, "reverse": 0, "gain_millibels": 0, "pan_thousandths": 0,
+        "voice_group": 0, "nna": 0, "polyphony": 0, "choke_fade_us": 3000,
+        "mod_set_id": 1, "output_stem": 0, "quality": 1}
+dev = {"device_id": 1, "kind": "sampler", "capability_mask": 5, "patcher_node_id": 0,
+       "host_slot_index": 0, "bypass": False,
+       "sampler": {"next_slot_id": 2, "next_source_id": 2, "next_mod_set_id": 2,
+                   "stem_count": 0, "voice_cap": 16, "default_view": 0,
+                   "sources": [{"local_id": 1, "path": "s.wav", "content_key": 0}],
+                   "slice_sets": [],
+                   "mod_sets": [{"id": 1, "name": "d", "filter_type": ftype,
+                                 "cutoff_milli": cutoff, "resonance_milli": 0,
+                                 "next_modulator_id": 1, "modulators": []}],
+                   "slots": [slot]}}
+notes = [{"nanotick": i * Q, "duration": Q - Q // 8, "pitch": 60, "velocity": 110,
+          "column": 0, "note_id": i + 1} for i in range(4)]
+tr = {"track_id": 0, "name": "S", "harmony_quantize": False, "lines_per_beat": 4,
+      "mixer": {"gain_db": 0.0, "pan": 0.0, "mute": False, "solo": False},
+      "routing": {"midi_in": r(), "midi_out": r(), "audio_in": r(),
+                  "audio_out": r("master"), "pre_fader_send": True},
+      "device_chain": [dev], "mod_links": [],
+      "placements": [{"clip_id": 1, "id": 1, "at": 0, "length": BAR,
+                      "notes": [], "chords": [], "mutes": []}]}
+json.dump({"schema_version": 4, "meta": {"name": sys.argv[1]}, "nanoticks_per_quarter": Q,
+           "tempo_map": [{"nanotick": 0, "bpm": 120.0}], "harmony_timeline": [],
+           "clips": [{"id": 1, "name": "p", "length": BAR, "kind": "symbolic",
+                      "notes": notes}],
+           "tracks": [tr]}, open(out, "w"))
+PYP
+  ( cd "$BUILD" && env DAW_UI_SHM_NAME="/filtchk_${$}_$1" DAW_PROJECT_DIR="$TMP/projects" \
+      ./daw_engine --project "$1" --render "$1" --run-seconds 5 --block-size 256 \
+      >"$TMP/projects/$1.log" 2>&1 ) || fail "the '$1' render exited non-zero"
+  [ -s "$TMP/projects/$1.wav" ] || fail "the '$1' render wrote no output"
 }
 
-render off
-render dark --type lp12 --cutoff 100
-render bright --type lp12 --cutoff 900
+render off 0 1000
+render dark 1 100
+render bright 1 900
 
 hf() {  # high-frequency energy of a render
-  python3 - "$TMP/$1.wav" <<'PY'
+  python3 - "$TMP/projects/$1.wav" <<'PY'
 import sys, wave, struct, math
 w = wave.open(sys.argv[1], 'rb')
 ch, n = w.getnchannels(), w.getnframes()
