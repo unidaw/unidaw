@@ -13,9 +13,19 @@
 // functions the keys do.
 
 export const GLOBAL_KEYS = [
-  ['Tab', 'next surface (shift+Tab previous)'],
+  // Ctrl+Tab, not Tab. Plain Tab moves to the next TRACK — a tracker keeps Tab for the grid,
+  // and a help overlay naming it for surface switching sends the reader somewhere else
+  // entirely. Same for the browser rail: plain B types a note.
+  ['Ctrl+Tab', 'next surface (shift for previous)'],
+  // The keys VIEW_TABS actually declares, not a range: F5-F7 are unbound, and "F1-F8" invites
+  // somebody to press three keys that do nothing. Shift opens the surface in the lower pane.
+  ['F1 F2 F3 F4 F8', 'tracker · arrange · patcher · scale roll · mixer (shift = lower pane)'],
+  ['Tab', 'next track (shift for previous)'],
   ['/', 'agent dock'],
-  ['B', 'browser rail'],
+  ['⌘B', 'browser rail'],
+  ['⌘K', 'command palette'],
+  ['⌘E', 'edit mode — whether a note key writes or auditions'],
+  ['⌘S', 'save'],
   ['?', 'this help'],
   ['Space', 'play / pause'],
   ['F', 'follow the playhead (off when you scroll; on when you hit play)'],

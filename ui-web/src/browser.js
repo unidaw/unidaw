@@ -116,7 +116,10 @@ const SEP = ' · ';
 
 const HINT_SAVING = 'Enter saves · Esc cancels';
 const HINT_FINDING = 'typing filters · ↑↓ ⏎ still move and open · Esc clears';
-const HINT_LIST = 'Enter opens · F finds · S saves as · B closes';
+// `⌘B`, not `B`. Plain B has never closed the rail — it types a note when the tracker has the
+// keyboard — and a footer naming a key that does nothing is a footer that teaches the wrong
+// thing to the one person reading it.
+const HINT_LIST = 'Enter opens · F finds · S saves as · ⌘B closes';
 
 const EMPTY_NONE = 'no projects on disk';
 const EMPTY_FILTERED = 'no project matches';
