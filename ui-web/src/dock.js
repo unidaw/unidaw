@@ -451,13 +451,51 @@ export function createCommands(api) {
      * the name gets 24, so the engine resolves it against its own audio directory — which is
      * also what stops a client naming a path of its choosing.
      */
-    'load-sample': { help: 'load-sample <track> <device> <file> — load a sample, one slot',
+    /*
+     * LOAD ONE SAMPLE, OR SEVERAL ACROSS CONSECUTIVE KEYS.
+     *
+     * Every load mints its slot at the SAME key — root 36, fixed pitch — which is right for a
+     * drum pad and useless for five sounds that have to be told apart: they all answer C-2 and
+     * one note triggers five voices. The engine has always been able to do better (SamplerLoad
+     * carries `root_key` per command) and this verb simply sent the default every time; backend
+     * checked and confirmed the gap is here, not there. `sampler-slice` already spreads.
+     *
+     * COMMA-SEPARATED, not space-separated, because a file name may contain a space and
+     * `rest: true` joins on one — `load-sample 0 0 my kick.wav` is one file, not two.
+     *
+     * THE WHOLE BATCH IS REFUSED if the spread would run past 127, rather than clamping the tail
+     * onto one key. A kit whose last three pads all answer 127 is worse than a refusal, and it
+     * is the same argument the engine makes about a slot name that does not fit: never
+     * truncated, always refused, because the truncated outcome LOOKS like it worked.
+     */
+    'load-sample': { help: 'load-sample <track> <device> <file>[,<file>…] [root] — load samples, '
+                         + 'one slot each, on consecutive keys from root (default 36)',
       args: [A_TRACK, { name: 'device', type: 'int', min: 0 },
              { name: 'file', type: 'text', rest: true }],
       run: (a) => {
-        const name = a.slice(2).join(' ');
-        return api.loadSample(Number(a[0]), Number(a[1]), name)
-          ? `loading ${name}` : refusal(api);
+        const rest = a.slice(2).join(' ');
+        /*
+         * A TRAILING NUMBER IS THE ROOT, and only when there is more than one word — otherwise
+         * `load-sample 0 0 808` would read the file name as a key and load nothing.
+         */
+        const words = rest.split(' ');
+        let root = 36;
+        if (words.length > 1 && /^\d+$/.test(words[words.length - 1])) {
+          root = Number(words.pop());
+          if (root > 127) return 'root must be 0..127';
+        }
+        const files = words.join(' ').split(',').map((f) => f.trim()).filter(Boolean);
+        if (!files.length) return 'load-sample needs a file name';
+        if (root + files.length - 1 > 127) {
+          return `${files.length} samples from key ${root} would run past 127 — the last `
+               + `${root + files.length - 1 - 127} would land on top of each other, so none was `
+               + 'loaded';
+        }
+        for (let i = 0; i < files.length; i++) {
+          if (!api.loadSample(Number(a[0]), Number(a[1]), files[i], root + i)) return refusal(api);
+        }
+        return files.length === 1 ? `loading ${files[0]} on key ${root}`
+          : `loading ${files.length} samples on keys ${root}-${root + files.length - 1}`;
       } },
     /*
      * CHOP IT. The gesture the whole per-note-op design was drawn around — an amen break cut

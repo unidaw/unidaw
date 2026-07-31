@@ -126,10 +126,19 @@ await page.waitForTimeout(2500);
  */
 await run(`sampler ${T}`);
 await page.waitForTimeout(1500);
-for (const s of SAMPLES) {
-  await run(`load-sample ${T} 0 ${s.name}`);
-  await page.waitForTimeout(1200);
-}
+/*
+ * ONE COMMAND, FIVE SAMPLES, FIVE CONSECUTIVE KEYS.
+ *
+ * This was five separate `load-sample` calls, and every one of them minted its slot on the same
+ * key — root 36, fixed pitch — so all five answered C-2 and one note triggered five voices. The
+ * suite worked around it by setting keylow/keyhigh/root per slot afterwards, which is a fine
+ * thing for a test to demonstrate once and a silly thing to make a person do every time.
+ *
+ * The engine could always do this (SamplerLoad carries `root_key` per command); the console verb
+ * sent the default every time. Comma-separated because a file name may contain a space.
+ */
+const loadSaid = await run(`load-sample ${T} 0 ${SAMPLES.map((s) => s.name).join(',')} 48`);
+await page.waitForTimeout(4000);
 
 const kit = await page.evaluate(async (t) => {
   for (let i = 0; i < 60; i++) {
@@ -152,6 +161,21 @@ check(kit && kit.slots && kit.slots.length === SAMPLES.length,
  * mismatch reported as an audio regression.
  */
 const slotIds = kit && kit.slots ? kit.slots.map((s) => s.slot).sort((a, b) => a - b) : [];
+/*
+ * AND THEY LANDED ON FIVE DIFFERENT KEYS, from the one command.
+ *
+ * The claim that matters is DISTINCTNESS: five slots on one key is what the old behaviour gave,
+ * and it looks perfectly healthy in every other respect — five slots, five sources, five
+ * lengths. Only the keys tell the two apart, which is why the load is asserted here rather than
+ * left to the note-mapping below to paper over.
+ */
+{
+  const ks = kit && kit.slots ? kit.slots.map((s) => s.keyLow).sort((a, b) => a - b) : [];
+  check(new Set(ks).size === SAMPLES.length && ks[0] === 48
+        && ks.every((k, i) => i === 0 || k === ks[i - 1] + 1),
+        'one `load-sample` with five files puts them on five CONSECUTIVE keys from the root',
+        `${JSON.stringify(ks)} :: ${JSON.stringify(loadSaid).slice(-80)}`);
+}
 // The lengths must differ, or the audibility check below cannot tell the slots apart either.
 const frames = kit && kit.slots ? kit.slots.map((s) => s.frames) : [];
 check(frames.length === SAMPLES.length && new Set(frames).size === SAMPLES.length

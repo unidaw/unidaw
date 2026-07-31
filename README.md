@@ -13,6 +13,9 @@ system stops being useful without them, not because anyone is depending on them.
 
 ## Quick start
 
+**To use it rather than build on it, read [docs/MANUAL.md](docs/MANUAL.md).** This file is
+about the repository.
+
 Assuming JUCE at `$HOME/src/juce/JUCE` and Boost installed:
 
 ```sh
@@ -414,6 +417,7 @@ tests); the environment section at the top is maintained.
 
 | Document | What it is |
 |---|---|
+| **`docs/MANUAL.md`** | **The user manual.** How to work the program, for someone who already knows trackers and DAWs. Written against the source, so it names what refuses as well as what works. Start here if you want to make a noise rather than change the code. |
 | `docs/SAMPLER_DESIGN.md` | The sampler: decisions, requirements, and an annotated record of what shipped. Current. |
 | `docs/row-ops.md` | The typed effect column. Predates most of the ops — `ui/daw-bridge/src/rowop.rs` is the authority. |
 | `docs/per-lane-grids.md` | Per-lane row subdivisions. Model and projection built; UI work still owed. |

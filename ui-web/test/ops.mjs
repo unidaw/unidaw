@@ -568,16 +568,30 @@ const cells = await opsCells();
     await page.waitForTimeout(1500);
     preResults.push(await page.evaluate(() => window.__uni.opsTextAtCursor()));
   }
-  check(preResults.every((x) => x === 'ret4 rv-60 c2:4'),
-        'cpre/cnpre are still REFUSED by the engine (clip_edit.cpp caps a trig condition at 64 '
-        + 'and PRE is 130) — flip this check when that range widens',
+  check(preResults[0] === 'ret4 rv-60 cpre' && preResults[1] === 'ret4 rv-60 cnpre',
+        'cpre and cnpre round-trip through the engine — the codes live in the same byte as '
+        + 'every packed A:B and survive it',
         JSON.stringify(preResults));
-  // ...and an A:B still works, so the refusal above is about the VALUE and not about the op
-  // having stopped working — the control that makes the inverted check a finding.
+  /*
+   * FILL IS STILL REFUSED, and that is the half of this that must not drift.
+   *
+   * 128/129 are reserved and unimplemented — a note carrying one ALWAYS SOUNDS under the
+   * engine's unknown-code rule — so the parser refuses the token on both sides deliberately: one
+   * that round-trips through the editor and then sounds on every pass is worse than one the
+   * editor rejects. This check is what stops "make PRE settable" from having quietly made FILL
+   * settable too, which is the obvious way to implement it and the wrong one.
+   */
+  const fillSaid = await page.evaluate(() => window.__uni.run('op cfill'));
+  await page.waitForTimeout(900);
+  check(await page.evaluate(() => window.__uni.opsTextAtCursor()) === 'ret4 rv-60 cnpre',
+        'while `cfill` is still refused — reserved, unimplemented, and it would sound on every '
+        + 'pass if it were written', JSON.stringify(fillSaid).slice(-90));
+
+  // ...and an A:B still lands, so the row can go back to a pass-counted conditional.
   await page.evaluate(() => window.__uni.run('op c3:4'));
   await page.waitForTimeout(1500);
   check(await page.evaluate(() => window.__uni.opsTextAtCursor()) === 'ret4 rv-60 c3:4',
-        'while an A:B conditional in range still lands — the refusal is the value, not the op');
+        'and an A:B conditional replaces a pre one');
 
   /*
    * A CONDITIONAL THAT COULD NEVER FIRE IS REFUSED, not normalised. A > B names a pass that
