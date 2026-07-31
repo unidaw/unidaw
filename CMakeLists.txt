@@ -613,6 +613,12 @@ add_test(NAME persisted_field_reach
 )
 set_tests_properties(persisted_field_reach PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# The ops column's width is a property of the TRACK, not of what is on screen.
+add_test(NAME ops_width
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/ops_width_check.sh
+)
+set_tests_properties(ops_width PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # A note's default length follows the SONG's meter, not a hardcoded 4/4 bar.
 add_test(NAME meter_bar
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/meter_bar_check.sh

@@ -123,7 +123,7 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //    agent forks the clip it was pointed at, writes into the copy, and the original becomes the
 //    alternate; swapping is the A/B. Published because an alternate nobody can see is the same as
 //    not having one.
-constexpr uint16_t kShmVersion = 33;
+constexpr uint16_t kShmVersion = 34;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -322,6 +322,31 @@ struct alignas(64) ShmHeader {
   // to catch.
   uint64_t uiSamplerKitOffset = 0;
   uint64_t uiSamplerKitBytes = 0;
+  // v34: THE WIDEST OP RUN ON ANY NOTE IN THE TRACK — how many glyphs the collapsed ops cell
+  // has to be able to draw. 0 means no note in the track carries an op at all.
+  //
+  // BOTH HALVES OF R5 NEED THIS ONE FACT: "does this track use ops" (draw the column at all)
+  // and "how wide is it". Requested by the web-UI agent, whose reason is the load-bearing part:
+  // they see a WINDOW — the rows being drawn — so anything they compute from it changes as you
+  // scroll. A column that widens when you scroll past a dense row and narrows coming back is
+  // worse than a clipped one; the grid reflows under the cursor while you are typing into it,
+  // and two people scrolling differently get different layouts for one song.
+  //
+  // COUNTED AS GLYPHS, one per op present (retrigger, probability, delay, sound, offset, ramp,
+  // condition), because that is what the cell draws. A width that is a proxy for the glyph count
+  // rather than the glyph count is a width that is wrong by one at the worst moment.
+  //
+  // Recomputed in rebuildFlatAndPublish, the single funnel every structural change goes through,
+  // so it moves with clipVersion rather than being recomputed per publish cycle — a max over
+  // every note in the track is not something to do every block.
+  //
+  // THIS GREW sizeof(ShmHeader) 6080 -> 6144 and therefore bumped kShmVersion. The header had
+  // ZERO tail padding, measured, and region offsets are computed from sizeof(ShmHeader) (see the
+  // note at the top of this file), so every region shifted. Four spare bits in uiTrackMixFlags
+  // would have held 0..15 and avoided the bump; that byte's own comment already warns it is the
+  // union of two flag enumerations and that the next collision comes from someone adding to it
+  // without knowing. Making it three things to save a bump is the trap with the warning above it.
+  uint8_t uiTrackOpsWidth[kUiMaxTracks]{};
 };
 
 // uiTrackFlags bits.

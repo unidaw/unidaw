@@ -39,6 +39,9 @@ pub struct TrackMixer {
     pub gain_millibels: i32,
     pub pan_thousandths: i32,
     pub flags: u8,
+    /// v34: the widest op run on any note in the track — how many glyphs the collapsed ops cell
+    /// must draw. 0 = the track uses no ops, so the column need not be drawn at all.
+    pub ops_width: u8,
 }
 
 /// The published patcher graph: nodes + edges, plus the version to cache-key on
@@ -662,6 +665,7 @@ impl EngineHandle {
                     gain_millibels: unsafe { (*self.header).ui_track_gain_millibels[i] },
                     pan_thousandths: unsafe { (*self.header).ui_track_pan_thousandths[i] },
                     flags: unsafe { (*self.header).ui_track_mix_flags[i] },
+                    ops_width: unsafe { (*self.header).ui_track_ops_width[i] },
                 });
             }
             fence(Ordering::Acquire);

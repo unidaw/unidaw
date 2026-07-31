@@ -2252,6 +2252,9 @@ struct TrackRuntime {
     // track_id; collapsed hides children in the UI. Published per track.
     std::atomic<uint32_t> parentId{0};
     std::atomic<bool> collapsed{false};
+    // The widest op run on any note in this track — see ShmHeader::uiTrackOpsWidth. An atomic
+    // because the publisher reads it every cycle and rebuildFlatAndPublish writes it on edit.
+    std::atomic<uint8_t> opsWidth{0};
     // Movement 4 multi-out: an aux CHILD track is an ordinary runtime with NO host — its
     // audio is a view into the parent's aux output plane (bus k's channels). isAuxChild
     // gates it out of every host/producer/restart loop; auxParentTrackId names the parent
@@ -5665,6 +5668,28 @@ struct TrackRuntime {
       flat.addEvent(ev);
     }
     rt.track.clip = std::move(flat);
+    // THE WIDEST OP RUN, over the flat clip that was just built. Counted as GLYPHS — one per op
+    // present — because that is what the collapsed cell draws; see ShmHeader::uiTrackOpsWidth.
+    //
+    // Here rather than in the publish loop: this is the single funnel every structural change
+    // goes through, so the number moves with clipVersion, and a max over every note in the track
+    // is not something to do once per block.
+    {
+      uint8_t widest = 0;
+      for (const auto& ev : rt.track.clip.events()) {
+        if (ev.type != daw::MusicalEventType::Note) {
+          continue;
+        }
+        const auto& n = ev.payload.note;
+        const uint8_t count =
+            static_cast<uint8_t>((n.retrigger > 1 ? 1 : 0) + (n.probability > 0 ? 1 : 0) +
+                                 (n.delayNanoticks > 0 ? 1 : 0) + (n.sound != 0 ? 1 : 0) +
+                                 (n.soundOffset != 0 ? 1 : 0) + (n.retrigRamp != 0 ? 1 : 0) +
+                                 (n.trigCondition != 0 ? 1 : 0));
+        widest = std::max(widest, count);
+      }
+      rt.opsWidth.store(widest, std::memory_order_relaxed);
+    }
     rt.clipExtents.clear();
     for (size_t i = 0; i < rt.sourcePlacements.size(); ++i) {
       const auto& pl = rt.sourcePlacements[i];
@@ -17933,6 +17958,12 @@ struct TrackRuntime {
                   ? static_cast<uint8_t>(std::min<uint32_t>(
                         trackSnapshot[i]->linesPerBeat.load(std::memory_order_relaxed),
                         255u))
+                  : 0;
+          // v34: the widest op run on any note in the track, so the ops column can be sized
+          // once for the track instead of from whatever rows happen to be on screen.
+          uiShm.header->uiTrackOpsWidth[i] =
+              i < trackSnapshot.size()
+                  ? trackSnapshot[i]->opsWidth.load(std::memory_order_relaxed)
                   : 0;
           // v26 (M1.13): the lane's quantize, so the UI can draw each note where it was
           // played and a deviation bar to where it sounds.
