@@ -39,6 +39,16 @@ that turned out wrong are marked rather than quietly deleted.
   one op's meaning as the token identifies it. Built from `ROW_OPS`, so a new op needs no mention.
 - **`s` and `o` decode off the v32 wire**, and the sampler kit read-back (`kit <track> <device>`)
   answers what is actually in a sampler, from the snapshot the audio producer reads.
+- **`s04` ACTUALLY PICKS THE SLICE, checked at the speakers.** `ui-web/test/sound-op-audible.mjs`
+  puts two notes on the SAME key, gives only the second an `s`, and compares the two hits' pitch
+  in the captured WAV. The fixture is authored so its eighths differ only in frequency — 220 Hz
+  to 1760 Hz — and the check counts zero crossings. With the op removed the control reads
+  `440/s and 440/s, a ratio of 1.00`: the same slice twice, exactly. This is the sentence the
+  whole design was drawn around and it was the last part of it nothing had verified.
+- **The chop workflow sounds, end to end from the UI** (`chop-audible.mjs`): make a sampler, load
+  a break, chop it, write notes on two slice keys, play, and slice 1 and slice 8 are different
+  audio. A chop whose slots all played the whole file would be structurally perfect — right
+  count, right keys, right slice ids — and musically useless, and no read-back could tell you.
 
 **WHAT WE TRIED AND REMOVED** — kept here because the reasoning still applies:
 
