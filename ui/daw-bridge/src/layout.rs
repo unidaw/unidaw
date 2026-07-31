@@ -1081,6 +1081,10 @@ pub enum UiCommandType {
     /// plays the lowest slot chromatically. Off by default — a blank `sound` still means "the
     /// keymap picks from pitch" (R5). Owner ruling, docs/SAMPLER_DESIGN.md section 8 Q2.
     SetTrackSoundAddressed = 87,
+    /// Device-level sampler fields, addressed by field id like SamplerSetSlot (74).
+    /// `defaultGate` is the per-bank "ignore note-offs" default; `voiceCap` and `defaultView`
+    /// were persisted and rendered and reachable by nothing until this existed.
+    SamplerSetDevice = 88,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -1712,6 +1716,25 @@ pub struct UiSamplerLoadPayload {
 /// playable zone. There is no mapping-MODE stored anywhere — this chooses which KEYS to write.
 pub const SAMPLER_LOAD_FIXED_PITCH: u16 = 1 << 0;
 
+/// Which device-level sampler field `SamplerSetDevice` (88) is speaking about.
+pub const SAMPLER_DEVICE_FIELD_DEFAULT_GATE: u16 = 1;
+pub const SAMPLER_DEVICE_FIELD_VOICE_CAP: u16 = 2;
+pub const SAMPLER_DEVICE_FIELD_DEFAULT_VIEW: u16 = 3;
+
+/// SamplerSetDevice (88). The same shape as `UiSamplerSetSlotPayload` minus the slot id — these
+/// are properties of the DEVICE, and a slot field saying "not a slot" would be a sentinel nobody
+/// needs.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiSamplerSetDevicePayload {
+    pub command_type: u16,
+    pub field: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub value: i32,
+    pub reserved: [u8; 24],
+}
+
 /// Mirrors apps/event_payloads.h UiSamplerSetSlotPayload. `value` is SIGNED: gain, pan, tune and
 /// pitch-track all take negative values as normal settings.
 #[repr(C)]
@@ -1729,6 +1752,14 @@ pub struct UiSamplerSetSlotPayload {
 /// Which slot field SamplerSetSlot writes. NAMED rather than an index into the struct, so adding
 /// a field never renumbers an existing one — a renumbered selector would silently write the
 /// wrong field on a saved macro or an agent's script.
+/// The DEVICE-level sampler fields (opcode 88). Names rather than numbers, for the reason the
+/// slot table gives below: a caller who mistypes gets the list back instead of a silent no-op.
+pub const SAMPLER_DEVICE_FIELDS: &[(&str, u16)] = &[
+    ("default-gate", SAMPLER_DEVICE_FIELD_DEFAULT_GATE),
+    ("voice-cap", SAMPLER_DEVICE_FIELD_VOICE_CAP),
+    ("default-view", SAMPLER_DEVICE_FIELD_DEFAULT_VIEW),
+];
+
 pub const SAMPLER_SLOT_FIELDS: &[(&str, u16)] = &[
     ("voice-group", 0),
     ("nna", 1),
@@ -2015,6 +2046,7 @@ mod tests {
         same!(UiSamplerLoadPayload, sys::daw_UiSamplerLoadPayload);
         same!(UiSamplerMarkerPayload, sys::daw_UiSamplerMarkerPayload);
         same!(UiSamplerSetSlotPayload, sys::daw_UiSamplerSetSlotPayload);
+        same!(UiSamplerSetDevicePayload, sys::daw_UiSamplerSetDevicePayload);
         same!(UiSamplerSlicePayload, sys::daw_UiSamplerSlicePayload);
         same!(UiSamplerFilterPayload, sys::daw_UiSamplerFilterPayload);
         same!(UiSamplerRejectPayload, sys::daw_UiSamplerRejectPayload);

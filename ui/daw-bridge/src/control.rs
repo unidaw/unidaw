@@ -149,6 +149,11 @@ pub struct SamplerKitView {
     pub device_id: u32,
     pub found: bool,
     pub voice_cap: u32,
+    /// The bank's own defaults. `default_gate` is what a NEWLY MINTED slot gets — it seeds and
+    /// then stops mattering, so it cannot be inferred from the slots (a bank legitimately mixes
+    /// one-shot and gated ones).
+    pub default_gate: u32,
+    pub default_view: u32,
     pub active_voices: u32,
     /// Telemetry. A voice pool running out is a musical fact, not a secret.
     pub steals: u32,
@@ -1171,6 +1176,16 @@ impl EngineHandle {
         )
     }
 
+    pub fn send_sampler_set_device(
+        &self,
+        payload: crate::layout::UiSamplerSetDevicePayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSamplerSetDevicePayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSamplerSetDevicePayload>(),
+        )
+    }
+
     /// Ask the engine to publish one sampler device's kit, then read the answer.
     pub fn send_sampler_kit_request(
         &self,
@@ -1227,6 +1242,8 @@ impl EngineHandle {
                     device_id: snap.deviceId,
                     found: snap.found != 0,
                     voice_cap: snap.voiceCap,
+                    default_gate: snap.defaultGate,
+                    default_view: snap.defaultView,
                     active_voices: snap.activeVoices,
                     steals: snap.steals,
                     unmapped: snap.unmapped,

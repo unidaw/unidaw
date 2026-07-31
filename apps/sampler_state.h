@@ -156,6 +156,21 @@ struct SamplerState {
   uint8_t stemCount = 0;  // set at instantiation; changing it renegotiates buses
   uint8_t voiceCap = 64;
   uint8_t defaultView = 0;  // 0 kit, 1 sample — seeded at load by drop arity, then user-owned
+  // WHAT `gate` A NEWLY MINTED SLOT GETS. 0 = one-shot (ignores note-off), 1 = gated.
+  //
+  // It SEEDS and then stops mattering: sampler-load and sampler-slice stamp it onto slots they
+  // create, and from that moment the slot's own `gate` is the authority. NOT a live override — a
+  // device flag that overrode slots at playback would be two facts about one thing for the voice
+  // to arbitrate on every note, which is the shape that had the kit read-back disagreeing with
+  // the model and the patcher pool disagreeing with the device graphs. A seed cannot drift
+  // because nothing consults it once the slot exists. `defaultView` above works the same way.
+  //
+  // WHY IT EXISTS: `gate` defaulted to 0 because neither load nor slice ever set it, so every
+  // slot they made inherited "one-shot" from this struct's initialiser rather than from anyone's
+  // decision. Right for drums by accident. A chopped break is 64 slices and setting the field 64
+  // times is not a workflow; a bank-level default is (owner, 2026-07-31: "could that be a setting
+  // per bank? 'ignore note-offs'").
+  uint8_t defaultGate = 0;
   std::vector<SamplerSource> sources;
   std::vector<SliceSet> sliceSets;
   std::vector<SamplerModSet> modSets;

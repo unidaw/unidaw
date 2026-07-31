@@ -11150,6 +11150,10 @@ struct TrackRuntime {
                 }
                 daw::SamplerSlot sl;
                 sl.id = d.sampler.nextSlotId++;
+                // The bank's default, stamped at mint. From here the slot's own gate is the
+                // authority — see SamplerState::defaultGate for why this seeds and does not
+                // override.
+                sl.gate = d.sampler.defaultGate;
                 sl.sourceLocalId = static_cast<uint16_t>(sourceId);
                 sl.sliceId = m.id;
                 sl.keyLow = sl.keyHigh = sl.rootKey = key++;
@@ -11242,6 +11246,8 @@ struct TrackRuntime {
       slot.found = 0;
       slot.voiceCap = 0;
       slot.activeVoices = 0;
+      slot.defaultGate = 0;
+      slot.defaultView = 0;
       slot.steals = 0;
       slot.unmapped = 0;
 
@@ -11259,6 +11265,8 @@ struct TrackRuntime {
           slot.found = 1;
           slot.deviceId = runtime->samplerDeviceId;
           slot.voiceCap = snap->state.voiceCap;
+          slot.defaultGate = snap->state.defaultGate;
+          slot.defaultView = snap->state.defaultView;
           slot.activeVoices = runtime->samplerRuntime.activeVoices();
           slot.steals = static_cast<uint32_t>(runtime->samplerRuntime.stealCount());
           slot.unmapped = static_cast<uint32_t>(runtime->samplerRuntime.unmappedCount());
@@ -11494,6 +11502,106 @@ struct TrackRuntime {
           .field("track", p.trackId)
           .field("device", p.deviceId)
           .field("slot", p.slotId)
+          .field("field", static_cast<uint32_t>(p.field))
+          .field("value", static_cast<int64_t>(p.value));
+      return;
+    }
+
+    // ---- SAMPLER SET DEVICE (88). The three device-level fields, none of which had a command.
+    //
+    // `defaultGate` is the one that was asked for (owner: "could that be a setting per bank?
+    // 'ignore note-offs'"). `voiceCap` and `defaultView` were already persisted and already
+    // rendered and reachable by nothing — the same "the engine reads a field it has no path to
+    // write" shape this suite keeps finding, sitting one field id away from the thing being
+    // added, so they are closed here rather than left for a later opcode.
+    if (entry.size == sizeof(daw::UiSamplerSetDevicePayload) &&
+        commandType == daw::UiCommandType::SamplerSetDevice) {
+      daw::UiSamplerSetDevicePayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (p.trackId < tracks.size()) {
+          runtime = tracks[p.trackId].get();
+        }
+      }
+      if (!runtime) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetDevice,
+                            daw::UiSamplerRejectReason::NoSuchTrack, p.trackId, 0, 0);
+        DAW_EVENT("sampler.set_device_rejected")
+            .field("track", p.trackId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      bool applied = false;
+      const char* why = "no_sampler_device";
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::Sampler ||
+              (p.deviceId != 0 && d.id != p.deviceId)) {
+            continue;
+          }
+          switch (static_cast<daw::SamplerDeviceField>(p.field)) {
+            case daw::SamplerDeviceField::DefaultGate:
+              d.sampler.defaultGate = p.value ? 1 : 0;
+              break;
+            // VOICE CAP IS REFUSED AT ZERO, not clamped to it. A cap of 0 is a device that can
+            // never sound, which is not a near-miss of anything a caller meant — and it is
+            // exactly the kind of value that reads as "the sampler is broken" rather than "I
+            // sent a bad number". The upper bound is a clamp because 500 voices IS a caller
+            // asking for as many as they can have.
+            case daw::SamplerDeviceField::VoiceCap: {
+              if (p.value <= 0) {
+                why = "bad_value";
+                goto devdone;
+              }
+              d.sampler.voiceCap = static_cast<uint8_t>(std::clamp(p.value, 1, 255));
+              break;
+            }
+            case daw::SamplerDeviceField::DefaultView:
+              d.sampler.defaultView = p.value ? 1 : 0;
+              break;
+            default:
+              why = "unknown_field";
+              goto devdone;
+          }
+          applied = true;
+          goto devdone;
+        }
+      devdone:
+        // REFRESHED, and my first version of this deliberately did not — with the reasoning that
+        // none of these three changes anything a VOICE reads, so rebuilding would retire every
+        // live voice's snapshot for a setting that cannot be heard. That was right about the
+        // voices and wrong about the READ-BACK: the kit answer is built from the RT snapshot, so
+        // a model-only change is invisible to it and default_gate read back as 0 immediately
+        // after being set to 1.
+        //
+        // Publishing this one field from the model instead would put TWO CLOCKS in one payload —
+        // the model's value beside the snapshot's slots — which is exactly the defect #96 was:
+        // an answer whose parts describe different moments. One source, one clock, one refresh.
+        if (applied) {
+          refreshSamplerForTrack(*runtime);
+        }
+      }
+      if (!applied) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetDevice,
+                            std::strcmp(why, "bad_value") == 0
+                                ? daw::UiSamplerRejectReason::BadValue
+                                : (std::strcmp(why, "unknown_field") == 0
+                                       ? daw::UiSamplerRejectReason::BadValue
+                                       : daw::UiSamplerRejectReason::NotASampler),
+                            p.trackId, p.deviceId, static_cast<uint16_t>(p.field));
+        DAW_EVENT("sampler.set_device_rejected")
+            .field("track", p.trackId)
+            .field("device", p.deviceId)
+            .field("field", static_cast<uint32_t>(p.field))
+            .field("reason", why);
+        return;
+      }
+      DAW_EVENT("sampler.device_set")
+          .field("track", p.trackId)
+          .field("device", p.deviceId)
           .field("field", static_cast<uint32_t>(p.field))
           .field("value", static_cast<int64_t>(p.value));
       return;
@@ -11874,6 +11982,7 @@ struct TrackRuntime {
           }
           daw::SamplerSlot slot;
           slot.id = d.sampler.nextSlotId++;
+          slot.gate = d.sampler.defaultGate;  // the bank's default, stamped at mint
           slot.name = name;
           slot.sourceLocalId = newSource;
           slot.rootKey = p.rootKey;
