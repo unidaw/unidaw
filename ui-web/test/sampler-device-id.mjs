@@ -179,10 +179,27 @@ const ids = await page.evaluate(() => {
   }
   return out;
 });
-check(ids[0] === 0, 'the sampler on the empty chain got device id 0', JSON.stringify(ids));
+/*
+ * ZERO IS NOT A DEVICE ID. IT IS THE ABSENCE OF ONE — and that is now the assertion.
+ *
+ * This file was written to isolate the opposite: `nextDeviceId()` started at 0, so the first
+ * device on an empty chain got id 0, which is what "there is no device" means everywhere else in
+ * the engine. `TrackRuntime::samplerDeviceId` is documented "0 = this track has no sampler" and
+ * guarded that way at nine sites, so a sampler that was the FIRST device on its track was never
+ * sent a note. The wire overloads it the same way — deviceId 0 on a command means "the first
+ * sampler on this track" — so it was unaddressable by every command too.
+ *
+ * Backend fixed it engine-side (nextDeviceId starts at 1). The check inverts rather than being
+ * deleted: what was the reproducer is now the regression guard, and it fails again the day
+ * anything starts handing out zero.
+ */
+check(ids[0] !== undefined && ids[0] !== 0,
+      'a sampler on an EMPTY chain gets a real device id, not the no-device sentinel',
+      JSON.stringify(ids));
 check(ids[1] !== undefined && ids[1] !== 0, 'the sampler behind a device got a non-zero id',
       JSON.stringify(ids));
-check(ids[2] !== undefined, 'the hosted track has a sampler too', JSON.stringify(ids));
+check(ids[2] !== undefined && ids[2] !== 0, 'the hosted track has a sampler too',
+      JSON.stringify(ids));
 
 const dev0 = ids[0], dev1 = ids[1], dev2 = ids[2];
 await run(`load-sample 0 ${dev0} break.wav`);
@@ -413,12 +430,16 @@ for (const m of engineLog.matchAll(/"event":"sampler\.kit_published","track":(\d
 }
 console.log(`  voices the ENGINE published while the notes sounded: ` +
             `t0=${voicesByTrack[0] || 0} t1=${voicesByTrack[1] || 0} t2=${voicesByTrack[2] || 0}`);
+/*
+ * EVERY SAMPLER STARTS A VOICE, whatever its chain. This was 0 / 1 / 1 before the id fix — the
+ * track whose sampler landed at id 0 was the one that never heard a note — and it is the reading
+ * that proved the cause, because the three tracks are otherwise identical.
+ */
 check((voicesByTrack[1] || 0) > 0,
-      'a sampler with a non-zero device id starts a voice', JSON.stringify(voicesByTrack));
+      'a sampler behind another device starts a voice', JSON.stringify(voicesByTrack));
 check((voicesByTrack[0] || 0) > 0,
-      'a sampler whose device id is 0 starts a voice too',
-      `t0=${voicesByTrack[0] || 0} against t1=${voicesByTrack[1] || 0} on an identical track — ` +
-      `samplerDeviceId 0 doubles as "this track has no sampler" (daw_engine_main.cpp:2273)`);
+      'a sampler alone on an empty chain starts a voice too',
+      `t0=${voicesByTrack[0] || 0} against t1=${voicesByTrack[1] || 0} on an identical track`);
 const worst = (engineLog.match(/\((\d+) total/g) || []).pop() || '';
 check(underruns === 0, 'the producer kept up (no underruns)',
       `${underruns} underrun report(s) ${worst} — a starved producer outputs silence, so every ` +
@@ -475,8 +496,10 @@ if (!existsSync(WAV)) {
           `peak ${behind.toFixed(4)} against ${control.toFixed(4)} for the control — the sampler ` +
           `renders into the host input plane, which is only read inside the segment loop, and ` +
           `segments are built only from VST devices (daw_engine_main.cpp:16109)`);
-    soundCheck(first > FLOOR, 'a sampler alone on its track sounds (device id 0)',
-          `peak ${first.toFixed(4)} against ${behind.toFixed(4)} one track over`);
+    soundCheck(first > FLOOR, 'a sampler alone on its track sounds (empty chain)',
+          `peak ${first.toFixed(4)} against ${control.toFixed(4)} for the control — this one ` +
+          `STARTS A VOICE (the engine publishes voices:1 while the note sounds) and reaches no ` +
+          `output, which is a different bug from the device-id one and outlives its fix`);
   }
 }
 

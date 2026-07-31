@@ -808,7 +808,7 @@ test('a project row leaves its meta line to the renderer', () => {
  */
 const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'samplerKitCached',
                      'rowOps', 'opsAtCursor', 'opAtCursor', 'opsTextAtCursor', 'noteIdAtCursor',
-                     'loadSample', 'addDevice', 'sliceSample',
+                     'loadSample', 'addDevice', 'sliceSample', 'samplerFilter',
                      'setView', 'load', 'save', 'listProjects', 'transport', 'seek', 'tempo',
                      'note', 'del', 'goto', 'zoom', 'octave', 'gain', 'strip', 'state',
                      'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
@@ -2218,6 +2218,12 @@ const OP_REGISTRY = {
    * bit, and two clients editing different ops on one row only survive the second.
    */
   op:        { cli: 'set-row-ops', agent: null, why: 'gap' },
+  /*
+   * The filter (opcode 86). No CLI verb yet — it landed engine-side this morning and daw-cli has
+   * not caught up — so it is recorded as a gap rather than claimed as covered. Recording it as
+   * covered would be worse than recording it as missing.
+   */
+  filter:    { cli: null, agent: null, why: 'gap' },
   edit:      { cli: null, agent: null, why: 'view' },
   fold:      { cli: null, agent: null, why: 'view' },
   follow:    { cli: null, agent: null, why: 'view' },
@@ -2265,6 +2271,9 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
                  'delchord', 'delharmony', 'move-clip', 'movedevice', 'new', 'paste',
                  'patch', 'redo', 'rename', 'seek', 'stop', 'transpose', 'trim-clip',
                  'undo',
+                 // The sampler filter (opcode 86). It landed engine-side this morning and the
+                 // CLI has no verb for it yet — recorded as a gap rather than claimed as covered.
+                 'filter',
                  // The sampler read-back. Reached the engine from this app first; daw-cli has
                  // no verb for it, which is the usual direction reversed and worth recording.
                  'kit',
@@ -2315,6 +2324,8 @@ const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
                    'del', 'delchord', 'delharmony', 'delnode', 'editor',
                    'gain', 'link', 'loop', 'mute', 'new', 'paste', 'patch',
                    'seek', 'solo', 'tempo', 'transpose', 'mods', 'ops',
+                   // With the other sampler verbs: the agent has no sampler tooling at all.
+                   'filter',
                    // With `ops`, and for the same reason: the agent has no row-op tool at all.
                    'op',
                    'sampler', 'load-sample', 'slice',

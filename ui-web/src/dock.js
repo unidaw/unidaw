@@ -12,6 +12,8 @@
 
 import { ZOOM_LEVELS } from './viewmodel.js';
 import { EDGE_KINDS } from './patchermodel.js';
+// The filter names, from the file that already decides whether a cutoff modulator is live.
+import { FILTER_TYPES } from './chainmodel.js';
 
 const MAX_LINES = 300;
 
@@ -474,6 +476,32 @@ export function createCommands(api) {
         const mode = a[3] === undefined ? 'equal' : String(a[3]);
         return api.sliceSample(Number(a[0]), Number(a[1]), { count, mode })
           ? `chopping into ${count} ${mode} slices` : refusal(api);
+      } },
+    /*
+     * THE FILTER, which until opcode 86 landed could not be set at all.
+     *
+     * Nothing in the engine wrote `modSet.filterType`, so every cutoff modulator in the file
+     * format was inert by construction and the kit view's `!` badge was reporting the only state
+     * the product could reach. Naming the types rather than taking a number because "2" is not a
+     * thing anyone remembers about a filter.
+     *
+     * Cutoff and resonance are OPTIONAL and omitted rather than defaulted: zero is a legal
+     * cutoff, so "change the type, leave the cutoff" is a distinct edit the payload's flags
+     * exist to express, and defaulting them here would silently zero someone's setting.
+     */
+    filter: { help: 'filter <track> <device> <off|lp12|lp24|hp|bp> [cutoff] [resonance] — the '
+                  + 'sampler filter the modulators move around; cutoff and resonance are 0-1000',
+      args: [A_TRACK, { name: 'device', type: 'int', min: 0 },
+             oneOf(FILTER_TYPES),
+             { name: 'cutoff', type: 'int', min: 0, max: 1000, optional: true },
+             { name: 'resonance', type: 'int', min: 0, max: 1000, optional: true }],
+      run: (a) => {
+        const type = FILTER_TYPES.indexOf(String(a[2]));
+        const cutoff = a[3] === undefined ? undefined : Number(a[3]);
+        const res = a[4] === undefined ? undefined : Number(a[4]);
+        if (!api.samplerFilter(num(a[0]), num(a[1]), type, cutoff, res)) return refusal(api);
+        return `filter ${a[2]}` + (cutoff === undefined ? '' : ` cutoff ${cutoff}`)
+             + (res === undefined ? '' : ` res ${res}`);
       } },
     kit: { help: 'kit <track> <device> — what is in that sampler, slot by slot',
       args: [A_TRACK, { name: 'device', type: 'int', min: 0 }],

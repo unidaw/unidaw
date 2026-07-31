@@ -2785,6 +2785,31 @@ const dockApi = {
   addDevice: (track, kind) => !!(conn && conn.send({ type: 'adddevice',
     track: track === undefined ? state.cursor.track : track, kind: kind || 'patcher event' })),
   loadSample: (t, d, name, root, fixed) => loadSample(t, d, name, root, fixed),
+  /**
+   * The filter on a sampler's mod set: type, and optionally the base cutoff and resonance.
+   *
+   * `cutoff` and `resonance` are OMITTED rather than defaulted when the caller does not name
+   * them, and that distinction is the whole reason the payload carries flags: zero is a legal
+   * cutoff, not a missing one, so "change the type and leave the cutoff alone" cannot be said
+   * with a value. Passing undefined here is what leaves them alone.
+   *
+   * Until opcode 86 existed nothing in the engine wrote `modSet.filterType`, so every cutoff
+   * modulator in the file format was inert by construction — the kit view's `!` badge was
+   * reporting the only state the product could reach. This is the command that gives it
+   * something else to report.
+   */
+  samplerFilter: (track, device, type, cutoff, resonance, modSet) => {
+    const msg = { type: 'samplerfilter', track: Number(track) || 0, device: Number(device) || 0,
+                  modSet: Number(modSet) || 0, filterType: Number(type) || 0 };
+    if (cutoff !== undefined && cutoff !== null && !Number.isNaN(Number(cutoff))) {
+      msg.cutoff = Number(cutoff);
+    }
+    if (resonance !== undefined && resonance !== null && !Number.isNaN(Number(resonance))) {
+      msg.resonance = Number(resonance);
+    }
+    if (!conn || !conn.send(msg)) { state.reject = 'no engine'; schedule(); return false; }
+    state.reject = null; schedule(); return true;
+  },
   sliceSample: (t, d, opts) => sliceSample(t, d, opts),
   rowOps: (track, note, text) => writeRowOps(track, 0, note, text),
   opsAtCursor: (text) => writeOpsAtCursor(text),
@@ -7716,6 +7741,8 @@ window.__uni = {
   // One op, leaving the rest of the row alone. On BOTH surfaces for the same reason
   // every other pair is: the console reaches one and tests and agents reach the other.
   opAtCursor: (x) => dockApi.opAtCursor(x),
+  // On both surfaces, like every other pair here.
+  samplerFilter: (t, d, ty, c, r, m) => dockApi.samplerFilter(t, d, ty, c, r, m),
   opsTextAtCursor: () => dockApi.opsTextAtCursor(),
   noteIdAtCursor: () => dockApi.noteIdAtCursor(),
   samplerKit: (t, d) => dockApi.samplerKit(t, d),

@@ -32,7 +32,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
-use daw_bridge::layout::{UiSetRowOpsPayload, UiSamplerLoadPayload, UiSamplerSlicePayload, EventEntry, UiChainCommandPayload, UiChordCommandPayload,
+use daw_bridge::layout::{UiSetRowOpsPayload, UiSamplerLoadPayload, UiSamplerSlicePayload,
+                         UiSamplerFilterPayload, EventEntry, UiChainCommandPayload, UiChordCommandPayload,
                          UiMarkerCommandPayload, UiArrangeTimeCommandPayload,
                          UI_TIME_SIG_FLATTEN, UiModLinkCommandPayload,
                          UiModLinkUid16Payload, UiModSourceValuePayload,
@@ -1452,7 +1453,20 @@ fn request_sampler_kit(handle: &EngineHandle, track: u32, device: u32) -> String
     let deadline = Instant::now() + Duration::from_millis(1500);
     loop {
         if let Some(k) = handle.read_sampler_kit_slot(slot) {
-            if k.request_seq == seq && k.track_id == track && k.device_id == device {
+            // DEVICE 0 IS A WILDCARD ON THE WAY OUT, and the answer comes back with the id it
+            // RESOLVED TO. Requiring the echo to equal the request rejected every answer to a
+            // wildcard — the read simply timed out and the UI held null for ever.
+            //
+            // It passed for months by luck: ids used to start at 0, so "the first sampler" and
+            // "device 0" were the same number and the comparison happened to hold. The day the
+            // engine stopped handing out 0 (it is the no-device sentinel, so a device that owned
+            // it was never sent a note) every wildcard read broke — a fix on one side surfacing
+            // a latent bug on the other.
+            //
+            // The seq is what makes an answer THIS answer; the track must still match, because
+            // the seq only indexes a slot and a slot is reused.
+            let device_ok = device == 0 || k.device_id == device;
+            if k.request_seq == seq && k.track_id == track && device_ok {
                 let slots: Vec<String> = k.slots.iter().map(|e| format!(
                     "{{\"slot\":{},\"source\":{},\"keyLow\":{},\"keyHigh\":{},\"root\":{},\
                       \"velLow\":{},\"velHigh\":{},\"group\":{},\"nna\":{},\"flags\":{},\
@@ -1469,10 +1483,26 @@ fn request_sampler_kit(handle: &EngineHandle, track: u32, device: u32) -> String
                     // without the other shows a live control over a dead one.
                     e.modMask, e.filterType)).collect();
                 return format!(
-                    "{{\"samplerKit\":{{\"track\":{},\"device\":{},\"found\":{},\
+                    "{{\"samplerKit\":{{\"track\":{},\"device\":{},\"resolvedDevice\":{},\
+                     \"found\":{},\
                      \"voiceCap\":{},\"activeVoices\":{},\"steals\":{},\"unmapped\":{},\
                      \"truncated\":{},\"slots\":[{}]}}}}",
-                    track, device, k.found, k.voice_cap, k.active_voices, k.steals,
+                    /*
+                     * THREE IDS, AND THEY ANSWER DIFFERENT QUESTIONS.
+                     *
+                     * `track` is the ANSWER's own field, so a reply about the wrong track cannot
+                     * be filed as one about the right one. `device` is what was ASKED, because
+                     * the caller's cache is keyed on the question and an answer filed under
+                     * another key is an answer nobody can find. `resolvedDevice` is what the
+                     * engine picked — for the deviceId-0 wildcard ("the first sampler on this
+                     * track") that is the only place the real id is visible at all.
+                     *
+                     * All three echoed the REQUEST before, so a check comparing the reply to what
+                     * it asked for compared a value with itself and could not fail. That is what
+                     * the guard written this morning against being handed another track's kit
+                     * was actually doing.
+                     */
+                    k.track_id, device, k.device_id, k.found, k.voice_cap, k.active_voices, k.steals,
                     k.unmapped, k.slots_truncated, slots.join(","));
             }
         }
@@ -3332,6 +3362,41 @@ fn build_sampler_load(body: &str) -> Option<Result<UiSamplerLoadPayload, &'stati
 /// tempo-adaptive from the moment it is made rather than tied to the rate the file was recorded
 /// at — which is the difference between a break that follows the song and one the song has to
 /// follow.
+/// SamplerSetFilter (86). The mod set's filter: type, and optionally the base cutoff and
+/// resonance the modulators move AROUND.
+///
+/// The two flags are the whole subtlety. The common edit is changing the TYPE on a mod set whose
+/// cutoff someone already dialled in, and zero is a LEGAL cutoff rather than a missing one — so
+/// "leave it alone" cannot be encoded as a zero value and has to be the absence of a flag. This
+/// therefore sets a flag only when the caller actually named the field.
+fn build_sampler_filter(body: &str) -> Option<Result<UiSamplerFilterPayload, &'static str>> {
+    if !is_type(body, "samplerfilter") { return None; }
+    let ftype = parse_num(body, "\"filterType\"").unwrap_or(0);
+    if !(0..=4).contains(&ftype) {
+        return Some(Err("filter type is 0 off, 1 LP12, 2 LP24, 3 HP, 4 BP"));
+    }
+    let cutoff = parse_num(body, "\"cutoff\"");
+    let resonance = parse_num(body, "\"resonance\"");
+    let mut flags = 0u16;
+    if cutoff.is_some() { flags |= daw_bridge::layout::SAMPLER_FILTER_SET_CUTOFF; }
+    if resonance.is_some() { flags |= daw_bridge::layout::SAMPLER_FILTER_SET_RESONANCE; }
+    Some(Ok(UiSamplerFilterPayload {
+        command_type: UiCommandType::SamplerSetFilter as u16,
+        flags,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        device_id: parse_num(body, "\"device\"").unwrap_or(0).max(0) as u32,
+        // 0 = every mod set on that sampler, which is the engine's own sentinel and the sane
+        // default for a kit where one filter setting is meant for the whole thing.
+        mod_set_id: parse_num(body, "\"modSet\"").unwrap_or(0).max(0) as u32,
+        filter_type: ftype as u8,
+        reserved0: 0,
+        cutoff_milli: cutoff.unwrap_or(0).clamp(0, 1000) as u16,
+        resonance_milli: resonance.unwrap_or(0).clamp(0, 1000) as u16,
+        reserved1: 0,
+        reserved2: [0u32; 4],
+    }))
+}
+
 fn build_sampler_slice(body: &str) -> Option<Result<UiSamplerSlicePayload, &'static str>> {
     if !is_type(body, "samplerslice") { return None; }
     let mode = match parse_str(body, "\"mode\"").unwrap_or("equal") {
@@ -3785,6 +3850,21 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                     Ok(()) => format!(
                                         "{{\"ok\":true,\"autopoint\":{},\"value\":{}}}",
                                         p.track_id, p.value),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        // THE FILTER ON A MOD SET. Own 40-byte payload.
+                        if let Some(r) = build_sampler_filter(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_sampler_filter(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"samplerfilter\":{},\"type\":{}}}",
+                                        p.device_id, p.filter_type),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                                 },
                             };

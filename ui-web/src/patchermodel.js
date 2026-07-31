@@ -20,6 +20,9 @@
 /** PatcherNodeType, from daw_bridge::layout. */
 export const NODE_TYPES = [
   'kernel', 'euclidean', 'passthru', 'audio', 'lfo', 'random', 'out',
+  // SliceSelect (7). Chooses WHICH SOUND a note plays — the sampler slot or slice — and leaves
+  // the pitch alone: random_degree writing `sound` instead of `pitch`.
+  'slice',
 ];
 
 /** PatcherPortKind, from apps/patcher_graph.h. Also the edge kinds on the wire. */
@@ -68,6 +71,9 @@ const PORTS_BY_TYPE = [
   [[PORT_EVENT_IN, KIND_EVENT, 0], [PORT_EVENT_OUT, KIND_EVENT, 1]],
   // out (EventOut): a sink.
   [[PORT_EVENT_IN, KIND_EVENT, 0]],
+  // slice (SliceSelect): events in, events out — it rewrites what passes through rather than
+  // sourcing anything, so the shape is `random`'s and not `euclidean`'s.
+  [[PORT_EVENT_IN, KIND_EVENT, 0], [PORT_EVENT_OUT, KIND_EVENT, 1]],
 ];
 
 /** What a port is called on the box. Short, because it sits outside a 224px node. */
@@ -88,6 +94,9 @@ const CONFIG_FIELDS = {
   random: ['degree', 'vel', ['dur', 960000, 'b', 'auto']],
   // Stored as milli-units, so they are shown divided rather than as raw i32s.
   lfo: [['freq', 1000, 'Hz'], ['depth', 1000, ''], ['bias', 1000, ''], ['phase', 1000, '']],
+  // Picks a sound address in [base, base+count). Plain integers: these are SLOT NUMBERS, and
+  // dividing one by anything would be a different quantity.
+  slice: ['base', 'count'],
 };
 
 /** How much one nudge moves each field, and what it may not exceed. */
@@ -97,6 +106,9 @@ const CONFIG_LIMITS = {
   random: [[1, 0, 12], [1, 1, 127], [120000, 0, 7680000]],
   // Milli-units, so a step of 100 is 0.1 Hz.
   lfo: [[100, 1, 20000], [50, 0, 1000], [50, -1000, 1000], [50, 0, 1000]],
+  // A slot address and how many to choose from. 0 as a base means "the keymap picks from the
+  // pitch", which is the sampler's own sentinel and a legitimate setting rather than an unset one.
+  slice: [[1, 0, 127], [1, 1, 128]],
 };
 
 /** The most fields any type has, which is how many rows a node box pools. */
@@ -605,7 +617,12 @@ export function subgraphFrom(nodes, edges, rootNodeId, mask) {
  * `random` picks a degree; both make notes nobody wrote, which is the whole reason
  * anyone needs to be told they are there.
  */
-export const GENERATOR_TYPES = new Set(['euclidean', 'random']);
+export const GENERATOR_TYPES = new Set(['euclidean', 'random',
+  // `slice` for the same reason `random` is here, and the engine agrees in as many words
+  // (isEventGeneratorNode, patcher_graph.h): it rewrites what a note PLAYS, so the note that
+  // sounds is not the note that was written — and it promotes a bare gate into a note, which is
+  // generation in the plainest sense.
+  'slice']);
 
 /**
  * The generator node types reachable from `rootNodeId`, as a phrase.

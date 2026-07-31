@@ -153,6 +153,17 @@ const MOD_TARGETS = ['volume', 'panning', 'pitch', 'cutoff', 'resonance'];
 /** Targets whose modulators are silent while the mod set's filter is off. */
 const FILTER_TARGETS = 3;   // cutoff and resonance, i.e. indices 3 and 4
 
+/**
+ * The filter types, by their wire value — `UiSamplerFilterPayload.filterType`: 0 off, 1 LP12,
+ * 2 LP24, 3 HP, 4 BP.
+ *
+ * Named rather than numbered wherever a person types or reads one: "2" is not a thing anyone
+ * remembers about a filter. Lives here because this is the file that already has to decide
+ * whether a cutoff modulator is live or inert, and that decision IS `filterType !== 0` — so the
+ * list and the rule that reads it stay in one place.
+ */
+export const FILTER_TYPES = ['off', 'lp12', 'lp24', 'hp', 'bp'];
+
 export function modSummary(modMask, filterType) {
   if (!modMask) return { mark: '', title: '' };
   let live = 0, inert = 0;

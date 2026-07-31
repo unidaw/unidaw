@@ -323,8 +323,10 @@ const ask = async (track, device) => {
   check(slot && (slot.modMask & (1 << 6)) !== 0, 'and so does the cutoff envelope',
         slot && `mask ${slot.modMask}`);
   check(slot && slot.filterType === 0,
-        'while the filter is OFF — nothing in the engine writes filterType, so this is the '
-        + 'only value it can have. Reported; opcode 86 will change it.',
+        'while the filter is OFF — which is now a STATE rather than the only value reachable. '
+        + 'It was the latter for a night: no site in the engine wrote filterType, so every '
+        + 'cutoff modulator was inert by construction. Opcode 86 changed that; the check below '
+        + 'turns it on.',
         slot && String(slot.filterType));
 
   /*
@@ -340,14 +342,49 @@ const ask = async (track, device) => {
       .map((r) => ({ v: r.querySelector('.dv-p-v') ? r.querySelector('.dv-p-v').textContent : '',
                      t: r.title || '' }))[0]);
   /*
-   * `~!` AND NOT `~`. One modulator moves, one cannot, and the row says both. Marking the
-   * cutoff envelope live would make this surface agree with a bug that currently has no way to
-   * be disagreed with — which is exactly what backend's own check did before it caught itself.
+   * `~!` AND NOT `~`, WHILE THE FILTER IS OFF. One modulator moves, one cannot, and the row says
+   * both. Marking the cutoff envelope live here would make this surface agree with a state the
+   * product can genuinely be in.
    */
   check(row && /~/.test(row.v) && /!/.test(row.v),
         'and the row shows BOTH — something moves, something cannot', row && JSON.stringify(row.v));
   check(row && /filter is off/.test(row.t),
         'naming the reason, because the reason is the fixable part', row && row.t);
+
+  /*
+   * NOW TURN THE FILTER ON — the half that could not be written until opcode 86 existed.
+   *
+   * This was an inverted gap check for most of a night: nothing in the engine wrote
+   * `modSet.filterType`, so every cutoff modulator in the file format was inert BY CONSTRUCTION
+   * and `!` was the only badge the product could reach. The command exists now, so the same
+   * cutoff envelope becomes live and the `!` must go — which is a claim about the engine, the
+   * sidecar, the console verb and the badge rule all at once, and the only reason to trust any
+   * of them is that this fails when any one is wrong.
+   */
+  const set = await page.evaluate((t) => window.__uni.run(`filter ${t} 0 lp24 700 200`), mt);
+  await page.waitForTimeout(1500);
+  const lit = await page.evaluate(async (t) => {
+    for (let i = 0; i < 40; i++) {
+      window.__uni.send({ type: 'samplerkit', track: t, device: 0 });
+      await new Promise((r) => setTimeout(r, 200));
+      const k = window.__uni.samplerKitCached(t, 0);
+      if (k && k.slots && k.slots.length && k.slots[0].filterType) return k.slots[0];
+    }
+    const k = window.__uni.samplerKitCached(t, 0);
+    return k && k.slots ? k.slots[0] : null;
+  }, mt);
+  check(lit && lit.filterType === 2,
+        'the console turns the filter ON, and the kit read-back says so',
+        `${String(set).slice(-40)} / filterType ${lit && lit.filterType}`);
+
+  await page.waitForTimeout(900);
+  const row2 = await page.evaluate(() =>
+    [...document.querySelectorAll('.dv-p')].filter((r) => r.style.display !== 'none')
+      .map((r) => ({ v: r.querySelector('.dv-p-v') ? r.querySelector('.dv-p-v').textContent : '',
+                     t: r.title || '' }))[0]);
+  check(row2 && /~/.test(row2.v) && !/!/.test(row2.v),
+        'and the row drops the inert mark — the cutoff envelope is live now',
+        row2 && JSON.stringify(row2.v));
 }
 
 // ---------------------------------------------------------------------------
@@ -391,22 +428,26 @@ const ask = async (track, device) => {
     return window.__uni.samplerKitCached(t, 0);
   }, ct);
   /*
-   * EIGHT ASKED FOR, SEVEN SLICES MADE, plus the whole-file slot the load left behind.
+   * EIGHT ASKED FOR, EIGHT MADE, plus the whole-file slot the load left behind.
    *
-   * `divideEqually(frames, parts)` returns the INTERIOR boundaries — `i` from 1 to parts-1 — so
-   * `parts = 8` yields seven markers and therefore seven slices, and the file's first region
-   * gets no slot at all. Asking for eight equal slices gives seven. Reported.
+   * This was 8-asked-for, SEVEN-made for a night, and the reason is worth keeping: `divideEqually`
+   * returned only the INTERIOR boundaries, so the region from frame 0 to the first marker had no
+   * index, no id and no way to be played. Backend's own words: "a comment called frame 0 'the
+   * first slice's implicit start' — it was not implicit, it was UNREACHABLE." For a transient
+   * chop that region is pre-roll and losing it is right; for an equal division it is the
+   * DOWNBEAT. Frame 0 is a legal marker now and N parts means N slices.
    *
-   * Asserted exactly rather than loosely: `>= 7` would pass if the count ever became right, and
-   * a check that cannot tell an off-by-one from a fix is not worth having.
+   * The check moved the day that changed, which is what an inverted gap check is for — it was
+   * written to fail on the fix rather than to be remembered.
+   *
+   * Asserted exactly rather than loosely: `>= 8` would pass on nine, and a check that cannot
+   * tell an off-by-one from a fix is not worth having.
    */
-  check(chopped && chopped.slots.length === 8,
-        'the chop adds seven slice slots beside the whole-file slot the load made — '
-        + '`count` is the number of PARTS and divideEqually returns interior boundaries, so '
-        + 'eight parts is seven slices. Reported; this check moves the day that changes.',
+  check(chopped && chopped.slots.length === 9,
+        'the chop adds eight slice slots beside the whole-file slot the load made',
         chopped && String(chopped.slots.length));
 
-  if (chopped && chopped.slots.length === 8) {
+  if (chopped && chopped.slots.length === 9) {
     const sorted = [...chopped.slots].sort((a, b) => a.keyLow - b.keyLow);
     /*
      * CONSECUTIVE KEYS FROM C1. That is what makes a chop playable rather than merely stored:
@@ -419,7 +460,8 @@ const ask = async (track, device) => {
     const cut = sorted.filter((x) => x.slice > 0);
     const keys = cut.map((x) => x.keyLow);
     const consecutive = keys.every((k, i) => i === 0 || k === keys[i - 1] + 1);
-    check(cut.length === 7 && consecutive,
+    // EIGHT, since frame 0 became a legal marker: `slice 8` is eight slices on eight keys.
+    check(cut.length === 8 && consecutive,
           'the slices are on consecutive keys, so the break is playable in order',
           JSON.stringify(keys));
     check(cut.every((x, i) => x.slice === i + 1), 'each naming the slice it plays, in order',
