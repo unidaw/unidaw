@@ -2802,3 +2802,51 @@ test('a modulator that cannot move anything reads as inert, not as absent', () =
   const both = modSummary((1 << 0) | (1 << 6), 0);
   assert.equal(both.mark, '~!', 'a slot with one working and one dead modulator says both');
 });
+
+test('the wire constants match the sidecar that writes them', async () => {
+  /*
+   * `wire.js` decodes a frame the sidecar encodes, and the two agree by hand: the sidecar writes
+   * fields sequentially and this side reads them at literal offsets. Tonight the lane block grew
+   * from 16 entries to 64 and I shifted twenty-five of those literals with a script — which
+   * worked, and which nothing would have caught if it had not.
+   *
+   * The suites DO catch a mismatch, loudly, because everything after the error decodes as
+   * garbage. But they catch it as "twelve suites are failing", which is an expensive way to be
+   * told that one number is wrong. These three are the numbers a shift moves, read out of the
+   * Rust so neither side is quoting the other from memory:
+   *
+   *   WIRE_VERSION       a mismatch REJECTS the frame, which is the designed behaviour — so a
+   *                      forgotten bump is a blank page rather than a wrong one
+   *   FULL_HEADER_BYTES  where the variable section starts; wrong and every section is wrong
+   *   NOTE_BYTES         the per-note stride
+   *
+   * This is the cheap half of what backend called the real check — dumping sizeof/offsetof from
+   * both languages and diffing. It compares three declared constants rather than a computed
+   * layout, so it catches a forgotten bump and not a mis-ordered field. Worth saying which,
+   * because a check that is trusted beyond what it verifies is worse than none.
+   */
+  const { readFileSync } = await import('node:fs');
+  const rs = readFileSync(new URL('../../ui/daw-sidecar/src/main.rs', import.meta.url), 'utf8');
+  const js = readFileSync(new URL('../src/wire.js', import.meta.url), 'utf8');
+
+  const rust = (re, what) => {
+    const m = re.exec(rs);
+    assert.ok(m, `found ${what} in the sidecar`);
+    return Number(m[1]);
+  };
+  const mine = (re, what) => {
+    const m = re.exec(js);
+    assert.ok(m, `found ${what} in wire.js`);
+    return Number(m[1]);
+  };
+
+  assert.equal(mine(/export const WIRE_VERSION = (\d+);/, 'WIRE_VERSION'),
+               rust(/const WIRE_VERSION: u16 = (\d+);/, 'WIRE_VERSION'),
+    'WIRE_VERSION differs — the page would reject every frame, which looks like a dead engine');
+  assert.equal(mine(/const HEADER_BYTES = (\d+);/, 'HEADER_BYTES'),
+               rust(/const FULL_HEADER_BYTES: usize = (\d+);/, 'FULL_HEADER_BYTES'),
+    'the header size differs — every section after it decodes at the wrong offset');
+  assert.equal(mine(/const NOTE_BYTES = (\d+);/, 'NOTE_BYTES'),
+               rust(/const NOTE_BYTES: usize = (\d+);/, 'NOTE_BYTES'),
+    'the note stride differs — notes read fine and everything after them is garbage');
+});
