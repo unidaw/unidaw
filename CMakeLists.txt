@@ -583,6 +583,12 @@ add_test(NAME sampler_reject
 )
 set_tests_properties(sampler_reject PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# The retrigger ramp is heard, and a conditional trig skips the right passes — reproducibly.
+add_test(NAME elektron_ops
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/elektron_ops_check.sh
+)
+set_tests_properties(elektron_ops PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # Every published patcher node names the device it came from.
 add_test(NAME patcher_node_owner
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/patcher_node_owner_check.sh

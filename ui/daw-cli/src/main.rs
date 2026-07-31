@@ -16,6 +16,8 @@ use daw_bridge::layout::{
     UiSamplerEnvelopePayload, UiSamplerFilterPayload, UiSetRowOpsPayload, UiWaveformRequestPayload,
     MASTER_TRACK_ID, SAMPLER_ENV_BY_TARGET, SAMPLER_FILTER_SET_CUTOFF, SAMPLER_FILTER_SET_RESONANCE,
     ROW_OP_MASK_DELAY,
+    ROW_OP_MASK_RETRIG_RAMP,
+    ROW_OP_MASK_TRIG_CONDITION,
     ROW_OP_MASK_PROBABILITY, ROW_OP_MASK_RETRIGGER, ROW_OP_MASK_SOUND, ROW_OP_MASK_SOUND_OFFSET,
     SAMPLER_LOAD_FIXED_PITCH, SAMPLER_MARKER_ADD,
     SAMPLER_MARKER_MOVE, SAMPLER_MARKER_REMOVE, SAMPLER_SLICE_CLEAR, SAMPLER_SLICE_EQUAL,
@@ -44,7 +46,8 @@ daw-cli — control surface for a running engine
                           [--sensitivity 0-1000] [--count 16] [--snap TICKS] [--slots]
                                    chop a source; --slots makes one playable slot per slice
   daw-cli do sampler-marker --track N --source 1 --op add|move|remove [--marker ID] [--frame F]
-  daw-cli do set-row-ops --track N --note ID [--clip ID] [--ret N] [--prob N] [--sound N] [--offset N] [--delay TICKS] [--clear ret,prob,sound,offset,delay]
+  daw-cli do set-row-ops --track N --note ID [--clip ID] [--ret N] [--prob N] [--sound N] [--offset N] [--delay TICKS]
+                         [--retrig-ramp -100..100] [--condition A:B] [--clear ret,prob,sound,offset,delay,ramp,cond]
   daw-cli do sampler-env --track N [--device ID] [--mod-set ID] [--amp|--modulator ID] --attack US --decay US --sustain MILLI --release US [--sync] [--rate MILLI] [--target amp|pan|pitch|cutoff|res] [--depth MILLI]
   daw-cli do sampler-env-draw --track N [--target amp|pan|pitch|cutoff|res] --points t,v[,tension[,step]];...
   daw-cli do sampler-filter --track N [--device D] [--mod-set ID] --type off|lp12|lp24|hp|bp [--cutoff 0..1000] [--resonance 0..1000]
@@ -2717,6 +2720,8 @@ fn main() {
                     let mut sound: u16 = 0;
                     let mut sound_offset: u16 = 0;
                     let mut delay_nanoticks: u32 = 0;
+                    let mut retrig_ramp: i8 = 0;
+                    let mut trig_condition: u8 = 0;
                     let mut parse_error: Option<String> = None;
                     // PRESENCE is what sets the mask bit, so a value must be read with `flag`
                     // (was it given?) rather than flag_u64 (what is it, or a default?). A parse
@@ -2750,6 +2755,55 @@ fn main() {
                     if let Some(v) = take("--delay", ROW_OP_MASK_DELAY) {
                         delay_nanoticks = v as u32;
                     }
+                    // THE RAMP IS SIGNED, so it cannot go through `take`, which parses u64 — and
+                    // "--retrig-ramp -60" landing as a parse error that defaulted to 0 would
+                    // clear a ramp the caller was setting, which is the exact failure the
+                    // presence/parse split above exists to avoid.
+                    if let Some(raw) = flag(&args, "--retrig-ramp") {
+                        match raw.parse::<i32>() {
+                            Ok(v) if (-100..=100).contains(&v) => {
+                                mask |= ROW_OP_MASK_RETRIG_RAMP;
+                                retrig_ramp = v as i8;
+                            }
+                            Ok(v) => {
+                                parse_error =
+                                    Some(format!("--retrig-ramp must be -100..100, got {v}"));
+                            }
+                            Err(_) => {
+                                parse_error = Some(format!(
+                                    "--retrig-ramp expects a signed number, got {raw:?}"));
+                            }
+                        }
+                    }
+                    // A:B, in the notation people type, not the packed code — the packing is the
+                    // wire's business and a caller that had to compute it would be a second
+                    // implementation of make_trig_condition waiting to disagree with the first.
+                    if let Some(raw) = flag(&args, "--condition") {
+                        match raw.split_once(':') {
+                            Some((a_text, b_text)) => {
+                                match (a_text.parse::<u8>(), b_text.parse::<u8>()) {
+                                    (Ok(a), Ok(b)) => {
+                                        let code = daw_bridge::rowop::make_trig_condition(a, b);
+                                        if code == 0 {
+                                            parse_error = Some(format!(
+                                                "--condition must be A:B with 1 <= A <= B <= 8, got {raw:?}"));
+                                        } else {
+                                            mask |= ROW_OP_MASK_TRIG_CONDITION;
+                                            trig_condition = code;
+                                        }
+                                    }
+                                    _ => {
+                                        parse_error = Some(format!(
+                                            "--condition expects numbers either side of the colon, got {raw:?}"));
+                                    }
+                                }
+                            }
+                            None => {
+                                parse_error = Some(format!(
+                                    "--condition needs A:B, e.g. 1:2 — got {raw:?}"));
+                            }
+                        }
+                    }
                     // --clear names ops to REMOVE: the mask bit is set and the value stays zero.
                     for (name, bit) in [
                         ("ret", ROW_OP_MASK_RETRIGGER),
@@ -2757,6 +2811,8 @@ fn main() {
                         ("sound", ROW_OP_MASK_SOUND),
                         ("offset", ROW_OP_MASK_SOUND_OFFSET),
                         ("delay", ROW_OP_MASK_DELAY),
+                        ("ramp", ROW_OP_MASK_RETRIG_RAMP),
+                        ("cond", ROW_OP_MASK_TRIG_CONDITION),
                     ] {
                         if clear_arg.split(',').any(|c| c.trim() == name) {
                             mask |= bit;
@@ -2765,6 +2821,8 @@ fn main() {
                                 "prob" => probability = 0,
                                 "sound" => sound = 0,
                                 "offset" => sound_offset = 0,
+                                "ramp" => retrig_ramp = 0,
+                                "cond" => trig_condition = 0,
                                 _ => delay_nanoticks = 0,
                             }
                         }
@@ -2778,7 +2836,7 @@ fn main() {
                     } else if mask == 0 {
                         // Refused rather than sent as a no-op: a command that names no op is a
                         // typo, and silently succeeding would report a write that never happened.
-                        eprintln!("daw-cli: set-row-ops names no op — pass at least one of --ret --prob --sound --offset --delay, or --clear <names>");
+                        eprintln!("daw-cli: set-row-ops names no op — pass at least one of --ret --prob --sound --offset --delay --retrig-ramp --condition, or --clear <names>");
                         2
                     } else {
                         let payload = UiSetRowOpsPayload {
@@ -2788,7 +2846,8 @@ fn main() {
                             clip_id: clip,
                             note_id_lo: note as u32,
                             note_id_hi: (note >> 32) as u32,
-                            pad0: [0; 2],
+                            retrig_ramp,
+                            trig_condition,
                             delay_nanoticks,
                             sound,
                             sound_offset,

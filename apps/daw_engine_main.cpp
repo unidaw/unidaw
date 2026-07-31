@@ -2863,6 +2863,22 @@ struct TrackRuntime {
   updatePatcherGraphSnapshot();
 
   std::atomic<uint64_t> transportNanotick{0};
+  // TICKS PLAYED SINCE THE TRANSPORT LAST STARTED FROM THE LOOP START, never wrapped.
+  //
+  // transportNanotick is a POSITION and wraps at the loop end, so nothing in the engine knew
+  // which PASS it was on — and conditional trigs (`1:2`, `3:4`) are defined entirely in terms of
+  // that. This is the one place the pass index comes from.
+  //
+  // IT MUST NOT BE A COUNTER THE DISPATCH INCREMENTS. Advanced only here, by the same blockTicks
+  // the transport advances by, so it is a function of the transport rather than of how many
+  // times a code path happened to run. A counter bumped per dispatch would depend on when
+  // playback started and how the blocks fell, and an offline bounce would quietly stop being
+  // reproducible while passing every structural test in the suite.
+  //
+  // Reset with the position on any explicit seek, so pass counting restarts from wherever you
+  // dropped the playhead — and so a render, which always begins at the loop start, always begins
+  // at pass 0.
+  std::atomic<uint64_t> transportElapsedNanotick{0};
   std::atomic<uint64_t> loopStartNanotick{0};
   std::atomic<uint64_t> loopEndNanotick{0};
   std::atomic<bool> resetTimeline{false};
@@ -10907,6 +10923,8 @@ struct TrackRuntime {
       edit.mask = p.mask;
       edit.retrigger = p.retrigger;
       edit.probability = p.probability;
+      edit.retrigRamp = p.retrigRamp;
+      edit.trigCondition = p.trigCondition;
       edit.sound = p.sound;
       edit.soundOffset = p.soundOffset;
       edit.delayNanoticks = p.delayNanoticks;
@@ -13090,6 +13108,10 @@ struct TrackRuntime {
         clamped = end - 1;
       }
       transportNanotick.store(clamped, std::memory_order_release);
+      // A SEEK RESTARTS THE PASS COUNT. Carrying it across a seek would make a conditional trig
+      // depend on how the playhead got here, which is exactly the "depends on the session's
+      // history" property that makes a bounce irreproducible.
+      transportElapsedNanotick.store(0, std::memory_order_release);
       std::cout << "UI: Transport SetPosition " << clamped << std::endl;
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetTempo)) {
@@ -13997,6 +14019,7 @@ struct TrackRuntime {
           nextTicks = loopStartTicks + ((nextTicks - loopStartTicks) % loopLen);
         }
         transportNanotick.store(nextTicks, std::memory_order_release);
+        transportElapsedNanotick.fetch_add(blockTicks, std::memory_order_acq_rel);
       };
       bool anyReady = false;
       for (auto* runtime : trackSnapshot) {
@@ -14017,6 +14040,9 @@ struct TrackRuntime {
         // would start with whatever fraction the first one happened to end on, and two bounces
         // of the same project would differ — which is the property this whole file protects.
         tickCarry = 0.0L;
+        // And the pass count, for the same reason: a render begins at the loop start, so it must
+        // begin at pass 0 every time or two bounces of one project would differ.
+        transportElapsedNanotick.store(0, std::memory_order_release);
         // Rewind to the loop start (Stop), resetting the audio playback position
         // with it so the next Play begins there rather than mid-block.
         transportNanotick.store(loopStartNanotick.load(std::memory_order_acquire),
@@ -15489,6 +15515,38 @@ struct TrackRuntime {
               continue;
             }
 
+            // CONDITIONAL TRIG. Different in kind from probability, which is why it is a separate
+            // gate rather than another argument to that one: `pN` is a per-pass roll and
+            // deliberately unpredictable, `1:2` is deterministic in WHICH PASS the transport is
+            // on. That is what lets a phrase resolve every four bars instead of merely thinning.
+            //
+            // The pass index comes from transportElapsedNanotick — the transport's own unwrapped
+            // position — and NEVER from a counter incremented here. A dispatch-side counter would
+            // depend on how many blocks had run and how the note fell across them, and two
+            // bounces of one project would differ.
+            if (event->payload.note.trigCondition != daw::kTrigConditionNone) {
+              // THE PASS OF THE NOTE, NOT OF THE BLOCK. `elapsed` is the transport's position at
+              // the START of this block's window, and the dispatch looks AHEAD — so a note at
+              // the top of pass N is emitted while the block is still in pass N-1. Reading the
+              // block's pass made c1:2 sound on passes 0, 1 and 3 instead of 0 and 2: the gate
+              // was firing correctly on the wrong number.
+              //
+              // `baseTickDelta` is how far into the window this SEGMENT begins — non-zero
+              // exactly when the window straddled the loop end and emitNotes was called a second
+              // time for the wrapped part, which is the next pass. Adding it and the note's own
+              // offset within the segment gives the absolute tick the note actually sounds at,
+              // which is the only position whose pass is the one the musician means.
+              const uint64_t elapsed =
+                  transportElapsedNanotick.load(std::memory_order_acquire);
+              const uint64_t absoluteTick =
+                  elapsed + baseTickDelta +
+                  (event->nanotickOffset >= rangeStart ? event->nanotickOffset - rangeStart : 0);
+              const uint64_t passIndex = loopLen > 0 ? (absoluteTick / loopLen) : 0;
+              if (!daw::trigConditionFires(event->payload.note.trigCondition, passIndex)) {
+                continue;
+              }
+            }
+
             daw::ResolvedPitch resolved =
                 daw::resolvedPitchFromCents(static_cast<double>(event->payload.note.pitch) * 100.0);
             if (auto harmony = getHarmonyAt(event->nanotickOffset)) {
@@ -15511,19 +15569,36 @@ struct TrackRuntime {
             const uint32_t delayTicks = event->payload.note.delayNanoticks;
             if (retrig > 1 || delayTicks > 0) {
               const auto strikes = daw::expandNoteOps(
-                  event->nanotickOffset, noteDuration, retrig, delayTicks);
+                  event->nanotickOffset, noteDuration, retrig, delayTicks,
+                  event->payload.note.retrigRamp);
               std::vector<PendingStrike> queued;
+              // THE RAMP IS APPLIED HERE, ONCE, so a queued strike carries the velocity it will
+              // sound at rather than a scale somebody downstream has to remember to apply. A
+              // PendingStrike that stored the authored velocity plus a factor would be two facts
+              // about one thing, and the queue path is exactly where the second one gets lost —
+              // which is how a retriggered note's later strikes lost their sound address before.
+              auto rampedVelocity = [&](uint16_t scaleMilli) -> uint8_t {
+                if (scaleMilli == 1000) {
+                  return velocity;
+                }
+                const uint32_t scaled =
+                    (static_cast<uint32_t>(velocity) * scaleMilli + 500u) / 1000u;
+                // Floor of 1, not 0: velocity 0 is a note-off in MIDI, so a ramp that reached
+                // zero would not be a silent strike but a stuck one.
+                return static_cast<uint8_t>(scaled < 1 ? 1 : (scaled > 127 ? 127 : scaled));
+              };
               for (const auto& s : strikes) {
                 const uint64_t onTick = wrapTick(s.onTick);
                 const uint64_t dur =
                     s.offTick > s.onTick ? s.offTick - s.onTick : 0;
+                const uint8_t strikeVelocity = rampedVelocity(s.velocityScaleMilli);
                 if (onTick >= rangeStart && onTick < rangeEnd) {
-                  emitNoteOnWithOff(onTick, dur, scheduledPitch, velocity, column,
+                  emitNoteOnWithOff(onTick, dur, scheduledPitch, strikeVelocity, column,
                                     tuningCents, event->payload.note.sound,
                                     event->payload.note.soundOffset);
                 } else {
                   queued.push_back(PendingStrike{onTick, dur, scheduledPitch,
-                                                 velocity, column, tuningCents,
+                                                 strikeVelocity, column, tuningCents,
                                                  event->payload.note.sound,
                                                  event->payload.note.soundOffset});
                 }
@@ -17161,6 +17236,9 @@ struct TrackRuntime {
           nextTicks = loopStartTicks + ((nextTicks - loopStartTicks) % loopLen);
         }
         transportNanotick.store(nextTicks, std::memory_order_release);
+        // The pass counter moves with the position, by the same amount, before the wrap that
+        // throws the pass away. This is the only other place the transport advances.
+        transportElapsedNanotick.fetch_add(blockTicks, std::memory_order_acq_rel);
       }
       // Fold this block into the producer-load counters, BEFORE the throttle sleep below —
       // that sleep is deliberate pacing, not work, and folding it in would report an idling

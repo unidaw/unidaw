@@ -98,6 +98,8 @@ struct RowOpEdit {
   uint16_t sound = 0;
   uint16_t soundOffset = 0;
   uint32_t delayNanoticks = 0;
+  int8_t retrigRamp = 0;
+  uint8_t trigCondition = 0;
 };
 
 // Applies a masked row-op edit to ONE note payload. Returns false when a value is out of range —
