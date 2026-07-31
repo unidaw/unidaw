@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 34;
+pub const K_SHM_VERSION: u16 = 36;
 
 /// SetLaneQuantize carries swing through an unsigned field; this is the bias.
 pub const LANE_QUANTIZE_SWING_BIAS: u32 = 500;
@@ -205,6 +205,9 @@ pub struct ShmHeader {
 /// the model answers "what was configured" while the audio thread plays something else, which is
 /// precisely the divergence a read-back exists to catch.
 pub const UI_MAX_SAMPLER_SLOTS: usize = 64;
+/// Bytes in a published slot name INCLUDING the terminator, so 39 usable. Must match
+/// `kUiSamplerSlotNameBytes`. The engine REFUSES a longer name rather than truncating it.
+pub const UI_SAMPLER_SLOT_NAME_BYTES: usize = 40;
 pub const UI_SAMPLER_KIT_SLOTS: usize = 2;
 
 /// The slot's source did not resolve, so it will be SILENT. A flag rather than something to infer
@@ -339,6 +342,20 @@ pub struct UiSamplerEnvPointsHeader {
     pub release_loop_start: u8,
     pub release_loop_end: u8,
     pub release_fade: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+/// Header of an assembled SamplerSetSlotName (90) payload; `name_bytes` raw bytes follow, NOT
+/// nul-terminated — the length is explicit. The engine REFUSES a name that does not fit
+/// `UiSamplerSlotEntry::name` rather than shortening it, so a successful send reads back byte for
+/// byte and a rejected one leaves the slot alone.
+pub struct UiSamplerSlotNameHeader {
+    pub command_type: u16,
+    pub device_id: u16,
+    pub track_id: u32,
+    pub slot_id: u16,
+    pub name_bytes: u16,
 }
 
 #[repr(C)]
@@ -1179,6 +1196,9 @@ pub enum UiCommandType {
     /// Fold a track. `collapsed` was persisted, published and restored on load, and settable by
     /// nothing — the fold could be drawn and never set.
     SetTrackCollapsed = 89,
+    /// Rename a sampler slot, over the BulkChunk carrier. `name` was persisted by the project
+    /// format and published by NOTHING, so no UI could read a pad's name let alone change it.
+    SamplerSetSlotName = 90,
 }
 
 /// Where a route points. Mirrors daw::TrackRouteKind.
@@ -2162,6 +2182,7 @@ mod tests {
         same!(UiSamplerSetSlotPayload, sys::daw_UiSamplerSetSlotPayload);
         same!(UiSamplerSetDevicePayload, sys::daw_UiSamplerSetDevicePayload);
         same!(UiSamplerSlicePayload, sys::daw_UiSamplerSlicePayload);
+        same!(UiSamplerSlotNameHeader, sys::daw_UiSamplerSlotNameHeader);
         same!(UiSamplerFilterPayload, sys::daw_UiSamplerFilterPayload);
         same!(UiSamplerRejectPayload, sys::daw_UiSamplerRejectPayload);
         same!(UiSetParamPayload, sys::daw_UiSetParamPayload);
@@ -2451,7 +2472,11 @@ mod wire_layout {
         assert_eq!(std::mem::size_of::<UiSamplerRejectPayload>(), 40);
         // Not a ring payload — the ASSEMBLED shapes, which the engine memcpys.
         assert_eq!(std::mem::size_of::<UiSamplerEnvPointsHeader>(), 32);
+        assert_eq!(std::mem::size_of::<UiSamplerSlotNameHeader>(), 12);
         assert_eq!(std::mem::size_of::<UiEnvPointWire>(), 8);
-        assert_eq!(std::mem::size_of::<UiSamplerSlotEntry>(), 32);
+        // v35: + sliceBeginFrame / sliceEndFrame. Only three bytes were spare and two frame
+        // counts need eight, so the entry's STRIDE changed — which is why this needed a version
+        // bump and a parallel array would not have.
+        assert_eq!(std::mem::size_of::<UiSamplerSlotEntry>(), 80);
     }
 }

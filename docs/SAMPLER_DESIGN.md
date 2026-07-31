@@ -606,15 +606,35 @@ you are building something rather than taking something apart, and by then you h
 *Engine note: the snap is per-chop, not per-device — a kit can hold slices cut both ways, and it
 should, because that is a property of the material rather than of the instrument.*
 
-**Q7 — the Elektron gap is QUEUED.** Retrigger volume ramp and conditional trigs (`1:2`, `FILL`,
-`PRE`) beyond the existing `retN` / `pN`. Row-op work, not sampler work; S4 is complete (task #88),
-so nothing blocks it.
+**Q7 — the Elektron gap is BUILT except for FILL.** Retrigger volume ramp (`rvN`) and conditional
+trigs beyond the existing `retN` / `pN`:
+
+- `c1:2` — fire on pass A of every B. Landed with #105.
+- `cpre` / `cnpre` — fire if the previous conditional trig on the track fired, or if it did not.
+  Landed with #107. Resolved by looking BACKWARD at the predecessor and evaluating it at its own
+  pass, never by carrying a flag forward as notes dispatch — so the result stays a pure function
+  of the note and the transport position and a bounce is byte-identical at any block size.
+- `FILL` — **the one thing still waiting on the owner.** See below.
 
 ---
 
 ### Still open — owner only
 
-Nothing. Q1 through Q7 are all answered; Q1 and Q6 were revised on 2026-07-31 and the sections
+**FILL's bounce semantics.** A FILL trig fires only while a fill button is held, which makes the
+render depend on a LIVE input — so an offline bounce has to define what fill state it renders
+under, and that is a musical decision rather than a coding one.
+
+My proposal: **fill is OFF in a bounce unless the project records a fill automation lane.** The
+reasoning is that "the bounce sounds different from the take you just played" is a worse surprise
+than "fill is a performance gesture, and to bounce it you have to record it". The alternative —
+freezing whatever the button happened to be doing when you hit render — makes the render depend
+on something that is not in the file.
+
+Codes 128 (FILL) and 129 (NOT FILL) are reserved in `UiClipNote.trigCondition` and deliberately
+NOT parseable by the row-op editor, so nobody can type a token that round-trips and then always
+sounds. Everything else about it is built: no contract change is needed when the answer arrives.
+
+Q1 through Q7 are otherwise answered; Q1 and Q6 were revised on 2026-07-31 and the sections
 above are written to the revisions rather than to the originals.
 
 Two decisions were raised BY the work rather than by this list and are still the owner's:

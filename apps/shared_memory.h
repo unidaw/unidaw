@@ -123,7 +123,17 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //    agent forks the clip it was pointed at, writes into the copy, and the original becomes the
 //    alternate; swapping is the A/B. Published because an alternate nobody can see is the same as
 //    not having one.
-constexpr uint16_t kShmVersion = 34;
+// v32: THE SAMPLER KIT READ-BACK — UiSamplerKitRegion. Documented at the region itself.
+// v33: UiClipNote gains the SOUND ADDRESS and the note offset (SAMPLER_DESIGN S4).
+// v34: uiTrackOpsWidth[] — the widest op run in a TRACK, so the collapsed ops column has a width
+//    that does not reflow as you scroll. Grew the header 6080 -> 6144, which moves every region.
+// v35: UiSamplerSlotEntry gains sliceBeginFrame/sliceEndFrame, 32 -> 40 bytes.
+// v36: UiSamplerSlotEntry gains `name`, 40 -> 80 bytes. The name was persisted by the project
+//    format from the day the sampler shipped and published by NOTHING, so a pad's name round-
+//    tripped through save and reload and no UI could read it — and no command could write it
+//    (task #110). Publishing it is half the fix; SamplerSetSlotName (90) is the other half, and
+//    they land together because a field you can set and not see is not better than neither.
+constexpr uint16_t kShmVersion = 36;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -902,12 +912,15 @@ struct alignas(64) UiAutomationSlotRegion {
 // the audio thread is playing something else, and the whole point of a read-back is to catch
 // exactly that divergence.
 constexpr uint32_t kUiMaxSamplerSlots = 64;
+// Max bytes for a published slot name INCLUDING the terminator, so 39 usable bytes. The command
+// that writes it refuses anything longer rather than truncating — see UiSamplerSlotEntry::name.
+constexpr uint32_t kUiSamplerSlotNameBytes = 40;
 constexpr uint32_t kUiSamplerKitSlots = 2;
 
 // One slot, flattened for display. Deliberately NOT the whole SamplerSlot: this is what a kit
 // grid draws, and a region that mirrored every field would have to be re-versioned every time
 // the device gained one.
-struct UiSamplerSlotEntry {          // 32 B
+struct UiSamplerSlotEntry {          // 80 B (v33 32 -> v35 40 -> v36 80)
   uint16_t slotId = 0;
   uint16_t sourceLocalId = 0;
   uint8_t keyLow = 0;
@@ -949,8 +962,47 @@ struct UiSamplerSlotEntry {          // 32 B
   uint8_t filterType = 0;
   uint8_t reserved0 = 0;
   uint16_t reserved1 = 0;
+  // v35: WHERE THIS SLOT'S SLICE STARTS AND ENDS IN ITS SOURCE. The chop plays and could not be
+  // SEEN: every slot reported lengthFrames as the SOURCE's length, so nothing could draw where a
+  // slice begins or how long it is, and the extent was computed at note-on from the marker list
+  // and never published. Dragging a marker, nudging a boundary, seeing that slice 3 is twice
+  // slice 4 — all of it needs this and none of it was derivable from what was published.
+  //
+  // `lengthFrames` is UNCHANGED and still the source's length. Two facts about one slot rather
+  // than one field that means different things depending on whether a slice is set — a waveform
+  // needs the source length for its own scale even while drawing a slice inside it.
+  //
+  // A SLOT WITH NO SLICE GETS THE WHOLE SOURCE: begin 0, end lengthFrames. Not zeroes. A UI
+  // drawing "the region this pad plays" wants one rule, and "0,0 means the whole thing" is a
+  // sentinel that reads as a bug at the exact moment somebody is looking for one.
+  //
+  // THIS GREW THE ENTRY 32 -> 40 and therefore bumped kShmVersion. Only three bytes were spare
+  // and two frame counts need eight; the entry's STRIDE changed, so a v34 reader would index
+  // every slot after the first into the middle of the one before it. A parallel array after
+  // slots[] would have avoided the bump entirely and was rejected: it is a second fact about the
+  // same thing, written in the same loop today and desynced the first time anything reorders,
+  // filters or early-continues on one and not the other.
+  uint32_t sliceBeginFrame = 0;
+  uint32_t sliceEndFrame = 0;
+  // v36: THE SLOT'S NAME, nul-terminated inside its own bytes.
+  //
+  // WHY IT WAS NOT HERE. The project format has persisted `name` since the sampler shipped and
+  // nothing published it, so the name survived save and reload perfectly and was invisible to
+  // every reader. That is the codebase's most-repeated defect wearing its other face: usually a
+  // persisted field cannot be WRITTEN, this one could not be READ.
+  //
+  // NEVER TRUNCATED, ALWAYS REFUSED. SamplerSetSlotName rejects a name that does not fit here
+  // rather than storing a shortened one, so what a UI reads back is byte-for-byte what it sent
+  // or the write did not happen. A truncated name is the worst of the three outcomes because it
+  // LOOKS like it worked. Refusing on byte length also means no multi-byte character is ever cut
+  // in half — nothing is ever cut.
+  //
+  // THIS GREW THE ENTRY 40 -> 80 and so bumped kShmVersion, for the same reason v35 did: the
+  // STRIDE changed, and a v35 reader would index every slot after the first into the middle of
+  // the one before it.
+  char name[kUiSamplerSlotNameBytes]{};
 };
-static_assert(sizeof(UiSamplerSlotEntry) == 32, "UiSamplerSlotEntry must be 32 bytes");
+static_assert(sizeof(UiSamplerSlotEntry) == 80, "UiSamplerSlotEntry must be 80 bytes");
 
 // bit2: the slot's source did not resolve, so it will be SILENT. Published rather than left to
 // be inferred from lengthFrames == 0, because "silent because the file is missing" and "silent

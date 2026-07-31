@@ -120,6 +120,61 @@ json.dump({"schema_version": 4, "meta": {"name": "e"}, "nanoticks_per_quarter": 
 PY
 }
 
+# TWO notes in the bar: an ANCHOR at the top carrying A:B, and a second note half a bar later
+# carrying PRE (or NOT PRE). Two are required — PRE is a statement about ANOTHER note, so a
+# one-note fixture cannot express it at all, let alone tell a working PRE from a note that simply
+# copied its own condition.
+# pre_project <name> <anchorCondition> <secondCondition>
+pre_project() {
+  python3 - "$TMP/$1.uniproj.json" "$Q" "$2" "$3" <<'PY'
+import json, sys
+out, Q = sys.argv[1], int(sys.argv[2])
+anchor_cond, second_cond = int(sys.argv[3]), int(sys.argv[4])
+BAR = Q * 4
+r = lambda k="none": {"kind": k, "track_id": 0, "input_id": 0}
+slot = {"id": 1, "name": "s", "source_local_id": 1, "slice_id": 0,
+        "start_frame": 0, "end_frame": 0,
+        "loop_start_frame": 0, "loop_end_frame": 0, "loop_xfade_frames": 0,
+        "loop_mode": 0, "sustain_loop": 0,
+        "key_low": 0, "key_high": 127, "root_key": 60,
+        "pitch_track_milli": 0, "tune_cents": 0,
+        "vel_low": 0, "vel_high": 127, "layer_group": 0, "select_mode": 0,
+        "gate": 0, "reverse": 0, "gain_millibels": 0, "pan_thousandths": 0,
+        "voice_group": 0, "nna": 0, "polyphony": 0, "choke_fade_us": 3000,
+        "mod_set_id": 1, "output_stem": 0, "quality": 1}
+dev = {"device_id": 1, "kind": "sampler", "capability_mask": 5, "patcher_node_id": 0,
+       "host_slot_index": 0, "bypass": False,
+       "sampler": {"next_slot_id": 2, "next_source_id": 2, "next_mod_set_id": 2,
+                   "stem_count": 0, "voice_cap": 16, "default_view": 0,
+                   "sources": [{"local_id": 1, "path": "click.wav", "content_key": 0}],
+                   "slice_sets": [],
+                   "mod_sets": [{"id": 1, "name": "d", "filter_type": 0,
+                                 "cutoff_milli": 1000, "resonance_milli": 0,
+                                 "next_modulator_id": 1, "modulators": []}],
+                   "slots": [slot]}}
+def note(tick, nid, cond):
+    n = {"nanotick": tick, "duration": Q, "pitch": 60, "velocity": 100,
+         "column": 0, "note_id": nid}
+    if cond != 0:
+        n["trig_condition"] = cond
+    return n
+# The anchor at 0, the PRE note at HALF THE BAR, so each lands in its own measurement window.
+notes = [note(0, 1, anchor_cond), note(Q * 2, 2, second_cond)]
+tr = {"track_id": 0, "name": "E", "harmony_quantize": False, "lines_per_beat": 4,
+      "mixer": {"gain_db": 0.0, "pan": 0.0, "mute": False, "solo": False},
+      "routing": {"midi_in": r(), "midi_out": r(), "audio_in": r(),
+                  "audio_out": r("master"), "pre_fader_send": True},
+      "device_chain": [dev], "mod_links": [],
+      "placements": [{"clip_id": 1, "id": 1, "at": 0, "length": BAR,
+                      "notes": [], "chords": [], "mutes": []}]}
+json.dump({"schema_version": 4, "meta": {"name": "e"}, "nanoticks_per_quarter": Q,
+           "tempo_map": [{"nanotick": 0, "bpm": 120.0}], "harmony_timeline": [],
+           "clips": [{"id": 1, "name": "p", "length": BAR, "kind": "symbolic",
+                      "notes": notes}],
+           "tracks": [tr]}, open(out, "w"))
+PY
+}
+
 render() {  # render <project> <name> [blockSize]
   local bs="${3:-256}"
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/elek_${$}_$2" \
@@ -156,6 +211,43 @@ s = struct.unpack('<' + 'h' * (n * ch), w.readframes(n)); w.close()
 out = []
 for k in range(4):
     a, b = int(sr * 2.0 * k), int(sr * 2.0 * (k + 1))
+    seg = [abs(s[i * ch]) for i in range(a, min(b, n))]
+    out.append(max(seg) if seg else 0)
+print(" ".join(str(v) for v in out))
+PY
+}
+
+# The peak in the FIRST half of each of four bars — where the ANCHOR sits. Needed because
+# bar_peaks cannot tell the two notes apart when both are in one bar: it would report "the anchor
+# sounded" for a pass where only the PRE note did, which is precisely the pass the phases below
+# argue about.
+first_peaks() {  # first_peaks <name>
+  python3 - "$TMP/$1.wav" <<'PY'
+import sys, wave, struct
+w = wave.open(sys.argv[1], 'rb')
+ch, n, sr = w.getnchannels(), w.getnframes(), w.getframerate()
+s = struct.unpack('<' + 'h' * (n * ch), w.readframes(n)); w.close()
+out = []
+for k in range(4):
+    a, b = int(sr * 2.0 * k), int(sr * (2.0 * k + 1.0))
+    seg = [abs(s[i * ch]) for i in range(a, min(b, n))]
+    out.append(max(seg) if seg else 0)
+print(" ".join(str(v) for v in out))
+PY
+}
+
+# The peak in the SECOND HALF of each of four bars, as "a b c d" — where the PRE note sits. The
+# anchor's click decays in 40 ms, thousands of times shorter than the half bar, so the two notes
+# never bleed into each other's window.
+half_peaks() {  # half_peaks <name>
+  python3 - "$TMP/$1.wav" <<'PY'
+import sys, wave, struct
+w = wave.open(sys.argv[1], 'rb')
+ch, n, sr = w.getnchannels(), w.getnframes(), w.getframerate()
+s = struct.unpack('<' + 'h' * (n * ch), w.readframes(n)); w.close()
+out = []
+for k in range(4):
+    a, b = int(sr * (2.0 * k + 1.0)), int(sr * (2.0 * k + 2.0))
     seg = [abs(s[i * ch]) for i in range(a, min(b, n))]
     out.append(max(seg) if seg else 0)
 print(" ".join(str(v) for v in out))
@@ -237,5 +329,105 @@ for name, other in (("64", b), ("1024", c)):
 print("  conditional render identical at 64, 256 and 1024 frames (%d bytes)" % n)
 PY
 
+# ---- PRE (#107). "Fire only if the previous conditional trig fired."
+#
+# The anchor carries c1:2, so it fires on passes 0 and 2. The second note carries PRE, so it must
+# fire on EXACTLY the passes the anchor did — and NOT PRE on exactly the ones it did not.
+#
+# WHY BOTH FORMS. PRE alone is satisfiable by a bug that ignores the condition entirely on the
+# passes the anchor happens to sound: the two notes are in the same bar, so "fires when the
+# anchor fires" and "fires whenever anything fires" agree. NOT PRE fires on the passes the anchor
+# is SILENT, which no such bug produces — it is the half that proves the predecessor's result is
+# actually being read.
+pre_project prego 2 130
+render prego prego
+read -r P1 P2 P3 P4 <<<"$(first_peaks prego)"
+read -r H1 H2 H3 H4 <<<"$(half_peaks prego)"
+echo "  anchor c1:2:     $P1 $P2 $P3 $P4  (bars, first half = the anchor)"
+echo "  cpre:            $H1 $H2 $H3 $H4  (second half = the PRE note)"
+python3 -c "
+a=[$P1,$P2,$P3,$P4]
+raise SystemExit(0 if a[0] > 3000 and a[2] > 3000 and a[1] < 500 and a[3] < 500 else 1)" || \
+  fail "the ANCHOR must sound on passes 0 and 2 and be silent on 1 and 3; it gave $P1 $P2 $P3 $P4.
+        Nothing below is a statement about PRE until the predecessor behaves — and this is
+        measured over the FIRST half of each bar so it is the anchor being measured and not
+        whichever of the two notes happened to sound"
+python3 -c "
+h=[$H1,$H2,$H3,$H4]
+raise SystemExit(0 if h[0] > 3000 and h[2] > 3000 and h[1] < 500 and h[3] < 500 else 1)" || \
+  fail "cpre must fire on exactly the passes the anchor fired — 0 and 2 — and it gave
+        $H1 $H2 $H3 $H4. All four sounding means PRE never reached the dispatch or resolved to
+        'always'; none sounding means it never finds its predecessor"
+
+pre_project prenot 2 131
+render prenot prenot
+read -r Q1 Q2 Q3 Q4 <<<"$(half_peaks prenot)"
+echo "  cnpre:           $Q1 $Q2 $Q3 $Q4  (second half)"
+python3 -c "
+q=[$Q1,$Q2,$Q3,$Q4]
+raise SystemExit(0 if q[1] > 3000 and q[3] > 3000 and q[0] < 500 and q[2] < 500 else 1)" || \
+  fail "cnpre must fire on the passes the anchor did NOT — 1 and 3 — and it gave $Q1 $Q2 $Q3 $Q4.
+        This is the phase that cannot be passed by ignoring the predecessor: on passes 1 and 3
+        the anchor is silent and this note must SOUND, which no 'copy whatever the anchor did'
+        mistake produces"
+
+# ---- WRAPPED. The PRE note comes BEFORE its predecessor in the bar, so the conditional it asks
+# about is the one at the END OF THE PREVIOUS PASS. This is the case the whole design is arranged
+# around and the one the two phases above cannot reach: with PRE after the anchor, the predecessor
+# is in the same bar and an implementation that never handles the wrap passes both.
+#
+# It is also where emitNotes is called TWICE for one window — the second call covering the wrapped
+# part with a non-zero baseTickDelta — so "the previous note" is not "the previous iteration".
+#
+# PRE at the top of the bar, anchor (c1:2) half a bar later:
+#   pass 0  no predecessor at all — there is no previous pass — so SILENT
+#   pass 1  asks the anchor of pass 0, which fired      -> sounds
+#   pass 2  asks the anchor of pass 1, which did not    -> SILENT
+#   pass 3  asks the anchor of pass 2, which fired      -> sounds
+# The two notes therefore alternate bars, which no same-pass reading produces.
+pre_project prewrap 130 2
+render prewrap prewrap
+read -r W1 W2 W3 W4 <<<"$(first_peaks prewrap)"
+read -r V1 V2 V3 V4 <<<"$(half_peaks prewrap)"
+echo "  cpre before its anchor: $W1 $W2 $W3 $W4  (first half = the PRE note)"
+echo "  its anchor c1:2:        $V1 $V2 $V3 $V4  (second half)"
+python3 -c "
+v=[$V1,$V2,$V3,$V4]
+raise SystemExit(0 if v[0] > 3000 and v[2] > 3000 and v[1] < 500 and v[3] < 500 else 1)" || \
+  fail "the anchor must still fire on passes 0 and 2 when it sits in the second half of the bar;
+        it gave $V1 $V2 $V3 $V4"
+python3 -c "
+w=[$W1,$W2,$W3,$W4]
+raise SystemExit(0 if w[0] < 500 and w[1] > 3000 and w[2] < 500 and w[3] > 3000 else 1)" || \
+  fail "a PRE trig placed BEFORE its predecessor must resolve against the previous PASS: silent on
+        pass 0 (nothing precedes it at all), then sounding on 1 and 3 where the anchor fired the
+        pass before. It gave $W1 $W2 $W3 $W4. Matching the anchor's own 0-and-2 pattern means the
+        predecessor is being read in the SAME pass and the loop wrap is not handled; sounding on
+        pass 0 means 'no predecessor' is being treated as 'fires'"
+
+# The PRE render must be block-size invariant too, and for a sharper reason than c1:2: PRE is
+# resolved by walking BACKWARD to another note, and the obvious implementation — carry a flag
+# forward as notes dispatch — would depend on how many blocks ran and on emitNotes being called
+# twice when a window straddles the loop end. That bug passes both phases above.
+render prewrap prewrap64 64
+render prewrap prewrap1024 1024
+python3 - "$TMP/prewrap.wav" "$TMP/prewrap64.wav" "$TMP/prewrap1024.wav" <<'PY' || \
+  fail "a PRE render is NOT byte-identical across block sizes. PRE must be a pure function of the
+        note and the transport position — if the previous conditional's result is carried forward
+        as state, it depends on where the block boundaries fell and two bounces differ"
+import sys, wave
+def data(p):
+    w = wave.open(p, 'rb'); d = w.readframes(w.getnframes()); w.close(); return d
+a, b, c = (data(p) for p in sys.argv[1:4])
+n = min(len(a), len(b), len(c))
+for name, other in (("64", b), ("1024", c)):
+    if a[:n] != other[:n]:
+        first = next(i for i in range(n) if a[i] != other[i])
+        print("  DIFFER: 256 vs %s at byte %d of %d" % (name, first, n))
+        raise SystemExit(1)
+print("  PRE render identical at 64, 256 and 1024 frames (%d bytes)" % n)
+PY
+
 echo "elektron_ops_check: PASS — the ramp descends and lands where it should, c1:2 skips the"
-echo "                    right passes, and the result does not depend on the block size"
+echo "                    right passes, PRE follows its predecessor and NOT PRE inverts it, and"
+echo "                    neither result depends on the block size"

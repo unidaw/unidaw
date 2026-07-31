@@ -309,6 +309,68 @@ int main() {
     checkEq(set.nextMarkerId, 5, "ids advanced only for the ones actually minted");
   }
 
+  // ---- A FILE THAT STARTS ON THE HIT KEEPS ITS FIRST HIT.
+  //
+  // insertSliceMarker's comment settles half of this and stops short of the other half: "for a
+  // transient chop that region is the pre-roll before the first hit and losing it is correct".
+  // True when there IS pre-roll. When the file starts ON a hit — a rendered loop, a hard-trimmed
+  // break, anything bounced to its own downbeat — the "pre-roll" IS the first hit, and dropping
+  // it drops the downbeat.
+  //
+  // AND THE DETECTOR CANNOT SEE THAT CASE BY CONSTRUCTION. Its scan starts at envelope hop 2, so
+  // nothing in the first 256 frames is ever reported, and a hit at frame 0 has no rise before it
+  // to contrast against anyway. So "the detector will find it" is not available as an answer:
+  // whatever fixes this cannot be a threshold.
+  //
+  // Found by accident — a mistyped flag ran a transient chop where an equal one was meant, and
+  // the tiling assertion in tools/slice_extent_check.sh reported seven slices starting at 11904
+  // on a file whose first hit is at frame 0.
+  {
+    const uint64_t frames = 48000;
+    // Hits AT ZERO and every 12000 after it.
+    const auto audio = breakFixture(frames, {0, 12000, 24000, 36000});
+    daw::SliceDetectOptions opt;
+    opt.sensitivity = 500;
+    opt.maxSlices = 64;
+    const auto found = daw::detectTransients(audio, frames, opt);
+
+    check(!found.empty(), "a break with four hits detects something");
+    checkEq(found.front(), 0,
+            "the first slice boundary is frame 0 when the file starts ON a hit — otherwise the "
+            "downbeat is in no slice, has no id, and cannot be played");
+
+    // AND THE SLICES MUST TILE. This is the property the frontend's check asserts end to end, in
+    // the one place it can be asserted without a running engine.
+    daw::SliceSet set;
+    daw::applySliceFrames(set, found, frames);
+    checkEq(set.markers.front().frame, 0, "so the marker set starts at 0 too");
+    for (size_t i = 0; i < set.markers.size(); ++i) {
+      const daw::SliceExtent e = daw::sliceExtentAt(set, i, frames);
+      check(e.valid, "every slice has a positive extent");
+      const uint64_t want = (i == 0) ? 0 : daw::sliceExtentAt(set, i - 1, frames).end;
+      checkEq(e.begin, want, "each slice begins where the previous one ended");
+    }
+    checkEq(daw::sliceExtentAt(set, set.markers.size() - 1, frames).end, frames,
+            "and the last runs to the end of the file");
+  }
+
+  // ---- A FILE WITH REAL PRE-ROLL STILL DROPS IT, which is the half that was already right and
+  // must stay right. Without this the fix above would just be "always slice from 0", which throws
+  // away the behaviour insertSliceMarker's comment deliberately chose.
+  {
+    const uint64_t frames = 48000;
+    // Silence until 6000, then hits. The head is genuinely nothing.
+    const auto audio = breakFixture(frames, {6000, 18000, 30000, 42000});
+    daw::SliceDetectOptions opt;
+    opt.sensitivity = 500;
+    opt.maxSlices = 64;
+    const auto found = daw::detectTransients(audio, frames, opt);
+    check(!found.empty(), "a break with pre-roll detects something");
+    check(found.front() != 0,
+          "a file whose head is SILENT does not get a slice of silence — dropping the pre-roll is "
+          "what the transient mode is for, and 'always slice from 0' would take that away");
+  }
+
   if (g_fail == 0) {
     std::printf("sampler_slice_tests: PASS\n");
   }

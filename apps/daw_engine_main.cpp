@@ -99,6 +99,24 @@ using daw::trackShmName;
 using daw::trackSocketPath;
 using daw::uiShmName;
 
+// THE DISPLAY NAME A SAMPLE FILE SEEDS A SLOT WITH: the basename with its extension dropped.
+//
+// `sampler-load` used to stamp the WHOLE PATH onto slot.name — the same string it matches against
+// SamplerSource::path — which was invisible until v36 published the name and would have drawn
+// /Users/jak/samples/kicks/BD_808.wav on a pad. The path still lives on the SOURCE, which is what
+// actually needs to find the file again; the slot gets something a person can read.
+//
+// Clamped to the published width so a long filename seeds a name that survives the trip out. This
+// is the ONE place a name is shortened rather than refused, and it is the right place: nobody
+// typed it, so there is no write to reject and nothing to look like it worked.
+std::string sampleDisplayName(const std::string& path) {
+  std::string stem = std::filesystem::path(path).stem().string();
+  if (stem.size() >= daw::kUiSamplerSlotNameBytes) {
+    stem.resize(daw::kUiSamplerSlotNameBytes - 1);
+  }
+  return stem;
+}
+
 bool uiDebugEnabled() {
   static const bool enabled = []() {
     const char* env = std::getenv("DAW_UI_DEBUG");
@@ -1545,6 +1563,19 @@ private:
 
 struct ClipSnapshot {
   std::vector<daw::MusicalEvent> events;
+  // EVERY CONDITIONAL TRIG ON THIS TRACK, in sounding order. PRE resolves against this list
+  // rather than against a flag carried forward as notes dispatch — see conditionalTrigFires in
+  // musical_structures.h for why a forward flag would break bounce reproducibility.
+  //
+  // Built here, off the audio path, because it is a pure function of the clip: the list changes
+  // when the notes change and never because of where a block boundary fell.
+  std::vector<daw::TrigConditionSite> conditionals;
+  // True when a note carries PRE and NO A:B conditional exists anywhere on the track to ground
+  // the chain against. Such a PRE does not resolve by meaning: a lone one never fires, and a run
+  // of them unwinds to the recursion cap and then sounds. Either way the row is doing something
+  // nobody asked for, so it is recorded at build time and reported ONCE rather than left to be
+  // discovered by ear.
+  bool unanchoredPre = false;
 };
 
 struct TrackStateSnapshot {
@@ -1566,6 +1597,25 @@ const TrackStateSnapshot kEmptyTrackState{};
 inline std::shared_ptr<const ClipSnapshot> buildClipSnapshot(const daw::MusicalClip& clip) {
   auto snapshot = std::make_shared<ClipSnapshot>();
   snapshot->events = clip.events();
+  // The conditional index, in the order the events already are — which is sounding order, so the
+  // "previous conditional" a PRE trig asks about is simply the entry before it.
+  bool sawPre = false;
+  bool sawAnchor = false;
+  for (const auto& e : snapshot->events) {
+    if (e.type != daw::MusicalEventType::Note ||
+        e.payload.note.trigCondition == daw::kTrigConditionNone) {
+      continue;
+    }
+    snapshot->conditionals.push_back(
+        daw::TrigConditionSite{e.nanotickOffset, e.payload.note.trigCondition});
+    if (daw::isPreTrigCondition(e.payload.note.trigCondition)) {
+      sawPre = true;
+    } else {
+      sawAnchor = true;
+    }
+  }
+  // A PRE chain with no A:B anywhere to ground it. Recorded for the caller to report ONCE.
+  snapshot->unanchoredPre = sawPre && !sawAnchor;
   return snapshot;
 }
 
@@ -5768,8 +5818,20 @@ struct TrackRuntime {
     // emission time matters: moving a note's start changes which block it belongs to,
     // and the scheduler windows on the tick it reads, so a note nudged earlier at
     // emission time would already have missed its block.
-    return buildClipSnapshot(
+    auto built = buildClipSnapshot(
         daw::quantizeClipForSchedule(rt.track.clip, laneQuantizeOf(rt)));
+    // A PRE trig with no A:B anywhere on the track to ground it. Said out loud, once per
+    // rebuild, because the alternative is a row whose behaviour nobody can account for: a lone
+    // one is silent forever and a run of them unwinds to the recursion cap and sounds. Neither
+    // is what was typed, and neither leaves a trace anywhere else.
+    if (built && built->unanchoredPre) {
+      DAW_EVENT("trig.unanchored_pre")
+          .field("track", rt.trackId)
+          .field("conditionals", static_cast<uint64_t>(built->conditionals.size()))
+          .field("detail",
+                 "a PRE trig has no A:B conditional on this track to resolve against");
+    }
+    return built;
   };
 
   // Resolve a clip's sourcePath the one way both the decode funnel and the clip-
@@ -9287,6 +9349,124 @@ struct TrackRuntime {
       return;
     }
 
+    // ---- SAMPLER SET SLOT NAME (90). Task #110: the name was persisted by the project format,
+    // published by nothing and written by nothing but the loader stamping a path onto it.
+    if (innerType == daw::UiCommandType::SamplerSetSlotName) {
+      if (buf.size() < sizeof(daw::UiSamplerSlotNameHeader)) {
+        DAW_EVENT("bulk.rejected")
+            .field("op", static_cast<uint32_t>(inner))
+            .field("bytes", static_cast<uint64_t>(buf.size()))
+            .field("reason", "short_header");
+        return;
+      }
+      daw::UiSamplerSlotNameHeader h{};
+      std::memcpy(&h, buf.data(), sizeof(h));
+      const size_t need = sizeof(h) + static_cast<size_t>(h.nameBytes);
+      if (buf.size() < need) {
+        DAW_EVENT("bulk.rejected")
+            .field("op", static_cast<uint32_t>(inner))
+            .field("bytes", static_cast<uint64_t>(buf.size()))
+            .field("need", static_cast<uint64_t>(need))
+            .field("reason", "short_payload");
+        return;
+      }
+      // REFUSED, NEVER TRUNCATED — the one rule this command has. A name that does not fit the
+      // published field would round-trip through save and reload intact and read back short, so
+      // the file and the screen would disagree forever and nothing would report it. Refusing on
+      // BYTE length also means no multi-byte character is ever cut in half, because nothing is
+      // ever cut.
+      if (h.nameBytes >= daw::kUiSamplerSlotNameBytes) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetSlotName,
+                            daw::UiSamplerRejectReason::BadValue, h.trackId, h.deviceId,
+                            h.slotId);
+        DAW_EVENT("sampler.slot_name_rejected")
+            .field("track", h.trackId)
+            .field("slot", static_cast<uint32_t>(h.slotId))
+            .field("bytes", static_cast<uint32_t>(h.nameBytes))
+            .field("max", daw::kUiSamplerSlotNameBytes - 1)
+            .field("reason", "name_not_representable");
+        return;
+      }
+      const char* nameStart = reinterpret_cast<const char*>(buf.data()) + sizeof(h);
+      const std::string newName(nameStart, h.nameBytes);
+      // An embedded NUL is the same disagreement by another route: the project format would keep
+      // the whole string and the published field would stop at the NUL.
+      if (newName.find('\0') != std::string::npos) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetSlotName,
+                            daw::UiSamplerRejectReason::BadValue, h.trackId, h.deviceId,
+                            h.slotId);
+        DAW_EVENT("sampler.slot_name_rejected")
+            .field("track", h.trackId)
+            .field("slot", static_cast<uint32_t>(h.slotId))
+            .field("reason", "embedded_nul");
+        return;
+      }
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (h.trackId < tracks.size()) {
+          runtime = tracks[h.trackId].get();
+        }
+      }
+      if (!runtime) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetSlotName,
+                            daw::UiSamplerRejectReason::NoSuchTrack, h.trackId, h.deviceId,
+                            h.slotId);
+        DAW_EVENT("sampler.slot_name_rejected")
+            .field("track", h.trackId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      bool applied = false;
+      bool sawSampler = false;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::Sampler ||
+              (h.deviceId != 0 && d.id != h.deviceId)) {
+            continue;
+          }
+          sawSampler = true;
+          for (auto& sl : d.sampler.slots) {
+            if (sl.id != h.slotId) {
+              continue;
+            }
+            sl.name = newName;
+            applied = true;
+            break;
+          }
+          if (applied) {
+            break;
+          }
+        }
+        // THE PUBLISH READS THE RT SNAPSHOT, NOT THE MODEL. Without this the name would be
+        // saved and the read-back would keep answering the old one — the exact trap opcode 88
+        // fell into, one field along.
+        if (applied) {
+          refreshSamplerForTrack(*runtime);
+        }
+      }
+      if (!applied) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetSlotName,
+                            sawSampler ? daw::UiSamplerRejectReason::NoSuchSlot
+                                       : daw::UiSamplerRejectReason::NoSuchDevice,
+                            h.trackId, h.deviceId, h.slotId);
+        DAW_EVENT("sampler.slot_name_rejected")
+            .field("track", h.trackId)
+            .field("device", static_cast<uint32_t>(h.deviceId))
+            .field("slot", static_cast<uint32_t>(h.slotId))
+            .field("reason", sawSampler ? "no_such_slot" : "no_such_sampler_device");
+        return;
+      }
+      DAW_EVENT("sampler.slot_renamed")
+          .field("track", h.trackId)
+          .field("device", static_cast<uint32_t>(h.deviceId))
+          .field("slot", static_cast<uint32_t>(h.slotId))
+          .field("name", newName)
+          .field("bytes", static_cast<uint32_t>(h.nameBytes));
+      return;
+    }
+
     DAW_EVENT("bulk.rejected")
         .field("op", static_cast<uint32_t>(inner))
         .field("bytes", static_cast<uint64_t>(buf.size()))
@@ -11196,7 +11376,25 @@ struct TrackRuntime {
               // into something playable in one command rather than N — and every slot names its
               // slice by ID, so a later re-cut moves what they play without moving any row.
               uint8_t key = sp.slotBaseKey;
+              // THE SOURCE'S STEM, resolved once, so every slice this chop mints is named
+              // "<stem> NN". Slices were minted with NO name at all, so a chopped kit published
+              // sixteen empty strings and nothing could tell slice 3 from slice 11 without
+              // reading the extents. The stem rather than a bare "slice NN" because two breaks
+              // chopped into one kit have to stay apart, and that is the normal case.
+              std::string sliceStem;
+              for (const auto& src : d.sampler.sources) {
+                if (src.localId == sourceId) {
+                  sliceStem = sampleDisplayName(src.path);
+                  break;
+                }
+              }
+              // The ordinal counts MARKERS, not slots made, so a re-cut that skips slices which
+              // already have slots still numbers the new ones by where they sit in the file.
+              // Numbering by slots-made would name the same slice differently depending on what
+              // was chopped before it.
+              uint32_t sliceOrdinal = 0;
               for (const auto& m : set->markers) {
+                ++sliceOrdinal;
                 bool exists = false;
                 for (const auto& sl : d.sampler.slots) {
                   if (sl.sliceId == m.id) {
@@ -11215,6 +11413,14 @@ struct TrackRuntime {
                 sl.gate = d.sampler.defaultGate;
                 sl.sourceLocalId = static_cast<uint16_t>(sourceId);
                 sl.sliceId = m.id;
+                {
+                  char buf[8];
+                  std::snprintf(buf, sizeof(buf), " %02u", sliceOrdinal);
+                  sl.name = sliceStem + buf;
+                  if (sl.name.size() >= daw::kUiSamplerSlotNameBytes) {
+                    sl.name = sl.name.substr(0, daw::kUiSamplerSlotNameBytes - 1);
+                  }
+                }
                 sl.keyLow = sl.keyHigh = sl.rootKey = key++;
                 // FIXED PITCH: a slice played from its own key should sound as recorded, not
                 // transposed by where it happens to sit on the keyboard.
@@ -11360,6 +11566,15 @@ struct TrackRuntime {
             e.outputStem = sl.outputStem;
             e.quality = sl.quality;
             e.sliceId = sl.sliceId;
+            // v36: THE NAME. Copied with a hard stop one byte short of the field so the result is
+            // always nul-terminated inside its own bytes — a reader that trusts the terminator
+            // must never run off the end of the entry and into the next slot's id.
+            //
+            // A name too long to fit CANNOT arrive here: SamplerSetSlotName refuses it. This
+            // clamp is for names that predate the command — a project saved when the loader
+            // stamped the full path on, which is every project made before v36.
+            std::memcpy(e.name, sl.name.data(),
+                        std::min(sl.name.size(), sizeof(e.name) - 1));
             // WHAT THE SLOT'S MOD SET DOES, resolved here so a UI does not have to hold the mod
             // sets to interpret a modSetId. A bit is set only when the modulator would actually
             // MOVE something: an envelope needs points, an LFO needs a non-zero swing, and both
@@ -11392,6 +11607,26 @@ struct TrackRuntime {
             }
             const daw::SamplerSourceAudio* audio = snap->audioFor(sl.sourceLocalId);
             e.lengthFrames = audio ? static_cast<uint32_t>(audio->frames) : 0;
+            // THE SLICE'S EXTENT, from the same snapshot the voice reads — so what is drawn is
+            // what would sound, not what the model happens to hold. A slot with no slice gets the
+            // whole source rather than zeroes; see the field's comment for why that is not a
+            // sentinel worth having.
+            e.sliceBeginFrame = 0;
+            e.sliceEndFrame = e.lengthFrames;
+            if (sl.sliceId != 0 && audio != nullptr) {
+              for (const auto& ss : snap->state.sliceSets) {
+                if (ss.sourceLocalId != sl.sourceLocalId) {
+                  continue;
+                }
+                const daw::SliceExtent ext =
+                    daw::sliceExtentById(ss, sl.sliceId, audio->frames);
+                if (ext.valid) {
+                  e.sliceBeginFrame = static_cast<uint32_t>(ext.begin);
+                  e.sliceEndFrame = static_cast<uint32_t>(ext.end);
+                }
+                break;
+              }
+            }
             // "Silent because the file is missing" and "silent because the sample is empty" are
             // different problems, and a UI should be able to say which — so the reason is a FLAG
             // rather than something to infer from a zero length.
@@ -12079,7 +12314,9 @@ struct TrackRuntime {
           daw::SamplerSlot slot;
           slot.id = d.sampler.nextSlotId++;
           slot.gate = d.sampler.defaultGate;  // the bank's default, stamped at mint
-          slot.name = name;
+          // The file's STEM, not `name` — which is the full path, and is what the SOURCE keeps.
+          // A seed, not an override: SamplerSetSlotName is the authority from here.
+          slot.name = sampleDisplayName(name);
           slot.sourceLocalId = newSource;
           slot.rootKey = p.rootKey;
           // The mapping is DERIVED from the keys, so this writes keys rather than a mode.
@@ -15615,10 +15852,18 @@ struct TrackRuntime {
             }
           }
 
-          // Now process new notes starting in this range
+          // Now process new notes starting in this range.
+          //
+          // THE SNAPSHOT IS HELD FOR THE WHOLE LOOP, not just for the range query. `events` is a
+          // vector of RAW POINTERS into it, so the owning shared_ptr has to outlive their last
+          // use — it used to be scoped to the `if`, leaving the only other owner as
+          // runtime.clipSnapshot, which another thread replaces whenever the notes change. A
+          // rebuild landing mid-window would then free the events being dispatched. Same family
+          // as the use-after-free in #97, and PRE needs the snapshot down here anyway.
           std::vector<const daw::MusicalEvent*> events;
-          if (auto snapshot = std::atomic_load_explicit(&runtime.clipSnapshot,
-                                                        std::memory_order_acquire)) {
+          auto snapshot = std::atomic_load_explicit(&runtime.clipSnapshot,
+                                                    std::memory_order_acquire);
+          if (snapshot) {
             getClipEventsInRange(*snapshot, rangeStart, rangeEnd, events);
           }
           for (const auto* event : events) {
@@ -15869,7 +16114,32 @@ struct TrackRuntime {
                   elapsed + baseTickDelta +
                   (event->nanotickOffset >= rangeStart ? event->nanotickOffset - rangeStart : 0);
               const uint64_t passIndex = loopLen > 0 ? (absoluteTick / loopLen) : 0;
-              if (!daw::trigConditionFires(event->payload.note.trigCondition, passIndex)) {
+              // PRE (#107) asks about a DIFFERENT note, so it is resolved against the track's
+              // conditional list rather than by the per-note function. Finding this note's place
+              // in that list is a binary search on a vector that holds only conditional trigs —
+              // typically a handful — and it happens only for notes that carry a condition.
+              //
+              // The list is looked up by TICK, not by identity: two conditionals at the same tick
+              // in different columns are interchangeable as predecessors, and matching the code
+              // as well pins the common case without needing a note id in the site.
+              bool fires = true;
+              if (daw::isPreTrigCondition(event->payload.note.trigCondition)) {
+                const auto& sites = snapshot->conditionals;
+                size_t idx = sites.size();
+                auto it = std::lower_bound(
+                    sites.begin(), sites.end(), event->nanotickOffset,
+                    [](const daw::TrigConditionSite& s, uint64_t t) { return s.tick < t; });
+                for (; it != sites.end() && it->tick == event->nanotickOffset; ++it) {
+                  if (it->code == event->payload.note.trigCondition) {
+                    idx = static_cast<size_t>(it - sites.begin());
+                    break;
+                  }
+                }
+                fires = daw::conditionalTrigFires(sites.data(), sites.size(), idx, passIndex);
+              } else {
+                fires = daw::trigConditionFires(event->payload.note.trigCondition, passIndex);
+              }
+              if (!fires) {
                 continue;
               }
             }
