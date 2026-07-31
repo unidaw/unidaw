@@ -350,6 +350,100 @@ const ask = async (track, device) => {
         'naming the reason, because the reason is the fixable part', row && row.t);
 }
 
+// ---------------------------------------------------------------------------
+// THE WHOLE CHOP, FROM THE UI ALONE. No daw-cli anywhere in this block.
+//
+// This is the workflow the entire per-note-op design was drawn around — Jaakko's amen break,
+// one snare at five pitches, a row addressing a hit by `s04`. Every piece of it existed and none
+// of it was reachable: `add-device --kind sampler`, `sampler-load` and `sampler-slice` were
+// daw-cli verbs, so the surface could draw a chop that only a command line could make.
+//
+// make the sampler -> load the break -> chop it -> the slots appear, one per slice, on
+// consecutive keys, and a note can name one.
+// ---------------------------------------------------------------------------
+{
+  await page.evaluate(() => window.__uni.run('add-track'));
+  await page.waitForTimeout(1200);
+  const ct = await page.evaluate(() => window.__uni.state().tracks - 1);
+  copyFileSync(resolve('presets/audio/waveform_probe.wav'), `${stack.dir}/break.wav`);
+
+  await page.evaluate((t) => window.__uni.run(`sampler ${t}`), ct);
+  await page.waitForTimeout(1500);
+  await page.evaluate((t) => window.__uni.run(`load-sample ${t} 0 break.wav`), ct);
+  const one = await page.waitForFunction(async (t) => {
+    window.__uni.samplerKit(t, 0);
+    const k = window.__uni.samplerKitCached(t, 0);
+    return !!(k && k.slots && k.slots.length === 1);
+  }, ct, { timeout: 8000 }).then(() => true).catch(() => false);
+  check(one, 'the break loads as one slot');
+
+  const said = await page.evaluate((t) => window.__uni.run(`slice ${t} 0 8`), ct);
+  check(/8 equal slices/.test((said || []).join(' ')), 'the console chops it',
+        (said || []).join(' ').slice(-80));
+
+  const chopped = await page.evaluate(async (t) => {
+    for (let i = 0; i < 60; i++) {
+      window.__uni.samplerKit(t, 0);
+      const k = window.__uni.samplerKitCached(t, 0);
+      if (k && k.slots && k.slots.length >= 8) return k;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    return window.__uni.samplerKitCached(t, 0);
+  }, ct);
+  /*
+   * EIGHT ASKED FOR, SEVEN SLICES MADE, plus the whole-file slot the load left behind.
+   *
+   * `divideEqually(frames, parts)` returns the INTERIOR boundaries — `i` from 1 to parts-1 — so
+   * `parts = 8` yields seven markers and therefore seven slices, and the file's first region
+   * gets no slot at all. Asking for eight equal slices gives seven. Reported.
+   *
+   * Asserted exactly rather than loosely: `>= 7` would pass if the count ever became right, and
+   * a check that cannot tell an off-by-one from a fix is not worth having.
+   */
+  check(chopped && chopped.slots.length === 8,
+        'the chop adds seven slice slots beside the whole-file slot the load made — '
+        + '`count` is the number of PARTS and divideEqually returns interior boundaries, so '
+        + 'eight parts is seven slices. Reported; this check moves the day that changes.',
+        chopped && String(chopped.slots.length));
+
+  if (chopped && chopped.slots.length === 8) {
+    const sorted = [...chopped.slots].sort((a, b) => a.keyLow - b.keyLow);
+    /*
+     * CONSECUTIVE KEYS FROM C1. That is what makes a chop playable rather than merely stored:
+     * the break lands under the fingers IN ORDER, so a pattern can address a hit by pitch alone
+     * and never mention a slot id at all. It is also why `sound == 0` meaning "pitch picks the
+     * slot" is the common case and the ops cell is empty on an ordinary kit track.
+     */
+    // The whole-file slot from the load shares key 36 with the chop's first slice, so the chop's
+    // own slots are the ones naming a slice.
+    const cut = sorted.filter((x) => x.slice > 0);
+    const keys = cut.map((x) => x.keyLow);
+    const consecutive = keys.every((k, i) => i === 0 || k === keys[i - 1] + 1);
+    check(cut.length === 7 && consecutive,
+          'the slices are on consecutive keys, so the break is playable in order',
+          JSON.stringify(keys));
+    check(cut.every((x, i) => x.slice === i + 1), 'each naming the slice it plays, in order',
+          JSON.stringify(cut.map((x) => x.slice)));
+    /*
+     * AND EVERY SLOT REPORTS THE SAME LENGTH — the SOURCE's, not its own.
+     *
+     * `e.lengthFrames = audio->frames` at the publish site, so eight slices of one break all say
+     * 352800. The slice extent is derived at note-on from the marker and is never published, so
+     * a kit view cannot say how long a slice is or draw where it starts.
+     *
+     * Asserted because it is a limitation worth failing on the day it changes, and because the
+     * shape of the lie matters: every slot agreeing with every other looks exactly like a
+     * correct answer. The card says "slice 3 of a 352800-frame source" rather than presenting
+     * that number as the slice's length.
+     */
+    check(cut.every((x) => x.frames === cut[0].frames),
+          'KNOWN: every slot reports the SOURCE length, not the slice extent — the extent is '
+          + 'derived at note-on and never published, so a kit view cannot draw slice bounds. '
+          + 'Reported. This check moves the day it is.',
+          JSON.stringify(cut.map((x) => x.frames)));
+  }
+}
+
 check(errors.length === 0, 'and nothing threw', errors.slice(0, 3).join(' | '));
 
 await browser.close();

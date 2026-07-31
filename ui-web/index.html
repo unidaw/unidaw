@@ -1481,6 +1481,39 @@ const samplerKitsForChain = {};
 let samplerKitAsked = null;
 
 /**
+ * CHOP a source into slices, and by default a playable slot per slice.
+ *
+ * `slots` is what turns a chop into something you can play in one gesture rather than N: the
+ * slices land on consecutive keys from `base`, so the break is under the fingers in order and a
+ * pattern addresses a hit by pitch alone. Without it the slice set exists and nothing plays it —
+ * which is a real thing to want (re-cutting an existing chop) and a surprising default.
+ *
+ * `snap` is the row grid in nanoticks. Snapping makes the chop tempo-adaptive from the moment it
+ * is made rather than tied to the rate the file was recorded at, which is the difference between
+ * a break that follows the song and a song that has to follow the break.
+ */
+function sliceSample(track, device, opts) {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
+  const o = opts || {};
+  const mode = String(o.mode || 'equal');
+  if (mode !== 'equal' && mode !== 'transient' && mode !== 'clear') {
+    state.reject = 'slice mode is equal, transient or clear';
+    schedule();
+    return false;
+  }
+  conn.send({ type: 'samplerslice', track: Number(track) || 0, device: Number(device) || 0,
+              source: o.source === undefined ? 1 : Number(o.source), mode,
+              count: o.count === undefined ? 16 : Number(o.count),
+              sensitivity: o.sensitivity === undefined ? 500 : Number(o.sensitivity),
+              snap: o.snap === undefined ? 0 : Number(o.snap),
+              base: o.base === undefined ? 36 : Number(o.base),
+              slots: o.slots === false ? 0 : 1 });
+  state.reject = null;
+  schedule();
+  return true;
+}
+
+/**
  * Load a sample into a sampler, minting a source and a slot.
  *
  * The name is a project-relative FILE NAME, not a path: the whole command is 40 bytes and the
@@ -2716,6 +2749,7 @@ const dockApi = {
   addDevice: (track, kind) => !!(conn && conn.send({ type: 'adddevice',
     track: track === undefined ? state.cursor.track : track, kind: kind || 'patcher event' })),
   loadSample: (t, d, name, root, fixed) => loadSample(t, d, name, root, fixed),
+  sliceSample: (t, d, opts) => sliceSample(t, d, opts),
   rowOps: (track, note, text) => writeRowOps(track, 0, note, text),
   opsAtCursor: (text) => writeOpsAtCursor(text),
   opsTextAtCursor: () => opsAtCursorText(),
@@ -7559,6 +7593,7 @@ window.__uni = {
   writeAutomation: (t, p, k, v, d) => dockApi.writeAutomation(t, p, k, v, d),
   automationPoints: (track, param) => dockApi.automationPoints(track, param),
   loadSample: (t, d, n, r, f) => dockApi.loadSample(t, d, n, r, f),
+  sliceSample: (t, d, o) => dockApi.sliceSample(t, d, o),
   rowOps: (t, n, x) => dockApi.rowOps(t, n, x),
   opsAtCursor: (x) => dockApi.opsAtCursor(x),
   opsTextAtCursor: () => dockApi.opsTextAtCursor(),

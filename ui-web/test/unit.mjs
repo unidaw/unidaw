@@ -807,7 +807,7 @@ test('a project row leaves its meta line to the renderer', () => {
  */
 const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'samplerKitCached',
                      'rowOps', 'opsAtCursor', 'opsTextAtCursor', 'noteIdAtCursor',
-                     'loadSample', 'addDevice',
+                     'loadSample', 'addDevice', 'sliceSample',
                      'setView', 'load', 'save', 'listProjects', 'transport', 'seek', 'tempo',
                      'note', 'del', 'goto', 'zoom', 'octave', 'gain', 'strip', 'state',
                      'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
@@ -2205,6 +2205,7 @@ const OP_REGISTRY = {
   // CLI paths are real and only the agent manifest owes them tools.
   sampler:   { cli: 'add-device', agent: null, why: 'gap' },
   'load-sample': { cli: 'sampler-load', agent: null, why: 'gap' },
+  slice:     { cli: 'sampler-slice', agent: null, why: 'gap' },
   // Row ops. daw-cli reached the engine FIRST here — `do set-row-ops` shipped with the opcode —
   // so the CLI path is real from day one and only the agent manifest owes it a tool.
   ops:       { cli: 'set-row-ops', agent: null, why: 'gap' },
@@ -2305,7 +2306,7 @@ const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
                    'del', 'delchord', 'delharmony', 'delnode', 'editor',
                    'gain', 'link', 'loop', 'mute', 'new', 'paste', 'patch',
                    'seek', 'solo', 'tempo', 'transpose', 'mods', 'ops',
-                   'sampler', 'load-sample',
+                   'sampler', 'load-sample', 'slice',
                    // With `mods`: a read-back this app has and the agent manifest does not.
                    'kit'];
 
@@ -2538,7 +2539,6 @@ const ENGINE_UNUSED = {
   BulkChunk: 'gap — a carrier for payloads over 40 bytes; nothing here needs one yet',
   SamplerSetEnvelopePoints: 'gap — with SamplerSetEnvelope, and rides BulkChunk',
   SamplerSetSlot: 'gap — with SamplerLoad',
-  SamplerSlice: 'gap — with SamplerLoad; slicing wants markers on a waveform, not a verb',
   SamplerMarker: 'gap — with SamplerSlice',
   SamplerEmitRows: 'gap — with SamplerSlice; emits a chop into the pattern',
 };

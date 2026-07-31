@@ -32,7 +32,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
-use daw_bridge::layout::{UiSetRowOpsPayload, UiSamplerLoadPayload, EventEntry, UiChainCommandPayload, UiChordCommandPayload,
+use daw_bridge::layout::{UiSetRowOpsPayload, UiSamplerLoadPayload, UiSamplerSlicePayload, EventEntry, UiChainCommandPayload, UiChordCommandPayload,
                          UiMarkerCommandPayload, UiArrangeTimeCommandPayload,
                          UI_TIME_SIG_FLATTEN, UiModLinkCommandPayload,
                          UiModLinkUid16Payload, UiModSourceValuePayload,
@@ -3319,6 +3319,43 @@ fn build_sampler_load(body: &str) -> Option<Result<UiSamplerLoadPayload, &'stati
     }))
 }
 
+/// CHOP A SOURCE into slices, and optionally a playable slot per slice (opcode 74).
+///
+///   {"type":"samplerslice","track":0,"device":9,"source":1,"mode":"equal","count":16,"slots":1}
+///
+/// `slots` is the gesture that turns a chop into something you can play in ONE command rather
+/// than N: a slot per slice from `base` upward, so the break lands under the fingers in order
+/// and a pattern addresses a hit by pitch alone. Without it the slice set exists and nothing
+/// plays it.
+///
+/// `snap` is the row grid in nanoticks, and 0 means no snap. Snapping makes a chop
+/// tempo-adaptive from the moment it is made rather than tied to the rate the file was recorded
+/// at — which is the difference between a break that follows the song and one the song has to
+/// follow.
+fn build_sampler_slice(body: &str) -> Option<Result<UiSamplerSlicePayload, &'static str>> {
+    if !is_type(body, "samplerslice") { return None; }
+    let mode = match parse_str(body, "\"mode\"").unwrap_or("equal") {
+        "transient" => daw_bridge::layout::SAMPLER_SLICE_TRANSIENT,
+        "equal" => daw_bridge::layout::SAMPLER_SLICE_EQUAL,
+        "clear" => daw_bridge::layout::SAMPLER_SLICE_CLEAR,
+        _ => return Some(Err("slice mode is transient, equal or clear")),
+    };
+    Some(Ok(UiSamplerSlicePayload {
+        command_type: UiCommandType::SamplerSlice as u16,
+        mode,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        device_id: parse_num(body, "\"device\"").unwrap_or(0).max(0) as u32,
+        source_local_id: parse_num(body, "\"source\"").unwrap_or(1).max(0) as u32,
+        sensitivity: parse_num(body, "\"sensitivity\"").unwrap_or(500).clamp(0, 1000) as u32,
+        count: parse_num(body, "\"count\"").unwrap_or(16).clamp(0, 4096) as u32,
+        max_slices: parse_num(body, "\"max\"").unwrap_or(0).max(0) as u32,
+        snap_nanoticks: parse_num(body, "\"snap\"").unwrap_or(0).max(0) as u32,
+        make_slots: if parse_num(body, "\"slots\"").unwrap_or(1) != 0 { 1 } else { 0 },
+        slot_base_key: parse_num(body, "\"base\"").unwrap_or(36).clamp(0, 127) as u8,
+        reserved: [0u8; 6],
+    }))
+}
+
 /// One line of agent progress, as JSON the page can render.
 ///
 /// Hand-built rather than serde-derived: this is four fields and the escaping is
@@ -3748,6 +3785,21 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                     Ok(()) => format!(
                                         "{{\"ok\":true,\"autopoint\":{},\"value\":{}}}",
                                         p.track_id, p.value),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        // CHOP A SOURCE. Own 40-byte payload again.
+                        if let Some(r) = build_sampler_slice(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_sampler_slice(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"samplerslice\":{},\"count\":{}}}",
+                                        p.device_id, p.count),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                                 },
                             };

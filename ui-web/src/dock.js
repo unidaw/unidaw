@@ -439,6 +439,25 @@ export function createCommands(api) {
         return api.loadSample(Number(a[0]), Number(a[1]), name)
           ? `loading ${name}` : refusal(api);
       } },
+    /*
+     * CHOP IT. The gesture the whole per-note-op design was drawn around — an amen break cut
+     * into slices, each one playable, each one addressable from a row by `s04`.
+     *
+     * Slots by default. A chop with no slots is a slice set nothing plays, which is a real thing
+     * to want when re-cutting an existing chop and a surprising thing to get when you asked for
+     * a break.
+     */
+    slice: { help: 'slice <track> <device> [count] [equal|transient] — chop the sample into '
+                 + 'playable slices from C1 up',
+      args: [A_TRACK, { name: 'device', type: 'int', min: 0 },
+             { name: 'count', type: 'int', min: 1, max: 512, optional: true },
+             oneOf(['equal', 'transient'], true)],
+      run: (a) => {
+        const count = a[2] === undefined ? 16 : Number(a[2]);
+        const mode = a[3] === undefined ? 'equal' : String(a[3]);
+        return api.sliceSample(Number(a[0]), Number(a[1]), { count, mode })
+          ? `chopping into ${count} ${mode} slices` : refusal(api);
+      } },
     kit: { help: 'kit <track> <device> — what is in that sampler, slot by slot',
       args: [A_TRACK, { name: 'device', type: 'int', min: 0 }],
       run: (a) => {

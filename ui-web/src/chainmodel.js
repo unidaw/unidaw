@@ -639,8 +639,21 @@ export function buildChainModel(opts, buf) {
           p.isSlot = true;
           p.defaultValue = 0;
           const mod = modSummary(q.modMask | 0, q.filterType | 0);
+          /*
+           * `lengthFrames` IS THE SOURCE'S LENGTH, NOT THE SLOT'S.
+           *
+           * `e.lengthFrames = audio->frames` at the publish site, so every slot of a chop
+           * reports the whole file — eight slices of one break all say 352800 frames. The slice
+           * EXTENT is derived at note-on from the marker and is not published at all.
+           *
+           * So a sliced slot says which slice it is and how long its SOURCE is, labelled as the
+           * source. Presenting that number as the slice's length would be a plain lie, and the
+           * lie would be invisible: every slot of a chop would agree with every other, which
+           * looks exactly like a correct answer.
+           */
           p.range = missing ? 'the source file did not resolve — this slot is silent'
-                  : [q.slice ? `slice ${q.slice}, ${q.frames} frames` : `${q.frames} frames`,
+                  : [q.slice ? `slice ${q.slice} of a ${q.frames}-frame source`
+                             : `${q.frames} frames`,
                      mod.title].filter(Boolean).join(' · ');
           p.display = missing ? 'MISSING'
                     : (q.slice ? `sl${q.slice}` : frameText(q.frames)) + mod.mark;
