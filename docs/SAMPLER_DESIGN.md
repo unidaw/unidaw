@@ -559,6 +559,14 @@ old rows keep meaning what they meant. It is pinned as an EQUIVALENCE
 (`a_padded_sound_address_is_the_same_slot`) rather than left as a property of the parser nobody
 states, because a later formatting opinion is exactly the thing that would break it by accident.
 
+**THE ID IS STABLE; WHAT IS BEHIND IT IS NOT.** Repointing a pad — `sampler-slot --field source`,
+added f4f9ef7 — changes what an existing `s07` row PLAYS without the row changing. That is this
+decision working exactly as designed, and it will still read as a bug the first time somebody hits
+it: *"I did not touch that row and it sounds different."* The alternative is worse in the other
+direction, because notating the NAME would mean a rename silently rewrote every row that used it.
+A row names a slot; a slot names a sample; only the second link is editable. (Raised by the web-UI
+agent, who has to explain it to whoever hits it.)
+
 The argument padding lost to is worth recording, because it was a good one: a ragged `s7` / `s13`
 column does break the vertical rhythm a tracker is read by. It lost to "the two spellings mean the
 same slot, so the canonical form should be the one a person types". If the ragged column reads

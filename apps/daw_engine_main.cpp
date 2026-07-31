@@ -2284,6 +2284,9 @@ struct TrackRuntime {
     // track_id; collapsed hides children in the UI. Published per track.
     std::atomic<uint32_t> parentId{0};
     std::atomic<bool> collapsed{false};
+    // The widest op run on any note in this track — see ShmHeader::uiTrackOpsWidth. An atomic
+    // because the publisher reads it every cycle and rebuildFlatAndPublish writes it on edit.
+    std::atomic<uint8_t> opsWidth{0};
     // Movement 4 multi-out: an aux CHILD track is an ordinary runtime with NO host — its
     // audio is a view into the parent's aux output plane (bus k's channels). isAuxChild
     // gates it out of every host/producer/restart loop; auxParentTrackId names the parent
@@ -4846,6 +4849,8 @@ struct TrackRuntime {
     if (std::strcmp(why, "no_such_slot") == 0) return R::NoSuchSlot;
     if (std::strcmp(why, "no_such_mod_set") == 0) return R::NoSuchModSet;
     if (std::strcmp(why, "no_such_modulator") == 0) return R::NoSuchModulator;
+    if (std::strcmp(why, "no_such_source") == 0) return R::NoSuchSource;
+    if (std::strcmp(why, "no_such_slice") == 0) return R::NoSuchSliceSet;
     return R::BadValue;  // unknown_field, and anything added later that nobody mapped
   };
 
@@ -5695,6 +5700,28 @@ struct TrackRuntime {
       flat.addEvent(ev);
     }
     rt.track.clip = std::move(flat);
+    // THE WIDEST OP RUN, over the flat clip that was just built. Counted as GLYPHS — one per op
+    // present — because that is what the collapsed cell draws; see ShmHeader::uiTrackOpsWidth.
+    //
+    // Here rather than in the publish loop: this is the single funnel every structural change
+    // goes through, so the number moves with clipVersion, and a max over every note in the track
+    // is not something to do once per block.
+    {
+      uint8_t widest = 0;
+      for (const auto& ev : rt.track.clip.events()) {
+        if (ev.type != daw::MusicalEventType::Note) {
+          continue;
+        }
+        const auto& n = ev.payload.note;
+        const uint8_t count =
+            static_cast<uint8_t>((n.retrigger > 1 ? 1 : 0) + (n.probability > 0 ? 1 : 0) +
+                                 (n.delayNanoticks > 0 ? 1 : 0) + (n.sound != 0 ? 1 : 0) +
+                                 (n.soundOffset != 0 ? 1 : 0) + (n.retrigRamp != 0 ? 1 : 0) +
+                                 (n.trigCondition != 0 ? 1 : 0));
+        widest = std::max(widest, count);
+      }
+      rt.opsWidth.store(widest, std::memory_order_relaxed);
+    }
     rt.clipExtents.clear();
     for (size_t i = 0; i < rt.sourcePlacements.size(); ++i) {
       const auto& pl = rt.sourcePlacements[i];
@@ -11499,6 +11526,43 @@ struct TrackRuntime {
                 slot.modSetId = want;
                 break;
               }
+              case daw::SamplerSlotField::SourceLocalId: {
+                // A source that is not there would make the slot silent — refused, like ModSetId.
+                const uint16_t want = static_cast<uint16_t>(std::max(0, v));
+                if (want == 0 || !d.sampler.findSource(want)) {
+                  why = "no_such_source";
+                  goto done;
+                }
+                slot.sourceLocalId = want;
+                break;
+              }
+              case daw::SamplerSlotField::SliceId: {
+                const uint16_t want = static_cast<uint16_t>(std::max(0, v));
+                if (want != 0) {
+                  // The marker must exist in THIS SLOT'S source's slice set. A slice id is only
+                  // meaningful against the sample it was cut from, so validating it globally
+                  // would accept slice 7 of another file and play the wrong region.
+                  bool found = false;
+                  for (const auto& ss : d.sampler.sliceSets) {
+                    if (ss.sourceLocalId != slot.sourceLocalId) {
+                      continue;
+                    }
+                    for (const auto& m : ss.markers) {
+                      if (m.id == want) {
+                        found = true;
+                        break;
+                      }
+                    }
+                    break;
+                  }
+                  if (!found) {
+                    why = "no_such_slice";
+                    goto done;
+                  }
+                }
+                slot.sliceId = want;
+                break;
+              }
               case daw::SamplerSlotField::OutputStem: slot.outputStem = u8c(v); break;
               case daw::SamplerSlotField::Quality:
                 slot.quality = static_cast<uint8_t>(std::clamp(v, 0, 2));
@@ -13940,6 +14004,28 @@ struct TrackRuntime {
       DAW_EVENT("track.sound_addressed")
           .field("track", payload.trackId)
           .field("enabled", enable);
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::SetTrackCollapsed)) {
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (payload.trackId < tracks.size()) {
+          runtime = tracks[payload.trackId].get();
+        }
+      }
+      if (!runtime) {
+        daw::LogLine() << "UI: SetTrackCollapsed failed - track "
+                       << payload.trackId << " not found" << std::endl;
+        return;
+      }
+      // AN ATOMIC, not the track struct under its mutex: `collapsed` lives beside the other
+      // per-track atomics the publisher reads every frame, and the save copies it out from there.
+      // No snapshot rebuild — it changes nothing the RT plays.
+      const bool folded = payload.value0 != 0;
+      runtime->collapsed.store(folded, std::memory_order_relaxed);
+      DAW_EVENT("track.collapsed")
+          .field("track", payload.trackId)
+          .field("collapsed", folded);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetLaneQuantize)) {
       TrackRuntime* runtime = nullptr;
@@ -17937,6 +18023,12 @@ struct TrackRuntime {
                   ? static_cast<uint8_t>(std::min<uint32_t>(
                         trackSnapshot[i]->linesPerBeat.load(std::memory_order_relaxed),
                         255u))
+                  : 0;
+          // v34: the widest op run on any note in the track, so the ops column can be sized
+          // once for the track instead of from whatever rows happen to be on screen.
+          uiShm.header->uiTrackOpsWidth[i] =
+              i < trackSnapshot.size()
+                  ? trackSnapshot[i]->opsWidth.load(std::memory_order_relaxed)
                   : 0;
           // v26 (M1.13): the lane's quantize, so the UI can draw each note where it was
           // played and a deviation bar to where it sounds.

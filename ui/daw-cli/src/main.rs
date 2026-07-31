@@ -86,6 +86,7 @@ daw-cli — control surface for a running engine
   daw-cli do loop --start T --end T set the loop range
   daw-cli do harmony-quantize --track N [--on 0|1]
   daw-cli do sound-addressed --track N [--on 0|1]
+  daw-cli do collapse --track N [--on 0|1]
   daw-cli do automation --track N --param ID --nanotick T --value V
                         [--discrete] [--device D]
                                    writes one automation point. --discrete makes the
@@ -456,6 +457,10 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
         // Published for the same reason harmony_quantize is, and it matters more: this flag
         // decides which SLOT a note plays, so a UI that had to guess would draw the kit's
         // mapping backwards.
+        let collapsed = flag & daw_bridge::layout::UI_TRACK_FLAG_COLLAPSED != 0;
+        // v34: sized for the TRACK, not for the rows on screen — a column computed from a
+        // window reflows as you scroll.
+        let ops_width = mixers.get(index).map(|m| m.ops_width).unwrap_or(0);
         let sound_addressed = mixers
             .get(index)
             .map(|m| m.flags & daw_bridge::layout::MIX_FLAG_SOUND_ADDRESSED != 0)
@@ -466,7 +471,7 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
         // track changes and is no longer the right base for a track-scoped edit.
         let clip_version = handle.clip_version_for_track(id);
         println!(
-            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"absent\": {is_absent}, \"harmony_quantize\": {harmony_q}, \"sound_addressed\": {sound_addressed}, \"clip_version\": {clip_version}, \"peak_rms\": {rms} }}{comma}"
+            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"absent\": {is_absent}, \"harmony_quantize\": {harmony_q}, \"sound_addressed\": {sound_addressed}, \"collapsed\": {collapsed}, \"ops_width\": {ops_width}, \"clip_version\": {clip_version}, \"peak_rms\": {rms} }}{comma}"
         );
     }
     println!("  ]");
@@ -3625,6 +3630,20 @@ removed is the whole command");
                     payload.note_duration_hi = (end >> 32) as u32;
                     match handle.send_command(payload) {
                         Ok(()) => { println!("{{ \"sent\": \"loop\", \"start\": {start}, \"end\": {end} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"collapse") => {
+                    // The same shape as sound-addressed and harmony-quantize: a per-track
+                    // boolean. `collapsed` was persisted, published and restored on load and
+                    // settable by nothing, so the fold could be drawn and never set.
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let on = flag_u64(&args, "--on", Some(1)).unwrap_or(1);
+                    let mut payload = track_structure_command(
+                        UiCommandType::SetTrackCollapsed, track);
+                    payload.value0 = if on != 0 { 1 } else { 0 };
+                    match handle.send_command(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"collapse\", \"track\": {track}, \"on\": {on} }}"); 0 }
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }

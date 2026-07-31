@@ -595,6 +595,30 @@ add_test(NAME sampler_default_gate
 )
 set_tests_properties(sampler_default_gate PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# A pad can be repointed at another sample, and you hear the other sample.
+add_test(NAME slot_repoint
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/slot_repoint_check.sh
+)
+set_tests_properties(slot_repoint PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+# A folded track stays folded — the state can be SET, not only drawn.
+add_test(NAME track_collapse
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/track_collapse_check.sh
+)
+set_tests_properties(track_collapse PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+# Nothing the project format remembers is unwritable without a reason recorded.
+add_test(NAME persisted_field_reach
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/persisted_field_reach_check.sh
+)
+set_tests_properties(persisted_field_reach PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+# The ops column's width is a property of the TRACK, not of what is on screen.
+add_test(NAME ops_width
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/ops_width_check.sh
+)
+set_tests_properties(ops_width PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # A note's default length follows the SONG's meter, not a hardcoded 4/4 bar.
 add_test(NAME meter_bar
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/meter_bar_check.sh

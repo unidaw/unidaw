@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 33;
+pub const K_SHM_VERSION: u16 = 34;
 
 /// SetLaneQuantize carries swing through an unsigned field; this is the bias.
 pub const LANE_QUANTIZE_SWING_BIAS: u32 = 500;
@@ -185,6 +185,15 @@ pub struct ShmHeader {
     /// v32: one sampler device's kit, on request.
     pub ui_sampler_kit_offset: u64,
     pub ui_sampler_kit_bytes: u64,
+    /// v34: the widest op run on any note in the track — how many glyphs the collapsed ops cell
+    /// must be able to draw. 0 = no note in the track carries an op, which is R5's "do not draw
+    /// the column at all".
+    ///
+    /// It exists because a client sees only a WINDOW: anything computed from the rows on screen
+    /// changes as you scroll, and a column that reflows under the cursor while you type into it
+    /// is worse than one that clips. Recomputed where the flat clip is re-derived, so it moves
+    /// with clip_version.
+    pub ui_track_ops_width: [u8; K_UI_MAX_TRACKS],
 }
 
 /// uiTrackFlags bits (Movement 4).
@@ -1167,6 +1176,9 @@ pub enum UiCommandType {
     /// `defaultGate` is the per-bank "ignore note-offs" default; `voiceCap` and `defaultView`
     /// were persisted and rendered and reachable by nothing until this existed.
     SamplerSetDevice = 88,
+    /// Fold a track. `collapsed` was persisted, published and restored on load, and settable by
+    /// nothing — the fold could be drawn and never set.
+    SetTrackCollapsed = 89,
 }
 
 /// Where a route points. Mirrors daw::TrackRouteKind.
@@ -1889,6 +1901,10 @@ pub const SAMPLER_SLOT_FIELDS: &[(&str, u16)] = &[
     ("loop-xfade", 24),
     ("start-frame", 25),
     ("end-frame", 26),
+    // Repointing a pad. Set at mint by sampler-load / sampler-slice and, until these existed,
+    // never again — so "this pad should play that other file" meant rebuilding the slot.
+    ("source", 27),
+    ("slice", 28),
 ];
 
 #[repr(C)]
@@ -2224,7 +2240,10 @@ mod tests {
 
     #[test]
     fn shm_header_layout_matches_cpp() {
-        const_assert_eq!(size_of::<ShmHeader>(), 6080); // v27: + arrange summary offset
+        // v34: + uiTrackOpsWidth[64]. The header had ZERO tail padding, so one cache line of
+        // per-track bytes grew it 6080 -> 6144 and bumped kShmVersion — region offsets are
+        // computed from sizeof(ShmHeader), so every region shifted.
+        const_assert_eq!(size_of::<ShmHeader>(), 6144);
         const_assert_eq!(size_of::<UiDeviceMeter>(), 12);
         const_assert_eq!(size_of::<UiDeviceMeterRegion>(), 12352);
         const_assert_eq!(align_of::<ShmHeader>(), 64);
