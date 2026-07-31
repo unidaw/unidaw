@@ -35,6 +35,7 @@ use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{UiSetRowOpsPayload, UiSamplerLoadPayload, UiSamplerSlicePayload,
                          UiSamplerFilterPayload, UiSamplerEnvelopePayload,
                          UiSamplerSetSlotPayload, UiSamplerSetDevicePayload,
+                         UiSamplerVintagePayload,
                          UiSamplerEmitRowsPayload, UiSamplerSlotNameHeader,
                          EventEntry, UiChainCommandPayload, UiChordCommandPayload,
                          UiMarkerCommandPayload, UiArrangeTimeCommandPayload,
@@ -1511,7 +1512,7 @@ fn request_sampler_kit(handle: &EngineHandle, track: u32, device: u32) -> String
                       \"velLow\":{},\"velHigh\":{},\"group\":{},\"nna\":{},\"flags\":{},\
                       \"gainMb\":{},\"panTh\":{},\"modSet\":{},\"stem\":{},\"quality\":{},\
                       \"frames\":{},\"slice\":{},\"modMask\":{},\"filterType\":{},\
-                      \"begin\":{},\"end\":{},\"name\":\"{}\"}}",
+                      \"begin\":{},\"end\":{},\"bits\":{},\"rate\":{},\"name\":\"{}\"}}",
                     e.slotId, e.sourceLocalId, e.keyLow, e.keyHigh, e.rootKey,
                     e.velLow, e.velHigh, e.voiceGroup, e.nna, e.flags,
                     e.gainMillibels, e.panThousandths, e.modSetId, e.outputStem,
@@ -1533,6 +1534,17 @@ fn request_sampler_kit(handle: &EngineHandle, track: u32, device: u32) -> String
                      * at the moment somebody is looking for one.
                      */
                     e.sliceBeginFrame, e.sliceEndFrame,
+                    /*
+                     * VINTAGE, resolved from the slot's MOD SET. Published per slot rather than
+                     * per set because a slot is what a kit grid draws and "which set is this
+                     * pad on" is a question the grid should not have to answer to say whether
+                     * the pad is crushed. Both 0 = off.
+                     *
+                     * They ride the entry's two reserved words, so no offset moved and
+                     * kShmVersion did not change — zero has always been there and zero is
+                     * exactly what "off" means.
+                     */
+                    e.vintageBits, e.vintageRateHz,
                     /*
                      * v36: THE SLOT'S NAME, nul-terminated inside its 40 bytes. Persisted since
                      * the sampler shipped and published by nothing, so it survived save and
@@ -3727,6 +3739,52 @@ fn build_sampler_filter(body: &str) -> Option<Result<UiSamplerFilterPayload, &'s
     }))
 }
 
+/// SAMPLER SET VINTAGE (opcode 91). Bit depth and sample-rate reduction on a mod set — the
+/// SP-1200 / MPC60 character.
+///
+/// ON THE MOD SET, not the slot, and 0 means every mod set on the sampler: a chopped break wants
+/// ONE vintage character and sixteen copies would be sixteen edits. Same sentinel as the filter,
+/// which is the neighbouring mod-set command.
+///
+/// THE FLAGS SAY WHICH HALF THIS CALL IS ABOUT, and that is the whole reason they exist: 0 is a
+/// legal value for both (it means OFF), so "reduce the bits and leave the rate" cannot be said
+/// with a value. Omitted here unless the caller named it — the same discipline the filter's
+/// cutoff needs, and the one I got wrong on the envelope by sending `modulator: 0` for
+/// completeness and turning every call into a different command.
+fn build_sampler_vintage(body: &str) -> Option<Result<UiSamplerVintagePayload, &'static str>> {
+    if !is_type(body, "samplervintage") { return None; }
+    let bits = parse_num(body, "\"bits\"");
+    let rate = parse_num(body, "\"rate\"");
+    if bits.is_none() && rate.is_none() {
+        return Some(Err("samplervintage needs bits, rate, or both — with neither it would be a \
+                         command that changes nothing and reports success"));
+    }
+    if let Some(b) = bits {
+        if !(0..=16).contains(&b) {
+            return Some(Err("bit depth is 0 (off) or 1..16"));
+        }
+    }
+    if let Some(r) = rate {
+        if !(0..=65535).contains(&r) {
+            return Some(Err("rate is 0 (off) or a target sample rate in Hz"));
+        }
+    }
+    let mut flags = 0u16;
+    if bits.is_some() { flags |= daw_bridge::layout::SAMPLER_VINTAGE_SET_BITS; }
+    if rate.is_some() { flags |= daw_bridge::layout::SAMPLER_VINTAGE_SET_RATE; }
+    Some(Ok(UiSamplerVintagePayload {
+        command_type: UiCommandType::SamplerSetVintage as u16,
+        flags,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        device_id: parse_num(body, "\"device\"").unwrap_or(0).max(0) as u32,
+        mod_set_id: parse_num(body, "\"modSet\"").unwrap_or(0).max(0) as u32,
+        bit_depth: bits.unwrap_or(0) as u8,
+        reserved0: 0,
+        rate_hz: rate.unwrap_or(0) as u16,
+        reserved1: [0u32; 5],
+    }))
+}
+
 fn build_sampler_slice(body: &str) -> Option<Result<UiSamplerSlicePayload, &'static str>> {
     if !is_type(body, "samplerslice") { return None; }
     let mode = match parse_str(body, "\"mode\"").unwrap_or("equal") {
@@ -4276,6 +4334,21 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                         header.slot_id, bytes.len()),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                                 }
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        // VINTAGE ON A MOD SET. Own 40-byte payload, shaped like the filter's.
+                        if let Some(r) = build_sampler_vintage(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_sampler_vintage(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"samplervintage\":{},\"bits\":{},\"rate\":{}}}",
+                                        p.mod_set_id, p.bit_depth, p.rate_hz),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
                             };
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;

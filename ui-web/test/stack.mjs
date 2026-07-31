@@ -352,11 +352,36 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
     return (atMs - (endsAt - captureSeconds * 1000)) / 1000;
   };
 
+  /*
+   * STOP, AND MAKE SURE IT STOPPED.
+   *
+   * This sent SIGTERM and returned. That is usually enough — and "usually" is the problem: a
+   * leaked engine holds the audio device, and the NEXT engine blocks waiting for it and never
+   * starts its own `--run-seconds` clock, so it lingers indefinitely too. The failures that
+   * produces do not look like leaks. They look like a suite that captured silence, or one that
+   * took 935 seconds where it usually takes 10. This project has already spent a night reading a
+   * machine carrying 79 stray engines as a bug in the sampler.
+   *
+   * So: SIGTERM, a grace period, then SIGKILL anything still alive — and SAY SO, loudly, because
+   * a process that needed the KILL is a defect somewhere even though this recovered from it.
+   *
+   * `spawn(bin, ...)` directly rather than through a shell is what makes the handle trustworthy
+   * here. Backend found the other shape in tools/: `( cd … && ./daw_engine … ) &` makes `$!` the
+   * SUBSHELL, so the kill reaps the subshell and leaves the engine. Worth knowing when reading
+   * any of those scripts.
+   */
   const stop = () => {
     for (const p of procs) { try { p.kill('SIGTERM'); } catch {} }
-    // The engine spawns plugin hosts of its own; they exit with it, but give
-    // them a moment before the directory goes.
     setTimeout(() => {
+      const stubborn = procs.filter((p) => p.exitCode === null && p.signalCode === null);
+      for (const p of stubborn) {
+        console.log(`  stack: pid ${p.pid} ignored SIGTERM — sending KILL. A survivor holds the `
+                  + 'audio device and the next run blocks on it, which reads as silence rather '
+                  + 'than as a leak.');
+        try { p.kill('SIGKILL'); } catch {}
+      }
+      // The engine spawns plugin hosts of its own; they exit with it, but give
+      // them a moment before the directory goes.
       if (!keepDir) { try { rmSync(root, { recursive: true, force: true }); } catch {} }
     }, 500);
   };

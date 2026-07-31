@@ -79,7 +79,7 @@
 
 <script type="module">
 import { Tracker } from './src/tracker.js';
-import { buildViewModel, ZOOM_LEVELS, createBuffer } from './src/viewmodel.js';
+import { buildViewModel, ZOOM_LEVELS, createBuffer, velocityText } from './src/viewmodel.js';
 import { opsText, parseOps, OP_MASK, opMaskOf, oneOpEdit, opsPresent, opTokenAt,
          ROW_OPS, opsHint, opHelpFor } from './src/rowops.js';
 /*
@@ -2999,6 +2999,27 @@ const dockApi = {
                               name: String(name === undefined ? '' : name) })) {
       state.reject = 'no engine'; schedule(); return false;
     }
+    state.reject = null; schedule(); return true;
+  },
+  /**
+   * VINTAGE ON A MOD SET (opcode 91): bit depth and sample-rate reduction, the SP-1200 / MPC60
+   * character. Both off by default and independent of each other.
+   *
+   * `bits` and `rate` are OMITTED rather than defaulted when the caller does not name them, and
+   * that is what the payload's flags are for: 0 is a legal value for both — it means OFF — so
+   * "crush the bits and leave the rate" cannot be said with a value. Passing undefined is what
+   * leaves the other one alone. Same shape as `samplerFilter` above, and the same trap the
+   * envelope fell into by sending a field for completeness.
+   *
+   * `modSet` 0 is a real wildcard here (every mod set on the sampler), unlike a slot id: a
+   * chopped break wants one vintage character, not sixteen edits.
+   */
+  samplerVintage: (track, device, bits, rate, modSet) => {
+    const msg = { type: 'samplervintage', track: Number(track) || 0,
+                  device: Number(device) || 0, modSet: Number(modSet) || 0 };
+    if (bits !== undefined && bits !== null && !Number.isNaN(Number(bits))) msg.bits = Number(bits);
+    if (rate !== undefined && rate !== null && !Number.isNaN(Number(rate))) msg.rate = Number(rate);
+    if (!conn || !conn.send(msg)) { state.reject = 'no engine'; schedule(); return false; }
     state.reject = null; schedule(); return true;
   },
   samplerSlot: (track, device, slot, field, value) => {
@@ -6128,7 +6149,19 @@ function typeValue(digit) {
     state.digitAcc = v;
     const base = rewriteNote(n, { vel: v });
     if (base === false) return false;
-    addPending(state.cursor.row, state.cursor.track, 1, ('0' + v).slice(-2), base);
+    /*
+     * HEX, through the SAME function the settled cell uses.
+     *
+     * This was `('0' + v).slice(-2)` — the last two DECIMAL digits — which is verbatim the
+     * formula viewmodel.js's own comment records as the bug it fixed: 127 reads as "27" and 100
+     * as "00", both plausible velocities, neither the one you typed. The optimistic overlay
+     * kept it, so a typed velocity flashed a wrong number for one round trip and then settled
+     * to the right one, which is the hardest kind of wrong to notice.
+     *
+     * Calling `velocityText` rather than repeating its logic is the point: a second formatter is
+     * how the first one's fix failed to reach here.
+     */
+    addPending(state.cursor.row, state.cursor.track, 1, velocityText(v), base);
     return true;
   }
 }
@@ -8176,6 +8209,10 @@ window.__uni = {
   samplerSlot: (t, d, sl, f, v) => dockApi.samplerSlot(t, d, sl, f, v),
   samplerDevice: (t, d, f, v) => dockApi.samplerDevice(t, d, f, v),
   samplerSlotName: (t, d, sl, n) => dockApi.samplerSlotName(t, d, sl, n),
+  samplerVintage: (t, d, b, r, m) => dockApi.samplerVintage(t, d, b, r, m),
+  // The console's transcript, reachable from a script — the ratchet's rule is that anything on
+  // dockApi is on __uni or is listed as console-only with a reason, and this has neither excuse.
+  log: (kind, text) => dockApi.log(kind, text),
   samplerEmit: (t, d, o) => dockApi.samplerEmit(t, d, o),
   soundAddressed: (t, on) => dockApi.soundAddressed(t, on),
   opsTextAtCursor: () => dockApi.opsTextAtCursor(),
