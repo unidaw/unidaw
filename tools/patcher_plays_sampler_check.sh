@@ -119,7 +119,7 @@ PY
     >"$TMP/eng.log" 2>&1 ) || fail "the render exited non-zero — see $TMP/eng.log"
 [ -s "$TMP/pat.wav" ] || fail "the render wrote no output"
 
-grep -q '"event":"project.patcher_loaded"' "$TMP/eng.log" || \
+grep -qE '"event":"project.patcher_(loaded|assembled)"' "$TMP/eng.log" || \
   fail "the patcher graph never loaded, so this check is measuring a project without one"
 
 read -r PEAK BURSTS <<EOF

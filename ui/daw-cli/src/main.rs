@@ -14,7 +14,7 @@ use daw_bridge::layout::{
     UiCommandType, UiPatcherPresetCommandPayload, UiSamplerKitRequestPayload,
     UiSamplerEmitRowsPayload, UiSamplerLoadPayload, UiSamplerMarkerPayload, UiSamplerSetSlotPayload, UiSamplerSlicePayload,
     UiSamplerEnvelopePayload, UiSamplerFilterPayload, UiSetRowOpsPayload, UiWaveformRequestPayload,
-    MASTER_TRACK_ID, SAMPLER_ENV_AMP, SAMPLER_FILTER_SET_CUTOFF, SAMPLER_FILTER_SET_RESONANCE,
+    MASTER_TRACK_ID, SAMPLER_ENV_BY_TARGET, SAMPLER_FILTER_SET_CUTOFF, SAMPLER_FILTER_SET_RESONANCE,
     ROW_OP_MASK_DELAY,
     ROW_OP_MASK_PROBABILITY, ROW_OP_MASK_RETRIGGER, ROW_OP_MASK_SOUND, ROW_OP_MASK_SOUND_OFFSET,
     SAMPLER_LOAD_FIXED_PITCH, SAMPLER_MARKER_ADD,
@@ -2432,7 +2432,7 @@ fn main() {
                     } else {
                         let header = L::UiSamplerEnvPointsHeader {
                             command_type: UiCommandType::SamplerSetEnvelopePoints as u16,
-                            flags: SAMPLER_ENV_AMP,
+                            flags: SAMPLER_ENV_BY_TARGET,
                             track_id: track,
                             device_id: device,
                             mod_set_id: mod_set,
@@ -2555,7 +2555,7 @@ fn main() {
                     };
                     let payload = L::UiSamplerLfoPayload {
                         command_type: UiCommandType::SamplerSetLfo as u16,
-                        flags: SAMPLER_ENV_AMP,
+                        flags: SAMPLER_ENV_BY_TARGET,
                         track_id: track,
                         device_id: device,
                         mod_set_id: mod_set,
@@ -2613,7 +2613,7 @@ fn main() {
                     let amp = modulator == 0 || args.iter().any(|a| a == "--amp");
                     let payload = UiSamplerEnvelopePayload {
                         command_type: UiCommandType::SamplerSetEnvelope as u16,
-                        flags: if amp { SAMPLER_ENV_AMP } else { 0 },
+                        flags: if amp { SAMPLER_ENV_BY_TARGET } else { 0 },
                         track_id: track,
                         device_id: device,
                         mod_set_id: mod_set,

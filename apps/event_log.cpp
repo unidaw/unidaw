@@ -94,6 +94,24 @@ LogEvent::~LogEvent() {
   }
 }
 
+LogLine::~LogLine() {
+  std::string line = buffer_.str();
+  if (line.empty()) {
+    return;
+  }
+  // Call sites end with std::endl, which has already put the '\n' in the buffer. One that
+  // does not still gets a whole line — the point is that a line is written in one call, so
+  // "the newline is somebody else's job" would reintroduce exactly the interleaving this
+  // class exists to stop.
+  if (line.back() != '\n') {
+    line.push_back('\n');
+  }
+  // The same mutex LogEvent uses, so a diagnostic and a structured event can never land
+  // inside one another when both are going to stderr.
+  std::lock_guard<std::mutex> lock(sinkMutex());
+  std::fwrite(line.data(), 1, line.size(), stderr);
+}
+
 void LogEvent::writeKey(const char* key) {
   buffer_ << ",\"" << escape(key ? key : "") << "\":";
 }

@@ -1743,12 +1743,12 @@ int main(int argc, char** argv) {
     if (!parsed) {
       // An OLDER host predates --version entirely, which is itself the answer. Not fatal — it
       // may be a deliberately pinned binary — but it is said out loud rather than discovered.
-      std::cerr << "Engine: WARNING could not read the host binary's contract version ("
+      daw::LogLine() << "Engine: WARNING could not read the host binary's contract version ("
                 << hostExe << "). If it fails to start, rebuild ALL targets, not just "
                    "daw_engine." << std::endl;
       DAW_EVENT("host.version_unknown").field("binary", hostExe);
     } else if (hostShm != daw::kShmVersion || hostControl != daw::kControlVersion) {
-      std::cerr << "Engine: REFUSING TO START — the host binary is stale.\n"
+      daw::LogLine() << "Engine: REFUSING TO START — the host binary is stale.\n"
                 << "  " << hostExe << " was built against shm=" << hostShm
                 << " control=" << hostControl << "\n"
                 << "  this engine expects              shm=" << daw::kShmVersion
@@ -1925,7 +1925,7 @@ int main(int argc, char** argv) {
     std::cout << "Audio device sample rate: " << baseConfig.sampleRate << " Hz"
               << ", buffer: " << baseConfig.blockSize << " samples" << std::endl;
   } else {
-    std::cerr << "No audio device; using " << baseConfig.sampleRate
+    daw::LogLine() << "No audio device; using " << baseConfig.sampleRate
               << " Hz for offline timing" << std::endl;
     audioBackend.reset();
   }
@@ -1934,7 +1934,7 @@ int main(int argc, char** argv) {
   // block-size invariance is checkable through the real engine (§3.5).
   if (forcedBlockSize > 0) {
     baseConfig.blockSize = forcedBlockSize;
-    std::cerr << "Block size forced to " << baseConfig.blockSize << " samples" << std::endl;
+    daw::LogLine() << "Block size forced to " << baseConfig.blockSize << " samples" << std::endl;
   }
 
   const std::string pluginCachePath = defaultPluginCachePath();
@@ -1970,11 +1970,11 @@ int main(int argc, char** argv) {
   } uiShm;
 
   uiShm.name = uiShmName();
-  std::cerr << "UI SHM name (engine): " << uiShm.name << std::endl;
+  daw::LogLine() << "UI SHM name (engine): " << uiShm.name << std::endl;
   ::shm_unlink(uiShm.name.c_str());
   uiShm.fd = ::shm_open(uiShm.name.c_str(), O_CREAT | O_RDWR, 0600);
   if (uiShm.fd < 0) {
-    std::cerr << "Failed to create UI SHM: " << uiShm.name << std::endl;
+    daw::LogLine() << "Failed to create UI SHM: " << uiShm.name << std::endl;
     return 1;
   }
 
@@ -2047,19 +2047,19 @@ int main(int argc, char** argv) {
     uiShm.size = daw::alignUp(offset, 64);
 
     if (::ftruncate(uiShm.fd, static_cast<off_t>(uiShm.size)) != 0) {
-      std::cerr << "Failed to size UI SHM: " << uiShm.name << std::endl;
+      daw::LogLine() << "Failed to size UI SHM: " << uiShm.name << std::endl;
       return 1;
     }
-    std::cerr << "UI SHM name: " << uiShm.name
+    daw::LogLine() << "UI SHM name: " << uiShm.name
               << " size: " << uiShm.size << std::endl;
     uiShm.base = ::mmap(nullptr, uiShm.size, PROT_READ | PROT_WRITE,
                         MAP_SHARED, uiShm.fd, 0);
     if (uiShm.base == MAP_FAILED) {
       uiShm.base = nullptr;
-      std::cerr << "Failed to map UI SHM: " << uiShm.name << std::endl;
+      daw::LogLine() << "Failed to map UI SHM: " << uiShm.name << std::endl;
       return 1;
     }
-    std::cerr << "UI SHM mapped: " << uiShm.name << std::endl;
+    daw::LogLine() << "UI SHM mapped: " << uiShm.name << std::endl;
     std::memset(uiShm.base, 0, uiShm.size);
     std::memcpy(uiShm.base, &header, sizeof(header));
     uiShm.header = reinterpret_cast<daw::ShmHeader*>(uiShm.base);
@@ -2141,7 +2141,7 @@ int main(int argc, char** argv) {
     ringUiEdit->readIndex.store(0);
     ringUiEdit->writeIndex.store(0);
 
-    std::cerr << "UI rings ready (ui_offset=" << header.ringUiOffset
+    daw::LogLine() << "UI rings ready (ui_offset=" << header.ringUiOffset
               << ", ui_capacity=" << ringUi->capacity
               << ", ui_entry_size=" << ringUi->entrySize
               << ", ui_out_offset=" << header.ringUiOutOffset
@@ -2446,21 +2446,21 @@ struct TrackRuntime {
     if (startHost) {
       bool connected = false;
       if (trackId == 0 && allowConnect) {
-        std::cerr << "Engine: connecting host for track " << trackId << std::endl;
+        daw::LogLine() << "Engine: connecting host for track " << trackId << std::endl;
         connected = runtime->controller.connect(runtime->config);
       } else {
-        std::cerr << "Engine: launching host for track " << trackId << std::endl;
+        daw::LogLine() << "Engine: launching host for track " << trackId << std::endl;
         connected = runtime->controller.launch(runtime->config);
       }
       if (!connected) {
-        std::cerr << "Engine: host connect/launch failed for track " << trackId << std::endl;
+        daw::LogLine() << "Engine: host connect/launch failed for track " << trackId << std::endl;
         return nullptr;
       }
       if (!runtime->controller.shmHeader()) {
-        std::cerr << "Engine: host SHM missing for track " << trackId << std::endl;
+        daw::LogLine() << "Engine: host SHM missing for track " << trackId << std::endl;
         return nullptr;
       }
-      std::cerr << "Engine: host ready for track " << trackId << std::endl;
+      daw::LogLine() << "Engine: host ready for track " << trackId << std::endl;
 
       runtime->watchdog = std::make_unique<daw::Watchdog>(
           runtime->controller.mailbox(), 500, [ptr = runtime.get()]() {
@@ -2494,7 +2494,7 @@ struct TrackRuntime {
                                  daw::DeviceCapabilityProcessesAudio);
         instrument.hostSlotIndex = daw::kHostSlotIndexDirect;
         daw::addDevice(runtime->track.chain, instrument, daw::kDeviceIdAuto);
-        std::cerr << "Engine: using direct host slot for default plugin path "
+        daw::LogLine() << "Engine: using direct host slot for default plugin path "
                   << trackPluginPath << std::endl;
       }
     }
@@ -2641,19 +2641,19 @@ struct TrackRuntime {
   {
     auto runtime = setupTrackRuntime(0, pluginPath, !spawnHost, true);
     if (!runtime) {
-      std::cerr << "Failed to connect to host." << std::endl;
+      daw::LogLine() << "Failed to connect to host." << std::endl;
       return 1;
     }
     uiTrack = runtime.get();
     tracks.push_back(std::move(runtime));
   }
-  std::cerr << "Engine: track runtime(s) ready, starting threads" << std::endl;
+  daw::LogLine() << "Engine: track runtime(s) ready, starting threads" << std::endl;
   if (testMode) {
     constexpr uint32_t kTestTrackCount = 3;
     for (uint32_t trackId = 1; trackId < kTestTrackCount; ++trackId) {
       auto runtime = setupTrackRuntime(trackId, pluginPath, true, false);
       if (!runtime) {
-        std::cerr << "Failed to launch test track " << trackId << "." << std::endl;
+        daw::LogLine() << "Failed to launch test track " << trackId << "." << std::endl;
         return 1;
       }
       tracks.push_back(std::move(runtime));
@@ -2875,7 +2875,7 @@ struct TrackRuntime {
     patcherGraphState.graph.edges.push_back(edge);
   }
   if (!daw::buildPatcherGraph(patcherGraphState.graph)) {
-    std::cerr << "Patcher graph invalid; disabling patcher kernels." << std::endl;
+    daw::LogLine() << "Patcher graph invalid; disabling patcher kernels." << std::endl;
     std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
     patcherGraphState.graph.nodes.clear();
     patcherGraphState.graph.edges.clear();
@@ -3273,13 +3273,13 @@ struct TrackRuntime {
                                uint64_t sampleTime) {
     // Caller must hold controllerMutex to avoid racing host restarts.
     if (!runtime.controller.shmHeader()) {
-      std::cerr << "WriteMirrorParams: No SHM header for track " << runtime.trackId << std::endl;
+      daw::LogLine() << "WriteMirrorParams: No SHM header for track " << runtime.trackId << std::endl;
       return;
     }
 
     auto ringStd = getRingStd(runtime);
     if (ringStd.mask == 0) {
-      std::cerr << "WriteMirrorParams: Invalid ring for track " << runtime.trackId << std::endl;
+      daw::LogLine() << "WriteMirrorParams: Invalid ring for track " << runtime.trackId << std::endl;
       return;
     }
 
@@ -3345,7 +3345,7 @@ struct TrackRuntime {
   if (!uiTrack || getRingStd(*uiTrack).mask == 0 ||
       getRingCtrl(*uiTrack).mask == 0 || getRingUi().mask == 0 ||
       getRingUiOut().mask == 0) {
-    std::cerr << "Invalid ring capacity (must be power of two)." << std::endl;
+    daw::LogLine() << "Invalid ring capacity (must be power of two)." << std::endl;
     return 1;
   }
 
@@ -3419,7 +3419,7 @@ struct TrackRuntime {
           .field("nodes", static_cast<uint64_t>(pool.nodes.size()))
           .field("edges", static_cast<uint64_t>(pool.edges.size()))
           .field("action", "previous_pool_left_running");
-      std::cerr << "Engine: patcher re-assembly FAILED (" << pool.nodes.size()
+      daw::LogLine() << "Engine: patcher re-assembly FAILED (" << pool.nodes.size()
                 << " nodes) — one device's graph is invalid. The edit is kept, the PREVIOUS "
                    "pool is still executing; run tools/daw_lint to find the bad edge."
                 << std::endl;
@@ -4106,7 +4106,7 @@ struct TrackRuntime {
   auto ensureTrack = [&](uint32_t trackId,
                          const std::string& pluginPath) -> TrackRuntime* {
     if (trackId >= daw::kUiMaxTracks) {
-      std::cerr << "UI: track " << trackId
+      daw::LogLine() << "UI: track " << trackId
                 << " exceeds max tracks " << daw::kUiMaxTracks << std::endl;
       return nullptr;
     }
@@ -4223,7 +4223,7 @@ struct TrackRuntime {
           path = resolveDevicePluginPath(runtime, device.hostSlotIndex);
         }
         if (!path) {
-          std::cerr << "Engine: missing plugin path for device "
+          daw::LogLine() << "Engine: missing plugin path for device "
                     << device.id << std::endl;
           continue;
         }
@@ -4303,7 +4303,7 @@ struct TrackRuntime {
       runtime.restartAttempts = 0;
       runtime.restartWindowStart = {};
       runtime.needsRestart.store(true, std::memory_order_release);
-      std::cerr << "Engine: queued host restart for track "
+      daw::LogLine() << "Engine: queued host restart for track "
                 << runtime.trackId << std::endl;
       return;
     }
@@ -4605,7 +4605,7 @@ struct TrackRuntime {
         runtime->active.store(false, std::memory_order_release);
         runtime->needsRestart.store(false, std::memory_order_release);
         runtime->restartInFlight.store(false, std::memory_order_release);
-        std::cerr << "Engine: track " << runtime->trackId
+        daw::LogLine() << "Engine: track " << runtime->trackId
                   << " host keeps dying (" << runtime->restartAttempts - 1
                   << " restarts in " << kRestartWindow.count()
                   << "s); giving up. The track is disabled but the engine stays "
@@ -4619,7 +4619,7 @@ struct TrackRuntime {
       {
         std::lock_guard<std::mutex> lock(runtime->controllerMutex);
         if (!runtime->controller.launch(runtime->config)) {
-          std::cerr << "Consumer: Failed to restart track "
+          daw::LogLine() << "Consumer: Failed to restart track "
                     << runtime->trackId << std::endl;
           runtime->hostReady.store(false, std::memory_order_release);
           runtime->active.store(false, std::memory_order_release);
@@ -4699,7 +4699,7 @@ struct TrackRuntime {
     if (nowMs - last >= 1000 &&
         uiDiffDropLogMs.compare_exchange_strong(
             last, nowMs, std::memory_order_relaxed)) {
-      std::cerr << "Engine: UI diff ring saturated (sent "
+      daw::LogLine() << "Engine: UI diff ring saturated (sent "
                 << uiDiffSent.load(std::memory_order_relaxed)
                 << ", dropped " << uiDiffDropped.load(std::memory_order_relaxed)
                 << ")" << std::endl;
@@ -6954,7 +6954,7 @@ struct TrackRuntime {
         DAW_EVENT("markers.ids_repaired")
             .field("count", markerList.repaired())
             .field("reason", "duplicate_or_zero_id");
-        std::cerr << "Load: " << markerList.repaired()
+        daw::LogLine() << "Load: " << markerList.repaired()
                   << " marker id(s) in this project were duplicated or zero and have been "
                      "reassigned — a duplicate id makes one of the two impossible to address."
                   << std::endl;
@@ -7030,7 +7030,25 @@ struct TrackRuntime {
         }
       }
     }
-    if (deviceGraphCount >= 2) {
+    // ONE CONTRIBUTING DEVICE IS ENOUGH TO ASSEMBLE. This was `>= 2`, and a single-graph project
+    // fell through to the legacy branch below, which copies the device's graph into the pool
+    // verbatim and stamps no ownerDeviceId — so every node published owner 0, meaning "no owning
+    // device". Two load paths for one kind of data, disagreeing about whether the owner is set.
+    //
+    // The two-device case was the one under test (tools/patcher_node_owner_check.sh, whose comment
+    // explains why it needs two: with one device "always 1" and "correctly 1" are the same run).
+    // But with one device "always 0" and "correctly 0" are ALSO the same run, so the fixture that
+    // covered the rare case stayed green while every project anyone actually has was broken. The
+    // web-UI agent measured the far end: with no owner a UI cannot set kUiPatcherFlagHasDeviceId,
+    // every patcher edit goes to the shared pool instead of the device graph the project renders,
+    // and a knob nudge is heard, drawn and lost on save.
+    //
+    // Assembly with one device is the same work with a base offset of 0 — authored ids equal
+    // pooled ids — so the pool is unchanged and the owner is stamped by construction. It also
+    // sets patcherAssembledFromDevices, which moves the save off the "park the live pool on the
+    // first instrument" branch onto "preserve each device's own graph": the same data for one
+    // device, and it retires the boot-demo-graph litter described at the top of this file.
+    if (deviceGraphCount >= 1) {
       struct DevOut {
         uint32_t trackId;
         uint32_t deviceId;
@@ -7070,7 +7088,7 @@ struct TrackRuntime {
             .field("nodes", static_cast<uint64_t>(pool.nodes.size()))
             .field("edges", static_cast<uint64_t>(pool.edges.size()))
             .field("action", "per_device_graphs_preserved_but_not_executing");
-        std::cerr << "Engine: patcher assembly FAILED (" << pool.nodes.size()
+        daw::LogLine() << "Engine: patcher assembly FAILED (" << pool.nodes.size()
                   << " nodes, " << pool.edges.size()
                   << " edges) — one device's graph is invalid. The graphs are left "
                      "exactly as loaded and are NOT executing; run tools/daw_lint on "
@@ -7883,7 +7901,7 @@ struct TrackRuntime {
       }
     }
     if (!runtime) {
-      std::cerr << "UI: AddNote failed - track " << trackId << " not found" << std::endl;
+      daw::LogLine() << "UI: AddNote failed - track " << trackId << " not found" << std::endl;
       return false;
     }
     // A note with no velocity and no length is an OFF gesture. It ends the
@@ -8446,7 +8464,7 @@ struct TrackRuntime {
       }
     }
     if (!runtime) {
-      std::cerr << "UI: placement edit — track " << trackId << " not found" << std::endl;
+      daw::LogLine() << "UI: placement edit — track " << trackId << " not found" << std::endl;
       return false;
     }
     std::shared_ptr<const ClipSnapshot> snapshot;
@@ -8493,7 +8511,7 @@ struct TrackRuntime {
       }
     }
     if (!runtime) {
-      std::cerr << "UI: RemoveNote failed - track " << trackId << " not found" << std::endl;
+      daw::LogLine() << "UI: RemoveNote failed - track " << trackId << " not found" << std::endl;
       return false;
     }
 
@@ -8590,7 +8608,7 @@ struct TrackRuntime {
       }
     }
     if (!runtime) {
-      std::cerr << "UI: AddChord failed - track " << trackId << " not found" << std::endl;
+      daw::LogLine() << "UI: AddChord failed - track " << trackId << " not found" << std::endl;
       return false;
     }
     daw::MusicalEvent event;
@@ -8749,7 +8767,7 @@ struct TrackRuntime {
       }
     }
     if (!runtime) {
-      std::cerr << "UI: RemoveChord failed - track " << trackId << " not found" << std::endl;
+      daw::LogLine() << "UI: RemoveChord failed - track " << trackId << " not found" << std::endl;
       return false;
     }
     std::optional<daw::MusicalClip::RemovedChord> removed;
@@ -8776,7 +8794,7 @@ struct TrackRuntime {
       }
     }
     if (!removed) {
-      std::cerr << "UI: RemoveChord - chord not found (track "
+      daw::LogLine() << "UI: RemoveChord - chord not found (track "
                 << trackId << ", id " << chordId << ")" << std::endl;
       consumeClipVersionForNoOp(runtime);
       return false;
@@ -8797,7 +8815,7 @@ struct TrackRuntime {
       }
     }
     if (!runtime) {
-      std::cerr << "UI: RemoveChord failed - track " << trackId << " not found" << std::endl;
+      daw::LogLine() << "UI: RemoveChord failed - track " << trackId << " not found" << std::endl;
       return false;
     }
     std::optional<daw::MusicalClip::RemovedChord> removed;
@@ -8823,7 +8841,7 @@ struct TrackRuntime {
       }
     }
     if (!removed) {
-      std::cerr << "UI: RemoveChord - chord not found (track "
+      daw::LogLine() << "UI: RemoveChord - chord not found (track "
                 << trackId << ", tick " << nanotick
                 << ", col " << static_cast<int>(column) << ")" << std::endl;
       consumeClipVersionForNoOp(runtime);
@@ -9033,7 +9051,7 @@ struct TrackRuntime {
               continue;
             }
             daw::SamplerModulator* mod = nullptr;
-            if ((h.flags & daw::kSamplerEnvAmp) != 0) {
+            if ((h.flags & daw::kSamplerEnvByTarget) != 0) {
               mod = findOrMintEnvelope(
                   ms, static_cast<daw::ModTarget>(std::min<uint8_t>(h.target, 4)));
             } else {
@@ -9236,7 +9254,7 @@ struct TrackRuntime {
         }
       }
       if (!runtime) {
-        std::cerr << "UI: SetAutomationTarget failed - track "
+        daw::LogLine() << "UI: SetAutomationTarget failed - track "
                   << autoPayload.trackId << " not found" << std::endl;
         return;
       }
@@ -9263,7 +9281,7 @@ struct TrackRuntime {
                                    std::memory_order_release);
       }
       if (!updated) {
-        std::cerr << "UI: SetAutomationTarget - automation clip not found (track "
+        daw::LogLine() << "UI: SetAutomationTarget - automation clip not found (track "
                   << autoPayload.trackId << ")" << std::endl;
       }
       return;
@@ -9675,7 +9693,7 @@ struct TrackRuntime {
                       .field("track", rt->trackId)
                       .field("param", clip.paramId())
                       .field("nanotick", pt.nanotick);
-                  std::cerr << "UI: InsertRemoveTime refused — automation on track "
+                  daw::LogLine() << "UI: InsertRemoveTime refused — automation on track "
                             << rt->trackId << " param '" << clip.paramId()
                             << "' has a point at " << pt.nanotick
                             << ", inside the bars this would remove. Shrinking would leave the "
@@ -9702,7 +9720,7 @@ struct TrackRuntime {
               .field("reason", reason)
               .field("blocking_placement", plan.blockingPlacementId);
           if (straddling) {
-            std::cerr << "UI: InsertRemoveTime refused — placement "
+            daw::LogLine() << "UI: InsertRemoveTime refused — placement "
                       << plan.blockingPlacementId
                       << " crosses the edit point, so the inserted bars would land INSIDE "
                          "it: it would keep its start and length while everything after it "
@@ -9710,7 +9728,7 @@ struct TrackRuntime {
                          "inside it or after it is a musical decision this command cannot make."
                       << std::endl;
           } else {
-            std::cerr << "UI: InsertRemoveTime refused — placement "
+            daw::LogLine() << "UI: InsertRemoveTime refused — placement "
                       << plan.blockingPlacementId
                       << " lives in the bars this would remove. Shrinking would stack it "
                          "onto one tick or delete it; empty those bars first." << std::endl;
@@ -11484,7 +11502,7 @@ struct TrackRuntime {
             daw::SamplerModulator* mod = nullptr;
             const auto target =
                 static_cast<daw::ModTarget>(std::min<uint8_t>(p.target, 4));
-            if ((p.flags & daw::kSamplerEnvAmp) != 0) {
+            if ((p.flags & daw::kSamplerEnvByTarget) != 0) {
               for (auto& m : ms.modulators) {
                 if (m.kind == daw::ModKind::Lfo && m.target == target) {
                   mod = &m;
@@ -11585,7 +11603,7 @@ struct TrackRuntime {
               continue;
             }
             daw::SamplerModulator* mod = nullptr;
-            if ((p.flags & daw::kSamplerEnvAmp) != 0) {
+            if ((p.flags & daw::kSamplerEnvByTarget) != 0) {
               mod = findOrMintEnvelope(
                   ms, static_cast<daw::ModTarget>(std::min<uint8_t>(p.target, 4)));
             } else {
@@ -11844,7 +11862,7 @@ struct TrackRuntime {
       std::error_code ec;
       std::filesystem::create_directories(dir, ec);
       if (ec) {
-        std::cerr << "UI: Project failed - cannot create dir " << dir << std::endl;
+        daw::LogLine() << "UI: Project failed - cannot create dir " << dir << std::endl;
         return;
       }
       const std::filesystem::path path =
@@ -11896,7 +11914,7 @@ struct TrackRuntime {
             .field("error", why);
       };
       if (name.empty()) {
-        std::cerr << "UI: SavePatcherPreset failed - empty name" << std::endl;
+        daw::LogLine() << "UI: SavePatcherPreset failed - empty name" << std::endl;
         reportPreset(false, "empty_name");
         return;
       }
@@ -11904,7 +11922,7 @@ struct TrackRuntime {
       std::error_code ec;
       std::filesystem::create_directories(dir, ec);
       if (ec) {
-        std::cerr << "UI: SavePatcherPreset failed - cannot create dir "
+        daw::LogLine() << "UI: SavePatcherPreset failed - cannot create dir "
                   << dir << std::endl;
         reportPreset(false, "cannot_create_dir");
         return;
@@ -11915,10 +11933,10 @@ struct TrackRuntime {
       if (!daw::savePatcherPreset(patcherGraphState,
                                   path.string(),
                                   &error)) {
-        std::cerr << "UI: SavePatcherPreset failed - " << error << std::endl;
+        daw::LogLine() << "UI: SavePatcherPreset failed - " << error << std::endl;
         reportPreset(false, error);
       } else {
-        std::cerr << "UI: Saved patcher preset " << path.string() << std::endl;
+        daw::LogLine() << "UI: Saved patcher preset " << path.string() << std::endl;
         reportPreset(true, std::string());
       }
       return;
@@ -11939,7 +11957,7 @@ struct TrackRuntime {
         }
       }
       if (!runtime) {
-        std::cerr << "UI: SetDeviceEuclideanConfig failed - track "
+        daw::LogLine() << "UI: SetDeviceEuclideanConfig failed - track "
                   << configPayload.trackId << " not found" << std::endl;
         return;
       }
@@ -11969,7 +11987,7 @@ struct TrackRuntime {
                                    snapshot,
                                    std::memory_order_release);
       } else {
-        std::cerr << "UI: SetDeviceEuclideanConfig failed - device "
+        daw::LogLine() << "UI: SetDeviceEuclideanConfig failed - device "
                   << configPayload.deviceId << " not found" << std::endl;
       }
       return;
@@ -11995,7 +12013,7 @@ struct TrackRuntime {
         }
       }
       if (!runtime) {
-        std::cerr << "UI: Chain command failed - track "
+        daw::LogLine() << "UI: Chain command failed - track "
                   << chainPayload.trackId << " not found" << std::endl;
         return;
       }
@@ -12156,7 +12174,7 @@ struct TrackRuntime {
       return;
     }
     if (entry.size != sizeof(daw::UiCommandPayload)) {
-      std::cerr << "UI: bad UiCommand size " << entry.size
+      daw::LogLine() << "UI: bad UiCommand size " << entry.size
                 << " (expected " << sizeof(daw::UiCommandPayload) << ")"
                 << std::endl;
       return;
@@ -12169,7 +12187,7 @@ struct TrackRuntime {
       const uint32_t pluginIndex = payload.pluginIndex;
       const auto pluginPath = resolvePluginPath(pluginIndex);
       if (!pluginPath) {
-        std::cerr << "UI: invalid plugin index " << pluginIndex << std::endl;
+        daw::LogLine() << "UI: invalid plugin index " << pluginIndex << std::endl;
         return;
       }
       if (auto* runtime = ensureTrack(trackId, *pluginPath)) {
@@ -12178,7 +12196,7 @@ struct TrackRuntime {
         std::cout << "UI: loaded plugin on track " << trackId
                   << " from " << *pluginPath << std::endl;
       } else {
-        std::cerr << "UI: failed to load plugin for track " << trackId << std::endl;
+        daw::LogLine() << "UI: failed to load plugin for track " << trackId << std::endl;
       }
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::OpenPluginEditor)) {
@@ -12192,7 +12210,7 @@ struct TrackRuntime {
         }
       }
       if (!runtime) {
-        std::cerr << "UI: OpenPluginEditor failed - track "
+        daw::LogLine() << "UI: OpenPluginEditor failed - track "
                   << trackId << " not found" << std::endl;
         return;
       }
@@ -12221,19 +12239,19 @@ struct TrackRuntime {
           };
       const auto hostIndex = resolveHostIndexForDevice(deviceId);
       if (!hostIndex) {
-        std::cerr << "UI: OpenPluginEditor failed - device "
+        daw::LogLine() << "UI: OpenPluginEditor failed - device "
                   << deviceId << " not found" << std::endl;
         return;
       }
       if (!runtime->hostReady.load(std::memory_order_acquire)) {
-        std::cerr << "UI: OpenPluginEditor failed - host not ready for track "
+        daw::LogLine() << "UI: OpenPluginEditor failed - host not ready for track "
                   << trackId << std::endl;
         return;
       }
       {
         std::lock_guard<std::mutex> lock(runtime->controllerMutex);
         if (!runtime->controller.sendOpenEditor(*hostIndex)) {
-          std::cerr << "UI: OpenPluginEditor failed - host IPC error (track "
+          daw::LogLine() << "UI: OpenPluginEditor failed - host IPC error (track "
                     << trackId << ")" << std::endl;
         }
       }
@@ -12579,7 +12597,7 @@ struct TrackRuntime {
         }
       }
       if (slot >= daw::kUiMaxTracks) {
-        std::cerr << "UI: AddTrack refused — at track cap " << daw::kUiMaxTracks
+        daw::LogLine() << "UI: AddTrack refused — at track cap " << daw::kUiMaxTracks
                   << std::endl;
       } else {
         TrackRuntime* existing = nullptr;
@@ -12638,7 +12656,7 @@ struct TrackRuntime {
           clipVersion.fetch_add(1, std::memory_order_acq_rel);
           std::cout << "UI: AddTrack -> track " << slot << std::endl;
         } else {
-          std::cerr << "UI: AddTrack failed to bring up track " << slot << std::endl;
+          daw::LogLine() << "UI: AddTrack failed to bring up track " << slot << std::endl;
         }
       }
     } else if (payload.commandType ==
@@ -12669,10 +12687,10 @@ struct TrackRuntime {
         }
       }
       if (rejected) {
-        std::cerr << "UI: RemoveTrack rejected — track " << targetId
+        daw::LogLine() << "UI: RemoveTrack rejected — track " << targetId
                   << " is an aux child (managed via its parent's buses)" << std::endl;
       } else if (toRemove.empty()) {
-        std::cerr << "UI: RemoveTrack — no track with id " << targetId << std::endl;
+        daw::LogLine() << "UI: RemoveTrack — no track with id " << targetId << std::endl;
       } else {
         for (TrackRuntime* rt : toRemove) {
           // Tear the host down and blank the track, mirroring the load-clear sequence, then
@@ -12905,7 +12923,7 @@ struct TrackRuntime {
       // an invisible box at the end of time that then poisoned any song-end computation
       // that added a length to it. Refuse it, and say so.
       if (at == kPlacementUnchanged || len == kPlacementUnchanged) {
-        std::cerr << "UI: AddPlacement rejected — `at` and `length` are required "
+        daw::LogLine() << "UI: AddPlacement rejected — `at` and `length` are required "
                      "(0xFFFF..FF is Resize's leave-unchanged sentinel, not a position)"
                   << std::endl;
         DAW_EVENT("placement.add_rejected")
@@ -13537,7 +13555,7 @@ struct TrackRuntime {
           static_cast<uint64_t>(payload.noteNanotickLo) |
           (static_cast<uint64_t>(payload.noteNanotickHi) << 32);
       if (!removeHarmony(nanotick, true)) {
-        std::cerr << "UI: DeleteHarmony - event not found at nanotick "
+        daw::LogLine() << "UI: DeleteHarmony - event not found at nanotick "
                   << nanotick << std::endl;
       }
     } else if (payload.commandType ==
@@ -13595,7 +13613,7 @@ struct TrackRuntime {
         }
       }
       if (!runtime) {
-        std::cerr << "UI: SetTrackHarmonyQuantize failed - track "
+        daw::LogLine() << "UI: SetTrackHarmonyQuantize failed - track "
                   << payload.trackId << " not found" << std::endl;
         return;
       }
@@ -13620,7 +13638,7 @@ struct TrackRuntime {
         }
       }
       if (!runtime) {
-        std::cerr << "UI: SetLaneQuantize failed - track " << payload.trackId
+        daw::LogLine() << "UI: SetLaneQuantize failed - track " << payload.trackId
                   << " not found" << std::endl;
         return;
       }
@@ -13702,14 +13720,14 @@ struct TrackRuntime {
         std::cout << "UI: Loop range set [" << start << ", " << end << ")"
                   << std::endl;
       } else {
-        std::cerr << "UI: Invalid loop range [" << start << ", " << end << ")"
+        daw::LogLine() << "UI: Invalid loop range [" << start << ", " << end << ")"
                   << std::endl;
       }
     }
   };
 
   std::thread uiThread([&] {
-    std::cerr << "UI: command thread started" << std::endl;
+    daw::LogLine() << "UI: command thread started" << std::endl;
     uint64_t lastIdleLogMs = 0;
     // M2.18: abandoned-slot recovery for the multi-producer rings. A producer reserves
     // a slot, then fills and publishes it — a few instructions apart. If it dies in
@@ -13744,7 +13762,7 @@ struct TrackRuntime {
           .field("slot", slot)
           .field("waited_ms", static_cast<uint32_t>(nowMs - watch.sinceMs))
           .field("action", "retired");
-      std::cerr << "UI: retiring abandoned " << which << " ring slot " << slot
+      daw::LogLine() << "UI: retiring abandoned " << which << " ring slot " << slot
                 << " (producer reserved it and never published; it probably died)"
                 << std::endl;
       daw::ringSkipStalledSlot(ring);
@@ -13782,7 +13800,7 @@ struct TrackRuntime {
       }
       while (daw::ringPop(ringUi, uiEntry)) {
         if (uiDebugEnabled()) {
-          std::cerr << "UI: received command entry size "
+          daw::LogLine() << "UI: received command entry size "
                     << uiEntry.size << " type " << uiEntry.type << std::endl;
         }
         handleUiEntry(uiEntry);
@@ -13804,15 +13822,15 @@ struct TrackRuntime {
               ringUi.header ? ringUi.header->readIndex.load(std::memory_order_relaxed) : 0;
           const uint32_t write =
               ringUi.header ? ringUi.header->writeIndex.load(std::memory_order_relaxed) : 0;
-          std::cerr << "UI: command ring idle (read " << read
+          daw::LogLine() << "UI: command ring idle (read " << read
                     << ", write " << write << ")" << std::endl;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     }
-    std::cerr << "UI: command thread exiting" << std::endl;
+    daw::LogLine() << "UI: command thread exiting" << std::endl;
   });
-  std::cerr << "UI: command thread launched" << std::endl;
+  daw::LogLine() << "UI: command thread launched" << std::endl;
 
   std::thread producer([&] {
     // The producer renders/dispatches each block ahead of the device and paces to it;
@@ -13857,7 +13875,7 @@ struct TrackRuntime {
         return;
       }
       stallLogMs = nowMs;
-      std::cerr << "Engine: producer stall (" << reason
+      daw::LogLine() << "Engine: producer stall (" << reason
                 << ") next=" << nextId
                 << " minCompleted=" << minCompleted
                 << " playback=" << currentPlayback
@@ -16901,7 +16919,7 @@ struct TrackRuntime {
             const auto sendMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - sendStart).count();
             if (sendMs > 10) {
-              std::cerr << "Engine: sendProcessBlock slow (track "
+              daw::LogLine() << "Engine: sendProcessBlock slow (track "
                         << runtime->trackId << ", " << sendMs
                         << " ms)" << std::endl;
             }
@@ -17840,7 +17858,7 @@ struct TrackRuntime {
     // 200 lines of delicate master-FX wiring out of here to share it would have been the
     // riskier way to say the same thing.
     if (!audioBackend && !offlineRender) {
-      std::cerr << "No audio device; running without audio output" << std::endl;
+      daw::LogLine() << "No audio device; running without audio output" << std::endl;
     } else {
       std::cout << "Audio device: "
                 << (audioBackend ? audioBackend->deviceName() : "(offline render)")
@@ -18009,7 +18027,7 @@ struct TrackRuntime {
               }
               if (timedOut) {
                 if (++consecutiveTimeouts >= 10) {
-                  std::cerr << "Engine: master FX host is not completing blocks; "
+                  daw::LogLine() << "Engine: master FX host is not completing blocks; "
                                "restarting it." << std::endl;
                   consecutiveTimeouts = 0;
                   masterTrack->hostReady.store(false, std::memory_order_release);
@@ -18030,7 +18048,7 @@ struct TrackRuntime {
                 if (!warnedNotConsumed && masterBlockId > 200 &&
                     audioCallback->masterFxBlocks() == 0) {
                   warnedNotConsumed = true;
-                  std::cerr << "Engine: master FX is processing but the audio callback is "
+                  daw::LogLine() << "Engine: master FX is processing but the audio callback is "
                                "not using it — the master bus width does not match the "
                                "master host ("
                             << chn << " ch). The effect is installed but inaudible."
@@ -18075,7 +18093,7 @@ struct TrackRuntime {
                      })) {
         std::cout << "Audio output started" << std::endl;
       } else {
-        std::cerr << "Failed to start audio output" << std::endl;
+        daw::LogLine() << "Failed to start audio output" << std::endl;
       }
     }
   }
@@ -18099,7 +18117,7 @@ struct TrackRuntime {
         }
         const uint64_t starve = audioCallback->starveCallbacks();
         if (starve > lastStarve) {
-          std::cerr << "Engine: audio underrun — " << (starve - lastStarve)
+          daw::LogLine() << "Engine: audio underrun — " << (starve - lastStarve)
                     << " dropout callback(s) in the last ~2s (" << starve
                     << " total, worst shortfall " << audioCallback->worstStarveGap()
                     << " blocks). Raise DAW_ENGINE_NUM_BLOCKS (deeper pipeline) or "
@@ -18117,7 +18135,7 @@ struct TrackRuntime {
           const uint32_t depth = produced > playingId ? produced - playingId : 0;
           observedPipelineBlocks.store(depth, std::memory_order_relaxed);
           if (latencyReport) {
-            std::cerr << "Engine: pipeline depth " << depth << " blocks (~"
+            daw::LogLine() << "Engine: pipeline depth " << depth << " blocks (~"
                       << (depth * blockMs) << " ms transport-to-ear, + device buffer)"
                       << std::endl;
           }
@@ -18144,7 +18162,7 @@ struct TrackRuntime {
         .field("startup", true)
         .field("error", ok ? std::string() : error);
     if (!ok) {
-      std::cerr << "Startup load FAILED for " << path.string() << ": " << error << std::endl;
+      daw::LogLine() << "Startup load FAILED for " << path.string() << ": " << error << std::endl;
       startupLoadFailed = true;
     } else {
       std::cout << "Startup load: " << path.string() << std::endl;
@@ -18154,7 +18172,7 @@ struct TrackRuntime {
     }
   }
   if (offlineRender && startupLoadFailed) {
-    std::cerr << "Offline render abandoned: nothing was loaded to render" << std::endl;
+    daw::LogLine() << "Offline render abandoned: nothing was loaded to render" << std::endl;
     renderFailed = true;
     running.store(false);
   } else if (offlineRender && audioCallback) {
@@ -18205,7 +18223,7 @@ struct TrackRuntime {
     bool haveSomethingToRender =
         audioCallback->awaitAnyReadyTrack(15000, /*requireActive=*/false);
     if (!haveSomethingToRender) {
-      std::cerr << "Offline render abandoned: no track host connected in 15s, so there is "
+      daw::LogLine() << "Offline render abandoned: no track host connected in 15s, so there is "
                    "nothing to render" << std::endl;
       DAW_EVENT("render.no_ready_track");
       renderFailed = true;
@@ -18223,7 +18241,7 @@ struct TrackRuntime {
     // which writes one block of silence at the head of every render.
     if (haveSomethingToRender &&
         !audioCallback->awaitAnyReadyTrack(15000, /*requireActive=*/true)) {
-      std::cerr << "Offline render abandoned: production never started (no track became active "
+      daw::LogLine() << "Offline render abandoned: production never started (no track became active "
                    "within 15s of the transport starting)" << std::endl;
       DAW_EVENT("render.production_never_started");
       renderFailed = true;
@@ -18242,7 +18260,7 @@ struct TrackRuntime {
             .field("block", b)
             .field("track", stalledTrack)
             .field("blocks_short", stalledGap);
-        std::cerr << "Offline render STALLED at block " << b << ": track " << stalledTrack
+        daw::LogLine() << "Offline render STALLED at block " << b << ": track " << stalledTrack
                   << " is " << stalledGap << " block(s) behind and stopped advancing."
                   << std::endl;
         stalled = true;
@@ -18284,7 +18302,7 @@ struct TrackRuntime {
       std::cout << "Offline render written: " << outPath << " (" << rendered
                 << " blocks)" << std::endl;
     } else {
-      std::cerr << "Offline render: failed to write " << outPath << std::endl;
+      daw::LogLine() << "Offline render: failed to write " << outPath << std::endl;
     }
     if (stalled) {
       renderFailed = true;
@@ -18348,7 +18366,7 @@ struct TrackRuntime {
                 << static_cast<uint64_t>(samplerShare * 100.0) << "% of it; " << over
                 << " block(s) over budget." << std::endl;
       if (over > 0) {
-        std::cerr << "Engine: the producer went over its block budget " << over
+        daw::LogLine() << "Engine: the producer went over its block budget " << over
                   << " time(s). Past 1.0x it cannot catch up — every block it falls further "
                      "behind and the callback starts dropping tracks." << std::endl;
       }

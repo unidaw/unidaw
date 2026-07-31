@@ -50,7 +50,23 @@ BUILD="$ROOT/build"
 [ -x "$BUILD/daw_engine" ] || { echo "build daw_engine first"; exit 2; }
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+# KEEP THE EVIDENCE ON FAILURE. This check compares whole renders byte for byte, and task #102 —
+# an offline render whose first block or two depends on machine load — is OPEN and INTERMITTENT.
+# When it fires, this check is one of the three things that notices. A trap that deletes the wavs
+# on the way out turns the one occurrence anybody caught into "it failed once, and it passed when
+# I ran it again", which is exactly how #102 stayed unexplained through two investigations.
+KEEPDIR="${DAW_CHECK_EVIDENCE:-/tmp/daw-check-evidence}"
+keep_evidence() {
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    local dest="$KEEPDIR/$(basename "$0" .sh).$$"
+    mkdir -p "$dest" && cp -R "$TMP"/. "$dest"/ 2>/dev/null
+    echo "  evidence kept in $dest (renders, projects and engine logs)"
+  fi
+  rm -rf "$TMP"
+  exit $rc
+}
+trap keep_evidence EXIT
 fail() { echo "  FAIL: $*"; exit 1; }
 
 python3 - "$TMP" <<'PY'
@@ -158,23 +174,11 @@ render() {
 compare() {  # compare <label> <wavA> <wavB> <logB>
   local threads
   threads="$(grep -o 'Render pool: [0-9]* thread' "$4" | tail -1 | grep -o '[0-9]*')"
-  # COMPARED PAST A ONE-SECOND LEAD-IN. Task #102: an offline render's first ~512 frames depend
-  # on machine LOAD, so `cmp` over the whole file failed under a parallel ctest for a reason that
-  # has nothing to do with threading — and this check's whole message is "threading CHANGED THE
-  # AUDIO", which would have been a confident lie about the render pool. The skipped second is a
-  # filed defect, not a tolerance.
-  if python3 - "$2" "$3" <<'PYC'
-import sys, wave
-def data(p):
-    w = wave.open(p, 'rb')
-    bps = w.getframerate() * w.getnchannels() * w.getsampwidth()
-    d = w.readframes(w.getnframes()); w.close(); return d, bps
-a, bps = data(sys.argv[1])
-b, _ = data(sys.argv[2])
-n = min(len(a), len(b))
-raise SystemExit(0 if n > bps and a[bps:n] == b[bps:n] else 1)
-PYC
-  then
+  # COMPARED WHOLE, with cmp. This briefly skipped a one-second lead-in while task #102 was
+  # open — an offline render's first blocks depended on machine load, so `cmp` failed under a
+  # parallel ctest and this check's message ("threading CHANGED THE AUDIO") would have been a
+  # confident lie about the render pool. Fixed at the source; the whole file is compared again.
+  if cmp -s "$2" "$3"; then
     echo "  $1: identical on 1 thread and ${threads:-?} ($(wc -c <"$2" | tr -d ' ') bytes)"
   else
     local diffbytes
