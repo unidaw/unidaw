@@ -1037,6 +1037,12 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::SamplerSetVintage: return "sampler_set_vintage";
     case UiCommandType::SetTrackLinesPerBeat: return "set_track_lines_per_beat";
     case UiCommandType::SetTrackAllowNoteOverlap: return "set_track_allow_note_overlap";
+    // NAMED HERE ONLY, deliberately: these two have no daw-cli verb and that is a separate
+    // question, but an opcode with no NAME is recorded by the history journal as "op:unknown"
+    // whatever else is true of it — so a session that used one is unreadable afterwards. The
+    // name costs nothing and is not a contract decision.
+    case UiCommandType::RequestChainSnapshot: return "request_chain_snapshot";
+    case UiCommandType::Quit: return "quit";
     case UiCommandType::Redo: return "redo";
     case UiCommandType::SetLoopRange: return "set_loop_range";
     case UiCommandType::SetAutomationTarget: return "set_automation_target";
