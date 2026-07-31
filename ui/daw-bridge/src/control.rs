@@ -1263,6 +1263,21 @@ impl EngineHandle {
 
     /// Reads one answered kit slot under its seqlock. `None` while the engine is mid-write or
     /// the region does not exist.
+    /// The kit's POLL COUNTER: bumped whenever any track's sampler state changes, and written
+    /// every publish cycle so it can be read WITHOUT first asking for a kit. 0 means the engine
+    /// does not publish one (the counter starts at 1), which is distinguishable from an
+    /// unchanged kit precisely because it never appears after a change.
+    pub fn sampler_kit_version(&self) -> u32 {
+        let off = unsafe { (*self.header).ui_sampler_kit_offset };
+        if off == 0 {
+            return 0;
+        }
+        let region = self._mmap.as_ptr().wrapping_add(off as usize)
+            as *const crate::layout::UiSamplerKitRegion;
+        let ptr = unsafe { std::ptr::addr_of!((*region).version) } as *const AtomicU32;
+        unsafe { (*ptr).load(Ordering::Acquire) }
+    }
+
     pub fn read_sampler_kit_slot(&self, index: usize) -> Option<SamplerKitView> {
         if index >= crate::layout::UI_SAMPLER_KIT_SLOTS {
             return None;

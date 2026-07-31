@@ -10,21 +10,31 @@
 # pool keeps up while a device is actually asking for blocks, which is a different claim and the
 # one a listener cares about.
 #
-# THREE PROPERTIES, and the first is a COMPARISON:
+# FOUR PROPERTIES, and two of them are COMPARISONS:
 #   PLAYS       eight sampler tracks make sound through the device — captured, not assumed
-#   NO WORSE    the pool drops no more blocks than a single thread does on the same machine.
-#               Compared rather than thresholded: how many a machine drops depends on the
-#               machine, so an absolute number would be a statement about this laptop
+#   DOES ITS JOB  the pool's producer LOAD is materially below one thread's on the same run.
+#                 Asserted on load and not on dropouts: dropout counts at these sizes measure
+#                 the laptop (3/4/2/6 against 78/4/0/3 across four runs), while the load is
+#                 stable to a few percent because it is a property of the engine
+#   ENGAGED       the adaptive rule actually turned the pool on, or the comparison is one
+#                 thread against one thread and passes because nothing differs
 #   HEADROOM    the producer's measured load stays well under 1.0x with the pool doing the work
 #
 # Needs a REAL AUDIO DEVICE. This is the one check here that cannot run headless, and that is
 # the point of it.
-#   tools/realtime_pool_check.sh [trackCount]      (default 8)
+# TWENTY-FOUR TRACKS BY DEFAULT, because the pool now engages on the WORK and at eight tracks it
+# correctly declines to: one thread spends 0.18x of the budget there and waking seven workers
+# every block costs more than it saves. Measured across four runs at eight tracks, the pool
+# dropped 4/0/2/7 callbacks against one thread's 0/3/0/0 — which is what taught the engine to
+# engage on load rather than on isolation. A check at eight tracks would now be measuring the
+# adaptive rule declining, not the pool working.
+#
+#   tools/realtime_pool_check.sh [trackCount]      (default 24)
 #
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/build"
-TRACKS="${1:-8}"
+TRACKS="${1:-24}"
 
 [ -x "$BUILD/daw_engine" ] || { echo "build daw_engine first"; exit 2; }
 
@@ -99,19 +109,42 @@ SS="$(starved serial)"; SC="$(callbacks serial)"; SL="$(loadx serial)"
 [ -n "${PS:-}" ] && [ -n "${SS:-}" ] || fail "the engine wrote no underrun summary, so nothing
         here is measurable — see $TMP/pool.log"
 POOLN="$(grep -o 'Render pool: [0-9]* thread' "$TMP/pool.log" | tail -1 | grep -o '[0-9]*')"
+# THE POOL HAS TO HAVE ENGAGED, or this is a comparison of serial against serial that passes
+# because nothing differs. "auto" is the shipping configuration and it engages on the WORK, so a
+# fixture too light to provoke it makes the whole check vacuous — exactly the failure mode this
+# suite keeps finding in its own fixtures.
+grep -q '"event":"producer.pool_engaged"' "$TMP/pool.log" || \
+  fail "the pool never engaged with $TRACKS tracks, so the run compared one thread against one
+        thread. Either the fixture is too light to need the pool, or the adaptive rule is not
+        engaging when it should — check producer.load in $TMP/pool.log"
 echo "  with the pool (${POOLN:-?} threads): $PS dropped of $PC callbacks, producer at ${PL}x"
 echo "  on one thread:                      $SS dropped of $SC callbacks, producer at ${SL}x"
 
-# ---- NO WORSE. The comparison is the assertion, not an absolute count: how many callbacks a
-# machine drops depends on the machine, the device buffer and what else is running, so a fixed
-# threshold would be a statement about this laptop. What must hold is that threading the producer
-# did not make real-time behaviour WORSE than leaving it serial.
+# ---- THE POOL DOES ITS JOB, measured as LOAD and not as dropouts.
+#
+# Dropouts were the obvious assertion and they are not assertable. Across runs at 24 tracks the
+# pool dropped 3/4/2/6 callbacks and one thread dropped 78/4/0/3 — the 78 an outlier from
+# whatever else the machine was doing, and the rest indistinguishable noise. Neither
+# configuration is genuinely starving at this size, so the counts measure the laptop.
+#
+# The LOAD is stable to a few percent across the same runs (pool 0.09-0.13x, serial 0.46-0.52x)
+# because it is a property of the engine rather than of the moment. So that is what is asserted,
+# and the dropout counts are printed for a human to look at.
+python3 -c "
+p, s = float('${PL:-9}'), float('${SL:-0}')
+raise SystemExit(0 if s > 0 and p < s * 0.7 else 1)" || \
+  fail "the pool did not reduce the producer's load: ${PL}x against ${SL}x on one thread. With
+        $TRACKS sampler tracks the work is well past the point where spreading it should help,
+        so no improvement means the parallel group is not getting the tracks"
+
+# A SYSTEMATIC collapse would still show, and this is deliberately loose enough that noise cannot
+# trip it: a pool that dropped tens of blocks where one thread dropped none is broken, not
+# unlucky.
 python3 -c "
 p, s = $PS, $SS
-raise SystemExit(0 if p <= max(2, s) else 1)" || \
-  fail "the render pool dropped MORE blocks than a single thread did: $PS against $SS. Threading
-        the producer is supposed to give the callback more room, not less — if it costs dropouts
-        the pool is hurting the thing it exists to help"
+raise SystemExit(0 if p <= s + 25 or p <= 25 else 1)" || \
+  fail "the pool dropped $PS callbacks against one thread's $SS. That is far past the run-to-run
+        noise this check tolerates on purpose — something is starving the callback"
 
 # ---- HEADROOM.
 python3 -c "
@@ -128,5 +161,5 @@ python3 "$ROOT/tools/perceptual.py" "$TMP/pool.wav" --expect-audio >/dev/null ||
         up perfectly with nothing"
 echo "  the take has audio in it"
 
-echo "realtime_pool_check: PASS — $TRACKS sampler tracks played through a real device on the pool,"
-echo "                     dropping no more blocks than one thread does, with room to spare"
+echo "realtime_pool_check: PASS — $TRACKS sampler tracks played through a real device, the pool"
+echo "                     engaged on its own, and it cut the producer's load from ${SL}x to ${PL}x"
