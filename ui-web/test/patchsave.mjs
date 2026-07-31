@@ -21,7 +21,7 @@
  */
 
 import { chromium } from 'playwright';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { startStack } from './stack.mjs';
 
 let pass = 0, fail = 0;
@@ -138,8 +138,25 @@ check(drawnBefore !== null && drawnAfter !== null && drawnBefore !== drawnAfter,
       'the nudge MOVES the value the app is drawing',
       `${drawnBefore} -> ${drawnAfter} (${String(said).slice(-60)})`);
 
-await page.evaluate(() => window.__uni.run('save'));
+/*
+ * SAVE, AND PROVE THE SAVE HAPPENED before reading anything into the result.
+ *
+ * The first version called `run('save')` with no argument. `save` takes a project NAME, so it
+ * was refused by the argument check, nothing was written — and the unchanged file was then read
+ * as evidence that the engine drops patcher edits. A test that verifies nothing, arriving at the
+ * right answer for no reason: the bug is real and backend found it independently, but this run
+ * was not what found it.
+ *
+ * So the file's mtime is checked. An unchanged mtime means the save did not happen and the
+ * comparison below is meaningless — which is a different failure from "the value was not kept",
+ * and has to be reported as one.
+ */
+const mtimeBefore = existsSync(projectPath) ? statSync(projectPath).mtimeMs : 0;
+const saveSaid = await page.evaluate(() => window.__uni.run('save generator'));
 await page.waitForTimeout(3000);
+const mtimeAfter = existsSync(projectPath) ? statSync(projectPath).mtimeMs : 0;
+check(mtimeAfter > mtimeBefore, 'the project is actually written to disk',
+      `mtime ${mtimeBefore} -> ${mtimeAfter}; ${String(saveSaid).slice(-70)}`);
 const now = hitsOnDisk();
 
 /*
