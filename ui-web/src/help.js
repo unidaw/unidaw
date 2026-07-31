@@ -41,8 +41,13 @@ export const SURFACE_KEYS = {
       ["; '", 'default velocity down / up'],
       ['- =', 'zoom out / in'],
       ['shift+up/down', 'extend the selection'],
-      ['opt+c / opt+v', 'copy / paste (relative to the cursor)'],
-      ['opt+x', 'cut'],
+      // BOTH PAIRS, because both are bound. opt+ is the tracker convention and ⌘ is what a hand
+      // reaches for without deciding to; a range you selected and cannot copy is worse than one
+      // you can copy two ways. Listing only one of them sent a test suite chasing the wrong key
+      // and nearly put a false limitation in the manual.
+      ['⌘c / opt+c', 'copy the selection'],
+      ['⌘v / opt+v', 'paste (relative to the cursor)'],
+      ['⌘x / opt+x', 'cut'],
       ['opt+q / opt+a', 'transpose a semitone up / down'],
       ['opt+w / opt+s', 'transpose an octave up / down'],
       ['arrows', 'move cursor (drops the selection)'],

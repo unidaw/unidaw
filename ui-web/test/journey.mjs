@@ -477,10 +477,44 @@ if (grid) {
     for (let i = 0; i < atTop.row + 2; i++) await page.keyboard.press('ArrowUp');
     await settle(200);
   }
+  /*
+   * ...AND ONTO THE NOTE COLUMN, which is the half that made this look broken.
+   *
+   * The selection this built was `f0:1, f1:1` — the VELOCITY field, because earlier steps left
+   * the cursor there and neither Shift+Tab nor Home moves it back. A selection of velocity cells
+   * contains no notes, so `copySelection` correctly answered "nothing to copy" and the suite
+   * reported that a person cannot copy and paste.
+   *
+   * The app was honest throughout: it sets `state.reject` and the chrome draws it. This file
+   * simply never read it, which is why the reject line is now part of the gap message below.
+   */
+  for (let i = 0; i < 4; i++) {
+    if ((await st()).cursor.col % 3 === 0) break;
+    await page.keyboard.press('ArrowLeft');
+    await settle(120);
+  }
   for (let i = 0; i < 4; i++) await page.keyboard.press('Shift+ArrowDown');
   await settle(300);
   const sel = await page.evaluate(() => window.__uni.selection && window.__uni.selection());
-  ok(!!sel, 'shift+arrows make a selection', JSON.stringify(sel));
+  ok(sel && sel.f0 === 0, 'shift+arrows make a selection ON THE NOTE COLUMN',
+     JSON.stringify(sel));
+  /*
+   * BOTH KEY SETS, because the app binds both and a manual now says so.
+   *
+   * This step reported "a person cannot copy and paste notes" for weeks and the keys were never
+   * the reason — ⌘C and ⌘V are bound, and so are opt+C and opt+V (the tracker convention, kept
+   * because Alt combos are free in a browser tab). What was wrong was the COLUMN: the selection
+   * above was on the velocity field, `copySelection` correctly answered "nothing to copy", and
+   * this file never read the reject line that said so.
+   *
+   * I first "fixed" it by switching to opt+ and asserting the app had never bound ⌘C. That was
+   * wrong in the other direction and would have put a false limitation in the manual — the same
+   * mistake one layer along. Testing both is what actually holds the claim the manual makes.
+   *
+   * KeyC/KeyV rather than 'c'/'v' for the Alt pair: Option is a compose modifier on macOS, so
+   * Option+C delivers 'ç' and every alt shortcut matched on `e.key` was dead on the primary
+   * platform. The handler matches on `e.code` and the presses have to agree.
+   */
   const nBefore = (await st()).engine.noteCount;
   await page.keyboard.press('Meta+c');
   await settle(250);
@@ -488,9 +522,21 @@ if (grid) {
   await settle(200);
   await page.keyboard.press('Meta+v');
   await settle(900);
+  const nMeta = (await st()).engine.noteCount;
+  ok(nMeta > nBefore, 'CMD+C / CMD+V duplicate the selection', `${nBefore} -> ${nMeta}`);
+  // ...and the tracker pair, on the same clipboard, four rows further down.
+  for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowDown');
+  await settle(200);
+  await page.keyboard.press('Alt+KeyV');
+  await settle(900);
   const nAfter = (await st()).engine.noteCount;
+  ok(nAfter > nMeta, 'and opt+V pastes the same clipboard again', `${nMeta} -> ${nAfter}`);
   if (nAfter <= nBefore) {
-    gap('copy and paste notes', `note count stayed at ${nAfter} after ⌘C then ⌘V`);
+    // WITH THE REASON. The app sets `state.reject` on every refusal and this file spent weeks
+    // reporting the symptom without it — "nothing to copy" would have named the cause at once.
+    const why = (await st()).reject;
+    gap('copy and paste notes',
+        `note count stayed at ${nAfter} after opt+C then opt+V${why ? ` — the app said "${why}"` : ''}`);
   } else {
     ok(true, 'copy and paste duplicates notes', `${nBefore} -> ${nAfter}`);
   }
@@ -503,7 +549,8 @@ await page.keyboard.press('Meta+z');
 await settle(900);
 const afterUndo = (await st()).engine.noteCount;
 if (afterUndo === beforeUndo) {
-  gap('undo', `⌘Z left the note count at ${afterUndo}`);
+  const why = (await st()).reject;
+  gap('undo', `⌘Z left the note count at ${afterUndo}${why ? ` — the app said "${why}"` : ''}`);
 } else {
   ok(true, 'undo takes the last edit back', `${beforeUndo} -> ${afterUndo}`);
   await page.keyboard.press('Meta+Shift+z');
