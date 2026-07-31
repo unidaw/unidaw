@@ -815,7 +815,8 @@ const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'sampl
                      'nodes', 'addNode', 'delNode', 'linkNodes', 'patch', 'copy', 'paste',
                      'cut', 'addTrack', 'removeTrack', 'noteColumns', 'delDevice', 'bypass',
                      'quantize', 'moveDevice', 'chord', 'delChord', 'deleteHarmony',
-                     'addDevice', 'openEditor', 'newSong', 'fold', 'edit', 'harmony', 'ask', 'forget',
+                     'addDevice', 'openEditor', 'newSong', 'fold', 'opsColumn', 'opsShown',
+                     'edit', 'harmony', 'ask', 'forget',
                      'clips', 'moveClip', 'trimClip', 'delClip', 'addClip',
                      'selectedClip', 'ticksPerBar', 'master',
                      // The spine. Six, because a section has six things you can do to it
@@ -2251,6 +2252,9 @@ const OP_REGISTRY = {
   emit:      { cli: 'sampler-emit-rows', agent: null, why: 'gap' },
   edit:      { cli: null, agent: null, why: 'view' },
   fold:      { cli: null, agent: null, why: 'view' },
+  // Which columns this window draws. Genuinely a view decision — the engine already remembers
+  // the only half that outlives the tab, which is whether the ops are THERE.
+  'ops-column': { cli: null, agent: null, why: 'view' },
   follow:    { cli: null, agent: null, why: 'view' },
   goto:      { cli: null, agent: null, why: 'view' },
   oct:       { cli: null, agent: null, why: 'view' },
@@ -3174,4 +3178,107 @@ test('the wire constants match the sidecar that writes them', async () => {
   assert.equal(mine(/const NOTE_BYTES = (\d+);/, 'NOTE_BYTES'),
                rust(/const NOTE_BYTES: usize = (\d+);/, 'NOTE_BYTES'),
     'the note stride differs — notes read fine and everything after them is garbage');
+});
+
+// ---------------------------------------------------------------------------
+// THE OPS COLUMN: the per-track width the engine publishes, and the copy of
+// FIELDS_PER_NOTE that the renderer keeps so it can lay a box out without
+// importing the model.
+// ---------------------------------------------------------------------------
+
+test("tracker.js's FIELDS_PER_NOTE equals the model's", async () => {
+  /*
+   * The renderer needs to know which column the ops glyphs are in — it is the column that
+   * disappears on a track with no ops — and it must not import the model to find out, because
+   * the rule that keeps the paint and the hit test agreeing is that geometry lives in one file.
+   *
+   * So it holds a copy, and this is what stops a copy from rotting. Both numbers are read out
+   * of the SOURCE rather than imported, because importing tracker.js needs a DOM.
+   */
+  const src = readFileSync(new URL('../src/tracker.js', import.meta.url), 'utf8');
+  const m = src.match(/^const FIELDS_PER_NOTE = (\d+);/m);
+  assert.ok(m, 'tracker.js declares FIELDS_PER_NOTE');
+  const vm = readFileSync(new URL('../src/viewmodel.js', import.meta.url), 'utf8');
+  const v = vm.match(/^export const FIELDS_PER_NOTE = (\d+);/m);
+  assert.ok(v, 'viewmodel.js declares FIELDS_PER_NOTE');
+  assert.equal(Number(m[1]), Number(v[1]),
+    `the renderer's copy of FIELDS_PER_NOTE is ${m[1]} and the model's is ${v[1]} — `
+    + 'the ops column would be laid out at one index and drawn at another');
+
+  // And that the ops field is the LAST of a note's fields. `cellLeft` counts hidden columns as
+  // `floor(col / FIELDS_PER_NOTE)`, and `hitTest` inverts it as `(vis / (FIELDS_PER_NOTE - 1))`;
+  // both are only right when the hidden column is the group's last.
+  const o = src.match(/^const OPS_FIELD = (\d+);/m);
+  assert.ok(o, 'tracker.js declares OPS_FIELD');
+  assert.equal(Number(o[1]), Number(m[1]) - 1,
+    'the ops column is the last field of a note group — cellLeft and hitTest both assume it');
+});
+
+test('the ops column is hidden exactly when no note in the track carries one', async () => {
+  /*
+   * `computeOpsShow` is not exported (nothing in this file is, past the model), so this drives
+   * it through `buildViewModel` — which is the honest instrument anyway: the question is what
+   * the RENDERER is handed, and a direct call on the helper could pass while the plumbing that
+   * carries it to `buf.opsShow` is missing. That plumbing is exactly what broke the first time
+   * a per-track array was added here.
+   */
+  const engine = {
+    opsWidth: new Uint8Array([0, 3, 0, 7]),
+    extentCount: 0, extents: [], extentsRevision: 1,
+    noteCount: 0, notes: [], notesRevision: 1,
+    aggCount: 0, aggs: [], aggsRevision: 1,
+    lpb: new Uint8Array(64), trackParent: new Uint32Array(4), trackFlags: new Uint8Array(4),
+    chordCount: 0, chords: [], chordsRevision: 0,
+    clipVersion: 1, trackCount: 4, quantize: [], quantizeVersion: 0,
+    harmony: null, names: [], tempoMilliBpm: 120000,
+  };
+  const vm = buildViewModel({ startRow: 0, rowCount: 4, tracks: 4, columns: 3, engine }, null);
+  assert.deepEqual([...vm.opsShow].slice(0, 4), [0, 1, 0, 1],
+    'tracks 1 and 3 carry ops and draw the column; 0 and 2 do not');
+  assert.equal(vm.opsShowSig, 0b1010, 'the signature names the same set as a bitmask');
+
+  // The override is ADDITIVE and cannot subtract: forcing track 0 on shows it, and "forcing"
+  // track 1 off does not hide a column whose glyphs would then have nowhere to go.
+  const forced = new Uint8Array([1, 0, 0, 0]);
+  const vm2 = buildViewModel(
+    { startRow: 0, rowCount: 4, tracks: 4, columns: 3, engine, opsOverride: forced }, null);
+  assert.deepEqual([...vm2.opsShow].slice(0, 4), [1, 1, 0, 1],
+    'the override reveals a column the width would hide, and never hides one it shows');
+  assert.equal(vm2.opsShowSig, 0b1011);
+
+  // A NEGATIVE CONTROL, because "the array came back all ones" is what a broken read looks
+  // like: an engine that publishes no width at all draws no ops column anywhere.
+  const vm3 = buildViewModel(
+    { startRow: 0, rowCount: 4, tracks: 4, columns: 3, engine: { ...engine, opsWidth: null } },
+    null);
+  assert.deepEqual([...vm3.opsShow].slice(0, 4), [0, 0, 0, 0],
+    'no published width means no column — not every column');
+});
+
+test('no console command shadows another', () => {
+  /*
+   * THE REGISTRY IS AN OBJECT LITERAL, so a duplicate key does not collide — it SILENTLY
+   * REPLACES. Adding a second `ops` deleted `ops [tokens]` (set the row ops on the note at the
+   * cursor) and thirty checks in ops.mjs failed at once, all of them reporting that the op
+   * parser had started rejecting valid tokens.
+   *
+   * `createCommands` cannot answer this: by the time it returns, the loser is gone and the
+   * object looks perfectly well-formed. So this reads the SOURCE, which is the only place both
+   * names still exist.
+   *
+   * Keys are matched at the registry's own indentation (four spaces) to avoid the `run:` bodies
+   * and nested option objects; the count assertion below is what makes that safe to trust, the
+   * same guard every source-reading check in this file carries.
+   */
+  const src = readFileSync(new URL('../src/dock.js', import.meta.url), 'utf8');
+  const keys = [...src.matchAll(/^ {4}(?:'([a-z0-9-]+)'|([a-z][a-zA-Z0-9-]*)): \{ help:/gm)]
+    .map((m) => m[1] || m[2]);
+  const declared = Object.keys(createCommands(stubApi()));
+  assert.ok(keys.length >= declared.length,
+    `the source scan found ${keys.length} commands and the registry has ${declared.length} — `
+    + 'the pattern has stopped matching the file');
+  const seen = new Set(), dupes = [];
+  for (const k of keys) { if (seen.has(k)) dupes.push(k); seen.add(k); }
+  assert.deepEqual(dupes, [],
+    'a command name declared twice — the later one silently deletes the earlier');
 });

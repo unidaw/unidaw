@@ -629,8 +629,23 @@ step('17. two notes on one row, in two cells');
     // First note in whatever column the cursor is in.
     await page.keyboard.press('z');
     await settle(600);
-    // Step RIGHT by a whole note column (three fields) and play another.
-    for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowRight');
+    /*
+     * Step RIGHT until the cursor is on the PITCH FIELD OF THE NEXT NOTE COLUMN.
+     *
+     * This used to press ArrowRight three times, on the arithmetic that a note is three fields
+     * wide. That stopped being true when the ops column became per-track: a track no note of
+     * which carries an op does not draw its ops cells, and the cursor steps over them — so three
+     * presses land on the VELOCITY of the next note column, `x` writes nothing, and the check
+     * below reports the chord feature broken when what moved was the geometry.
+     *
+     * Driven off the cursor's own position rather than a count, which is what it should always
+     * have been: "the next note column" is the intent, and three was only ever its coincidence.
+     */
+    for (let i = 0; i < 8; i++) {
+      const c = (await st()).cursor;
+      if (c.col > 0 && c.col % 3 === 0) break;
+      await page.keyboard.press('ArrowRight');
+    }
     await settle(250);
     await page.keyboard.press('x');
     await settle(900);

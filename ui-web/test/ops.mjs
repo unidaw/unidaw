@@ -71,6 +71,24 @@ writeFileSync(`${stack.dir}/opsfix.uniproj.json`, JSON.stringify({
         { note_id: 3, pitch: 64, velocity: 100, nanotick: Q * 8, duration: Q },
       ],
     }],
+  }, {
+    /*
+     * A SECOND TRACK WHOSE NOTES CARRY NO OPS AT ALL.
+     *
+     * This is what makes the per-track ops column testable. `uiTrackOpsWidth[t]` is 0 for a
+     * track like this and non-zero for track 0, and a fixture with only ONE track cannot tell
+     * "the column is hidden correctly" from "the column is always hidden" — the same blind spot
+     * that let a one-device project publish patcher owner 0 and look right.
+     */
+    track_id: 1, name: 'NoOps', harmony_quantize: false, lines_per_beat: 4,
+    mixer: { gain_db: 0, pan: 0, mute: false, solo: false }, device_chain: [], mod_links: [],
+    placements: [{
+      clip_id: 2, at: 0, length: Q * 16, chords: [], mutes: [],
+      notes: [
+        { note_id: 11, pitch: 48, velocity: 100, nanotick: 0, duration: Q },
+        { note_id: 12, pitch: 50, velocity: 100, nanotick: Q * 4, duration: Q },
+      ],
+    }],
   }],
 }));
 
@@ -572,6 +590,146 @@ const cells = await opsCells();
   check(drawn && drawn.scroll <= drawn.client,
         'and the cell is wide enough to show them — nothing is clipped',
         drawn && `${drawn.text.length} glyphs need ${drawn.scroll}px in a ${drawn.client}px cell`);
+}
+
+// ---------------------------------------------------------------------------
+// THE OPS COLUMN IS PER TRACK (kShmVersion 34 / uiTrackOpsWidth).
+//
+// The cell measurement above is what motivated this: the ops cell holds about seven glyphs and
+// seven ops now exist, so the column is exactly full — and it was being drawn, empty, on every
+// track that will never use one. The engine publishes the widest run per track; 0 means the
+// column has never held anything and it goes away.
+// ---------------------------------------------------------------------------
+{
+  /*
+   * BACK TO `opsfix`, WHICH IS THE TWO-TRACK FIXTURE.
+   *
+   * The write half above runs `new opswrite` — a fresh, one-track song — and everything after it
+   * is in that song. Asked there, this section read `opsWidths()` as a one-element array and
+   * reported the differential broken; a fixture with one track cannot tell "hidden correctly"
+   * from "always hidden", which is the same blind spot the second track was added to close.
+   */
+  await page.evaluate(() => window.__uni.loadProject('opsfix'));
+  await page.waitForTimeout(2500);
+  await page.evaluate(() => window.__uni.run('zoom 1'));
+  // ...AND BACK TO THE TOP. The write half left the cursor on row 32 and the viewport with it,
+  // so every DOM probe below was reading rows the fixture's notes are not on — which looks
+  // exactly like the notes not being drawn.
+  await page.evaluate(() => window.__uni.run('goto 0 0'));
+  await page.waitForTimeout(700);
+
+  const widths = await page.evaluate(() => window.__uni.opsWidths());
+  check(Array.isArray(widths) && widths.length >= 2,
+        'the engine publishes a per-track op width', JSON.stringify(widths));
+  /*
+   * THE DIFFERENTIAL, which is the only form of this question worth asking.
+   *
+   * Track 0's notes carry ops and track 1's do not, so a correct reading is (>0, 0). An
+   * always-0 read and an always-non-zero read each fail exactly one half of this, and neither
+   * could be caught by looking at one track.
+   */
+  check(widths && widths[0] > 0 && widths[1] === 0,
+        'and it distinguishes the track that uses ops from the one that does not',
+        `t0=${widths && widths[0]} t1=${widths && widths[1]}`);
+  /*
+   * COUNTED IN GLYPHS, which is backend's stated contract: "one per op present — retrigger,
+   * probability, delay, sound, offset, ramp, condition". Note 1 carries three of them, so the
+   * widest run in track 0 is 3 — and the cell above proves the page draws exactly that many
+   * characters for it, so the two sides are counting the same thing.
+   */
+  /*
+   * COUNTED IN GLYPHS, which is backend's stated contract: "one per op present — retrigger,
+   * probability, delay, sound, offset, ramp, condition". Asserted against what the PAGE DRAWS
+   * rather than against a literal 3: the two sides counting the same thing is the claim, and a
+   * hardcoded number would only ever check that this fixture is still this fixture.
+   */
+  const drawnRuns = (await opsCells()).map((c) => c.text.length);
+  const widest = drawnRuns.length ? Math.max(...drawnRuns) : -1;
+  check(widths && widths[0] === widest,
+        'and it counts GLYPHS — the same number the page draws for the widest note',
+        `engine says ${widths && widths[0]}, the cells draw ${JSON.stringify(drawnRuns)}`);
+
+  const shown = await page.evaluate(() => window.__uni.opsShown());
+  check(shown && shown[0] === 1 && shown[1] === 0,
+        'so track 0 draws the column and track 1 does not', JSON.stringify(shown));
+
+  // ...and the DOM agrees, which is the half a state accessor cannot answer. A zero-width box
+  // is the thing that actually recovers the space.
+  /*
+   * SCOPED TO `.tk-band`, because the RULER is not in it and looks exactly like a row.
+   *
+   * `buildRuler` renders one exemplar of each width class as a two-track row so the widths can
+   * be measured without drawing every track — `visibility: hidden`, which still has layout. An
+   * unscoped `[data-track="1"]` found the ruler's second exemplar, measured 230px of a track
+   * that is not the song's, and reported the column present when it was gone.
+   */
+  const boxes = () => page.evaluate(() => {
+    const w = (t) => {
+      const c = document.querySelector(`.tk-band .tk-cell.ops[data-track="${t}"][data-col="2"]`);
+      return c ? Math.round(c.getBoundingClientRect().width) : -1;
+    };
+    const track = (t) => {
+      const e = document.querySelector(`.tk-band .tk-track[data-track="${t}"]`);
+      return e ? Math.round(e.getBoundingClientRect().width) : -1;
+    };
+    return { ops0: w(0), ops1: w(1), t0: track(0), t1: track(1) };
+  });
+  const b = await boxes();
+  check(b.ops0 > 0 && b.ops1 === 0,
+        'the ops cell has width on track 0 and none on track 1', JSON.stringify(b));
+  check(b.t1 > 0 && b.t1 < b.t0,
+        'so track 1 is genuinely narrower — the space is recovered, not just blanked',
+        JSON.stringify(b));
+
+  /*
+   * AND IT COMES BACK. A column you cannot get back is a column you can never type the first op
+   * into, because the cell to type it into would not be on screen — which would make this a
+   * feature that quietly removes an ability rather than one that saves width.
+   *
+   * Driven through the CONSOLE verb, since that is the path an agent has; the header control
+   * calls the same function, and a unit check holds the console and the api together.
+   */
+  const said = await page.evaluate(() => window.__uni.run('ops-column 1 on'));
+  await page.waitForTimeout(400);
+  const back = await boxes();
+  check(back.ops1 > 0, '`ops-column 1 on` brings the column back', `${said} -> ${JSON.stringify(back)}`);
+  check(back.t1 === b.t0, 'and track 1 is then exactly as wide as track 0',
+        JSON.stringify(back));
+
+  /*
+   * THE HIT TEST'S INVERSE, with the column hidden again.
+   *
+   * On a track that hides its ops columns the drawn boxes are fields 0,1,3,4,... — so the third
+   * box along is field 3, not field 2. `hitTest` divides by a uniform cell width to get a
+   * VISIBLE index and has to map it back; get that wrong and every click past the first note
+   * group lands one field to the left, which is a cursor in the wrong column and an edit to the
+   * wrong thing, with nothing on screen to say so.
+   *
+   * Two note columns, so there IS a group past the first — with one, both mappings agree and the
+   * check proves nothing.
+   */
+  await page.evaluate(() => { window.__uni.run('ops-column 1 off'); window.__uni.run('columns 2'); });
+  await page.waitForTimeout(500);
+  const mapped = await page.evaluate(() => {
+    const cells = [...document.querySelectorAll('.tk-band .tk-row[data-row="0"] .tk-cell[data-track="1"]')]
+      .filter((c) => c.getBoundingClientRect().width > 0);
+    return cells.map((c) => {
+      const r = c.getBoundingClientRect();
+      const h = window.__uni.clickAt(r.left + r.width / 2, r.top + r.height / 2);
+      return { want: Number(c.dataset.col), got: h ? h.col : null };
+    });
+  });
+  const wrong = mapped.filter((x) => x.want !== x.got);
+  check(mapped.length > 2 && wrong.length === 0,
+        'with the column hidden, every drawn cell still hit-tests to its own field',
+        `${mapped.length} cells, wrong: ${JSON.stringify(wrong.slice(0, 4))}`);
+  // THE NEGATIVE CONTROL. If the drawn cells do not actually skip a field, the mapping above was
+  // never exercised and the check passed on a track whose columns are all present.
+  const skipped = mapped.some((x, i) => i > 0 && x.want - mapped[i - 1].want > 1);
+  check(skipped, 'and the drawn cells really do skip the ops fields — the check had something to get wrong',
+        JSON.stringify(mapped.map((x) => x.want)));
+  await page.evaluate(() => window.__uni.run('columns 1'));
+  await page.waitForTimeout(300);
 }
 
 /*

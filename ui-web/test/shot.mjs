@@ -776,6 +776,20 @@ for (const scene of SCENES) {
     // width before resolving a column. Driven through the real hitTest with real
     // coordinates taken off the rendered cells, so it cannot agree with the
     // renderer by sharing its arithmetic.
+    /*
+     * COLUMN 2 IS THE OPS COLUMN, and it is not drawn on a track no note of which carries an op
+     * — which is every track in this fixture. Probed as-is it returned `null` out of a
+     * `display: none` box's all-zero rect, which reads as a broken hit test and is not one.
+     *
+     * Turned ON for the two probed tracks, so the check keeps asking what it was written to ask:
+     * does a hit test resolve the LAST column of a ragged track. The hidden case gets its own
+     * probe below rather than quietly replacing this one.
+     *
+     * Its own evaluate, with a frame between: `opsColumn` schedules a draw, and reading the
+     * boxes in the same turn would measure the layout it is about to change.
+     */
+    await page.evaluate(() => { window.__uni.opsColumn(1, true); window.__uni.opsColumn(2, true); });
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
     const hits = await page.evaluate(() => {
       const probe = (track, col) => {
         const c = document.querySelector(
@@ -785,6 +799,15 @@ for (const scene of SCENES) {
         const h = window.__uni.clickAt(b.left + b.width / 2, b.top + b.height / 2);
         return h ? `${h.track},${h.col}` : 'null';
       };
+      /*
+       * COLUMN 2 IS THE OPS COLUMN, and it is not drawn on a track no note of which carries an
+       * op — which is every track in this fixture. Probed as-is it returned `null` from a
+       * `display: none` box's all-zero rect, which reads as a broken hit test and is not one.
+       *
+       * Turned ON for the two probed tracks, so the check keeps asking what it was written to
+       * ask: does a hit test resolve the LAST column of a ragged track. The hidden case gets its
+       * own probe below rather than quietly replacing this one.
+       */
       // A lane WITH a readout and a lane without, so a single-stride hit test
       // cannot pass both.
       const withCol = [probe(1, 0), probe(1, 2)];
@@ -801,6 +824,12 @@ for (const scene of SCENES) {
        `and on a lane without one: ${JSON.stringify(hits.without)}`);
     ok(hits.onReadout === 'null',
        `a click on the readout is not a click on a cell: ${hits.onReadout}`);
+
+    // The INVERSE — that a hidden ops column still resolves the fields after it — needs a track
+    // with more than one note column to be worth asking, and this fixture has one. It lives in
+    // ops.mjs, against a project whose notes actually carry ops.
+    await page.evaluate(() => { window.__uni.opsColumn(1, false); window.__uni.opsColumn(2, false); });
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   }
 
   if (scene.palette) {

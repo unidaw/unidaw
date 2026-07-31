@@ -911,6 +911,30 @@ export function createCommands(api) {
       run: (a) => (api.edit(a[0] === undefined ? undefined : a[0] === 'on') ? 'edit on' : 'edit off') },
     fold: { help: 'fold <track> — hide a parent\'s child tracks', args: [A_TRACK],
       run: (a) => { const t = Number(a[0]); return api.fold(t) ? 'fold ' + t : 'not a parent'; } },
+    /*
+     * The ops column, per track. A track no note of which carries an op does not draw the
+     * column at all, and this is what gets it back — without it you could never type the first
+     * op into such a track, because the cell to type it into would not be on screen.
+     *
+     * `ops-column` and not `ops`, which is TAKEN — `ops [tokens]` writes the row ops on the note
+     * at the cursor. This registry is an object literal, so a duplicate key does not collide, it
+     * SILENTLY REPLACES: the second `ops` won, `ops ret3 p60` started answering "<track> must be
+     * a whole number", and thirty checks in ops.mjs failed at once. A name clash in a command
+     * table is not a name clash, it is a deletion.
+     *
+     * `on|off` spelled out in the help because the `oneOf` list is what the palette offers and
+     * a help string that summarises it is a help string that goes stale.
+     */
+    'ops-column': { help: 'ops-column <track> [on|off] — show the per-note op column on a track',
+      args: [A_TRACK, ON_OFF],
+      run: (a) => {
+        const t = Number(a[0]);
+        const want = a[1] === undefined ? undefined : a[1] === 'on';
+        // The reason comes off `state().reject`, which is the projection that exists precisely
+        // so a refusal is not re-guessed here — every verb that guessed answered "no engine".
+        if (!api.opsColumn(t, want)) return api.state().reject || 'refused';
+        return 'ops t' + t + ' ' + (api.opsShown()[t] ? 'on' : 'off');
+      } },
     solo: { help: 'solo <track>', args: [A_TRACK],
       run: (a) => { const t = Number(a[0]); api.strip(t, 'solo'); return 'solo t' + t; } },
     state: { help: 'dump UI state', args: NONE, run: () => JSON.stringify(api.state()) },

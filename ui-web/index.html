@@ -3257,6 +3257,37 @@ const dockApi = {
     if (!n) state.reject = 'nothing on this row';
     return n > 0;
   },
+  /**
+   * SHOW OR HIDE A TRACK'S OPS COLUMN.
+   *
+   * `on` omitted toggles, which is what a keyboard or a header click wants. It can only ever
+   * ADD to what the engine's width already shows, so hiding a track whose notes carry ops is
+   * refused rather than silently ignored: the glyphs would have nowhere to go, and a control
+   * that reports success and changes nothing is the failure mode this project keeps finding.
+   */
+  /** Per track, whether the ops column is drawn — the engine's width OR the local force. */
+  opsShown: () => {
+    const w = engine && engine.opsWidth;
+    const out = [];
+    for (let t = 0; t < state.tracks; t++) {
+      out.push((w && t < w.length && w[t] > 0) || !!opsForced[t] ? 1 : 0);
+    }
+    return out;
+  },
+  opsColumn: (t, on) => {
+    if (t < 0 || t >= opsForced.length || t >= state.tracks) {
+      state.reject = 'no such track'; return false;
+    }
+    const want = on === undefined ? !opsForced[t] : !!on;
+    const w = engine && engine.opsWidth;
+    if (!want && w && t < w.length && w[t] > 0) {
+      state.reject = `track ${t} carries ops (${w[t]} glyphs) — the column stays`;
+      return false;
+    }
+    opsForced[t] = want ? 1 : 0;
+    schedule();
+    return true;
+  },
   fold: (t) => {
     if (!engine || t < 0 || t >= collapsed.length) return false;
     const parent = engine.trackParent;
@@ -3672,6 +3703,22 @@ let lastLoadSeq = -1;
 const collapsed = new Uint8Array(64);
 let collapsedAny = false;
 /**
+ * PER TRACK, SHOW THE OPS COLUMN EVEN THOUGH NO NOTE CARRIES AN OP.
+ *
+ * The engine's `uiTrackOpsWidth[t]` decides it otherwise: 0 means the track has never held a
+ * retrigger, a probability, a delay or any of the other four, so the column is three empty
+ * cells per note column and it goes away.
+ *
+ * That is only safe because of this array. A column you cannot get back is a column you can
+ * never type the FIRST op into — the cell would not exist to put a cursor in — so `ops <track>
+ * on` forces it, and the engine's own width takes over as soon as a note actually carries one.
+ *
+ * Purely local, and deliberately not sent anywhere: which columns are on screen is a property
+ * of this window, not of the song. The engine already remembers the only half that matters,
+ * which is whether the ops are THERE.
+ */
+const opsForced = new Uint8Array(64);
+/**
  * ADOPT THE ENGINE'S FOLD WHEN IT MOVES, and only then.
  *
  * The local array is an override, and an override that never yields is just a second source of
@@ -3997,6 +4044,26 @@ function buildHead() {
      * tracker is an invitation, and this cannot be undone. `removeTrack` names the track in its
      * confirm; nothing here asks a second time.
      */
+    /*
+     * SHOW THIS TRACK'S OPS COLUMN, on the track's own header.
+     *
+     * The column is hidden on a track no note of which carries a per-note op, which means the
+     * cell you would type the first one into is not on screen. Without a pointer path here the
+     * feature would be reachable only by `ops <track> on` \u2014 console-only, which does not count
+     * as done.
+     *
+     * Hidden until hover and drawn as `\u00b7` when off, `ops` when forced on, ABSENT when the
+     * engine's own width is what is showing the column: a control that claims to be the reason
+     * a thing is visible when it is not is a control that lies the moment you click it off and
+     * nothing happens.
+     */
+    const opsBtn = document.createElement('span');
+    opsBtn.className = 'hops';
+    opsBtn.appendChild(document.createTextNode('\u00b7'));
+    opsBtn.title = 'Show this track\u2019s per-note op column';
+    el.appendChild(opsBtn);
+    el._opsBtn = opsBtn; el._opsState = null;
+
     const del = document.createElement('span');
     del.className = 'hdel';
     del.appendChild(document.createTextNode('\u00d7'));
@@ -4052,6 +4119,16 @@ function buildHead() {
      * — and then open a confirm on top of it.
      */
     if (e.target.closest('.hadd')) { e.preventDefault(); addTrack(); return; }
+    const opsBtn = e.target.closest('.hops');
+    if (opsBtn) {
+      e.preventDefault();
+      const t = Number(opsBtn.parentElement.dataset.track);
+      // Toggles, through the SAME function the `ops` verb calls — the control and the command
+      // are one implementation, which is what stops the two from drifting into different rules
+      // about when the column may be hidden.
+      if (Number.isFinite(t)) dockApi.opsColumn(t);
+      return;
+    }
     const killer = e.target.closest('.hdel');
     if (killer) {
       e.preventDefault();
@@ -4115,6 +4192,7 @@ function buildHead() {
   headRow._stride = stride;
   headRow._laneSig = tracker._laneSig;
   headRow._hiddenSig = tracker._hiddenSig;
+  headRow._opsSig = tracker._opsSig;
   head.append(headRow);
   paintHeadLpb();
 }
@@ -4147,6 +4225,25 @@ function paintHeadLpb() {
       // The class carries whether there IS a setting, so an unquantized lane —
       // which is nearly all of them — costs no padding and no border.
       el._qEl.classList.toggle('on', !!txt);
+    }
+    /*
+     * The ops control's three states, as one string so the guard is one compare.
+     *
+     * 'engine' — the track's notes carry ops and the column is showing because of that. The
+     * control is not drawn at all: it cannot turn the column off (`opsColumn` refuses, because
+     * the glyphs would have nowhere to go), and a control that does nothing when clicked is
+     * worse than no control.
+     * 'on'  — the column is showing because this window asked for it.
+     * 'off' — the column is hidden and this is how it comes back.
+     */
+    const w = engine && engine.opsWidth;
+    const byEngine = !!(w && t < w.length && w[t] > 0);
+    const st = byEngine ? 'engine' : (opsForced[t] ? 'on' : 'off');
+    if (el._opsState !== st && el._opsBtn) {
+      el._opsState = st;
+      el._opsBtn.firstChild.nodeValue = st === 'on' ? 'ops' : '·';
+      el._opsBtn.classList.toggle('on', st === 'on');
+      el._opsBtn.classList.toggle('hidden', st === 'engine');
     }
   }
 }
@@ -5426,6 +5523,10 @@ function draw() {
   // open — the override silently becoming the only source rather than an override.
   adoptEngineFold();
   o.collapsedOverride = collapsedAny ? collapsed : null;
+  // Additive only — see computeOpsShow. Passed unconditionally, unlike the fold override,
+  // because it cannot contradict the engine: it can reveal a column the width would hide and
+  // never hide one it would show, so an all-zero array is exactly "no override".
+  o.opsOverride = opsForced;
   const vm = bufs[bi] = buildViewModel(o, bufs[bi]);
   vm.scrollX = state.scrollX;
   updateChrome();
@@ -5466,9 +5567,13 @@ function draw() {
   // each of them and every header past the change sits over the wrong lane. That is
   // GUIDELINES 2.1 twice in one line: the key has to name everything the value is
   // computed from, and "the widths" has three inputs now.
+  // ...and on the OPS signature, which is the fourth input to a track's width: a track whose
+  // notes carry no ops drops three cells, so a key that does not name this puts every header
+  // past the first such track over the wrong lane. Same rule, third time.
   if (!headRow || headRow._tracks !== state.tracks || headRow._stride !== stride
       || headRow._laneSig !== tracker._laneSig
-      || headRow._hiddenSig !== tracker._hiddenSig) buildHead();
+      || headRow._hiddenSig !== tracker._hiddenSig
+      || headRow._opsSig !== tracker._opsSig) buildHead();
   paintHeadLpb();
   if (headRow && headRow._x !== state.scrollX) {
     headRow._x = state.scrollX;
@@ -6639,6 +6744,25 @@ addEventListener('keydown', (e) => {
     moveCursor(() => {
       let f = state.cursor.track * state.columns + state.cursor.col + d;
       f = Math.max(0, Math.min(f, state.tracks * state.columns - 1));
+      /*
+       * STEP OVER AN OPS COLUMN THAT IS NOT DRAWN.
+       *
+       * A track no note of which carries an op does not draw the column, and a cursor parked in
+       * a `display: none` cell is the exact defect the fold logic already names: the cell is
+       * still addressable, every edit still lands correctly, and none of it is visible.
+       *
+       * A while loop, not an if: the columns are hidden per TRACK, so stepping right off the
+       * end of one track can land on the ops column of the next, and the skip has to keep
+       * going. Bounded by the field count, so no arrangement of hidden columns can spin.
+       */
+      const shown = dockApi.opsShown();
+      for (let guard = 0; guard < state.columns * 2; guard++) {
+        const tr = Math.floor(f / state.columns), c = f % state.columns;
+        if (fieldOfCol(c) !== 2 || shown[tr]) break;
+        const next = f + d;
+        if (next < 0 || next > state.tracks * state.columns - 1) break;
+        f = next;
+      }
       state.cursor.track = Math.floor(f / state.columns); state.cursor.col = f % state.columns;
       // A selection belongs to the cell it was made in. Carrying it to the next one would put
       // the caret on an op of a different note, and `@` would edit that.
@@ -7818,9 +7942,32 @@ window.__uni = {
          * in the first place.
          */
         const dev = (t === 0 || k % 3) ? 0 : [20000, 40000, 60000][(k / 3) % 3];
+        /*
+         * TRACKS 1 AND 3 CARRY A ROW OP, and 0 and 2 carry none.
+         *
+         * The ops column is per track now, so a fixture where no track uses ops photographs
+         * only the hidden case — and a golden that shows one state of a two-state feature is
+         * a golden that cannot tell the feature working from the feature missing. Two tracks
+         * with and two without puts both in one frame, and `opsWidth` below says the same
+         * thing the notes do.
+         */
+        const ret = t === 1 ? 2 : 0;
+        /*
+         * ...AND `probability: 0` ON THE TRACKS THAT CARRY NO OP, not 100.
+         *
+         * This fixture used to say 100 on every note — "certain", read as a value — and the
+         * op mask is `if (v)`, so every note in the scene drew a `p`. The old golden shows a
+         * probability glyph on all four tracks, which is not what a note with no probability
+         * op looks like: the wire sends 0 when the mask bit is clear.
+         *
+         * It has to be right here, because `opsWidth` below now claims two of these tracks
+         * carry nothing — and a fixture whose declared width disagrees with its own notes would
+         * hide ink that exists, which the engine can never do and the golden would then bless.
+         */
+        const prob = t === 3 ? 60 : 0;
         notes.push({ tOn: k * stride * 80000 + dev, tOff: 0, id: t * 100 + k,
                      pitch: 48 + t * 5 + (k % 5), velocity: 100, column: 0, track: t,
-                     retrigger: 0, probability: 100, delayTicks: 0, row: k * stride,
+                     retrigger: ret, probability: prob, delayTicks: 0, row: k * stride,
                      muted: false, isAdd: false, placementId: 1 });
       }
     }
@@ -7831,7 +7978,11 @@ window.__uni = {
                aggCount: new Uint32Array(0), aggRep: new Uint8Array(0),
                aggLo: new Uint8Array(0), aggHi: new Uint8Array(0), aggRows: 0, aggTracks: 0,
                extents: [], extentCount: 0, extentsRevision: 1,
-               lpb: Uint8Array.from(lpb), notesRevision: 1, aggRevision: 1 };
+               lpb: Uint8Array.from(lpb),
+               // What the engine would publish for these notes: one glyph on the two tracks
+               // that carry an op, nothing on the two that do not.
+               opsWidth: Uint8Array.from([0, 1, 0, 1]),
+               notesRevision: 1, aggRevision: 1 };
     draw();
   },
   // currentProject is set here too, not only in the rail: it seeds save-as, and a
@@ -8127,6 +8278,12 @@ window.__uni = {
   goto: (row, track) => dockApi.goto(row, track),
   /** Collapse/expand a parent's children, and what is folded right now. */
   fold: (t) => dockApi.fold(t),
+  /** Show/hide a track's ops column, and what each track's published op width is —
+   *  which is the only way to tell "hidden because empty" from "hidden by mistake". */
+  opsColumn: (t, on) => dockApi.opsColumn(t, on),
+  opsWidths: () => (engine && engine.opsWidth
+    ? Array.from(engine.opsWidth.slice(0, state.tracks)) : null),
+  opsShown: () => dockApi.opsShown(),
   // The same functions the dock and the palette call, not copies of them.
   newSong: (name) => dockApi.newSong(name),
   openEditor: (track, device) => dockApi.openEditor(track, device),

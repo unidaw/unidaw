@@ -196,6 +196,36 @@ function computeLaneShow(engine, buf, meter, trackCount) {
   return sig;
 }
 
+/**
+ * WHICH TRACKS SHOW THE OPS COLUMN.
+ *
+ * The engine publishes `uiTrackOpsWidth[t]` (kShmVersion 34): the widest run of per-note ops
+ * any note in that track carries, in GLYPHS, and 0 when no note carries one at all. A drum
+ * track that will never hold a retrigger should not spend a third of its width on an empty
+ * column forever, which is what every track did before this.
+ *
+ * `override` is what makes the column REACHABLE. Hiding a column you cannot get back is a trap
+ * — you could never type the first op into a track, because the cell to type it into would not
+ * be there — so a track can be told to show it (`ops <track> on`, and the header control),
+ * and the engine's own width takes over the moment a note actually carries one.
+ *
+ * NOT keyed on the cursor's track, which was the first rule I wrote and the wrong one: the
+ * cursor moves between tracks constantly, and a column that appears under it would shift every
+ * track to its right by a cell on every horizontal step. A layout that moves while you move
+ * through it is worse than one column too many.
+ */
+function computeOpsShow(engine, buf, trackCount, override) {
+  if (buf._opsShow.length < trackCount) buf._opsShow = new Uint8Array(trackCount * 2);
+  const w = engine.opsWidth;
+  let sig = 0;
+  for (let t = 0; t < trackCount; t++) {
+    const on = (w && t < w.length && w[t] > 0) || !!(override && override[t]) ? 1 : 0;
+    buf._opsShow[t] = on;
+    if (t < 32) sig |= on << t;
+  }
+  return sig;
+}
+
 function reduceExtents(engine, buf, rowTicks, meter) {
   const n = engine.extentCount;
   if (buf._extStartRow.length < n) {
@@ -557,6 +587,8 @@ export function createBuffer(rowCount, trackCount, columns) {
     _laneShow: new Uint8Array(0),
     /** Per track, whether an ancestor is collapsed. See computeLaneHidden. */
     _laneHidden: new Uint8Array(0),
+    /** Per track, whether the ops column is drawn at all. See computeOpsShow. */
+    _opsShow: new Uint8Array(0),
   };
 }
 
@@ -642,13 +674,19 @@ export function buildViewModel(opts, buf) {
     /**
      * A per-track override of the engine's `collapsed` flag, or null to use it.
      *
-     * Collapsing is a view decision and the engine has no command for it yet, so
-     * the UI holds its own answer. Kept as an OVERRIDE rather than as the only
-     * source: when a command exists the engine's flag becomes authoritative and
-     * this becomes the optimistic half, which is the same shape every other edit
-     * on this surface already has.
+     * Collapsing is a view decision, and since opcode 89 the engine remembers it — so this is
+     * the OPTIMISTIC half rather than the only source, the same shape every other edit on this
+     * surface already has. The page yields it back to the engine's bit when that bit moves.
      */
     collapsedOverride = null,
+    /**
+     * Per track, force the ops column on even though no note in the track carries an op.
+     *
+     * Purely additive: it can reveal a column the engine's width would hide, and never hides
+     * one it would show. A track whose notes DO carry ops always draws the column, because
+     * otherwise the glyphs the engine is publishing would have nowhere to go.
+     */
+    opsOverride = null,
   } = opts;
 
   if (!buf || buf._rows !== rowCount || buf._trackCount !== trackCount
@@ -779,6 +817,7 @@ export function buildViewModel(opts, buf) {
   const laneShowSig = engine ? computeLaneShow(engine, buf, meter, trackCount) : 0;
   const laneHiddenSig = engine
     ? computeLaneHidden(engine, buf, trackCount, collapsedOverride) : 0;
+  const opsShowSig = engine ? computeOpsShow(engine, buf, trackCount, opsOverride) : 0;
   const laneStale = relabel || buf._laneExtRev !== extRev;
   buf._laneExtRev = extRev;
   buf._labelStart = startRow;
@@ -1497,6 +1536,8 @@ export function buildViewModel(opts, buf) {
   buf.laneShowSig = laneShowSig;
   buf.laneHidden = engine ? buf._laneHidden : null;
   buf.laneHiddenSig = laneHiddenSig;
+  buf.opsShow = engine ? buf._opsShow : null;
+  buf.opsShowSig = opsShowSig;
   buf.window.startRow = startRow; buf.window.rowCount = rowCount;
   buf.zoom = zoom;
   buf.cursor.row = cursor.row; buf.cursor.track = cursor.track; buf.cursor.col = cursor.col;

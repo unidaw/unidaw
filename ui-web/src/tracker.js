@@ -15,6 +15,17 @@
 // The row pool is fixed: OVERSCAN rows above and below the viewport, recycled.
 // The timeline is unbounded, so there is no path here that materialises it.
 
+/*
+ * WHICH COLUMN THE OPS GLYPHS LIVE IN, and how many columns a note occupies.
+ *
+ * Duplicated from viewmodel.js's `FIELDS_PER_NOTE` rather than imported, because importing it
+ * would make this file depend on the model to lay out a box — and the rule that keeps the paint
+ * and the hit test agreeing is that geometry lives HERE and only here. A unit check holds the
+ * two equal, so the copy cannot rot the way an unwatched one would.
+ */
+const FIELDS_PER_NOTE = 3;
+const OPS_FIELD = 2;
+
 const OVERSCAN = 4;
 /*
  * How many tracks to render beyond each edge of the viewport.
@@ -117,7 +128,10 @@ export class Tracker {
      * how this file once recorded a zero-width strip and made all 612 cells unclickable.
      */
     this.ruler = null;
-    this._wPlain = 0; this._wBar = 0; this._wLaneBar = 0;
+    this._wPlain = 0; this._wBar = 0; this._wLaneBar = 0; this._wOps = 0;
+    // -2, not -1 and not 0: 0 is a legal signature (no track shows ops) and a guard seeded to
+    // a state it can be in never fires on that state's first arrival.
+    this._opsSig = -2; this._opsShow = null;
     host.append(this.rails, this.harmLane, this.band);
   }
 
@@ -269,10 +283,14 @@ export class Tracker {
    * scroll. Re-measuring is not optional — every cell position, the hit test, the
    * header and the scroll clamp are derived from widths that just changed.
    */
-  applyLaneShow(laneShow, sig, laneHidden, hiddenSig) {
-    if (this._laneSig === sig && this._hiddenSig === hiddenSig) return false;
+  applyLaneShow(laneShow, sig, laneHidden, hiddenSig, opsShow, opsSig) {
+    if (this._laneSig === sig && this._hiddenSig === hiddenSig && this._opsSig === opsSig) {
+      return false;
+    }
     this._laneSig = sig;
     this._hiddenSig = hiddenSig;
+    this._opsSig = opsSig;
+    this._opsShow = opsShow;
     // KEPT, not just applied: the width model asks these for every track, including ones with
     // no DOM. Held by reference — the caller rebuilds them per frame into the same arrays.
     this._laneShow = laneShow;
@@ -292,13 +310,17 @@ export class Tracker {
    */
   applyLaneClasses() {
     const first = this._firstTrack | 0;
-    const show = this._laneShow, hidden = this._laneHidden;
+    const show = this._laneShow, hidden = this._laneHidden, ops = this._opsShow;
     for (let i = 0; i < this.pool.length; i++) {
       const lanes = this.pool[i]._lanes;
       if (!lanes) continue;
       for (let sIdx = 0; sIdx < lanes.length; sIdx++) {
         const t = first + sIdx;
         lanes[sIdx].classList.toggle('no-lane', !(show && show[t]));
+        // No note in this track carries an op and nobody has asked to see the column, so it
+        // takes no width. Applied here rather than at bind time for the same reason `no-lane`
+        // is: a slot repointed at another track is still wearing the previous track's answer.
+        lanes[sIdx].classList.toggle('no-ops', !!(ops && !ops[t]));
         // A lane whose parent is collapsed takes no width. NOT removed and not renumbered: the
         // track keeps its published index, so the cursor, the selection's field indices and
         // every track-keyed command are untouched. Collapse is what is drawn, never what exists.
@@ -313,7 +335,19 @@ export class Tracker {
     const left = this.trackLeft && track < this.trackCountMeasured
       ? this.trackLeft[track] : track * this.trackStride;
     const lb = this.laneBarW && track < this.trackCountMeasured ? this.laneBarW[track] : 0;
-    return this.stripLeft + left + lb + col * this.m.cellWidth;
+    /*
+     * The ops columns BEFORE `col` are gone on a track that hides them, so every field to their
+     * right moves left by one. `floor(col / FIELDS_PER_NOTE)` counts them: col 2 is itself the
+     * first ops column and has none before it, col 3 has one, col 5 still one, col 6 two.
+     *
+     * A hidden ops column asked for its own left therefore answers with the position of the
+     * cell after it, which is what a zero-width box's left edge IS. The cursor never sits there
+     * — you cannot click a `display: none` box and the ops cell is only reachable by clicking —
+     * but a caret drawn at a stale index lands somewhere honest rather than a cell too far.
+     */
+    const hidden = this._opsShow && !this._opsShow[track] && this._wOps
+      ? this._wOps * ((col / FIELDS_PER_NOTE) | 0) : 0;
+    return this.stripLeft + left + lb + col * this.m.cellWidth - hidden;
   }
 
   /** Which track a band-relative x falls in, or -1. Linear because tracks are no
@@ -364,9 +398,20 @@ export class Tracker {
     const wp = plain.offsetWidth, wb = bar.offsetWidth;
     const lbEl = bar.firstElementChild;
     const wl = lbEl ? lbEl.offsetWidth : 0;
+    /*
+     * THE OPS CELL'S OWN WIDTH, read rather than assumed equal to `--metrics-cell-width`.
+     *
+     * They are the same number today — every cell wears one width class — and deriving it from
+     * the metric would be the second authority the whole measured-geometry rule exists to
+     * forbid. The day the ops column gets its own width (it should: the run is monospace glyphs
+     * and the note columns are not), this reads the new one and nothing else changes.
+     */
+    const opsEl = plain.querySelector('.tk-cell.ops');
+    const wo = opsEl ? opsEl.offsetWidth : 0;
     if (!wp || !wb) return false;
-    if (wp === this._wPlain && wb === this._wBar && wl === this._wLaneBar) return false;
-    this._wPlain = wp; this._wBar = wb; this._wLaneBar = wl;
+    if (wp === this._wPlain && wb === this._wBar && wl === this._wLaneBar
+        && wo === this._wOps) return false;
+    this._wPlain = wp; this._wBar = wb; this._wLaneBar = wl; this._wOps = wo;
     return true;
   }
 
@@ -402,11 +447,24 @@ export class Tracker {
      */
     const n = trackCount | 0;
     if (!n) return 0;
-    // The narrowest a track can be is the plain class; anything wider means FEWER fit, so the
-    // narrowest is the safe divisor. Falling back to the whole track count before the classes
-    // are measured keeps a cold start identical to the old behaviour.
-    const min = this._wPlain || 0;
-    if (min < 1) return n;
+    /*
+     * The narrowest a track can be; anything wider means FEWER fit, so the narrowest is the safe
+     * divisor. Falling back to the whole track count before the classes are measured keeps a
+     * cold start identical to the old behaviour.
+     *
+     * A track that hides its ops columns is narrower than the plain class, so the plain class
+     * ALONE is no longer the floor — using it would size the pool for wide tracks, leave the
+     * right edge of a strip of narrow ones short of slots, and draw a gap that only appears on
+     * a project whose tracks carry no ops at all. Subtracted unconditionally: a too-small
+     * divisor over-allocates slots, which costs DOM and is correct, and the alternative
+     * under-allocates, which is a hole.
+     */
+    // The cold-start test is on the MEASUREMENT, not on the adjusted floor: subtracting the ops
+    // columns can only make the number smaller, so a `min < 1` check after the subtraction
+    // would stop distinguishing "not measured yet" from "measured, and narrow".
+    if (!this._wPlain) return n;
+    const min = Math.max(1, this._wPlain
+      - this._wOps * Math.max(1, ((this.cols || FIELDS_PER_NOTE) / FIELDS_PER_NOTE) | 0));
     return Math.min(n, Math.ceil(viewW / min) + 1 + OVERSCAN_TRACKS * 2);
   }
 
@@ -471,10 +529,26 @@ export class Tracker {
     return moved;
   }
 
+  /**
+   * HOW MUCH NARROWER TRACK `t` IS FOR HIDING ITS OPS COLUMNS — one cell per note column.
+   *
+   * Subtracted from a measured class rather than measured as a class of its own. Four
+   * exemplars (bar/plain x ops/no-ops) would be the tidier shape and it does not scale: the
+   * next per-track column doubles it again, and the ops column is already the second thing a
+   * track can individually drop. A width class times a per-track subtraction stays two reads
+   * however many of these there are.
+   */
+  opsSavingOf(t) {
+    if (!this._opsShow || this._opsShow[t]) return 0;
+    if (!this._wOps) return 0;
+    return this._wOps * Math.max(1, (this.cols / FIELDS_PER_NOTE) | 0);
+  }
+
   /** The width of track `t`, from its class. Defined for every track, drawn or not. */
   trackWidthOf(t) {
     if (this._laneHidden && this._laneHidden[t]) return 0;
-    return (this._laneShow && this._laneShow[t]) ? this._wBar : this._wPlain;
+    const base = (this._laneShow && this._laneShow[t]) ? this._wBar : this._wPlain;
+    return Math.max(0, base - this.opsSavingOf(t));
   }
 
   makeRow(trackCount, columns) {
@@ -565,7 +639,13 @@ export class Tracker {
       laneBars[t] = lb;
       laneEls[t] = tr;
       for (let c = 0; c < columns; c++) {
-        const cell = el('div', 'tk-cell');
+        /*
+         * `ops` marks the third field of each note group — the one the per-note op glyphs go
+         * in. It is a CLASS and not a `:nth-child` rule so the stylesheet never has to know
+         * that a track's first child is the lane readout; that assumption has already broken
+         * once here, when a spacer was added in front of the tracks.
+         */
+        const cell = el('div', c % FIELDS_PER_NOTE === OPS_FIELD ? 'tk-cell ops' : 'tk-cell');
         cell.dataset.track = String(t);
         cell.dataset.col = String(c);
         // Own the Text node up front. Assigning .textContent destroys and
@@ -773,7 +853,8 @@ export class Tracker {
     // widths, and every cell position, the hit test and the scroll clamp are
     // derived from those. Guarded on a bitmask, so a scroll costs one compare.
     const laneChanged = this.applyLaneShow(vm.laneShow, vm.laneShowSig | 0,
-                                           vm.laneHidden, vm.laneHiddenSig | 0);
+                                           vm.laneHidden, vm.laneHiddenSig | 0,
+                                           vm.opsShow, vm.opsShow ? vm.opsShowSig | 0 : -1);
 
     // A ring, not a list. Pool slot is `row mod poolSize`, so a row keeps the
     // same element until it leaves the window entirely — scrolling one row
@@ -1114,9 +1195,21 @@ export class Tracker {
     // left of wherever the user actually pointed.
     const inTrack = rel - this.trackLeft[track];
     if (inTrack < this.laneBarW[track]) return null;
-    const col = Math.min(this.cols - 1,
-                         Math.floor((inTrack - this.laneBarW[track]) / this.m.cellWidth));
-    return { row, track, col };
+    /*
+     * The VISIBLE index, which is the field column only when every column is drawn.
+     *
+     * On a track that hides its ops columns the drawn cells are 0,1,3,4,6,7 — so the third box
+     * along is field 3, not field 2, and without this the pointer put the cursor one field to
+     * the left for every note group past the first. `cellLeft` already subtracts the same
+     * columns going the other way; this is its inverse and the two have to be read together.
+     */
+    const vis = Math.floor((inTrack - this.laneBarW[track]) / this.m.cellWidth);
+    let col = vis;
+    if (this._opsShow && !this._opsShow[track]) {
+      const per = FIELDS_PER_NOTE - 1;                  // drawn cells per note group
+      col = ((vis / per) | 0) * FIELDS_PER_NOTE + (vis % per);
+    }
+    return { row, track, col: Math.max(0, Math.min(this.cols - 1, col)) };
   }
 
   /** What an agent (or a test) asks. Structure, not pixels. */

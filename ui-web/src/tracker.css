@@ -163,6 +163,15 @@
    measure() sees the new geometry. */
 .tk-track.no-lane > .tk-lane-bar { display: none; }
 
+/* A track no note of which carries a per-note op. The engine publishes the widest run per
+   track (kShmVersion 34) and 0 means the column has never held anything — so a drum track
+   stops spending a third of its width on three empty cells it will never fill.
+   `display: none` for the same reason `.no-lane` uses it: the track's box has to genuinely
+   shrink, or measure() would size the strip for a column that is not drawn. It is reachable
+   again with `ops <track> on`, which is what stops this from being a column you can never
+   type the first op into. */
+.tk-track.no-ops > .tk-cell.ops { display: none; }
+
 /* A lane whose parent is collapsed. Zero width rather than `display: none` on the
    track itself, so the element stays in the flow and measure() reads a real box for
    it — a removed track would make offsetLeft skip an index and every lane after it
@@ -413,6 +422,27 @@
 .hdel:hover { color: var(--uni-text-fx); }
 /* A folded lane has no room for anything, and its header has no border either. */
 .htrack.folded .hdel { display: none; }
+
+/* THE OPS COLUMN TOGGLE, beside the remove control on the left, absolutely positioned for the
+   same reason: a header is sized from the measured track box and a control in its flow would
+   push the name off centre by exactly the amount that is supposed to be invisible.
+   Persistently visible when `on`, because it is then the ONLY reason the column is there —
+   unlike ✕, whose action is available from the chrome as well. `.hidden` is the case where the
+   engine's own op width is showing the column and this control has nothing to say. */
+.hops {
+  position: absolute; left: 14px; top: 50%;
+  transform: translateY(-50%);
+  font-size: 9px; line-height: 10px;
+  color: var(--uni-text-empty);
+  cursor: pointer;
+  opacity: 0;
+  padding: 0 2px;
+}
+.htrack:hover .hops { opacity: 1; }
+.hops.on { opacity: 1; color: var(--uni-text-fx); }
+.hops:hover { color: var(--uni-text-fx); }
+.hops.hidden { display: none; }
+.htrack.folded .hops { display: none; }
 
 /* ADD A TRACK, at the end of the row — the position the new lane will occupy. */
 .hadd {
