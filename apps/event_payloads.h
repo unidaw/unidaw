@@ -308,8 +308,43 @@ enum class UiCommandType : uint16_t {
 
   /// A hand-drawn multi-point envelope: the pencil, where SamplerSetEnvelope (82) is the sliders.
   /// Arrives over BulkChunk because N points do not fit in 40 bytes.
-  SamplerSetEnvelopePoints = 84,  // next free 85
+  SamplerSetEnvelopePoints = 84,
+
+  /// Sets a sampler modulator's LFO. ModKind::Lfo has been in SamplerModulator and in the saved
+  /// project since the sampler shipped, and nothing in the engine or the voice ever looked at
+  /// it — a modulator kind that saved, loaded, round-tripped perfectly and made no sound.
+  ///
+  /// The LFO is NOTE-RETRIGGERED: its phase is a pure function of the voice's age, exactly like
+  /// the envelope runner. Two notes at the same tick therefore sound identical whatever the
+  /// transport did beforehand, and the value at a frame does not depend on where the block
+  /// boundaries fell. A timeline-locked LFO is right for a patcher control signal and wrong
+  /// inside a voice; `phaseOffset` is how you move it deliberately.
+  SamplerSetLfo = 85,  // next free 86
 };
+
+// SAMPLER SET LFO (opcode 85). 40 bytes.
+//
+// Two depths, and they mean different things: `depth` is the LFO's OWN amplitude (the shape it
+// makes) and `depthMilli` is how much of that reaches the target (how far it moves it). Keeping
+// them apart is what lets a preset carry "a gentle 6 Hz wobble" and a slot decide how much of it
+// to use, which is the same separation the envelopes already have.
+struct UiSamplerLfoPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerSetLfo);
+  uint16_t flags = 0;  // kSamplerEnvAmp: address by TARGET rather than by modulator id
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint32_t modSetId = 0;
+  uint16_t modulatorId = 0;
+  uint8_t target = 0;  // kSamplerEnvTarget*
+  uint8_t reserved = 0;
+  float frequencyHz = 1.0f;
+  float depth = 1.0f;
+  float bias = 0.0f;
+  float phaseOffset = 0.0f;  // in turns
+  int16_t depthMilli = 1000;
+  uint16_t reserved2 = 0;
+};
+static_assert(sizeof(UiSamplerLfoPayload) == 40, "UiSamplerLfoPayload must be 40 bytes");
 
 // BULK CHUNK (opcode 83). 40 bytes like every other ring payload; 32 of them are cargo.
 //
@@ -782,6 +817,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::SamplerSetEnvelope: return "sampler_set_envelope";
     case UiCommandType::BulkChunk: return "bulk_chunk";
     case UiCommandType::SamplerSetEnvelopePoints: return "sampler_set_envelope_points";
+    case UiCommandType::SamplerSetLfo: return "sampler_set_lfo";
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
     case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";

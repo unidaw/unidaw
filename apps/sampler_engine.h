@@ -374,7 +374,34 @@ class SamplerRuntime {
         }
         return u;
       };
+      // LFOs. Everything the voice needs is converted HERE — frequency to cycles per frame,
+      // depth into the target's own units — so the per-sample path does no unit arithmetic at
+      // all and the conversion lives at one boundary, exactly as the envelope clock does.
+      //
+      // The target scalings are the same as the envelopes': 6 octaves on cutoff, 4800 cents on
+      // pitch, the full pan range, the filter's Q range. One modulator's depth means the same
+      // thing whichever kind it is.
+      auto fillLfo = [&](const SamplerModulator& m, float targetScale,
+                         SamplerVoiceSpec::VoiceLfo& out) {
+        const float d = static_cast<float>(m.depthMilli) / 1000.0f;
+        out.cyclesPerFrame =
+            static_cast<float>(m.lfo.frequency_hz / std::max(1.0, snap_->sampleRate));
+        out.phase0 = m.lfo.phase_offset;
+        out.amp = m.lfo.depth * d * targetScale;
+        out.bias = m.lfo.bias * d * targetScale;
+        out.active = out.amp != 0.0f || out.bias != 0.0f;
+      };
       for (const auto& m : mod->modulators) {
+        if (m.kind == ModKind::Lfo) {
+          switch (m.target) {
+            case ModTarget::Volume:    fillLfo(m, 1.0f, spec.volLfo); break;
+            case ModTarget::Panning:   fillLfo(m, 1.0f, spec.panLfo); break;
+            case ModTarget::Pitch:     fillLfo(m, 4800.0f, spec.pitchLfo); break;
+            case ModTarget::Cutoff:    fillLfo(m, 6.0f, spec.cutoffLfo); break;
+            case ModTarget::Resonance: fillLfo(m, 9.3f, spec.resLfo); break;
+          }
+          continue;
+        }
         if (m.kind != ModKind::Envelope || m.env.empty()) {
           continue;
         }

@@ -225,6 +225,31 @@ pub const SAMPLER_MARKER_REMOVE: u16 = 2;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
+/// SamplerSetLfo (85). ModKind::Lfo has been in the saved project since the sampler shipped and
+/// nothing rendered it — a modulator kind that round-tripped perfectly and made no sound.
+///
+/// Two depths, meaning different things: `depth` is the LFO's OWN amplitude and `depth_milli` is
+/// how much of it reaches the target. The LFO is note-retriggered, so its phase is a pure
+/// function of the voice's age and a render does not depend on when playback started.
+pub struct UiSamplerLfoPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub mod_set_id: u32,
+    pub modulator_id: u16,
+    pub target: u8,
+    pub reserved: u8,
+    pub frequency_hz: f32,
+    pub depth: f32,
+    pub bias: f32,
+    pub phase_offset: f32,
+    pub depth_milli: i16,
+    pub reserved2: u16,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 /// BulkChunk (83) — one chunk of a longer command. The inward bulk carrier.
 ///
 /// Outbound has SHM regions; inbound had only the ring's 40-byte payload, so any variable-length
@@ -993,6 +1018,9 @@ pub enum UiCommandType {
     BulkChunk = 83,
     /// A hand-drawn multi-point envelope, carried over BulkChunk.
     SamplerSetEnvelopePoints = 84,
+
+    /// Sets a sampler modulator's LFO — note-retriggered, on any modulation target.
+    SamplerSetLfo = 85,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -2058,6 +2086,7 @@ mod wire_layout {
             UiSetRowOpsPayload,
             UiSamplerEnvelopePayload,
             UiBulkChunkPayload,
+            UiSamplerLfoPayload,
         );
     }
 
@@ -2076,6 +2105,7 @@ mod wire_layout {
         assert_eq!(std::mem::size_of::<UiSetRowOpsPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerEnvelopePayload>(), 40);
         assert_eq!(std::mem::size_of::<UiBulkChunkPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerLfoPayload>(), 40);
         // Not a ring payload — the ASSEMBLED shapes, which the engine memcpys.
         assert_eq!(std::mem::size_of::<UiSamplerEnvPointsHeader>(), 32);
         assert_eq!(std::mem::size_of::<UiEnvPointWire>(), 8);

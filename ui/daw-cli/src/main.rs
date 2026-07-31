@@ -43,7 +43,8 @@ daw-cli — control surface for a running engine
   daw-cli do sampler-marker --track N --source 1 --op add|move|remove [--marker ID] [--frame F]
   daw-cli do set-row-ops --track N --note ID [--clip ID] [--ret N] [--prob N] [--sound N] [--offset N] [--delay TICKS] [--clear ret,prob,sound,offset,delay]
   daw-cli do sampler-env --track N [--device ID] [--mod-set ID] [--amp|--modulator ID] --attack US --decay US --sustain MILLI --release US [--sync] [--rate MILLI] [--target amp|pan|pitch|cutoff|res] [--depth MILLI]
-  daw-cli do sampler-env-draw --track N [--target amp|pan|pitch|cutoff|res] --points t,v[,tension[,step]];... [--sustain-loop A,B] [--release-loop A,B] [--release-fade US] [--sync] [--rate MILLI]
+  daw-cli do sampler-env-draw --track N [--target amp|pan|pitch|cutoff|res] --points t,v[,tension[,step]];...
+  daw-cli do sampler-lfo --track N [--target amp|pan|pitch|cutoff|res] --hz F [--depth F] [--bias F] [--phase F] [--amount MILLI] [--sustain-loop A,B] [--release-loop A,B] [--release-fade US] [--sync] [--rate MILLI]
                                    nudge one boundary — ids are stable, so no row moves
   daw-cli do sampler-emit-rows --track N --source 1 [--at TICK] [--step TICKS] [--column C]
                                    write the pattern that reproduces the chop
@@ -2425,6 +2426,53 @@ fn main() {
                                 eprintln!("daw-cli: {err}");
                                 1
                             }
+                        }
+                    }
+                }
+                Some(&"sampler-lfo") => {
+                    use daw_bridge::layout as L;
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let mod_set = flag_u64(&args, "--mod-set", Some(0)).unwrap_or(0) as u32;
+                    let amount = flag_u64(&args, "--amount", Some(1000)).unwrap_or(1000) as i16;
+                    let fl = |key: &str, dflt: f32| -> f32 {
+                        flag(&args, key).and_then(|r| r.parse::<f32>().ok()).unwrap_or(dflt)
+                    };
+                    let target = match flag(&args, "--target").as_deref() {
+                        None | Some("amp") | Some("volume") | Some("vol") => 0u8,
+                        Some("pan") | Some("panning") => 1u8,
+                        Some("pitch") => 2u8,
+                        Some("cutoff") | Some("filter") => 3u8,
+                        Some("res") | Some("resonance") => 4u8,
+                        Some(other) => {
+                            eprintln!("daw-cli: --target expects amp|pan|pitch|cutoff|res, got {other:?}");
+                            return;
+                        }
+                    };
+                    let payload = L::UiSamplerLfoPayload {
+                        command_type: UiCommandType::SamplerSetLfo as u16,
+                        flags: SAMPLER_ENV_AMP,
+                        track_id: track,
+                        device_id: device,
+                        mod_set_id: mod_set,
+                        modulator_id: 0,
+                        target,
+                        reserved: 0,
+                        frequency_hz: fl("--hz", 1.0),
+                        depth: fl("--depth", 1.0),
+                        bias: fl("--bias", 0.0),
+                        phase_offset: fl("--phase", 0.0),
+                        depth_milli: amount,
+                        reserved2: 0,
+                    };
+                    match handle.send_sampler_lfo(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"sampler-lfo\", \"track\": {track}, \"target\": {target} }}");
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            1
                         }
                     }
                 }

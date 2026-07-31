@@ -11068,6 +11068,106 @@ struct TrackRuntime {
       return;
     }
 
+    // ---- SAMPLER SET LFO (85). The modulator kind that saved, loaded and made no sound.
+    if (entry.size == sizeof(daw::UiSamplerLfoPayload) &&
+        commandType == daw::UiCommandType::SamplerSetLfo) {
+      daw::UiSamplerLfoPayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (p.trackId < tracks.size()) {
+          runtime = tracks[p.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("sampler.lfo_rejected")
+            .field("track", p.trackId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      bool applied = false;
+      uint16_t targetId = 0;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::Sampler ||
+              (p.deviceId != 0 && d.id != p.deviceId)) {
+            continue;
+          }
+          for (auto& ms : d.sampler.modSets) {
+            if (p.modSetId != 0 && ms.id != p.modSetId) {
+              continue;
+            }
+            daw::SamplerModulator* mod = nullptr;
+            const auto target =
+                static_cast<daw::ModTarget>(std::min<uint8_t>(p.target, 4));
+            if ((p.flags & daw::kSamplerEnvAmp) != 0) {
+              for (auto& m : ms.modulators) {
+                if (m.kind == daw::ModKind::Lfo && m.target == target) {
+                  mod = &m;
+                  break;
+                }
+              }
+              if (mod == nullptr) {
+                daw::SamplerModulator fresh;
+                fresh.id = ms.nextModulatorId++;
+                fresh.kind = daw::ModKind::Lfo;
+                fresh.target = target;
+                fresh.apply = target == daw::ModTarget::Volume ? 1 : 0;
+                ms.modulators.push_back(fresh);
+                mod = &ms.modulators.back();
+              }
+            } else {
+              for (auto& m : ms.modulators) {
+                if (m.id == p.modulatorId) {
+                  mod = &m;
+                  break;
+                }
+              }
+            }
+            if (mod == nullptr) {
+              break;
+            }
+            mod->kind = daw::ModKind::Lfo;
+            mod->target = target;
+            // NEGATIVE OR ABSURD RATES ARE REFUSED BY CLAMP, not by rejection: a frequency is a
+            // continuous control someone will sweep, and refusing mid-sweep is worse than
+            // stopping at the end of the range. 0.01..200 Hz spans a bar-long swell to an
+            // audible-rate buzz, which is the whole musical range of the thing.
+            mod->lfo.frequency_hz = std::clamp(p.frequencyHz, 0.01f, 200.0f);
+            mod->lfo.depth = std::clamp(p.depth, -4.0f, 4.0f);
+            mod->lfo.bias = std::clamp(p.bias, -4.0f, 4.0f);
+            mod->lfo.phase_offset = p.phaseOffset;
+            mod->depthMilli = std::clamp<int16_t>(p.depthMilli, -1000, 1000);
+            targetId = mod->id;
+            applied = true;
+            break;
+          }
+          if (applied) {
+            break;
+          }
+        }
+        if (applied) {
+          refreshSamplerForTrack(*runtime);
+        }
+      }
+      if (!applied) {
+        DAW_EVENT("sampler.lfo_rejected")
+            .field("track", p.trackId)
+            .field("mod_set", p.modSetId)
+            .field("reason", "no_such_mod_set_or_modulator");
+        return;
+      }
+      DAW_EVENT("sampler.lfo_set")
+          .field("track", p.trackId)
+          .field("modulator", static_cast<uint32_t>(targetId))
+          .field("target", static_cast<uint32_t>(p.target))
+          .field("hz_milli", static_cast<uint64_t>(p.frequencyHz * 1000.0f))
+          .field("depth_milli", static_cast<int64_t>(p.depthMilli));
+      return;
+    }
+
     // ---- SAMPLER SET ENVELOPE (82). The ADSR, which nothing could reach before.
     if (entry.size == sizeof(daw::UiSamplerEnvelopePayload) &&
         commandType == daw::UiCommandType::SamplerSetEnvelope) {

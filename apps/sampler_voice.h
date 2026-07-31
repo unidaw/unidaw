@@ -98,6 +98,24 @@ struct SamplerVoiceSpec {
   float panDepth = 0.0f;
   const EnvShape* resonanceEnv = nullptr;
   float resonanceDepth = 0.0f;  // in Q units at full envelope; the filter's range is 0.7..10
+
+  // ---- LFOs. ModKind::Lfo was in the model and in the file format from the start, and NOTHING
+  // rendered it: a modulator kind that saved, loaded, and made no sound. This is it.
+  //
+  // NOTE-RETRIGGERED, not free-running, and that is a decision. The phase is a pure function of
+  // the voice's age, exactly like EnvRunner — so two notes at the same tick sound identical
+  // whatever the transport did before them, and the value at frame f does not depend on where
+  // the block boundaries fell. A timeline-locked LFO is the right thing for a patcher control
+  // signal and the wrong thing inside a voice, where it would make a render depend on when
+  // playback started. `phaseOffset` is how you move it deliberately.
+  struct VoiceLfo {
+    float cyclesPerFrame = 0.0f;
+    float phase0 = 0.0f;  // in turns
+    float amp = 0.0f;     // the LFO's own depth, already scaled into TARGET units
+    float bias = 0.0f;    // likewise, so the voice does no unit conversion at all
+    bool active = false;
+  };
+  VoiceLfo volLfo, panLfo, pitchLfo, cutoffLfo, resLfo;
   double sampleRate = 48000.0;
 };
 
@@ -391,7 +409,9 @@ class SamplerVoice {
     //
     // Per block would also make the output depend on where the block boundaries fall, which is
     // the determinism failure the pitch envelope's comment already argues against.
-    const bool panMoving = spec_.panEnv && !spec_.panEnv->empty() && spec_.panDepth != 0.0f;
+    const bool panMoving =
+        (spec_.panEnv && !spec_.panEnv->empty() && spec_.panDepth != 0.0f) ||
+        spec_.panLfo.active;
 
     const uint64_t stopFrame = spec_.reverse ? startFrame_ : endFrame_;
     for (uint32_t i = 0; i < numFrames; ++i) {
@@ -418,7 +438,12 @@ class SamplerVoice {
           active_ = false;
         }
       }
-      const float g = amp * gainSmoothed_;
+      float g = amp * gainSmoothed_;
+      if (spec_.volLfo.active) {
+        // TREMOLO. Multiplies, like every other Volume modulator: 1 + v, so a depth of 1 swings
+        // between silence and double and a depth of 0.3 is the gentle thing people actually use.
+        g *= std::clamp(1.0f + lfoAt(spec_.volLfo, age_), 0.0f, 2.0f);
+      }
 
       // ---- PITCH MODULATION, per sample, and the MIP LEVEL FOLLOWS IT.
       //
@@ -427,8 +452,12 @@ class SamplerVoice {
       // per SAMPLE, not per block: choosing it per block would make the output depend on where
       // the block boundaries fall, which is the determinism failure this whole design is built
       // to avoid. It costs comparisons rather than a log2 — the thresholds are powers of two.
-      if (spec_.pitchEnv && !spec_.pitchEnv->empty() && spec_.pitchDepthCents != 0.0f) {
-        const float cents = pitchEnv_.valueAt(age_) * spec_.pitchDepthCents;
+      if ((spec_.pitchEnv && !spec_.pitchEnv->empty() && spec_.pitchDepthCents != 0.0f) ||
+          spec_.pitchLfo.active) {
+        float cents = spec_.pitchLfo.active ? lfoAt(spec_.pitchLfo, age_) : 0.0f;
+        if (spec_.pitchEnv && !spec_.pitchEnv->empty() && spec_.pitchDepthCents != 0.0f) {
+          cents += pitchEnv_.valueAt(age_) * spec_.pitchDepthCents;
+        }
         const double mul = std::pow(2.0, static_cast<double>(cents) / 1200.0);
         step_ = static_cast<uint64_t>(static_cast<double>(baseStep_) * mul);
         if (spec_.quality != 0 && spec_.source.mipCount > 0) {
@@ -444,8 +473,11 @@ class SamplerVoice {
 
       float glNow = gl, grNow = gr;
       if (panMoving) {
-        panGains(std::clamp(p + panEnv_.valueAt(age_) * spec_.panDepth, -1.0f, 1.0f),
-                 glNow, grNow);
+        float pan = p + lfoAt(spec_.panLfo, age_);
+        if (spec_.panEnv && !spec_.panEnv->empty()) {
+          pan += panEnv_.valueAt(age_) * spec_.panDepth;
+        }
+        panGains(std::clamp(pan, -1.0f, 1.0f), glNow, grNow);
       }
 
       const uint32_t dst = offsetInBlock + i;
@@ -484,6 +516,9 @@ class SamplerVoice {
         // filtering a drum kit that asked for none is a sound nobody chose.
         if (spec_.filterType != 0) {
           float fc = spec_.cutoffHz;
+          if (spec_.cutoffLfo.active) {
+            fc *= std::pow(2.0f, lfoAt(spec_.cutoffLfo, age_));  // the wobble
+          }
           if (spec_.cutoffEnv && !spec_.cutoffEnv->empty() && spec_.cutoffDepth != 0.0f) {
             // Depth is in OCTAVES, not hertz. A filter envelope that moved a fixed number of
             // hertz would be a different musical gesture at every cutoff setting — barely
@@ -495,8 +530,12 @@ class SamplerVoice {
           float q = spec_.resonance;
           if (spec_.resonanceEnv && !spec_.resonanceEnv->empty() &&
               spec_.resonanceDepth != 0.0f) {
-            q = std::clamp(q + resonanceEnv_.valueAt(age_) * spec_.resonanceDepth, 0.7f, 10.0f);
+            q += resonanceEnv_.valueAt(age_) * spec_.resonanceDepth;
           }
+          if (spec_.resLfo.active) {
+            q += lfoAt(spec_.resLfo, age_);
+          }
+          q = std::clamp(q, 0.7f, 10.0f);
           SvfFilter& f1 = (ch == 0) ? filtL_ : filtR_;
           s = f1.process(s, fc, q, spec_.filterType, spec_.sampleRate);
           if (spec_.filterType == 2) {  // LP24 is two LP12s, so "steeper" means what it says
@@ -695,6 +734,15 @@ class SamplerVoice {
   SamplerVoiceSpec spec_{};
   EnvRunner env_{};
   EnvRunner cutoffEnv_{}, pitchEnv_{}, panEnv_{}, resonanceEnv_{};
+
+  // sin over TURNS, so the phase arithmetic stays in the same units the config uses.
+  static float lfoAt(const SamplerVoiceSpec::VoiceLfo& l, uint64_t frame) {
+    if (!l.active) {
+      return 0.0f;
+    }
+    const float turns = l.phase0 + l.cyclesPerFrame * static_cast<float>(frame);
+    return std::sin(turns * 2.0f * static_cast<float>(M_PI)) * l.amp + l.bias;
+  }
   SvfFilter filtL_{}, filtR_{}, filtL2_{}, filtR2_{};
   uint64_t pos_ = 0;  // 32.32 fixed point, in level-0 source frames
   uint64_t step_ = 0;

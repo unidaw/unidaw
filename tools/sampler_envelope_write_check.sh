@@ -11,11 +11,13 @@
 # the envelope never reaching a voice, which is the failure that matters. So this renders the
 # same note three ways and listens to the shape.
 #
-# SIX PROPERTIES:
+# SEVEN PROPERTIES:
 #   ATTACK    a long attack makes the note START QUIET and arrive later. Measured as the ratio of
 #             early energy to late energy, which is the shape rather than the level
 #   SUSTAIN   a low sustain holds the note QUIETER after the decay than a full one does
 #   RELEASE   a long release makes the sound OUTLAST its note-off
+#   LFOs      ModKind::Lfo renders at all. A pitch LFO is vibrato, measured as the note's
+#             PERIOD wandering — which amplitude, filter and pan modulation cannot fake
 #   PANNING   a pan envelope MOVES the sound across the stereo field, which neither a
 #             volume nor a filter envelope can imitate
 #   TARGETS   an envelope can drive CUTOFF, not only volume. Asserted on BRIGHTNESS (the
@@ -294,6 +296,70 @@ raise SystemExit(0 if moved > 100 and moved > still * 4 else 1)" || \
   fail "a PAN envelope did not move the sound across the stereo field: the right channel's share
         went $PAN_EARLY -> $PAN_LATE, against $FLAT_EARLY -> $FLAT_LATE with no envelope at all.
         The pan envelope used to be started, released, and never evaluated"
+
+# ---- LFOs. ModKind::Lfo was in SamplerModulator and in the saved project from the day the
+# sampler shipped, and nothing in the engine or the voice ever looked at it: a modulator kind
+# that saved, loaded, round-tripped perfectly and made no sound.
+#
+# A PITCH LFO is vibrato, and vibrato is measurable as something no other modulator can fake:
+# the note's period WANDERS. Measured by counting zero crossings in successive 50 ms windows — a
+# steady tone gives the same count every time, a vibrato'd one does not. Amplitude, filter and
+# pan modulation all leave the crossing count alone.
+#
+# 50 ms windows and a deep swing on purpose. The first version used 20 ms at 220 Hz, which is
+# about nine crossings — too few for an integer count to resolve a modest wobble, so a vibrato
+# that was plainly working measured a spread of 3 and failed. The measurement has to be able to
+# SEE the thing before its threshold means anything.
+lfoShape() {  # like shape(), but sends sampler-lfo
+  local name="$1"; shift
+  local shm="/lfochk_$$_$name"
+  start_engine "$shm" "$TMP/$name.eng.log"
+  DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do load env --force >/dev/null 2>&1 || true
+  sleep 1.2
+  DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do sampler-lfo "$@" \
+    >/dev/null 2>&1 || fail "sampler-lfo was refused for '$name'"
+  sleep 0.6
+  DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do save "$name" --force >/dev/null 2>&1 || true
+  sleep 1.5
+  kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
+  ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/lforn_$$_$name" \
+      ./daw_engine --project "$name" --render "$name" --run-seconds 6 --block-size 256 \
+      >"$TMP/$name.render.log" 2>&1 ) || fail "the '$name' render exited non-zero"
+  [ -s "$TMP/$name.wav" ] || fail "the '$name' render wrote no output"
+}
+wobble() {  # wobble <wav> — spread of the zero-crossing count across 20 ms windows, in the note
+  python3 - "$1" <<'PYW'
+import sys, wave, struct
+w = wave.open(sys.argv[1], 'rb')
+ch, n, sr = w.getnchannels(), w.getnframes(), w.getframerate()
+s = struct.unpack('<' + 'h' * (n * ch), w.readframes(n)); w.close()
+win = int(0.05 * sr)
+counts = []
+start = int(0.55 * sr)
+while start + win < int(0.98 * sr):
+    c = 0
+    prev = s[start * ch]
+    for i in range(start + 1, start + win):
+        v = s[i * ch]
+        if (prev < 0) != (v < 0):
+            c += 1
+        prev = v
+    counts.append(c)
+    start += win
+if not counts:
+    print(0); raise SystemExit(0)
+print(max(counts) - min(counts))
+PYW
+}
+lfoShape vibrato --track 0 --target pitch --hz 6 --depth 1 --amount 300
+VIB="$(wobble "$TMP/vibrato.wav")"
+STEADY="$(wobble "$TMP/flat.wav")"
+echo "  pitch LFO:    crossing spread $VIB (steady tone: $STEADY)"
+python3 -c "
+raise SystemExit(0 if $VIB > max(4, $STEADY * 3) else 1)" || \
+  fail "a PITCH LFO produced no vibrato: the zero-crossing count varied by $VIB across the note,
+        against $STEADY for a steady tone. ModKind::Lfo has been in the file format from the
+        start; if this does not move, nothing is rendering it"
 
 echo "sampler_envelope_write_check: PASS — the ADSR is reachable, and it is audible in all three"
 echo "                              stages, on a mod set that started with no modulators at all"
