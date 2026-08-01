@@ -110,3 +110,25 @@
   background: var(--base-accent);
   pointer-events: none; z-index: 3;
 }
+
+/* VELOCITY EDIT MODE. The roll is tinted while it is on, because a mode you cannot see is a
+   modifier with extra steps — and this one changes what a vertical drag MEANS, which is the
+   difference between moving a note and changing how hard it is played. */
+.pr.vel-edit .pr-note { cursor: ns-resize; }
+.pr.vel-edit .pr-band { background: var(--uni-surface-selection); }
+
+/* The number, while a drag is proposing one. Opacity is not a readable quantity: you can see
+   that a note got louder and not that it is now 96, so a gesture whose only output is an
+   opacity needs a number beside it or it cannot be aimed. */
+.pr-vel-readout {
+  position: absolute; top: 4px; right: 8px;
+  z-index: 4;
+  font-family: var(--font-mono); font-size: var(--font-size-inst);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--base-accent);
+  background: var(--uni-surface-tracker-bg);
+  border: 1px solid var(--uni-rule-track);
+  border-radius: 2px;
+  padding: 1px 6px;
+  pointer-events: none;
+}

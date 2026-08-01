@@ -82,6 +82,7 @@ export const SURFACE_KEYS = {
     title: 'PIANO ROLL',
     keys: [
       ['click', 'write a note, snapped to the lane grid'],
+      ['/ vel-edit', 'drag a note to set its velocity — up is louder'],
       ['click note', 'select'],
       ['drag a note', 'move it (snapped to the lane grid)'],
       ['drag its right edge', 'change its length'],
