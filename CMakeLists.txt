@@ -679,6 +679,14 @@ set_tests_properties(sampler_loop PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DI
 # every per-track field the engine publishes has a reader, and the values come back in the units
 # they were SENT in — a name comparison would pass on a read-back that leaked the wire's swing
 # bias, which is exactly what its negative control demonstrates.
+# Every published ROW OP can be read back, and the note id that addresses one is visible —
+# set-row-ops is addressed by an id `get notes` did not print, so the write path needed an
+# identifier the read path would not give you.
+add_test(NAME note_readback
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/note_readback_check.sh
+)
+set_tests_properties(note_readback PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME track_readback
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/track_readback_check.sh
 )

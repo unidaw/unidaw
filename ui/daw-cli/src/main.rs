@@ -410,14 +410,31 @@ fn get_notes(handle: &EngineHandle, args: &[String]) -> i32 {
         // and this output could not tell it from a note that sounds. A test written against it
         // asserted the note EXISTED and passed against an engine that stored length 0.
         let duration = note.t_off.saturating_sub(note.t_on);
+        // THE ROW OPS, AND THE ID THAT ADDRESSES THEM. All six ops are published in UiClipNote
+        // and all six were shown by nothing: `do set-row-ops` could write them and the only way
+        // to read one back was to save the project and read the file — which is the exact
+        // complaint sampler_kit_check's header makes about the kit, one feature along.
+        //
+        // note_id matters most and is the reason this was a hole rather than an inconvenience:
+        // set-row-ops is ADDRESSED BY IT (`--note ID`), so the write path needed an identifier
+        // the read path would not give you. An agent had to guess, or track ids it never saw.
+        //
+        // Provenance too: a note that is MUTED on this appearance, or an ADD that exists only
+        // here, is a different note from one the clip carries — and both drew identically.
+        let muted = note.placement_flags & 1 != 0;
+        let is_add = note.placement_flags & 2 != 0;
         println!(
             "    {{ \"nanotick\": {}, \"duration\": {duration}, \"pitch\": {}, \"velocity\": {}, \"column\": {}, \
-             \"dev\": {}, \"delay\": {}, \"sounds_at\": {} }}{comma}",
+             \"dev\": {}, \"delay\": {}, \"sounds_at\": {}, \"note_id\": {}, \"retrigger\": {}, \
+             \"probability\": {}, \"sound\": {}, \"sound_offset\": {}, \"retrig_ramp\": {}, \
+             \"trig_condition\": {}, \"placement_id\": {}, \"muted\": {muted}, \"is_add\": {is_add} }}{comma}",
             note.t_on, note.pitch, note.velocity, note.column,
             note.dev_nanoticks, note.delay_nanoticks,
             // The AUTHORED tick plus both offsets — quantize moves the tick and the row-op
             // delay is added after it, so the sounding position is the sum.
-            note.t_on as i64 + note.dev_nanoticks as i64 + note.delay_nanoticks as i64
+            note.t_on as i64 + note.dev_nanoticks as i64 + note.delay_nanoticks as i64,
+            note.note_id, note.retrigger, note.probability, note.sound, note.sound_offset,
+            note.retrig_ramp, note.trig_condition, note.placement_id
         );
     }
     println!("  ]");
