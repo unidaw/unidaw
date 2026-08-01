@@ -880,6 +880,56 @@ test('every console command can actually run', () => {
   assert.deepEqual(broken, [], `console commands calling nothing:\n  ${broken.join('\n  ')}`);
 });
 
+test('the ? overlay records no limitations, because it is not reviewed', async () => {
+  /*
+   * THE OVERLAY IS A KEY REFERENCE, NOT A PLACE TO RECORD WHAT IS MISSING.
+   *
+   * Three of its lines were stale at once, and all three were stale in the same way —
+   * each recorded an absence that had since been built:
+   *
+   *   "clip edits — not implemented, needs engine commands"  (they all work)
+   *   "one global graph; the engine does not run per-device graphs yet"  (it does)
+   *   "** = notes a cell cannot show apart"  (the cell draws "4x C-4" now)
+   *
+   * The manual had all three written down as known-stale, which is the tell: a claim
+   * nobody re-checks is indistinguishable from a real limitation, and the overlay is
+   * hand-maintained against a handler that moves under it.
+   *
+   * So limitations live in docs/MANUAL.md, which gets read end to end, and this table
+   * says only what a key does. A line that needs a caveat is a line whose key needs
+   * fixing.
+   */
+  const { GLOBAL_KEYS, SURFACE_KEYS } = await import('../src/help.js');
+  const CLAIMS = /not implemented|does not .* yet|\byet\b|cannot|can't|no command|needs engine|unimplemented|coming soon|todo/i;
+  const bad = [];
+  const scan = (where, rows) => {
+    for (const [key, text] of rows) if (CLAIMS.test(text)) bad.push(`${where} "${key}": ${text}`);
+  };
+  scan('global', GLOBAL_KEYS);
+  for (const [view, def] of Object.entries(SURFACE_KEYS)) scan(view, def.keys);
+  assert.deepEqual(bad, [],
+    'the ? overlay states a limitation — put it in docs/MANUAL.md, which is reviewed');
+});
+
+test('the manual states the real number of commands', async () => {
+  /*
+   * A COUNT IN PROSE IS A FACT THAT ROTS SILENTLY. The manual said "Ninety-one
+   * commands" while there were ninety-seven — stale by five before anything was added
+   * to it, and nothing could have noticed, because a wrong number reads exactly like a
+   * right one. The same defect as a recorded limitation nobody re-checks.
+   *
+   * So the number is checked against the command table rather than trusted. If this
+   * fails, the manual is wrong: update the sentence, don't relax the check.
+   */
+  const { readFileSync } = await import('node:fs');
+  const md = readFileSync(new URL('../../docs/MANUAL.md', import.meta.url), 'utf8');
+  const m = md.match(/^(\d+) commands\./m);
+  assert.ok(m, 'the command reference states a count as "<n> commands."');
+  const actual = Object.keys(createCommands(stubApi())).length;
+  assert.equal(Number(m[1]), actual,
+               `the manual says ${m[1]} commands and there are ${actual}`);
+});
+
 test('every command’s prose and its schema describe the same arguments', () => {
   const cmds = createCommands(stubApi());
   const names = Object.keys(cmds);

@@ -7084,10 +7084,17 @@ addEventListener('keydown', (e) => {
     if (k === '+' || k === '=') { state.arrangeZoom = Math.max(0, state.arrangeZoom - 1); return done(); }
     if (k === ' ') { cmd('play'); return done(); }
     if (k === 'Escape') { state.selectedPlacement = null; state.reject = null; return done(); }
-    // Clip edits need engine commands that do not exist yet (move/resize/
-    // duplicate/delete placement). Asked backend; refusing visibly until then.
+    /*
+     * Backspace WITH a selection is handled above and deletes the clip. This is the
+     * other half: nothing selected, so say what is missing.
+     *
+     * It used to say "clip edits need engine commands (asked backend)" — true when it
+     * was written and false for months after the placement opcodes landed, so the one
+     * message a user got for pressing delete named a limitation that no longer existed
+     * and told them to wait for something already built.
+     */
     if (k === 'Backspace' || k === 'Delete') {
-      state.reject = 'clip edits need engine commands (asked backend)';
+      state.reject = 'select a clip first — click one in the arrangement';
       return done();
     }
     return;
