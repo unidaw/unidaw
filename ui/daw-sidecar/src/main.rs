@@ -35,7 +35,7 @@ use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{UiSetRowOpsPayload, UiSamplerLoadPayload, UiSamplerSlicePayload,
                          UiSamplerFilterPayload, UiSamplerEnvelopePayload,
                          UiSamplerSetSlotPayload, UiSamplerSetDevicePayload,
-                         UiSamplerVintagePayload,
+                         UiSamplerVintagePayload, UiSetClipGridPayload,
                          UiSamplerEmitRowsPayload, UiSamplerSlotNameHeader,
                          EventEntry, UiChainCommandPayload, UiChordCommandPayload,
                          UiMarkerCommandPayload, UiArrangeTimeCommandPayload,
@@ -2053,6 +2053,60 @@ fn build_allow_overlap(body: &str) -> Option<Result<UiCommandPayload, &'static s
         note_duration_lo: 0,
         note_duration_hi: 0,
         base_version: 0,
+    }))
+}
+
+/// A CLIP's own grid (SetClipGrid, 94) — subdivision and meter, per clip.
+///
+/// This is the one the renderer honours FIRST: `viewmodel.js` resolves a lane's rows
+/// clip -> track -> zoom, so a clip's grid outranks its track's. All three fields have
+/// been persisted and published since kShmVersion 19 and nothing could write any of
+/// them; a verse in 4 and a bridge in 3 on one track was reachable only by editing
+/// project JSON by hand.
+///
+/// FLAGS PER FIELD, so setting the meter does not silently reset the subdivision.
+/// Naming no field is REFUSED rather than sent — an empty command that reports success
+/// is worse than an error. Ranges are refused too, not clamped, and the bounds are the
+/// packer's: lines and numerator get five bits each, the denominator a 3-bit exponent.
+fn build_clip_grid(body: &str) -> Option<Result<UiSetClipGridPayload, &'static str>> {
+    if !is_type(body, "clipgrid") { return None; }
+    let lines = parse_num(body, "\"lines\"");
+    let num = parse_num(body, "\"num\"");
+    let den = parse_num(body, "\"den\"");
+    if lines.is_none() && num.is_none() && den.is_none() {
+        return Some(Err("clipgrid needs lines, num or den — with none of them it would be a \
+                         command that changes nothing and reports success"));
+    }
+    if let Some(n) = lines {
+        if !(1..=31).contains(&n) {
+            return Some(Err("lines per beat is 1..31 — 0 is the grid packer's \"no grid\" \
+                             sentinel and 32 would pack as 0, so both are refused"));
+        }
+    }
+    if let Some(n) = num {
+        if !(1..=31).contains(&n) {
+            return Some(Err("time signature numerator is 1..31 — it packs into five bits"));
+        }
+    }
+    if let Some(d) = den {
+        if !(1..=128).contains(&d) || (d & (d - 1)) != 0 {
+            return Some(Err("time signature denominator must be a power of two in 1..128 — \
+                             it is stored as a 3-bit exponent, so 6 has no representation"));
+        }
+    }
+    let mut flags = 0u16;
+    if lines.is_some() { flags |= daw_bridge::layout::CLIP_GRID_SET_LINES; }
+    if num.is_some() { flags |= daw_bridge::layout::CLIP_GRID_SET_NUMERATOR; }
+    if den.is_some() { flags |= daw_bridge::layout::CLIP_GRID_SET_DENOMINATOR; }
+    Some(Ok(UiSetClipGridPayload {
+        command_type: UiCommandType::SetClipGrid as u16,
+        flags,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        clip_id: parse_num(body, "\"clip\"").unwrap_or(0).max(0) as u32,
+        lines_per_beat: lines.unwrap_or(0) as u32,
+        time_sig_numerator: num.unwrap_or(0) as u32,
+        time_sig_denominator: den.unwrap_or(0) as u32,
+        reserved: [0u32; 4],
     }))
 }
 
@@ -4504,6 +4558,22 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                         header.slot_id, bytes.len()),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                                 }
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        // A CLIP'S OWN GRID. Own 40-byte payload; the reply echoes the clip so a
+                        // caller that mistyped an id sees which one it actually addressed.
+                        if let Some(r) = build_clip_grid(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_clip_grid(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"clipgrid\":{},\"track\":{},\"flags\":{}}}",
+                                        p.clip_id, p.track_id, p.flags),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
                             };
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;

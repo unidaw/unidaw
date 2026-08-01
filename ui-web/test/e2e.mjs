@@ -4649,8 +4649,17 @@ section('a lane\'s subdivision is settable');
   ok(await lpbOf(1) === want, 'and 0 or 32 leaves the lane exactly as it was — refused, not '
      + 'clamped', String(await lpbOf(1)));
 
-  // THE READOUT IS THE CONTROL. Clicking it cycles; it has looked like a label since the
-  // feature landed.
+  /*
+   * THE READOUT IS THE CONTROL. Clicking it cycles; it has looked like a label since the
+   * feature landed.
+   *
+   * WHAT IT CYCLES IS THE LEVEL IN FORCE, which is not always the track. A lane's rows
+   * resolve clip -> track -> zoom, so on a track whose clip carries its own subdivision the
+   * badge names the CLIP's number and the click edits the clip (opcode 94). This check used
+   * to assert the track's `lpb` moved, and it passed only because no clip could carry a grid
+   * of its own until something could write one — a control that wrote the track while the
+   * badge showed the clip would change a number nothing on screen was using.
+   */
   await page.evaluate(() => window.__uni.run('goto 0 1'));
   await page.waitForTimeout(600);
   const at = await page.evaluate(() => {
@@ -4658,14 +4667,21 @@ section('a lane\'s subdivision is settable');
     if (!b) return null;
     const r = b.getBoundingClientRect();
     return { x: r.x + r.width / 2, y: r.y + r.height / 2,
-             onScreen: r.x > 0 && r.x < window.innerWidth, text: b.textContent };
+             onScreen: r.x > 0 && r.x < window.innerWidth, text: b.textContent,
+             fromClip: b.classList.contains('from-clip') };
   });
   ok(at && at.onScreen, 'the header draws the lane grid, on screen', JSON.stringify(at));
   if (at && at.onScreen) {
-    const before = await lpbOf(1);
+    // Whichever level the badge is naming, read from the same place the user reads it.
+    const shown = () => page.evaluate(() => {
+      const b = document.querySelector('.htrack[data-track="1"] .hlpb');
+      return b ? parseInt(b.textContent, 10) : NaN;
+    });
+    const before = await shown();
+    const trackBefore = await lpbOf(1);
     await page.mouse.click(at.x, at.y);
     await page.waitForTimeout(1200);
-    const after = await lpbOf(1);
+    const after = await shown();
     /*
      * `after !== want` ALONE IS NOT THE CLAIM, and my first version stopped there — which passes
      * when the click did nothing AND the console set before it did nothing, because the lane
@@ -4673,7 +4689,14 @@ section('a lane\'s subdivision is settable');
      * the click happened, so that is what is compared.
      */
     ok(after !== before && after >= 1 && after <= 31,
-       'and clicking it moves the lane to another subdivision', `${before} -> ${after}`);
+       'and clicking it moves the subdivision the badge is naming', `${before} -> ${after}`);
+    // ...and it moved the level it NAMED. A clip-level badge that wrote the track would leave
+    // the screen unmoved, which is the failure this pair exists to tell apart.
+    const trackAfter = await lpbOf(1);
+    ok(at.fromClip ? trackAfter === trackBefore : trackAfter !== trackBefore,
+       at.fromClip ? 'and left the track\'s own value alone, because the badge named the clip'
+                   : 'and moved the track\'s value, because the badge named the track',
+       `badge ${at.fromClip ? 'clip' : 'track'}, track ${trackBefore} -> ${trackAfter}`);
   }
 }
 
