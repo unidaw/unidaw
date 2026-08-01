@@ -512,6 +512,9 @@ const arrange = new Arrange(arrangeHost, metrics, {
    */
   onAutomationWrite: ({ track, param, tick, value }) =>
     writeAutomation(track, param, tick, value),
+  /* Alt-clicking a point removes it. Lands on the same function `del-point` calls, so the
+     pointer and the console cannot come to mean different things by "remove this point". */
+  onAutomationDelete: ({ track, param, tick }) => deleteAutomationPoint(track, param, tick),
   onNav: (zoomIndex, startTick, laneScroll, why) => {
     state.arrangeZoom = clampZoom(zoomIndex);
     state.arrangeStart = Math.max(0, startTick);
@@ -1555,6 +1558,33 @@ function writeAutomation(track, param, tick, value, discrete) {
    * or replace, and a curve drawn from a guess is the exact failure the read-back exists to
    * prevent. Dropped, so the next read asks again.
    */
+  automationCurves.delete(`${track}:${p}`);
+  state.reject = null;
+  schedule();
+  return true;
+}
+
+/**
+ * REMOVE ONE AUTOMATION POINT (opcode 96).
+ *
+ * Addressed exactly as the write is — (track, param, tick) — because that is how the engine
+ * identifies a point, and an index into a list would shift the moment anything else edited
+ * the lane.
+ *
+ * The cached curve is DROPPED rather than patched, same as the write: patching would be this
+ * side inventing what the engine holds, and a curve drawn from a guess is the exact failure
+ * the read-back exists to prevent.
+ */
+function deleteAutomationPoint(track, param, tick) {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
+  const p = String(param || '').trim();
+  if (!p) { state.reject = 'which parameter?'; schedule(); return false; }
+  const t = Math.round(Number(tick));
+  if (!Number.isFinite(t) || t < 0) {
+    state.reject = 'a tick is a position, and a negative one addresses nothing';
+    schedule(); return false;
+  }
+  conn.send({ type: 'delpoint', track: Number(track) || 0, param: p, tick: t });
   automationCurves.delete(`${track}:${p}`);
   state.reject = null;
   schedule();
@@ -2948,6 +2978,7 @@ const dockApi = {
    * ever drawn.
    */
   automation: (track) => automationOf(track),
+  delAutomationPoint: (track, param, tick) => deleteAutomationPoint(track, param, tick),
   writeAutomation: (track, param, tick, value, discrete) =>
     writeAutomation(track, param, tick, value, discrete),
   automationPoints: (track, param) => requestAutomation(track, param),
@@ -8883,6 +8914,7 @@ window.__uni = {
   allowOverlap: (t, on) => dockApi.allowOverlap(t, on),
   clipGrid: (t, clip, opts) => dockApi.clipGrid(t, clip, opts),
   velocityEdit: (on) => dockApi.velocityEdit(on),
+  delAutomationPoint: (t, param, tick) => dockApi.delAutomationPoint(t, param, tick),
   audioClip: (t, clip, field, v) => dockApi.audioClip(t, clip, field, v),
   /** Per track, whether note entry leaves the sounding note alone. */
   overlapping: () => {

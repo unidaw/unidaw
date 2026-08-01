@@ -1569,6 +1569,7 @@ Two different things. **Automation** is a curve in time on an arrangement lane.
 automation [track]                          which parameters are automated
 curve <track> <param>                       one lane, point by point
 autopoint <track> <param> <tick> <value>    write one point, value 0..1
+del-point <track> <param> <tick>            remove one point
 draw [on|off]                               the pointer mode
 ```
 
@@ -1589,11 +1590,17 @@ point that does not exist yet, so the feedback is not a round trip late.
 Clicking a track with no automation lane does nothing: there is no lane to edit, and inventing
 one would be this surface deciding which parameter a click meant.
 
-**What it deliberately cannot do:** there is no engine opcode to remove an automation point.
-So a point **cannot be deleted**, and **cannot be moved in time** — a move is a write at the
-new tick plus a remove at the old one, and without the remove it would litter. The grabbed
-point's tick is fixed for the whole gesture. This is stated in the chip's tooltip rather than
-offered as a gesture that half-works.
+**Alt-click a point to remove it.** A modifier, which this app avoids elsewhere — and the
+usual argument does not apply here, because the *mode* is already visible: the chip is lit and
+the lane is tinted, so "the next click edits the curve" is on screen, and alt only chooses
+which edit inside a state you entered deliberately. Alt on empty lane does nothing rather than
+creating a point: a delete gesture that creates when it misses is worse than one that misses.
+`del-point <track> <param> <tick>` is the same operation from the console.
+
+**What it still cannot do:** move a point in TIME. The grabbed point's tick is fixed for the
+whole gesture. A move is a write at the new tick plus a remove at the old one — both halves
+exist now — and it wants to be a single undo step, which is a batching question rather than a
+missing command.
 
 Writing to a tick that already has a point **replaces** it, and the console says so.
 
@@ -1823,7 +1830,9 @@ knowing before you trust anything below.
 - **The scale roll's scale features** — degree gutter, in-key shading, cents column. The
   surface carries the name and not the feature.
 - **Turning a loop off.** A loop is a range and no command clears one.
-- **Deleting or time-moving an automation point.** Create and change-value only.
+- **Time-moving an automation point.** A point can be created, re-valued and removed, but not
+  dragged along the timeline. That is a write at the new tick plus a remove at the old one —
+  both halves exist now — and it wants to be one undo step, which is a batching question.
 - **Loading, chopping, naming or repointing a sampler slot with the pointer.** Console only.
 - **Duplicating a clip *with the pointer*.** There is no alt-drag. The commands exist:
   `add-clip <clip> <track> <bar> <bars>` places an existing clip again — that second
@@ -1923,7 +1932,7 @@ must send an envelope first; that was fixed the same day and the default kit is 
 
 ## 18. Command reference
 
-101 commands. `help` prints this list live; the palette (`⌘K`) is the same list,
+102 commands. `help` prints this list live; the palette (`⌘K`) is the same list,
 searchable, with argument checking.
 
 **Transport and position** — `play`, `stop` (twice = panic), `seek <tick>`,
@@ -1971,7 +1980,8 @@ searchable, with argument checking.
 `vintage <track> <device> [bits] [rate] [modset]`.
 
 **Automation and modulation** — `automation [track]`, `curve <track> <param>`,
-`autopoint <track> <param> <tick> <value>`, `draw [on|off]`, `mods [track]`,
+`autopoint <track> <param> <tick> <value>`, `del-point <track> <param> <tick>`,
+`draw [on|off]`, `mods [track]`,
 `map <track> <device> <param>`, `unmap <track> <link>`, `depth <track> <link> <amount>`,
 `macro <track> <device> <value>`.
 

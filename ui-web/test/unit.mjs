@@ -817,7 +817,7 @@ const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'sampl
                      'quantize', 'moveDevice', 'chord', 'delChord', 'deleteHarmony',
                      'addDevice', 'openEditor', 'newSong', 'fold', 'opsColumn', 'opsShown',
                      'harmonyQuantize', 'harmonyQuantized', 'savePatch', 'linesPerBeat',
-                     'clipGrid', 'hasMaster', 'audioClip', 'velocityEdit',
+                     'clipGrid', 'hasMaster', 'audioClip', 'velocityEdit', 'delAutomationPoint',
                      'allowOverlap', 'overlapping',
                      'samplerSlotName',
                      'edit', 'harmony', 'ask', 'forget',
@@ -2330,6 +2330,8 @@ const OP_REGISTRY = {
   // Whether a drag in the piano roll sets velocity. A VIEW decision like `draw`, which it
   // mirrors — the mode changes what a gesture means here and nothing about the document.
   'vel-edit': { cli: null, agent: null, why: 'view' },
+  // Remove one automation point (opcode 96). The lane was create-and-adjust-only until it.
+  'del-point': { cli: null, agent: null, why: 'gap' },
   // Whether note entry cuts the sounding note (opcode 93). Landed engine-side today.
   'note-overlap': { cli: null, agent: null, why: 'gap' },
   // Which columns this window draws. Genuinely a view decision — the engine already remembers
@@ -2383,7 +2385,7 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
                  // The master bus fader and mute. SetTrackMixer addressed to kMasterTrackId
                  // is what they send, and daw-cli's mixer verb takes a track INDEX, so there
                  // is no spelling for the master there yet.
-                 'main-gain', 'main-mute',
+                 'main-gain', 'main-mute', 'del-point',
                  // The sampler filter (opcode 86). It landed engine-side this morning and the
                  // CLI has no verb for it yet — recorded as a gap rather than claimed as covered.
                  'filter', 'soundaddr',
@@ -2448,7 +2450,7 @@ const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
                    'harmony-quantize', 'save-patch', 'lpb', 'note-overlap',
                    // A clip's own grid (opcode 94). It HAS a CLI path — `daw-cli do clip-grid`
                    // shipped with the opcode — so it is only in the agent half of the gap.
-                   'clip-grid', 'audio-clip', 'main-gain', 'main-mute',
+                   'clip-grid', 'audio-clip', 'main-gain', 'main-mute', 'del-point',
                    // With `mods`: a read-back this app has and the agent manifest does not.
                    'kit'];
 

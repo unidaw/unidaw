@@ -3047,6 +3047,47 @@ fn build_automation_point(body: &str) -> Option<Result<UiAutomationPointPayload,
     }))
 }
 
+/// REMOVE one automation point (DeleteAutomationPoint, 96).
+///
+///   {"type":"delpoint","track":0,"param":"cutoff","tick":960000}
+///
+/// The same payload as the write and the same addressing — (track, target, param, tick) — with
+/// `value` ignored. Its OWN opcode rather than a flag on the write, which is the call this repo
+/// has already made twice: DeleteNote sits beside the note write, and the four marker ops share
+/// one struct. A destructive operation reached by setting a bit on a constructive one is a
+/// caller's typo away from deleting what they meant to write, and it has no name for a builder
+/// to key on — so the refusals, the range checks and the test names all stop distinguishing the
+/// two operations, and "the console said it wrote a point and the point vanished" is a bug
+/// report nobody can act on.
+fn build_automation_delete(body: &str) -> Option<Result<UiAutomationPointPayload, &'static str>> {
+    if !is_type(body, "delpoint") { return None; }
+    let Some(param) = parse_str(body, "\"param\"").filter(|p| !p.is_empty()) else {
+        return Some(Err("delpoint needs a param"));
+    };
+    let Some(tick) = parse_num(body, "\"tick\"") else {
+        return Some(Err("delpoint needs the tick of the point to remove"));
+    };
+    if tick < 0 {
+        return Some(Err("a tick is a position, and a negative one addresses nothing"));
+    }
+    let mut param_id = [0u8; 16];
+    let b = param.as_bytes();
+    let take = b.len().min(param_id.len());
+    param_id[..take].copy_from_slice(&b[..take]);
+    Some(Ok(UiAutomationPointPayload {
+        command_type: UiCommandType::DeleteAutomationPoint as u16,
+        flags: 0,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        target_plugin_index: parse_num(body, "\"target\"").unwrap_or(u32::MAX as i64) as u32,
+        nanotick_lo: (tick as u64 & 0xffff_ffff) as u32,
+        nanotick_hi: ((tick as u64) >> 32) as u32,
+        // Ignored by the engine for a delete. Zero rather than anything else so a reader of the
+        // ring sees a payload that cannot be mistaken for a write of 0.0.
+        value: 0.0,
+        param_id,
+    }))
+}
+
 /// One of the four MARKER commands, or None if this message is not one.
 ///
 ///   {"type":"marker","op":"add","tick":0,"name":"chorus","color":0}
@@ -4505,6 +4546,23 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                     Ok(()) => format!(
                                         "{{\"ok\":true,\"autopoint\":{},\"value\":{}}}",
                                         p.track_id, p.value),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        // REMOVE one automation point. Same payload as the write, its own
+                        // opcode — see build_automation_delete.
+                        if let Some(r) = build_automation_delete(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_automation_point(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"delpoint\":{},\"tick\":{}}}",
+                                        p.track_id,
+                                        ((p.nanotick_hi as u64) << 32) | p.nanotick_lo as u64),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                                 },
                             };
