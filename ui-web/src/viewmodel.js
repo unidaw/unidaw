@@ -635,6 +635,51 @@ export function velocityText(v) {
   return VELOCITY_TEXT[Math.max(0, Math.min(255, v | 0))];
 }
 
+/**
+ * WHETHER A LANE HAS A ROW AT A GIVEN TICK — the one-off form of the rule the
+ * row loop below applies to every visible cell.
+ *
+ * It exists because there were TWO copies of this rule. The loop resolved
+ * clip -> track -> zoom with exact integer arithmetic; the copy that gated
+ * KEYSTROKES did `row % Math.round(zoomLpb / laneLpb)` and never looked at the
+ * clip at all. `Math.round(4 / 3)` is 1 and every row is 0 mod 1, so a triplet
+ * lane accepted a note on every row while the renderer greyed out two in three.
+ * A rule that decides what you see and a rule that decides what you may do must
+ * be the same rule; this is it, and `lane-grid.mjs` asserts the two agree at
+ * every zoom.
+ *
+ * `zoomLpb` is the floor: with no clip grid and no per-track subdivision, every
+ * row of the axis is writable, which is the behaviour from before lanes had
+ * their own grids.
+ */
+export function laneGridAt(engine, tick, track, zoomLpb) {
+  let lpb = 0;
+  let phase = 0;
+  if (engine) {
+    for (let i = 0; i < engine.extentCount; i++) {
+      const e = engine.extents[i];
+      if (e.track !== track || tick < e.startTick || tick >= e.endTick) continue;
+      // Anchored at the CLIP's start for the same reason the loop is: a clip's
+      // grid is a property of the clip, so moving it must not resubdivide it.
+      phase = e.startTick % NANOTICKS_PER_QUARTER;
+      if (e.grid && e.grid.linesPerBeat > 0) lpb = e.grid.linesPerBeat;
+      break;
+    }
+    if (lpb <= 0 && engine.lpb) lpb = engine.lpb[track] || 0;
+  }
+  if (lpb <= 0) lpb = zoomLpb;
+  return { lpb, phase };
+}
+
+/** @returns {boolean} true when the lane's own grid lands on `tick`. */
+export function onLaneGridAt(engine, tick, track, zoomLpb) {
+  const { lpb, phase } = laneGridAt(engine, tick, track, zoomLpb);
+  if (!(lpb > 0)) return true;
+  // Integers divide exactly or they do not; nothing rounds. Same expression as
+  // the row loop's `offGrid`, negated.
+  return (((tick % NANOTICKS_PER_QUARTER) - phase) * lpb) % NANOTICKS_PER_QUARTER === 0;
+}
+
 export function buildViewModel(opts, buf) {
   const {
     startRow, rowCount, tracks: trackCount, columns = FIELDS_PER_NOTE,
