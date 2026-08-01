@@ -655,6 +655,12 @@ export function velocityText(v) {
 export function laneGridAt(engine, tick, track, zoomLpb) {
   let lpb = 0;
   let phase = 0;
+  // WHICH LEVEL ANSWERED, and the clip that did if one did. Reported rather than
+  // inferred by the caller: the header badge used to print the TRACK's number
+  // whatever the rows were actually drawn at, so a lane whose clip carried its
+  // own subdivision was labelled with a value nothing on screen was using.
+  let from = 'zoom';
+  let clipId = 0;
   if (engine) {
     for (let i = 0; i < engine.extentCount; i++) {
       const e = engine.extents[i];
@@ -662,13 +668,17 @@ export function laneGridAt(engine, tick, track, zoomLpb) {
       // Anchored at the CLIP's start for the same reason the loop is: a clip's
       // grid is a property of the clip, so moving it must not resubdivide it.
       phase = e.startTick % NANOTICKS_PER_QUARTER;
-      if (e.grid && e.grid.linesPerBeat > 0) lpb = e.grid.linesPerBeat;
+      clipId = e.clipId;
+      if (e.grid && e.grid.linesPerBeat > 0) { lpb = e.grid.linesPerBeat; from = 'clip'; }
       break;
     }
-    if (lpb <= 0 && engine.lpb) lpb = engine.lpb[track] || 0;
+    if (lpb <= 0 && engine.lpb) {
+      lpb = engine.lpb[track] || 0;
+      if (lpb > 0) from = 'track';
+    }
   }
-  if (lpb <= 0) lpb = zoomLpb;
-  return { lpb, phase };
+  if (lpb <= 0) { lpb = zoomLpb; from = 'zoom'; }
+  return { lpb, phase, from, clipId };
 }
 
 /** @returns {boolean} true when the lane's own grid lands on `tick`. */

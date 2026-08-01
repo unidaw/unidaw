@@ -817,6 +817,7 @@ const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'sampl
                      'quantize', 'moveDevice', 'chord', 'delChord', 'deleteHarmony',
                      'addDevice', 'openEditor', 'newSong', 'fold', 'opsColumn', 'opsShown',
                      'harmonyQuantize', 'harmonyQuantized', 'savePatch', 'linesPerBeat',
+                     'clipGrid',
                      'allowOverlap', 'overlapping',
                      'samplerSlotName',
                      'edit', 'harmony', 'ask', 'forget',
@@ -2266,6 +2267,9 @@ const OP_REGISTRY = {
   'save-patch': { cli: null, agent: null, why: 'gap' },
   // A lane's subdivision (opcode 92). Landed engine-side today; no CLI verb yet.
   lpb: { cli: null, agent: null, why: 'gap' },
+  // A CLIP's own subdivision and meter (opcode 94) — the level the renderer honours FIRST.
+  // Backend shipped `daw-cli do clip-grid` with it, so this one has a CLI path from the start.
+  'clip-grid': { cli: 'clip-grid', agent: null, why: 'gap' },
   // Whether note entry cuts the sounding note (opcode 93). Landed engine-side today.
   'note-overlap': { cli: null, agent: null, why: 'gap' },
   // Which columns this window draws. Genuinely a view decision — the engine already remembers
@@ -2378,6 +2382,9 @@ const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
                    'op',
                    'sampler', 'load-sample', 'slice', 'slot-name', 'vintage',
                    'harmony-quantize', 'save-patch', 'lpb', 'note-overlap',
+                   // A clip's own grid (opcode 94). It HAS a CLI path — `daw-cli do clip-grid`
+                   // shipped with the opcode — so it is only in the agent half of the gap.
+                   'clip-grid',
                    // With `mods`: a read-back this app has and the agent manifest does not.
                    'kit'];
 

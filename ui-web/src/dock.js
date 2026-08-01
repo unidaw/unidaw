@@ -1041,6 +1041,31 @@ export function createCommands(api) {
         if (!api.linesPerBeat(t, n)) return api.state().reject || 'refused';
         return `t${t} at ${n}/beat`;
       } },
+    /*
+     * A CLIP'S OWN GRID — the one the renderer honours FIRST.
+     *
+     * A lane's rows resolve clip -> track -> zoom, so this outranks `lpb`. All three fields
+     * have been persisted and published since kShmVersion 19 with nothing able to write them,
+     * so the case per-lane grids exist FOR — a verse in 4 and a bridge in 3 on ONE track —
+     * could be loaded from a hand-edited file and never authored here.
+     *
+     * ONE FIELD PER CALL, all four arguments required. The engine takes a flag per field so
+     * that setting the meter does not reset the subdivision, and a grammar with optional
+     * positionals in the middle is how `vintage 0 9 8 2` once read the 2 as a sample rate.
+     * Naming the field costs a word and removes the whole class.
+     */
+    'clip-grid': { help: 'clip-grid <track> <clip> <lines|num|den> <value> — the grid a CLIP '
+                       + 'runs internally, which outranks the track\'s lpb',
+      args: [A_TRACK, { name: 'clip', type: 'int', min: 0 },
+             oneOf(['lines', 'num', 'den']),
+             { name: 'value', type: 'int', min: 1, max: 128 }],
+      run: (a) => {
+        const t = Number(a[0]), clip = Number(a[1]), v = Number(a[3]);
+        const opts = {};
+        opts[a[2]] = v;
+        if (!api.clipGrid(t, clip, opts)) return api.state().reject || 'refused';
+        return `clip ${clip} ${a[2]} ${v}`;
+      } },
     'save-patch': { help: 'save-patch <name> — save the patcher graph as a preset',
       args: [{ name: 'name', type: 'text', rest: true }],
       run: (a) => {

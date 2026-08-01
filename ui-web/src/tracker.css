@@ -479,6 +479,10 @@
    is the thing worth reading and a button around it would cost width every lane pays for. */
 .hlpb { cursor: pointer; }
 .hlpb:hover { color: var(--base-accent); }
+/* A subdivision that came from the CLIP under the cursor rather than from the track.
+   Marked because "6/b" from a clip and "6/b" from a track are different facts, and a
+   click on this badge edits whichever one it is showing. */
+.hlpb.from-clip { color: var(--uni-text-note); }
 .htrack.folded .hops { display: none; }
 
 /* ADD A TRACK, at the end of the row — the position the new lane will occupy. */

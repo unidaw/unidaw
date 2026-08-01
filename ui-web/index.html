@@ -83,7 +83,7 @@ import { Tracker } from './src/tracker.js';
 // there: three call sites had three template strings and only two were updated together.
 import { waveKey } from './src/wire.js';
 import { buildViewModel, ZOOM_LEVELS, createBuffer, velocityText,
-         onLaneGridAt } from './src/viewmodel.js';
+         onLaneGridAt, laneGridAt } from './src/viewmodel.js';
 import { opsText, parseOps, OP_MASK, opMaskOf, oneOpEdit, opsPresent, opTokenAt,
          ROW_OPS, opsHint, opHelpFor } from './src/rowops.js';
 /*
@@ -3465,6 +3465,48 @@ const dockApi = {
     state.reject = null; schedule(); return true;
   },
   /**
+   * A CLIP'S OWN GRID (opcode 94) — subdivision and meter, on the clip rather than the track.
+   *
+   * This is the one the renderer honours FIRST: a lane's rows resolve clip -> track -> zoom,
+   * so a clip's grid outranks its track's. All three fields have been persisted and published
+   * since kShmVersion 19 and nothing could write any of them, so a verse in 4 and a bridge in 3
+   * on one track — the case per-lane grids exist FOR — was reachable only by hand-editing JSON.
+   *
+   * ONE KEY PER NAMED FIELD, and absent means absent. Sending `lines: 0` for "leave it alone"
+   * would be a value the engine has to guess about; the flags say which fields this call is
+   * about, and a call naming none is refused here rather than sent as a no-op that reports
+   * success.
+   */
+  clipGrid: (t, clip, opts) => {
+    const o = opts || {};
+    const msg = { type: 'clipgrid', track: Number(t) || 0, clip: Number(clip) || 0 };
+    if (o.lines !== undefined && o.lines !== null) {
+      const v = Number(o.lines);
+      if (!(v >= 1 && v <= 31)) { state.reject = 'lines per beat is 1..31'; schedule(); return false; }
+      msg.lines = v;
+    }
+    if (o.num !== undefined && o.num !== null) {
+      const v = Number(o.num);
+      if (!(v >= 1 && v <= 31)) { state.reject = 'time signature numerator is 1..31'; schedule(); return false; }
+      msg.num = v;
+    }
+    if (o.den !== undefined && o.den !== null) {
+      const v = Number(o.den);
+      // A 3-bit exponent: 6/8 is expressible, 6/6 is not, and clamping would silently
+      // pick a meter nobody asked for.
+      if (!(v >= 1 && v <= 128) || (v & (v - 1)) !== 0) {
+        state.reject = 'time signature denominator must be a power of two in 1..128';
+        schedule(); return false;
+      }
+      msg.den = v;
+    }
+    if (msg.lines === undefined && msg.num === undefined && msg.den === undefined) {
+      state.reject = 'clip grid needs lines, num or den'; schedule(); return false;
+    }
+    if (!conn || !conn.send(msg)) { state.reject = 'no engine'; schedule(); return false; }
+    state.reject = null; schedule(); return true;
+  },
+  /**
    * CUT ON THE NEXT NOTE, OR LET IT RING (opcode 93).
    *
    * The only setting in the tracker that decides whether an edit LOSES DATA: note entry
@@ -4399,13 +4441,27 @@ function buildHead() {
       const t = Number(grid.parentElement.dataset.track);
       if (Number.isFinite(t)) {
         const STEPS = [1, 2, 3, 4, 6, 8, 12, 16];
-        const now = engine && engine.lpb ? engine.lpb[t] : 4;
+        /*
+         * EDIT THE LEVEL THE BADGE IS SHOWING.
+         *
+         * The badge prints the subdivision in force at the cursor row, which on a
+         * track whose clip carries its own is the CLIP's. Writing the track's from
+         * here would change a number the lane is not using and leave the screen
+         * unmoved — a control that reports success and does nothing visible.
+         *
+         * When the clip has no grid of its own the track is what is in force, and
+         * that is what this writes; `clip-grid` in the console is how a clip gets
+         * one in the first place.
+         */
+        const lane = laneGridAt(engine, tickOfCursorRow(), t, ZOOM_LEVELS[state.zoom].linesPerBeat);
+        const now = lane.lpb;
         const at = STEPS.indexOf(now);
         // An unlisted value (a project may carry any of 1..31) steps to the nearest listed one
         // ABOVE it rather than jumping to the start of the cycle.
         const next = at < 0 ? (STEPS.find((x) => x > now) || STEPS[0])
           : STEPS[(at + (e.shiftKey ? STEPS.length - 1 : 1)) % STEPS.length];
-        dockApi.linesPerBeat(t, next);
+        if (lane.from === 'clip') dockApi.clipGrid(t, lane.clipId, { lines: next });
+        else dockApi.linesPerBeat(t, next);
       }
       return;
     }
@@ -4506,10 +4562,28 @@ function paintHeadLpb() {
     if (!el || !el._lpbEl) continue;
     const name = trackName(state.useEngine === false ? null : engine, t);
     if (el._nameVal !== name) { el._nameVal = name; el._nameNode.nodeValue = name; }
-    const n = engine && engine.lpb[t] ? engine.lpb[t] : 0;
-    if (el._lpb !== n) {
-      el._lpb = n;
-      el._lpbEl.firstChild.nodeValue = n ? ' ' + n + '/b' : '';
+    /*
+     * THE NUMBER IN FORCE AT THE CURSOR ROW, not the track's fallback.
+     *
+     * A lane's rows resolve clip -> track -> zoom, so on a track whose clip carries
+     * its own subdivision the track's number is not what anything on screen is drawn
+     * at. This badge printed it anyway — a label naming a value nothing was using,
+     * which is the same defect as a write gate that disagrees with the drawn grid.
+     *
+     * A clip-level answer is marked, because "6/b" from the clip and "6/b" from the
+     * track are different facts that a click acts on differently.
+     */
+    const g = laneGridAt(engine, tickOfCursorRow(), t, ZOOM_LEVELS[state.zoom].linesPerBeat);
+    const n = engine ? (g.from === 'zoom' ? 0 : g.lpb) : 0;
+    const src = engine ? g.from : 'zoom';
+    if (el._lpb !== n || el._lpbFrom !== src) {
+      el._lpb = n; el._lpbFrom = src;
+      el._lpbEl.firstChild.nodeValue = n ? ' ' + n + '/b' + (src === 'clip' ? '·' : '') : '';
+      el._lpbEl.title = n
+        ? (src === 'clip' ? 'this clip’s own subdivision — click to change it'
+                          : 'the track’s subdivision — click to change it')
+        : '';
+      el._lpbEl.classList.toggle('from-clip', src === 'clip');
     }
     /*
      * ...and its quantize. Built as a string only when the LANE'S SETTING moves —
@@ -8642,6 +8716,7 @@ window.__uni = {
   fold: (t) => dockApi.fold(t),
   harmonyQuantize: (t, on) => dockApi.harmonyQuantize(t, on),
   allowOverlap: (t, on) => dockApi.allowOverlap(t, on),
+  clipGrid: (t, clip, opts) => dockApi.clipGrid(t, clip, opts),
   /** Per track, whether note entry leaves the sounding note alone. */
   overlapping: () => {
     const out = [];
