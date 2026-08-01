@@ -16,6 +16,14 @@
 #   REPRODUCIBLE saving twice with no edits produces a byte-identical file
 #   REFUSES     a corrupt module is refused rather than opened with a sample missing
 #
+# EVERY STEP WAITS FOR THE ENGINE TO SAY IT FINISHED (task #91). This file used to `sleep 2.5` and
+# then assert, in eight places. A fixed sleep before an assertion is a claim about the machine's
+# load, and when it was wrong the failure said "the sample did not load" or "the module did not
+# load on the other machine" about an engine that did both a fraction of a second later — a
+# message that sends the reader to the product rather than the harness, which is why the flake
+# survived two investigations. And when it failed, the EXIT trap deleted both project trees and
+# all four engine logs, so there was nothing left to look at. Failures now keep their evidence.
+#
 # Needs a real audio device (non-test mode) + the C++ and daw-cli targets built.
 #   tools/module_check.sh
 #
@@ -34,9 +42,24 @@ HOME_DIR="$(mktemp -d)"   # where the song is made
 AWAY_DIR="$(mktemp -d)"   # the other machine
 trap 'rm -rf "$HOME_DIR" "$AWAY_DIR"' EXIT
 ENG=""
+
+# EVIDENCE OUTLIVES THE FAILURE (task #91). Both trees are mktemp dirs deleted by the EXIT trap,
+# so every rare failure this check has ever had destroyed the archive, the project and all four
+# engine logs on its way out — which is exactly why #91 survived two investigations as
+# "unreproducible". The same shape cost #102 two rounds before a check kept its renders.
+#
+# Copied rather than moved, and only on failure, so a passing run leaves nothing behind.
+KEEP="${TMPDIR:-/tmp}/module_check_evidence.$$"
+preserve() {
+  mkdir -p "$KEEP" 2>/dev/null || return 0
+  cp -R "$HOME_DIR" "$KEEP/home" 2>/dev/null || true
+  cp -R "$AWAY_DIR" "$KEEP/away" 2>/dev/null || true
+  echo "  evidence kept: $KEEP (both project trees, the .uni files, and every engine log)"
+}
 fail() {
   echo "  FAIL: $*"
   [ -n "$ENG" ] && { kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; }
+  preserve
   exit 1
 }
 
@@ -84,16 +107,22 @@ done
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$HOME_DIR" "$CLI" "$@"; }
 cli do load blank --force >/dev/null 2>&1 || true
 wait_for_boot "$HOME_DIR/eng.log" "$ENG" 80
-sleep 1.0
+# NO FIXED SLEEPS BETWEEN THESE (task #91). This was `sleep 1.0` / `sleep 1.0` / `sleep 1.5`, which
+# is not a wait but a claim that the engine finishes each step inside a second — a statement about
+# the machine's load, not about the product. When it was false the check said "the sample did not
+# load" about an engine that loaded it 200 ms later, which is a message that sends you to the
+# wrong layer and is why this stayed unexplained.
 cli do add-device --track 0 --kind sampler --device-id 1 >/dev/null 2>&1 || true
-sleep 1.0
 cli do sampler-load --track 0 --device 1 --file tone.wav --root 60 --fixed-pitch >/dev/null 2>&1 || true
-sleep 1.5
-grep -q '"event":"sampler.loaded"' "$HOME_DIR/eng.log" || fail "the sample did not load"
+wait_for_event "$HOME_DIR/eng.log" '"event":"sampler.loaded"' 160 "the sample to load" "$ENG" || \
+  fail "the sample never loaded. The two commands before this are fire-and-forget writes to the
+        command ring, so this waits for the engine to SAY it loaded rather than for a fixed time —
+        if the tail above shows a *_rejected line, that is the real answer"
 
 # ---- PACKS.
 cli do save-module song >/dev/null 2>&1 || true
-sleep 2.5
+wait_for_event "$HOME_DIR/eng.log" '"event":"project.module_saved"' 160 \
+  "the module save to finish" "$ENG" || true
 grep -q '"event":"project.module_saved"' "$HOME_DIR/eng.log" || \
   fail "no project.module_saved event: $(grep -o '\"event\":\"project.module[a-z_]*\"[^}]*' "$HOME_DIR/eng.log" | tail -2)"
 grep '"event":"project.module_saved"' "$HOME_DIR/eng.log" | tail -1 | grep -q '"ok":true' || \
@@ -147,15 +176,22 @@ for _ in $(seq 1 120); do
 done
 cli2() { DAW_UI_SHM_NAME="/modchk2_$$" DAW_PROJECT_DIR="$HOME_DIR" "$CLI" "$@"; }
 cli2 do load song --force >/dev/null 2>&1 || true
-sleep 2.0
+wait_for_event "$HOME_DIR/eng2.log" '"event":"project.load"' 160 \
+  "the reproducibility engine to load the module" "$ENG" || \
+  fail "the second engine never loaded song for the reproducibility comparison"
 # THE SAME NAME TWICE, not two names. The project's NAME is part of the document, so `song2` and
 # `song3` are legitimately different files — comparing those would be testing that the name is
 # stored, which it is. Copy the first save aside and overwrite it with a second.
 cli2 do save-module song2 >/dev/null 2>&1 || true
-sleep 2.5
+wait_for_event_count "$HOME_DIR/eng2.log" '"event":"project.module_saved"' 1 160 \
+  "the first reproducibility save" "$ENG" || fail "the first save of song2 never completed"
 cp "$HOME_DIR/song2.uni" "$HOME_DIR/song2.first.uni" 2>/dev/null || true
 cli2 do save-module song2 >/dev/null 2>&1 || true
-sleep 2.5
+# BY COUNT, not by presence: the second save writes the SAME event as the first, so a presence
+# check is already satisfied before the second command has even been read off the ring — and the
+# comparison below would then be the first file against itself, which passes forever.
+wait_for_event_count "$HOME_DIR/eng2.log" '"event":"project.module_saved"' 2 160 \
+  "the second reproducibility save" "$ENG" || fail "the second save of song2 never completed"
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 if [ -s "$HOME_DIR/song2.first.uni" ] && [ -s "$HOME_DIR/song2.uni" ]; then
   cmp -s "$HOME_DIR/song2.first.uni" "$HOME_DIR/song2.uni" || \
@@ -182,7 +218,8 @@ for _ in $(seq 1 120); do
 done
 cli3() { DAW_UI_SHM_NAME="$SHM3" DAW_PROJECT_DIR="$AWAY_DIR" "$CLI" "$@"; }
 cli3 do load-module song >/dev/null 2>&1 || true
-sleep 3.0
+wait_for_event "$AWAY_DIR/eng.log" '"event":"project.module_loaded"' 200 \
+  "the module to be opened on the other machine" "$ENG" || true
 grep '"event":"project.module_loaded"' "$AWAY_DIR/eng.log" | tail -1 | grep -q '"ok":true' || \
   fail "the module did not load on the other machine:
         $(grep -o '\"event\":\"project.module_loaded\"[^}]*' "$AWAY_DIR/eng.log" | tail -1)"
@@ -216,7 +253,8 @@ for _ in $(seq 1 120); do
   sleep 0.25
 done
 DAW_UI_SHM_NAME="$SHM4" DAW_PROJECT_DIR="$AWAY_DIR" "$CLI" do load-module bad >/dev/null 2>&1 || true
-sleep 2.0
+wait_for_event "$AWAY_DIR/eng2.log" '"event":"project.module_loaded"' 160 \
+  "the engine to answer for the corrupt module" "$ENG" || true
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 BAD="$(grep -o '"event":"project.module_loaded"[^}]*' "$AWAY_DIR/eng2.log" | tail -1)"
 echo "$BAD" | grep -q '"ok":false' || \

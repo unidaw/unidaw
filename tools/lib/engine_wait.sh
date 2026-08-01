@@ -134,6 +134,73 @@ wait_for_loads() {
         refused or never arrived rather than the engine dying. Grep the log for *_rejected."
 }
 
+# WAIT FOR AN EVENT INSTEAD OF SLEEPING AND HOPING (task #91).
+#
+# A `sleep 2.5` before an assertion is not a wait, it is a claim that the engine finishes within
+# 2.5 seconds — a statement about the machine's load, not about the product. Under a full ctest
+# run, or beside a build, it is false often enough to produce a failure whose message names the
+# wrong thing: module_check reported "the sample did not load" and "the module did not load on the
+# other machine" about an engine that did both, a few hundred milliseconds later. That is #91, and
+# it survived two investigations as "unreproducible" because the message sent everyone to the
+# product instead of to the harness.
+#
+# RETURNS NON-ZERO RATHER THAN CALLING _engine_wait_fail, deliberately: the call sites already
+# have specific messages naming what they wanted and quoting the event they found instead, and
+# those are better than anything this function could say. It prints the log tail — which the call
+# sites did not — and then lets the caller's own `fail` speak.
+#
+# CHECKS THE PROCESS FIRST, THEN THE LOG, for the reason wait_for_boot gives: a dead engine writes
+# nothing more, so testing the log first spends the whole timeout on a corpse.
+#
+#   wait_for_event_count <log> <pattern> <count> [tries=80] [what] [pid]
+#   wait_for_event       <log> <pattern>         [tries=80] [what] [pid]     (count = 1)
+#
+# THE COUNT FORM IS NOT A LUXURY. When a step repeats — two saves of the same project, say — both
+# write the SAME event, so a presence check is already satisfied by the first one and returns
+# before the second command has been read off the ring. In module_check that would have compared
+# the first file against itself, which passes forever.
+wait_for_event_count() {
+  local log="$1"
+  local pattern="$2"
+  local want="$3"
+  local tries="${4:-80}"
+  local what="${5:-$2}"
+  local pid="${6:-}"
+  local i=0
+  local n=0
+  local dead
+  while [ "$i" -lt "$tries" ]; do
+    dead=0
+    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+      dead=1
+    fi
+    # `; true` because grep -c exits 1 when it counts zero, which under `set -e` would kill the
+    # caller mid-wait with no message at all.
+    n=$(grep -c "$pattern" "$log" 2>/dev/null; true)
+    if [ "${n:-0}" -ge "$want" ]; then
+      return 0
+    fi
+    if [ "$dead" = "1" ]; then
+      echo "  --- the engine EXITED while waiting for $what (saw ${n:-0} of $want);"
+      echo "      last 15 lines of $log ---"
+      tail -15 "$log" 2>/dev/null
+      return 1
+    fi
+    sleep 0.25
+    i=$((i + 1))
+  done
+  echo "  --- timed out after $(python3 -c "print($tries * 0.25)")s waiting for $what"
+  echo "      (saw ${n:-0} of $want, and the engine is still alive — so it was refused or never"
+  echo "      arrived rather than the engine dying; grep the log for *_rejected);"
+  echo "      last 15 lines of $log ---"
+  tail -15 "$log" 2>/dev/null
+  return 1
+}
+
+wait_for_event() {
+  wait_for_event_count "$1" "$2" 1 "${3:-80}" "${4:-$2}" "${5:-}"
+}
+
 # WHY A LIVE CAPTURE CAME BACK EMPTY — the same argument as wait_for_boot, one layer along.
 #
 # Several checks arm DAW_CAPTURE_WAV and assert on the file. When it is empty they each say some

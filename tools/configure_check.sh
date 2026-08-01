@@ -25,11 +25,20 @@
 #
 # WHY A PERSISTENT PROBE DIRECTORY AND NOT A FRESH ONE EVERY TIME, which is what this check did
 # first and is worth writing down. Configuring from an empty directory re-adds JUCE and re-probes
-# the compiler: measured at 76 seconds idle and 953 seconds inside a full ctest run, where it blew
-# a ten-minute timeout while PASSING. Re-configuring a directory that already exists takes 1.4
+# the compiler: about a minute idle. Re-configuring a directory that already exists takes 1.4
 # seconds and still processes every add_test, so it still fails on all of the above — verified by
 # putting the duplicate name back, which produced both the duplicate add_test error and a
 # set_tests_properties error naming the test that had vanished.
+#
+# ONE NUMBER IN THE ORIGINAL VERSION OF THIS ARGUMENT WAS MEASURED ON A LIE, and it is left here
+# because the correction is the more useful lesson. The cold form was recorded at 953 seconds
+# inside a full ctest run — blowing a ten-minute timeout while printing PASS — and that is what
+# prompted this rewrite. It later turned out that eight orphaned `while :; do :; done` loops from
+# a stress run the previous day were still pinning eight cores, and had been for twenty-five
+# hours; the same run on the freed machine takes about a minute and would not have timed out. The
+# redesign still stands on its own (1.4 s against 60 s, for the same coverage), but the urgency
+# came from a machine that was quietly missing most of itself. Check `ps` sorted by CPU before
+# believing any timing on a shared box.
 #
 # WHAT THE CHEAP FORM DOES NOT COVER, said plainly rather than left to be discovered: a dependency
 # that is newly missing on a clean machine, or a cached variable masking a change to how something
