@@ -24,6 +24,13 @@ pub struct UiSnapshot {
     /// v10: per-track tracker subdivision (0 = absent track). Build one LaneGrid
     /// per track from this rather than one grid for the whole viewport.
     pub ui_lines_per_beat: [u8; K_UI_MAX_TRACKS],
+    /// v20 child-track structure and v13 lane quantize. Copied into the snapshot for the same
+    /// reason lines_per_beat is: they are published per track every frame and a reader that has
+    /// to reach past this struct for them ends up reading them OUTSIDE the seqlock, which is how
+    /// a row gets a parent from one frame and a grid from the next.
+    pub ui_track_quantize_grid: [u64; K_UI_MAX_TRACKS],
+    pub ui_track_quantize_strength: [u32; K_UI_MAX_TRACKS],
+    pub ui_track_quantize_swing: [i32; K_UI_MAX_TRACKS],
     /// v19: the song's time signature (ruler + time gutter). A clip's own meter is
     /// separate, on UiClipExtent.
     pub ui_song_time_sig_num: u32,
@@ -79,6 +86,10 @@ impl SeqlockReader {
             let ui_harmony_bytes = unsafe { (*self.header).ui_harmony_bytes };
             let ui_track_peak_rms = unsafe { (*self.header).ui_track_peak_rms };
             let ui_lines_per_beat = unsafe { (*self.header).ui_lines_per_beat };
+            let ui_track_quantize_grid = unsafe { (*self.header).ui_track_quantize_grid };
+            let ui_track_quantize_strength =
+                unsafe { (*self.header).ui_track_quantize_strength };
+            let ui_track_quantize_swing = unsafe { (*self.header).ui_track_quantize_swing };
             let ui_song_time_sig_num = unsafe { (*self.header).ui_song_time_sig_num };
             let ui_song_time_sig_den = unsafe { (*self.header).ui_song_time_sig_den };
             let ui_track_parent_id = unsafe { (*self.header).ui_track_parent_id };
@@ -104,6 +115,9 @@ impl SeqlockReader {
                     ui_harmony_bytes,
                     ui_track_peak_rms,
                     ui_lines_per_beat,
+                    ui_track_quantize_grid,
+                    ui_track_quantize_strength,
+                    ui_track_quantize_swing,
                     ui_song_time_sig_num,
                     ui_song_time_sig_den,
                     ui_track_parent_id,

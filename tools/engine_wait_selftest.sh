@@ -163,12 +163,28 @@ esac
 #
 # Asserted on the COMMAND NAME of the pid rather than by hunting for orphans, because that is the
 # mechanism itself: with `exec` the pid IS the command, without it the pid is a shell.
+# WAITS FOR THE PROCESS TO BE OBSERVABLE. Reading `ps` immediately after a fork races the fork
+# itself: on an idle machine the name is there at once, and under `ctest -j8` it is sometimes not,
+# so the first version of this property passed alone and failed in the suite. Both names are
+# polled the same way, because a control that raced would silently stop being a control.
+comm_of() {  # comm_of <pid> — the command name once the process is visible, or empty
+  local i=0 n=""
+  while [ "$i" -lt 80 ]; do
+    n="$(ps -o comm= -p "$1" 2>/dev/null | tr -d ' ')"
+    [ -n "$n" ] && { printf '%s' "$n"; return 0; }
+    sleep 0.05
+    i=$((i + 1))
+  done
+  printf '%s' ""
+}
 BUILD="$TMP" start_engine "$TMP/reap.log" sleep 60
-REAPED_NAME="$(ps -o comm= -p "$ENGINE_PID" 2>/dev/null | tr -d ' ')"
+REAPED_NAME="$(comm_of "$ENGINE_PID")"
 ( cd "$TMP" && sleep 60 >"$TMP/old.log" 2>&1 ) &
 OLD_PID=$!
-OLD_NAME="$(ps -o comm= -p "$OLD_PID" 2>/dev/null | tr -d ' ')"
+OLD_NAME="$(comm_of "$OLD_PID")"
 echo "  start_engine pid is '$REAPED_NAME'; the old pattern's pid is '$OLD_NAME'"
+[ -n "$REAPED_NAME" ] || fail "the process start_engine launched never became visible to ps
+        within 4s, so this property could not be evaluated either way"
 case "$REAPED_NAME" in
   *sleep*) : ;;
   *) fail "start_engine's ENGINE_PID names '$REAPED_NAME', not the command it was asked to run.

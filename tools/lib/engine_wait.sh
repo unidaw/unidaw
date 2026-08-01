@@ -234,6 +234,20 @@ stop_engine() {
   echo "  note: engine $pid ignored SIGTERM for 10s and had to be killed — the run above is"
   echo "        still valid, but something in it did not shut down when asked"
   kill -9 "$pid" 2>/dev/null
+  # CONFIRMS DEATH RATHER THAN ASSUMING IT, and `wait` cannot be what confirms it: when this
+  # function is called inside a command substitution — `out="$(stop_engine "$p")"` — the pid is
+  # not a child of THAT subshell, so `wait` fails instantly and returns without blocking. SIGKILL
+  # is not synchronous either, so the caller's `kill -0` could still see the process and
+  # reasonably conclude stop_engine had not killed it. Under `ctest -j8` that window is wide
+  # enough to fail one run in three.
   wait "$pid" 2>/dev/null
+  local j=0
+  while [ "$j" -lt 40 ]; do
+    kill -0 "$pid" 2>/dev/null || return 0
+    sleep 0.05
+    j=$((j + 1))
+  done
+  echo "  note: engine $pid survived SIGKILL for 2s, which should not be possible for an ordinary"
+  echo "        process — it is most likely stuck in an uninterruptible wait"
   return 0
 }

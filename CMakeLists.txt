@@ -675,6 +675,15 @@ add_test(NAME sampler_loop
 )
 set_tests_properties(sampler_loop PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# The READ direction's ratchet, the one op_registry and persisted_field_reach did not cover:
+# every per-track field the engine publishes has a reader, and the values come back in the units
+# they were SENT in — a name comparison would pass on a read-back that leaked the wire's swing
+# bias, which is exactly what its negative control demonstrates.
+add_test(NAME track_readback
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/track_readback_check.sh
+)
+set_tests_properties(track_readback PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # A sampler's audio is addressable for drawing, and it is the RIGHT audio. The load-bearing
 # property is the source NO audio clip names: every other assertion here passes with the sampler's
 # interning deleted, because the clip path covers for it.

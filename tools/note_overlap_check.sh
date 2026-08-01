@@ -170,10 +170,17 @@ for _ in $(seq 1 40); do [ "$(flag)" = "true" ] && break; sleep 0.25; done
 echo "  reads back as true"
 
 # ---- KEEPS. Same gesture, same track, flag flipped.
+# ONE DELETE AT A TIME, EACH WAITED FOR — and this is about the engine's concurrency control, not
+# about speed. An edit carries the clip version it was written against and is REFUSED if that has
+# moved (requireMatchingClipVersion). Each `daw-cli do` is a fresh process that reads the version
+# when it starts, so firing both deletes back to back lets the second read its base BEFORE the
+# first has applied: the second is then correctly refused, and the clip keeps a note.
+#
+# It failed exactly that way once under `ctest -j8` — "published 1 notes, waited 20s for 0", which
+# is a refusal rather than slowness, and no amount of waiting at the end would have fixed it.
 cli do delete-note --track 0 --nanotick 0 --pitch 60 --column 0 >/dev/null 2>&1
+wait_notes 1 "after deleting the first note"
 cli do delete-note --track 0 --nanotick $Q --pitch 67 --column 0 >/dev/null 2>&1
-# Waited for, for the same reason: re-entering onto a clip that still holds the old pair measures
-# the wrong thing entirely.
 wait_notes 0 "after deleting both notes"
 enter_pair
 D_ON="$(dur0)"

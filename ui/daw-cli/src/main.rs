@@ -477,6 +477,33 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
             .get(index)
             .map(|m| m.flags & daw_bridge::layout::MIX_FLAG_SOUND_ADDRESSED != 0)
             .unwrap_or(false);
+        // THE MIXER, THE LANE QUANTIZE AND THE PARENTAGE — all published per track since v12/v20
+        // and readable from no `get` verb at all. Every one of them is SETTABLE (`do mixer`,
+        // `do quantize`, the child-track derivation), so each was a control whose own state this
+        // surface could not show — the same defect this repo has spent two days closing on the
+        // other side of the wire, here on the reading side of the CLI.
+        //
+        // Units are the ones a caller SENDS, not the wire's: gain in dB and pan in -1..1, because
+        // `do mixer --gain-db` speaks dB, and a read-back in millibels would be a second unit for
+        // one fact. Swing is the signed value the model holds; the wire's +500 bias is the
+        // payload's business and stops at the engine.
+        let gain_db = mixers.get(index).map(|m| m.gain_millibels as f64 / 100.0).unwrap_or(0.0);
+        let pan = mixers.get(index).map(|m| m.pan_thousandths as f64 / 1000.0).unwrap_or(0.0);
+        let mute = mixers
+            .get(index)
+            .map(|m| m.flags & daw_bridge::layout::MIX_FLAG_MUTE != 0)
+            .unwrap_or(false);
+        let solo = mixers
+            .get(index)
+            .map(|m| m.flags & daw_bridge::layout::MIX_FLAG_SOLO != 0)
+            .unwrap_or(false);
+        // parent_id 0 is ambiguous on its own — it is both "top level" and "child of track 0" —
+        // which is why the flag exists and why both are printed rather than just the id.
+        let has_parent = flag & daw_bridge::layout::UI_TRACK_FLAG_HAS_PARENT != 0;
+        let parent_id = snapshot.ui_track_parent_id.get(index).copied().unwrap_or(0);
+        let q_grid = snapshot.ui_track_quantize_grid.get(index).copied().unwrap_or(0);
+        let q_strength = snapshot.ui_track_quantize_strength.get(index).copied().unwrap_or(0);
+        let q_swing = snapshot.ui_track_quantize_swing.get(index).copied().unwrap_or(0);
         // Published since v10 and honoured by the tracker's per-lane grid — and until opcode 92
         // nothing could SET it, so it was read-only state nobody could reach. Printed here for
         // the same reason harmony_quantize is: a control that cannot read its own value has to
@@ -498,7 +525,7 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
         // track changes and is no longer the right base for a track-scoped edit.
         let clip_version = handle.clip_version_for_track(id);
         println!(
-            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"absent\": {is_absent}, \"harmony_quantize\": {harmony_q}, \"sound_addressed\": {sound_addressed}, \"collapsed\": {collapsed}, \"lines_per_beat\": {lines_per_beat}, \"allow_note_overlap\": {allow_note_overlap}, \"ops_width\": {ops_width}, \"clip_version\": {clip_version}, \"peak_rms\": {rms} }}{comma}"
+            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"absent\": {is_absent}, \"harmony_quantize\": {harmony_q}, \"sound_addressed\": {sound_addressed}, \"collapsed\": {collapsed}, \"lines_per_beat\": {lines_per_beat}, \"gain_db\": {gain_db:.2}, \"pan\": {pan:.3}, \"mute\": {mute}, \"solo\": {solo}, \"has_parent\": {has_parent}, \"parent_id\": {parent_id}, \"quantize_grid\": {q_grid}, \"quantize_strength\": {q_strength}, \"quantize_swing\": {q_swing}, \"allow_note_overlap\": {allow_note_overlap}, \"ops_width\": {ops_width}, \"clip_version\": {clip_version}, \"peak_rms\": {rms} }}{comma}"
         );
     }
     println!("  ]");
@@ -977,6 +1004,10 @@ fn mixer_command(args: &[String]) -> Result<UiCommandPayload, String> {
     let track = flag_u64(args, "--track", Some(0))? as u32;
     let gain_db = flag_f64(args, "--gain-db", 0.0)?;
     let pan = flag_f64(args, "--pan", 0.0)?.clamp(-1.0, 1.0);
+    // THE COMMAND family (u16, in a payload's flags word), NOT the published one (u8, in the
+    // per-track byte). Same bit positions, different widths and different homes — a blanket
+    // rename across this file swapped these two and the compiler caught it, which is the argument
+    // for both families existing rather than one being reused for the other.
     let mut flags = 0u16;
     if flag_u64(args, "--mute", Some(0))? != 0 {
         flags |= daw_bridge::layout::MIXER_FLAG_MUTE;

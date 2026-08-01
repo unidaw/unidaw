@@ -1287,6 +1287,15 @@ pub const UI_PATCHER_DEVICE_ID_MASK: u16 = 0x7FFF;
 ///
 /// Bits 0-1 of that byte are the mute/solo COMMAND flags above; this is the first read-back-only
 /// bit in it, so the byte is a union of two enumerations. Do not add a command flag at 1 << 2.
+/// uiTrackMixFlags bits 0 and 1: this track's mute and solo.
+///
+/// The SAME BITS as MIXER_FLAG_MUTE/SOLO, and deliberately a separate pair of constants: those
+/// are `u16` because they live in a COMMAND payload's flags word, these are `u8` because they
+/// live in the published per-track byte. Reaching for the command family to read the SHM byte is
+/// a type error today and was a silent one before these existed — which is how bits 0 and 1 came
+/// to be the only two in this byte with no name of their own.
+pub const MIX_FLAG_MUTE: u8 = 1 << 0;
+pub const MIX_FLAG_SOLO: u8 = 1 << 1;
 pub const MIX_FLAG_HARMONY_QUANTIZE: u8 = 1 << 2;
 /// Bit 3: this track addresses its sampler by SOUND, not by pitch (opcode 87, section 8 Q2).
 /// Read-back only, like bit 2, and added without a kShmVersion bump for the same reason.
