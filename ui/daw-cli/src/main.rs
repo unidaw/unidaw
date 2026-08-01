@@ -85,7 +85,11 @@ daw-cli — control surface for a running engine
                                    writes a phrase in one invocation
   daw-cli do chord --track N --nanotick T --degree D
                    [--quality Q] [--inversion I] [--octave O] [--duration D]
-                   [--delete]
+                   [--spread NANOTICKS] [--humanize-timing 0-255]
+                   [--humanize-velocity 0-255] [--delete]
+                                   --spread strums the chord; the humanize pair jitters each
+                                   strike. All three persist and all three sound, and until
+                                   now this surface sent zero for every one of them
   daw-cli do harmony --nanotick T --root R --scale S [--delete]
   daw-cli do stop                  halt the transport
   daw-cli do position --nanotick T move the playhead
@@ -1103,10 +1107,37 @@ fn chord_command(
         quality: flag_u64(args, "--quality", Some(1))? as u8,
         inversion: flag_u64(args, "--inversion", Some(0))? as u8,
         base_octave: flag_u64(args, "--octave", Some(4))? as u8,
-        humanize_timing: 0,
-        humanize_velocity: 0,
+        // THE STRUM AND THE HUMANIZE PAIR, which were hardcoded to zero here. All three persist
+        // in the project file, all three are read by the scheduler, and all three change what
+        // SOUNDS — spread staggers the chord's notes, the humanize pair jitters each strike's
+        // timing and velocity. The engine's applyAddChord has taken them as parameters since it
+        // was written; this surface, the only one that sends the command, filled them with zeros.
+        // So no project could contain a strummed or humanized chord unless it was hand-written.
+        //
+        // 0..255 each, because both humanize fields are a BYTE on the wire (they are widened to
+        // uint16_t inside the engine, which is why a larger number looks like it would fit).
+        // Refused rather than truncated: 300 silently becoming 44 is a different feel than the
+        // one asked for, with nothing reporting it.
+        humanize_timing: match flag_u64(args, "--humanize-timing", Some(0))? {
+            v if v <= 255 => v as u8,
+            v => return Err(format!(
+                "--humanize-timing is 0..255 (the wire field is a byte), got {v}")),
+        },
+        humanize_velocity: match flag_u64(args, "--humanize-velocity", Some(0))? {
+            v if v <= 255 => v as u8,
+            v => return Err(format!(
+                "--humanize-velocity is 0..255 (the wire field is a byte), got {v}")),
+        },
         reserved: 0,
-        spread_nanoticks: 0,
+        // SPREAD IS ONLY A SPREAD ON A WRITE. On a DELETE the engine reads this same field as the
+        // chord id (see applyRemoveChordAt), so sending a strum width with --delete would address
+        // a chord nobody meant. Zero on a delete keeps the existing "delete at this tick and
+        // column" behaviour, which is what the flag has always meant there.
+        spread_nanoticks: if deleting {
+            0
+        } else {
+            flag_u64(args, "--spread", Some(0))? as u32
+        },
     })
 }
 

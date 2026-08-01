@@ -149,6 +149,30 @@ CLIP = {
                             "string, so also the bulk carrier",
 }
 
+# ---------------------------------------------------------------------------- the CHORD scope.
+#
+# Added after the CLIP scope found six gaps on its first run, on the reasoning that the format
+# writes 145 keys across sixteen object types and this check scoped three of them. It found three
+# more on ITS first run, all in the same shape: a field the format persists, the scheduler reads,
+# and the only surface that can send the command hardcoded to zero.
+CHORD = {
+    "chord_id":          "EXEMPT:identity — a chord is ADDRESSED by its id on delete",
+    "nanotick":          "EXEMPT:identity — where the chord IS; moving one is delete + write",
+    "column":            "EXEMPT:identity — part of the address (track, tick, column)",
+    "degree":            "WriteChord",
+    "quality":           "WriteChord",
+    "inversion":         "WriteChord",
+    "base_octave":       "WriteChord",
+    "duration":          "WriteChord",
+    # THE THREE THIS SCOPE FOUND. `chord_command` in daw-cli filled all three with the literal
+    # zero, so no project could contain a strummed or humanized chord unless it was hand-edited —
+    # while applyAddChord had taken all three as parameters since it was written, and the
+    # scheduler had been reading them to stagger and jitter each strike.
+    "spread":            "WriteChord",
+    "humanize_timing":   "WriteChord",
+    "humanize_velocity": "WriteChord",
+}
+
 # ---------------------------------------------------------------- what is actually persisted.
 def keys_in_block(path, begin_marker, span):
     text = open(os.path.join(root, path)).read().split("\n")
@@ -169,6 +193,9 @@ slot_keys = block_until_endarray("apps/sampler_serialize.h", 'beginArray("slots"
 # asserted below rather than only the membership.
 track_keys = keys_in_block("apps/project_file.cpp", 'beginArray("tracks")', 90)
 clip_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("clips")')
+# The chords live inside a clip's own array, so they are bounded by their own terminator the way
+# the slots are.
+chord_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("chords")')
 
 # Keys that belong to nested objects inside the track block rather than to the track itself.
 NESTED = {"kind", "device_id", "capability_mask", "host_slot_index", "patcher_node_id", "bypass",
@@ -179,7 +206,7 @@ track_keys = [k for k in track_keys if k not in NESTED]
 # ---------------------------------------------------------------- the assertions.
 problems = []
 for label, keys, table in (("slot", slot_keys, SLOT), ("track", track_keys, TRACK),
-                           ("clip", clip_keys, CLIP)):
+                           ("clip", clip_keys, CLIP), ("chord", chord_keys, CHORD)):
     for k in keys:
         if k not in table:
             problems.append(
@@ -197,8 +224,8 @@ for label, keys, table in (("slot", slot_keys, SLOT), ("track", track_keys, TRAC
             "        covering a field that does not exist. Remove it." % (label, k))
 
 if not problems:
-    print("  %d persisted slot fields, %d track fields, %d clip fields, all accounted for"
-          % (len(slot_keys), len(track_keys), len(clip_keys)))
+    print("  %d slot fields, %d track, %d clip, %d chord — all accounted for"
+          % (len(slot_keys), len(track_keys), len(clip_keys), len(chord_keys)))
 if problems:
     print("\n".join(problems))
     raise SystemExit(1)
@@ -208,7 +235,8 @@ if problems:
 # Printing the count keeps the debt in front of whoever runs the suite instead of letting a green
 # line imply there is none. They do not fail the run, because they were true before this scope
 # existed and failing on them would only get the scope deleted.
-gaps = [(label, k, v) for label, table in (("slot", SLOT), ("track", TRACK), ("clip", CLIP))
+gaps = [(label, k, v) for label, table in (("slot", SLOT), ("track", TRACK), ("clip", CLIP),
+                                          ("chord", CHORD))
         for k, v in table.items() if v.startswith("GAP:")]
 if gaps:
     print("  %d KNOWN GAP(S) — persisted, and no command can write them:" % len(gaps))
@@ -220,7 +248,7 @@ if gaps:
 cmds = set(re.findall(r'^\s*([A-Za-z]+) = \d+,',
                       open(os.path.join(root, "apps/event_payloads.h")).read(), re.M))
 missing = []
-for label, table in (("slot", SLOT), ("track", TRACK), ("clip", CLIP)):
+for label, table in (("slot", SLOT), ("track", TRACK), ("clip", CLIP), ("chord", CHORD)):
     for k, v in table.items():
         if v.startswith("EXEMPT:") or v.startswith("GAP:"):
             continue

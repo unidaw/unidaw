@@ -741,6 +741,15 @@ add_test(NAME automation_delete
 )
 set_tests_properties(automation_delete PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# A chord's STRUM and HUMANIZE. All three fields persist and the scheduler reads them; daw-cli
+# sent the literal zero for every one, so no project could contain a strummed chord unless it was
+# hand-edited. Asserts on chord.scheduled rather than on audio, because a chord currently renders
+# SILENT — a defect that predates this and is documented in the check's header.
+add_test(NAME chord_expression
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/chord_expression_check.sh
+)
+set_tests_properties(chord_expression PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 # The kit read-back covers the slot the engine publishes. A NAMES-only ratchet, deliberately —
 # the behaviour is driven by sampler_kit, sampler_vintage, slice_extent and slot_rename, and this
 # is the guard those do not provide. Costs no engine, so it is nearly free.
