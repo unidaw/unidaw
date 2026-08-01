@@ -677,10 +677,11 @@ will not stick, check the engine log.
 Uni's own instrument. It runs *in* the engine, not in a plugin host — which is what the `UNI`
 badge on its rack card means.
 
-**Almost all of the sampler is console-only.** The rack draws a sampler's slots as rows and
-gives you two buttons (filter type, bank gate default); everything else — loading, chopping,
-naming, key ranges, envelopes, cutoff values — is a command. There is no drag-and-drop, no
-file picker, no pad grid you can click, and no waveform editor.
+**Almost all of the sampler is console-only.** The rack draws a sampler's slots as rows — or its
+source's waveform with the slice boundaries on it, if you ask for the sample view — and gives you
+two buttons (filter type, bank gate default); everything else — loading, chopping, naming, key
+ranges, envelopes, cutoff values — is a command. There is no drag-and-drop, no file picker, no
+pad grid you can click, and the waveform is something you LOOK at: nothing on it can be dragged.
 
 ### The model
 
@@ -969,9 +970,16 @@ bank <track> <device> <default-gate|voice-cap|default-view> <value>
 `voice-cap` is 64 by default, clamped 1–255, and **refused at zero or below** — a cap of 0 is
 a device that can never sound, which is not a near-miss of anything anyone meant.
 
-`default-view` is a remembered per-device view (0 kit, 1 sample) that the engine persists.
-**The web UI implements neither view** — it draws a sampler's slots as rows in the rack card.
-Setting it changes a stored number and nothing you can see.
+`default-view` is a remembered per-device view the engine persists: **0 the pad grid, 1 the
+sample.** `bank <t> <d> default-view 1` swaps the card's slot rows for the source's WAVEFORM
+with a line at every slice boundary — which is what makes a chop something you can see rather
+than a list of frame counts. It is remembered per device, so a kit set up as a break opens as
+the break.
+
+It draws the source of the first slot that has one; slots pointing at a different source are
+not marked, because they are a different waveform. While the audio is still on its way the pad
+list stays up — a canvas with nothing on it is indistinguishable from a file that decoded to
+silence.
 
 ---
 
@@ -1733,8 +1741,6 @@ knowing before you trust anything below.
 - **Velocity editing in the roll.** Velocity is opacity, read-only there.
 - **Turning a loop off.** A loop is a range and no command clears one.
 - **Deleting or time-moving an automation point.** Create and change-value only.
-- **The sampler's kit and sample views.** `default-view` is a persisted number the web UI does
-  not implement; the rack draws slots as rows.
 - **Loading, chopping, naming or repointing a sampler slot with the pointer.** Console only.
 - **Duplicating a clip.** No gesture, no command.
 - **Adding a VST from the rack's `+`.** Use the browser rail.
@@ -1751,8 +1757,6 @@ knowing before you trust anything below.
   the render depend on a live input, so a bounce would have to define what fill state it renders
   under, and that is an owner decision. A token that round-trips through the editor and then
   sounds on every pass is worse than one the editor rejects.
-- **The sampler's kit and sample views.** `default-view` is a persisted number the web UI
-  implements neither of.
 
 ### Wired to nothing
 

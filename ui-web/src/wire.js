@@ -908,8 +908,8 @@ export function pitchName(p) {
 // read as a state frame that happens to start with the wrong bytes.
 
 export const WAVE_MAGIC = 0x57494e55; // "UNIW"
-export const WAVE_WIRE_VERSION = 1;
-const WAVE_HEADER_BYTES = 56;
+export const WAVE_WIRE_VERSION = 2;
+const WAVE_HEADER_BYTES = 60;
 
 /** status: what the engine could do with the request. */
 export const WAVE_OK = 0, WAVE_TRUNCATED = 1, WAVE_NOTREADY = 2, WAVE_BAD = 3;
@@ -945,6 +945,15 @@ export function decodeWaveform(buf, out) {
   out.firstFrame = v.getUint32(36, true) + v.getUint32(40, true) * 4294967296;
   out.frameCount = v.getUint32(44, true) + v.getUint32(48, true) * 4294967296;
   out.flags = v.getUint32(52, true);
+  /*
+   * WHICH SAMPLER, when `flags` bit 1 says the source id is a sampler's LOCAL id.
+   *
+   * `(trackId << 16) | deviceId`. It is part of the cache KEY, not decoration: the answer
+   * echoes the local id it was asked about, and a local id is a per-device counter, so two
+   * samplers holding different files at local id 1 would be one entry and the second pad would
+   * draw the first one's audio. Zero when the flag is clear, which is every clip answer.
+   */
+  out.samplerAddr = (out.flags & 2) !== 0 ? v.getUint32(56, true) : 0;
   const want = out.columns * out.channels * 2;
   const have = (buf.byteLength - WAVE_HEADER_BYTES) >> 1;
   // A short payload means the header and the body disagree, which is the stride
@@ -955,9 +964,26 @@ export function decodeWaveform(buf, out) {
   return out;
 }
 
+/**
+ * THE CACHE KEY FOR ONE WAVEFORM WINDOW, in one place.
+ *
+ * Three call sites need it — the requester, the answer handler, and the painter that looks a
+ * window up — and it lived as three separate template strings. Two of them were updated when the
+ * sampler address joined the key and the third was not, so the painter spent an evening looking
+ * up `1:1024:0` while the answer sat in the cache under `1@131073:1024:0`. Every instrument said
+ * "the window has not arrived"; it had.
+ *
+ * It belongs in this file because the key is a statement about the WIRE — it names exactly the
+ * fields an answer carries that identify which window it is — and a fourth caller should have to
+ * find it here rather than invent a fourth spelling.
+ */
+export function waveKey(sourceId, samplerAddr, decimation, firstFrame) {
+  return sourceId + '@' + (samplerAddr | 0) + ':' + decimation + ':' + firstFrame;
+}
+
 /** A reusable decode target for waveform answers. */
 export function createWaveform() {
-  return { status: WAVE_NOTREADY, requestSeq: 0, sourceId: 0, keyLo: 0, keyHi: 0,
+  return { status: WAVE_NOTREADY, requestSeq: 0, sourceId: 0, samplerAddr: 0, keyLo: 0, keyHi: 0,
            decimation: 0, columns: 0, channels: 0, firstFrame: 0, frameCount: 0,
            flags: 0, pairs: null };
 }

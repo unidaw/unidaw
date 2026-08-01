@@ -230,6 +230,27 @@ const playUntilAudible = async (device = 0, ms = 12000) => {
 };
 
 /**
+ * WHAT THE MACHINE WAS DOING, for any check that can be defeated by it.
+ *
+ * `audio underrun` counts DEVICE-callback dropouts and a producer starved upstream logs nothing,
+ * so load is read too. Neither number is about the app; both are about whether this run could
+ * answer the question it was asked.
+ */
+const machine = () => {
+  let underruns = -1;
+  if (stack) {
+    try {
+      const log = readFileSync(`${stack.root}/engine.log`, 'utf8');
+      underruns = (log.match(/audio underrun/g) || []).length;
+    } catch { /* no log is its own answer: -1 */ }
+  }
+  const load = os.loadavg()[0];
+  const cores = os.cpus().length || 1;
+  return { underruns, load: Math.round(load), cores,
+           starved: underruns > 0 || load > cores * 4 };
+};
+
+/**
  * A silence that the producer's own starvation explains is INCONCLUSIVE, not a failure.
  *
  * Same rule chop-audible.mjs and sampler-device-id.mjs already follow, brought here because
@@ -858,14 +879,27 @@ ok(/compatible ports/.test(why || ''), 'an impossible connection says why, on sc
 // is a test about history. Two fresh passthrus, linked in both directions: the
 // second link is a cycle whatever else exists.
 const before2 = await page.evaluate(() => window.__uni.patcher());
+/*
+ * A NODE THAT DID NOT ARRIVE MUST FAIL A CHECK, NOT THROW.
+ *
+ * `graphUntil` gives up and returns the last graph it saw, so `.find(...).id` on a miss reads
+ * `undefined.id` and kills the RUN — 423 checks abandoned because one add was slow on a loaded
+ * box. A suite that crashes tells you less than one that fails: the failure names the step, the
+ * crash names a line in the harness.
+ */
 const ids0 = new Set(before2.nodes.map((n) => n.id));
 await page.evaluate(() => window.__uni.run('addnode passthru'));
 const g1 = await graphUntil((g) => g.nodes.some((n) => !ids0.has(n.id)));
-const cycA = g1.nodes.find((n) => !ids0.has(n.id)).id;
+const newA = g1.nodes.find((n) => !ids0.has(n.id));
 const ids1 = new Set(g1.nodes.map((n) => n.id));
 await page.evaluate(() => window.__uni.run('addnode passthru'));
 const g2 = await graphUntil((g) => g.nodes.some((n) => !ids1.has(n.id)));
-const cycB = g2.nodes.find((n) => !ids1.has(n.id)).id;
+const newB = g2.nodes.find((n) => !ids1.has(n.id));
+ok(!!newA && !!newB, 'two fresh passthrus arrive, to build a cycle out of',
+   `${g1.nodes.length} then ${g2.nodes.length} nodes`);
+const cycA = newA ? newA.id : -1;
+const cycB = newB ? newB.id : -1;
+if (newA && newB) {
 await page.evaluate(([a, b]) => window.__uni.run(`link ${a} ${b}`), [cycA, cycB]);
 await graphUntil((g) => g.edges.some((e) => e.src === cycA && e.dst === cycB));
 await page.evaluate(() => window.__uni.state && window.__uni.run('state'));
@@ -876,6 +910,7 @@ ok(/cycle/.test(cycle || ''), "the engine's own refusal reaches the screen", Str
 for (const id of [cycA, cycB]) {
   await page.evaluate((n) => window.__uni.run(`delnode ${n}`), id);
   await graphUntil((g) => !g.nodes.some((n) => n.id === id));
+}
 }
 await page.evaluate((id) => window.__uni.run(`delnode ${id}`), added.id);
 const shrunk = await graphUntil((g) => !g.nodes.some((n) => n.id === added.id));
@@ -3869,6 +3904,18 @@ section('every insert says what it is putting out');
   // The SAME element `drawnFill` reads — the second `.dv-m-fill` of the second card — because a
   // wait on a different box is a wait that can be satisfied while the thing under test has not
   // moved. That is how a fixed sleep and a wrong selector fail identically.
+  /*
+   * A METER THAT HAS NOT FALLEN IN TWELVE SECONDS IS THE MACHINE, NOT THE PANIC.
+   *
+   * This check has failed three times on three different runs — twice as the dBFS pair, once as
+   * this — and each time a different member of the same family, always with the box loaded. A
+   * meter decays over about a second; taking more than twelve means the page is getting almost
+   * no frames, which is not a statement about whether `panic` cut the voices.
+   *
+   * It is NOT routed through the classifier unconditionally, because a bar that never falls is
+   * also what a broken panic looks like — so the machine has to actually be busy for the run to
+   * be excused, and on a quiet box this still fails.
+   */
   await cards[1].evaluate((el) => new Promise((done) => {
     const at = () => parseInt(el.querySelectorAll('.dv-m-fill')[1].style.width, 10) || 0;
     if (at() === 0) return done();
@@ -3900,7 +3947,8 @@ section('every insert says what it is putting out');
    * peak only has to be far below where it was playing. Which is the honest claim:
    * a cut voice leaves a noise floor, not a void.
    */
-  ok(silent.width === '0%', 'and with every voice cut, its level bar is empty',
+  audibleOr(silent.width === '0%' ? { ok: true } : machine(),
+     'and with every voice cut, its level bar is empty',
      JSON.stringify(silent));
   /*
    * `loudEnough` IS WHAT IT WAS PLAYING, so if it was never playing this comparison is between

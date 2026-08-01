@@ -3213,8 +3213,8 @@ static WAVEFORM_SEQ: AtomicU32 = AtomicU32::new(1);
 /// as JSON numbers would be roughly 400 KB of text to parse per zoom step, for
 /// data the browser wants as a typed array anyway.
 const WAVE_MAGIC: u32 = 0x5749_4e55; // "UNIW"
-const WAVE_WIRE_VERSION: u16 = 1;
-const WAVE_HEADER_BYTES: usize = 56;
+const WAVE_WIRE_VERSION: u16 = 2;
+const WAVE_HEADER_BYTES: usize = 60;
 
 fn encode_waveform(v: &daw_bridge::control::WaveformSlotView, out: &mut Vec<u8>) {
     out.clear();
@@ -3233,7 +3233,22 @@ fn encode_waveform(v: &daw_bridge::control::WaveformSlotView, out: &mut Vec<u8>)
     out.extend_from_slice(&((v.first_frame >> 32) as u32).to_le_bytes()); // 40
     out.extend_from_slice(&(v.frame_count as u32).to_le_bytes());  // 44
     out.extend_from_slice(&((v.frame_count >> 32) as u32).to_le_bytes()); // 48
-    out.extend_from_slice(&v.flags.to_le_bytes());                 // 52, to 56
+    out.extend_from_slice(&v.flags.to_le_bytes());                 // 52
+    /*
+     * 56..60 — WHICH SAMPLER THE SOURCE ID BELONGS TO, `(trackId << 16) | deviceId`, valid only
+     * when `flags` bit 1 (kUiWaveformFlagSamplerSource) is set.
+     *
+     * The answer echoes the LOCAL id it was asked about, and a sampler's local id is a per-device
+     * counter — so without this two samplers holding different files at local id 1 are one cache
+     * entry on the browser side and the second pad draws the first one's audio. A WRONG picture,
+     * which is worse than the missing one that preceded it and which neither side's fixture
+     * could produce, because both have one sampler.
+     *
+     * Wire version 2, not an append behind the old length: the header size is what a reader uses
+     * to find the pairs, so growing it silently would hand the payload's first four bytes to
+     * whoever read at 56.
+     */
+    out.extend_from_slice(&v.sampler_addr.to_le_bytes());          // 56, to 60
     debug_assert_eq!(out.len(), WAVE_HEADER_BYTES, "waveform header drifted");
     for p in &v.pairs {
         out.extend_from_slice(&p.to_le_bytes());
