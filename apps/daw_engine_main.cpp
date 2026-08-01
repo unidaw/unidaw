@@ -16704,6 +16704,21 @@ struct TrackRuntime {
                   rootPc,
                   *scale);
 
+              // THE CHORD PATH HAD NO TELEMETRY AT ALL, and nothing in this repo exercises it:
+              // no fixture contains a chord and no check sends `do chord`. So "a chord resolved
+              // and was scheduled" and "a chord was silently dropped for want of a scale" were
+              // the same observation — nothing. This is the line that separates them, and it is
+              // what made the strum measurable.
+              //
+              // ONCE PER CHORD, not once per pitch: a per-pitch event on a dense arrangement is
+              // a log nobody reads, and the pitch count is the useful number anyway.
+              DAW_EVENT("chord.scheduled")
+                  .field("track", runtime.trackId)
+                  .field("tick", event->nanotickOffset)
+                  .field("pitches", static_cast<uint64_t>(chordPitches.size()))
+                  .field("spread", spread)
+                  .field("humanize_timing", static_cast<uint64_t>(humanizeTiming))
+                  .field("humanize_velocity", static_cast<uint64_t>(humanizeVelocity));
               for (size_t i = 0; i < chordPitches.size(); ++i) {
                 uint64_t offsetTicks = 0;
                 if (chordPitches.size() > 1 && spread > 0) {
@@ -16719,114 +16734,30 @@ struct TrackRuntime {
                 if (onTick < 0) {
                   onTick = 0;
                 }
-                const uint64_t tickDelta =
-                    baseTickDelta + (static_cast<uint64_t>(onTick) - rangeStart);
-                const uint64_t eventSample =
-                    blockSampleStart + tickDeltaToSamples(tickDelta);
-                const int64_t offset =
-                    static_cast<int64_t>(eventSample) -
-                    static_cast<int64_t>(blockSampleStart);
-                if (offset < 0 ||
-                    offset >= static_cast<int64_t>(engineConfig.blockSize)) {
-                  continue;
-                }
-
                 int velJitter = daw::deterministicJitter(
                     event->payload.chord.chordId + static_cast<uint32_t>(i * 13),
                     static_cast<int>(humanizeVelocity));
-                const uint8_t velocity = clampMidi(static_cast<int>(baseVelocity) + velJitter);
-                const uint8_t pitch = clampMidi(chordPitches[i].midi);
-                const float tuningCents = chordPitches[i].cents;
-                const uint8_t channel = midiChannel;
-                const uint32_t noteId = nextNoteId.fetch_add(1, std::memory_order_acq_rel);
-
-                daw::EventEntry midiEntry;
-                midiEntry.sampleTime = eventSample;
-                midiEntry.blockId = 0;
-                midiEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
-                midiEntry.size = sizeof(daw::MidiPayload);
-                daw::MidiPayload midiPayload{};
-                midiPayload.status = 0x90;
-                midiPayload.data1 = pitch;
-                midiPayload.data2 = velocity;
-                midiPayload.channel = channel;
-                midiPayload.tuningCents = tuningCents;
-                midiPayload.noteId = noteId;
-                std::memcpy(midiEntry.payload, &midiPayload, sizeof(midiPayload));
-                pushScratchpad(midiEntry, event->nanotickOffset);
-
-                if (duration == 0) {
-                  std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
-                  ActiveNote activeNote;
-                  activeNote.noteId = noteId;
-                  activeNote.pitch = pitch;
-                  activeNote.column = column;
-                  activeNote.startNanotick = static_cast<uint64_t>(onTick);
-                  activeNote.endNanotick = static_cast<uint64_t>(onTick);
-                  activeNote.tuningCents = tuningCents;
-                  activeNote.hasScheduledEnd = false;
-                  runtime.activeNotes[activeNote.noteId] = activeNote;
-                  runtime.activeNoteByColumn[column].push_back(activeNote.noteId);
-                } else {
-                  uint64_t noteEndTick = static_cast<uint64_t>(onTick) + duration;
-                  uint64_t offTick = noteEndTick;
-                  offTick = wrapTick(offTick);
-                  if (offTick >= rangeStart && offTick < rangeEnd) {
-                    const uint64_t offDelta = baseTickDelta + (offTick - rangeStart);
-                    const uint64_t offSample = blockSampleStart + tickDeltaToSamples(offDelta);
-                    const int64_t offOffset =
-                        static_cast<int64_t>(offSample) -
-                        static_cast<int64_t>(blockSampleStart);
-                    if (offOffset >= 0 &&
-                        offOffset < static_cast<int64_t>(engineConfig.blockSize)) {
-                      daw::EventEntry noteOffEntry;
-                      noteOffEntry.sampleTime = offSample;
-                      noteOffEntry.blockId = 0;
-                      noteOffEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
-                      noteOffEntry.size = sizeof(daw::MidiPayload);
-                      daw::MidiPayload offPayload{};
-                      offPayload.status = 0x80;
-                      offPayload.data1 = pitch;
-                      offPayload.data2 = 0;
-                      offPayload.channel = channel;
-                      offPayload.tuningCents = tuningCents;
-                      offPayload.noteId = noteId;
-                      std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
-                      pushScratchpad(noteOffEntry, noteEndTick);
-              if (runtime.samplerDeviceId != 0) {
-                daw::SamplerEvent se;
-                // offSample, NOT eventSample. This read the NOTE-ON's sample time, so a note
-                // whose on and off fall in the SAME block handed the sampler its note-off at
-                // the note-ON's offset and released the voice at the instant it started. The
-                // MIDI entry three lines up already used offSample — the two disagreed, and
-                // only the in-engine tee was wrong, so the same note through a hosted plugin
-                // sounded correct. Two other tees in this file legitimately use eventSample,
-                // because THEIR note-off entry does too; they are left alone.
-                const int64_t off = static_cast<int64_t>(offSample) -
-                                    static_cast<int64_t>(blockSampleStart);
-                se.offsetInBlock = static_cast<uint32_t>(
-                    off < 0 ? 0 : (off >= static_cast<int64_t>(engineConfig.blockSize)
-                                       ? engineConfig.blockSize - 1
-                                       : off));
-                se.kind = daw::SamplerEventKind::NoteOff;
-                se.noteId = noteId;
-                runtime.samplerEvents.push_back(se);
-              }
-                    }
-                  } else if (duration > 0) {
-                    std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
-                    ActiveNote activeNote;
-                    activeNote.noteId = noteId;
-                    activeNote.pitch = pitch;
-                    activeNote.column = column;
-                    activeNote.startNanotick = static_cast<uint64_t>(onTick);
-                    activeNote.endNanotick = noteEndTick;
-                    activeNote.tuningCents = tuningCents;
-                    activeNote.hasScheduledEnd = true;
-                    runtime.activeNotes[activeNote.noteId] = activeNote;
-                    runtime.activeNoteByColumn[column].push_back(activeNote.noteId);
-                  }
-                }
+                // EMITTED THROUGH emitNoteOnWithOff, NOT BY A SECOND COPY OF IT.
+                //
+                // This was ninety lines duplicating that lambda, and the duplicate was missing
+                // one thing: the TEE TO THE BUILT-IN SAMPLER on the note-ON. It teed the
+                // note-OFF and not the note-on — so every chord released a voice that had never
+                // been started, and a chord played through the in-engine sampler was SILENT
+                // while the same chord through a hosted plugin sounded correct. Measured: a note
+                // and a chord in one fixture, same sampler, same render, note peak 9263 and
+                // chord peak 0.
+                //
+                // The comment forty lines down describes the identical defect found earlier in
+                // this same block, for the note-off's sample time. Two copies of one rule, twice,
+                // in one function — which is the argument for there being one copy.
+                //
+                // Everything the duplicate did, the lambda does and does better: it handles the
+                // block-boundary drop, both tees, the activeNotes bookkeeping, and the loop-point
+                // wrap that the copy did not have.
+                emitNoteOnWithOff(static_cast<uint64_t>(onTick), duration,
+                                  clampMidi(chordPitches[i].midi),
+                                  clampMidi(static_cast<int>(baseVelocity) + velJitter),
+                                  column, chordPitches[i].cents);
               }
               continue;
             }
