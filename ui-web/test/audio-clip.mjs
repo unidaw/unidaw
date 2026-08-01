@@ -179,6 +179,104 @@ check(afterBad && afterBad.fadeInTicks === beforeBad.fadeInTicks
       `${beforeBad.fadeInTicks}/${beforeBad.fadeOutTicks} -> ` +
       `${afterBad && afterBad.fadeInTicks}/${afterBad && afterBad.fadeOutTicks}`);
 
+/*
+ * THE POINTER GESTURE.
+ *
+ * A fade you can only type is a fade nobody adjusts by ear, and the corner handle is where
+ * every DAW puts it. The zone is the TOP of the corner, so trim keeps the rest of the edge:
+ * trimming is the more common and the more destructive of the two, and a gesture that
+ * silently became the other one would be worse than not having it.
+ */
+console.log('\n[dragging the handle]');
+await page.evaluate(({ t, c }) => window.__uni.run(`audio-clip ${t} ${c} fade-in 0`),
+                    { t: target.track, c: target.clipId });
+await page.waitForTimeout(1000);
+const box = await page.evaluate((clipId) => {
+  const els = [...document.querySelectorAll('.ar-clip')];
+  const el = els.find((x) => x._clipId === clipId);
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return { x: r.x, y: r.y, w: r.width, h: r.height };
+}, target.clipId);
+check(box !== null && box.w > 40, 'the clip is on screen and wide enough to grab',
+      JSON.stringify(box));
+
+if (box && box.w > 40) {
+  const zeroed = (await audio()).find((c) => c.clipId === target.clipId);
+  check(zeroed.fadeInTicks === 0, 'and its fade is back to zero before the drag',
+        String(zeroed.fadeInTicks));
+
+  // The TOP-LEFT corner, 4px in and 3px down — inside the fade band, and inside the trim
+  // zone too, which is the point: the band is what tells them apart.
+  await page.mouse.move(box.x + 4, box.y + 3);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 40, box.y + 3, { steps: 6 });
+  const preview = await page.evaluate((clipId) => {
+    const el = [...document.querySelectorAll('.ar-clip')].find((x) => x._clipId === clipId);
+    return el ? { drawn: el._fiW, fading: el.classList.contains('fading') } : null;
+  }, target.clipId);
+  /*
+   * PREVIEWED BEFORE THE BUTTON COMES UP. A fade redrawn only on the engine's answer lags
+   * the pointer by the round trip, which is the one thing a direct-manipulation gesture
+   * must not do — so this is asserted MID-DRAG, where that failure is visible.
+   */
+  check(preview && preview.drawn > 20, 'the ramp follows the pointer before the button is up',
+        JSON.stringify(preview));
+  check(preview && preview.fading === true, 'and the clip says it is being faded');
+
+  await page.mouse.up();
+  await page.waitForTimeout(1200);
+  const after = (await audio()).find((c) => c.clipId === target.clipId);
+  check(after && after.fadeInTicks > 0, 'releasing commits it to the engine',
+        `${after && after.fadeInTicks} ticks`);
+  check(after && after.drawnIn > 20, 'and the engine\'s value is what stays drawn',
+        `${after && after.drawnIn}px`);
+
+  /*
+   * AND THE NEIGHBOUR IS UNTOUCHED. A gesture that read the wrong element is the failure
+   * this codebase produces most, and it looks correct from the dragged clip alone.
+   */
+  const n2 = (await audio()).find((c) => c.clipId === other.clipId);
+  check(n2 && n2.fadeInTicks === 0, 'and the other clip still has no fade',
+        String(n2 && n2.fadeInTicks));
+
+  /*
+   * ESCAPE ABANDONS IT. A preview with no way back is a gesture you cannot try.
+   */
+  const beforeEsc = (await audio()).find((c) => c.clipId === target.clipId).fadeInTicks;
+  await page.mouse.move(box.x + 4, box.y + 3);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 120, box.y + 3, { steps: 6 });
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await page.waitForTimeout(1000);
+  const esc = (await audio()).find((c) => c.clipId === target.clipId);
+  check(esc && esc.fadeInTicks === beforeEsc, 'Escape mid-drag leaves the fade alone',
+        `${beforeEsc} -> ${esc && esc.fadeInTicks}`);
+
+  /*
+   * AND THE EDGE STILL TRIMS. The fade band took the top of the corner; the rest of the
+   * edge has to still be the trim handle, or this gesture was bought by breaking one that
+   * was already there.
+   */
+  const clipBefore = await page.evaluate(() => window.__uni.arrangeProbe().clips);
+  await page.mouse.move(box.x + 2, box.y + box.h - 4);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 60, box.y + box.h - 4, { steps: 6 });
+  const dragging = await page.evaluate(() => {
+    const g = document.querySelector('.ar-ghost');
+    return { ghost: !!g, w: g ? g.getBoundingClientRect().width : 0 };
+  });
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await page.waitForTimeout(600);
+  check(dragging.ghost === true,
+        'the lower part of the same edge still starts a TRIM, not a fade',
+        JSON.stringify(dragging));
+  check((await page.evaluate(() => window.__uni.arrangeProbe().clips)) === clipBefore,
+        'and abandoning it changed nothing');
+}
+
 await browser.close();
 stack.stop();
 console.log(`\n${fail === 0 ? `ALL PASS (${pass} checks)` : `${fail} of ${pass + fail} FAILED`}`);

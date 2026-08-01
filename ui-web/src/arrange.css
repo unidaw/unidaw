@@ -391,3 +391,19 @@
   color: var(--uni-text-fx);
   pointer-events: none;
 }
+
+/* The fade handles: the top corners of an AUDIO clip, and only those. A note clip has no
+   fade, so it gets no cursor promising one. The zones are `clipZoneAt`'s and this is only
+   the affordance — the two are set from the same numbers by hand, which is a duplication
+   worth naming: if one moves, move the other. */
+.ar-clip.audio::before,
+.ar-clip.audio::after {
+  content: '';
+  position: absolute; top: 0; height: 40%; max-height: 14px; width: 12px;
+  cursor: ew-resize;
+  z-index: 1;
+}
+.ar-clip.audio::before { left: 0; }
+.ar-clip.audio::after { right: 0; }
+/* While a fade is being dragged, the ramp is the only thing that should look live. */
+.ar-clip.fading .ar-clip-fade { transition: none; }
