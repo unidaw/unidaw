@@ -127,47 +127,54 @@ if (box) {
         'and no track gain moved with it', `${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
 
   /*
-   * AN INVERTED CHECK — IT ASSERTS THE GAP, SO IT FAILS THE DAY THE GAP CLOSES.
+   * IT REACHED THE ENGINE AND THE ENGINE SAID SO.
    *
-   * A master-only edit never clears `pending`, and the cause is one ordering in the
-   * engine: `uiMixerVersion` is bumped from `mixerChanged`, which is computed by
-   * comparing each TRACK slot against `lastGainMillibels[]` — and the master's slot is
-   * filled AFTER that, in the block that appends it with `kUiTrackFlagMaster`. So the
-   * master's gain IS published and readable, and nothing tells a reader it moved.
+   * This was an INVERTED check until 2026-08-01: a master-only edit did not move
+   * `uiMixerVersion`, because that counter came from comparing each TRACK slot against
+   * `lastGainMillibels[]` and the master's slot was filled afterwards, in the block that
+   * appends it. So the value was published and readable and nothing said it had moved,
+   * and an optimistic strip stayed pending for ever.
    *
-   * The fader still works: the engine applies it, the audio callback reads the atomics
-   * each block. What is missing is the acknowledgement, so an optimistic strip has
-   * nothing to reconcile against and stays pending for ever. Reported to backend.
+   * The check asserted the broken state and named the fix in its own failure message, so
+   * the day backend closed it the suite went red and said what to write instead. This is
+   * what it said to write. The engine now compares the master in the same loop as every
+   * other track, and the append block no longer writes gain/pan/flags at all — two sources
+   * for one value being what allowed the defect, with the second silently winning.
    *
-   * Written as "still pending" rather than left failing, because a suite that is red for
-   * a known reason is a suite people stop reading — and written as an ASSERTION rather
-   * than a comment, because a recorded limitation nobody re-checks is indistinguishable
-   * from a real one.
+   * `pending` clears only when the engine publishes a NEWER mixer version, so waiting for
+   * it to clear is waiting for the engine to have SEEN the edit.
    */
   let settled = false;
-  for (let i = 0; i < 15 && !settled; i++) {
+  for (let i = 0; i < 40 && !settled; i++) {
     await page.waitForTimeout(200);
     const q = await probe();
     settled = q.master && q.master.pending === false;
   }
-  check(!settled,
-        'GAP: a master edit is never acknowledged — uiMixerVersion does not move for it',
-        settled ? 'it settled! the engine now bumps the version for the master — delete this '
-                + 'inverted check and assert the round trip instead' : undefined);
+  check(settled, 'the engine acknowledges a master edit — the value is not just local');
   const done = await probe();
   check(done.master.gain === mid.master.gain,
-        'the fader value stands while it waits',
+        'and it kept the value the fader set',
         `${mid.master.gain} -> ${done.master.gain}`);
 
   /*
-   * AND THE METER. `uiTrackPeakRms[m] = 0.0f` with the comment "master peak: 4b" — the
-   * master's slot is published with a hard-coded zero, so the strip's meter can only ever
-   * be empty. Same shape, same treatment: asserted, so it retires itself.
+   * THE METER IS NOT ASSERTED HERE, AND THE REASON IS NOT THE ENGINE'S.
+   *
+   * It used to be an inverted check too — `uiTrackPeakRms[m]` was the literal `0.0f`, so
+   * the strip's meter could only ever be empty. Backend now measures it over the summed
+   * bus AFTER the master fader, in its own pass, because the fader's multiply is skipped
+   * at unity gain and the meter must not be.
+   *
+   * But the inverted check DID NOT GO RED when that landed, and that is the interesting
+   * part: it still read zero, because this machine's audio device never calls back, so
+   * nothing sounds and a correct meter reports silence. The check could no longer tell
+   * "published as a constant" from "measured, and the mix is genuinely silent" — it was
+   * passing for a reason it was not written to test.
+   *
+   * A check that cannot distinguish its two outcomes is worse than no check, so it is
+   * gone rather than reworded. The master meter is in exactly the same position as every
+   * other meter in the app on this machine, and e2e already reports that as BLOCKED with
+   * the device-callback count as its evidence. Nothing here is a separate claim.
    */
-  check(done.master.meter === 0,
-        'GAP: the master meter is published as a constant zero (engine: "master peak: 4b")',
-        done.master.meter !== 0 ? `it moved to ${done.master.meter} — the engine publishes a `
-          + 'master peak now, so delete this and assert the meter follows the mix' : undefined);
 }
 
 console.log('\n[mute]');
