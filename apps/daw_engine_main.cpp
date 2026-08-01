@@ -6281,6 +6281,48 @@ struct TrackRuntime {
     auto* region = reinterpret_cast<daw::UiAudioSourceRegion*>(
         reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiAudioSourceOffset);
 
+    // THE SOURCE HALF, AND IT LIVES HERE FOR THE REASON THE CLIP HALF DOES. This loop was
+    // load-only until SetClipText (98) let a command repoint a clip at another file: the retarget
+    // interned the new source and moved the clip's sourceId to it, and the sources array still
+    // listed only what the load had seen. The published table then carried a clip pointing at a
+    // sourceId that was not in it — a DANGLING JOIN, which is worse than the stale path it
+    // replaced, because a reader gets no waveform, no path, and nothing saying why.
+    //
+    // The comment above the old call site already said a load-only copy of the clip loop "is
+    // exactly how the table came to be a load-time snapshot in the first place". It was right,
+    // and the source loop sitting immediately above it was still that copy. Both halves are one
+    // definition now, so the next writer cannot update one and leave the other behind.
+    const auto sources = waveformStore.snapshot();
+    uint32_t sourceCount = 0;
+    for (const auto& e : sources) {
+      if (sourceCount >= daw::kUiMaxAudioSources) break;
+      auto& d = region->sources[sourceCount++];
+      d = daw::UiAudioSource{};
+      d.sourceId = e.sourceId;
+      d.contentKeyLo = static_cast<uint32_t>(e.contentKey & 0xffffffffu);
+      d.contentKeyHi = static_cast<uint32_t>(e.contentKey >> 32);
+      d.sourceChannels = e.sourceChannels;
+      d.waveChannels = e.waveChannels;
+      d.status = e.status;
+      d.sourceFrames = e.sourceFrames;
+      d.sourceRateHz = e.sourceRateHz;
+      d.absPeak = e.absPeak;
+      d.levelMask = e.levelMask;
+      std::memcpy(d.path, e.path.c_str(),
+                  std::min(e.path.size(), sizeof(d.path) - 1));
+      d.flags = (e.channelsTruncated ? 1u : 0u) | (e.clipped ? 2u : 0u);
+    }
+    for (uint32_t i = sourceCount; i < daw::kUiMaxAudioSources; ++i) {
+      region->sources[i] = daw::UiAudioSource{};
+    }
+    region->sourceCount = sourceCount;
+    region->formatVersion = daw::kWaveformFormatVersion;
+    // The constant tempo audio is actually positioned at (bpmAtNanotick(0)) — the number
+    // rebuildAudioRender uses, so drawn == heard even on a tempo-mapped project where audio is
+    // not yet tempo-followed. See contract §2.4.
+    region->audioMapBpmMilli =
+        static_cast<uint32_t>(tempoProvider.bpmAtNanotick(0) * 1000.0 + 0.5);
+
     std::vector<TrackRuntime*> runtimes;
     {
       std::lock_guard<std::mutex> lock(tracksMutex);
@@ -8137,49 +8179,14 @@ struct TrackRuntime {
       }
     }
 
-    // Publish the audio source + clip descriptor tables (contract §2.1). Version-
-    // gated like deviceParams: write both tables, then bump `version` last behind a
-    // release fence so a reader seeing the new version sees complete tables. These
-    // change only at load, so no seqlock — the frontend re-reads on a version move.
-    if (uiShm.header && uiShm.header->uiAudioSourceOffset != 0) {
-      auto* region = reinterpret_cast<daw::UiAudioSourceRegion*>(
-          reinterpret_cast<uint8_t*>(uiShm.base) +
-          uiShm.header->uiAudioSourceOffset);
-      const auto sources = waveformStore.snapshot();
-      uint32_t sourceCount = 0;
-      for (const auto& e : sources) {
-        if (sourceCount >= daw::kUiMaxAudioSources) break;
-        auto& d = region->sources[sourceCount++];
-        d = daw::UiAudioSource{};
-        d.sourceId = e.sourceId;
-        d.contentKeyLo = static_cast<uint32_t>(e.contentKey & 0xffffffffu);
-        d.contentKeyHi = static_cast<uint32_t>(e.contentKey >> 32);
-        d.sourceChannels = e.sourceChannels;
-        d.waveChannels = e.waveChannels;
-        d.status = e.status;
-        d.sourceFrames = e.sourceFrames;
-        d.sourceRateHz = e.sourceRateHz;
-        d.absPeak = e.absPeak;
-        d.levelMask = e.levelMask;
-        std::memcpy(d.path, e.path.c_str(),
-                    std::min(e.path.size(), sizeof(d.path) - 1));
-        d.flags = (e.channelsTruncated ? 1u : 0u) | (e.clipped ? 2u : 0u);
-      }
-      for (uint32_t i = sourceCount; i < daw::kUiMaxAudioSources; ++i) {
-        region->sources[i] = daw::UiAudioSource{};
-      }
-
-      region->sourceCount = sourceCount;
-      region->formatVersion = daw::kWaveformFormatVersion;
-      // The constant tempo audio is actually positioned at (bpmAtNanotick(0)) — the
-      // number rebuildAudioRender uses, so drawn == heard even on a tempo-mapped
-      // project where audio is not yet tempo-followed. See contract §2.4.
-      region->audioMapBpmMilli =
-          static_cast<uint32_t>(tempoProvider.bpmAtNanotick(0) * 1000.0 + 0.5);
-    }
-    // The clip half of the same table, and the version bump that covers both. ONE definition,
-    // shared with the SetAudioClipField command — a load-only copy of this loop is exactly how
-    // the table came to be a load-time snapshot in the first place.
+    // Publish the audio source + clip descriptor tables (contract §2.1). Version-gated like
+    // deviceParams: write both tables, then bump `version` last behind a release fence so a
+    // reader seeing the new version sees complete tables.
+    //
+    // BOTH HALVES, ONE DEFINITION, and the load is just another caller. The source loop used to
+    // be inline here under "these change only at load, so no seqlock" — true until a command
+    // could add a source, which SetClipText (98) now can. It is in publishAudioClipTable with
+    // the clip loop it has to stay consistent with.
     publishAudioClipTable();
 
     // The UI's mirror is now arbitrarily stale, so force a full resync rather
@@ -9652,6 +9659,193 @@ struct TrackRuntime {
           .field("slot", static_cast<uint32_t>(h.slotId))
           .field("name", newName)
           .field("bytes", static_cast<uint32_t>(h.nameBytes));
+      return;
+    }
+
+    // ---- SET CLIP TEXT (98). A clip's `name` and its audio `source_path` were the last two
+    // GAPs in persisted_field_reach: both persisted, both published, both rendered, and neither
+    // reachable from any surface. Both were GAPs for one reason — a string does not fit the
+    // 40-byte ring payload — so both arrive here, over the carrier, rather than as two more
+    // scalar opcodes that could not have carried them anyway.
+    if (innerType == daw::UiCommandType::SetClipText) {
+      if (buf.size() < sizeof(daw::UiClipTextHeader)) {
+        DAW_EVENT("bulk.rejected")
+            .field("op", static_cast<uint32_t>(inner))
+            .field("bytes", static_cast<uint64_t>(buf.size()))
+            .field("reason", "short_header");
+        return;
+      }
+      daw::UiClipTextHeader h{};
+      std::memcpy(&h, buf.data(), sizeof(h));
+      const auto whichField = static_cast<daw::ClipTextField>(h.field);
+      const char* fieldName = nullptr;
+      switch (whichField) {
+        case daw::ClipTextField::Name: fieldName = "name"; break;
+        case daw::ClipTextField::SourcePath: fieldName = "source_path"; break;
+      }
+      if (fieldName == nullptr) {
+        DAW_EVENT("clip_text.rejected")
+            .field("track", h.trackId)
+            .field("clip", h.clipId)
+            .field("field", static_cast<uint64_t>(h.field))
+            .field("reason", "no_field_named");
+        return;
+      }
+      // REFUSED, not truncated — the carrier's whole point is that a partial delivery is
+      // detectable, so accepting a short buffer here would undo it one layer up.
+      if (buf.size() < sizeof(h) + static_cast<size_t>(h.textBytes)) {
+        DAW_EVENT("clip_text.rejected")
+            .field("track", h.trackId)
+            .field("clip", h.clipId)
+            .field("field", fieldName)
+            .field("bytes", static_cast<uint64_t>(buf.size()))
+            .field("need", static_cast<uint64_t>(sizeof(h) + h.textBytes))
+            .field("reason", "short_payload");
+        return;
+      }
+      const std::string text(reinterpret_cast<const char*>(buf.data()) + sizeof(h),
+                             static_cast<size_t>(h.textBytes));
+      // AN EMPTY NAME IS LEGAL (a clip with no name), AN EMPTY PATH IS NOT. Clearing a source
+      // path would leave an audio clip that is still an audio clip and can never make a sound,
+      // which is a broken state rather than an edit — deleting the clip is how you remove it.
+      if (whichField == daw::ClipTextField::SourcePath && text.empty()) {
+        DAW_EVENT("clip_text.rejected")
+            .field("track", h.trackId)
+            .field("clip", h.clipId)
+            .field("field", fieldName)
+            .field("reason", "empty_text");
+        return;
+      }
+      // THE NAME IS REFUSED WHEN IT DOES NOT FIT THE PUBLISHED FIELD, which is what
+      // SamplerSetSlotName does for pad names. Truncating would make the read-back disagree with
+      // the write for every long name, silently, and "the engine never shortens" is a far easier
+      // rule to rely on than a length the caller has to know.
+      constexpr size_t kNameBytes = sizeof(daw::UiClipExtent::name);
+      if (whichField == daw::ClipTextField::Name && text.size() >= kNameBytes) {
+        DAW_EVENT("clip_text.rejected")
+            .field("track", h.trackId)
+            .field("clip", h.clipId)
+            .field("field", fieldName)
+            .field("bytes", static_cast<uint32_t>(text.size()))
+            .field("max", static_cast<uint32_t>(kNameBytes - 1))
+            .field("reason", "text_too_long");
+        return;
+      }
+      if (!requireMatchingClipVersion(h.baseVersion, daw::UiCommandType::SetClipText,
+                                      h.trackId)) {
+        return;
+      }
+      // A RETARGET AT A FILE THAT IS NOT THERE IS REFUSED, and refused BEFORE anything is
+      // written. rebuildAudioRender would otherwise accept it, log audio.decode_failed and
+      // schedule nothing — leaving a clip that displays the new path and renders silence, which
+      // is the "shows one thing, plays another" state this command exists to make impossible.
+      //
+      // The boundary, stated rather than overclaimed: this checks that the resolved path EXISTS.
+      // A file that exists and fails to decode still surfaces as audio.decode_failed, because
+      // proving decodability here means decoding twice.
+      if (whichField == daw::ClipTextField::SourcePath) {
+        const std::string resolved = resolveSourcePath(text);
+        std::error_code ec;
+        if (!std::filesystem::exists(resolved, ec)) {
+          DAW_EVENT("clip_text.rejected")
+              .field("track", h.trackId)
+              .field("clip", h.clipId)
+              .field("field", fieldName)
+              .field("path", resolved)
+              .field("reason", "source_unreadable");
+          return;
+        }
+      }
+
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (h.trackId < tracks.size()) {
+          runtime = tracks[h.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("clip_text.rejected")
+            .field("track", h.trackId)
+            .field("clip", h.clipId)
+            .field("field", fieldName)
+            .field("reason", "no_such_track");
+        return;
+      }
+      bool applied = false;
+      bool wrongKind = false;
+      std::shared_ptr<const ClipSnapshot> snapshot;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& oc : runtime->ownedClips) {
+          if (oc.id != h.clipId) {
+            continue;
+          }
+          // A SYMBOLIC CLIP HAS NO SOURCE PATH. Accepting one would write a field the save path
+          // never emits for this kind and the renderer never reads — the same "succeeded and
+          // nothing happened" that opcode 95 names rather than ignores. A NAME, by contrast, is
+          // common to both kinds, so it is not gated here.
+          if (whichField == daw::ClipTextField::SourcePath &&
+              oc.kind != daw::ClipKind::Audio) {
+            wrongKind = true;
+            break;
+          }
+          if (whichField == daw::ClipTextField::Name) {
+            oc.name = text;
+          } else {
+            oc.audio.sourcePath = text;
+          }
+          applied = true;
+          break;
+        }
+        // THE TWO FIELDS DO NOT SHARE A PUBLISHER. A name reaches readers through
+        // UiClipExtent::name, and rt.clipExtents is DERIVED inside rebuildFlatAndPublish; a
+        // source path reaches them through UiAudioSource::path and the render. Calling one
+        // publisher for both fields is the "saved correctly and drew nothing" failure this file
+        // already documents for the placement-scope flag.
+        if (applied) {
+          if (whichField == daw::ClipTextField::Name) {
+            snapshot = rebuildFlatAndPublish(*runtime);
+          } else {
+            std::atomic_store_explicit(&runtime->audioRender, rebuildAudioRender(*runtime),
+                                       std::memory_order_release);
+          }
+        }
+      }
+      if (wrongKind) {
+        DAW_EVENT("clip_text.rejected")
+            .field("track", h.trackId)
+            .field("clip", h.clipId)
+            .field("field", fieldName)
+            .field("reason", "not_an_audio_clip");
+        return;
+      }
+      if (!applied) {
+        DAW_EVENT("clip_text.rejected")
+            .field("track", h.trackId)
+            .field("clip", h.clipId)
+            .field("field", fieldName)
+            .field("reason", "no_such_clip");
+        return;
+      }
+      if (snapshot) {
+        std::atomic_store_explicit(&runtime->clipSnapshot, snapshot,
+                                   std::memory_order_release);
+      }
+      if (whichField == daw::ClipTextField::Name) {
+        // The extents rebuild on the clip version, so bump it or the new name stays invisible
+        // until some unrelated edit happens to republish.
+        bumpClipVersionFor(runtime);
+        clipDirty.store(true, std::memory_order_release);
+      } else {
+        publishAudioClipTable();
+      }
+      DAW_EVENT("clip_text.set")
+          .field("track", h.trackId)
+          .field("clip", h.clipId)
+          .field("field", fieldName)
+          .field("text", text)
+          .field("bytes", static_cast<uint32_t>(text.size()));
       return;
     }
 

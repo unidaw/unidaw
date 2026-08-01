@@ -478,7 +478,15 @@ enum class UiCommandType : uint16_t {
   /// so a pencil editor built on 84 would be WRITE-ONLY: able to send a curve and never to draw
   /// the one already in the project. A writer with no reader is the same defect as a field with
   /// no writer, with the halves swapped.
-  RequestSamplerEnvelope = 97,  // next free 98
+  RequestSamplerEnvelope = 97,
+
+  /// SET A CLIP'S NAME OR ITS AUDIO SOURCE PATH. Rides the BulkChunk carrier (83) as an inner
+  /// command, like SamplerSetEnvelopePoints (84) and SamplerSetSlotName (90), because a string
+  /// does not fit the 40-byte ring payload — which is the ONLY reason these two fields had no
+  /// writer. They were the last two GAPs in persisted_field_reach: persisted, published, rendered,
+  /// and unreachable from every surface, so a UI could draw a clip's name and never change it and
+  /// an audio clip could not be repointed at another file without a text editor.
+  SetClipText = 98,  // next free 99
 };
 
 // ASK FOR ONE MODULATOR'S ENVELOPE (opcode 97). 40 bytes.
@@ -705,6 +713,36 @@ struct UiSamplerSlotNameHeader {
 };
 static_assert(sizeof(UiSamplerSlotNameHeader) == 12,
               "UiSamplerSlotNameHeader must be 12 bytes");
+
+// WHICH STRING ON THE CLIP. Named rather than two opcodes because the carrier, the addressing,
+// the version gate and every rejection are identical; only the destination field differs.
+enum class ClipTextField : uint16_t {
+  Name = 0,
+  SourcePath = 1,
+};
+
+// SET A CLIP'S NAME OR SOURCE PATH (opcode 98), assembled from BulkChunk: this header, then
+// `textBytes` bytes of UTF-8, NOT nul-terminated.
+//
+// THE TWO FIELDS DO NOT SHARE A PUBLISHER, and that is the trap this command exists inside. A
+// name is published per PLACEMENT in UiClipExtent::name, and that region is derived inside
+// rebuildFlatAndPublish; a source path is published in UiAudioSource::path and feeds the render,
+// which is publishAudioClipTable plus rebuildAudioRender. Using either publisher for both fields
+// saves the edit correctly and shows nothing — the failure daw_engine_main.cpp already documents
+// for the placement scope flag, one object along.
+//
+// The name is REFUSED rather than truncated when it does not fit UiClipExtent::name, which is the
+// rule SamplerSetSlotName already applies to pad names: one policy for one quantity, so a
+// read-back is byte-for-byte the write or there was no write.
+struct UiClipTextHeader {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SetClipText);
+  uint16_t field = 0;        // ClipTextField
+  uint32_t trackId = 0;
+  uint32_t clipId = 0;
+  uint32_t textBytes = 0;    // UTF-8, not nul-terminated
+  uint32_t baseVersion = 0;  // the clip version this edit was composed against
+};
+static_assert(sizeof(UiClipTextHeader) == 20, "UiClipTextHeader must be 20 bytes");
 
 // SAMPLER SET VINTAGE (opcode 91). 40 bytes, shaped like UiSamplerFilterPayload so the two
 // mod-set commands read the same way.
@@ -1175,6 +1213,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::SetTrackAllowNoteOverlap: return "set_track_allow_note_overlap";
     case UiCommandType::SetClipGrid: return "set_clip_grid";
     case UiCommandType::SetAudioClipField: return "set_audio_clip_field";
+    case UiCommandType::SetClipText: return "set_clip_text";
     // NAMED HERE ONLY, deliberately: these two have no daw-cli verb and that is a separate
     // question, but an opcode with no NAME is recorded by the history journal as "op:unknown"
     // whatever else is true of it — so a session that used one is unreadable afterwards. The
@@ -1335,6 +1374,11 @@ inline bool uiCommandUsesGenericPayload(UiCommandType t) {
     case UiCommandType::BulkChunk:
     case UiCommandType::SetClipGrid:
     case UiCommandType::SetAudioClipField:
+    // Bulk-inner, like SamplerSetEnvelopePoints above: it never arrives as a ring commandType, so
+    // the journal only ever sees it via the assembled path. Listed anyway, for the same reason
+    // that one is — the alternative is a name here that means "we thought about it" and a name
+    // missing that means either "not applicable" or "forgotten", and those two must stay apart.
+    case UiCommandType::SetClipText:
       return false;
     default:
       return true;

@@ -132,21 +132,17 @@ CLIP = {
     "gain_db":              "SetAudioClipField",
     "fade_in":              "SetAudioClipField",
     "fade_out":             "SetAudioClipField",
-    # GAP is NOT a fourth kind of exemption. It is a debt marker: a field that is persisted,
-    # published and rendered, and that no command can write — the defect this whole check exists
-    # to find. They are listed so they are COUNTED AND PRINTED on every run rather than being
-    # invisible, which is what they were until clips were scoped at all.
+    # THE LAST TWO GAPS IN THIS TABLE, CLOSED. Both were strings, and that was not a coincidence:
+    # the ring payload is 40 bytes, so a name or a path needed the BulkChunk carrier (83) rather
+    # than a scalar payload like SetAudioClipField's. Neither was ever a decision against having
+    # them — they were unreachable because of a wire limit, which is the least visible reason for
+    # a field to be read-only and the easiest to mistake for intent.
     #
-    # BOTH REMAINING ONES ARE STRINGS, and that is not a coincidence: the command ring's payload is
-    # 40 bytes, so a name or a path needs the BulkChunk carrier (opcode 83) rather than a scalar
-    # payload like SetAudioClipField's. That is the change that closes these two, and it is the
-    # same shape as task #85's inward bulk carrier.
-    "name":                 "GAP:no writer — `rename` is track-only. A clip's name persists and "
-                            "is shown, and nothing can change it. Needs the bulk carrier: a name "
-                            "does not fit a 40-byte payload",
-    "source_path":          "GAP:no writer — an audio clip cannot be repointed at another file, "
-                            "the same defect sourceLocalId had for sampler slots (closed). Also a "
-                            "string, so also the bulk carrier",
+    # SetClipText (98) rides that carrier and writes both. Guarded by tools/clip_text_check.sh,
+    # which asserts the rename is SEEN and SAVED and the retarget is HEARD — the render moving
+    # 440 Hz -> 880 Hz — because a path that updates while the render does not is the actual bug.
+    "name":                 "SetClipText",
+    "source_path":          "SetClipText",
 }
 
 # ---------------------------------------------------------------------------- the CHORD scope.

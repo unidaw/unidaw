@@ -547,6 +547,13 @@ add_test(NAME check_registry
 )
 set_tests_properties(check_registry PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# SetClipText (98): a clip's name and its audio source path, the last two persisted_field_reach
+# GAPs. Renders offline, so no audio device.
+add_test(NAME clip_text
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/clip_text_check.sh
+)
+set_tests_properties(clip_text PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+
 add_test(NAME lint
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/lint_check.sh
 )

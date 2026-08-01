@@ -1269,8 +1269,16 @@ fn get_extents(handle: &EngineHandle) -> i32 {
         // M2.57: is there another version of this appearance to swap to? An alternate nobody can
         // see is the same as not having one.
         let alt = e.flags & daw_bridge::layout::UI_CLIP_EXTENT_HAS_ALTERNATE != 0;
+        // THE NAME, published in UiClipExtent since the region existed and printed by nothing.
+        // A field that is written, mirrored in Rust and readable from no client is invisible in
+        // exactly the way a field with no writer is — which is what `name` also was until
+        // SetClipText (98). Now that a command can change it, a caller has to be able to see it.
+        let name = String::from_utf8_lossy(
+            &e.name[..e.name.iter().position(|&b| b == 0).unwrap_or(e.name.len())],
+        )
+        .to_string();
         println!(
-            "  {{ \"placement\": {}, \"clip\": {}, \"track\": {}, \"audio\": {}, \"local_edits\": {local}, \"overrides\": {overrides}, \"has_overrides\": {has_overrides}, \"has_alternate\": {alt}, \"start\": {}, \"end\": {}, \"grid\": {} }}{comma}",
+            "  {{ \"placement\": {}, \"clip\": {}, \"track\": {}, \"name\": {name:?}, \"audio\": {}, \"local_edits\": {local}, \"overrides\": {overrides}, \"has_overrides\": {has_overrides}, \"has_alternate\": {alt}, \"start\": {}, \"end\": {}, \"grid\": {} }}{comma}",
             e.placement_id, e.clip_id, e.track_id, audio, e.start_tick, e.end_tick, grid
         );
     }
@@ -2665,6 +2673,101 @@ fn main() {
                             match handle.send_bulk(&buf) {
                                 Ok(()) => {
                                     println!("{{ \"sent\": \"sampler-slot-name\", \"track\": {track}, \"device\": {device}, \"slot\": {slot}, \"name\": {n:?} }}");
+                                    0
+                                }
+                                Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                            }
+                        }
+                    }
+                }
+                // A CLIP'S NAME OR ITS AUDIO SOURCE PATH (opcode 98), over the bulk carrier.
+                // Neither fits the 40-byte ring payload, which is the only reason either was
+                // unreachable — they were the last two GAPs in persisted_field_reach.
+                //
+                // SHAPE HERE, DOMAIN IN THE ENGINE. This refuses a missing flag and a name that
+                // cannot fit the published field; whether the clip exists, is audio, or the path
+                // resolves is the engine's to answer, because daw-cli is not the only producer —
+                // the web UI's sidecar writes the ring directly and never runs this binary.
+                Some(&"clip-name") | Some(&"clip-source") => {
+                    let is_name = rest.first() == Some(&"clip-name");
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    // REQUIRED, not defaulted to 0. An absent --clip falling back to clip 0 would
+                    // rename whichever clip happens to be there on a typo, which is the same
+                    // silent-wrong-target trap the --name handling below refuses to allow.
+                    let clip_arg = flag_u64(&args, "--clip", None).ok();
+                    let clip = clip_arg.unwrap_or(0) as u32;
+                    let flag = if is_name { "--name" } else { "--path" };
+                    // An ABSENT value is an error; an EMPTY --name is a legal clear. Defaulting
+                    // the missing case to "" would make a typo'd flag erase a name silently.
+                    let text = args
+                        .iter()
+                        .position(|a| a == flag)
+                        .and_then(|i| args.get(i + 1))
+                        .map(String::as_str);
+                    // Defaults to the track's CURRENT clip version, so an ordinary edit does not
+                    // have to know about the gate; --base-version is there to stamp a stale one
+                    // deliberately and see the engine refuse it.
+                    let base = flag_u64(&args, "--base-version", None)
+                        .map(|v| v as u32)
+                        .unwrap_or_else(|_| handle.clip_version_for_track(track));
+                    match text {
+                        // Checked before the text, so a call missing both flags names the
+                        // addressing problem first — a rename that cannot say WHICH clip is not
+                        // a rename with a missing name.
+                        _ if clip_arg.is_none() => {
+                            eprintln!("daw-cli: {} needs --clip <id>",
+                                      if is_name { "clip-name" } else { "clip-source" });
+                            2
+                        }
+                        None => {
+                            eprintln!("daw-cli: {} needs {flag} <text>",
+                                      if is_name { "clip-name" } else { "clip-source" });
+                            2
+                        }
+                        // Same limit and same reason as the engine's, so a name that cannot land
+                        // fails at the keyboard instead of becoming a log line nobody reads.
+                        // `--oversize-anyway` skips this and sends it regardless, so the ENGINE's
+                        // refusal is reachable through the ordinary client — without it, the only
+                        // oversize name the engine ever sees comes from a hand-rolled ring writer
+                        // and "the engine refuses it" is an untested claim about another process.
+                        Some(t)
+                            if is_name
+                                && t.len() >= daw_bridge::layout::UI_CLIP_EXTENT_NAME_BYTES
+                                && !args.iter().any(|a| a == "--oversize-anyway") =>
+                        {
+                            eprintln!(
+                                "daw-cli: name is {} bytes; the published field holds {} (the engine refuses rather than truncating)",
+                                t.len(),
+                                daw_bridge::layout::UI_CLIP_EXTENT_NAME_BYTES - 1);
+                            2
+                        }
+                        Some(t) => {
+                            let bytes = t.as_bytes();
+                            let header = daw_bridge::layout::UiClipTextHeader {
+                                command_type: UiCommandType::SetClipText as u16,
+                                field: if is_name {
+                                    daw_bridge::layout::CLIP_TEXT_FIELD_NAME
+                                } else {
+                                    daw_bridge::layout::CLIP_TEXT_FIELD_SOURCE_PATH
+                                },
+                                track_id: track,
+                                clip_id: clip,
+                                text_bytes: bytes.len() as u32,
+                                base_version: base,
+                            };
+                            let mut buf = Vec::with_capacity(20 + bytes.len());
+                            buf.extend_from_slice(unsafe {
+                                std::slice::from_raw_parts(
+                                    &header as *const daw_bridge::layout::UiClipTextHeader
+                                        as *const u8,
+                                    std::mem::size_of::<daw_bridge::layout::UiClipTextHeader>(),
+                                )
+                            });
+                            buf.extend_from_slice(bytes);
+                            match handle.send_bulk(&buf) {
+                                Ok(()) => {
+                                    let field = if is_name { "name" } else { "source_path" };
+                                    println!("{{ \"sent\": \"clip-text\", \"track\": {track}, \"clip\": {clip}, \"field\": {field:?}, \"text\": {t:?}, \"base_version\": {base} }}");
                                     0
                                 }
                                 Err(err) => { eprintln!("daw-cli: {err}"); 1 }

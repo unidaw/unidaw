@@ -451,6 +451,34 @@ pub struct UiSamplerSlotNameHeader {
     pub name_bytes: u16,
 }
 
+/// Which string on the clip. One opcode rather than two, because the carrier, the addressing,
+/// the version gate and every rejection are identical — only the destination field differs.
+pub const CLIP_TEXT_FIELD_NAME: u16 = 0;
+pub const CLIP_TEXT_FIELD_SOURCE_PATH: u16 = 1;
+
+/// How many bytes `UiClipExtent::name` holds. The engine REFUSES a longer name rather than
+/// truncating it, so this is a real limit a caller must respect and not a display hint.
+pub const UI_CLIP_EXTENT_NAME_BYTES: usize = 32;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+/// Header of an assembled SetClipText (98) payload; `text_bytes` raw UTF-8 bytes follow, NOT
+/// nul-terminated.
+///
+/// Clip `name` and audio `source_path` were the last two GAPs in persisted_field_reach —
+/// persisted, published and rendered, with no command able to write either. Both were GAPs for
+/// the same reason: a string does not fit the 40-byte ring payload, so both ride the BulkChunk
+/// carrier (83) exactly as SamplerSetSlotName (90) does.
+pub struct UiClipTextHeader {
+    pub command_type: u16,
+    /// `CLIP_TEXT_FIELD_*`
+    pub field: u16,
+    pub track_id: u32,
+    pub clip_id: u32,
+    pub text_bytes: u32,
+    pub base_version: u32,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 /// One drawn point. `tension` is toward the NEXT point: 0 linear, positive ease-in, negative
@@ -1328,6 +1356,10 @@ pub enum UiCommandType {
     /// time base and the rate. Opcode 84 could write all of that and nothing could read it back,
     /// so a pencil editor would have been write-only.
     RequestSamplerEnvelope = 97,
+    /// Set a clip's `name` or its audio `source_path`. Rides the BulkChunk carrier (83) as an
+    /// inner command — a string does not fit the 40-byte ring payload, which is the only reason
+    /// these two fields had no writer at all.
+    SetClipText = 98,
 }
 
 /// Where a route points. Mirrors daw::TrackRouteKind.
@@ -2628,6 +2660,7 @@ mod wire_layout {
         // Not a ring payload — the ASSEMBLED shapes, which the engine memcpys.
         assert_eq!(std::mem::size_of::<UiSamplerEnvPointsHeader>(), 32);
         assert_eq!(std::mem::size_of::<UiSamplerSlotNameHeader>(), 12);
+        assert_eq!(std::mem::size_of::<UiClipTextHeader>(), 20);
         assert_eq!(std::mem::size_of::<UiSamplerVintagePayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSetClipGridPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiAudioClipFieldPayload>(), 40);
