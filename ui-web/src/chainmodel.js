@@ -699,7 +699,13 @@ export function buildChainModel(opts, buf) {
         if (x.end > x.begin) cuts.push([x.begin | 0, x.end | 0, x.slot | 0]);
       }
       cuts.sort((a, b) => a[0] - b[0]);
-      c.sample = { source: sourceId, frames: first ? (first.frames | 0) : 0, cuts };
+      /*
+       * THE ADDRESS TRAVELS WITH THE ID, because a sampler's source id is a per-DEVICE counter
+       * and means nothing on its own — `kWaveformRequestSamplerSource` is what says which id
+       * space it is in, and (track, device) is the rest of the address.
+       */
+      c.sample = { source: sourceId, frames: first ? (first.frames | 0) : 0, cuts,
+                   track, device: d.id };
     } else {
       c.sample = null;
     }

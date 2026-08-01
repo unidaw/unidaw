@@ -1002,7 +1002,10 @@ export class Chain {
   _paintWave(el, c) {
     const cv = el._wave;
     const s = c.sample;
-    if (!cv || !s || !s.frames || !this.waveCache) return false;
+    if (!cv) { el._waveWhy = 'no canvas'; return false; }
+    if (!s) { el._waveWhy = 'no sample'; return false; }
+    if (!s.frames) { el._waveWhy = 'source has no frames'; return false; }
+    if (!this.waveCache) { el._waveWhy = 'no wave cache bound'; return false; }
     /*
      * MEASURED FROM WHICHEVER OF THE TWO IS LAID OUT.
      *
@@ -1019,7 +1022,7 @@ export class Chain {
     const alt = el._list ? el._list.getBoundingClientRect() : null;
     const w = Math.round(own.width > 8 ? own.width : (alt ? alt.width : 0));
     const h = Math.round(own.height > 8 ? own.height : (alt ? alt.height : 0));
-    if (w < 8 || h < 8) return false;
+    if (w < 8 || h < 8) { el._waveWhy = `no box (${w}x${h})`; return false; }
     const dpr = window.devicePixelRatio || 1;
     if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
       cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
@@ -1057,7 +1060,8 @@ export class Chain {
       if (!win) {
         missing = true;
         if (this.requestWave) {
-          this.requestWave(s.source, dec, tileFirst, WAVE_TILE_COLS, WAVE_MASK_BOTH);
+          this.requestWave(s.source, dec, tileFirst, WAVE_TILE_COLS, WAVE_MASK_BOTH,
+                           { track: s.track, device: s.device });
         }
         continue;
       }
@@ -1098,8 +1102,8 @@ export class Chain {
     }
     // NOTHING YET IS NOT A PICTURE. A partly-arrived file is worth showing — it fills in — but a
     // canvas with no audio on it at all is what the caller must not swap the pad list for.
-    if (!drewAny) return false;
-    void missing;
+    if (!drewAny) { el._waveWhy = missing ? 'windows not arrived' : 'window empty'; return false; }
+    el._waveWhy = '';
     /*
      * THE SLICE BOUNDARIES, which are the reason this view exists.
      *
@@ -1280,6 +1284,10 @@ export class Chain {
        * for COMMANDS, so the state looked absent when it was merely somewhere else.
        */
       views: vm.cards.slice(0, vm.cardCount).map((c) => c.defaultView),
+      // WHY a card is not painting, in the terms that tell the causes apart: no cache bound, no
+      // box to draw in, or a window that has not arrived. One boolean would send a reader to the
+      // wrong layer, which is what the first three attempts at this feature each did.
+      waveWhy: this.pool.slice(0, vm.cardCount).map((el) => el._waveWhy || ''),
       painted: this.pool.slice(0, vm.cardCount).map((el) => !!el._waveOn),
       samples: vm.cards.slice(0, vm.cardCount).map(
         (c) => (c.sample ? { source: c.sample.source, frames: c.sample.frames,
