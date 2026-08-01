@@ -395,23 +395,37 @@ narrow **lane bar readout** showing the clip-local `bar:beat`, and its clip's ba
 lines are drawn as accents on the lane itself. It is a readout — there is nothing to type
 into it, and it never appears or disappears as you scroll.
 
-**The badge is the TRACK's setting, and a clip can override it.** The renderer resolves a
-lane's grid clip-first: the extent's own lines-per-beat if it carries one, then the track's,
-then the zoom's. That is what lets a verse in 4 and a bridge in 3 live on one track, which a
-per-track number cannot express — and it means that on a lane whose clip carries a grid, this
-badge shows the track's value while the rows are drawn on the clip's.
+**The badge shows the subdivision in force at the cursor, and says where it came from.**
+The renderer resolves a lane's grid clip-first: the extent's own lines-per-beat if it carries
+one, then the track's, then the zoom's. A clip-level answer is marked with a trailing `·` and
+drawn brighter, because `6/b` from a clip and `6/b` from a track are different facts.
 
-Whether the per-track field is the authority or a fallback on its way out is **an open question
-in this tree**: `docs/per-lane-grids.md` calls a set-subdivision command "the one new command
-needed", and `persisted_field_reach_check` calls the same field "legacy, superseded by the
-per-extent grid". Opcode 92 was built on the first. Until that is settled, expect the badge and
-the rows to agree on a lane whose clips carry no grid of their own, and to differ on one whose
-clips do.
+It used to print the track's number whatever the rows were drawn at, so on a clip-gridded lane
+it named a value nothing on screen was using.
 
-**Click the badge to change it.** `1 2 3 4 6 8 12 16` in a cycle — shift goes back — because
-nobody wants eleven presses to get from 4 to 16, and a lane already carrying an unlisted value
-(any of 1..31 is legal) steps to the nearest listed one above it. `lpb <track> <lines>` reaches
-the rest.
+**Click the badge to change it — whichever level it is naming.** `1 2 3 4 6 8 12 16` in a
+cycle, shift goes back, because nobody wants eleven presses to get from 4 to 16; a lane already
+carrying an unlisted value (any of 1..31 is legal) steps to the nearest listed one above it. On
+a lane whose clip carries its own grid the click edits the CLIP, leaving the track's value
+alone; on one whose clips carry none, it edits the track.
+
+**`clip-grid <track> <clip> <lines|num|den> <value>`** sets a clip's own grid directly, and it
+is the only way to give a clip a subdivision or a meter it did not already have — including the
+meter, which the badge does not cycle. One field per call: the engine takes a flag per field so
+that setting a meter does not silently reset the subdivision, and naming no field at all is
+refused rather than sent as a command that changes nothing and reports success. `lpb <track>
+<lines>` still sets the track's own value, which is what a lane falls back to.
+
+A clip's meter is a **numerator of 1..31 over a power-of-two denominator in 1..128**. 6/8 is
+expressible and 6/6 is not, because the denominator is stored as a three-bit exponent — a
+denominator that is not a power of two is refused rather than rounded to one you did not ask
+for.
+
+Whether the per-track field should survive at all is still **an open question in this tree**:
+`docs/per-lane-grids.md` calls a set-subdivision command "the one new command needed", and
+`persisted_field_reach_check` calls the same field "legacy, superseded by the per-extent grid".
+Both levels are writable now, so nothing is blocked on the answer; what hangs on it is whether
+`lpb` and the track field eventually go away.
 
 Out of range is **refused, not clamped**, and the two ends are refused for different reasons: 32
 would pack as 0 in the grid's five-bit field, and 0 is that packer's sentinel for "no grid on
@@ -1742,7 +1756,11 @@ knowing before you trust anything below.
 - **Turning a loop off.** A loop is a range and no command clears one.
 - **Deleting or time-moving an automation point.** Create and change-value only.
 - **Loading, chopping, naming or repointing a sampler slot with the pointer.** Console only.
-- **Duplicating a clip.** No gesture, no command.
+- **Duplicating a clip *with the pointer*.** There is no alt-drag. The commands exist:
+  `add-clip <clip> <track> <bar> <bars>` places an existing clip again — that second
+  appearance is the same clip, so editing either changes both — and `fork` then gives an
+  appearance its own copy. Which of those you want is the question a duplicate gesture
+  would have to answer silently, which is part of why there isn't one.
 - **Adding a VST from the rack's `+`.** Use the browser rail.
 - **`cfill` / `cnfill` conditional trigs.** Reserved and refused on both sides, on purpose.
 - **Proposals from the engine.** The pending card is driven from `__uni` only.
@@ -1763,15 +1781,18 @@ knowing before you trust anything below.
 - The browser rail's header shows no close `✕` and its footer's `rescan` is blank, because no
   handler was passed. Deliberate: a control that does nothing is worse than no control.
 
-### Stale in the app's own help
+### The app's own help
 
 The `?` overlay is a hand-maintained mirror of the keydown handler and says so. Where they
-disagree, the handler is right. Currently stale:
+disagree, the handler is right.
 
-- Arrange: "clip edits — not implemented, needs engine commands". Clip move, trim, cross-track
-  drag and delete all work.
-- Patcher: "one global graph; the engine does not run per-device graphs yet". It is per-device.
-- Tracker: "`**` = notes a cell cannot show apart". The cell draws `4× C-4` or `3 evts` now.
+Three of its lines were stale at once, and all three in the same way — each recorded an
+absence that had since been built ("clip edits — not implemented", "the engine does not run
+per-device graphs yet", "`**` = notes a cell cannot show apart"). They are fixed, and the
+overlay no longer records limitations at all: **it says what a key does and nothing else.**
+Limitations live in this document, which gets read end to end, and a unit check refuses a
+help line that claims something is missing. A claim nobody re-checks is indistinguishable
+from a real limitation, and a key reference is not a place anyone re-checks.
 
 The global keys, the copy/paste pair and the function keys were stale here too and were
 corrected on 2026-07-31 — as was the `slice` help's "from C1 up", the browser rail's `B
@@ -1833,7 +1854,7 @@ must send an envelope first; that was fixed the same day and the default kit is 
 
 ## 18. Command reference
 
-Ninety-one commands. `help` prints this list live; the palette (`⌘K`) is the same list,
+97 commands. `help` prints this list live; the palette (`⌘K`) is the same list,
 searchable, with argument checking.
 
 **Transport and position** — `play`, `stop` (twice = panic), `seek <tick>`,
@@ -1845,8 +1866,8 @@ searchable, with argument checking.
 
 **Views and layout** — `view <tracker|arrange|piano|mixer|patcher>`, `zoom <index>`,
 `columns <n>`, `edit [on|off]`, `fold <track>`, `ops-column <track> [on|off]`,
-`lpb <track> <lines>`, `harmony-quantize <track> [on|off]`, `save-patch <name>`,
-`master [on|off]`.
+`lpb <track> <lines>`, `clip-grid <track> <clip> <lines|num|den> <value>`,
+`harmony-quantize <track> [on|off]`, `save-patch <name>`, `master [on|off]`.
 
 **Tracks** — `add-track`, `remove-track <track>`, `rename <track> <name>`,
 `gain <track> <dB>`, `mute <track>`, `solo <track>`.

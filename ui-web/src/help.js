@@ -44,7 +44,7 @@ export const SURFACE_KEYS = {
       ['0-9 a-f', 'velocity digits in the volume column, commit on each key'],
       ['0-9', 'note column: 2 3 5 6 7 are piano keys; in degree mode 1-9 are degrees'],
       ['@', 'chord/degree token — the only thing Enter is for'],
-      ['p', 'open the piano roll here (** = notes a cell cannot show apart)'],
+      ['p', 'open the piano roll here'],
       ['`', 'note column: piano keys or scale degrees (the chrome says which)'],
       ['[ ]', 'octave down / up'],
       [', .', 'edit step down / up (0 stays put, for stacking a chord)'],
@@ -75,7 +75,7 @@ export const SURFACE_KEYS = {
       ['up/down', 'change track'],
       ['- =', 'zoom out / in'],
       ['Home', 'back to the start'],
-      ['Backspace', 'clip edits — not implemented, needs engine commands'],
+      ['Backspace', 'delete the selected clip (undoable — no confirm)'],
     ],
   },
   piano: {
@@ -109,7 +109,7 @@ export const SURFACE_KEYS = {
       ['left/right', 'choose a config field on the selected node'],
       ['up/down', 'change it'],
       ['Backspace', 'remove the selected node'],
-      ['', 'one global graph; the engine does not run per-device graphs yet'],
+      ['', 'the selected device\'s own graph — the engine runs one per device'],
     ],
   },
   mixer: {
