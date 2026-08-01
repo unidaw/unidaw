@@ -376,6 +376,22 @@ export function createCommands(api) {
      * deleted. Saying so here rather than letting the gesture fail silently: an interface that
      * quietly ignores half a drag is worse than one that says which half it has.
      */
+    /*
+     * VELOCITY WITH THE POINTER, in the piano roll. Velocity has been drawn there as opacity
+     * since the roll existed and could not be CHANGED there — the tracker's volume column was
+     * the only way in, which is a long way to go to make one note softer than its neighbour.
+     *
+     * A mode, like `draw`, and for a sharper version of the same reason: velocity and pitch
+     * are both vertical, so a modifier would put two musical meanings on one gesture with
+     * nothing on screen to tell them apart.
+     */
+    'vel-edit': { help: 'vel-edit [on|off] — drag a note in the roll to set its velocity',
+      args: [ON_OFF],
+      run: (a) => {
+        const want = a[0] === undefined ? undefined : a[0] === 'on';
+        if (!api.velocityEdit(want)) return refusal(api);
+        return 'velocity edit ' + (api.state().velocityEdit ? 'on' : 'off');
+      } },
     draw: { help: 'draw [on|off] — edit the automation curve with the pointer, value only',
       args: [ON_OFF],
       run: (a) => {

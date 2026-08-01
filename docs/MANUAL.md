@@ -1262,9 +1262,22 @@ readout rather than a toggle.
 Row height is fixed at 11px; there is no vertical zoom. Six horizontal zoom levels, from
 `beat/512px` to `beat/16px`.
 
-Velocity is drawn as opacity and **cannot be edited here** — there is no velocity lane, no
-CC lane, and no way to change a note's velocity from the roll. Use the tracker's velocity
-field or write the note again.
+Velocity is drawn as **opacity**, and `vel-edit` turns the roll into a velocity editor:
+while it is on, dragging a note vertically sets how hard it is played instead of moving it,
+up is louder, and one unit is two pixels. The note wears the proposed value as you drag —
+opacity alone cannot be aimed, so the number is shown in the corner too — and it commits on
+release. `Escape` mid-drag abandons it.
+
+**It is a mode, not a modifier**, and this is where that matters most: velocity and pitch
+are both *vertical*, so a modifier would put two musical meanings on one gesture with
+nothing on screen telling them apart, and the wrong one transposes. The roll is tinted while
+the mode is on. It refuses to turn on when there are no notes.
+
+Velocity clamps to **1**, never 0. A MIDI velocity of zero is a note-off, so a note stored
+at zero draws, saves and reloads and can never sound — worse than a deletion, because
+nothing is missing to notice.
+
+There is still no velocity **lane** and no CC lane.
 
 | Gesture | What |
 |---|---|
@@ -1272,6 +1285,7 @@ field or write the note again.
 | click a note | select it |
 | drag a note body | move it in time and pitch |
 | drag its right edge (7px) | change its length |
+| drag a note, in `vel-edit` | set its velocity — vertical only, up is louder |
 | `Shift`+drag | marquee-select, live rather than on release |
 | `Backspace` | delete the selection, or the single selected note |
 | `opt+Q` / `opt+A` | transpose the selection ±1 semitone |
@@ -1282,6 +1296,7 @@ field or write the note again.
 | `a` | all tracks / this track only |
 | `[` `]` | previous / next track |
 | `s` | seek to the window start |
+| `Escape` mid-drag | abandon the drag — it used to only clear the selection |
 | `-` `+` | zoom out / in |
 
 New notes always go to the **cursor's track**, even in all-tracks mode, and snap to that
@@ -1807,7 +1822,6 @@ knowing before you trust anything below.
   card's TET chip is a readout by construction.
 - **The scale roll's scale features** — degree gutter, in-key shading, cents column. The
   surface carries the name and not the feature.
-- **Velocity editing in the roll.** Velocity is opacity, read-only there.
 - **Turning a loop off.** A loop is a range and no command clears one.
 - **Deleting or time-moving an automation point.** Create and change-value only.
 - **Loading, chopping, naming or repointing a sampler slot with the pointer.** Console only.
@@ -1909,7 +1923,7 @@ must send an envelope first; that was fixed the same day and the default kit is 
 
 ## 18. Command reference
 
-100 commands. `help` prints this list live; the palette (`⌘K`) is the same list,
+101 commands. `help` prints this list live; the palette (`⌘K`) is the same list,
 searchable, with argument checking.
 
 **Transport and position** — `play`, `stop` (twice = panic), `seek <tick>`,
@@ -1922,7 +1936,8 @@ searchable, with argument checking.
 **Views and layout** — `view <tracker|arrange|piano|mixer|patcher>`, `zoom <index>`,
 `columns <n>`, `edit [on|off]`, `fold <track>`, `ops-column <track> [on|off]`,
 `lpb <track> <lines>`, `clip-grid <track> <clip> <lines|num|den> <value>`,
-`harmony-quantize <track> [on|off]`, `save-patch <name>`, `master [on|off]`.
+`harmony-quantize <track> [on|off]`, `save-patch <name>`, `master [on|off]`,
+`vel-edit [on|off]`.
 
 **Tracks** — `add-track`, `remove-track <track>`, `rename <track> <name>`,
 `gain <track> <dB>`, `mute <track>`, `solo <track>`.

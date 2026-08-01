@@ -1489,6 +1489,32 @@ const automationReader = {
  *
  * @param {boolean} [on] what to set it to; omitted flips it.
  */
+/**
+ * WHETHER A DRAG IN THE PIANO ROLL SETS VELOCITY.
+ *
+ * A MODE, not a modifier, for the reason `setAutomationEdit` gives below and which applies
+ * with more force here: velocity and pitch are both VERTICAL, so a modifier would put two
+ * different musical meanings on one gesture with nothing on screen telling them apart, and
+ * the wrong one transposes. The mode tints the roll, and the console can turn it on — which
+ * is also what makes it testable without inventing a keyboard event.
+ *
+ * Refused when there is nothing to drag: a mode you can enter and do nothing in looks broken.
+ *
+ * @param {boolean} [on] what to set it to; omitted flips it.
+ */
+function setVelocityEdit(on) {
+  const want = on === undefined ? !state.velocityEdit : !!on;
+  if (want && !(engine && engine.noteCount > 0)) {
+    state.reject = 'no notes to set a velocity on';
+    schedule();
+    return false;
+  }
+  state.velocityEdit = want;
+  state.reject = null;
+  schedule();
+  return true;
+}
+
 function setAutomationEdit(on) {
   const want = on === undefined ? !state.automationEdit : !!on;
   if (want && !automationOf(state.cursor.track)?.list.length) {
@@ -3132,6 +3158,7 @@ const dockApi = {
   samplerKit: (track, device) => requestSamplerKit(track, device),
   samplerKitCached: (track, device) => samplerKitOf(track, device),
   automationEdit: (on) => setAutomationEdit(on),
+  velocityEdit: (on) => setVelocityEdit(on),
   /** Is the curve layer taking the pointer? Read separately from setting it, so a test and a
    *  chip can both ask without either of them toggling anything. */
   automationEditing: () => state.automationEdit,
@@ -3889,6 +3916,24 @@ function commitNoteDrag(d) {
   const dTick = (d.x1 - d.x0) * view.ticksPerPixel;
   const dur = Math.max(1, src.tOff - src.tOn);
 
+  /*
+   * VELOCITY. Vertical only, and UP IS LOUDER — the axis every fader in this app already
+   * uses, and the opposite of the screen's y.
+   *
+   * Two pixels per unit over 0..127, so the full range is about 254px: further than a lane
+   * is tall, deliberately, because a gesture that hits both ends inside one lane height
+   * cannot place a value in the middle. It is clamped to 1..127 rather than 0..127 — a
+   * velocity of zero is a note-off in MIDI, so a drag to the floor would silently delete
+   * the note it was meant to soften.
+   */
+  if (d.kind === 'velocity') {
+    const want = Math.max(1, Math.min(127, Math.round(src.velocity + (d.y0 - d.y1) / 2)));
+    if (want === src.velocity) return;
+    if (rewriteNote(src, { vel: want }) === false) { state.reject = 'no engine'; return; }
+    state.reject = null;
+    return;
+  }
+
   if (d.kind === 'resize') {
     const step = laneRowTicks(src.track);
     const want = Math.max(step, Math.round((dur + dTick) / step) * step);
@@ -4168,6 +4213,13 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: FIELDS_PER_NOTE,
    * crosshair over the lane, and a console verb — so it can be seen, felt and scripted.
    */
   automationEdit: false,
+  /**
+   * The same idea one surface over: whether a drag in the PIANO ROLL sets a note's velocity
+   * rather than moving it. Velocity and pitch are both vertical, so this is the one place a
+   * modifier would be worst — two musical meanings on one gesture, told apart by nothing you
+   * can see. See `setVelocityEdit`.
+   */
+  velocityEdit: false,
   // The roll shares the stage with the arrangement when a clip is open.
   /**
    * The SECOND centre pane's view, or null for one pane.
@@ -5345,7 +5397,8 @@ function fitPiano() { state.pianoFitPending = true; }
 
 const _pianoOpts = { startTick: 0, width: 0, height: 0, zoomIndex: 0, lowPitch: 0,
                      keyHeight: 0, engine: null, track: 0, allTracks: false,
-                     selectedNote: 0, selection: null, marquee: null, dragId: undefined };
+                     selectedNote: 0, selection: null, marquee: null, dragId: undefined,
+                     velocityEdit: false, dragVel: -1 };
 function drawPiano() {
   if (!pianoBuf) pianoBuf = createPianoBuffer(512, 128);
   const usable = boxOf(pianoHost, true) - 25;
@@ -5369,6 +5422,21 @@ function drawPiano() {
   o.selection = state.pianoSelection;
   o.marquee = state.pianoMarquee;
   o.dragId = state.pianoDrag ? state.pianoDrag.id : undefined;
+  o.velocityEdit = !!state.velocityEdit;
+  /*
+   * The velocity a live drag is proposing, computed HERE from the same expression
+   * `commitNoteDrag` uses, so the preview and the commit cannot disagree about what the
+   * gesture meant. -1 whenever a velocity drag is not in progress.
+   */
+  o.dragVel = -1;
+  if (state.pianoDrag && state.pianoDrag.kind === 'velocity' && engine) {
+    for (let i = 0; i < engine.noteCount; i++) {
+      if (engine.notes[i].id !== state.pianoDrag.id) continue;
+      o.dragVel = Math.max(1, Math.min(127, Math.round(
+        engine.notes[i].velocity + (state.pianoDrag.y0 - state.pianoDrag.y1) / 2)));
+      break;
+    }
+  }
   piano.render(buildPianoModel(o, pianoBuf));
   updateChrome();
 }
@@ -8814,6 +8882,7 @@ window.__uni = {
   harmonyQuantize: (t, on) => dockApi.harmonyQuantize(t, on),
   allowOverlap: (t, on) => dockApi.allowOverlap(t, on),
   clipGrid: (t, clip, opts) => dockApi.clipGrid(t, clip, opts),
+  velocityEdit: (on) => dockApi.velocityEdit(on),
   audioClip: (t, clip, field, v) => dockApi.audioClip(t, clip, field, v),
   /** Per track, whether note entry leaves the sounding note alone. */
   overlapping: () => {

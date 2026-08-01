@@ -75,6 +75,18 @@ export class Piano {
     this.onDrag = onDrag; this.onDragEnd = onDragEnd;
     /** How close to a note's right edge counts as "resize" rather than "move". */
     this.EDGE = 7;
+    /*
+     * THE VELOCITY READOUT, one element, shown only while a velocity drag is live.
+     *
+     * Opacity is not a readable quantity — you can see that a note got louder and not that
+     * it is now 96 — so a gesture whose whole output is an opacity needs a number beside it
+     * or it cannot be aimed. Hidden the rest of the time rather than blank: an empty box
+     * floating over the roll is a control that looks broken.
+     */
+    this.velReadout = div('pr-vel-readout', this.host);
+    this.velReadout.appendChild(document.createTextNode(''));
+    this.velReadout.style.display = 'none';
+    this._velShown = 0;
 
     this.keysEl = div('pr-keys', host);
     this.band = div('pr-band', host);
@@ -115,6 +127,17 @@ export class Piano {
     this.band.addEventListener('pointermove', (e) => this._move(e));
     this.band.addEventListener('pointerup', (e) => this._up(e));
     this.band.addEventListener('pointercancel', () => this._cancel());
+    /*
+     * ESCAPE ABANDONS A DRAG MID-GESTURE, which the roll could not do — Escape here cleared
+     * the SELECTION and left a live drag running, so a note you had started moving (or, now,
+     * started making louder) had to be finished and undone rather than called off.
+     *
+     * On the WINDOW rather than the band, for the reason the arrangement gives: a captured
+     * pointer can leave the element entirely, and by then the band is not where keys go. It
+     * is also the only way out of a drag whose pointerup was eaten.
+     */
+    this._onEsc = (e) => { if (e.key === 'Escape' && (this._note || this._drag)) this._cancel(); };
+    window.addEventListener('keydown', this._onEsc);
     this._drag = null;
   }
 
@@ -135,7 +158,16 @@ export class Piano {
       // Grabbing the right edge resizes, anywhere else moves. A note narrower
       // than twice the edge zone is all edge, so it can only be resized —
       // otherwise a short note would be impossible to lengthen.
-      const kind = (r.right - e.clientX) <= this.EDGE ? 'resize' : 'move';
+      /*
+       * VELOCITY IS A MODE, not a modifier — the same call the arrangement's automation
+       * editing makes, and for the same stated reason: a modifier is invisible, so there
+       * is no way to look at the screen and know whether the next drag will move a note
+       * or change how hard it is played, and that is a bad property for a gesture that
+       * changes the music. While the mode is on, a drag on a note is vertical-only and
+       * sets velocity; the note does not move in pitch or in time.
+       */
+      const kind = this.velocityEdit ? 'velocity'
+        : (r.right - e.clientX) <= this.EDGE ? 'resize' : 'move';
       this._note = { id, kind, x0: p.x, y0: p.y, x1: p.x, y1: p.y };
       this.band.setPointerCapture(e.pointerId);
       return;
@@ -175,7 +207,11 @@ export class Piano {
       this._note = null;
       // A click is a drag of zero distance; committing one would rewrite a note
       // to exactly where it already is and burn a clip version for nothing.
-      const moved = Math.abs(n.x1 - n.x0) > 2 || Math.abs(n.y1 - n.y0) > 2;
+      // A velocity drag is vertical, so the horizontal half of this would veto it — a
+      // careful straight-down drag moves x by zero and y by plenty.
+      const moved = n.kind === 'velocity'
+        ? Math.abs(n.y1 - n.y0) > 2
+        : (Math.abs(n.x1 - n.x0) > 2 || Math.abs(n.y1 - n.y0) > 2);
       this.onDragEnd && this.onDragEnd(moved ? n : null);
       return;
     }
@@ -202,6 +238,24 @@ export class Piano {
 
   render(vm) {
     this.vm = vm;
+    /*
+     * The mode arrives on the view model like every other piece of state, rather than being
+     * set on the renderer from outside: it changes what a drag MEANS, and a flag the model
+     * does not carry is one `probe()` cannot report and a test cannot read.
+     */
+    this.velocityEdit = !!vm.velocityEdit;
+    this.host.classList.toggle('vel-edit', this.velocityEdit);
+    // The proposed value, while a drag is proposing one. Guarded on the number, so a frame
+    // where it has not moved writes nothing.
+    const showVel = vm.dragVel >= 0 ? 1 : 0;
+    if (this._velShown !== showVel) {
+      this._velShown = showVel;
+      this.velReadout.style.display = showVel ? '' : 'none';
+    }
+    if (showVel && this._velV !== vm.dragVel) {
+      this._velV = vm.dragVel;
+      this.velReadout.firstChild.nodeValue = 'vel ' + vm.dragVel;
+    }
     const kh = vm.view.keyHeight;
 
     // Scroll by moving the strips, not their contents (GUIDELINES 3.3).
@@ -411,6 +465,19 @@ export class Piano {
       pitchRange: hi < 0 ? null : [lo, hi],
       gridLines: vm.gridCount, playheadX: Math.round(vm.playheadX),
       selected: vm.selectedCount,
+      /*
+       * The mode, the value a live drag proposes, and the VELOCITIES AS DRAWN.
+       *
+       * The velocities matter more than they look: this roll draws velocity as opacity and
+       * nothing else, so "the drag changed the note" and "the drag changed the picture" are
+       * different claims and only the second one is what a person sees. Read from the view
+       * model rather than from the engine, which is the whole point.
+       */
+      velocityEdit: !!vm.velocityEdit,
+      dragVel: vm.dragVel,
+      velocities: (() => { const out = []; for (let i = 0; i < vm.noteCount; i++)
+        out.push({ id: vm.notes[i].id, vel: vm.notes[i].velocity }); return out; })(),
+      readout: this.velReadout ? this.velReadout.textContent : null,
       domNodes: this.notePool.length + this.keyPool.length * 2 + this.gridPool.length,
     };
   }

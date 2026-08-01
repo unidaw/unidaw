@@ -817,7 +817,7 @@ const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'sampl
                      'quantize', 'moveDevice', 'chord', 'delChord', 'deleteHarmony',
                      'addDevice', 'openEditor', 'newSong', 'fold', 'opsColumn', 'opsShown',
                      'harmonyQuantize', 'harmonyQuantized', 'savePatch', 'linesPerBeat',
-                     'clipGrid', 'hasMaster', 'audioClip',
+                     'clipGrid', 'hasMaster', 'audioClip', 'velocityEdit',
                      'allowOverlap', 'overlapping',
                      'samplerSlotName',
                      'edit', 'harmony', 'ask', 'forget',
@@ -2327,6 +2327,9 @@ const OP_REGISTRY = {
   // An audio clip's gain, fades and in-point (opcode 95). Backend shipped `daw-cli do
   // audio-clip` with it, so this has a CLI path from the start.
   'audio-clip': { cli: 'audio-clip', agent: null, why: 'gap' },
+  // Whether a drag in the piano roll sets velocity. A VIEW decision like `draw`, which it
+  // mirrors — the mode changes what a gesture means here and nothing about the document.
+  'vel-edit': { cli: null, agent: null, why: 'view' },
   // Whether note entry cuts the sounding note (opcode 93). Landed engine-side today.
   'note-overlap': { cli: null, agent: null, why: 'gap' },
   // Which columns this window draws. Genuinely a view decision — the engine already remembers

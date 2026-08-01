@@ -70,6 +70,9 @@ export function createPianoBuffer(noteCapacity = 512, keyCapacity = 128) {
   }
   return {
     notes, noteCount: 0,
+    // Declared here so the buffer keeps one shape from the first frame, like every other
+    // field: a flag added on first use is a shape change on a hot object.
+    velocityEdit: false, dragVel: -1,
     keys, keyCount: 0,
     grid: new Float64Array(512), gridCount: 0, gridIsBar: new Uint8Array(512),
     gridFirst: 0,
@@ -151,6 +154,14 @@ export function buildPianoModel(opts, buf) {
     selection = null,
     marquee = null,
     dragId = undefined,
+    // Whether a drag on a note sets its VELOCITY instead of moving it. A mode rather than
+    // a modifier; see the note in piano.js's `_down`.
+    velocityEdit = false,
+    // The velocity a live velocity drag is currently proposing, or -1 for none. The engine
+    // still holds the OLD value until the gesture commits, so without this the note would
+    // keep its old opacity for the whole drag and the gesture would be invisible — the same
+    // failure the arrangement's fade preview had.
+    dragVel = -1,
   } = opts;
 
   const zoom = PIANO_ZOOM[Math.max(0, Math.min(PIANO_ZOOM.length - 1, zoomIndex))];
@@ -159,6 +170,8 @@ export function buildPianoModel(opts, buf) {
   const visibleKeys = Math.min(buf.keys.length, Math.ceil(height / keyHeight) + 1);
   const highPitch = lowPitch + visibleKeys;
 
+  buf.velocityEdit = !!velocityEdit;
+  buf.dragVel = dragVel | 0;
   buf.view.startTick = startTick;
   buf.view.ticksPerPixel = tpp;
   buf.view.width = width;
@@ -225,7 +238,9 @@ export function buildPianoModel(opts, buf) {
       d.pitch = src.pitch;
       d.track = src.track;
       d.tick = src.tOn;
-      d.velocity = src.velocity;
+      // The dragged note wears the value the gesture is PROPOSING; every other note wears
+      // the engine's. `dragVel` is -1 unless a velocity drag is live.
+      d.velocity = (dragVel >= 0 && src.id === dragId) ? dragVel : src.velocity;
       d.muted = src.muted;
       d.isAdd = src.isAdd;
       // After track, tick and pitch are set: `slotKey` reads them off the slot.
