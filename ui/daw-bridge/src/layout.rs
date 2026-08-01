@@ -369,6 +369,30 @@ pub struct UiSetClipGridPayload {
     pub reserved: [u32; 4],
 }
 
+/// SetAudioClipField (95). Field-ADDRESSED rather than flagged, the shape SamplerSetSlot uses:
+/// one property per call, so a fifth audio-clip property later is an enum entry rather than a
+/// fifth opcode and nothing is ever silently reset.
+pub const AUDIO_CLIP_FIELD_SOURCE_START_FRAME: u16 = 0;
+pub const AUDIO_CLIP_FIELD_GAIN_MILLIBELS: u16 = 1;
+pub const AUDIO_CLIP_FIELD_FADE_IN_NANOTICKS: u16 = 2;
+pub const AUDIO_CLIP_FIELD_FADE_OUT_NANOTICKS: u16 = 3;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+/// SetAudioClipField (95). `value` is SIGNED so the gain can be negative — which is the normal
+/// case, a clip being turned down. The engine CLAMPS the gain to -9600..=2400 millibels (matching
+/// the sampler slot, the same quantity over the same range) and REFUSES a negative frame or tick
+/// count, which is a caller with the wrong idea of the unit rather than a value to round.
+pub struct UiAudioClipFieldPayload {
+    pub command_type: u16,
+    pub field: u16,
+    pub track_id: u32,
+    pub clip_id: u32,
+    pub reserved0: u32,
+    pub value: i64,
+    pub reserved1: [u32; 4],
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 /// SamplerSetVintage (91). The flags say WHICH of the two this call is about, so setting the bit
@@ -1263,6 +1287,10 @@ pub enum UiCommandType {
     /// bits, and the tracker draws the CLIP's grid before the track's — so the authority in that
     /// chain was the one thing no command could write. Not a second answer to 92; the other half.
     SetClipGrid = 94,
+    /// An audio clip's in-point, gain and fades. All four persist, all four publish, the renderer
+    /// bakes all four into the region it schedules — and until this, nothing wrote any of them, so
+    /// an audio region was read-only from every surface.
+    SetAudioClipField = 95,
 }
 
 /// Where a route points. Mirrors daw::TrackRouteKind.
@@ -2269,6 +2297,7 @@ mod tests {
         same!(UiSamplerSlotNameHeader, sys::daw_UiSamplerSlotNameHeader);
         same!(UiSamplerVintagePayload, sys::daw_UiSamplerVintagePayload);
         same!(UiSetClipGridPayload, sys::daw_UiSetClipGridPayload);
+        same!(UiAudioClipFieldPayload, sys::daw_UiAudioClipFieldPayload);
         same!(UiSamplerFilterPayload, sys::daw_UiSamplerFilterPayload);
         same!(UiSamplerRejectPayload, sys::daw_UiSamplerRejectPayload);
         same!(UiSetParamPayload, sys::daw_UiSetParamPayload);
@@ -2561,6 +2590,7 @@ mod wire_layout {
         assert_eq!(std::mem::size_of::<UiSamplerSlotNameHeader>(), 12);
         assert_eq!(std::mem::size_of::<UiSamplerVintagePayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSetClipGridPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiAudioClipFieldPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiEnvPointWire>(), 8);
         // v35: + sliceBeginFrame / sliceEndFrame. Only three bytes were spare and two frame
         // counts need eight, so the entry's STRIDE changed — which is why this needed a version

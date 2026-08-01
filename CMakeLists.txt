@@ -704,6 +704,15 @@ add_test(NAME clip_grid_check
 )
 set_tests_properties(clip_grid_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# An AUDIO clip's in-point, gain and fades (opcode 95). Three layers have to move together and the
+# check asserts each one separately: the descriptor table (which was a load-time snapshot until
+# this command existed), the baked audio render (which the table cannot see), and the saved file.
+# The HEARD property renders offline, so no sound card is involved.
+add_test(NAME audio_clip_field
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/audio_clip_field_check.sh
+)
+set_tests_properties(audio_clip_field PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 # The kit read-back covers the slot the engine publishes. A NAMES-only ratchet, deliberately —
 # the behaviour is driven by sampler_kit, sampler_vintage, slice_extent and slot_rename, and this
 # is the guard those do not provide. Costs no engine, so it is nearly free.

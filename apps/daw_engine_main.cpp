@@ -6187,6 +6187,102 @@ struct TrackRuntime {
     return list;
   };
 
+  // PUBLISH THE AUDIO CLIP DESCRIPTOR TABLE (contract §2.1) and bump the region version.
+  //
+  // This used to be a loop inlined in loadProjectFromPath, reading that function's local
+  // `document`, under a comment saying "these change only at load, so no seqlock". True until
+  // SetAudioClipField (95) existed; the moment a command can move a clip's gain or fades, a
+  // table published once at load is the opcode 94 defect in a second table — written, saved,
+  // honoured by the renderer, and never seen by anyone reading the shared memory.
+  //
+  // SOURCED FROM THE LIVE PER-TRACK STORE FIRST. runtime->ownedClips is what the renderer reads
+  // and what a save re-emits, so it is the authority; the load-time `document` was a copy that
+  // stopped tracking edits the instant it was made. Retained definitions that no placement
+  // references are appended from `loadedClips` afterwards, because those exist only there and
+  // dropping them would be a regression in what the table lists.
+  //
+  // Deduped by clip id across tracks: a child track's ownedClips is a copy of its parent's
+  // (see the aux-plane overlay), so the same clip is reachable from two runtimes and would
+  // otherwise be published twice and eat the 64-entry budget.
+  //
+  // LOCK ORDER is tracksMutex -> trackMutex, taken as a pointer snapshot under tracksMutex and
+  // then released, matching every other command-thread walk over all tracks.
+  auto publishAudioClipTable = [&]() {
+    if (!uiShm.header || uiShm.header->uiAudioSourceOffset == 0) {
+      return;
+    }
+    auto* region = reinterpret_cast<daw::UiAudioSourceRegion*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiAudioSourceOffset);
+
+    std::vector<TrackRuntime*> runtimes;
+    {
+      std::lock_guard<std::mutex> lock(tracksMutex);
+      runtimes.reserve(tracks.size());
+      for (const auto& t : tracks) {
+        if (t) {
+          runtimes.push_back(t.get());
+        }
+      }
+    }
+
+    uint32_t clipCount = 0;
+    uint32_t audioClipsDropped = 0;
+    std::vector<uint32_t> published;
+    auto emit = [&](const daw::ProjectClip& c) {
+      if (c.kind != daw::ClipKind::Audio || c.audio.sourcePath.empty()) {
+        return;
+      }
+      if (std::find(published.begin(), published.end(), c.id) != published.end()) {
+        return;
+      }
+      published.push_back(c.id);
+      // kUiMaxAudioClips is 64 while the extent list holds 256, so this cap can be reached
+      // while the rails look complete — a box with no waveform in it and nothing saying why.
+      // Count the shortfall and keep going so the number is the real total.
+      if (clipCount >= daw::kUiMaxAudioClips) {
+        ++audioClipsDropped;
+        return;
+      }
+      auto& d = region->clips[clipCount++];
+      d = daw::UiAudioClip{};
+      d.clipId = c.id;
+      d.sourceId = waveformStore.sourceIdForPath(resolveSourcePath(c.audio.sourcePath));
+      d.sourceStartFrame = c.audio.sourceStartFrame;
+      d.clipLengthTicks = c.lengthNanoticks;
+      d.fadeInTicks = static_cast<uint32_t>(c.audio.fadeInNanoticks);
+      d.fadeOutTicks = static_cast<uint32_t>(c.audio.fadeOutNanoticks);
+      d.gainDb = c.audio.gainDb;
+    };
+
+    for (TrackRuntime* rt : runtimes) {
+      std::lock_guard<std::mutex> lock(rt->trackMutex);
+      for (const auto& c : rt->ownedClips) {
+        emit(c);
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lock(loadedClipsMutex);
+      for (const auto& c : loadedClips) {
+        emit(c);
+      }
+    }
+
+    for (uint32_t i = clipCount; i < daw::kUiMaxAudioClips; ++i) {
+      region->clips[i] = daw::UiAudioClip{};
+    }
+    region->clipCount = clipCount;
+    region->clipsTruncated = audioClipsDropped;
+    if (audioClipsDropped > 0) {
+      DAW_EVENT("audio_clips.truncated")
+          .field("published", clipCount)
+          .field("dropped", audioClipsDropped)
+          .field("cap", static_cast<uint64_t>(daw::kUiMaxAudioClips));
+    }
+    // Version last, behind a release fence, so a reader seeing the new version sees the
+    // complete table — the same discipline deviceParams uses.
+    std::atomic_thread_fence(std::memory_order_release);
+    region->version += 1;
+  };
 
   // Where a structural edit at an absolute tick lands: an index into ownedClips,
   // the clip-relative tick, and the covering placement.
@@ -8006,52 +8102,18 @@ struct TrackRuntime {
         region->sources[i] = daw::UiAudioSource{};
       }
 
-      uint32_t clipCount = 0;
-      uint32_t audioClipsDropped = 0;
-      for (const auto& c : document.clips) {
-        if (c.kind != daw::ClipKind::Audio || c.audio.sourcePath.empty()) {
-          continue;
-        }
-        // kUiMaxAudioClips is 64 while the extent list holds 256, so this cap can be reached
-        // while the rails look complete — a box with no waveform in it and nothing saying why.
-        // Count the shortfall and keep going so the number is the real total.
-        if (clipCount >= daw::kUiMaxAudioClips) {
-          ++audioClipsDropped;
-          continue;
-        }
-        auto& d = region->clips[clipCount++];
-        d = daw::UiAudioClip{};
-        d.clipId = c.id;
-        d.sourceId =
-            waveformStore.sourceIdForPath(resolveSourcePath(c.audio.sourcePath));
-        d.sourceStartFrame = c.audio.sourceStartFrame;
-        d.clipLengthTicks = c.lengthNanoticks;
-        d.fadeInTicks = static_cast<uint32_t>(c.audio.fadeInNanoticks);
-        d.fadeOutTicks = static_cast<uint32_t>(c.audio.fadeOutNanoticks);
-        d.gainDb = c.audio.gainDb;
-      }
-      for (uint32_t i = clipCount; i < daw::kUiMaxAudioClips; ++i) {
-        region->clips[i] = daw::UiAudioClip{};
-      }
-
       region->sourceCount = sourceCount;
-      region->clipCount = clipCount;
-      region->clipsTruncated = audioClipsDropped;
-      if (audioClipsDropped > 0) {
-        DAW_EVENT("audio_clips.truncated")
-            .field("published", clipCount)
-            .field("dropped", audioClipsDropped)
-            .field("cap", static_cast<uint64_t>(daw::kUiMaxAudioClips));
-      }
       region->formatVersion = daw::kWaveformFormatVersion;
       // The constant tempo audio is actually positioned at (bpmAtNanotick(0)) — the
       // number rebuildAudioRender uses, so drawn == heard even on a tempo-mapped
       // project where audio is not yet tempo-followed. See contract §2.4.
       region->audioMapBpmMilli =
           static_cast<uint32_t>(tempoProvider.bpmAtNanotick(0) * 1000.0 + 0.5);
-      std::atomic_thread_fence(std::memory_order_release);
-      region->version += 1;
     }
+    // The clip half of the same table, and the version bump that covers both. ONE definition,
+    // shared with the SetAudioClipField command — a load-only copy of this loop is exactly how
+    // the table came to be a load-time snapshot in the first place.
+    publishAudioClipTable();
 
     // The UI's mirror is now arbitrarily stale, so force a full resync rather
     // than trying to describe the change as a diff.
@@ -12215,6 +12277,148 @@ struct TrackRuntime {
           .field("lines", p.linesPerBeat)
           .field("num", p.timeSigNumerator)
           .field("den", p.timeSigDenominator);
+      return;
+    }
+
+    // ---- SET AUDIO CLIP FIELD (95): an audio region's in-point, gain and fades.
+    //
+    // All four persist, all four publish, and the renderer bakes all four into the region it
+    // schedules — and until this, no command wrote any of them. An audio clip was READ-ONLY from
+    // every surface: the UI could draw a clip gain and a fade handle and could not move them, and
+    // the only way to change one was a text editor on the project file. Found by giving
+    // persisted_field_reach a CLIP scope, which it had never had.
+    if (entry.size == sizeof(daw::UiAudioClipFieldPayload) &&
+        commandType == daw::UiCommandType::SetAudioClipField) {
+      daw::UiAudioClipFieldPayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      const auto field = static_cast<daw::AudioClipField>(p.field);
+      const char* fieldName = nullptr;
+      switch (field) {
+        case daw::AudioClipField::SourceStartFrame: fieldName = "source_start_frame"; break;
+        case daw::AudioClipField::GainMillibels: fieldName = "gain_millibels"; break;
+        case daw::AudioClipField::FadeInNanoticks: fieldName = "fade_in_nanoticks"; break;
+        case daw::AudioClipField::FadeOutNanoticks: fieldName = "fade_out_nanoticks"; break;
+      }
+      if (fieldName == nullptr) {
+        DAW_EVENT("audio_clip.field_rejected")
+            .field("track", p.trackId)
+            .field("clip", p.clipId)
+            .field("field", static_cast<uint64_t>(p.field))
+            .field("reason", "no_field_named");
+        return;
+      }
+      // THE THREE TIME/FRAME FIELDS REFUSE A NEGATIVE. Negative is not "before the start", it is
+      // a caller with the wrong idea of the unit, and there is no natural limit to clamp toward —
+      // so refusing says so where clamping to 0 would silently accept a bug.
+      if (field != daw::AudioClipField::GainMillibels && p.value < 0) {
+        DAW_EVENT("audio_clip.field_rejected")
+            .field("track", p.trackId)
+            .field("clip", p.clipId)
+            .field("field", fieldName)
+            .field("value", p.value)
+            .field("reason", "negative_not_allowed");
+        return;
+      }
+      // GAIN IS CLAMPED, and that is not this file's habit relaxed. It is what the sampler slot
+      // does with exactly this quantity over exactly this range, because a gain is a continuous
+      // control with natural limits and a fader stopping at the end of its travel is what a
+      // person expects from a drag. Inventing a second policy for the same quantity one object
+      // along would be worse than either policy applied consistently.
+      constexpr int64_t kMinGainMillibels = -9600;
+      constexpr int64_t kMaxGainMillibels = 2400;
+      int64_t value = p.value;
+      bool clamped = false;
+      if (field == daw::AudioClipField::GainMillibels) {
+        const int64_t before = value;
+        value = std::max(kMinGainMillibels, std::min(kMaxGainMillibels, value));
+        clamped = value != before;
+      }
+
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (p.trackId < tracks.size()) {
+          runtime = tracks[p.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("audio_clip.field_rejected")
+            .field("track", p.trackId)
+            .field("clip", p.clipId)
+            .field("field", fieldName)
+            .field("reason", "no_such_track");
+        return;
+      }
+      bool applied = false;
+      bool wrongKind = false;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& oc : runtime->ownedClips) {
+          if (oc.id != p.clipId) {
+            continue;
+          }
+          // A SYMBOLIC CLIP HAS NO GAIN. Writing one would set a field the save path never emits
+          // for this kind and the renderer never reads — accepted, invisible, and gone on
+          // reload. Named rather than ignored, because "the command succeeded and nothing
+          // happened" is the failure this whole opcode exists to remove.
+          if (oc.kind != daw::ClipKind::Audio) {
+            wrongKind = true;
+            break;
+          }
+          switch (field) {
+            case daw::AudioClipField::SourceStartFrame:
+              oc.audio.sourceStartFrame = static_cast<uint64_t>(value);
+              break;
+            case daw::AudioClipField::GainMillibels:
+              oc.audio.gainDb = static_cast<double>(value) / 100.0;
+              break;
+            case daw::AudioClipField::FadeInNanoticks:
+              oc.audio.fadeInNanoticks = static_cast<uint64_t>(value);
+              break;
+            case daw::AudioClipField::FadeOutNanoticks:
+              oc.audio.fadeOutNanoticks = static_cast<uint64_t>(value);
+              break;
+          }
+          applied = true;
+          break;
+        }
+      }
+      if (wrongKind) {
+        DAW_EVENT("audio_clip.field_rejected")
+            .field("track", p.trackId)
+            .field("clip", p.clipId)
+            .field("field", fieldName)
+            .field("reason", "not_an_audio_clip");
+        return;
+      }
+      if (!applied) {
+        DAW_EVENT("audio_clip.field_rejected")
+            .field("track", p.trackId)
+            .field("clip", p.clipId)
+            .field("field", fieldName)
+            .field("reason", "no_such_clip");
+        return;
+      }
+      // RE-DERIVE THE RENDER, or the edit is saved and never HEARD. rebuildAudioRender bakes the
+      // gain into a linear multiplier and the fades and in-point into sample counts at build
+      // time; the audio thread reads only that baked list. Without this line the model changes,
+      // the file is right, the table below reports the new number, and the clip plays at the old
+      // gain until some unrelated edit happens to rebuild — the audio-domain twin of opcode 94's
+      // "saved correctly and drew nothing".
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        std::atomic_store_explicit(&runtime->audioRender, rebuildAudioRender(*runtime),
+                                   std::memory_order_release);
+      }
+      // AND REPUBLISH THE TABLE, or the edit is never SEEN. Same argument one layer out: the
+      // descriptor table carried these four fields as a load-time snapshot.
+      publishAudioClipTable();
+      DAW_EVENT("audio_clip.field_set")
+          .field("track", p.trackId)
+          .field("clip", p.clipId)
+          .field("field", fieldName)
+          .field("value", value)
+          .field("clamped", clamped ? 1u : 0u);
       return;
     }
 

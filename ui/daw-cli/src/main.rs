@@ -97,6 +97,10 @@ daw-cli — control surface for a running engine
   daw-cli do clip-grid --track N --clip ID [--lines M] [--num N] [--den D]
                                    a CLIP's own subdivision and meter — drawn BEFORE the track's
   daw-cli do lines-per-beat --track N --lines M
+  daw-cli do audio-clip --track N --clip ID --field <start|gain|fade-in|fade-out> --value V
+                                   an audio region's in-point (frames), gain (dB*100, signed,
+                                   clamped -9600..2400) or either fade (nanoticks). One field
+                                   per call; --value is required because 0 is legal for all four
                                    a lane's SUBDIVISION: tracker rows per beat, 1..31. Out of
                                    range is refused — the clip grid packs it in five bits
   daw-cli do sound-addressed --track N [--on 0|1]
@@ -3957,6 +3961,89 @@ removed is the whole command");
                     match handle.send_clip_grid(payload) {
                         Ok(()) => {
                             println!("{{ \"sent\": \"clip-grid\", \"track\": {track}, \"clip\": {clip}, \"lines\": {lines}, \"num\": {num}, \"den\": {den} }}");
+                            0
+                        }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"audio-clip") => {
+                    // The audio clip's in-point, gain and fades. All four persisted, all four
+                    // published, all four honoured by the renderer, and written by nothing — an
+                    // audio region was read-only from every surface until this.
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let clip = match flag_u64(&args, "--clip", None) {
+                        Ok(v) => v as u32,
+                        Err(_) => {
+                            eprintln!("daw-cli: audio-clip needs --clip <id>");
+                            std::process::exit(2);
+                        }
+                    };
+                    // NAMED, not numbered. `--field 1` reads as a clip id at a glance and the
+                    // engine cannot tell a mistyped enum from a deliberate one — the same reason
+                    // `vintage 0 9 8 2` once read a bit depth as a sample rate.
+                    let field_name = match flag(&args, "--field") {
+                        Some(v) => v,
+                        None => {
+                            eprintln!("daw-cli: audio-clip needs --field <start|gain|fade-in|fade-out>");
+                            std::process::exit(2);
+                        }
+                    };
+                    let field = match field_name.as_str() {
+                        "start" | "source-start" | "source-start-frame" => {
+                            daw_bridge::layout::AUDIO_CLIP_FIELD_SOURCE_START_FRAME
+                        }
+                        "gain" | "gain-millibels" => daw_bridge::layout::AUDIO_CLIP_FIELD_GAIN_MILLIBELS,
+                        "fade-in" => daw_bridge::layout::AUDIO_CLIP_FIELD_FADE_IN_NANOTICKS,
+                        "fade-out" => daw_bridge::layout::AUDIO_CLIP_FIELD_FADE_OUT_NANOTICKS,
+                        other => {
+                            eprintln!(
+                                "daw-cli: --field {other:?} is not one of start, gain, fade-in, \
+                                 fade-out"
+                            );
+                            std::process::exit(2);
+                        }
+                    };
+                    // ABSENT IS NOT ZERO here either, and the stakes are higher than usual: 0 is a
+                    // legal value for every one of these four (unity gain, no fade, the file's
+                    // start), so a defaulted --value would be a silent reset that looks like a
+                    // successful call.
+                    if flag(&args, "--value").is_none() {
+                        eprintln!("daw-cli: audio-clip needs --value N (0 is a legal value for \
+                                   every field, so it cannot double as 'unset')");
+                        std::process::exit(2);
+                    }
+                    let value = match flag_i64(&args, "--value", 0) {
+                        Ok(v) => v,
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            std::process::exit(2);
+                        }
+                    };
+                    // THE RANGE IS THE ENGINE'S TO JUDGE, DELIBERATELY, and this is a split from
+                    // what `clip-grid` just above does. That command validates its ranges here AND
+                    // in the engine, and the consequence showed up the moment its sibling was
+                    // tested: with the engine's guard deleted entirely the check still passed,
+                    // because the CLI refused first and the engine's copy was never reached. Two
+                    // copies of one rule, where only one of them is on the path every producer
+                    // takes — the web UI's sidecar writes payloads to the ring directly.
+                    //
+                    // So the division here is by KIND, not by convenience: this surface validates
+                    // SHAPE (a field name it knows, a --value that was actually supplied) and the
+                    // engine validates DOMAIN (range, clip kind, existence). A refused command is
+                    // named in the engine log as audio_clip.field_rejected with a reason, exactly
+                    // like no_such_clip and not_an_audio_clip already are.
+                    let payload = daw_bridge::layout::UiAudioClipFieldPayload {
+                        command_type: UiCommandType::SetAudioClipField as u16,
+                        field,
+                        track_id: track,
+                        clip_id: clip,
+                        reserved0: 0,
+                        value,
+                        reserved1: [0; 4],
+                    };
+                    match handle.send_audio_clip_field(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"audio-clip\", \"track\": {track}, \"clip\": {clip}, \"field\": {field_name:?}, \"value\": {value} }}");
                             0
                         }
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }

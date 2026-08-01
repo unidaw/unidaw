@@ -1505,6 +1505,17 @@ impl EngineHandle {
         )
     }
 
+    /// Set one field of an audio clip: in-point, gain, or either fade (SetAudioClipField).
+    pub fn send_audio_clip_field(
+        &self,
+        payload: crate::layout::UiAudioClipFieldPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiAudioClipFieldPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiAudioClipFieldPayload>(),
+        )
+    }
+
     /// Set a sampler modulator's ADSR (SamplerSetEnvelope).
     pub fn send_sampler_envelope(
         &self,

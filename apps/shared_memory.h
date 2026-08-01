@@ -820,6 +820,10 @@ struct UiAudioClip {            // 64 B
 };
 static_assert(sizeof(UiAudioClip) == 64, "UiAudioClip must be 64 bytes");
 
+// VERSION-GATED, AND THE CLIP TABLE NOW MOVES BETWEEN LOADS. It used to be written once inside
+// loadProjectFromPath, under a comment saying these change only at load — true until
+// SetAudioClipField (95) gave the in-point, gain and fades a writer. A reader that sampled this
+// table once at startup was correct then and is not now: re-read whenever `version` moves.
 struct alignas(64) UiAudioSourceRegion {   // metadata table, version-gated
   uint32_t version = 0;         // bumped when either table changes
   uint32_t sourceCount = 0;

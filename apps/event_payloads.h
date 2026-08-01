@@ -445,8 +445,52 @@ enum class UiCommandType : uint16_t {
   /// This is not a second answer to the per-track `SetTrackLinesPerBeat` (92) — it is the half
   /// that was missing. Whichever way the per-track field is eventually ruled on, a clip's own
   /// grid needs a writer.
-  SetClipGrid = 94,  // next free 95
+  SetClipGrid = 94,
+
+  /// AN AUDIO CLIP'S GAIN, FADES AND IN-POINT. Field-addressed, like SamplerSetSlot (88).
+  ///
+  /// All four persist, all four are published (`get audio-sources` prints them), the engine
+  /// honours all four when it renders — and until this, no command wrote any of them. The audio
+  /// clip was read-only from every surface: you could see its gain and only a text editor could
+  /// change it. Found by giving persisted_field_reach a CLIP scope, which it had never had.
+  SetAudioClipField = 95,  // next free 96
 };
+
+/// WHICH PROPERTY OF AN AUDIO CLIP. Field-addressed rather than four opcodes, so a fifth property
+/// later is an enum entry — the same shape SamplerSlotField uses and for the same reason.
+enum class AudioClipField : uint16_t {
+  SourceStartFrame = 0,  // frames into the source
+  GainMillibels = 1,     // SIGNED, dB * 100 — the unit the sampler slot and the mixer both use
+  FadeInNanoticks = 2,
+  FadeOutNanoticks = 3,
+};
+
+// SET AUDIO CLIP FIELD (opcode 95). 40 bytes.
+//
+// ONE FIELD PER CALL, so nothing is silently reset — the reason vintage and clip-grid carry a
+// flag per field, reached here by addressing instead.
+//
+// TWO VALIDATION RULES, AND THEY DIFFER ON PURPOSE:
+//
+//   GAIN IS CLAMPED to -9600..2400 millibels. Not a relaxation of this file's "refuse, do not
+//   clamp" habit — it is what the sampler SLOT does with exactly this quantity and exactly this
+//   range, and a gain is a continuous control with natural limits where a fader stopping at the
+//   end of its travel is what a person expects. Inventing a different policy for the same
+//   quantity one object along would be worse than either policy consistently applied.
+//
+//   THE FRAME AND TICK FIELDS REFUSE a negative. Negative is not "past the end", it is a caller
+//   with the wrong idea of the unit, and there is no natural limit to clamp toward.
+struct UiAudioClipFieldPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SetAudioClipField);
+  uint16_t field = 0;  // AudioClipField
+  uint32_t trackId = 0;
+  uint32_t clipId = 0;
+  uint32_t reserved0 = 0;
+  int64_t value = 0;   // interpreted per `field`; signed so gain can be negative
+  uint32_t reserved1[4]{};
+};
+static_assert(sizeof(UiAudioClipFieldPayload) == 40,
+              "UiAudioClipFieldPayload must be 40 bytes");
 
 // SET CLIP GRID (opcode 94). 40 bytes.
 //
@@ -1081,6 +1125,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::SetTrackLinesPerBeat: return "set_track_lines_per_beat";
     case UiCommandType::SetTrackAllowNoteOverlap: return "set_track_allow_note_overlap";
     case UiCommandType::SetClipGrid: return "set_clip_grid";
+    case UiCommandType::SetAudioClipField: return "set_audio_clip_field";
     // NAMED HERE ONLY, deliberately: these two have no daw-cli verb and that is a separate
     // question, but an opcode with no NAME is recorded by the history journal as "op:unknown"
     // whatever else is true of it — so a session that used one is unreadable afterwards. The

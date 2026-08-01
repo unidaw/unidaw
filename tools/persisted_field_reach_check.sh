@@ -125,19 +125,28 @@ CLIP = {
     "lines_per_beat":       "SetClipGrid",
     "time_sig_numerator":   "SetClipGrid",
     "time_sig_denominator": "SetClipGrid",
+    # Four of the six gaps this scope found on its first run are discharged: an audio clip's
+    # in-point, gain and fades were persisted, published and rendered with nothing able to write
+    # them, which is exactly the defect this check exists to name.
+    "source_start_frame":   "SetAudioClipField",
+    "gain_db":              "SetAudioClipField",
+    "fade_in":              "SetAudioClipField",
+    "fade_out":             "SetAudioClipField",
     # GAP is NOT a fourth kind of exemption. It is a debt marker: a field that is persisted,
     # published and rendered, and that no command can write — the defect this whole check exists
     # to find. They are listed so they are COUNTED AND PRINTED on every run rather than being
     # invisible, which is what they were until clips were scoped at all.
+    #
+    # BOTH REMAINING ONES ARE STRINGS, and that is not a coincidence: the command ring's payload is
+    # 40 bytes, so a name or a path needs the BulkChunk carrier (opcode 83) rather than a scalar
+    # payload like SetAudioClipField's. That is the change that closes these two, and it is the
+    # same shape as task #85's inward bulk carrier.
     "name":                 "GAP:no writer — `rename` is track-only. A clip's name persists and "
-                            "is shown, and nothing can change it",
+                            "is shown, and nothing can change it. Needs the bulk carrier: a name "
+                            "does not fit a 40-byte payload",
     "source_path":          "GAP:no writer — an audio clip cannot be repointed at another file, "
-                            "the same defect sourceLocalId had for sampler slots (closed) ",
-    "source_start_frame":   "GAP:no writer — persisted, published in `get audio-sources`, "
-                            "rendered, settable by nothing",
-    "gain_db":              "GAP:no writer — same",
-    "fade_in":              "GAP:no writer — same",
-    "fade_out":             "GAP:no writer — same",
+                            "the same defect sourceLocalId had for sampler slots (closed). Also a "
+                            "string, so also the bulk carrier",
 }
 
 # ---------------------------------------------------------------- what is actually persisted.
