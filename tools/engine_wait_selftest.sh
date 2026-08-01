@@ -244,7 +244,8 @@ echo "  escalates: a SIGTERM-ignoring process is killed, and the escalation is r
 # missing file, and carry the diagnosis with it.
 cat >"$TMP/nocap.log" <<'EOS'
 Audio device: Built-in Output
-Audio underrun summary: 0 of 0 playback callbacks dropped a track (worst shortfall 0 blocks).
+Audio device callbacks: 0 from the DEVICE, 0 reaching the engine.
+Audio underrun summary: 0 of 0 callbacks that HAD A TRACK TO PLAY dropped one (worst shortfall 0 blocks).
 EOS
 cat >"$TMP/reqcap.sh" <<EOF
 . "$LIB"
@@ -263,6 +264,32 @@ case "$REQ_OUT" in
   *) fail "require_capture refused the missing capture and did NOT carry the diagnosis. It said:
         $REQ_OUT — which leaves the reader exactly where the traceback did" ;;
 esac
+# ---- AND IT MUST NOT ACCUSE A WORKING DEVICE. This is the case the old version got wrong, so it
+# is asserted rather than assumed: `capture_diagnosis` read "N of M playback callbacks" and called
+# M "how many times the device asked for audio". M counts callbacks that HAD A TRACK TO PLAY, so a
+# healthy device with the transport stopped reports 0 and was accused of never having run. The two
+# numbers coincided on the machine it was written against, which is exactly why it survived — and
+# the misreading reached a memory file and two agents' bug reports before anyone measured it.
+cat >"$TMP/livedev.log" <<'EOS'
+Audio device: Built-in Output
+Audio device callbacks: 431 from the DEVICE, 431 reaching the engine.
+Audio underrun summary: 0 of 0 callbacks that HAD A TRACK TO PLAY dropped one (worst shortfall 0 blocks).
+EOS
+cat >"$TMP/livedev.sh" <<EOF
+. "$LIB"
+capture_diagnosis "$TMP/livedev.log"
+EOF
+LIVE="$(run_case "$TMP/livedev.sh")"
+case "$(printf '%s' "$LIVE" | tail -n +2)" in
+  *"NEVER RAN A PLAYBACK CALLBACK"*)
+    fail "capture_diagnosis accused a device that ran 431 callbacks of never having run one. That
+        is the old defect: it was reading the count of callbacks that HAD SOMETHING TO PLAY, which
+        is zero whenever the transport is stopped" ;;
+  *"ran 431 playback callbacks"*) : ;;
+  *) fail "capture_diagnosis said something unexpected about a working device: $LIVE" ;;
+esac
+echo "  a device that DID run callbacks is not accused of being dead"
+
 # And it must NOT refuse a capture that IS there, or every live check fails on a working machine.
 printf 'x' >"$TMP/present.wav"
 cat >"$TMP/hascap.sh" <<EOF

@@ -501,7 +501,20 @@ public:
   void process(float* const* outputChannelData,
                int numOutputChannels,
                int numSamples) {
+    // EVERY CALLBACK, before any condition. The only other counter here (m_activeCallbacks)
+    // counts callbacks that HAD A TRACK TO PLAY, which is a different question and was read as
+    // this one by both agents and by me: "0 of 0 playback callbacks" was taken as "CoreAudio
+    // never called back" and used to blame the audio device, twice, in writing. It cannot mean
+    // that, because a callback with nothing to play does not increment it.
+    m_totalCallbacks.fetch_add(1, std::memory_order_relaxed);
     if (numSamples != (int)m_blockSize) {
+      // AND THE ONE THAT SILENTLY DISCARDS THE BLOCK. The device's buffer size and the engine's
+      // block size have to agree; when they do not, every callback lands here, zeroes the output
+      // and returns — the device runs, the producer keeps rendering, the pipeline depth climbs,
+      // and nothing is ever heard. That is indistinguishable from a dead device at every layer
+      // above unless this is counted, so it is counted.
+      m_wrongSizeCallbacks.fetch_add(1, std::memory_order_relaxed);
+      m_lastCallbackSamples.store(numSamples, std::memory_order_relaxed);
       for (int ch = 0; ch < numOutputChannels; ++ch) {
         if (outputChannelData[ch]) {
           std::memset(outputChannelData[ch], 0, numSamples * sizeof(float));
@@ -509,6 +522,7 @@ public:
       }
       return;
     }
+    m_lastCallbackSamples.store(numSamples, std::memory_order_relaxed);
 
     // Movement 4 surround: choose the effective master. When m_masterChannels is wider
     // than the audio device, the mix runs into the virtual m_masterBuffer and is
@@ -1237,6 +1251,16 @@ public:
   uint64_t activeCallbacks() const {
     return m_activeCallbacks.load(std::memory_order_relaxed);
   }
+  uint64_t totalCallbacks() const {
+    return m_totalCallbacks.load(std::memory_order_relaxed);
+  }
+  uint64_t wrongSizeCallbacks() const {
+    return m_wrongSizeCallbacks.load(std::memory_order_relaxed);
+  }
+  int lastCallbackSamples() const {
+    return m_lastCallbackSamples.load(std::memory_order_relaxed);
+  }
+  uint32_t engineBlockSize() const { return m_blockSize; }
   uint32_t worstStarveGap() const {
     return m_worstStarveGap.load(std::memory_order_relaxed);
   }
@@ -1391,6 +1415,9 @@ private:
   // audio thread, read by a low-priority reporter, so relaxed atomics suffice.
   std::atomic<uint64_t> m_starveCallbacks{0};   // callbacks that dropped >=1 track
   std::atomic<uint64_t> m_activeCallbacks{0};   // callbacks with >=1 active track
+  std::atomic<uint64_t> m_totalCallbacks{0};    // EVERY callback the device made
+  std::atomic<uint64_t> m_wrongSizeCallbacks{0};  // ...that were dropped on a size mismatch
+  std::atomic<int> m_lastCallbackSamples{0};
   std::atomic<uint32_t> m_worstStarveGap{0};    // largest (want - completed) seen
 
   // The audio callback must not touch a lock, and libc++ implements the
@@ -1991,6 +2018,16 @@ int main(int argc, char** argv) {
   // plays everything off-speed on any other device — 48k content on a 96k
   // device runs 2x fast, on 192k 4x fast. Opened here to read the rate; started
   // later. If there is no device, the 48 kHz fallback stands for offline timing.
+  // JUCE FIRST, DEVICE SECOND. `ScopedJuceInitialiser_GUI` (inside the runtime) brings up the
+  // MessageManager, and this used to be constructed seventeen thousand lines further down —
+  // AFTER the CoreAudio device was opened to read its sample rate. On this machine the device
+  // then opened, reported its name, rate and block size, answered isPlaying() with true, and
+  // never ran a single IO callback: the app made no sound at all, every capture came back empty,
+  // and both agents wrote it up as a dead audio device.
+  std::unique_ptr<daw::IRuntime> audioRuntime;
+  if (!noAudio) {
+    audioRuntime = daw::createJuceRuntime();
+  }
   std::unique_ptr<daw::IAudioBackend> audioBackend =
       noAudio ? nullptr : daw::createAudioBackend();
   if (noAudio) {
@@ -2859,7 +2896,6 @@ struct TrackRuntime {
               << (poolAlwaysOn ? " (forced)" : " (engaged when the work needs it)") << std::endl;
   }
 
-  std::unique_ptr<daw::IRuntime> audioRuntime;
   std::unique_ptr<EngineAudioCallback> audioCallback;
   // PUBLISHED SEPARATELY, because the producer and consumer threads are created LONG before this
   // is assigned — the callback needs the device's sample rate and block size, and the device is
@@ -19236,7 +19272,11 @@ struct TrackRuntime {
                           : engineConfig.blockSize);
   const int effOutChannels = audioBackend ? audioBackend->outputChannels() : 2;
   if (!testMode) {
-    audioRuntime = daw::createJuceRuntime();
+    // The runtime is created up where the device is OPENED, not here — see the comment there.
+    // Kept as a fallback for the --no-audio path, which opens no device and so never made one.
+    if (!audioRuntime) {
+      audioRuntime = daw::createJuceRuntime();
+    }
     // Opened earlier to adopt its sample rate; here we just wire the callback.
     //
     // OFFLINE takes this same branch with no device: it needs every bit of the setup below
@@ -19478,7 +19518,51 @@ struct TrackRuntime {
                      [&](float* const* outputs, int numChannels, int numFrames) {
                        audioCallback->process(outputs, numChannels, numFrames);
                      })) {
-        std::cout << "Audio output started" << std::endl;
+        // ASK THE DEVICE WHETHER IT IS RUNNING, rather than announcing it because a callback was
+        // registered. `start()` returns true whenever it is handed a non-null callback, so this
+        // line used to print on a machine where CoreAudio opens the device, reports its name,
+        // rate and block size, and never runs a single callback — indistinguishable from a
+        // working machine except in a summary at shutdown that nobody was reading. Both agents
+        // spent time on "the app makes no sound" against that message.
+        //
+        // The device may take a moment to come up, so this samples rather than asking once: a
+        // race lost here would print the alarming version on a machine that works, which is a
+        // worse failure than the one being fixed.
+        // WAIT FOR A CALLBACK, not for isPlaying(). The device's own isPlaying() answers TRUE on
+        // a machine where CoreAudio never runs the IO proc — measured — so it cannot tell the two
+        // cases apart, and the whole point of this check is to tell them apart. One real callback
+        // is the only thing that proves the chain works end to end.
+        //
+        // Exits the moment the first callback lands, so a working device costs about one block
+        // (~12 ms at 512/44100) and only a broken one waits the full second.
+        bool running = false;
+        for (int i = 0; i < 40 && !running; ++i) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(25));
+          running = audioBackend->deviceCallbacks() > 0;
+        }
+        if (running) {
+          std::cout << "Audio output started" << std::endl;
+        } else {
+          const std::string why = audioBackend->lastError();
+          const int inputs = audioBackend->inputChannels();
+          std::cout << "Audio output OPENED BUT NEVER STARTED on \""
+                    << audioBackend->deviceName() << "\" — the device reported its rate and "
+                    << "block size and is not playing, so nothing will be heard and every "
+                    << "capture will be empty." << std::endl;
+          if (inputs > 0) {
+            std::cout << "  It was opened with " << inputs << " INPUT channel(s). On macOS an "
+                      << "unanswered microphone permission stops the whole AudioUnit, output "
+                      << "included; check System Settings > Privacy & Security > Microphone."
+                      << std::endl;
+          }
+          if (!why.empty()) {
+            std::cout << "  The device's own last error: " << why << std::endl;
+          }
+          DAW_EVENT("audio.device_not_running")
+              .field("device", audioBackend->deviceName())
+              .field("inputs", static_cast<uint64_t>(inputs))
+              .field("error", why);
+        }
       } else {
         daw::LogLine() << "Failed to start audio output" << std::endl;
       }
@@ -19771,8 +19855,29 @@ struct TrackRuntime {
         ? static_cast<double>(engineConfig.blockSize) /
               engineConfig.sampleRate * 1000.0
         : 0.0;
+    const uint64_t total = audioCallback->totalCallbacks();
+    const uint64_t wrongSize = audioCallback->wrongSizeCallbacks();
+    // THE DEVICE COUNT FIRST, because it is the one that answers "did the sound card ever ask us
+    // for audio". The next line's "0 of 0" is about callbacks that HAD SOMETHING TO PLAY, and
+    // reading it as this number is how a working device got blamed for silence twice.
+    const uint64_t deviceCbs = audioBackend->deviceCallbacks();
+    std::cout << "Audio device callbacks: " << deviceCbs << " from the DEVICE, " << total
+              << " reaching the engine";
+    if (wrongSize > 0) {
+      std::cout << ", " << wrongSize << " DISCARDED on a block-size mismatch (device asked for "
+                << audioCallback->lastCallbackSamples() << " samples, the engine is built for "
+                << audioCallback->engineBlockSize()
+                << ") — that path zeroes the output and returns, so the device runs and nothing "
+                   "is ever heard";
+    }
+    std::cout << "." << std::endl;
+    if (total == 0) {
+      std::cout << "  ZERO callbacks: the device never asked for audio at all. That is the "
+                   "device or the OS, not the engine — nothing downstream of here can be judged "
+                   "from this run." << std::endl;
+    }
     std::cout << "Audio underrun summary: " << starve << " of " << active
-              << " playback callbacks dropped a track (worst shortfall "
+              << " callbacks that HAD A TRACK TO PLAY dropped one (worst shortfall "
               << audioCallback->worstStarveGap() << " blocks). Pipeline depth "
               << depth << " blocks (~" << (depth * blockMs)
               << " ms transport-to-ear, + device buffer)." << std::endl;

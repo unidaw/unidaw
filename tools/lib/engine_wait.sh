@@ -158,15 +158,23 @@ capture_diagnosis() {
   [ -f "$log" ] || { echo "(no engine log at $log to diagnose from)"; return; }
   local dev callbacks
   dev="$(grep -m1 '^Audio device: ' "$log" 2>/dev/null | sed 's/^Audio device: //')"
-  # "N of M playback callbacks dropped a track" — M is how many times the device asked for audio.
-  callbacks="$(grep -o 'of [0-9]* playback callbacks' "$log" 2>/dev/null | tail -1 |
+  # "Audio device callbacks: N from the DEVICE" — N is how many times the device asked for audio.
+  #
+  # THIS USED TO READ THE WRONG NUMBER, and the comment here asserted the wrong meaning of it. It
+  # parsed "N of M playback callbacks dropped a track" and called M "how many times the device
+  # asked for audio". M is nothing of the kind: it counts callbacks that HAD A TRACK TO PLAY, so
+  # an engine sitting with its transport stopped reports M=0 on a perfectly healthy device, and
+  # this function would have accused that device of never running. On the machine it was written
+  # against the two numbers coincided, which is exactly why it went unnoticed — and the same
+  # misreading put a wrong cause in a memory file and in two agents' bug reports.
+  callbacks="$(grep -o 'Audio device callbacks: [0-9]*' "$log" 2>/dev/null | tail -1 |
                grep -oE '[0-9]+' | head -1)"
   if [ "${callbacks:-unknown}" = "0" ]; then
-    echo "the audio device ${dev:-(unnamed)} NEVER RAN A PLAYBACK CALLBACK (0 of 0): it opened,
-        reported 'Audio output started', and then pulled nothing at all. No audio can reach the
+    echo "the audio device ${dev:-(unnamed)} NEVER RAN A PLAYBACK CALLBACK: it opened, reported
+        its rate and block size, and then asked for audio zero times. No audio can reach the
         capture tap, which lives in that callback, and the producer queue grows without bound.
-        Nothing under test can cause or fix this — the machine's default output device is not
-        actually playing. Select a real local output and re-run"
+        Nothing under test can cause or fix this. NOTE the device's own isPlaying() answers TRUE
+        in this state, so it is not a usable second signal — the callback count is"
   elif [ -n "$callbacks" ]; then
     # THE DEVICE PULLED, SO LOOK UPSTREAM. The underrun summary counts DEVICE dropouts; a
     # PRODUCER starved before the device ever asked logs nothing there at all, so "0 underruns"

@@ -74,6 +74,25 @@ class IAudioBackend {
   virtual int blockSize() const = 0;
   virtual int outputChannels() const = 0;
   virtual std::string deviceName() const = 0;
+
+  // WHAT THE DEVICE IS ACTUALLY DOING, in the device layer's own words.
+  //
+  // "Audio output started" was printed whenever start() returned true, and start() returned true
+  // whenever it was handed a non-null callback — it never asked the device anything. So a machine
+  // where CoreAudio opens the device, reports its name, rate and block size, and then never runs
+  // a single callback printed exactly the same line as one that works, and the only hint was a
+  // separate summary saying "0 of 0 playback callbacks" that nothing was looking for.
+  //
+  // These are the questions whose answers distinguish those two cases, and only the device can
+  // answer them.
+  virtual bool isRunning() const = 0;          // the device says it is playing
+  virtual std::string lastError() const = 0;   // the device's own last error, or empty
+  virtual uint64_t deviceCallbacks() const = 0; // callbacks the DEVICE made, counted at the
+                                               // boundary: the number that answers whether
+                                               // CoreAudio ever asked for audio at all
+  virtual int inputChannels() const = 0;       // active INPUTS — non-zero means a mic permission
+                                               // prompt is in play, which is the usual macOS
+                                               // reason an opened device never starts
 };
 
 // Musical position for the block about to be processed. Without this a hosted

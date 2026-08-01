@@ -1,5 +1,7 @@
 #include "platform_juce/juce_wrapper.h"
 
+#include <thread>
+
 #include "apps/waveform_pyramid.h"
 
 #include <algorithm>
@@ -248,6 +250,9 @@ class JuceAudioBackend final : public IAudioBackend,
  public:
   bool openDefaultDevice(int numOutputs) override {
     const juce::String error = deviceManager_.initialise(0, numOutputs, nullptr, true);
+    // KEPT, not discarded. When initialise fails the caller only learns "false", and the one
+    // sentence saying why is the most useful thing anyone will read that day.
+    initError_ = error.toStdString();
     if (error.isNotEmpty()) {
       return false;
     }
@@ -302,6 +307,31 @@ class JuceAudioBackend final : public IAudioBackend,
   int outputChannels() const override { return outputChannels_; }
   std::string deviceName() const override { return deviceName_; }
 
+  // ASKED OF THE DEVICE, not remembered from open time. A device can open and then fail to run,
+  // which is the case these exist to make visible.
+  uint64_t deviceCallbacks() const override {
+    return deviceCallbacks_.load(std::memory_order_relaxed);
+  }
+
+  bool isRunning() const override {
+    auto* device = const_cast<juce::AudioDeviceManager&>(deviceManager_).getCurrentAudioDevice();
+    return device != nullptr && device->isPlaying();
+  }
+
+  std::string lastError() const override {
+    auto* device = const_cast<juce::AudioDeviceManager&>(deviceManager_).getCurrentAudioDevice();
+    if (device == nullptr) {
+      return initError_.empty() ? std::string("no current audio device") : initError_;
+    }
+    const std::string deviceError = device->getLastError().toStdString();
+    return deviceError.empty() ? initError_ : deviceError;
+  }
+
+  int inputChannels() const override {
+    auto* device = const_cast<juce::AudioDeviceManager&>(deviceManager_).getCurrentAudioDevice();
+    return device == nullptr ? 0 : device->getActiveInputChannels().countNumberOfSetBits();
+  }
+
  private:
   void audioDeviceAboutToStart(juce::AudioIODevice* device) override {
     if (device != nullptr) {
@@ -320,6 +350,11 @@ class JuceAudioBackend final : public IAudioBackend,
                                         int numOutputChannels,
                                         int numSamples,
                                         const juce::AudioIODeviceCallbackContext& /*context*/) override {
+    // COUNTED AT THE DEVICE BOUNDARY, before any condition and before the engine's own counter.
+    // The engine counts callbacks it was HANDED; this counts callbacks the DEVICE MADE, and the
+    // gap between the two is itself a diagnosis: equal means the engine is dropping them, zero
+    // here means CoreAudio never asked for audio at all.
+    deviceCallbacks_.fetch_add(1, std::memory_order_relaxed);
     if (numOutputChannels <= 0 || numSamples <= 0) {
       return;
     }
@@ -334,6 +369,8 @@ class JuceAudioBackend final : public IAudioBackend,
 
   juce::AudioDeviceManager deviceManager_;
   AudioCallback callback_;
+  std::string initError_;
+  std::atomic<uint64_t> deviceCallbacks_{0};
   double sampleRate_ = 0.0;
   int blockSize_ = 0;
   int outputChannels_ = 0;
