@@ -817,7 +817,7 @@ const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'sampl
                      'quantize', 'moveDevice', 'chord', 'delChord', 'deleteHarmony',
                      'addDevice', 'openEditor', 'newSong', 'fold', 'opsColumn', 'opsShown',
                      'harmonyQuantize', 'harmonyQuantized', 'savePatch', 'linesPerBeat',
-                     'clipGrid',
+                     'clipGrid', 'hasMaster',
                      'allowOverlap', 'overlapping',
                      'samplerSlotName',
                      'edit', 'harmony', 'ask', 'forget',
@@ -2317,6 +2317,10 @@ const OP_REGISTRY = {
   'save-patch': { cli: null, agent: null, why: 'gap' },
   // A lane's subdivision (opcode 92). Landed engine-side today; no CLI verb yet.
   lpb: { cli: null, agent: null, why: 'gap' },
+  // The master bus fader and mute (SetTrackMixer addressed to kMasterTrackId). The engine has
+  // honoured both on the summed output since the master track landed; nothing could move them.
+  'main-gain': { cli: null, agent: null, why: 'gap' },
+  'main-mute': { cli: null, agent: null, why: 'gap' },
   // A CLIP's own subdivision and meter (opcode 94) — the level the renderer honours FIRST.
   // Backend shipped `daw-cli do clip-grid` with it, so this one has a CLI path from the start.
   'clip-grid': { cli: 'clip-grid', agent: null, why: 'gap' },
@@ -2370,6 +2374,10 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
                  'delchord', 'delharmony', 'move-clip', 'movedevice', 'new', 'paste',
                  'patch', 'redo', 'rename', 'seek', 'stop', 'transpose', 'trim-clip',
                  'undo',
+                 // The master bus fader and mute. SetTrackMixer addressed to kMasterTrackId
+                 // is what they send, and daw-cli's mixer verb takes a track INDEX, so there
+                 // is no spelling for the master there yet.
+                 'main-gain', 'main-mute',
                  // The sampler filter (opcode 86). It landed engine-side this morning and the
                  // CLI has no verb for it yet — recorded as a gap rather than claimed as covered.
                  'filter', 'soundaddr',
@@ -2434,7 +2442,7 @@ const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
                    'harmony-quantize', 'save-patch', 'lpb', 'note-overlap',
                    // A clip's own grid (opcode 94). It HAS a CLI path — `daw-cli do clip-grid`
                    // shipped with the opcode — so it is only in the agent half of the gap.
-                   'clip-grid',
+                   'clip-grid', 'main-gain', 'main-mute',
                    // With `mods`: a read-back this app has and the agent manifest does not.
                    'kit'];
 

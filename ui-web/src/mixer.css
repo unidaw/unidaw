@@ -124,3 +124,15 @@
   padding: 1px 2px;
 }
 .mx-out:focus { outline: 1px solid var(--base-accent); }
+
+/* THE MASTER BUS STRIP.
+   Pushed to the far end and separated by a margin rather than sorted into the row: it is
+   not a lane, and a strip that sat between two tracks would read as one. Its name is not
+   a rename target and it carries no solo or destination, so those two boxes are simply
+   absent — a disabled control that can never be enabled is worse than no control. */
+.mx-strip.mx-master {
+  margin-left: auto;
+  border-color: var(--uni-rule-track);
+  background: var(--uni-surface-row-alt);
+}
+.mx-strip.mx-master .mx-name { color: var(--uni-text-note); cursor: default; }

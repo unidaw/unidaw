@@ -1009,6 +1009,28 @@ export function createCommands(api) {
       } },
     mute: { help: 'mute <track>', args: [A_TRACK],
       run: (a) => { const t = Number(a[0]); api.strip(t, 'mute'); return 'mute t' + t; } },
+    /*
+     * THE MASTER BUS, which the engine has published as a real track — its own chain, mixer
+     * and meters — since the master-track work landed, and which the mixer drew nothing for.
+     * The strip iterates the LANE count, and the master is deliberately not a lane so the
+     * tracker never draws a row for it.
+     *
+     * Its own verbs rather than `gain main`, because the track argument is an integer and a
+     * union type here would be a second grammar for one idea. -1 is how the app already
+     * spells "the master" internally; the console says `main`, which is what the routing
+     * dropdown has always called it on screen.
+     */
+    'main-gain': { help: 'main-gain <dB> — the master bus fader, where every track ends up',
+      args: [{ name: 'dB', type: 'num', min: -96, max: 12 }],
+      run: (a) => {
+        if (!api.hasMaster()) return 'this engine publishes no master track';
+        const db = Number(a[0]); api.gain(-1, db); return 'main ' + db + 'dB';
+      } },
+    'main-mute': { help: 'main-mute — silence the master bus', args: [],
+      run: () => {
+        if (!api.hasMaster()) return 'this engine publishes no master track';
+        api.strip(-1, 'mute'); return 'main mute';
+      } },
     // Collapse is a VIEW decision, and it still gets a command: hard requirement 4
     // is that an agent can drive the UI, and a fold reachable only by a keystroke
     // is a fold an agent cannot reach. The op-registry test enforces exactly this.
