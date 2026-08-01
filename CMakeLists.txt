@@ -723,6 +723,15 @@ add_test(NAME audio_clip_field
 )
 set_tests_properties(audio_clip_field PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# The MASTER strip is a track like the others: its fader moves uiMixerVersion, and its meter
+# reports the sum it produced. Both were reported by the web-UI agent against PR #19 — a value
+# published correctly with nothing saying it changed, and a meter hardcoded to zero. The meter
+# property runs an OFFLINE RENDER, so no audio device is involved.
+add_test(NAME master_mixer
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/master_mixer_check.sh
+)
+set_tests_properties(master_mixer PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 # The kit read-back covers the slot the engine publishes. A NAMES-only ratchet, deliberately —
 # the behaviour is driven by sampler_kit, sampler_vintage, slice_extent and slot_rename, and this
 # is the guard those do not provide. Costs no engine, so it is nearly free.

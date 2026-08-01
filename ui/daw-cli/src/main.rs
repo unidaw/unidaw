@@ -460,6 +460,11 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
     // The per-track boolean byte, which carries harmony-quantize alongside mute/solo.
     let mixers = handle.read_mixer();
     println!("{{");
+    // THE MIXER VERSION, which nothing could read until now. It is the word an optimistic UI
+    // strip waits on to clear a pending fader move, and it was invisible from every surface —
+    // so the bug where a master-only edit published a correct value and never moved this word
+    // was not merely uncaught, it was unobservable.
+    println!("  \"mixer_version\": {},", handle.mixer_version());
     println!("  \"track_count\": {count},");
     println!("  \"tracks\": [");
     for index in 0..count {
@@ -1024,7 +1029,14 @@ fn track_structure_command(command: UiCommandType, track: u32) -> UiCommandPaylo
 }
 
 fn mixer_command(args: &[String]) -> Result<UiCommandPayload, String> {
-    let track = flag_u64(args, "--track", Some(0))? as u32;
+    // `--track master`, like add-device, remove-device and move-device already accept. It did
+    // not, so the one fader every track passes through was unreachable from this surface by
+    // name — you had to know that 4294901760 is the master's stable id. `get tracks` prints that
+    // row as "master": true and never prints the number in a form anyone would type.
+    let track = match flag(args, "--track").as_deref() {
+        Some("master") => MASTER_TRACK_ID,
+        _ => flag_u64(args, "--track", Some(0))? as u32,
+    };
     let gain_db = flag_f64(args, "--gain-db", 0.0)?;
     let pan = flag_f64(args, "--pan", 0.0)?.clamp(-1.0, 1.0);
     // THE COMMAND family (u16, in a payload's flags word), NOT the published one (u8, in the

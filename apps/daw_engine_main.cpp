@@ -460,6 +460,10 @@ public:
                ? m_trackPeak[slot].load(std::memory_order_relaxed)
                : 0.0f;
   }
+  // The summed master bus, after its own fader. Not one of m_trackPeak's slots: the master
+  // occupies a published slot but is not one of the mixed tracks, so it has no uiSlot to
+  // write into and its level is measured where the sum exists.
+  float masterPeak() const { return m_masterPeak.load(std::memory_order_relaxed); }
 
   EngineAudioCallback(double sampleRate, uint32_t blockSize, uint32_t numBlocks,
                       std::atomic<uint32_t>* playbackBlockId)
@@ -590,6 +594,7 @@ public:
     // track thus reads silence rather than a stale level.
     for (uint32_t s = 0; s < daw::kUiMaxTracks; ++s) {
       m_trackPeak[s].store(0.0f, std::memory_order_relaxed);
+      m_masterPeak.store(0.0f, std::memory_order_relaxed);
       m_pdcAdvanced[s] = false;  // PDC: which slots fed their delay line this block
     }
 
@@ -1035,6 +1040,28 @@ public:
           }
         }
       }
+      // THE MASTER'S OWN LEVEL, measured AFTER its fader because that is what leaves the
+      // machine — a meter above a fader that does not respond to it is a second confusion on
+      // top of the first. Published as uiTrackPeakRms[master], which was hardcoded to 0.0f
+      // with a comment deferring it; an empty master meter is not a statement about the mix,
+      // it is the absence of one, and the web UI could not tell those apart.
+      //
+      // A SEPARATE PASS rather than folding it into the multiply above, because the multiply
+      // is skipped at unity gain and the meter must not be. Two float compares per sample per
+      // channel on a stereo master is nothing next to the mix that produced them.
+      float masterPeak = 0.0f;
+      for (int ch = 0; ch < masterCh; ++ch) {
+        if (!master[ch]) {
+          continue;
+        }
+        for (int i = 0; i < numSamples; ++i) {
+          const float mag = master[ch][i] < 0.0f ? -master[ch][i] : master[ch][i];
+          if (mag > masterPeak) {
+            masterPeak = mag;
+          }
+        }
+      }
+      m_masterPeak.store(masterPeak, std::memory_order_relaxed);
     }
 
     // Capture the FULL master (all N channels) so a surround mix is verifiable, then, if
@@ -1432,6 +1459,7 @@ private:
   std::atomic<std::vector<TrackInfo>*> m_tracksHazard{nullptr};
   std::vector<std::shared_ptr<std::vector<TrackInfo>>> m_tracksRetired;
   std::atomic<float> m_trackPeak[daw::kUiMaxTracks]{};
+  std::atomic<float> m_masterPeak{0.0f};
 
   // --- Movement 4 PDC (plugin delay compensation) ---------------------------------
   // A hosted plugin with processing latency returns its output that many samples late,
@@ -9970,6 +9998,7 @@ struct TrackRuntime {
       historyAppend("write_automation_point", "received", ap.trackId, 0, "");
       return;
     }
+
     // M3.23 SECTION ops. All five are SONG-scoped: the spine belongs to no track, and
     // SetSectionLength moves placements on every track at once.
     // v29 MARKER ops — naming a position. TOTAL: they move no material, so there is nothing to
@@ -19023,7 +19052,20 @@ struct TrackRuntime {
           int32_t gainMb = -120000;  // ~silence for an absent/zero-gain track
           int32_t panTh = 0;
           uint8_t flags = 0;
-          if (i < trackSnapshot.size()) {
+          // THE MASTER IS COMPARED HERE WITH EVERY OTHER TRACK, and that is the fix. Its slot
+          // is filled in the append block below, which runs AFTER `mixerChanged` has been
+          // decided — so a master-only fader move published the new value correctly and left
+          // uiMixerVersion untouched, and an optimistic UI strip stayed pending for ever. The
+          // edit always landed; nothing ever said so.
+          if (masterTrack && i == publishedTrackCount) {
+            const float mg = masterTrack->mixGainLinear.load(std::memory_order_relaxed);
+            gainMb = mg > 0.0f ? static_cast<int32_t>(std::lround(2000.0 * std::log10(mg)))
+                               : -120000;
+            panTh = 0;  // the master has no pan
+            if (masterTrack->mixMute.load(std::memory_order_relaxed)) {
+              flags |= daw::kMixerFlagMute;
+            }
+          } else if (i < trackSnapshot.size()) {
             auto* rt = trackSnapshot[i];
             const float g = rt->mixGainLinear.load(std::memory_order_relaxed);
             gainMb = g > 0.0f
@@ -19121,18 +19163,16 @@ struct TrackRuntime {
             uiShm.header->uiTrackQuantizeGrid[m] = 0;  // the master has no lane
             uiShm.header->uiTrackQuantizeStrength[m] = 0;
             uiShm.header->uiTrackQuantizeSwing[m] = 0;
-            uiShm.header->uiTrackPeakRms[m] = 0.0f;  // master peak: 4b
-            const float mg =
-                masterTrack->mixGainLinear.load(std::memory_order_relaxed);
-            uiShm.header->uiTrackGainMillibels[m] =
-                mg > 0.0f ? static_cast<int32_t>(std::lround(2000.0 * std::log10(mg)))
-                          : -120000;
-            uiShm.header->uiTrackPanThousandths[m] = 0;
-            uint8_t mflags = 0;
-            if (masterTrack->mixMute.load(std::memory_order_relaxed)) {
-              mflags |= daw::kMixerFlagMute;
+            // The summed master bus's own level, after its fader. This was `0.0f` with a
+            // comment deferring it, so the master meter could not move at all.
+            {
+              auto* masterCb = publishedCallback();
+              uiShm.header->uiTrackPeakRms[m] = masterCb ? masterCb->masterPeak() : 0.0f;
             }
-            uiShm.header->uiTrackMixFlags[m] = mflags;
+            // GAIN, PAN AND FLAGS ARE NOT WRITTEN HERE any more — the mixer loop above fills
+            // this same slot and, crucially, COMPARES it, which is what makes a master-only
+            // edit move uiMixerVersion. Writing them twice would be two sources for one value,
+            // and the second one silently won.
             std::memset(uiShm.header->uiTrackName[m], 0, daw::kUiTrackNameBytes);
             std::memcpy(uiShm.header->uiTrackName[m], "Master", 6);
             std::memset(uiShm.header->uiTrackDeviceName[m], 0, daw::kUiTrackNameBytes);
