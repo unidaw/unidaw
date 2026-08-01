@@ -682,10 +682,13 @@ set_tests_properties(sampler_loop PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DI
 # A CLIP's own subdivision and meter — task #43 phase 2. The load-bearing property is PUBLISHED
 # rather than saved: the first version of this command saved correctly and drew nothing, because
 # the extent publish is gated on the clip version and a grid change touches no note.
-add_test(NAME clip_grid
+# Named for the script it runs, because `clip_grid` is taken by the unit binary below and
+# CMake refuses a duplicate test name at CONFIGURE time — a tree with both cannot build at
+# all, and a stale cmake cache hides that from whoever added the second one.
+add_test(NAME clip_grid_check
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/clip_grid_check.sh
 )
-set_tests_properties(clip_grid PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(clip_grid_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 # The kit read-back covers the slot the engine publishes. A NAMES-only ratchet, deliberately —
 # the behaviour is driven by sampler_kit, sampler_vintage, slice_extent and slot_rename, and this
