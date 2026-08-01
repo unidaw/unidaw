@@ -367,6 +367,21 @@ export function createCommands(api) {
       run: (a) => (api.writeAutomation(Number(a[0]), a[1], Number(a[2]), Number(a[3]))
         ? `${a[1]} = ${a[3]} at ${a[2]} (a point at that tick is replaced)` : refusal(api)) },
     /*
+     * REMOVE ONE POINT (opcode 96). Its own verb, not a flag on `autopoint`, mirroring the
+     * engine's decision to give it its own opcode — a destructive operation reached by
+     * setting a bit on a constructive one is a caller's typo away from deleting what they
+     * meant to write.
+     *
+     * Until this existed the lane was create-and-adjust-only: you could draw a curve and not
+     * undraw it, and a point written at the wrong tick could only be neutralised by writing
+     * another one beside it and leaving the mistake in the shape.
+     */
+    'del-point': { help: 'del-point <track> <param> <tick> — remove one automation point',
+      args: [A_TRACK, { name: 'param', type: 'text' },
+             { name: 'tick', type: 'int', min: 0 }],
+      run: (a) => (api.delAutomationPoint(Number(a[0]), a[1], Number(a[2]))
+        ? `removed ${a[1]} at ${a[2]}` : refusal(api)) },
+    /*
      * `draw` rather than `automationedit`, because it is typed as often as `note` is and the
      * long name is the one nobody reaches for. What it turns on is the pointer: with it lit, a
      * click on the curve makes a point and a drag changes its value.

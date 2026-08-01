@@ -187,7 +187,8 @@ export class Arrange {
   constructor(host, metrics,
               { onLoop, onNav, onClipSelect, onClipOpen, onClipEdit, onClipFork, onClipFade, onClipGain,
                 onMarkerSelect, onTimeEdit, onMarkerRename,
-                onMarkerAdd, onMarkerDelete, onAutomationWrite } = {}) {
+                onMarkerAdd, onMarkerDelete, onAutomationWrite,
+                onAutomationDelete } = {}) {
     this.host = host;
     this.metrics = metrics;
     this.host.className = 'ar';
@@ -221,6 +222,8 @@ export class Arrange {
      * surface bound without a writer and is exactly what a read-only arrangement should do.
      */
     this.onAutomationWrite = onAutomationWrite;
+    /** Where an alt-clicked point goes to be removed. Absent, alt-click does nothing. */
+    this.onAutomationDelete = onAutomationDelete;
     /*
      * THE SPINE's three gestures. Absent, the strip still DRAWS — a read-only spine is
      * a useful spine, and it is what this surface was before the engine had marker ops — so
@@ -359,12 +362,15 @@ export class Arrange {
      * the chrome, the lane is tinted while it is on, and the console can turn it on and off —
      * which is also what makes it testable without inventing a keyboard event.
      *
-     * WHAT IT CAN DO IS DELIBERATELY HALF OF WHAT IT SHOULD. `WriteAutomationPoint` can add a
-     * point and replace one at the same tick, and there is no opcode to REMOVE a point. So a
-     * point can be created and its value dragged; it cannot be moved in time (that is a write at
-     * the new tick plus a remove at the old one, and without the remove it litters) and it
-     * cannot be deleted. Backend has the request. The mode says so rather than offering a
-     * gesture that half-works.
+     * WHAT IT CAN DO: add a point, drag its value, and ALT-CLICK ONE TO REMOVE IT
+     * (`DeleteAutomationPoint`, 96). Until that opcode existed the lane was
+     * create-and-adjust-only — a point written at the wrong tick could only be neutralised by
+     * writing another beside it and leaving the mistake in the shape — and this comment said
+     * so, which is the kind of paragraph that becomes a lie the day the opcode lands.
+     *
+     * Still missing: MOVING a point in time. That is a write at the new tick plus a remove at
+     * the old one, which both halves now exist for; it wants to be one undo step, which is a
+     * batching question rather than a payload one.
      */
     this._auDrag = null;
     this.autoWrites = 0;
@@ -567,6 +573,25 @@ export class Arrange {
     for (let k = 0; k < pts.length; k++) {
       const d = Math.abs((pts[k][0] - vm.view.startTick) / tpp - x);
       if (d <= best) { best = d; grabbed = k; }
+    }
+    /*
+     * ALT-CLICK ON AN EXISTING POINT REMOVES IT (opcode 96).
+     *
+     * A modifier, which this file argues against elsewhere — and the argument does not apply
+     * here, because the mode is ALREADY visible. `draw` has a lit chip and a tinted lane, so
+     * "the next click edits the curve" is on screen; the modifier only chooses WHICH edit,
+     * inside a state you had to enter deliberately. That is the convention every DAW uses for
+     * this and there is no second mode worth inventing for it.
+     *
+     * Only on an existing point. Alt on empty lane does nothing rather than creating one —
+     * a delete gesture that creates when it misses is worse than one that misses.
+     */
+    if (e.altKey) {
+      if (grabbed >= 0 && this.onAutomationDelete) {
+        this.onAutomationDelete({ track: at.track, param: at.param, tick: pts[grabbed][0] });
+      }
+      e.preventDefault();
+      return;
     }
     const atTick = grabbed >= 0 ? pts[grabbed][0] : tick;
     // The lane's box is captured WITH the drag: see `_autoMove` for why the pointer wandering

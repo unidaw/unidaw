@@ -340,6 +340,75 @@ await page.waitForTimeout(1500);
   check(made && Math.abs(made[1] - 0.4) < 0.06, 'and the value under it',
         made && String(made[1]));
 
+  /*
+   * ALT-CLICK REMOVES A POINT (opcode 96).
+   *
+   * The lane was create-and-adjust-only until this: a point at the wrong tick could only be
+   * neutralised by writing another beside it and leaving the mistake in the shape.
+   *
+   * A modifier, unusually for this codebase — and the argument it normally makes does not
+   * apply, because the MODE is already visible. `draw` has a lit chip and a tinted lane, so
+   * "the next click edits the curve" is on screen; alt only chooses which edit, inside a
+   * state you entered deliberately.
+   */
+  const beforeDel = await curve();
+  const target = beforeDel && beforeDel.points.find(([t]) => t === 960000);
+  check(!!target, 'there is a point at a known tick to remove',
+        beforeDel && JSON.stringify(beforeDel.points.map((q) => q[0])));
+
+  if (target) {
+    const dx = geom.left + (target[0] - geom.start) / geom.tpp;
+    const dy = geom.top + 3 + (geom.laneH - 6) * (1 - target[1]);
+
+    /*
+     * PLAIN CLICK FIRST, AS THE CONTROL. Without it, "alt-click removed the point" is also
+     * satisfied by a click that removes points whatever modifier is held — and that would be
+     * a far worse bug than the one this gesture fixes.
+     */
+    await page.mouse.click(dx, dy);
+    await page.waitForTimeout(1500);
+    await page.evaluate(() => window.__uni.automationPoints(0, 'cutoff'));
+    await page.waitForTimeout(1200);
+    const plain = await curve();
+    check(plain && plain.points.length === beforeDel.points.length,
+          'a PLAIN click on a point removes nothing',
+          plain && `${beforeDel.points.length} -> ${plain.points.length}`);
+
+    await page.keyboard.down('Alt');
+    await page.mouse.click(dx, dy);
+    await page.keyboard.up('Alt');
+    await page.waitForTimeout(1800);
+    await page.evaluate(() => window.__uni.automationPoints(0, 'cutoff'));
+    await page.waitForTimeout(1500);
+    const gone = await curve();
+    check(gone && gone.points.length === plain.points.length - 1,
+          'alt-click removes exactly one point',
+          gone && `${plain.points.length} -> ${gone.points.length}`);
+    check(gone && !gone.points.some(([t]) => t === target[0]),
+          'and it is the one that was under the pointer',
+          gone && JSON.stringify(gone.points.map((q) => q[0])));
+  }
+
+  /*
+   * ...AND THE CONSOLE REACHES IT TOO. Pointer-only is not done.
+   */
+  const beforeVerb = await curve();
+  if (beforeVerb && beforeVerb.points.length) {
+    const tick = beforeVerb.points[beforeVerb.points.length - 1][0];
+    const said = await page.evaluate((t) =>
+      window.__uni.run(`del-point 0 cutoff ${t}`), tick);
+    await page.waitForTimeout(1500);
+    await page.evaluate(() => window.__uni.automationPoints(0, 'cutoff'));
+    await page.waitForTimeout(1200);
+    const afterVerb = await curve();
+    check(afterVerb && afterVerb.points.length === beforeVerb.points.length - 1,
+          'del-point removes one from the console too',
+          `${beforeVerb.points.length} -> ${afterVerb && afterVerb.points.length}, said "${said}"`);
+    check(afterVerb && !afterVerb.points.some(([t]) => t === tick),
+          'and it is the tick that was named',
+          afterVerb && JSON.stringify(afterVerb.points.map((q) => q[0])));
+  }
+
   // OFF again, and the lane goes back to the clips. A mode with no way out is a trap.
   await page.locator('.ch-draw').click();
   await page.waitForTimeout(300);
