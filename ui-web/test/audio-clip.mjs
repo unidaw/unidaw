@@ -138,7 +138,12 @@ check(both && both.drawnOut > both.drawnIn,
       both ? `in ${both.drawnIn}px, out ${both.drawnOut}px` : 'no clip');
 
 console.log('\n[gain]');
-check(both && both.gainText === '', 'a clip at unity shows no gain badge',
+/*
+ * A clip at unity reads 0.0 and is INVISIBLE, rather than having no badge at all — the badge
+ * is also the control, so removing it at unity would remove the handle you need to leave
+ * unity with. The visibility is asserted below, on computed opacity; this is the reading.
+ */
+check(both && both.gainText === '0.0', 'a clip at unity reads 0.0',
       JSON.stringify(both && both.gainText));
 await page.evaluate(({ t, c }) => window.__uni.run(`audio-clip ${t} ${c} gain -3.5`),
                     { t: target.track, c: target.clipId });
@@ -275,6 +280,110 @@ if (box && box.w > 40) {
         JSON.stringify(dragging));
   check((await page.evaluate(() => window.__uni.arrangeProbe().clips)) === clipBefore,
         'and abandoning it changed nothing');
+}
+
+/*
+ * DRAGGING THE GAIN BADGE.
+ *
+ * The badge is the control, which is the same call the shared-count badge makes: the reading
+ * is where a person finds out the clip is off unity, so it is where they will look for the
+ * way to change it. At unity it reads 0.0 and is invisible until the clip is pointed at —
+ * a row of "0.0" would hide the one clip that is not at unity, and a badge that did not
+ * exist at unity would be a control you cannot grab to LEAVE unity with.
+ */
+console.log('\n[dragging the gain]');
+await page.evaluate(({ t, c }) => window.__uni.run(`audio-clip ${t} ${c} gain 0`),
+                    { t: target.track, c: target.clipId });
+await page.waitForTimeout(1000);
+// The pointer is still sitting on the clip from the fade drag above, and the badge is
+// revealed on hover — so park it somewhere neutral before measuring anything about the
+// resting state.
+await page.mouse.move(5, 5);
+await page.waitForTimeout(200);
+const gbox = await page.evaluate((clipId) => {
+  const el = [...document.querySelectorAll('.ar-clip')].find((x) => x._clipId === clipId);
+  if (!el) return null;
+  const b = el.querySelector('.ar-clip-gain');
+  if (!b) return null;
+  const r = b.getBoundingClientRect();
+  return { x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width,
+           text: b.textContent, unity: b.classList.contains('unity') };
+}, target.clipId);
+check(gbox !== null, 'the badge exists at unity, so there is something to grab',
+      JSON.stringify(gbox));
+check(gbox && gbox.text === '0.0', 'and it reads 0.0', gbox && gbox.text);
+check(gbox && gbox.unity === true, 'and is marked as the quiet state');
+
+/*
+ * AND THE CLASS ACTUALLY DOES SOMETHING. Asserting `.unity` is on the element is a name
+ * check — it passes just as well if the stylesheet never mentions it. The claim is that
+ * the badge is INVISIBLE at unity and appears when you point at the clip, so that is what
+ * is measured: computed opacity, before and during a hover.
+ */
+const opacity = async (hover) => page.evaluate(async ({ clipId, h }) => {
+  const el = [...document.querySelectorAll('.ar-clip')].find((x) => x._clipId === clipId);
+  const b = el && el.querySelector('.ar-clip-gain');
+  if (!b) return null;
+  if (h) {
+    const r = el.getBoundingClientRect();
+    el.dispatchEvent(new PointerEvent('pointerover', { bubbles: true,
+      clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 }));
+  }
+  return getComputedStyle(b).opacity;
+}, { clipId: target.clipId, h: hover });
+const restOpacity = await opacity(false);
+check(restOpacity === '0', 'a unity badge is invisible at rest', String(restOpacity));
+await page.mouse.move(gbox.x, gbox.y);
+await page.waitForTimeout(200);
+const hoverOpacity = await opacity(true);
+check(hoverOpacity !== null && Number(hoverOpacity) > 0,
+      'and appears when the clip is pointed at', String(hoverOpacity));
+
+if (gbox && gbox.w > 0) {
+  await page.mouse.move(gbox.x, gbox.y);
+  await page.mouse.down();
+  await page.mouse.move(gbox.x, gbox.y - 30, { steps: 5 });    // up is louder
+  const mid = await page.evaluate((clipId) => {
+    const el = [...document.querySelectorAll('.ar-clip')].find((x) => x._clipId === clipId);
+    return el ? { mb: el._gainMb, text: el._gainT.nodeValue,
+                  gaining: el.classList.contains('gaining') } : null;
+  }, target.clipId);
+  check(mid && mid.mb > 0, 'dragging up raises the gain, before the button is up',
+        JSON.stringify(mid));
+  check(mid && mid.text === '+3.0', 'and the badge reads it in dB as it moves',
+        JSON.stringify(mid && mid.text));
+  await page.mouse.up();
+  await page.waitForTimeout(1200);
+  const done = (await audio()).find((c) => c.clipId === target.clipId);
+  check(done && done.gainMb === 300, 'releasing commits it — 30px up is +3.0 dB',
+        String(done && done.gainMb));
+
+  // ...and DOWN is quieter, because a control that only goes one way is half a control.
+  await page.mouse.move(gbox.x, gbox.y);
+  await page.mouse.down();
+  await page.mouse.move(gbox.x, gbox.y + 80, { steps: 6 });
+  await page.mouse.up();
+  await page.waitForTimeout(1200);
+  const lower = (await audio()).find((c) => c.clipId === target.clipId);
+  check(lower && lower.gainMb < 0, 'dragging down lowers it past unity',
+        String(lower && lower.gainMb));
+
+  // And Escape, as everywhere else here.
+  const beforeEsc = (await audio()).find((c) => c.clipId === target.clipId).gainMb;
+  await page.mouse.move(gbox.x, gbox.y);
+  await page.mouse.down();
+  await page.mouse.move(gbox.x, gbox.y - 100, { steps: 6 });
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await page.waitForTimeout(1000);
+  const esc = (await audio()).find((c) => c.clipId === target.clipId);
+  check(esc && esc.gainMb === beforeEsc, 'Escape mid-drag leaves the gain alone',
+        `${beforeEsc} -> ${esc && esc.gainMb}`);
+
+  // The neighbour, again: the failure this codebase produces most.
+  const n3 = (await audio()).find((c) => c.clipId === other.clipId);
+  check(n3 && n3.gainMb === 0, 'and the other clip is still at unity',
+        String(n3 && n3.gainMb));
 }
 
 await browser.close();

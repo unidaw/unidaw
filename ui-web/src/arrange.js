@@ -185,7 +185,7 @@ export class Arrange {
    * any playhead-following should stop on all three.
    */
   constructor(host, metrics,
-              { onLoop, onNav, onClipSelect, onClipOpen, onClipEdit, onClipFork, onClipFade,
+              { onLoop, onNav, onClipSelect, onClipOpen, onClipEdit, onClipFork, onClipFade, onClipGain,
                 onMarkerSelect, onTimeEdit, onMarkerRename,
                 onMarkerAdd, onMarkerDelete, onAutomationWrite } = {}) {
     this.host = host;
@@ -213,6 +213,8 @@ export class Arrange {
      * than one that never starts, and `probe()` reports which it is.
      */
     this.onClipFade = onClipFade;
+    /** Where a dragged gain badge goes. Absent, the badge does not arm — see onClipFade. */
+    this.onClipGain = onClipGain;
     /*
      * Where a point dragged on the curve goes. Absent, the mode can still be entered and the
      * lane still takes the pointer — and nothing is written, which is the right behaviour for a
@@ -463,7 +465,9 @@ export class Arrange {
     this.clipsIn.addEventListener('pointermove', (e) => this._clipMove(e));
     this.clipsIn.addEventListener('pointerup', (e) => this._clipUp(e));
     this.clipsIn.addEventListener('pointercancel', () => {
-      if (this._fadeDrag) this._fadeCancel(); else this._clipCancel();
+      if (this._gainDrag) this._gainCancel();
+      else if (this._fadeDrag) this._fadeCancel();
+      else this._clipCancel();
     });
     /**
      * Escape abandons a drag mid-gesture.
@@ -475,12 +479,14 @@ export class Arrange {
      */
     this._onEsc = (e) => {
       if (e.key !== 'Escape') return;
-      if (this._fadeDrag) this._fadeCancel();
+      if (this._gainDrag) this._gainCancel();
+      else if (this._fadeDrag) this._fadeCancel();
       else if (this._clipDrag) this._clipCancel();
     };
     window.addEventListener('keydown', this._onEsc);
     this._clipDrag = null;
     this._fadeDrag = null;
+    this._gainDrag = null;
     // dblclick, not a hand-rolled double pointerdown: the browser already knows
     // the platform's interval and its slop radius, and both differ per OS.
     this.clipsIn.addEventListener('dblclick', (e) => {
@@ -822,6 +828,25 @@ export class Arrange {
       e.preventDefault();
       return;
     }
+    /*
+     * THE GAIN BADGE IS THE CONTROL, claimed before anything else on the clip for the same
+     * reason the shared badge is: it sits inside the block, so a press on it is also a press
+     * on the block, and without this order it would arm a move underneath.
+     *
+     * ABOVE the `onClipEdit` guard, with the share badge, and not below it with the fade
+     * handles. A clip gain is not a placement edit — it does not move, trim or delete
+     * anything — so a page that wired the gain and not the placement ops would otherwise
+     * find the badge inert for a reason with nothing to do with gain.
+     */
+    if (e.target && e.target.classList && e.target.classList.contains('ar-clip-gain')) {
+      if (!this.onClipGain) return;
+      this._gainDrag = {
+        el, pointerId: e.pointerId, y0: e.clientY,
+        clipId: el._clipId, track: el._pTrack, was: el._gainMb, live: false,
+      };
+      e.preventDefault();
+      return;
+    }
     if (!this.vm || !this.onClipEdit) return;
     // Only the primary button. A right-click is a context menu everywhere else
     // and starting a drag under one is how a clip ends up somewhere nobody
@@ -938,7 +963,51 @@ export class Arrange {
     }
   }
 
+  /**
+   * Drag the gain badge. Up is louder, and one pixel is a tenth of a dB — fine enough to
+   * place a level and coarse enough that the whole −96…+24 range is not one screen height.
+   * Previewed locally and committed once, for the same reason the fade is.
+   */
+  _gainMove(e) {
+    const d = this._gainDrag;
+    if (!d) return;
+    if (e.buttons === 0) { this._gainCancel(); return; }
+    if (!d.live) {
+      if (Math.abs(e.clientY - d.y0) < CLIP_DRAG_SLOP_PX) return;
+      d.live = true;
+      this.clipsIn.setPointerCapture(d.pointerId);
+      d.el.classList.add('gaining');
+    }
+    const mb = Math.max(-9600, Math.min(2400, Math.round(d.was + (d.y0 - e.clientY) * 10)));
+    d.mb = mb;
+    d.el._gainMb = mb;
+    d.el._gainT.nodeValue = (mb > 0 ? '+' : '') + (mb / 100).toFixed(1);
+    d.el._gainEl.classList.toggle('unity', mb === 0);
+  }
+
+  _gainUp() {
+    const d = this._gainDrag;
+    if (!d) return false;
+    this._gainDrag = null;
+    d.el.classList.remove('gaining');
+    if (d.live && this.onClipGain && d.mb !== undefined && d.mb !== d.was) {
+      this.onClipGain({ track: d.track, clipId: d.clipId, millibels: d.mb });
+    }
+    return true;
+  }
+
+  _gainCancel() {
+    const d = this._gainDrag;
+    if (!d) return;
+    this._gainDrag = null;
+    d.el.classList.remove('gaining');
+    d.el._gainMb = d.was;
+    d.el._gainT.nodeValue = (d.was > 0 ? '+' : '') + (d.was / 100).toFixed(1);
+    d.el._gainEl.classList.toggle('unity', d.was === 0);
+  }
+
   _clipMove(e) {
+    if (this._gainDrag) { this._gainMove(e); return; }
     if (this._fadeDrag) { this._fadeMove(e); return; }
     const d = this._clipDrag;
     if (!d) return;
@@ -975,6 +1044,7 @@ export class Arrange {
   }
 
   _clipUp(e) {
+    if (this._gainUp()) return;
     if (this._fadeUp()) return;
     const d = this._clipDrag;
     if (!d) return;
@@ -1922,13 +1992,22 @@ export class Arrange {
         el._fadeOut.style.width = foW + 'px';
         el._fadeOut.style.display = foW > 0 ? '' : 'none';
       }
-      if (el._gainMb !== c.gainMb) {
-        el._gainMb = c.gainMb;
-        // Unity draws nothing. A badge reading "0.0dB" on every clip is noise that hides the
-        // one clip that is not at unity, which is the only thing this is for.
-        el._gainT.nodeValue = c.gainMb === 0 ? ''
-          : (c.gainMb > 0 ? '+' : '') + (c.gainMb / 100).toFixed(1);
-        el._gainEl.style.display = c.gainMb === 0 ? 'none' : '';
+      const gainMb = this._gainDrag && this._gainDrag.el === el && this._gainDrag.live
+        ? el._gainMb : c.gainMb;
+      if (el._gainMb !== gainMb || el._gainAudio !== c.audio) {
+        el._gainMb = gainMb; el._gainAudio = c.audio;
+        /*
+         * AT UNITY IT READS 0.0 AND IS INVISIBLE UNTIL YOU POINT AT THE CLIP.
+         *
+         * Two things at once, and they pull against each other: a badge reading "0.0" on
+         * every clip is noise that hides the one clip that is NOT at unity, and a badge
+         * that does not exist at unity is a control you cannot grab to leave unity with.
+         * So it is always there on an audio clip and CSS hides it until the clip is
+         * hovered — the reading stays quiet and the handle stays reachable.
+         */
+        el._gainT.nodeValue = (gainMb > 0 ? '+' : '') + (gainMb / 100).toFixed(1);
+        el._gainEl.style.display = c.audio ? '' : 'none';
+        el._gainEl.classList.toggle('unity', gainMb === 0);
       }
       /*
        * SHARED, FORKED, OR THE ONLY ONE — three states, drawn as three.

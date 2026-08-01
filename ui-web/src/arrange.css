@@ -370,26 +370,37 @@
   pointer-events: none;
   z-index: 0;
 }
+/* A TRANSLUCENT SCRIM, not the background colour.
+   The first version ramped to `--uni-surface-tracker-bg`, which is opaque #161826 — so it
+   painted a solid block over the clip's start and HID THE WAVEFORM UNDER IT, which is the
+   one thing a fade drawn over a waveform must not do. `--uni-surface-off-grid` is the
+   existing translucent dark scrim and it composites over whichever lane colour is behind.
+   Nothing in the suite caught this: it asserts the fade's WIDTH in pixels, and an opaque
+   ramp is exactly as wide as a correct one. */
 .ar-clip-fade.in {
   left: 0;
   background: linear-gradient(to right,
-              var(--uni-surface-tracker-bg), transparent);
+              var(--uni-surface-off-grid), transparent);
 }
 .ar-clip-fade.out {
   right: 0;
   background: linear-gradient(to left,
-              var(--uni-surface-tracker-bg), transparent);
+              var(--uni-surface-off-grid), transparent);
 }
 
-/* The gain, only when the clip is not at unity — a badge reading 0.0 on every clip hides
-   the one clip that is not at unity, which is the only thing this is for. Bottom left, so
-   it does not fight the shared-count badge at the top right. */
+/* THE CLIP GAIN — a readout and the control that sets it, bottom left so it does not fight
+   the shared-count badge at the top right.
+   Two things pull against each other here: a badge reading 0.0 on every clip is noise that
+   hides the one clip that is NOT at unity, and a badge that does not exist at unity is a
+   control you cannot grab to leave unity with. So it is always present on an audio clip,
+   invisible while it reads unity, and revealed when the clip is pointed at. */
 .ar-clip-gain {
   position: absolute; left: 3px; bottom: 1px;
   font-family: var(--font-mono); font-size: var(--font-size-fx);
   letter-spacing: var(--font-tracking-fx);
   color: var(--uni-text-fx);
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: ns-resize;
 }
 
 /* The fade handles: the top corners of an AUDIO clip, and only those. A note clip has no
@@ -407,3 +418,8 @@
 .ar-clip.audio::after { right: 0; }
 /* While a fade is being dragged, the ramp is the only thing that should look live. */
 .ar-clip.fading .ar-clip-fade { transition: none; }
+
+.ar-clip-gain.unity { opacity: 0; }
+.ar-clip:hover .ar-clip-gain.unity { opacity: .5; }
+.ar-clip.gaining .ar-clip-gain,
+.ar-clip.gaining .ar-clip-gain.unity { opacity: 1; color: var(--base-accent); }

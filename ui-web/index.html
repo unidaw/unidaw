@@ -492,6 +492,12 @@ const arrange = new Arrange(arrangeHost, metrics, {
    */
   onClipFade: ({ track, clipId, which, ticks }) =>
     dockApi.audioClip(track, clipId, which, ticks),
+  /* Dragging the gain badge. Same split as the fade: the surface owns the gesture, this
+     owns what a clip gain IS, and both end up in `audioClip` so the pointer and the
+     console cannot drift apart. Millibels here because that is what the badge is showing
+     and what the wire takes; the console converts from dB on its own side. */
+  onClipGain: ({ track, clipId, millibels }) =>
+    dockApi.audioClip(track, clipId, 'gain', millibels),
   /*
    * DRAGGING A POINT ON THE CURVE.
    *
@@ -4632,6 +4638,10 @@ function buildHead() {
 
 /** Write each lane's lines-per-beat into its header. Guarded, so a frame where
  *  nothing changed writes nothing — this runs from draw(). */
+/* One scratch record for the loop below. See laneGridAt: this runs per track per frame, and
+   a fresh object per track was 64 allocations a frame. */
+const headLaneGrid = { lpb: 0, phase: 0, from: 'zoom', clipId: 0 };
+
 function paintHeadLpb() {
   if (!headRow) return;
   const heads = headRow._heads;
@@ -4651,7 +4661,8 @@ function paintHeadLpb() {
      * A clip-level answer is marked, because "6/b" from the clip and "6/b" from the
      * track are different facts that a click acts on differently.
      */
-    const g = laneGridAt(engine, tickOfCursorRow(), t, ZOOM_LEVELS[state.zoom].linesPerBeat);
+    const g = laneGridAt(engine, tickOfCursorRow(), t, ZOOM_LEVELS[state.zoom].linesPerBeat,
+                         headLaneGrid);
     const n = engine ? (g.from === 'zoom' ? 0 : g.lpb) : 0;
     const src = engine ? g.from : 'zoom';
     if (el._lpb !== n || el._lpbFrom !== src) {

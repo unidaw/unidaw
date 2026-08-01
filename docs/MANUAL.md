@@ -1166,8 +1166,10 @@ the commoner and the more destructive of the two, and a gesture that silently be
 one would be worse than not having it. A clip too narrow for two handles and a body has
 neither, as with trim.
 
-> Clip **gain** still has no pointer gesture — no body drag, no gain line. `audio-clip … gain`
-> is the only way to set it. It is drawn, so you can see what you set.
+**Drag the gain badge** at a clip's bottom left: up is louder, one pixel is a tenth of a dB.
+At unity it reads `0.0` and is invisible until you point at the clip — a row of `0.0` would
+hide the one clip that is *not* at unity, and a badge that did not exist at unity would be a
+control you could not grab to leave unity with. It commits on release; `Escape` abandons it.
 
 ### Shared clips and forking
 

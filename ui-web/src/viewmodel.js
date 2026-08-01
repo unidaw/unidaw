@@ -652,7 +652,7 @@ export function velocityText(v) {
  * row of the axis is writable, which is the behaviour from before lanes had
  * their own grids.
  */
-export function laneGridAt(engine, tick, track, zoomLpb) {
+export function laneGridAt(engine, tick, track, zoomLpb, out) {
   let lpb = 0;
   let phase = 0;
   // WHICH LEVEL ANSWERED, and the clip that did if one did. Reported rather than
@@ -678,12 +678,28 @@ export function laneGridAt(engine, tick, track, zoomLpb) {
     }
   }
   if (lpb <= 0) { lpb = zoomLpb; from = 'zoom'; }
+  /*
+   * FILLED INTO A CALLER-OWNED OBJECT when one is passed, the same shape `unpackClipGrid`
+   * uses two hundred lines up and for the same reason: the header paints this PER TRACK PER
+   * FRAME, so returning a fresh object put 64 of them on the heap every frame and pushed
+   * three tracker scenarios over the allocation budget — the budget caught it, one PR after
+   * the badge landed.
+   */
+  if (out) {
+    out.lpb = lpb; out.phase = phase; out.from = from; out.clipId = clipId;
+    return out;
+  }
   return { lpb, phase, from, clipId };
 }
 
 /** @returns {boolean} true when the lane's own grid lands on `tick`. */
+const _gateScratch = { lpb: 0, phase: 0, from: 'zoom', clipId: 0 };
+
 export function onLaneGridAt(engine, tick, track, zoomLpb) {
-  const { lpb, phase } = laneGridAt(engine, tick, track, zoomLpb);
+  // Its own scratch: this runs per KEYSTROKE, not per frame, but it is on the same page as
+  // the per-frame caller and sharing one buffer between them would be a bug waiting for the
+  // day something calls both in one pass.
+  const { lpb, phase } = laneGridAt(engine, tick, track, zoomLpb, _gateScratch);
   if (!(lpb > 0)) return true;
   // Integers divide exactly or they do not; nothing rounds. Same expression as
   // the row loop's `offGrid`, negated.
