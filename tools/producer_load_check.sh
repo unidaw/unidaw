@@ -185,15 +185,67 @@ raise SystemExit(0 if $OVER <= max(2, $BLOCKS * 0.02) else 1)" || \
     # Superlinear growth means per-track work is contending rather than merely adding up.
     # 1.5x slack absorbs cache pressure and the fact that a bigger project also schedules
     # more notes; a genuine contention bug shows up far above that.
+    # RECORDED, NOT FAILED YET. The verdict is deferred until the one-track baseline has been
+    # RE-MEASURED after the run — see the block below the loop for why. A superlinear result on a
+    # machine that moved under the measurement is a claim about the machine.
     python3 -c "
 base = max(1, $BASE_SAMPLER)
 raise SystemExit(0 if $SAMP <= base * $N * 1.5 else 1)" || \
-      fail "$N sampler tracks cost ${SAMP}us of DSP per block, more than $N x the one-track
-        cost (${BASE_SAMPLER}us) plus 50% slack. Per-track work is CONTENDING, not just
-        adding up — and no amount of parallelism fixes contention"
+      SCALE_FAIL="$N sampler tracks cost ${SAMP}us of DSP per block, more than $N x the
+        one-track cost (${BASE_SAMPLER}us) plus 50% slack. Per-track work is CONTENDING, not
+        just adding up — and no amount of parallelism fixes contention"
   fi
   N=$((N * 2))
 done
+
+# ---- IS THE MEASUREMENT SOUND? Asked only when the scaling assertion failed, and answered by
+# RE-MEASURING THE ONE-TRACK BASELINE the whole comparison rests on.
+#
+# This check reported "Per-track work is CONTENDING, not just adding up" twice on 2026-08-01 —
+# a claim about the CODE — and passed standalone both times. Once the machine was running eight
+# orphaned CPU burners; once Spotlight was indexing at 74%. The check could not tell contention
+# in the engine from contention on the box, which is the same defect as a meter that cannot tell
+# a broken meter from a silent mix.
+#
+# THE SECOND SIGNAL HAS TO BE INDEPENDENT OF THE FAILURE MODE, and a re-measured baseline is:
+# it says nothing about whether per-track work contends, only whether the box gave the same
+# answer to the same question twice. If the one-track cost has moved by more than half, the
+# machine drifted DURING the run and the N-track number was measured against a baseline that no
+# longer describes it — so the scaling claim is unsound, whichever way it came out.
+#
+# A load average would NOT have worked here and it is worth saying why: neither disturbance
+# pushed it far on a ten-core box, and it is a snapshot of the wrong moment.
+#
+# BLOCKED IS REPORTED, NEVER SILENT. A check that excuses itself quietly is worse than one that
+# fails, because the excuse becomes furniture. The banner carries it.
+if [ -n "${SCALE_FAIL:-}" ]; then
+  project "recheck" 1
+  ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/pload_${$}_re" \
+      DAW_ENGINE_RENDER_THREADS=1 \
+      ./daw_engine --project recheck --render recheck --run-seconds 8 --block-size 256 \
+      >"$TMP/recheck.log" 2>&1 ) || fail "the baseline re-measurement exited non-zero"
+  BASE2="$(field "$TMP/recheck.log" sampler_mean_us)"
+  [ -n "${BASE2:-}" ] || fail "the baseline re-measurement produced no telemetry"
+  DRIFTED=$(python3 -c "
+a, b = max(1, $BASE_SAMPLER), max(1, $BASE2)
+print(1 if (max(a, b) / min(a, b)) > 1.5 else 0)")
+  if [ "$DRIFTED" = "1" ]; then
+    echo "  BLOCKED: the scaling assertion failed, and the machine moved under the measurement."
+    echo "           One sampler track cost ${BASE_SAMPLER}us before the run and ${BASE2}us"
+    echo "           after — the same work, the same binary, more than 1.5x apart. The N-track"
+    echo "           number was compared against a baseline that no longer describes this box,"
+    echo "           so the result says nothing about whether per-track work contends."
+    echo "           Re-run on a quiet machine. What it WOULD have said:"
+    echo "           $SCALE_FAIL"
+    echo "producer_load_check: BLOCKED — the box was not stable enough to answer (baseline"
+    echo "                     ${BASE_SAMPLER}us -> ${BASE2}us). Nothing here is a verdict on the engine."
+    exit 0
+  fi
+  fail "$SCALE_FAIL
+
+        The one-track baseline was re-measured after the run and held (${BASE_SAMPLER}us ->
+        ${BASE2}us), so the machine was stable and this IS the engine."
+fi
 
 # ---- AND WHAT IT ACTUALLY COSTS WITH THE POOL. Reported, not asserted: the speedup depends on
 # how many cores this machine has and what else is running, so a threshold here would be a
