@@ -1095,6 +1095,16 @@ waveform — stereo as two half-height bands, channel 0 above channel 1, because
 downmix of an out-of-phase pair is silence and that is the one thing it must not look like.
 A source that failed to decode draws a dashed centre stripe rather than going blank.
 
+An audio clip's **fades** are drawn as ramps over its own ends, and its **gain** as a small
+`-3.5` badge at the bottom left — the badge appears only when the clip is not at unity,
+because one reading `0.0` on every clip hides the one clip that is not. Both were invisible
+until opcode 95: a two-second fade looked exactly like a hard start, and the only way to know
+what a clip did was to listen to it.
+
+A fade is a length in *time*, so its drawn width follows the zoom. It is clamped to the clip
+when drawn — the model permits a fade longer than the region it sits on, and letting the
+picture spill past the clip's end would read as the *neighbour* fading.
+
 Above the lanes: the bar ruler with the loop bracket, and the **MARKERS** spine.
 
 ### Navigating
@@ -1137,6 +1147,19 @@ Console: `clips` lists placements with ids and bars; `move-clip <id> <track> <ba
 `trim-clip <id> <track> [bar] [bars]` (omit either edge to leave it),
 `del-clip <id> <track>`, `add-clip <clip> <track> <bar> <bars>`. Bars are 1-based, as on the
 ruler.
+
+**An audio clip's own fields** — `audio-clip <track> <clip> <start|gain|fade-in|fade-out>
+<value>`. Gain is typed in **dB**, like every other gain here; `start` is an in-point in
+**source frames**; the fades are in **nanoticks**. One field per call, which is what the wire
+takes: the three counts are 64-bit in the model, and a payload carrying all four at once
+would have to truncate them — capping a fade at about 1100 bars, silently.
+
+The three counts are **refused when negative**, not clamped to zero: a negative fade is not a
+quiet value, it is a caller who meant something else. Gain is clamped, to −96…+24 dB.
+
+> There is **no pointer gesture for these yet** — no corner handle to drag a fade, no body
+> drag for clip gain. The console is the only way in. They are drawn, so you can see what you
+> set.
 
 ### Shared clips and forking
 
@@ -1880,7 +1903,7 @@ must send an envelope first; that was fixed the same day and the default kit is 
 
 ## 18. Command reference
 
-99 commands. `help` prints this list live; the palette (`⌘K`) is the same list,
+100 commands. `help` prints this list live; the palette (`⌘K`) is the same list,
 searchable, with argument checking.
 
 **Transport and position** — `play`, `stop` (twice = panic), `seek <tick>`,

@@ -359,3 +359,35 @@
   pointer-events: none;
   z-index: 3;
 }
+
+/* A CLIP'S FADES, drawn as ramps over its own ends.
+   `pointer-events: none` matters: the fade is drawn ON the clip and must never swallow a
+   click meant for it, or the one part of a clip you cannot select would be the part you
+   most want to grab. Behind the label and the badges (z-index 0 against their default
+   auto), so a name over a long fade stays readable. */
+.ar-clip-fade {
+  position: absolute; top: 0; bottom: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+.ar-clip-fade.in {
+  left: 0;
+  background: linear-gradient(to right,
+              var(--uni-surface-tracker-bg), transparent);
+}
+.ar-clip-fade.out {
+  right: 0;
+  background: linear-gradient(to left,
+              var(--uni-surface-tracker-bg), transparent);
+}
+
+/* The gain, only when the clip is not at unity — a badge reading 0.0 on every clip hides
+   the one clip that is not at unity, which is the only thing this is for. Bottom left, so
+   it does not fight the shared-count badge at the top right. */
+.ar-clip-gain {
+  position: absolute; left: 3px; bottom: 1px;
+  font-family: var(--font-mono); font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-fx);
+  pointer-events: none;
+}

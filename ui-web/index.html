@@ -3481,6 +3481,38 @@ const dockApi = {
     state.reject = null; schedule(); return true;
   },
   /**
+   * AN AUDIO CLIP'S GAIN, FADES AND IN-POINT (opcode 95).
+   *
+   * All four persist on ProjectClip, all four are published, and the engine has honoured all
+   * four when rendering — with nothing able to write any of them. So a clip you needed two dB
+   * off, or a splice that clicked, could only be fixed by editing the project JSON by hand.
+   *
+   * One field per call, which is what the wire takes: the three counts are u64 in the model,
+   * and a payload carrying all four in 40 bytes would have to truncate them to u32 — a fade
+   * capped at about 1100 bars, silently. Every gesture is one field anyway.
+   *
+   * The COUNTS are refused when negative rather than clamped to zero: a negative fade is not
+   * a quiet value, it is a caller who meant something else. Gain is clamped by the engine to
+   * the same range a sampler slot uses.
+   */
+  audioClip: (track, clip, field, value) => {
+    const FIELDS = ['start', 'gain', 'fade-in', 'fade-out'];
+    if (!FIELDS.includes(field)) {
+      state.reject = 'audio clip field is start, gain, fade-in or fade-out'; schedule(); return false;
+    }
+    const v = Math.round(Number(value));
+    if (!Number.isFinite(v)) { state.reject = 'that is not a number'; schedule(); return false; }
+    if (field !== 'gain' && v < 0) {
+      state.reject = 'a fade length and an in-point are counts — a negative is refused';
+      schedule(); return false;
+    }
+    if (!conn || !conn.send({ type: 'audioclip', track: Number(track) || 0,
+                              clip: Number(clip) || 0, field, value: v })) {
+      state.reject = 'no engine'; schedule(); return false;
+    }
+    state.reject = null; schedule(); return true;
+  },
+  /**
    * A CLIP'S OWN GRID (opcode 94) — subdivision and meter, on the clip rather than the track.
    *
    * This is the one the renderer honours FIRST: a lane's rows resolve clip -> track -> zoom,
@@ -8759,6 +8791,7 @@ window.__uni = {
   harmonyQuantize: (t, on) => dockApi.harmonyQuantize(t, on),
   allowOverlap: (t, on) => dockApi.allowOverlap(t, on),
   clipGrid: (t, clip, opts) => dockApi.clipGrid(t, clip, opts),
+  audioClip: (t, clip, field, v) => dockApi.audioClip(t, clip, field, v),
   /** Per track, whether note entry leaves the sounding note alone. */
   overlapping: () => {
     const out = [];

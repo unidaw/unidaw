@@ -1137,6 +1137,29 @@ export class Arrange {
       const share = div('ar-clip-share', el);
       share.appendChild(document.createTextNode(''));
       el._share = share.firstChild;
+      /*
+       * THE FADES, as two ramps drawn over the clip's own ends.
+       *
+       * A clip's fade in and fade out have persisted and been rendered since audio clips
+       * existed and were drawn by NOTHING, so a two-second fade looked exactly like a hard
+       * start and the only way to tell was to listen. Drawn as geometry rather than as a
+       * label because that is what a fade is — a shape over time — and because a number
+       * cannot be compared with the waveform underneath it at a glance.
+       *
+       * Two elements per pooled clip, sized only when a fade actually moves. They are
+       * `pointer-events: none` so they never swallow a click meant for the clip: the fade
+       * is drawn ON the clip, not in front of it.
+       */
+      const fadeIn = div('ar-clip-fade in', el);
+      const fadeOut = div('ar-clip-fade out', el);
+      el._fadeIn = fadeIn; el._fadeOut = fadeOut;
+      el._fiW = -1; el._foW = -1;
+      // The gain badge, only when the clip is not at unity. `gainMb` is an integer, so this
+      // guard is an integer compare and the string is built when the gain moves and not
+      // per frame.
+      const gainEl = div('ar-clip-gain', el);
+      gainEl.appendChild(document.createTextNode(''));
+      el._gainEl = gainEl; el._gainT = gainEl.firstChild; el._gainMb = 0x7fffffff;
       el._shared = null; el._forked = null; el._badge = null; el._title = null;
       el._x = -1; el._w = -1; el._y = -1; el._name = null;
       el._pTrack = -1; el._pTick = -1; el._bad = false;
@@ -1761,6 +1784,35 @@ export class Arrange {
       if (el._name !== c.name) { el._name = c.name; el._label.nodeValue = c.name; }
       if (el._audio !== c.audio) { el._audio = c.audio; el.classList.toggle('audio', c.audio); }
       /*
+       * THE FADES AND THE GAIN. Widths in pixels from the clip's own tick lengths, so a fade
+       * keeps its musical length as you zoom rather than its screen length.
+       *
+       * Clamped to the clip's own width: a fade longer than the region it is on is a state
+       * the model permits and the drawing must not overflow into the next clip, which would
+       * read as the neighbour fading.
+       */
+      const tpp = vm.view.ticksPerPixel || 1;
+      const fiW = c.fadeInTicks > 0 ? Math.min(c.w, Math.round(c.fadeInTicks / tpp)) : 0;
+      const foW = c.fadeOutTicks > 0 ? Math.min(c.w, Math.round(c.fadeOutTicks / tpp)) : 0;
+      if (el._fiW !== fiW) {
+        el._fiW = fiW;
+        el._fadeIn.style.width = fiW + 'px';
+        el._fadeIn.style.display = fiW > 0 ? '' : 'none';
+      }
+      if (el._foW !== foW) {
+        el._foW = foW;
+        el._fadeOut.style.width = foW + 'px';
+        el._fadeOut.style.display = foW > 0 ? '' : 'none';
+      }
+      if (el._gainMb !== c.gainMb) {
+        el._gainMb = c.gainMb;
+        // Unity draws nothing. A badge reading "0.0dB" on every clip is noise that hides the
+        // one clip that is not at unity, which is the only thing this is for.
+        el._gainT.nodeValue = c.gainMb === 0 ? ''
+          : (c.gainMb > 0 ? '+' : '') + (c.gainMb / 100).toFixed(1);
+        el._gainEl.style.display = c.gainMb === 0 ? 'none' : '';
+      }
+      /*
        * SHARED, FORKED, OR THE ONLY ONE — three states, drawn as three.
        *
        * The arrangement could not say any of this: two placements of one clip drew as two rails
@@ -2054,6 +2106,28 @@ export class Arrange {
       lanes: vm.laneCount,
       clips: vm.clipCount,
       audioClips: (() => { let n = 0; for (let i = 0; i < vm.clipCount; i++) if (vm.clips[i].audio) n++; return n; })(),
+      /*
+       * WHAT EACH AUDIO CLIP CARRIES, and what was DRAWN for it.
+       *
+       * Both halves, because they answer different questions: the model says what the
+       * engine published, and `drawnIn`/`drawnOut` are the pixel widths that actually
+       * reached the element. A fade published and not drawn, and a fade drawn from a
+       * stale cache, look identical from either one alone.
+       */
+      audio: (() => {
+        const out = [];
+        for (let i = 0; i < vm.clipCount; i++) {
+          const c = vm.clips[i];
+          if (!c.audio) continue;
+          const el = this.clipPool[c.slot];
+          out.push({ clipId: c.clipId, track: c.track, w: c.w,
+                     fadeInTicks: c.fadeInTicks, fadeOutTicks: c.fadeOutTicks,
+                     gainMb: c.gainMb, startFrame: c.startFrame,
+                     drawnIn: el ? el._fiW : -1, drawnOut: el ? el._foW : -1,
+                     gainText: el && el._gainT ? el._gainT.nodeValue : null });
+        }
+        return out;
+      })(),
       zoom: vm.zoom.label,
       zoomIndex: vm.zoom.index,
       startTick: vm.view.startTick,

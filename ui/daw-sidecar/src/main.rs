@@ -36,6 +36,7 @@ use daw_bridge::layout::{UiSetRowOpsPayload, UiSamplerLoadPayload, UiSamplerSlic
                          UiSamplerFilterPayload, UiSamplerEnvelopePayload,
                          UiSamplerSetSlotPayload, UiSamplerSetDevicePayload,
                          UiSamplerVintagePayload, UiSetClipGridPayload,
+                         UiAudioClipFieldPayload,
                          UiSamplerEmitRowsPayload, UiSamplerSlotNameHeader,
                          EventEntry, UiChainCommandPayload, UiChordCommandPayload,
                          UiMarkerCommandPayload, UiArrangeTimeCommandPayload,
@@ -2053,6 +2054,48 @@ fn build_allow_overlap(body: &str) -> Option<Result<UiCommandPayload, &'static s
         note_duration_lo: 0,
         note_duration_hi: 0,
         base_version: 0,
+    }))
+}
+
+/// AN AUDIO CLIP'S OWN FIELDS (SetAudioClipField, 95) — gain, both fades, and the in-point.
+///
+/// ADDRESSED, one field per call, rather than flagged with four values. Backend's arithmetic
+/// rather than mine: 40 bytes leaves 28 after commandType/field/trackId/clipId, and
+/// sourceStartFrame and both fades are u64 in the model — so a flagged payload has to truncate
+/// three of them to u32, capping a fade at about 1100 bars and an in-point at about 27 hours.
+/// Limits the model does not have, that nothing would report on the day someone hit one. The
+/// addressed form carries a single i64 and has no cap.
+///
+/// Every gesture here is one field anyway: a corner handle is a fade, a body drag is the gain.
+fn build_audio_clip(body: &str) -> Option<Result<UiAudioClipFieldPayload, &'static str>> {
+    if !is_type(body, "audioclip") { return None; }
+    let Some(name) = parse_str(body, "\"field\"") else {
+        return Some(Err("audioclip needs a field: start, gain, fade-in or fade-out"));
+    };
+    let field = match name {
+        "start" => daw_bridge::layout::AUDIO_CLIP_FIELD_SOURCE_START_FRAME,
+        "gain" => daw_bridge::layout::AUDIO_CLIP_FIELD_GAIN_MILLIBELS,
+        "fade-in" => daw_bridge::layout::AUDIO_CLIP_FIELD_FADE_IN_NANOTICKS,
+        "fade-out" => daw_bridge::layout::AUDIO_CLIP_FIELD_FADE_OUT_NANOTICKS,
+        _ => return Some(Err("field is start, gain, fade-in or fade-out")),
+    };
+    let Some(value) = parse_num(body, "\"value\"") else {
+        return Some(Err("audioclip needs a value"));
+    };
+    // The three COUNTS refuse a negative rather than clamping it — a negative fade or
+    // in-point is not a quiet value, it is a caller who meant something else. Gain is
+    // signed by nature and the engine clamps it to the sampler slot's range.
+    if field != daw_bridge::layout::AUDIO_CLIP_FIELD_GAIN_MILLIBELS && value < 0 {
+        return Some(Err("a fade length and an in-point are counts — a negative is refused"));
+    }
+    Some(Ok(UiAudioClipFieldPayload {
+        command_type: UiCommandType::SetAudioClipField as u16,
+        field,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        clip_id: parse_num(body, "\"clip\"").unwrap_or(0).max(0) as u32,
+        reserved0: 0,
+        value,
+        reserved1: [0u32; 4],
     }))
 }
 
@@ -4558,6 +4601,23 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                         header.slot_id, bytes.len()),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                                 }
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        // AN AUDIO CLIP'S GAIN, FADES AND IN-POINT. Addressed one field per
+                        // call; the reply echoes the field so a caller that mistyped one sees
+                        // which it actually set.
+                        if let Some(r) = build_audio_clip(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_audio_clip_field(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"audioclip\":{},\"field\":{},\"value\":{}}}",
+                                        p.clip_id, p.field, p.value),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
                             };
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;

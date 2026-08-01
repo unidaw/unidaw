@@ -1088,6 +1088,32 @@ export function createCommands(api) {
         if (!api.clipGrid(t, clip, opts)) return api.state().reject || 'refused';
         return `clip ${clip} ${a[2]} ${v}`;
       } },
+    /*
+     * AN AUDIO CLIP'S OWN FIELDS — gain, both fades, and where in the file it starts.
+     *
+     * All four have persisted, published and been honoured by the renderer since audio clips
+     * existed, and nothing could write any of them: a clip two dB too loud, or a splice that
+     * clicked, was fixable only by hand-editing the project. Fades are the reason this
+     * matters most — every cut in recorded audio clicks without one, and a click is not
+     * something you mix out later.
+     *
+     * `gain` is dB and everything else is in the unit the model uses: `start` in FRAMES of
+     * the source file, the fades in NANOTICKS. Those two are counts, so a negative is refused
+     * rather than clamped — it means the caller meant something else.
+     */
+    'audio-clip': { help: 'audio-clip <track> <clip> <start|gain|fade-in|fade-out> <value> — '
+                        + 'gain in dB, start in frames, fades in nanoticks',
+      args: [A_TRACK, { name: 'clip', type: 'int', min: 0 },
+             oneOf(['start', 'gain', 'fade-in', 'fade-out']),
+             { name: 'value', type: 'num' }],
+      run: (a) => {
+        const t = Number(a[0]), clip = Number(a[1]), field = a[2];
+        // dB on the way in, millibels on the wire — the same unit every other gain in this
+        // app is typed in, so nobody has to know the wire's.
+        const v = field === 'gain' ? Math.round(Number(a[3]) * 100) : Number(a[3]);
+        if (!api.audioClip(t, clip, field, v)) return api.state().reject || 'refused';
+        return `clip ${clip} ${field} ${a[3]}` + (field === 'gain' ? 'dB' : '');
+      } },
     'save-patch': { help: 'save-patch <name> — save the patcher graph as a preset',
       args: [{ name: 'name', type: 'text', rest: true }],
       run: (a) => {
