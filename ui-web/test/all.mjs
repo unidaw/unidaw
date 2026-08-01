@@ -33,12 +33,41 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  */
 const EXCLUDED = {
   'ask-live.mjs': 'needs an API key and the network, and costs money per run',
-  'audible.mjs': 'needs a working audio OUTPUT device; this machine\'s default opens and never calls back',
-  'chop-audible.mjs': 'needs a working audio output device (see audible.mjs)',
-  'sound-op-audible.mjs': 'needs a working audio output device (see audible.mjs)',
+  'audible.mjs': 'live capture — see THE CAPTURE PROBLEM below',
+  'chop-audible.mjs': 'live capture — see THE CAPTURE PROBLEM below',
+  'sound-op-audible.mjs': 'live capture — see THE CAPTURE PROBLEM below',
+  'note-off-cuts.mjs': 'live capture — see THE CAPTURE PROBLEM below',
+  'sampler-device-id.mjs': 'live capture — see THE CAPTURE PROBLEM below',
   'repro-hang.mjs': 'a reproduction script for one bug, not a suite — it is meant to hang',
   'soak.mjs': 'minutes of heap soak; run it deliberately, not on every sweep',
 };
+
+/*
+ * THE CAPTURE PROBLEM — why five suites are held out, stated once rather than five times.
+ *
+ * On this machine the engine opens the audio device, reports it by name, prints "Audio output
+ * started" and "Audio output stopped", and CoreAudio never calls the callback even once:
+ *
+ *   Audio device: MacBook Pro Speakers
+ *   Audio underrun summary: 0 of 0 playback callbacks dropped a track
+ *   {"event":"audio.capture_written","frames":0,"ok":false}
+ *
+ * Reproducible with a stock project, no browser and no load, in and out of the sandbox. Every
+ * suite that measures SOUND does it through DAW_CAPTURE_WAV, which records what the device is
+ * handed — so with no callbacks there is no capture, and the checks fail for a reason that is
+ * not about the code they test. Reported to backend with the repro; it is engine-side.
+ *
+ * "0 of 0 CALLBACKS" IS THE SIGNAL THAT MAKES THIS SAFE TO EXCLUDE, and it is worth saying why:
+ * that counter increments per callback no matter what the capture path does. A broken capture
+ * with a working device reads as N callbacks and an empty file; this reads as zero callbacks.
+ * The two causes are distinguishable, which is the only thing that separates a legitimate
+ * exclusion from an excuse — an excuse is safe only when the second signal is INDEPENDENT of the
+ * failure mode, and "the producer reported no underruns" is NOT independent here, because zero
+ * callbacks produce zero underruns too. That is precisely how note-off-cuts came to report a
+ * dead device as a hard failure of the sampler.
+ *
+ * `--with-audio` runs all five, which is what to do on a machine whose device works.
+ */
 
 /** Not suites: helpers, fixtures, and the ones with their own npm script. */
 const NOT_A_SUITE = new Set([
@@ -56,7 +85,8 @@ const only = onlyArg
   : null;
 
 const files = readdirSync(HERE).filter((f) => f.endsWith('.mjs')).sort();
-const audioOnes = ['audible.mjs', 'chop-audible.mjs', 'sound-op-audible.mjs'];
+const audioOnes = ['audible.mjs', 'chop-audible.mjs', 'sound-op-audible.mjs',
+                   'note-off-cuts.mjs', 'sampler-device-id.mjs'];
 const skipped = [];
 const suites = files.filter((f) => {
   if (NOT_A_SUITE.has(f)) return false;
@@ -118,7 +148,7 @@ for (const r of failed) {
 if (skipped.length) {
   console.log(`\n${skipped.length} NOT RUN, and why:`);
   for (const [f, why] of skipped) console.log(`  ${f.padEnd(24)} ${why}`);
-  console.log('  (--with-audio adds the three that need an output device)');
+  console.log('  (--with-audio adds the five that measure sound through a live capture)');
 }
 
 console.log(`\n${failed.length === 0

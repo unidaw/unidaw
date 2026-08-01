@@ -82,8 +82,22 @@ load-average failures that say nothing about the code.
 
 It prints what it did NOT run, and why, on every run. That is the point of it —
 "all suites passed" has to mean the set it listed, not the set that happened to
-be cheap that day. `--with-audio` adds the three needing a working output device;
-`--only kit,ops` runs just those.
+be cheap that day. `--only kit,ops` runs just those.
+
+**Five suites measure sound through a live capture and are held out**, because on
+this machine the engine opens the audio device, prints `Audio output started`,
+and CoreAudio never calls the callback once — `0 of 0 playback callbacks`,
+`capture_written frames:0`. Reproducible with a stock project, no browser, no
+load. Nothing is capturable until that is fixed, and the checks would fail for a
+reason that is not about the code they test. `--with-audio` runs them anyway,
+which is the right thing on a machine whose device works.
+
+The counter is what makes that exclusion honest rather than an excuse: it
+increments per callback regardless of the capture path, so a broken capture on a
+working device would read as N callbacks and an empty file. Note that "the
+producer reported no underruns" is **not** an independent signal here — zero
+callbacks produce zero underruns too, which is how a dead device once got
+reported as a failure of the sampler.
 
 Or all of the engine-free ones at once, including the Rust side that `npm test`
 does not reach:
