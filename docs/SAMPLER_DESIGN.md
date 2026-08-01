@@ -713,6 +713,29 @@ Two decisions were raised BY the work rather than by this list and are still the
     if their tracker uses the track's value when a clip carries no grid, the check's exemption
     text is simply stale and this closes without reaching you.
 
+    **ANSWERED FROM THE RENDERER, 2026-08-01 — and it does still need you, for a narrower
+    reason.** The web-UI agent read it out of `ui-web/src/viewmodel.js` rather than out of the
+    manual (whose sentence a subagent had written and nobody had checked):
+
+        const lpb = (ei >= 0 && buf._extLpb[ei]) || engine.lpb[t] || zoom.linesPerBeat;
+
+    Extent's own subdivision, then the track's, then the zoom's — clip-first, with the track as
+    the **fallback**, and the comment above it already calls it *"the fallback while the engine
+    still publishes it"*. So `persisted_field_reach_check` describes their renderer accurately and
+    `per-lane-grids.md` was written before the per-extent grid existed. My opcode 92 was built on
+    the older document.
+
+    **What that means in practice, which is the actual question:** on a lane whose clips carry no
+    grid, the badge control and the rows agree. On a lane whose clips DO carry one, the badge
+    shows the track's value while the rows are drawn on the clip's — so setting it moves the badge
+    and not the music. That is not new (the badge always read the track field) but a *control* has
+    now been attached to it, which turns a possibly-surprising readout into an action that can
+    appear to do nothing.
+
+    So the choice is yours and it is three-way: keep 92 and the badge as a per-track fallback
+    control, make both clip-scoped, or retire the field and remove them. Neither of us is touching
+    it until you say. Nothing is broken meanwhile — the control writes the field it names.
+
   - **Should a sampler track MIX audio routed into it, or keep replacing it?** The engine
     currently REPLACES: a sampler feeds the head of the chain, so a track that is both an
     instrument and a bus destination silently loses everything routed in. That is already flagged
