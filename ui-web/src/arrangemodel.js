@@ -289,7 +289,33 @@ export const MIN_PITCH_SPAN = 12;
  * draws anything down to 2px wide, the alternative is a clip that can be trimmed
  * to nothing and never moved.
  */
-export function clipZoneAt(localX, width, handlePx = CLIP_HANDLE_PX) {
+export function clipZoneAt(localX, width, handlePx = CLIP_HANDLE_PX, opts) {
+  /*
+   * AN AUDIO CLIP'S TOP CORNERS ARE ITS FADE HANDLES.
+   *
+   * Corners rather than edges, and the TOP of the corner rather than all of it, because
+   * the edge already means trim and trimming is the more common and the more destructive
+   * of the two — a gesture that silently became the other one would be worse than not
+   * having it. So a fade takes the top band and trim keeps everything below it, which is
+   * also where every DAW puts them.
+   *
+   * Only for AUDIO clips: a note clip has no fade to drag, and offering the target anyway
+   * would be a control that does nothing on three quarters of the arrangement.
+   *
+   * The band is a fraction of the lane height with a floor, unlike the trim handle, which
+   * is fixed pixels. The two are different targets: trim is bounded by how precisely you
+   * can hit a vertical edge (which does not change with lane height) and this is bounded
+   * by the lane, which does.
+   */
+  if (opts && opts.audio && width >= handlePx * 3 && opts.height > 0
+      && opts.localY !== undefined) {
+    const band = Math.max(6, Math.min(14, Math.round(opts.height * 0.4)));
+    const grab = Math.max(handlePx, Math.min(handlePx * 2, Math.round(width / 4)));
+    if (opts.localY <= band) {
+      if (localX <= grab) return 'fade-in';
+      if (localX >= width - grab) return 'fade-out';
+    }
+  }
   if (width < handlePx * 3) return 'move';
   if (localX < handlePx) return 'trim-l';
   if (localX > width - handlePx) return 'trim-r';

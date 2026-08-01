@@ -1157,9 +1157,17 @@ would have to truncate them — capping a fade at about 1100 bars, silently.
 The three counts are **refused when negative**, not clamped to zero: a negative fade is not a
 quiet value, it is a caller who meant something else. Gain is clamped, to −96…+24 dB.
 
-> There is **no pointer gesture for these yet** — no corner handle to drag a fade, no body
-> drag for clip gain. The console is the only way in. They are drawn, so you can see what you
-> set.
+**Drag a fade with the pointer**: an audio clip's **top corners** are its fade handles. Drag
+the top-left corner right to lengthen the fade in, the top-right corner left for the fade out.
+The ramp follows the pointer and is committed on release; `Escape` mid-drag abandons it.
+
+The handle is the *top* of the corner and the rest of the edge still **trims** — trimming is
+the commoner and the more destructive of the two, and a gesture that silently became the other
+one would be worse than not having it. A clip too narrow for two handles and a body has
+neither, as with trim.
+
+> Clip **gain** still has no pointer gesture — no body drag, no gain line. `audio-clip … gain`
+> is the only way to set it. It is drawn, so you can see what you set.
 
 ### Shared clips and forking
 

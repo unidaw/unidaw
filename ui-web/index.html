@@ -481,6 +481,18 @@ const arrange = new Arrange(arrangeHost, metrics, {
     ? swapClipAt(track, placement)
     : forkAt(track, placement)),
   /*
+   * DRAGGING A FADE HANDLE.
+   *
+   * Lands on `dockApi.audioClip` — the same function `audio-clip` calls — so the pointer and
+   * the console cannot come to mean different things by "set this fade". The surface owns the
+   * gesture and this owns what a fade IS, which is the split every other control here makes.
+   *
+   * The renderer has already previewed it locally, because a fade redrawn only on the engine's
+   * answer would lag the pointer by exactly the round trip. This is the commit.
+   */
+  onClipFade: ({ track, clipId, which, ticks }) =>
+    dockApi.audioClip(track, clipId, which, ticks),
+  /*
    * DRAGGING A POINT ON THE CURVE.
    *
    * Lands on `writeAutomation` — the same function `autopoint` calls — so the pointer and the

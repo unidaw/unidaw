@@ -185,7 +185,7 @@ export class Arrange {
    * any playhead-following should stop on all three.
    */
   constructor(host, metrics,
-              { onLoop, onNav, onClipSelect, onClipOpen, onClipEdit, onClipFork,
+              { onLoop, onNav, onClipSelect, onClipOpen, onClipEdit, onClipFork, onClipFade,
                 onMarkerSelect, onTimeEdit, onMarkerRename,
                 onMarkerAdd, onMarkerDelete, onAutomationWrite } = {}) {
     this.host = host;
@@ -207,6 +207,12 @@ export class Arrange {
      * is what it was before scratch clips existed and is still a useful thing for it to be.
      */
     this.onClipFork = onClipFork;
+    /*
+     * Where a dragged fade handle goes. Absent, the handle does not arm at all — an
+     * unwired gesture that previewed a ramp and then silently dropped it would be worse
+     * than one that never starts, and `probe()` reports which it is.
+     */
+    this.onClipFade = onClipFade;
     /*
      * Where a point dragged on the curve goes. Absent, the mode can still be entered and the
      * lane still takes the pointer — and nothing is written, which is the right behaviour for a
@@ -456,7 +462,9 @@ export class Arrange {
     });
     this.clipsIn.addEventListener('pointermove', (e) => this._clipMove(e));
     this.clipsIn.addEventListener('pointerup', (e) => this._clipUp(e));
-    this.clipsIn.addEventListener('pointercancel', () => this._clipCancel());
+    this.clipsIn.addEventListener('pointercancel', () => {
+      if (this._fadeDrag) this._fadeCancel(); else this._clipCancel();
+    });
     /**
      * Escape abandons a drag mid-gesture.
      *
@@ -465,9 +473,14 @@ export class Arrange {
      * also the only way out of a drag whose pointerup was eaten — a plugin
      * window taking focus mid-gesture, say.
      */
-    this._onEsc = (e) => { if (e.key === 'Escape' && this._clipDrag) this._clipCancel(); };
+    this._onEsc = (e) => {
+      if (e.key !== 'Escape') return;
+      if (this._fadeDrag) this._fadeCancel();
+      else if (this._clipDrag) this._clipCancel();
+    };
     window.addEventListener('keydown', this._onEsc);
     this._clipDrag = null;
+    this._fadeDrag = null;
     // dblclick, not a hand-rolled double pointerdown: the browser already knows
     // the platform's interval and its slop radius, and both differ per OS.
     this.clipsIn.addEventListener('dblclick', (e) => {
@@ -815,7 +828,28 @@ export class Arrange {
     // meant to put it.
     if (e.button !== 0) return;
     const r = el.getBoundingClientRect();
-    const mode = clipZoneAt(e.clientX - r.left, r.width);
+    const mode = clipZoneAt(e.clientX - r.left, r.width, undefined,
+                            { audio: !!el._audio, height: r.height,
+                              localY: e.clientY - r.top });
+    /*
+     * A FADE IS ITS OWN GESTURE, and it exits here rather than joining the placement drag
+     * below: it changes no placement, so the ghost, the lane arithmetic and the
+     * cross-track logic all mean nothing for it. Sharing that machinery would mean four
+     * `if (mode === 'fade-…')` guards inside code whose whole subject is where a clip sits.
+     */
+    if (mode === 'fade-in' || mode === 'fade-out') {
+      if (!this.onClipFade) return;
+      this._fadeDrag = {
+        el, mode, pointerId: e.pointerId, x0: e.clientX,
+        clipId: el._clipId, track: el._pTrack,
+        // What it was, so Escape can put it back and so the delta is measured from the
+        // value at the press rather than from wherever the last frame left it.
+        was: mode === 'fade-in' ? el._fiW : el._foW,
+        live: false,
+      };
+      e.preventDefault();
+      return;
+    }
     // Armed, not started. Nothing is captured and no ghost is drawn until the
     // pointer moves — see CLIP_DRAG_SLOP_PX.
     this._clipDrag = {
@@ -839,7 +873,73 @@ export class Arrange {
                            meter: this.vm.meter });
   }
 
+  /**
+   * Drag a fade. PREVIEWED LOCALLY and sent once, on release.
+   *
+   * Locally because a fade at frame rate would be a command per pointermove, and the
+   * engine's answer arrives a frame later — so the ramp would lag the pointer by exactly
+   * the round trip, which is the one thing a direct-manipulation gesture must not do. Sent
+   * ONCE because the intermediate values are not edits anybody made.
+   */
+  _fadeMove(e) {
+    const d = this._fadeDrag;
+    if (!d) return true;
+    if (e.buttons === 0) { this._fadeCancel(); return true; }
+    if (!d.live) {
+      if (Math.abs(e.clientX - d.x0) < CLIP_DRAG_SLOP_PX) return true;
+      d.live = true;
+      this.clipsIn.setPointerCapture(d.pointerId);
+      d.el.classList.add('fading');
+    }
+    const dx = e.clientX - d.x0;
+    // Right lengthens a fade IN, left lengthens a fade OUT — each grows away from the end
+    // it is anchored to, which is the direction the ramp itself grows.
+    const want = d.mode === 'fade-in' ? d.was + dx : d.was - dx;
+    const w = Math.max(0, Math.min(d.el._w || 0, Math.round(want)));
+    d.px = w;
+    if (d.mode === 'fade-in') {
+      d.el._fiW = w;
+      d.el._fadeIn.style.width = w + 'px';
+      d.el._fadeIn.style.display = w > 0 ? '' : 'none';
+    } else {
+      d.el._foW = w;
+      d.el._fadeOut.style.width = w + 'px';
+      d.el._fadeOut.style.display = w > 0 ? '' : 'none';
+    }
+    return true;
+  }
+
+  _fadeUp() {
+    const d = this._fadeDrag;
+    if (!d) return false;
+    this._fadeDrag = null;
+    d.el.classList.remove('fading');
+    if (d.live && this.onClipFade && this.vm) {
+      const ticks = Math.max(0, Math.round((d.px || 0) * this.vm.view.ticksPerPixel));
+      this.onClipFade({ track: d.track, clipId: d.clipId, which: d.mode, ticks });
+    }
+    return true;
+  }
+
+  /** Put the ramp back where it was. The next render overwrites it either way. */
+  _fadeCancel() {
+    const d = this._fadeDrag;
+    if (!d) return;
+    this._fadeDrag = null;
+    d.el.classList.remove('fading');
+    if (d.mode === 'fade-in') {
+      d.el._fiW = d.was;
+      d.el._fadeIn.style.width = d.was + 'px';
+      d.el._fadeIn.style.display = d.was > 0 ? '' : 'none';
+    } else {
+      d.el._foW = d.was;
+      d.el._fadeOut.style.width = d.was + 'px';
+      d.el._fadeOut.style.display = d.was > 0 ? '' : 'none';
+    }
+  }
+
   _clipMove(e) {
+    if (this._fadeDrag) { this._fadeMove(e); return; }
     const d = this._clipDrag;
     if (!d) return;
     /*
@@ -875,6 +975,7 @@ export class Arrange {
   }
 
   _clipUp(e) {
+    if (this._fadeUp()) return;
     const d = this._clipDrag;
     if (!d) return;
     this._clipDrag = null;
@@ -1164,6 +1265,10 @@ export class Arrange {
       el._x = -1; el._w = -1; el._y = -1; el._name = null;
       el._pTrack = -1; el._pTick = -1; el._bad = false;
       el._pId = -1; el._pEnd = -1;
+      // The CLIP id, not the placement id. A fade belongs to the clip, so two placements
+      // of one clip share it — which is the same rule the notes inside them follow, and
+      // the shared badge is what says so on screen.
+      el._clipId = -1;
       el._narrow = false; el._dragging = false;
       this.clipPool.push(el);
     }
@@ -1783,6 +1888,7 @@ export class Arrange {
       if (el._h !== lh) { el._h = lh; el.style.height = `${lh}px`; }
       if (el._name !== c.name) { el._name = c.name; el._label.nodeValue = c.name; }
       if (el._audio !== c.audio) { el._audio = c.audio; el.classList.toggle('audio', c.audio); }
+      if (el._clipId !== c.clipId) el._clipId = c.clipId;
       /*
        * THE FADES AND THE GAIN. Widths in pixels from the clip's own tick lengths, so a fade
        * keeps its musical length as you zoom rather than its screen length.
@@ -1791,9 +1897,21 @@ export class Arrange {
        * the model permits and the drawing must not overflow into the next clip, which would
        * read as the neighbour fading.
        */
+      /*
+       * A CLIP BEING FADED RIGHT NOW KEEPS ITS PREVIEW.
+       *
+       * Without this the drag is invisible: the ramp is previewed locally on pointermove
+       * and this loop runs on the very next frame with the engine's value, which is still
+       * the OLD one until the gesture commits — so every previewed pixel was overwritten
+       * about eight milliseconds after it was drawn. The gesture worked and could not be
+       * seen to, which is the same thing as not working.
+       */
+      const fading = this._fadeDrag && this._fadeDrag.el === el && this._fadeDrag.live;
       const tpp = vm.view.ticksPerPixel || 1;
-      const fiW = c.fadeInTicks > 0 ? Math.min(c.w, Math.round(c.fadeInTicks / tpp)) : 0;
-      const foW = c.fadeOutTicks > 0 ? Math.min(c.w, Math.round(c.fadeOutTicks / tpp)) : 0;
+      const fiW = fading && this._fadeDrag.mode === 'fade-in' ? el._fiW
+        : (c.fadeInTicks > 0 ? Math.min(c.w, Math.round(c.fadeInTicks / tpp)) : 0);
+      const foW = fading && this._fadeDrag.mode === 'fade-out' ? el._foW
+        : (c.fadeOutTicks > 0 ? Math.min(c.w, Math.round(c.fadeOutTicks / tpp)) : 0);
       if (el._fiW !== fiW) {
         el._fiW = fiW;
         el._fadeIn.style.width = fiW + 'px';
