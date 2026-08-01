@@ -115,6 +115,31 @@ TRACK = {
                             "statement about that id rather than a settable property",
 }
 
+CLIP = {
+    "id":                   "EXEMPT:identity — a clip is ADDRESSED by its id",
+    "kind":                 "EXEMPT:identity — symbolic or audio is decided when the clip is "
+                            "created and changing it in place would reinterpret its payload",
+    "length":               "EXEMPT:derived — grown from content (clip.lengthNanoticks = max(...,"
+                            " contentEnd)) and set at creation by add-clip; a writer would be a "
+                            "second truth about how long a clip is",
+    "lines_per_beat":       "SetClipGrid",
+    "time_sig_numerator":   "SetClipGrid",
+    "time_sig_denominator": "SetClipGrid",
+    # GAP is NOT a fourth kind of exemption. It is a debt marker: a field that is persisted,
+    # published and rendered, and that no command can write — the defect this whole check exists
+    # to find. They are listed so they are COUNTED AND PRINTED on every run rather than being
+    # invisible, which is what they were until clips were scoped at all.
+    "name":                 "GAP:no writer — `rename` is track-only. A clip's name persists and "
+                            "is shown, and nothing can change it",
+    "source_path":          "GAP:no writer — an audio clip cannot be repointed at another file, "
+                            "the same defect sourceLocalId had for sampler slots (closed) ",
+    "source_start_frame":   "GAP:no writer — persisted, published in `get audio-sources`, "
+                            "rendered, settable by nothing",
+    "gain_db":              "GAP:no writer — same",
+    "fade_in":              "GAP:no writer — same",
+    "fade_out":             "GAP:no writer — same",
+}
+
 # ---------------------------------------------------------------- what is actually persisted.
 def keys_in_block(path, begin_marker, span):
     text = open(os.path.join(root, path)).read().split("\n")
@@ -134,6 +159,7 @@ slot_keys = block_until_endarray("apps/sampler_serialize.h", 'beginArray("slots"
 # the writer grows past this the check will simply see fewer keys — which is why the COUNT is
 # asserted below rather than only the membership.
 track_keys = keys_in_block("apps/project_file.cpp", 'beginArray("tracks")', 90)
+clip_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("clips")')
 
 # Keys that belong to nested objects inside the track block rather than to the track itself.
 NESTED = {"kind", "device_id", "capability_mask", "host_slot_index", "patcher_node_id", "bypass",
@@ -143,7 +169,8 @@ track_keys = [k for k in track_keys if k not in NESTED]
 
 # ---------------------------------------------------------------- the assertions.
 problems = []
-for label, keys, table in (("slot", slot_keys, SLOT), ("track", track_keys, TRACK)):
+for label, keys, table in (("slot", slot_keys, SLOT), ("track", track_keys, TRACK),
+                           ("clip", clip_keys, CLIP)):
     for k in keys:
         if k not in table:
             problems.append(
@@ -160,20 +187,33 @@ for label, keys, table in (("slot", slot_keys, SLOT), ("track", track_keys, TRAC
             "        A stale entry is worse than none: it makes the table look complete while\n"
             "        covering a field that does not exist. Remove it." % (label, k))
 
-print("  %d persisted slot fields, %d persisted track fields, all accounted for"
-      % (len(slot_keys), len(track_keys)) if not problems else "")
+if not problems:
+    print("  %d persisted slot fields, %d track fields, %d clip fields, all accounted for"
+          % (len(slot_keys), len(track_keys), len(clip_keys)))
 if problems:
     print("\n".join(problems))
     raise SystemExit(1)
+
+# KNOWN GAPS ARE PRINTED, EVERY RUN. A field that is persisted, published and rendered with no
+# command to write it is the defect this check exists to find — recording one is not closing it.
+# Printing the count keeps the debt in front of whoever runs the suite instead of letting a green
+# line imply there is none. They do not fail the run, because they were true before this scope
+# existed and failing on them would only get the scope deleted.
+gaps = [(label, k, v) for label, table in (("slot", SLOT), ("track", TRACK), ("clip", CLIP))
+        for k, v in table.items() if v.startswith("GAP:")]
+if gaps:
+    print("  %d KNOWN GAP(S) — persisted, and no command can write them:" % len(gaps))
+    for label, k, v in sorted(gaps):
+        print("      %-5s %-20s %s" % (label, k, v[4:].strip()))
 
 # The command names in the table must be REAL. A table entry naming a command that does not exist
 # would pass everything above while documenting a writer nobody can call.
 cmds = set(re.findall(r'^\s*([A-Za-z]+) = \d+,',
                       open(os.path.join(root, "apps/event_payloads.h")).read(), re.M))
 missing = []
-for label, table in (("slot", SLOT), ("track", TRACK)):
+for label, table in (("slot", SLOT), ("track", TRACK), ("clip", CLIP)):
     for k, v in table.items():
-        if v.startswith("EXEMPT:"):
+        if v.startswith("EXEMPT:") or v.startswith("GAP:"):
             continue
         name = v.split("::")[-1]
         if name not in cmds:
@@ -185,5 +225,6 @@ if missing:
 print("  every named writer resolves to a real command or field id")
 PY
 
-echo "persisted_field_reach_check: PASS — nothing the project format remembers is unwritable"
-echo "                             without a reason recorded"
+echo "persisted_field_reach_check: PASS — every persisted field is accounted for. If a GAP
+                             count is printed above, those are fields nothing can write: the debt
+                             is recorded, not discharged."
