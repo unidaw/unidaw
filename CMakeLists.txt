@@ -515,6 +515,19 @@ add_test(NAME op_registry
 )
 set_tests_properties(op_registry PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# CAN A FRESH CLONE BUILD THIS AT ALL. Every other test here runs against an already-configured
+# build directory, so none of them can see a configure-time break — and main spent a day in one
+# (two add_test entries named clip_grid) while every warm tree stayed green.
+#
+# It is the slowest test in the suite, around a minute, because a cold configure re-adds JUCE
+# and re-probes the compiler; that IS the work, and sharing a cache to speed it up would test
+# the warm path this exists to distrust. Left in the automatic suite rather than made opt-in,
+# because a manual check for "does the repo build" is one nobody runs until it is already broken.
+add_test(NAME cold_configure
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/cold_configure_check.sh
+)
+set_tests_properties(cold_configure PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+
 add_test(NAME lint
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/lint_check.sh
 )
@@ -682,10 +695,13 @@ set_tests_properties(sampler_loop PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DI
 # A CLIP's own subdivision and meter — task #43 phase 2. The load-bearing property is PUBLISHED
 # rather than saved: the first version of this command saved correctly and drew nothing, because
 # the extent publish is gated on the clip version and a grid change touches no note.
-add_test(NAME clip_grid
+# NAMED FOR THE SCRIPT, not for the feature: `clip_grid` was already taken by the unit binary
+# 200 lines down, and CMake refuses a duplicate test name at CONFIGURE time — so main did not
+# configure at all from a cold cache, while every warm tree (mine) built and tested green.
+add_test(NAME clip_grid_check
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/clip_grid_check.sh
 )
-set_tests_properties(clip_grid PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(clip_grid_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 # The kit read-back covers the slot the engine publishes. A NAMES-only ratchet, deliberately —
 # the behaviour is driven by sampler_kit, sampler_vintage, slice_extent and slot_rename, and this
