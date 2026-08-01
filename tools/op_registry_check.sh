@@ -67,6 +67,17 @@ DECLARED_NO_CLI = {
                            "clip is created, which covers the case that exists today",
     "SetDeviceEuclideanConfig": "the patcher node config surface as a whole is unbuilt "
                                 "on the CLI side; see the patcher ops below",
+    "RequestChainSnapshot": "DERIVED. It asks the engine to re-EMIT a chain that is "
+                            "otherwise published on change, which a long-lived subscriber "
+                            "needs after attaching to a running engine and a CLI never does: "
+                            "`get chains` reads the published region directly, so there is no "
+                            "edit it can have missed. A `do request-chain-snapshot` would ask "
+                            "for a republish and then not be listening for it",
+    "Quit": "IDENTITY. It means 'the last UI went away', which only the thing tracking UI "
+            "connections can truthfully say — the sidecar sends it after a grace period so a "
+            "page reload does not kill the session. daw-cli is not a UI, so from there the "
+            "message would be a claim about session state it cannot observe, and the effect it "
+            "wants (stop this engine) is what a signal already does",
     "BulkChunk": "a TRANSPORT, not a verb — it carries a fragment of some other command "
                  "and has no meaning on its own. EngineHandle::send_bulk chunks a payload "
                  "into these, and the commands that ride it (sampler-env-draw today) are "
