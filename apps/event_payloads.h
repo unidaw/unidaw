@@ -468,8 +468,42 @@ enum class UiCommandType : uint16_t {
   /// Dropping the device index would fit and would silently break automation of a specific
   /// plugin's parameter — the quiet cap this file argues against on SetAudioClipField. The ring
   /// is ordered and single-consumer, so from one producer the pair arrives in order.
-  DeleteAutomationPoint = 96,  // next free 97
+  DeleteAutomationPoint = 96,
+
+  /// ASK for one modulator's envelope SHAPE — the points, both loop ranges, the release fade, the
+  /// time base and the rate. Answered into a seqlocked slot, exactly as RequestAutomationLane
+  /// (62) and RequestSamplerKit (75) are.
+  ///
+  /// SamplerSetEnvelopePoints (84) could write all of that and nothing could read any of it back,
+  /// so a pencil editor built on 84 would be WRITE-ONLY: able to send a curve and never to draw
+  /// the one already in the project. A writer with no reader is the same defect as a field with
+  /// no writer, with the halves swapped.
+  RequestSamplerEnvelope = 97,  // next free 98
 };
+
+// ASK FOR ONE MODULATOR'S ENVELOPE (opcode 97). 40 bytes.
+//
+// `requestSeq` is CLIENT-OWNED, as in RequestAutomationLane and RequestWaveform, and it picks the
+// answer slot (requestSeq % kUiSamplerEnvelopeSlots). That is what lets a caller know which slot
+// its answer will land in BEFORE it asks, rather than scanning for one that looks like a reply.
+//
+// ADDRESSED THE WAY THE WRITE IS: by modulator id, or — with kSamplerEnvByTarget, the SAME bit
+// SamplerSetEnvelopePoints uses — by target, letting the engine find the modulator driving it.
+// Asking a different way than writing is how a read-back answers about a different object.
+struct UiSamplerEnvelopeRequestPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::RequestSamplerEnvelope);
+  uint16_t flags = 0;       // kSamplerEnvByTarget
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;    // 0 = the track's first sampler, as everywhere in this family
+  uint32_t modSetId = 0;    // 0 = the first mod set
+  uint32_t requestSeq = 0;
+  uint16_t modulatorId = 0;
+  uint8_t target = 0;       // kSamplerEnvTarget*, meaningful with kSamplerEnvByTarget
+  uint8_t reserved0 = 0;
+  uint32_t reserved1[4]{};
+};
+static_assert(sizeof(UiSamplerEnvelopeRequestPayload) == 40,
+              "UiSamplerEnvelopeRequestPayload must fit the command payload exactly");
 
 /// WHICH PROPERTY OF AN AUDIO CLIP. Field-addressed rather than four opcodes, so a fifth property
 /// later is an enum entry — the same shape SamplerSlotField uses and for the same reason.
@@ -1212,6 +1246,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
     case UiCommandType::DeleteAutomationPoint: return "delete_automation_point";
+    case UiCommandType::RequestSamplerEnvelope: return "request_sampler_envelope";
     case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";
     case UiCommandType::RequestAutomationLane: return "request_automation_lane";
     case UiCommandType::SetModLinkDepth: return "set_mod_link_depth";
@@ -1271,6 +1306,7 @@ inline bool uiCommandUsesGenericPayload(UiCommandType t) {
     case UiCommandType::SetAutomationTarget:
     case UiCommandType::WriteAutomationPoint:
     case UiCommandType::DeleteAutomationPoint:
+    case UiCommandType::RequestSamplerEnvelope:
     case UiCommandType::RequestAutomationLane:
     case UiCommandType::SetModLinkDepth:
     // UiModLinkTargetPayload packs uid16[16]

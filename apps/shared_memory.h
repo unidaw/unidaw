@@ -46,6 +46,11 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 // 15: loop range read-back (uiLoopStart/uiLoopEnd) + load-result signal
 //     (uiLoadSeq/uiLoadOk). All ride the header's remaining tail padding, so
 //     sizeof(ShmHeader) is unchanged.
+// 37: one modulator's ENVELOPE SHAPE on request (uiSamplerEnvelopeOffset/Bytes ->
+//     UiSamplerEnvelopeRegion). Opcode 84 could WRITE a multi-segment envelope and nothing could
+//     read one back, so a pencil editor would have been write-only — able to send a curve and
+//     never to draw the one already in the project. The mirror image of the persisted-but-
+//     unwritable defect, and the same lie.
 // 18: waveform read-back — UiAudioSourceRegion + UiWaveformRegion (uiAudioSourceOffset
 //     / uiWaveformOffset). The two new u64 offsets grow sizeof(ShmHeader) 576 -> 640,
 //     so this is the first UI-region bump that does NOT ride the header tail padding.
@@ -133,7 +138,7 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //    tripped through save and reload and no UI could read it — and no command could write it
 //    (task #110). Publishing it is half the fix; SamplerSetSlotName (90) is the other half, and
 //    they land together because a field you can set and not see is not better than neither.
-constexpr uint16_t kShmVersion = 36;
+constexpr uint16_t kShmVersion = 37;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -357,6 +362,12 @@ struct alignas(64) ShmHeader {
   // union of two flag enumerations and that the next collision comes from someone adding to it
   // without knowing. Making it three things to save a bump is the trap with the warning above it.
   uint8_t uiTrackOpsWidth[kUiMaxTracks]{};
+  // v37: one modulator's envelope shape, on request. APPENDED AT THE END deliberately: every
+  // region offset is computed from sizeof(ShmHeader) and the Rust mirror asserts the offset of
+  // each field, so adding here grows the header without moving anything already in it. The
+  // version still bumps, because the header's SIZE changes and therefore every region shifts.
+  uint64_t uiSamplerEnvelopeOffset = 0;
+  uint64_t uiSamplerEnvelopeBytes = 0;
 };
 
 // uiTrackFlags bits.
@@ -914,6 +925,78 @@ struct alignas(64) UiAutomationSlotRegion {
   ShmAtomicU32 requestSeq{0};
   uint32_t reserved[15]{};
   UiAutomationSlot slots[kUiAutomationSlots]{};
+};
+
+// ---------------------------------------------------------------------------------------------
+// v37: ONE MODULATOR'S ENVELOPE SHAPE, ON REQUEST.
+//
+// SamplerSetEnvelopePoints (84) can WRITE a full multi-segment envelope — points, both loop
+// ranges, the release fade, the time base and rate — and nothing could read one back. The kit
+// read-back carries `modMask`, ten bits saying WHICH (target, kind) pairs are configured, which
+// answers a modulator ROW's question ("does this slot have an amp envelope") and cannot answer
+// "what shape". So a pencil editor built on 84 would be WRITE-ONLY: able to send a curve and
+// never to draw the one already in the project, including the one a loaded file arrived with.
+//
+// That is the mirror image of the defect this repo spent a day closing — a field that is
+// persisted, published and honoured with no writer. A writer with no reader is the same lie with
+// the halves swapped, and the web-UI agent named it as the reason they had not built the editor.
+//
+// REQUEST/ANSWER, NOT A STANDING REGION, for the reason the automation lane is: a project holds
+// far more envelope than a fixed region could carry, and a UI draws the one modulator that is
+// open. "Which targets have an envelope at all" is modMask, which already exists.
+//
+// EVERY FIELD THE WRITE TAKES IS IN THE ANSWER. A read-back that returns a SUBSET is how a
+// pencil editor lies: an editor that draws the shape and sends it back would CLEAR whatever the
+// answer omitted, because the caller cannot preserve what it was never told. Opcode 84 takes
+// eleven fields and this returns eleven.
+constexpr uint32_t kUiSamplerEnvelopeSlots = 4;
+constexpr uint32_t kUiMaxEnvelopePoints = 64;   // == kMaxEnvPoints in sampler_envelope.h
+
+// One envelope point, byte-identical to UiEnvPointWire on the command side — the shape that goes
+// in is the shape that comes out, and a second layout for one thing is how the two drift.
+struct UiEnvelopePointEntry {      // 8 B
+  uint32_t time = 0;
+  int16_t valueMilli = 0;
+  int8_t tension = 0;
+  uint8_t flags = 0;
+};
+static_assert(sizeof(UiEnvelopePointEntry) == 8, "UiEnvelopePointEntry must be 8 bytes");
+
+// One answered envelope, under a seqlock (seq ODD while writing). The request fields are echoed
+// so a caller can tell WHICH question this answers — without that, a slot reused for a different
+// modulator looks like an answer to the one you asked.
+struct alignas(64) UiSamplerEnvelopeSlot {
+  ShmAtomicU32 seq{0};
+  uint32_t requestSeq = 0;    // echo
+  uint32_t trackId = 0;       // echo
+  uint32_t deviceId = 0;      // echo
+  uint32_t modSetId = 0;      // echo
+  uint16_t modulatorId = 0;   // echo
+  uint8_t target = 0;         // echo
+  uint8_t timeBase = 0;
+  uint16_t rateMilli = 1000;
+  uint16_t pointCount = 0;
+  // 0 = no such (track, device, mod set, modulator/target). An ANSWER, not an error: "there is
+  // no envelope on this target" is a thing a UI draws (an empty lane with an add button), and
+  // making it an error means the UI cannot tell it from a dropped request.
+  uint32_t found = 0;
+  uint32_t pointsTruncated = 0;
+  // 255 = no loop, matching kEnvLoopNone and the wire the write side uses.
+  uint8_t sustainLoopStart = 255;
+  uint8_t sustainLoopEnd = 255;
+  uint8_t releaseLoopStart = 255;
+  uint8_t releaseLoopEnd = 255;
+  uint32_t releaseFade = 0;
+  uint32_t reserved = 0;
+  UiEnvelopePointEntry points[kUiMaxEnvelopePoints]{};
+};
+
+struct alignas(64) UiSamplerEnvelopeRegion {
+  // The last sequence the ENGINE has answered. The client owns the sequence itself (it goes out
+  // in the request and picks the slot); this is only "answers are complete through here".
+  ShmAtomicU32 requestSeq{0};
+  uint32_t reserved[15]{};
+  UiSamplerEnvelopeSlot slots[kUiSamplerEnvelopeSlots]{};
 };
 
 // ---------------------------------------------------------------------------------------------

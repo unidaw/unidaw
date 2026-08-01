@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 36;
+pub const K_SHM_VERSION: u16 = 37;
 
 /// SetLaneQuantize carries swing through an unsigned field; this is the bias.
 pub const LANE_QUANTIZE_SWING_BIAS: u32 = 500;
@@ -194,6 +194,10 @@ pub struct ShmHeader {
     /// is worse than one that clips. Recomputed where the flat clip is re-derived, so it moves
     /// with clip_version.
     pub ui_track_ops_width: [u8; K_UI_MAX_TRACKS],
+    /// v37: one modulator's envelope shape, on request. Appended at the END so every existing
+    /// field keeps its offset; only sizeof(ShmHeader) grew, which is what bumps K_SHM_VERSION.
+    pub ui_sampler_envelope_offset: u64,
+    pub ui_sampler_envelope_bytes: u64,
 }
 
 /// uiTrackFlags bits (Movement 4).
@@ -367,6 +371,26 @@ pub struct UiSetClipGridPayload {
     pub time_sig_numerator: u32,
     pub time_sig_denominator: u32,
     pub reserved: [u32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+/// RequestSamplerEnvelope (97). `request_seq` is CLIENT-OWNED and picks the answer slot
+/// (request_seq % K_UI_SAMPLER_ENVELOPE_SLOTS), so a caller knows where its answer will land
+/// before it asks. Addressed by modulator id, or by target with SAMPLER_ENV_BY_TARGET — the same
+/// bit the WRITE uses, because asking a different way than writing is how a read-back ends up
+/// answering about a different object.
+pub struct UiSamplerEnvelopeRequestPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub mod_set_id: u32,
+    pub request_seq: u32,
+    pub modulator_id: u16,
+    pub target: u8,
+    pub reserved0: u8,
+    pub reserved1: [u32; 4],
 }
 
 /// SetAudioClipField (95). Field-ADDRESSED rather than flagged, the shape SamplerSetSlot uses:
@@ -849,6 +873,9 @@ pub const K_UI_MAX_CLIP_EXTENTS: usize = 256;
 pub const K_UI_MAX_AUTOMATION_LANES: usize = 64;
 pub const K_UI_MAX_AUTOMATION_POINTS: usize = 512;
 pub const K_UI_AUTOMATION_SLOTS: usize = 4;
+/// v37: one modulator's envelope shape, on request. Four slots, chosen the same way.
+pub const K_UI_SAMPLER_ENVELOPE_SLOTS: usize = 4;
+pub const K_UI_MAX_ENVELOPE_POINTS: usize = 64;
 pub const UI_AUTOMATION_FLAG_DISCRETE: u32 = 1 << 0;
 
 // v28 automation read-back regions, generated from shared_memory.h. Hand-mirrored structs are
@@ -861,6 +888,7 @@ pub use crate::sys::{
     daw_UiAutomationPointEntry as UiAutomationPointEntry,
     daw_UiAutomationSlot as UiAutomationSlot,
     daw_UiAutomationSlotRegion as UiAutomationSlotRegion,
+    daw_UiSamplerEnvelopeRegion as UiSamplerEnvelopeRegion,
 };
 
 #[repr(C)]
@@ -1296,6 +1324,10 @@ pub enum UiCommandType {
     /// destructive operation reached by setting a bit on a constructive one is one typo away from
     /// deleting what the caller meant to write.
     DeleteAutomationPoint = 96,
+    /// Ask for one modulator's envelope SHAPE — points, both loop ranges, the release fade, the
+    /// time base and the rate. Opcode 84 could write all of that and nothing could read it back,
+    /// so a pencil editor would have been write-only.
+    RequestSamplerEnvelope = 97,
 }
 
 /// Where a route points. Mirrors daw::TrackRouteKind.
@@ -2303,6 +2335,7 @@ mod tests {
         same!(UiSamplerVintagePayload, sys::daw_UiSamplerVintagePayload);
         same!(UiSetClipGridPayload, sys::daw_UiSetClipGridPayload);
         same!(UiAudioClipFieldPayload, sys::daw_UiAudioClipFieldPayload);
+        same!(UiSamplerEnvelopeRequestPayload, sys::daw_UiSamplerEnvelopeRequestPayload);
         same!(UiSamplerFilterPayload, sys::daw_UiSamplerFilterPayload);
         same!(UiSamplerRejectPayload, sys::daw_UiSamplerRejectPayload);
         same!(UiSetParamPayload, sys::daw_UiSetParamPayload);
@@ -2384,7 +2417,9 @@ mod tests {
         // v34: + uiTrackOpsWidth[64]. The header had ZERO tail padding, so one cache line of
         // per-track bytes grew it 6080 -> 6144 and bumped kShmVersion — region offsets are
         // computed from sizeof(ShmHeader), so every region shifted.
-        const_assert_eq!(size_of::<ShmHeader>(), 6144);
+        // v37: + uiSamplerEnvelopeOffset/Bytes, appended at the END so no existing
+        // field moved — only the total grew, which is what bumps kShmVersion.
+        const_assert_eq!(size_of::<ShmHeader>(), 6208);
         const_assert_eq!(size_of::<UiDeviceMeter>(), 12);
         const_assert_eq!(size_of::<UiDeviceMeterRegion>(), 12352);
         const_assert_eq!(align_of::<ShmHeader>(), 64);
@@ -2596,6 +2631,7 @@ mod wire_layout {
         assert_eq!(std::mem::size_of::<UiSamplerVintagePayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSetClipGridPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiAudioClipFieldPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerEnvelopeRequestPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiEnvPointWire>(), 8);
         // v35: + sliceBeginFrame / sliceEndFrame. Only three bytes were spare and two frame
         // counts need eight, so the entry's STRIDE changed — which is why this needed a version

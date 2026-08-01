@@ -240,6 +240,28 @@ pub struct AutomationLaneAnswer {
     pub points: Vec<(u64, f32)>,
 }
 
+/// One modulator's envelope shape, as the engine has it. EVERY FIELD THE WRITE TAKES IS HERE —
+/// a read-back that returns a subset is how a pencil editor lies, because an editor that draws
+/// the shape and sends it back would CLEAR whatever the answer omitted.
+pub struct SamplerEnvelopeAnswer {
+    pub request_seq: u32,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub mod_set_id: u32,
+    pub modulator_id: u16,
+    pub target: u8,
+    pub found: bool,
+    pub time_base: u8,
+    pub rate_milli: u16,
+    pub points_truncated: u32,
+    /// 255 = no loop, matching kEnvLoopNone and the wire the write side uses.
+    pub sustain_loop: (u8, u8),
+    pub release_loop: (u8, u8),
+    pub release_fade: u32,
+    /// (time, valueMilli, tension, flags) in time order.
+    pub points: Vec<(u32, i16, i8, u8)>,
+}
+
 /// Read a nul-terminated C `char` array (from a bindgen-generated struct, where
 /// `char` is `i8`) into an owned String.
 fn cchar_str(b: &[std::os::raw::c_char]) -> String {
@@ -1040,6 +1062,66 @@ impl EngineHandle {
             }
         }
         None
+    }
+
+    /// Read one answered envelope out of its seqlock slot. `None` while the engine is mid-write
+    /// or the region is absent — the caller retries, exactly as with the automation lane.
+    pub fn read_sampler_envelope_slot(&self, index: usize) -> Option<SamplerEnvelopeAnswer> {
+        if index >= crate::layout::K_UI_SAMPLER_ENVELOPE_SLOTS {
+            return None;
+        }
+        let off = unsafe { (*self.header).ui_sampler_envelope_offset };
+        if off == 0 {
+            return None;
+        }
+        let region = self._mmap.as_ptr().wrapping_add(off as usize)
+            as *const crate::layout::UiSamplerEnvelopeRegion;
+        let slot = unsafe { std::ptr::addr_of!((*region).slots[index]) };
+        let seq_ptr = unsafe { std::ptr::addr_of!((*slot).seq) } as *const AtomicU32;
+        for _ in 0..4096 {
+            let v0 = unsafe { (*seq_ptr).load(Ordering::Acquire) };
+            if v0 % 2 == 1 {
+                continue; // engine mid-write
+            }
+            let snap = unsafe { std::ptr::read_volatile(slot) };
+            fence(Ordering::Acquire);
+            let v1 = unsafe { (*seq_ptr).load(Ordering::Acquire) };
+            if v0 == v1 && v0 % 2 == 0 {
+                let n = (snap.pointCount as usize)
+                    .min(crate::layout::K_UI_MAX_ENVELOPE_POINTS);
+                return Some(SamplerEnvelopeAnswer {
+                    request_seq: snap.requestSeq,
+                    track_id: snap.trackId,
+                    device_id: snap.deviceId,
+                    mod_set_id: snap.modSetId,
+                    modulator_id: snap.modulatorId,
+                    target: snap.target,
+                    found: snap.found != 0,
+                    time_base: snap.timeBase,
+                    rate_milli: snap.rateMilli,
+                    points_truncated: snap.pointsTruncated,
+                    sustain_loop: (snap.sustainLoopStart, snap.sustainLoopEnd),
+                    release_loop: (snap.releaseLoopStart, snap.releaseLoopEnd),
+                    release_fade: snap.releaseFade,
+                    points: snap.points[..n]
+                        .iter()
+                        .map(|p| (p.time, p.valueMilli, p.tension, p.flags))
+                        .collect(),
+                });
+            }
+        }
+        None
+    }
+
+    /// Ask for one modulator's envelope shape (RequestSamplerEnvelope, 97).
+    pub fn send_sampler_envelope_request(
+        &self,
+        payload: crate::layout::UiSamplerEnvelopeRequestPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSamplerEnvelopeRequestPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSamplerEnvelopeRequestPayload>(),
+        )
     }
 
     /// Per-track display names for the current track count (nul-trimmed).

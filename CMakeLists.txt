@@ -750,6 +750,16 @@ add_test(NAME chord_expression
 )
 set_tests_properties(chord_expression PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# One modulator's ENVELOPE SHAPE, on request (opcode 97, kShmVersion 37). Opcode 84 could write a
+# full multi-segment envelope and nothing could read one back, so a pencil editor would have been
+# write-only. Asserts every field the write takes — a read-back that returns a subset is how such
+# an editor silently destroys the loop ranges and the release fade it was never told about.
+add_test(NAME sampler_envelope_readback
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_envelope_readback_check.sh
+)
+set_tests_properties(sampler_envelope_readback PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 # The kit read-back covers the slot the engine publishes. A NAMES-only ratchet, deliberately —
 # the behaviour is driven by sampler_kit, sampler_vintage, slice_extent and slot_rename, and this
 # is the guard those do not provide. Costs no engine, so it is nearly free.

@@ -2195,6 +2195,9 @@ int main(int argc, char** argv) {
     header.uiSamplerKitOffset = offset;    // v32: one sampler device's kit, on request
     header.uiSamplerKitBytes = sizeof(daw::UiSamplerKitRegion);
     offset += daw::alignUp(header.uiSamplerKitBytes, 64);
+    header.uiSamplerEnvelopeOffset = offset;  // v37: one modulator's envelope shape, on request
+    header.uiSamplerEnvelopeBytes = sizeof(daw::UiSamplerEnvelopeRegion);
+    offset += daw::alignUp(header.uiSamplerEnvelopeBytes, 64);
     uiShm.size = daw::alignUp(offset, 64);
 
     if (::ftruncate(uiShm.fd, static_cast<off_t>(uiShm.size)) != 0) {
@@ -11758,6 +11761,129 @@ struct TrackRuntime {
           .field("made", made)
           .field("removed", removed)
           .field("slots", slotsMade);
+      return;
+    }
+
+    // ---- REQUEST SAMPLER ENVELOPE (97). One modulator's SHAPE into a seqlock slot.
+    //
+    // SamplerSetEnvelopePoints (84) could write a full multi-segment envelope and nothing could
+    // read one back, so a pencil editor built on it would be write-only — able to send a curve
+    // and never to draw the one already in the project. The kit read-back's modMask says WHICH
+    // targets are configured and cannot say what shape.
+    if (entry.size == sizeof(daw::UiSamplerEnvelopeRequestPayload) &&
+        commandType == daw::UiCommandType::RequestSamplerEnvelope) {
+      daw::UiSamplerEnvelopeRequestPayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      if (!uiShm.header || uiShm.header->uiSamplerEnvelopeOffset == 0) {
+        return;
+      }
+      auto* region = reinterpret_cast<daw::UiSamplerEnvelopeRegion*>(
+          reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiSamplerEnvelopeOffset);
+      daw::UiSamplerEnvelopeSlot& slot =
+          region->slots[p.requestSeq % daw::kUiSamplerEnvelopeSlots];
+
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (p.trackId < tracks.size()) {
+          runtime = tracks[p.trackId].get();
+        }
+      }
+
+      // SEQLOCK: odd while writing, as the kit and automation answers do.
+      const uint32_t before = slot.seq.load(std::memory_order_relaxed) | 1u;
+      slot.seq.store(before, std::memory_order_release);
+      std::atomic_thread_fence(std::memory_order_release);
+
+      slot.requestSeq = p.requestSeq;
+      slot.trackId = p.trackId;
+      slot.deviceId = p.deviceId;
+      slot.modSetId = p.modSetId;
+      slot.modulatorId = p.modulatorId;
+      slot.target = p.target;
+      slot.found = 0;
+      slot.pointCount = 0;
+      slot.pointsTruncated = 0;
+      slot.timeBase = 0;
+      slot.rateMilli = 1000;
+      slot.sustainLoopStart = 255;
+      slot.sustainLoopEnd = 255;
+      slot.releaseLoopStart = 255;
+      slot.releaseLoopEnd = 255;
+      slot.releaseFade = 0;
+
+      if (runtime) {
+        // FROM THE SNAPSHOT THE PRODUCER READS, not from the document — the same decision the
+        // kit read-back makes and for the same reason: the model answers "what was configured"
+        // while the audio thread plays something else, and catching that divergence is the whole
+        // point of a read-back.
+        std::shared_ptr<const daw::SamplerRender> snap;
+        {
+          std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          snap = runtime->samplerSnapshot;
+        }
+        if (snap && (p.deviceId == 0 || runtime->samplerDeviceId == p.deviceId)) {
+          const bool byTarget = (p.flags & daw::kSamplerEnvByTarget) != 0;
+          for (const auto& ms : snap->state.modSets) {
+            if (p.modSetId != 0 && ms.id != p.modSetId) {
+              continue;
+            }
+            for (const auto& mod : ms.modulators) {
+              if (mod.kind != daw::ModKind::Envelope) {
+                continue;
+              }
+              const bool match =
+                  byTarget ? (static_cast<uint8_t>(mod.target) == p.target)
+                           : (p.modulatorId == 0 || mod.id == p.modulatorId);
+              if (!match) {
+                continue;
+              }
+              slot.found = 1;
+              slot.deviceId = runtime->samplerDeviceId;
+              slot.modSetId = ms.id;
+              slot.modulatorId = mod.id;
+              slot.target = static_cast<uint8_t>(mod.target);
+              slot.timeBase = mod.timeBase;
+              slot.rateMilli = mod.rateMilli;
+              slot.sustainLoopStart = mod.env.sustainLoopStart;
+              slot.sustainLoopEnd = mod.env.sustainLoopEnd;
+              slot.releaseLoopStart = mod.env.releaseLoopStart;
+              slot.releaseLoopEnd = mod.env.releaseLoopEnd;
+              slot.releaseFade = mod.env.releaseFade;
+              uint32_t n = 0;
+              for (const auto& pt : mod.env.points) {
+                if (n >= daw::kUiMaxEnvelopePoints) {
+                  // COUNTED, not silently dropped: a truncated curve that says nothing reads as
+                  // the whole curve, and an editor would then SAVE the truncation back.
+                  ++slot.pointsTruncated;
+                  continue;
+                }
+                slot.points[n].time = pt.time;
+                slot.points[n].valueMilli = pt.valueMilli;
+                slot.points[n].tension = pt.tension;
+                slot.points[n].flags = pt.flags;
+                ++n;
+              }
+              slot.pointCount = static_cast<uint16_t>(n);
+              break;
+            }
+            if (slot.found != 0) {
+              break;
+            }
+          }
+        }
+      }
+
+      std::atomic_thread_fence(std::memory_order_release);
+      slot.seq.store(before + 1, std::memory_order_release);
+      region->requestSeq.store(p.requestSeq, std::memory_order_release);
+      DAW_EVENT("sampler.envelope_answered")
+          .field("track", p.trackId)
+          .field("mod_set", slot.modSetId)
+          .field("modulator", static_cast<uint64_t>(slot.modulatorId))
+          .field("target", static_cast<uint64_t>(slot.target))
+          .field("found", slot.found)
+          .field("points", static_cast<uint64_t>(slot.pointCount));
       return;
     }
 

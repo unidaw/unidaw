@@ -46,6 +46,11 @@ daw-cli — control surface for a running engine
   daw-cli do sampler-vintage --track N [--device D] [--mod-set M] [--bits 0-16] [--rate HZ]
                                    bit/rate reduction before the filter; 0 turns one off
   daw-cli get sampler-kit --track N [--device D]
+  daw-cli get sampler-envelope --track N [--device D] [--mod-set M]
+                          [--modulator ID | --target amp|pan|pitch|cutoff|res]
+                                   one modulator's SHAPE: points, both loop ranges, the
+                                   release fade, time base and rate. Opcode 84 could write
+                                   all of it and nothing could read it back
   daw-cli get patcher              the assembled patcher pool, with each node's OWNING DEVICE
                                    the device's slots, as the ENGINE has them
   daw-cli do sampler-slice --track N --source 1 [--mode transient|equal|clear] [--count 16] [--no-slots]
@@ -1497,6 +1502,90 @@ fn get_automation(handle: &EngineHandle) -> i32 {
 }
 
 /// v28: one lane's POINTS. Sends RequestAutomationLane and reads the slot it addressed.
+// get sampler-envelope — one modulator's shape, request/answer through a seqlock slot.
+fn get_sampler_envelope(handle: &EngineHandle, args: &[String]) -> i32 {
+    use daw_bridge::layout as L;
+    let track = flag_u64(args, "--track", Some(0)).unwrap_or(0) as u32;
+    let device = flag_u64(args, "--device", Some(0)).unwrap_or(0) as u32;
+    let mod_set = flag_u64(args, "--mod-set", Some(0)).unwrap_or(0) as u32;
+    // ADDRESSED BY MODULATOR ID, OR BY TARGET. Same choice the WRITE offers, and the same flag
+    // bit carries it — asking a different way than writing is how a read-back ends up answering
+    // about a different object.
+    let modulator = flag_u64(args, "--modulator", Some(0)).unwrap_or(0) as u16;
+    let (flags, target) = match flag(args, "--target").as_deref() {
+        None => (0u16, 0u8),
+        Some(t) => {
+            let id = match t {
+                "amp" | "volume" | "vol" => 0u8,
+                "pan" | "panning" => 1u8,
+                "pitch" => 2u8,
+                "cutoff" | "filter" => 3u8,
+                "res" | "resonance" => 4u8,
+                other => {
+                    eprintln!("daw-cli: --target expects amp|pan|pitch|cutoff|res, got {other:?}");
+                    return 2;
+                }
+            };
+            (L::SAMPLER_ENV_BY_TARGET, id)
+        }
+    };
+    // UNIQUE PER INVOCATION, for the reason get_clip and get_automation_points both spell out: a
+    // constant request id makes every call after the first match the PREVIOUS call's answer the
+    // instant it is read, so asking about modulator B returns modulator A.
+    let request_seq = {
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let id = pid.rotate_left(11) ^ nanos;
+        if id == 0 { 1 } else { id }
+    };
+    let slot_index = (request_seq as usize) % L::K_UI_SAMPLER_ENVELOPE_SLOTS;
+    let payload = L::UiSamplerEnvelopeRequestPayload {
+        command_type: UiCommandType::RequestSamplerEnvelope as u16,
+        flags,
+        track_id: track,
+        device_id: device,
+        mod_set_id: mod_set,
+        request_seq,
+        modulator_id: modulator,
+        reserved0: 0,
+        target,
+        reserved1: [0; 4],
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let _ = handle.send_sampler_envelope_request(payload);
+        thread::sleep(Duration::from_millis(80));
+        if let Some(a) = handle.read_sampler_envelope_slot(slot_index) {
+            if a.request_seq == request_seq {
+                let pts: Vec<String> = a
+                    .points
+                    .iter()
+                    .map(|(t, v, tension, f)| format!(
+                        "{{ \"time\": {t}, \"value_milli\": {v}, \"tension\": {tension}, \"flags\": {f} }}"))
+                    .collect();
+                println!(
+                    "{{ \"request_seq\": {}, \"track_id\": {}, \"device_id\": {}, \"mod_set_id\": {}, \"modulator_id\": {}, \"target\": {}, \"found\": {}, \"time_base\": {}, \"rate_milli\": {}, \"sustain_loop\": [{}, {}], \"release_loop\": [{}, {}], \"release_fade\": {}, \"points_truncated\": {}, \"points\": [{}] }}",
+                    a.request_seq, a.track_id, a.device_id, a.mod_set_id, a.modulator_id,
+                    a.target, a.found, a.time_base, a.rate_milli,
+                    a.sustain_loop.0, a.sustain_loop.1, a.release_loop.0, a.release_loop.1,
+                    a.release_fade, a.points_truncated, pts.join(", ")
+                );
+                // `found: false` is an ANSWER and exit 0 says so — "there is no envelope on this
+                // target" is a thing a UI draws. Only a request never answered at all is a
+                // failure of this command.
+                return 0;
+            }
+        }
+        if Instant::now() >= deadline {
+            eprintln!("daw-cli: no envelope answer for track {track} (slot {slot_index})");
+            return 1;
+        }
+    }
+}
+
 fn get_automation_points(handle: &EngineHandle, args: &[String]) -> i32 {
     use daw_bridge::layout as L;
     let track = flag_u64(args, "--track", Some(0)).unwrap_or(0) as u32;
@@ -1791,6 +1880,16 @@ fn main() {
         }
         // Sends RequestAutomationLane before reading its answer, so it needs a writable
         // handle — a read-only mmap makes the send a silent no-op and the wait always times out.
+        // v37: one modulator's envelope SHAPE. SamplerSetEnvelopePoints (84) could write a full
+        // multi-segment envelope and nothing could read one back, so a pencil editor built on it
+        // would have been write-only — able to send a curve and never to draw the one already in
+        // the project.
+        Some((&"get", rest)) if rest.first() == Some(&"sampler-envelope") => {
+            match EngineHandle::attach(&name, true) {
+                Ok(handle) => get_sampler_envelope(&handle, &args),
+                Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+            }
+        }
         Some((&"get", rest)) if rest.first() == Some(&"automation-points") => {
             match EngineHandle::attach(&name, true) {
                 Ok(handle) => get_automation_points(&handle, &args),
