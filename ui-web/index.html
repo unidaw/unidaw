@@ -82,7 +82,8 @@ import { Tracker } from './src/tracker.js';
 // One spelling of the waveform cache key, shared with chain.js. See wire.js for why it lives
 // there: three call sites had three template strings and only two were updated together.
 import { waveKey } from './src/wire.js';
-import { buildViewModel, ZOOM_LEVELS, createBuffer, velocityText } from './src/viewmodel.js';
+import { buildViewModel, ZOOM_LEVELS, createBuffer, velocityText,
+         onLaneGridAt } from './src/viewmodel.js';
 import { opsText, parseOps, OP_MASK, opMaskOf, oneOpEdit, opsPresent, opTokenAt,
          ROW_OPS, opsHint, opHelpFor } from './src/rowops.js';
 /*
@@ -4642,9 +4643,8 @@ function laneRowTicks(track) {
  * nothing to write into there, and offering an empty cell would imply otherwise.
  */
 function onLaneGrid(row, track) {
-  const lane = engine && engine.lpb[track] ? engine.lpb[track] : ZOOM_LEVELS[state.zoom].linesPerBeat;
-  const stride = ZOOM_LEVELS[state.zoom].linesPerBeat / lane;
-  return stride < 1 || row % Math.round(stride) === 0;
+  const zl = ZOOM_LEVELS[state.zoom];
+  return onLaneGridAt(engine, row * zl.rowNanoticks, track, zl.linesPerBeat);
 }
 /** The tick the cursor's row means. Rows are viewport rows — one axis, and the
  *  same one the sidecar projects notes into. */
