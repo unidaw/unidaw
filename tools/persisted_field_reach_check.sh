@@ -211,6 +211,96 @@ PLACEMENT = {
     "local_edits":       "SetPlacementEditScope",
 }
 
+# ------------------------------------------------------------------------------------ the MOD LINK scope.
+#
+# A modulation link: a source on one device driving a parameter on another. Ten keys, clean.
+MODLINK = {
+    "link_id":     "EXEMPT:identity — a link is ADDRESSED by its id",
+    "source_id":   "AddModLink",
+    "target_id":   "AddModLink",
+    "device_id":   "AddModLink",
+    "kind":        "AddModLink",
+    "depth":       "SetModLinkDepth",
+    "bias":        "AddModLink",
+    "rate":        "AddModLink",
+    "enabled":     "AddModLink",
+    # The VST parameter a link drives, named by its 16-byte uid rather than by index — an index
+    # means something only against the scan that produced it.
+    "param_uid16": "SetModLinkUid16",
+}
+
+# --------------------------------------------------------------------------------- the PATCHER NODE scope.
+#
+# Sixteen keys, and every one of them is a node CONFIG field reachable through patcher-config.
+# This is the scope whose absence the ratchet's own header cites as one of the eight defects found
+# BY HAND before the check existed ("every patcher node config"), so it is worth locking.
+PATCHERNODE = {
+    "id":             "EXEMPT:identity — a node is ADDRESSED by its id",
+    "type":           "EXEMPT:identity — chosen at AddPatcherNode; changing it in place would reinterpret the config",
+    "steps":          "SetPatcherNodeConfig",
+    "hits":           "SetPatcherNodeConfig",
+    "offset":         "SetPatcherNodeConfig",
+    "degree":         "SetPatcherNodeConfig",
+    "octave_offset":  "SetPatcherNodeConfig",
+    "velocity":       "SetPatcherNodeConfig",
+    "base_octave":    "SetPatcherNodeConfig",
+    "duration_ticks": "SetPatcherNodeConfig",
+    "base":           "SetPatcherNodeConfig",
+    "count":          "SetPatcherNodeConfig",
+    "frequency_hz":   "SetPatcherNodeConfig",
+    "depth":          "SetPatcherNodeConfig",
+    "bias":           "SetPatcherNodeConfig",
+    "phase_offset":   "SetPatcherNodeConfig",
+}
+
+# --------------------------------------------------------------------------------- the PATCHER EDGE scope.
+#
+# A connection between two node ports. Five keys, all of them the address itself — an edge has no
+# properties beyond what it connects, so ConnectPatcherNodes writes all five and there is nothing
+# to edit afterwards.
+PATCHEREDGE = {
+    "src_node_id": "ConnectPatcherNodes",
+    "src_port_id": "ConnectPatcherNodes",
+    "dst_node_id": "ConnectPatcherNodes",
+    "dst_port_id": "ConnectPatcherNodes",
+    "kind":        "ConnectPatcherNodes",
+}
+
+# ------------------------------------------------------------------------------------- the DEVICE scope.
+#
+# Eighteen keys, and they are three different things sharing one object — which is why this scope
+# needed the most care rather than the most typing:
+#
+#   the device itself       device_id, kind, bypass, capability_mask, host_slot_index,
+#                           patcher_node_id
+#   its VST IDENTITY        name, path, vendor, uid16 — stamped at SAVE from the plugin cache,
+#                           never typed. hostSlotIndex only means anything against the scan that
+#                           produced it, so the durable identity is derived from it rather than
+#                           being what the file relies on
+#   a DEVICE-LEVEL euclidean config, nested here rather than in the patcher graph
+DEVICE = {
+    "device_id":       "EXEMPT:identity — a device is ADDRESSED by its id",
+    "kind":            "EXEMPT:identity — chosen at AddDevice; changing it reinterprets the device",
+    "bypass":          "UpdateDevice",
+    "capability_mask": "EXEMPT:derived — capabilityMaskForKind(kind); a writer would be a second truth about what a kind can do",
+    "host_slot_index": "AddDevice",
+    "patcher_node_id": "EXEMPT:derived — assigned when the device's own patcher graph is created",
+    # The VST reference, all four stamped from the plugin cache at save time.
+    "name":            "EXEMPT:derived — stamped from the plugin cache at save, keyed on hostSlotIndex",
+    "path":            "EXEMPT:derived — same stamp",
+    "vendor":          "EXEMPT:derived — same stamp",
+    "uid16":           "EXEMPT:derived — same stamp",
+    # The device-level euclidean generator.
+    "steps":           "SetDeviceEuclideanConfig",
+    "hits":            "SetDeviceEuclideanConfig",
+    "offset":          "SetDeviceEuclideanConfig",
+    "degree":          "SetDeviceEuclideanConfig",
+    "octave_offset":   "SetDeviceEuclideanConfig",
+    "velocity":        "SetDeviceEuclideanConfig",
+    "base_octave":     "SetDeviceEuclideanConfig",
+    "duration_ticks":  "SetDeviceEuclideanConfig",
+}
+
 # ---------------------------------------------------------------- what is actually persisted.
 def keys_in_block(path, begin_marker, span):
     text = open(os.path.join(root, path)).read().split("\n")
@@ -236,6 +326,10 @@ clip_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("clips")')
 chord_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("chords")')
 note_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("notes")')
 placement_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("placements")')
+modlink_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("mod_links")')
+node_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("nodes")')
+edge_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("edges")')
+device_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("device_chain")')
 
 # Keys that belong to nested objects inside the track block rather than to the track itself.
 NESTED = {"kind", "device_id", "capability_mask", "host_slot_index", "patcher_node_id", "bypass",
@@ -248,7 +342,11 @@ problems = []
 for label, keys, table in (("slot", slot_keys, SLOT), ("track", track_keys, TRACK),
                            ("clip", clip_keys, CLIP), ("chord", chord_keys, CHORD),
                            ("note", note_keys, NOTE),
-                           ("placement", placement_keys, PLACEMENT)):
+                           ("placement", placement_keys, PLACEMENT),
+                           ("mod link", modlink_keys, MODLINK),
+                           ("patcher node", node_keys, PATCHERNODE),
+                           ("patcher edge", edge_keys, PATCHEREDGE),
+                           ("device", device_keys, DEVICE)):
     for k in keys:
         if k not in table:
             problems.append(
@@ -266,9 +364,15 @@ for label, keys, table in (("slot", slot_keys, SLOT), ("track", track_keys, TRAC
             "        covering a field that does not exist. Remove it." % (label, k))
 
 if not problems:
-    print("  %d slot, %d track, %d clip, %d chord, %d note, %d placement — all accounted for"
-          % (len(slot_keys), len(track_keys), len(clip_keys), len(chord_keys),
-             len(note_keys), len(placement_keys)))
+    print("  %d keys across ten scopes — slot %d, track %d, clip %d, chord %d, note %d,"
+          % (len(slot_keys) + len(track_keys) + len(clip_keys) + len(chord_keys) +
+             len(note_keys) + len(placement_keys) + len(modlink_keys) + len(node_keys) +
+             len(edge_keys) + len(device_keys),
+             len(slot_keys), len(track_keys), len(clip_keys), len(chord_keys), len(note_keys)))
+    print("  placement %d, mod link %d, patcher node %d, patcher edge %d, device %d — all"
+          " accounted for"
+          % (len(placement_keys), len(modlink_keys), len(node_keys), len(edge_keys),
+             len(device_keys)))
 if problems:
     print("\n".join(problems))
     raise SystemExit(1)
@@ -280,7 +384,9 @@ if problems:
 # existed and failing on them would only get the scope deleted.
 gaps = [(label, k, v) for label, table in (("slot", SLOT), ("track", TRACK), ("clip", CLIP),
                                           ("chord", CHORD), ("note", NOTE),
-                                          ("placement", PLACEMENT))
+                                          ("placement", PLACEMENT), ("mod link", MODLINK),
+                                          ("patcher node", PATCHERNODE),
+                                          ("patcher edge", PATCHEREDGE), ("device", DEVICE))
         for k, v in table.items() if v.startswith("GAP:")]
 if gaps:
     print("  %d KNOWN GAP(S) — persisted, and no command can write them:" % len(gaps))
@@ -289,11 +395,22 @@ if gaps:
 
 # The command names in the table must be REAL. A table entry naming a command that does not exist
 # would pass everything above while documenting a writer nobody can call.
-cmds = set(re.findall(r'^\s*([A-Za-z]+) = \d+,',
+# [A-Za-z][A-Za-z0-9]* — an opcode name may contain DIGITS, and the old pattern could not match
+# one. `SetModLinkUid16 = 22` exists and was invisible here, so naming it as a writer was reported
+# as "not a UiCommandType" — a FALSE POSITIVE that pushes the reader to delete a CORRECT entry and
+# replace it with an exemption. Found by this very assertion firing on a name that was right.
+#
+# op_registry_check parses the same enum and already had this right ([A-Za-z][A-Za-z0-9]*) — I
+# checked rather than assuming, having just written the opposite here. The lesson stands anyway: a
+# check that reads source has to be as careful about its own regex as about the thing it checks,
+# and this one silently could not see an entire class of opcode name.
+cmds = set(re.findall(r'^\s*([A-Za-z][A-Za-z0-9]*) = \d+,',
                       open(os.path.join(root, "apps/event_payloads.h")).read(), re.M))
 missing = []
 for label, table in (("slot", SLOT), ("track", TRACK), ("clip", CLIP), ("chord", CHORD),
-                     ("note", NOTE), ("placement", PLACEMENT)):
+                     ("note", NOTE), ("placement", PLACEMENT), ("mod link", MODLINK),
+                     ("patcher node", PATCHERNODE), ("patcher edge", PATCHEREDGE),
+                     ("device", DEVICE)):
     for k, v in table.items():
         if v.startswith("EXEMPT:") or v.startswith("GAP:"):
             continue
