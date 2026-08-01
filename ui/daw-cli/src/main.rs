@@ -1356,10 +1356,10 @@ fn get_waveform(handle: &EngineHandle, args: &[&str], all: &[String]) -> i32 {
             if v.request_seq == request_seq && v.source_id == source_id {
                 let pairs: Vec<String> = v.pairs.iter().map(|p| p.to_string()).collect();
                 println!(
-                    "{{ \"requestSeq\": {}, \"sourceId\": {}, \"status\": {}, \"decimation\": {}, \"columns\": {}, \"channels\": {}, \"firstFrame\": {}, \"frameCount\": {}, \"contentKey\": {}, \"flags\": {}, \"pairs\": [{}] }}",
+                    "{{ \"requestSeq\": {}, \"sourceId\": {}, \"status\": {}, \"decimation\": {}, \"columns\": {}, \"channels\": {}, \"firstFrame\": {}, \"frameCount\": {}, \"contentKey\": {}, \"flags\": {}, \"samplerAddr\": {}, \"pairs\": [{}] }}",
                     v.request_seq, v.source_id, v.status, v.decimation, v.columns,
                     v.channels, v.first_frame, v.frame_count, v.content_key, v.flags,
-                    pairs.join(",")
+                    v.sampler_addr, pairs.join(",")
                 );
                 return 0;
             }

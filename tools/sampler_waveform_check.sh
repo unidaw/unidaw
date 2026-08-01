@@ -18,7 +18,7 @@
 # store interns a decoy first, so the file under test is store id 2 while the sampler calls it
 # local id 1 — and a no-op translation returns the decoy, which property NOT THE DECOY catches.
 #
-# SIX PROPERTIES:
+# SEVEN PROPERTIES:
 #   IDS DIFFER   the sampler's local id and the file's store id are different numbers. Asserted,
 #                because if they ever coincide again this check silently stops testing anything
 #   REACHES      the triple answers status 0 with real min/max pairs
@@ -28,6 +28,8 @@
 #                mistaken for "answered the right thing"
 #   SAMPLER-ONLY a source NO audio clip names is drawable — the one property that fails if the
 #                sampler stops interning, since the clip path cannot cover for it
+#   IDENTIFIES   the ANSWER carries the track and device, not just the local id — a local id is
+#                a per-device counter, so it does not identify a source on its own
 #   REFUSED      a local id no source has is refused rather than answered with someone else's
 #                audio, and the engine says which triple it could not resolve
 #
@@ -201,6 +203,44 @@ esac
   fail "the sampler-only source returned the SAME window as brk.wav, so the local id is not
         selecting between two sources on one device"
 echo "  sampler-only: solo.wav is drawable and nothing but the sampler ever named it"
+
+# ---- THE ANSWER IDENTIFIES ITSELF. A reader files an answer under what it DESCRIBES, not under
+# what it asked — the request seq belongs to the sender and a browser tab never learns it — so a
+# sampler answer carrying only `sourceId` is not identifiable: a local id is a PER-DEVICE counter,
+# and local id 7 of this sampler is the same key as local id 7 of any other. Different audio, one
+# cache entry, and the second pad draws the first one's waveform.
+#
+# Raised by the web-UI agent from the cache side. This check has ONE sampler and could not have
+# found it; the property is here so a later change cannot silently drop the addressing again.
+addr() {  # addr <cli-args...> -> "<flags> <samplerAddr>"
+  cli get waveform "$@" 2>/dev/null | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print('NOANSWER'); raise SystemExit
+print('%s %s' % (d.get('flags'), d.get('samplerAddr')))
+"
+}
+read -r A_FLAGS A_ADDR <<<"$(addr 7 64 0 8 1 --track 0 --device 1)"
+# bit1 = kUiWaveformFlagSamplerSource. The BIT is what makes the address readable at all: a
+# packed (0,0) is the legal address "first sampler on the first track" and is otherwise
+# indistinguishable from an unset word.
+python3 -c "raise SystemExit(0 if (int('${A_FLAGS:-0}') & 2) != 0 else 1)" || \
+  fail "the sampler answer did not set flags bit 1, so a reader cannot tell that samplerAddr
+        means anything — and cannot tell a sampler answer from a store-id one"
+[ "${A_ADDR:-0}" = "$(python3 -c 'print((0 << 16) | 1)')" ] || \
+  fail "the answer's samplerAddr is '$A_ADDR', expected $(python3 -c 'print((0 << 16) | 1)')
+        for track 0 device 1. Without it two samplers' local id 7 are one cache key"
+# And a STORE-ID answer must NOT claim to be a sampler one, or every plain window gets filed
+# under a bogus address.
+read -r B_FLAGS B_ADDR <<<"$(addr "$BRK_ID" 64 0 8 1)"
+python3 -c "raise SystemExit(0 if (int('${B_FLAGS:-0}') & 2) == 0 else 1)" || \
+  fail "a plain store-id answer set the sampler bit (flags $B_FLAGS), so a reader would key it
+        on an address that means nothing"
+[ "${B_ADDR:-1}" = "0" ] || \
+  fail "a plain store-id answer carried samplerAddr $B_ADDR rather than 0"
+echo "  identifies itself: the sampler answer carries track 0 / device 1 and says so; a store-id answer does not"
 
 # ---- REFUSED. A local id no source has must not quietly answer with someone else's audio.
 BOGUS="$(pairs 99 64 0 8 1 --track 0 --device 1)"

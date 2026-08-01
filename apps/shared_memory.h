@@ -1115,11 +1115,35 @@ struct alignas(64) UiWaveformSlot {          // 98,368 B
   uint64_t firstFrame = 0;      //  32  always a multiple of decimation
   uint64_t frameCount = 0;      //  40  = columns * decimation, clipped at EOF
   uint32_t status = 0;          //  48  0 ok, 1 truncated, 2 notready, 3 badrequest
-  uint32_t flags = 0;           //  52  bit0 window ran past EOF
+  uint32_t flags = 0;           //  52  bit0 window ran past EOF; bit1 sampler answer
   uint32_t formatVersion = 0;   //  56
-  uint32_t reserved = 0;        //  60
+  // THE ANSWER DESCRIBES ITSELF, which it has to because a reader files answers by what they
+  // DESCRIBE and not by what it asked: the request seq belongs to the sidecar and a browser tab
+  // never learns it, deliberately, so two tabs cannot mint colliding ids.
+  //
+  // For a sampler answer `sourceId` echoes the LOCAL id, which is a PER-DEVICE counter — so
+  // local id 1 of one sampler and local id 1 of another are the same cache key and the second pad
+  // draws the first one's waveform. Different audio, one entry, a WRONG picture rather than a
+  // missing one. (Raised by the web-UI agent, who could see it from the cache side; my own check
+  // has one sampler and could not.)
+  //
+  // (trackId << 16) | deviceId, valid ONLY when flags bit1 is set. The bit is not decoration:
+  // a packed (0, 0) is the legal address "first sampler on the first track" and is otherwise
+  // indistinguishable from "this word means nothing", which is the sentinel trap this file
+  // refuses everywhere else.
+  uint32_t samplerAddr = 0;     //  60
   int16_t pairs[kUiWaveformMaxPairs * 2] = {};   // 64
 };
+
+// UiWaveformSlot.flags bit 0: the requested window ran past the end of the source.
+inline constexpr uint32_t kUiWaveformFlagPastEof = 1u << 0;
+// UiWaveformSlot.flags bit 1: this answer is for a SAMPLER source, so `sourceId` is a per-device
+// LOCAL id and `samplerAddr` names the track and device it belongs to. Clear on a store-id
+// answer, so a reader that does not know the bit sees exactly what it always saw.
+inline constexpr uint32_t kUiWaveformFlagSamplerSource = 1u << 1;
+inline constexpr uint32_t packSamplerAddr(uint32_t trackId, uint32_t deviceId) {
+  return (trackId << 16) | (deviceId & 0xffffu);
+}
 
 struct alignas(64) UiWaveformRegion {
   uint32_t slotCount = 0;

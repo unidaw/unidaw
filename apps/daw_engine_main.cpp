@@ -14185,6 +14185,19 @@ struct TrackRuntime {
       slot.firstFrame = firstFrame;
       slot.frameCount = frameCount;
       slot.status = status;
+      // THE ANSWER SAYS WHICH SAMPLER SOURCE IT IS, because sourceId alone does not: a local id
+      // is a per-device counter, so local id 1 of two different samplers is one cache key for a
+      // reader that files answers by what they describe. Same key, different audio, and the
+      // second pad draws the first one's waveform.
+      //
+      // Written even when the request FAILED, so a badrequest is attributable to the triple that
+      // caused it rather than arriving anonymous.
+      if ((req.flags & daw::kWaveformRequestSamplerSource) != 0) {
+        flags |= daw::kUiWaveformFlagSamplerSource;
+        slot.samplerAddr = daw::packSamplerAddr(req.reserved0, req.reserved1);
+      } else {
+        slot.samplerAddr = 0;
+      }
       slot.flags = flags;
       slot.formatVersion = daw::kWaveformFormatVersion;
       std::atomic_thread_fence(std::memory_order_release);

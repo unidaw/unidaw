@@ -189,6 +189,12 @@ pub struct WaveformSlotView {
     pub frame_count: u64,
     pub status: u32,
     pub flags: u32,
+    /// `(trackId << 16) | deviceId`, valid ONLY when `flags` has
+    /// `UI_WAVEFORM_FLAG_SAMPLER_SOURCE`. Needed because `source_id` on a sampler answer is a
+    /// PER-DEVICE local id, so it does not identify the source on its own — two samplers both
+    /// have a local id 1, and a reader keying on source_id alone draws one pad's audio on the
+    /// other's canvas.
+    pub sampler_addr: u32,
     pub pairs: Vec<i16>,
 }
 
@@ -926,6 +932,7 @@ impl EngineHandle {
                     frame_count: snap.frameCount,
                     status: snap.status,
                     flags: snap.flags,
+                    sampler_addr: snap.samplerAddr,
                     pairs: snap.pairs[..n].to_vec(),
                 });
             }
