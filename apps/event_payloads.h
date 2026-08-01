@@ -1273,6 +1273,32 @@ inline bool uiCommandUsesGenericPayload(UiCommandType t) {
     case UiCommandType::DeleteAutomationPoint:
     case UiCommandType::RequestAutomationLane:
     case UiCommandType::SetModLinkDepth:
+    // UiModLinkTargetPayload packs uid16[16]
+    case UiCommandType::SetModLinkUid16:
+    // THE SAMPLER FAMILY, plus the ops that arrived with it. Every one of these was missing —
+    // sixteen in all — while the comment above declared the list complete, so the journal has
+    // been recording a slot id and a source path as a pitch and a nanotick for as long as the
+    // sampler has existed. Found by deriving the list from the engine's own dispatch instead of
+    // trusting the claim; op_registry_check now does that on every run, so it cannot drift again.
+    case UiCommandType::SamplerLoad:
+    case UiCommandType::SamplerSetSlot:
+    case UiCommandType::RequestSamplerKit:
+    case UiCommandType::SamplerSlice:
+    case UiCommandType::SamplerMarker:
+    case UiCommandType::SamplerEmitRows:
+    case UiCommandType::SamplerSetEnvelope:
+    case UiCommandType::SamplerSetEnvelopePoints:
+    case UiCommandType::SamplerSetLfo:
+    case UiCommandType::SamplerSetFilter:
+    case UiCommandType::SamplerSetDevice:
+    case UiCommandType::SamplerSetSlotName:
+    case UiCommandType::SamplerSetVintage:
+    // UiSetRowOpsPayload / UiBulkChunkPayload (32 bytes of cargo) /
+    // UiSetClipGridPayload / UiAudioClipFieldPayload
+    case UiCommandType::SetRowOps:
+    case UiCommandType::BulkChunk:
+    case UiCommandType::SetClipGrid:
+    case UiCommandType::SetAudioClipField:
       return false;
     default:
       return true;

@@ -138,6 +138,68 @@ else:
     else:
         print("  every opcode has a name for the history journal")
 
+# EVERY OPCODE THE ENGINE DISPATCHES BY PAYLOAD SIZE IS DECLARED AS CARRYING ITS OWN PAYLOAD.
+#
+# `uiCommandUsesGenericPayload()` decides whether the history journal may read a command's forty
+# bytes as trackId / pitch / nanotick. For an opcode that packs a name, a paramId or a slot index
+# into those same bytes, reading them that way records numbers that look like data and are not —
+# which is precisely what that function's own comment warns about, immediately before claiming
+# "The list below is now the full set; keep it that way when adding one."
+#
+# It was not. SIXTEEN opcodes were missing, including every sampler opcode, BulkChunk, SetRowOps,
+# SetClipGrid and SetAudioClipField. The comment was true when written and false within a release,
+# and nothing could tell. That is the argument for deriving the list instead of asserting its
+# completeness in prose.
+#
+# DERIVED FROM THE ENGINE'S DISPATCH, which is what the comment says the list means: an opcode
+# tested as `entry.size == sizeof(daw::Ui*Payload) && ... commandType == X` has its own payload by
+# construction. Reading the header's struct defaults instead was tried first and is wrong — a
+# payload shared by four opcodes (the marker commands) has no default naming any of them.
+#
+# ONE DIRECTION ONLY, and this is deliberate rather than laziness. Some opcodes carry their own
+# payload and are dispatched on `payload.commandType` rather than on size — RequestWaveform,
+# RequestClipWindow and SetDeviceParam — so they belong in the list and this derivation cannot see
+# them. Failing on "listed but not derived" would demand their removal and make the journal worse.
+# So the check can only ever demand ADDITIONS: the debt can shrink and cannot silently grow, the
+# same rule as DECLARED_NO_CLI above.
+engine = (root / "apps/daw_engine_main.cpp").read_text()
+size_dispatched = set()
+for m in re.finditer(r"entry\.size == sizeof\(daw::(Ui\w+)\)", engine):
+    window = engine[m.end(): m.end() + 700]
+    stop = window.find("{")
+    size_dispatched.update(
+        re.findall(r"daw::UiCommandType::(\w+)", window[:stop] if stop > 0 else window))
+
+genericfn = re.search(
+    r"inline bool uiCommandUsesGenericPayload\(UiCommandType t\) \{(.*?)\n\}", payloads, re.S)
+if not genericfn:
+    print("  FAIL (setup): could not find uiCommandUsesGenericPayload")
+    ok = False
+elif not size_dispatched:
+    # A derivation that finds nothing would pass silently for ever, which is the failure this
+    # whole file exists to prevent.
+    print("  FAIL (setup): no size-dispatched opcodes found in the engine — the pattern this")
+    print("        derives from has changed, so this assertion is no longer measuring anything")
+    ok = False
+else:
+    gbody = genericfn.group(1)
+    gcut = gbody.find("return false;")
+    declared_own = set(re.findall(r"case UiCommandType::(\w+):", gbody[:gcut] if gcut >= 0 else gbody))
+    order = {name: int(value) for name, value in ops}
+    missing_own = sorted(size_dispatched - declared_own, key=lambda n: order.get(n, 0))
+    if missing_own:
+        print("  FAIL: %d opcode(s) are dispatched by their own payload struct and are NOT listed"
+              % len(missing_own))
+        print("        in uiCommandUsesGenericPayload, so the history journal reads their bytes")
+        print("        as trackId/pitch/nanotick — numbers that look like data and are not:")
+        for n in missing_own:
+            print("          %-4s %s" % (order.get(n, "?"), n))
+        print("        Add each to that switch.")
+        ok = False
+    else:
+        print("  every size-dispatched opcode is declared as carrying its own payload (%d)"
+              % len(size_dispatched))
+
 raise SystemExit(0 if ok else 1)
 PY
 rc=$?
