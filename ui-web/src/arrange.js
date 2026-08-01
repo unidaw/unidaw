@@ -6,6 +6,7 @@
 // A DAW's arrange page is where a user drags things around, so it is the one
 // surface where a dropped frame is felt directly.
 
+import { waveKey } from './wire.js';
 import { anchoredStart, clampZoom, ticksPerPixelAt, wheelPixels, dragPlacement,
          clipZoneAt, CLIP_HANDLE_PX,
          WHEEL_NOTCH_PX, WHEEL_PINCH_PX } from './arrangemodel.js';
@@ -1395,7 +1396,13 @@ export class Arrange {
         const tileFirst = t * tileFrames;
         if (tileFirst >= c.srcFrames) break;
         this.waveWanted++;
-        const key = c.srcId + ':' + dec + ':' + tileFirst;
+        /*
+         * THE SHARED BUILDER. This was `c.srcId + ':' + dec + ':' + tileFirst` and it was the
+         * FOURTH spelling of one key — and it is the one I missed when the sampler address
+         * joined the other three, which broke every waveform in the arrangement while the
+         * sampler's drew perfectly. A clip source has no sampler address, so 0.
+         */
+        const key = waveKey(c.srcId, 0, dec, tileFirst);
         const win = this.waveCache.get(key);
         if (!win || !win.pairs || win.columns === 0) {
           if (!win) {

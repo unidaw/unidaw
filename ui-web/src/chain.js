@@ -27,6 +27,9 @@
 
 import { createParamEdits, findParamEdit, setParamEdit, dropParamEdit,
          reapParamEdits, FILTER_TYPES } from './chainmodel.js';
+// One spelling of the waveform cache key, shared with index.html's requester and answer
+// handler. Three template strings is how the painter came to look up a window that had arrived.
+import { waveKey } from './wire.js';
 
 function div(cls, parent) {
   const el = document.createElement('div');
@@ -1055,7 +1058,10 @@ export class Chain {
     let drewAny = false;
     let missing = false;
     for (let tileFirst = 0; tileFirst < s.frames; tileFirst += tileFrames) {
-      const key = `${s.source}:${dec}:${tileFirst}`;
+      // THE SHARED BUILDER, not a fourth spelling. This was `${s.source}:${dec}:${tileFirst}`
+      // and stayed that way when the sampler address joined the key everywhere else, so the
+      // painter looked up a window that was sitting in the cache under a longer name.
+      const key = waveKey(s.source, ((s.track << 16) | (s.device & 0xffff)) >>> 0, dec, tileFirst);
       const win = this.waveCache.get(key);
       if (!win) {
         missing = true;

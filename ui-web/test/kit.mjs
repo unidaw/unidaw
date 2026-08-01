@@ -688,16 +688,33 @@ const ask = async (track, device) => {
      * happens to be first in DOM order — it measured 0x0 and read as a dead feature while the
      * real card had 7,524 lit pixels on it. The same trap the tracker's ruler set earlier.
      */
-    const drawn = await page.evaluate(() => {
-      const card = [...document.querySelectorAll('.dv-card')]
-        .find((e) => e.getBoundingClientRect().width > 4 && e.offsetParent !== null);
-      const c = card && card.querySelector('.dv-wave');
-      if (!c || !c.width) return { ink: -1 };
-      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-      let ink = 0;
-      for (let i = 3; i < d.length; i += 4) if (d[i] > 8) ink++;
-      return { ink, w: c.width, h: c.height };
-    });
+    /*
+     * WAIT FOR INK, do not sleep and hope. The window comes from the engine, so how long it
+     * takes is a fact about the machine — the same reason `playUntilAudible` waits on the meter
+     * rather than on a clock. The timeout still fails, and it fails having given the box a fair
+     * chance rather than a constant somebody guessed.
+     */
+    const drawn = await page.evaluate(() => new Promise((done) => {
+      const read = () => {
+        const card = [...document.querySelectorAll('.dv-card')]
+          .find((e) => e.getBoundingClientRect().width > 4 && e.offsetParent !== null);
+        const c = card && card.querySelector('.dv-wave');
+        if (!c || !c.width) return { ink: -1 };
+        const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        let ink = 0;
+        for (let i = 3; i < d.length; i += 4) if (d[i] > 8) ink++;
+        return { ink, w: c.width, h: c.height };
+      };
+      const t0 = Date.now();
+      const tick = setInterval(() => {
+        const r = read();
+        if (r.ink > 500 || Date.now() - t0 > 15000) {
+          clearInterval(tick);
+          r.cache = window.__uni.waveProbe().map((e) => e.key);
+          done(r);
+        }
+      }, 200);
+    }));
     check(drawn.ink > 500,
           'and DRAWS it — the sampler source resolves through the engine\'s path-keyed store '
           + 'now (kWaveformRequestSamplerSource), so the audio a pad plays is finally visible',

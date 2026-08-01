@@ -79,6 +79,9 @@
 
 <script type="module">
 import { Tracker } from './src/tracker.js';
+// One spelling of the waveform cache key, shared with chain.js. See wire.js for why it lives
+// there: three call sites had three template strings and only two were updated together.
+import { waveKey } from './src/wire.js';
 import { buildViewModel, ZOOM_LEVELS, createBuffer, velocityText } from './src/viewmodel.js';
 import { opsText, parseOps, OP_MASK, opMaskOf, oneOpEdit, opsPresent, opTokenAt,
          ROW_OPS, opsHint, opHelpFor } from './src/rowops.js';
@@ -2581,16 +2584,19 @@ const WAVE_MAX_INFLIGHT = 4;
  * two are different id spaces and a bare number does not say which. `at` is what says. Absent
  * means the clip space, which is every existing caller.
  *
- * THE KEY DOES NOT CARRY IT YET, and that is a known hole rather than an oversight. `onWaveform`
- * files an answer under what the ANSWER describes — source, decimation, first frame — because
- * the request id is the sidecar's and this side never learns it. So a key with the address in it
- * would never be matched by an answer that does not echo one, and local id 1 of one sampler
- * collides with local id 1 of another. Asked backend what the region echoes for a sampler
- * source; until that is answered the collision is real and bounded to two samplers holding
- * different files at the same local id, which no fixture here builds.
+ * THE KEY CARRIES IT, and must. `onWaveform` files an answer under what the ANSWER describes —
+ * the request id is the sidecar's and this side never learns it — so this only works because the
+ * answer echoes the address back (`kUiWaveformFlagSamplerSource` + `samplerAddr`). Backend
+ * shipped the version that did not, and then this one when I asked: without it two samplers
+ * holding different files at local id 1 are ONE cache entry and the second pad draws the first
+ * one's audio. A wrong picture, which is worse than a missing one.
+ *
+ * Neither side's fixture could have found it — both have one sampler — which is why it is
+ * asserted below with two.
  */
 function requestWaveform(sourceId, decimation, firstFrame, columns, mask, at) {
-  const key = sourceId + ':' + decimation + ':' + firstFrame;
+  const addr = at ? ((at.track << 16) | (at.device & 0xffff)) >>> 0 : 0;
+  const key = waveKey(sourceId, addr, decimation, firstFrame);
   if (waveCache.has(key) || waveAsked.has(key)) return false;
   // The fixture answers its own questions, in place, from the same key the real
   // path uses — see useWaveFixture. Below the dedupe on purpose: a fixture that
@@ -7452,7 +7458,9 @@ conn = WANTS_ENGINE ? connectEngine({
      * exactly the cache key. An answer that describes itself cannot be filed
      * under the wrong question, which a correlation id can.
      */
-    const key = w.sourceId + ':' + w.decimation + ':' + w.firstFrame;
+    // Through the SAME builder the request uses. Two spellings of one key is how an answer ends
+    // up filed under a question nobody asked.
+    const key = waveKey(w.sourceId, w.samplerAddr, w.decimation, w.firstFrame);
     waveAsked.delete(key);
     if (w.status === 3 || !w.pairs) { schedule(); return; }
     // Only a window that LANDED is news. A refusal deliberately does not bump it:
@@ -7461,7 +7469,11 @@ conn = WANTS_ENGINE ? connectEngine({
     // own retry clock asks again a few times a second, which is bounded.
     waveRevision++;
     waveCache.set(key, {
-      sourceId: w.sourceId, decimation: w.decimation, columns: w.columns,
+      // `samplerAddr` is stored as well as keyed on. The key proves the two entries are
+      // separate; a reader that wants to know WHICH sampler an entry is for — the probe, and
+      // anything that ever draws two at once — needs the number, not the string it is in.
+      sourceId: w.sourceId, samplerAddr: w.samplerAddr | 0,
+      decimation: w.decimation, columns: w.columns,
       channels: w.channels, firstFrame: w.firstFrame, status: w.status,
       keyLo: w.keyLo, keyHi: w.keyHi, pairs: Int16Array.from(w.pairs),
     });
@@ -8514,6 +8526,27 @@ window.__uni = {
   propose: (ops, label) => { propose(pendingState, { ops, label, version: engine ? engine.clipVersion : -1 });
                              draw(); return pendingCard.probe(); },
   scales: () => scales,
+  /**
+   * The waveform cache, as keys and a per-entry fingerprint.
+   *
+   * Exposed so a test can prove that two samplers holding DIFFERENT files at the same local id
+   * are two entries rather than one. That collision is invisible from every other surface — both
+   * pads draw a waveform, one of them just draws the wrong file's — and neither this repo's
+   * fixtures nor the engine's had two samplers, which is exactly why it survived a design
+   * review on both sides.
+   */
+  waveProbe: () => {
+    const out = [];
+    for (const [k, w] of waveCache) {
+      // A cheap fingerprint of the AUDIO, so two entries can be compared without shipping 98 KB
+      // of pairs through the bridge. Different files differ here; the same file does not.
+      let sum = 0;
+      for (let i = 0; i < w.pairs.length; i += 64) sum = (sum + Math.abs(w.pairs[i])) | 0;
+      out.push({ key: k, source: w.sourceId, addr: w.samplerAddr | 0,
+                 cols: w.columns, ink: sum });
+    }
+    return out;
+  },
   paletteProbe: () => palette.probe(),
   /**
    * TYPE INTO THE PALETTE, AND RUN WHAT IS HIGHLIGHTED.
@@ -8649,7 +8682,9 @@ window.__uni = {
     if (!requestWaveform(source, decim, frame, cols, mask)) {
       return resolve({ error: 'not sent' });
     }
-    const key = source + ':' + decim + ':' + frame;
+    // The shared builder — the FIFTH place this key was spelled by hand. A clip source has no
+    // sampler address, so 0.
+    const key = waveKey(source, 0, decim, frame);
     const t0 = Date.now();
     const poll = () => {
       const hit = waveCache.get(key);

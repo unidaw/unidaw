@@ -3446,3 +3446,42 @@ test("the sidecar's patcher node-type bound matches the engine's ceiling", async
     `node types with no entry in ports_for: ${JSON.stringify(missing)} — they can be created `
     + 'and never wired');
 });
+
+test('the waveform cache key is built in exactly one place', async () => {
+  /*
+   * FIVE SPELLINGS OF ONE KEY, and updating four of them broke two features in opposite
+   * directions within one edit.
+   *
+   * The key identifies a waveform window: source, sampler address, decimation, first frame. It
+   * was a hand-written template string in the requester, the answer handler, the arrangement's
+   * painter, the rack's painter and the `__uni.waveform` fixture. When the sampler address
+   * joined it, I updated three — the rack's painter then looked up a window that had ARRIVED and
+   * every instrument said "not arrived", and then fixing that broke every waveform in the
+   * ARRANGEMENT, which had the old spelling and was suddenly a stranger to the cache.
+   *
+   * Both failures are silent and neither points at the key: one is an empty view with a complete
+   * model, the other is a golden that moved by 67,898 pixels.
+   *
+   * So: one builder in wire.js, and this refuses a sixth. Source-read rather than exercised,
+   * because the point is that no OTHER site constructs one — which is a claim about the text.
+   */
+  const { readFileSync } = await import('node:fs');
+  const files = ['../index.html', '../src/arrange.js', '../src/chain.js', '../src/wire.js'];
+  const offenders = [];
+  for (const f of files) {
+    const src = readFileSync(new URL(f, import.meta.url), 'utf8');
+    for (const line of src.split('\n')) {
+      // A concatenation or template that joins something to `:<decimation>:` is this key being
+      // built by hand. The builder's own body is the one legal instance.
+      if (/return .*\+ ':' \+ decimation \+ ':' \+ firstFrame/.test(line)) continue;
+      if (/(\+ ':' \+ (dec|decim|decimation)\b)|(\$\{(dec|decim|decimation)\}:)/.test(line)
+          && !/^\s*[*/]/.test(line)) {
+        offenders.push(`${f.split('/').pop()}: ${line.trim().slice(0, 80)}`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, [],
+    'a waveform cache key built somewhere other than wire.js\'s `waveKey` — five spellings is '
+    + 'how a window that had arrived was reported missing, and how fixing that broke the '
+    + 'arrangement');
+});
