@@ -44,7 +44,28 @@ TMP="$(mktemp -d)"
 ENG=""
 cleanup() { [ -n "$ENG" ] && kill "$ENG" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
-fail() { echo "  FAIL: $*"; exit 1; }
+
+# THE CRASH DELETED ITS OWN EVIDENCE, which is why the one that happened on 2026-08-01 is
+# recorded and not explained.
+#
+# This check caught a real SIGSEGV in a full ctest run — round 1 of 2, the engine dead of signal
+# 11 — and then the EXIT trap removed the project, the render and every engine log on the way
+# out. It has not reproduced since: 36 rounds sequentially and 12 across three concurrent runs,
+# all clean. So the residual path is rarer than the one the original fix closed, and the next
+# occurrence is the only chance to see it.
+#
+# Copied, not moved, and only on a crash — a passing run leaves nothing behind. Two other checks
+# in this repo learned the same lesson the same way (#91's module_check and #102's renders): an
+# intermittent failure that erases its inputs stays unexplained for as long as it lives.
+KEEP="${TMPDIR:-/tmp}/sampler_edit_crash.$$"
+preserve() {
+  mkdir -p "$KEEP" 2>/dev/null || return 0
+  cp -R "$TMP"/. "$KEEP/" 2>/dev/null || true
+  echo "  evidence kept: $KEEP (the project, every engine log, and any render that got written)"
+  echo "  next step: rebuild with -fsanitize=address and re-run — the original defect here was"
+  echo "  a heap-use-after-free READ of size 8 on a render-pool worker, and ASan named it"
+}
+fail() { echo "  FAIL: $*"; preserve; exit 1; }
 
 python3 - "$TMP/s.wav" <<'PY'
 import sys, wave, struct
