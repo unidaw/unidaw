@@ -1339,7 +1339,8 @@ quantize. See §5.)
 `F8`. One strip per track, 76×340px, no virtualisation, up to 64 tracks.
 
 A strip has: the track name, a fader beside a level meter, the gain in dB, the pan as
-`L40`/`C`/`R60`, an output destination select, and `M` / `S`.
+`L40`/`C`/`R60`, an output destination select, and `M` / `S`. The **master strip** is at
+the far end and is described below.
 
 | Gesture | What |
 |---|---|
@@ -1362,9 +1363,29 @@ create. The list builds lazily when you open the select, because a full list on 
 is O(tracks²). The engine refuses a route that would make a cycle; the UI does not duplicate
 that rule.
 
-**There is no master strip, no sends, no returns and no pre/post switch.** Parent/child
-tracks exist in the engine (and `fold <track>` collapses a parent's children in the tracker),
-but the mixer draws every track flat, including a collapsed parent's children.
+**The master strip** sits at the far end, past a gap, labelled `MAIN` — which is what the
+routing select has always called it. Every track ends up there. It has a fader, a balance,
+a mute and a meter, and it deliberately has **no solo** (there is nothing to solo it against)
+and **no destination** (it *is* the destination); neither is drawn disabled, because a
+control that can never do anything is worse than no control. Its name is not a rename target.
+
+The master is a real track to the engine — its own device chain (`master [on|off]` shows that
+chain in the rack), its own mixer entry, its own published slot — but it is not a *lane*, so
+the tracker never draws a row for it and the mixer finds it by its published flag rather than
+by its position. Console: `main-gain <dB>` and `main-mute`.
+
+Two things about it are **read-back gaps in the engine**, both asserted by `master-strip.mjs`
+so they retire themselves the day they close:
+
+- A master-only edit does not move `uiMixerVersion`, so the strip never receives an
+  acknowledgement and keeps its pending tint until something else changes the mixer. The
+  edit itself lands — the engine applies it and the audio callback reads it every block.
+- The master's peak is published as a constant zero, so **its meter cannot move**. An empty
+  master meter is not a statement about the mix.
+
+**There are no sends, no returns and no pre/post switch.** Parent/child tracks exist in the
+engine (and `fold <track>` collapses a parent's children in the tracker), but the mixer draws
+every track flat, including a collapsed parent's children.
 
 Meters read the engine's per-track peak RMS at its publish rate (~86 Hz), mapped over 100 dB
 so everything below −20 is not invisible. **No ballistics, no peak hold, no clip indicator,
@@ -1375,7 +1396,7 @@ at the left, up to 16 lanes. It is built eagerly rather than on first look, so i
 showing a flat line for everything that happened before you glanced at it.
 
 Console: `gain <track> <dB>`, `mute <track>`, `solo <track>`, `rename <track> <name>`,
-`add-track`, `remove-track <track>`.
+`add-track`, `remove-track <track>`, `main-gain <dB>`, `main-mute`.
 
 Refusals: `64 tracks is the limit`, `the last track cannot be removed`,
 `that is an aux stem — remove its instrument instead`, `no engine`.
@@ -1747,7 +1768,12 @@ knowing before you trust anything below.
 
 - **Recording.** No engine command arms a take. The button is drawn disabled.
 - **Metronome.** Same. The `CLICK` chip is drawn unavailable.
-- **A master mixer strip, sends, returns, aux, pre/post.** Grouping is track-to-track routing.
+- **Sends, returns, aux, pre/post.** Grouping is track-to-track routing. The MASTER strip is
+  built — see the mixer section — but with two engine-side gaps that `master-strip.mjs`
+  asserts so they retire themselves: a master-only edit does not move `uiMixerVersion`, so
+  the strip never gets an acknowledgement and shows its pending styling until something else
+  changes; and the master's peak is published as a constant zero, so its meter cannot move.
+  Both are read-back gaps. The fader and mute themselves reach the engine and are applied.
 - **Selecting or editing a tuning.** The scale registry is a fixed built-in list. The harmony
   card's TET chip is a readout by construction.
 - **The scale roll's scale features** — degree gutter, in-key shading, cents column. The
@@ -1854,7 +1880,7 @@ must send an envelope first; that was fixed the same day and the default kit is 
 
 ## 18. Command reference
 
-97 commands. `help` prints this list live; the palette (`⌘K`) is the same list,
+99 commands. `help` prints this list live; the palette (`⌘K`) is the same list,
 searchable, with argument checking.
 
 **Transport and position** — `play`, `stop` (twice = panic), `seek <tick>`,

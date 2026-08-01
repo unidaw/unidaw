@@ -178,6 +178,53 @@ export class Mixer {
   }
 
   /**
+   * THE MASTER STRIP, built once and outside the pool.
+   *
+   * Outside because the pool is indexed by lane and re-bound as tracks come and go, and
+   * the master is neither — it would be strip 65 on a full project, or strip 3 on an
+   * empty one, and a pool slot that means something different from all its neighbours is
+   * how a rename or a fader lands on the wrong thing.
+   *
+   * `data-track="-1"` is the app's existing spelling for "the master" — it is what every
+   * routing dropdown already stores for Main — so the pointer handlers need no new case.
+   *
+   * NO SOLO and NO DESTINATION: there is nothing to solo the master against, and it is
+   * where everything already goes. A control that cannot do anything is worse than no
+   * control, so neither is drawn. The name is not clickable either; the master is not
+   * renameable.
+   */
+  _master() {
+    if (this._masterEl) return this._masterEl;
+    const el = div('mx-strip mx-master', this.stripsEl);
+    el.dataset.track = '-1';
+    el.dataset.master = '1';
+    el.title = 'the master bus — every track ends up here';
+    const name = textDiv('mx-name', el);
+    name.firstChild.nodeValue = 'MAIN';
+    const meterWrap = div('mx-meterwrap', el);
+    const fader = div('mx-fader', meterWrap);
+    const faderFill = div('mx-fader-fill', fader);
+    const meter = div('mx-meter', meterWrap);
+    const meterFill = div('mx-meter-fill', meter);
+    const gain = textDiv('mx-gain', el);
+    const pan = textDiv('mx-pan', el);
+    pan.title = 'master balance';
+    const btns = div('mx-btns', el);
+    const mute = textDiv('mx-btn mx-mute', btns);
+    mute.firstChild.nodeValue = 'M';
+    mute.dataset.act = 'mute';
+    fader.dataset.act = 'fader';
+    pan.dataset.act = 'pan';
+    el._gain = gain.firstChild; el._pan = pan.firstChild;
+    el._fader = fader; el._faderFill = faderFill; el._meterFill = meterFill;
+    el._mute = mute;
+    el._gainV = null; el._panV = null; el._faderV = -1; el._meterV = -1;
+    el._muteV = null; el._pendV = null; el._shownV = 1;
+    this._masterEl = el;
+    return el;
+  }
+
+  /**
    * Every destination this strip can route to. Built on demand.
    *
    * A track cannot feed itself, so it is not in its own list. Everything else the engine
@@ -356,6 +403,32 @@ export class Mixer {
       if (el._shownV !== 0) { el._shownV = 0; el.style.display = 'none'; }
     }
 
+    /*
+     * THE MASTER, after the hidden spares so it is last in the flow.
+     *
+     * Only when the engine actually published one — a fixture, or an engine from before the
+     * master track existed, has no master, and drawing a fader for it would be a control over
+     * nothing. `hasMaster` is the model's answer to that and not a guess from the track count.
+     */
+    if (vm.hasMaster) {
+      const el = this._master();
+      const m = vm.master;
+      if (el._shownV !== 1) { el._shownV = 1; el.style.display = ''; }
+      if (el._gainV !== m.gainDb) { el._gainV = m.gainDb; el._gain.nodeValue = m.gainDb; }
+      if (el._panV !== m.panLabel) { el._panV = m.panLabel; el._pan.nodeValue = m.panLabel; }
+      if (el._faderV !== m.faderPct) {
+        el._faderV = m.faderPct;
+        el._faderFill.style.height = (m.faderPct * 100).toFixed(1) + '%';
+      }
+      if (el._muteV !== m.mute) { el._muteV = m.mute; el._mute.classList.toggle('on', m.mute); }
+      if (el._pendV !== m.pending) { el._pendV = m.pending; el.classList.toggle('pending', m.pending); }
+      const pct = Math.round(m.peakPct * 100);
+      if (el._meterV !== pct) { el._meterV = pct; el._meterFill.style.height = PCT[pct]; }
+    } else if (this._masterEl && this._masterEl._shownV !== 0) {
+      this._masterEl._shownV = 0;
+      this._masterEl.style.display = 'none';
+    }
+
     // The one honest thing this surface can say about itself.
     const note = vm.authoritative
       ? ''
@@ -377,7 +450,18 @@ export class Mixer {
                mute: x.mute, solo: x.solo, dim: x.dimmed, pending: x.pending,
                fader: +x.faderPct.toFixed(3), meter: +x.peakPct.toFixed(3) });
     }
-    return { strips: vm.stripCount, authoritative: vm.authoritative,
+    /*
+     * The master, reported separately rather than appended to `detail`. It is not a lane,
+     * and a caller counting strips must not have to know that the last one is special —
+     * every existing assertion on `strips`/`detail` keeps meaning what it meant.
+     */
+    const m = vm.hasMaster ? {
+      slot: vm.master.slot, gain: vm.master.gain, db: vm.master.gainDb,
+      pan: vm.master.panLabel, mute: vm.master.mute, pending: vm.master.pending,
+      fader: +vm.master.faderPct.toFixed(3), meter: +vm.master.peakPct.toFixed(3),
+      onScreen: !!(this._masterEl && this._masterEl._shownV === 1),
+    } : null;
+    return { strips: vm.stripCount, authoritative: vm.authoritative, master: m,
              renaming: this.renaming, renameText: this.field.text,
              /*
               * COUNTED, NOT ESTIMATED.

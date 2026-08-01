@@ -19,6 +19,14 @@ export const GAIN_UNITY = 0;
 export const FLAG_MUTE = 1;
 export const FLAG_SOLO = 2;
 /**
+ * `uiTrackFlags` bit 3 — a DIFFERENT byte from the mixer flags above.
+ *
+ * This one says the published slot is the MASTER: a real device chain and mixer whose
+ * output is the master bus, with no arrangement rail, no clips and no tracker lane. The
+ * two flag bytes are easy to confuse and the mistake is quiet, so the name says which.
+ */
+export const FLAG_TRACK_MASTER = 8;
+/**
  * Bit 2: does this track quantize its notes to the harmony timeline?
  *
  * READ FROM HERE, WRITTEN BY ITS OWN OPCODE. It rides the mixer flags because that is the
@@ -51,7 +59,16 @@ export function createMixerState(trackCount = 16) {
   for (let i = 0; i < trackCount; i++) {
     strips[i] = { track: i, gain: GAIN_UNITY, pan: 0, flags: 0, pendingUntil: -1 };
   }
-  return { strips, authoritative: false };
+  /*
+   * THE MASTER GETS ITS OWN ENTRY RATHER THAN A SLOT IN `strips`.
+   *
+   * It occupies a published slot like any track, but that slot's INDEX is one past the
+   * last real track — so on a project at the track cap it would be `strips[64]` in a
+   * 64-long array, and the optimistic value for the one fader everything passes through
+   * would silently vanish. Keyed by what it is instead of by where it happens to sit.
+   */
+  return { strips, master: { gain: GAIN_UNITY, pan: 0, flags: 0, pendingUntil: -1 },
+           authoritative: false };
 }
 
 /** Drop local values the engine has now answered. */
@@ -62,6 +79,8 @@ export function reconcileMixer(mixer, engine) {
     const s = mixer.strips[i];
     if (s.pendingUntil >= 0 && engine.mixerVersion > s.pendingUntil) s.pendingUntil = -1;
   }
+  const m = mixer.master;
+  if (m && m.pendingUntil >= 0 && engine.mixerVersion > m.pendingUntil) m.pendingUntil = -1;
 }
 
 /** The value to draw: the local one while an edit is in flight, else the engine's. */
@@ -89,7 +108,22 @@ export function createMixerBuffer(trackCount = 16) {
       _nameSrc: -1,
     };
   }
-  return { strips, stripCount: 0, authoritative: false,
+  /*
+   * THE MASTER STRIP. Shaped like the others so the view can draw it with the same code,
+   * minus the two controls that mean nothing on it: solo (there is nothing to solo it
+   * against) and a routing destination (it IS the destination).
+   *
+   * `slot` is where the engine published it and `-1` means it has not. The engine has
+   * published the master as a real track with its own device chain, mixer and meters
+   * since the master-track work landed, and honours its gain and mute on the summed
+   * output — and the mixer drew nothing, because it iterates the LANE count, which stops
+   * before the master deliberately so the tracker never draws it as a row.
+   */
+  const master = {
+    track: -1, slot: -1, name: 'MAIN', gain: 0, gainDb: '0.0', pan: 0, panLabel: 'C',
+    mute: false, pending: false, peak: 0, peakPct: 0, faderPct: 0, _nameSrc: -1,
+  };
+  return { strips, master, hasMaster: false, stripCount: 0, authoritative: false,
            /* Changes when the DESTINATION LIST would — the strip count and the
               names. The view rebuilds its <option>s on this and not on the
               routing, which moves far more often and does not change the list. */
@@ -213,6 +247,45 @@ export function buildMixerModel(opts, buf) {
     s.peak = p;
     s.peakPct = p <= 0 ? 0 : Math.max(0, Math.min(1, 1 + Math.log10(Math.max(p, 1e-5)) / 5));
   }
+  /*
+   * THE MASTER, FOUND BY ITS FLAG AND NEVER BY ITS POSITION.
+   *
+   * The engine appends it today; `shared_memory.h` says in as many words that this is
+   * not a promise ("counts back from the end rather than assuming a position"), and a
+   * strip that assumed the last slot would one day attenuate a track instead of the mix.
+   * Scanned over the ENGINE's extent, not `n`, because `n` is the lane count and the
+   * whole point is that the master is not a lane.
+   */
+  buf.hasMaster = false;
+  if (engine && engine.trackFlags) {
+    const extent = Math.min(engine.trackCount | 0, engine.trackFlags.length);
+    for (let t = 0; t < extent; t++) {
+      if ((engine.trackFlags[t] & FLAG_TRACK_MASTER) === 0) continue;
+      const m = buf.master;
+      const local = mixer.master;
+      // Same optimistic rule as a track strip: the local value while an edit is in
+      // flight, the engine's once it has answered — whether it applied it or not, so a
+      // REFUSED master fader move cannot sit on screen looking like state.
+      const live = !engine || !mixer.authoritative || local.pendingUntil >= 0;
+      const gain = live ? local.gain : (t < engine.mixCount ? engine.mixGain[t] : local.gain);
+      const pan = live ? local.pan : (t < engine.mixCount ? engine.mixPan[t] : local.pan);
+      const flags = live ? local.flags : (t < engine.mixCount ? engine.mixFlags[t] : local.flags);
+      m.slot = t;
+      if (m._nameSrc !== gain) { m._nameSrc = gain; m.gainDb = gainLabel(gain); }
+      m.gain = gain;
+      m.pan = pan;
+      m.panLabel = panLabel(pan);
+      m.mute = (flags & FLAG_MUTE) !== 0;
+      m.pending = local.pendingUntil >= 0;
+      m.faderPct = faderPosition(gain);
+      const p = t < engine.peakCount ? engine.peaks[t] : 0;
+      m.peak = p;
+      m.peakPct = p <= 0 ? 0 : Math.max(0, Math.min(1, 1 + Math.log10(Math.max(p, 1e-5)) / 5));
+      buf.hasMaster = true;
+      break;
+    }
+  }
+
   buf.stripCount = n;
   // Built here, once, rather than compared field by field in the view: it is one
   // small string per frame against N option elements per strip per frame.

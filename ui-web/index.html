@@ -623,12 +623,28 @@ let mixerBuf = null;
 let mixRevision = 0;
 const mixerHost = document.getElementById('mixer');
 
+/**
+ * @param {number} track a lane index, or -1 for the MASTER.
+ *
+ * -1 is the app's existing spelling for the master — it is what every routing dropdown
+ * stores for "Main" — so the mixer's pointer handlers need no separate case. It becomes
+ * `MASTER_TRACK_ID` on the wire, which is 0xFFFF0000 and deliberately outside the track
+ * range so every per-track handler's `trackId >= kUiMaxTracks` guard rejects it; the
+ * engine's SetTrackMixer handler is one of the few that names the master explicitly and
+ * routes it to the master runtime, whose gain and mute the audio callback reads each
+ * block to attenuate the summed output.
+ */
+function mixerLocal(track) {
+  return track < 0 ? mixerState.master : mixerState.strips[track];
+}
+
 function sendMixer(track) {
-  const s = mixerState.strips[track];
+  const s = mixerLocal(track);
   // Composed against this mixer version; the engine's next one settles it.
   s.pendingUntil = engine ? engine.mixerVersion : -1;
   mixRevision++;
-  if (!conn || !conn.send({ type: 'mixer', track, gain: s.gain, pan: s.pan, flags: s.flags })) {
+  const id = track < 0 ? MASTER_TRACK_ID : track;
+  if (!conn || !conn.send({ type: 'mixer', track: id, gain: s.gain, pan: s.pan, flags: s.flags })) {
     state.reject = 'no engine';
   }
   schedule();
@@ -3585,13 +3601,28 @@ const dockApi = {
   },
   zoom: (z) => { state.zoom = Math.max(0, Math.min(ZOOM_LEVELS.length - 1, z)); schedule(); },
   octave: (o) => { state.octave = Math.max(0, Math.min(9, o)); schedule(); },
+  // `t` of -1 is the MASTER on both of these, the same spelling the mixer's own pointer
+  // handlers use — see `mixerLocal`. `main-gain` and `main-mute` are the console's way in.
   gain: (t, db) => {
-    mixerState.strips[t].gain = Math.round(Math.max(-96, Math.min(12, db)) * 100);
+    mixerLocal(t).gain = Math.round(Math.max(-96, Math.min(12, db)) * 100);
     sendMixer(t);
   },
   strip: (t, which) => {
-    mixerState.strips[t].flags ^= which === 'mute' ? FLAG_MUTE : FLAG_SOLO;
+    mixerLocal(t).flags ^= which === 'mute' ? FLAG_MUTE : FLAG_SOLO;
     sendMixer(t);
+  },
+  /**
+   * IS THERE A MASTER TO ADDRESS? Answered from the published flag, never assumed.
+   *
+   * An engine from before the master track existed publishes none, and a command that
+   * addressed one anyway would be sent, rejected in a log the browser cannot read, and
+   * reported as success.
+   */
+  hasMaster: () => {
+    if (!engine || !engine.trackFlags) return false;
+    const extent = Math.min(engine.trackCount | 0, engine.trackFlags.length);
+    for (let t = 0; t < extent; t++) if ((engine.trackFlags[t] & TRACK_FLAG_MASTER) !== 0) return true;
+    return false;
   },
   /**
    * WRITE A LINE INTO THE CONSOLE'S TRANSCRIPT.
@@ -3876,11 +3907,11 @@ function pianoEdit(kind, semitones) {
 
 const mixer = new Mixer(mixerHost, {
   onGain: (track, pos) => {
-    mixerState.strips[track].gain = gainAtPosition(pos);
+    mixerLocal(track).gain = gainAtPosition(pos);
     sendMixer(track);
   },
   onPan: (track, dir) => {
-    const s = mixerState.strips[track];
+    const s = mixerLocal(track);
     s.pan = Math.max(-1000, Math.min(1000, s.pan + dir * 100));
     sendMixer(track);
   },
@@ -3919,7 +3950,10 @@ const mixer = new Mixer(mixerHost, {
     schedule();
   },
   onToggle: (track, which) => {
-    const s = mixerState.strips[track];
+    const s = mixerLocal(track);
+    // The master draws no solo button — there is nothing to solo it against — so a solo
+    // reaching here for it would be a control the view never offered.
+    if (track < 0 && which !== 'mute') return;
     s.flags ^= which === 'mute' ? FLAG_MUTE : FLAG_SOLO;
     sendMixer(track);
   },
@@ -8023,6 +8057,7 @@ window.__uni = {
   listProjects: () => dockApi.listProjects(),
   load: (n) => dockApi.load(n),
   master: (on) => dockApi.master(on),
+  hasMaster: () => dockApi.hasMaster(),
   moveDevice: () => dockApi.moveDevice(),
   nodes: () => dockApi.nodes(),
   note: (pitch, dur, vel) => dockApi.note(pitch, dur, vel),
