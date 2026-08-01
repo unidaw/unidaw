@@ -539,6 +539,14 @@ add_test(NAME configure
 )
 set_tests_properties(configure PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 1800)
 
+# AND DOES EVERY CHECK IN tools/ ACTUALLY RUN. The configure check above proves cmake can read
+# this file; it says nothing about what this file forgot to mention. 43 of 101 check scripts were
+# never registered — 37 of them passing, so they were working checks nobody was running.
+add_test(NAME check_registry
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_registry_check.sh
+)
+set_tests_properties(check_registry PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME lint
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/lint_check.sh
 )
@@ -759,6 +767,174 @@ add_test(NAME sampler_envelope_readback
 )
 set_tests_properties(sampler_envelope_readback PROPERTIES
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+# ---------------------------------------------------------------------------------------------
+# THIRTY-SEVEN CHECKS THAT EXISTED AND NEVER RAN.
+#
+# `tools/` held 101 *_check.sh and CMakeLists registered 58. The other 43 ran only when somebody
+# remembered them by name — which is how the web-UI agent found 27 of their own suites unrun on
+# the same day, and it is the same defect: a check nobody runs is a check that rots, and it rots
+# silently because nothing reports the absence of a result.
+#
+# All 37 below were run and PASS. They were not excluded for a reason; they were never wired up.
+# The remaining 6 need a live audio capture and are DECLARED in tools/check_registry_check.sh
+# with that reason, so the exclusion list can shrink and cannot silently grow.
+#
+# Registered with a generous timeout: several launch an engine with its own --run-seconds
+# lifetime, and a timeout tighter than that lifetime turns a slow machine into a red suite.
+add_test(NAME add_remove_track
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/add_remove_track_check.sh
+)
+set_tests_properties(add_remove_track PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME arrangement
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/arrangement_check.sh
+)
+set_tests_properties(arrangement PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME audio_clip_playback
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/audio_clip_playback_check.sh
+)
+set_tests_properties(audio_clip_playback PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME audio_loop
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/audio_loop_check.sh
+)
+set_tests_properties(audio_loop PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME audio_stability
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/audio_stability_check.sh
+)
+set_tests_properties(audio_stability PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME automation
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/automation_check.sh
+)
+set_tests_properties(automation PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME automation_readback
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/automation_readback_check.sh
+)
+set_tests_properties(automation_readback PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME child_track
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/child_track_check.sh
+)
+set_tests_properties(child_track PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME cross_track_move
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/cross_track_move_check.sh
+)
+set_tests_properties(cross_track_move PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME edited_roundtrip
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/edited_roundtrip_check.sh
+)
+set_tests_properties(edited_roundtrip PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME extent_truncation
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/extent_truncation_check.sh
+)
+set_tests_properties(extent_truncation PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME instrument_meter
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/instrument_meter_check.sh
+)
+set_tests_properties(instrument_meter PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+# NAMED FOR THE SCRIPT: `lane_quantize` is already the unit binary's test name, and CMake refuses
+# a duplicate at CONFIGURE time — the same collision `clip_grid` had, caught here by
+# configure_check on the first try rather than by a colleague on a cold clone.
+add_test(NAME lane_quantize_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/lane_quantize_check.sh
+)
+set_tests_properties(lane_quantize_check PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME lock_order
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/lock_order_check.sh
+)
+set_tests_properties(lock_order PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME master_track
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/master_track_check.sh
+)
+set_tests_properties(master_track PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME modlink
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/modlink_check.sh
+)
+set_tests_properties(modlink PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME multi_producer_ring
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/multi_producer_ring_check.sh
+)
+set_tests_properties(multi_producer_ring PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME multiout
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/multiout_check.sh
+)
+set_tests_properties(multiout PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME multiout_persist
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/multiout_persist_check.sh
+)
+set_tests_properties(multiout_persist PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME offline_render
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/offline_render_check.sh
+)
+set_tests_properties(offline_render PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME override
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/override_check.sh
+)
+set_tests_properties(override PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME param_metadata
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/param_metadata_check.sh
+)
+set_tests_properties(param_metadata PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME patcher_device_edit
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/patcher_device_edit_check.sh
+)
+set_tests_properties(patcher_device_edit PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME patcher_device_migration
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/patcher_device_migration_check.sh
+)
+set_tests_properties(patcher_device_migration PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME patcher_pool_scoping
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/patcher_pool_scoping_check.sh
+)
+set_tests_properties(patcher_pool_scoping PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME patcher_save_guard
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/patcher_save_guard_check.sh
+)
+set_tests_properties(patcher_save_guard PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME pdc_alignment
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/pdc_alignment_check.sh
+)
+set_tests_properties(pdc_alignment PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME per_track_version
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/per_track_version_check.sh
+)
+set_tests_properties(per_track_version PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME placement_ops
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/placement_ops_check.sh
+)
+set_tests_properties(placement_ops PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME ripple_undo
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/ripple_undo_check.sh
+)
+set_tests_properties(ripple_undo PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME save_roundtrip
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/save_roundtrip_check.sh
+)
+set_tests_properties(save_roundtrip PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME scratch_clip
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/scratch_clip_check.sh
+)
+set_tests_properties(scratch_clip PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME song_end_loop
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/song_end_loop_check.sh
+)
+set_tests_properties(song_end_loop PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME stereo_audio
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/stereo_audio_check.sh
+)
+set_tests_properties(stereo_audio PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME surround
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/surround_check.sh
+)
+set_tests_properties(surround PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME tempo_map_audio
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/tempo_map_audio_check.sh
+)
+set_tests_properties(tempo_map_audio PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+add_test(NAME track_edit
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/track_edit_check.sh
+)
+set_tests_properties(track_edit PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+
 
 # The kit read-back covers the slot the engine publishes. A NAMES-only ratchet, deliberately —
 # the behaviour is driven by sampler_kit, sampler_vintage, slice_extent and slot_rename, and this
