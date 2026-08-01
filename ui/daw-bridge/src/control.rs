@@ -1494,6 +1494,17 @@ impl EngineHandle {
         )
     }
 
+    /// Set a CLIP's own subdivision and meter (SetClipGrid, 94).
+    pub fn send_clip_grid(
+        &self,
+        payload: crate::layout::UiSetClipGridPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSetClipGridPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSetClipGridPayload>(),
+        )
+    }
+
     /// Set a sampler modulator's ADSR (SamplerSetEnvelope).
     pub fn send_sampler_envelope(
         &self,

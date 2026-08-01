@@ -432,8 +432,51 @@ enum class UiCommandType : uint16_t {
   /// Rides UiCommandPayload: `value0` 0 = truncate (today's behaviour and the default),
   /// 1 = leave the sounding note alone. Nothing in playback changes — the scheduler already
   /// honours overlapping durations.
-  SetTrackAllowNoteOverlap = 93,  // next free 94
+  SetTrackAllowNoteOverlap = 93,
+
+  /// A CLIP'S OWN MUSICAL GRID — subdivision and meter (task #43 phase 2).
+  ///
+  /// `ProjectClip` carries linesPerBeat, timeSigNumerator and timeSigDenominator; all three are
+  /// persisted, all three are published packed into `UiClipExtent`'s flag bits, and the tracker
+  /// draws from the CLIP's grid before the track's. So the authority in that chain was the one
+  /// thing no command could write: a project can hold a verse in 4 and a bridge in 3, and could
+  /// only get there by hand-editing JSON.
+  ///
+  /// This is not a second answer to the per-track `SetTrackLinesPerBeat` (92) — it is the half
+  /// that was missing. Whichever way the per-track field is eventually ruled on, a clip's own
+  /// grid needs a writer.
+  SetClipGrid = 94,  // next free 95
 };
+
+// SET CLIP GRID (opcode 94). 40 bytes.
+//
+// FLAGS PER FIELD, the same rule vintage (91) needed: setting the meter must not silently reset
+// the subdivision, and there is no value that can mean "leave this alone" — 0 is not spare, it is
+// the packer's "no grid on this extent" sentinel.
+inline constexpr uint16_t kClipGridSetLines = 1u << 0;
+inline constexpr uint16_t kClipGridSetNumerator = 1u << 1;
+inline constexpr uint16_t kClipGridSetDenominator = 1u << 2;
+
+// RANGES ARE REFUSED, NOT CLAMPED, and they mirror `packClipGrid`'s own three rules rather than
+// inventing policy: linesPerBeat and numerator get five bits each (1..31), and the denominator is
+// stored as a 3-bit EXPONENT so it must be a power of two in 1..128.
+//
+// Clamping is the PACKER's defence against a bad value reaching the wire — see its rule (b),
+// which clamps and emits project.meter_clamped. It is not this layer's policy: at the command a
+// value out of range is a caller with the wrong idea of the unit, and rounding a non-power-of-two
+// denominator would hand back a meter nobody asked for.
+struct UiSetClipGridPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SetClipGrid);
+  uint16_t flags = 0;   // kClipGridSet*
+  uint32_t trackId = 0;
+  uint32_t clipId = 0;
+  uint32_t linesPerBeat = 0;
+  uint32_t timeSigNumerator = 0;
+  uint32_t timeSigDenominator = 0;
+  uint32_t reserved[4]{};
+};
+static_assert(sizeof(UiSetClipGridPayload) == 40,
+              "UiSetClipGridPayload must be 40 bytes");
 
 // SET TRACK LINES PER BEAT (opcode 92) RIDES UiCommandPayload — `trackId`, and the subdivision in
 // `value0`. No bespoke struct, because SetTrackCollapsed (89), SetLaneQuantize and
@@ -1037,6 +1080,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::SamplerSetVintage: return "sampler_set_vintage";
     case UiCommandType::SetTrackLinesPerBeat: return "set_track_lines_per_beat";
     case UiCommandType::SetTrackAllowNoteOverlap: return "set_track_allow_note_overlap";
+    case UiCommandType::SetClipGrid: return "set_clip_grid";
     // NAMED HERE ONLY, deliberately: these two have no daw-cli verb and that is a separate
     // question, but an opcode with no NAME is recorded by the history journal as "op:unknown"
     // whatever else is true of it — so a session that used one is unreadable afterwards. The

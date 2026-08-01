@@ -12109,6 +12109,115 @@ struct TrackRuntime {
       return;
     }
 
+    // ---- SET CLIP GRID (94): a clip's OWN subdivision and meter. Task #43 phase 2.
+    //
+    // ProjectClip has carried linesPerBeat + a time signature since the grid moved off the track;
+    // all three persist, all three publish packed into UiClipExtent's flag bits, and the tracker
+    // draws from the CLIP's grid before the track's. So the authority in that chain was the one
+    // thing no command could write — a verse in 4 against a bridge in 3 was reachable only by
+    // hand-editing the project file.
+    if (entry.size == sizeof(daw::UiSetClipGridPayload) &&
+        commandType == daw::UiCommandType::SetClipGrid) {
+      daw::UiSetClipGridPayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      if (p.flags == 0) {
+        DAW_EVENT("clip.grid_rejected")
+            .field("track", p.trackId)
+            .field("clip", p.clipId)
+            .field("reason", "no_field_named");
+        return;
+      }
+      // REFUSED, NOT CLAMPED, and each bound is the packer's rather than an opinion: five bits
+      // for the subdivision and the numerator, and a 3-bit EXPONENT for the denominator, so it
+      // must be a power of two. Clamping is packClipGrid's defence against a bad value reaching
+      // the wire; at this layer an out-of-range value is a caller with the wrong idea of the
+      // unit, and rounding a non-power-of-two denominator hands back a meter nobody asked for.
+      const char* bad = nullptr;
+      if ((p.flags & daw::kClipGridSetLines) != 0 &&
+          (p.linesPerBeat == 0 || p.linesPerBeat > 31)) {
+        bad = "lines_out_of_range";
+      } else if ((p.flags & daw::kClipGridSetNumerator) != 0 &&
+                 (p.timeSigNumerator == 0 || p.timeSigNumerator > 31)) {
+        bad = "numerator_out_of_range";
+      } else if ((p.flags & daw::kClipGridSetDenominator) != 0 &&
+                 (p.timeSigDenominator == 0 || p.timeSigDenominator > 128 ||
+                  (p.timeSigDenominator & (p.timeSigDenominator - 1)) != 0)) {
+        bad = "denominator_not_power_of_two";
+      }
+      if (bad != nullptr) {
+        DAW_EVENT("clip.grid_rejected")
+            .field("track", p.trackId)
+            .field("clip", p.clipId)
+            .field("lines", p.linesPerBeat)
+            .field("num", p.timeSigNumerator)
+            .field("den", p.timeSigDenominator)
+            .field("reason", bad);
+        return;
+      }
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (p.trackId < tracks.size()) {
+          runtime = tracks[p.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("clip.grid_rejected")
+            .field("track", p.trackId)
+            .field("clip", p.clipId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      bool applied = false;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& oc : runtime->ownedClips) {
+          if (oc.id != p.clipId) {
+            continue;
+          }
+          // The flags are what makes "change the meter, keep the subdivision" expressible. There
+          // is no value that could mean "leave this alone": 0 is the packer's sentinel for no
+          // grid, not a spare.
+          if ((p.flags & daw::kClipGridSetLines) != 0) {
+            oc.linesPerBeat = p.linesPerBeat;
+          }
+          if ((p.flags & daw::kClipGridSetNumerator) != 0) {
+            oc.timeSigNumerator = p.timeSigNumerator;
+          }
+          if ((p.flags & daw::kClipGridSetDenominator) != 0) {
+            oc.timeSigDenominator = p.timeSigDenominator;
+          }
+          applied = true;
+          break;
+        }
+      }
+      if (!applied) {
+        DAW_EVENT("clip.grid_rejected")
+            .field("track", p.trackId)
+            .field("clip", p.clipId)
+            .field("reason", "no_such_clip");
+        return;
+      }
+      // BUMP THE CLIP VERSION, or the edit saves and is never SEEN. The extent publisher does
+      // read each clip's grid live out of ownedClips — but the whole publish is gated on
+      // `clipVersion` moving (writeUiClipExtents returns early when it has not), so a change that
+      // touches no note republishes nothing. Measured before this line existed: the command
+      // applied, the save carried 3 and 7/8, and `get extents` still said 4 and 4/4 — the exact
+      // "written and not drawn" half of the defect this command exists to fix.
+      //
+      // Through the helper rather than by hand: it advances the per-track counter and the global
+      // gate in that order, and the comment on it explains why the reverse deadlocks a track's
+      // published base one version behind forever.
+      bumpClipVersionFor(runtime);
+      DAW_EVENT("clip.grid_set")
+          .field("track", p.trackId)
+          .field("clip", p.clipId)
+          .field("lines", p.linesPerBeat)
+          .field("num", p.timeSigNumerator)
+          .field("den", p.timeSigDenominator);
+      return;
+    }
+
     // ---- SAMPLER SET VINTAGE (91): bit depth and rate reduction, the SP-1200 character. A mod
     // set property for the same reason the filter is one — a chop's twenty slices are one
     // instrument.

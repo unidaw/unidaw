@@ -94,6 +94,8 @@ daw-cli — control surface for a running engine
   daw-cli do note-overlap --track N [--on 0|1]
                                    cut-on-next OFF: a note entered over a sounding one no longer
                                    TRUNCATES it in the document. Off by default
+  daw-cli do clip-grid --track N --clip ID [--lines M] [--num N] [--den D]
+                                   a CLIP's own subdivision and meter — drawn BEFORE the track's
   daw-cli do lines-per-beat --track N --lines M
                                    a lane's SUBDIVISION: tracker rows per beat, 1..31. Out of
                                    range is refused — the clip grid packs it in five bits
@@ -3888,6 +3890,75 @@ removed is the whole command");
                     payload.value0 = if on != 0 { 1 } else { 0 };
                     match handle.send_command(payload) {
                         Ok(()) => { println!("{{ \"sent\": \"collapse\", \"track\": {track}, \"on\": {on} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"clip-grid") => {
+                    // A CLIP's own grid — task #43 phase 2. The clip's subdivision and meter are
+                    // persisted, published packed into the extent's flags, and drawn BEFORE the
+                    // track's, so this is the authoritative one and it had no writer at all.
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let clip = match flag_u64(&args, "--clip", None) {
+                        Ok(v) => v as u32,
+                        Err(_) => {
+                            eprintln!("daw-cli: clip-grid needs --clip <id>");
+                            std::process::exit(2);
+                        }
+                    };
+                    // ABSENT IS NOT ZERO, the same rule vintage follows: 0 is the packer's "no
+                    // grid on this extent" sentinel, so it cannot double as "leave this alone".
+                    let mut flags = 0u16;
+                    let mut lines = 0u32;
+                    let mut num = 0u32;
+                    let mut den = 0u32;
+                    if let Ok(v) = flag_u64(&args, "--lines", None) {
+                        if v == 0 || v > 31 {
+                            eprintln!("daw-cli: --lines is 1..31 (five bits in the clip grid, and \
+                                       0 is its 'no grid' sentinel), got {v}");
+                            std::process::exit(2);
+                        }
+                        flags |= daw_bridge::layout::CLIP_GRID_SET_LINES;
+                        lines = v as u32;
+                    }
+                    if let Ok(v) = flag_u64(&args, "--num", None) {
+                        if v == 0 || v > 31 {
+                            eprintln!("daw-cli: --num is 1..31 (five bits), got {v}");
+                            std::process::exit(2);
+                        }
+                        flags |= daw_bridge::layout::CLIP_GRID_SET_NUMERATOR;
+                        num = v as u32;
+                    }
+                    if let Ok(v) = flag_u64(&args, "--den", None) {
+                        // A POWER OF TWO, because it is stored as a 3-bit exponent. Refused
+                        // rather than rounded — 6/8 is not a typo for 6/8, it is a caller with
+                        // the wrong idea, and rounding hands back a meter nobody asked for.
+                        if v == 0 || v > 128 || (v & (v - 1)) != 0 {
+                            eprintln!("daw-cli: --den must be a power of two in 1..128 (it is \
+                                       stored as an exponent), got {v}");
+                            std::process::exit(2);
+                        }
+                        flags |= daw_bridge::layout::CLIP_GRID_SET_DENOMINATOR;
+                        den = v as u32;
+                    }
+                    if flags == 0 {
+                        eprintln!("daw-cli: clip-grid needs at least one of --lines --num --den");
+                        std::process::exit(2);
+                    }
+                    let payload = daw_bridge::layout::UiSetClipGridPayload {
+                        command_type: UiCommandType::SetClipGrid as u16,
+                        flags,
+                        track_id: track,
+                        clip_id: clip,
+                        lines_per_beat: lines,
+                        time_sig_numerator: num,
+                        time_sig_denominator: den,
+                        reserved: [0; 4],
+                    };
+                    match handle.send_clip_grid(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"clip-grid\", \"track\": {track}, \"clip\": {clip}, \"lines\": {lines}, \"num\": {num}, \"den\": {den} }}");
+                            0
+                        }
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }

@@ -348,6 +348,27 @@ pub struct UiSamplerEnvPointsHeader {
     pub release_fade: u32,
 }
 
+/// SetClipGrid (94). Flags per field, because 0 is not spare — it is the packer's "no grid on
+/// this extent" sentinel, so there is no value that can mean "leave this one alone".
+pub const CLIP_GRID_SET_LINES: u16 = 1 << 0;
+pub const CLIP_GRID_SET_NUMERATOR: u16 = 1 << 1;
+pub const CLIP_GRID_SET_DENOMINATOR: u16 = 1 << 2;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+/// SetClipGrid (94). Ranges are REFUSED, not clamped: lines and numerator get five bits each
+/// (1..=31) and the denominator is stored as a 3-bit exponent, so it must be a power of two.
+pub struct UiSetClipGridPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub clip_id: u32,
+    pub lines_per_beat: u32,
+    pub time_sig_numerator: u32,
+    pub time_sig_denominator: u32,
+    pub reserved: [u32; 4],
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 /// SamplerSetVintage (91). The flags say WHICH of the two this call is about, so setting the bit
@@ -1237,6 +1258,11 @@ pub enum UiCommandType {
     /// duration the player typed is destroyed at entry. value0 1 skips that truncate. Nothing
     /// in playback changes — the scheduler already honours overlapping durations.
     SetTrackAllowNoteOverlap = 93,
+    /// A CLIP's own subdivision and meter (task #43 phase 2). ProjectClip carries linesPerBeat
+    /// and a time signature; all three persist, all three publish packed into UiClipExtent's flag
+    /// bits, and the tracker draws the CLIP's grid before the track's — so the authority in that
+    /// chain was the one thing no command could write. Not a second answer to 92; the other half.
+    SetClipGrid = 94,
 }
 
 /// Where a route points. Mirrors daw::TrackRouteKind.
@@ -2242,6 +2268,7 @@ mod tests {
         same!(UiSamplerSlicePayload, sys::daw_UiSamplerSlicePayload);
         same!(UiSamplerSlotNameHeader, sys::daw_UiSamplerSlotNameHeader);
         same!(UiSamplerVintagePayload, sys::daw_UiSamplerVintagePayload);
+        same!(UiSetClipGridPayload, sys::daw_UiSetClipGridPayload);
         same!(UiSamplerFilterPayload, sys::daw_UiSamplerFilterPayload);
         same!(UiSamplerRejectPayload, sys::daw_UiSamplerRejectPayload);
         same!(UiSetParamPayload, sys::daw_UiSetParamPayload);
@@ -2533,6 +2560,7 @@ mod wire_layout {
         assert_eq!(std::mem::size_of::<UiSamplerEnvPointsHeader>(), 32);
         assert_eq!(std::mem::size_of::<UiSamplerSlotNameHeader>(), 12);
         assert_eq!(std::mem::size_of::<UiSamplerVintagePayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSetClipGridPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiEnvPointWire>(), 8);
         // v35: + sliceBeginFrame / sliceEndFrame. Only three bytes were spare and two frame
         // counts need eight, so the entry's STRIDE changed — which is why this needed a version
