@@ -16,7 +16,7 @@
  * with their reason on every run, so the exclusions are read as often as the results.
  *
  *   node test/all.mjs                  the deterministic set
- *   node test/all.mjs --with-audio     also the three that need a working output device
+ *   node test/all.mjs --with-audio     also the five that measure sound through a capture
  *   node test/all.mjs --only kit,ops   just these
  */
 
@@ -45,26 +45,31 @@ const EXCLUDED = {
 /*
  * THE CAPTURE PROBLEM — why five suites are held out, stated once rather than five times.
  *
- * On this machine the engine opens the audio device, reports it by name, prints "Audio output
- * started" and "Audio output stopped", and CoreAudio never calls the callback even once:
+ * This machine produces no audio at all, and as of 2026-08-01 the root cause is OPEN. The engine
+ * opens the default output, the device reports its name, rate and block size, JUCE's isPlaying()
+ * answers TRUE — and CoreAudio never invokes the IO proc. Not device-specific: the built-in
+ * speakers behave identically on a quiet machine with no other engine running.
  *
- *   Audio device: MacBook Pro Speakers
- *   Audio underrun summary: 0 of 0 playback callbacks dropped a track
- *   {"event":"audio.capture_written","frames":0,"ok":false}
+ * Every suite that measures SOUND does it through DAW_CAPTURE_WAV, which records what the device
+ * is handed — so with no callbacks there is nothing to record, and the checks fail for a reason
+ * that has nothing to do with the code they test.
  *
- * Reproducible with a stock project, no browser and no load, in and out of the sandbox. Every
- * suite that measures SOUND does it through DAW_CAPTURE_WAV, which records what the device is
- * handed — so with no callbacks there is no capture, and the checks fail for a reason that is
- * not about the code they test. Reported to backend with the repro; it is engine-side.
+ * THE SIGNAL TO READ IS THE ONE AT THE DEVICE BOUNDARY:
  *
- * "0 of 0 CALLBACKS" IS THE SIGNAL THAT MAKES THIS SAFE TO EXCLUDE, and it is worth saying why:
- * that counter increments per callback no matter what the capture path does. A broken capture
- * with a working device reads as N callbacks and an empty file; this reads as zero callbacks.
- * The two causes are distinguishable, which is the only thing that separates a legitimate
- * exclusion from an excuse — an excuse is safe only when the second signal is INDEPENDENT of the
- * failure mode, and "the producer reported no underruns" is NOT independent here, because zero
- * callbacks produce zero underruns too. That is precisely how note-off-cuts came to report a
- * dead device as a hard failure of the sampler.
+ *   Audio device callbacks: N from the DEVICE, M reaching the engine
+ *
+ * N of zero means the device never asked for audio, so nothing under test can cause it or fix
+ * it. That line exists because the OLD one did not mean what both of us read it as: "Audio
+ * underrun summary: 0 of 0 playback callbacks" counts callbacks THAT HAD A TRACK TO PLAY, so a
+ * healthy device with the transport stopped prints 0 of 0 as well. I cited it here as the
+ * independent second signal that made these exclusions safe, and it was not one — the exclusions
+ * are right, and the reason I gave for them was wrong. Backend's counter at the boundary is the
+ * measurement that actually distinguishes the two.
+ *
+ * The rule stands even though I misapplied it: an excuse is safe only when the second signal is
+ * INDEPENDENT of the failure mode. "The producer reported no underruns" is not independent, which
+ * is how note-off-cuts came to report a dead device as a hard failure of the sampler. Neither was
+ * the counter I reached for instead. Check what a number counts before leaning on it.
  *
  * `--with-audio` runs all five, which is what to do on a machine whose device works.
  */
