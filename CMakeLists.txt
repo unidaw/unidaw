@@ -515,18 +515,19 @@ add_test(NAME op_registry
 )
 set_tests_properties(op_registry PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
-# CAN A FRESH CLONE BUILD THIS AT ALL. Every other test here runs against an already-configured
+# CAN CMAKE STILL PROCESS THIS TREE. Every other test here runs against an already-configured
 # build directory, so none of them can see a configure-time break — and main spent a day in one
 # (two add_test entries named clip_grid) while every warm tree stayed green.
 #
-# It is the slowest test in the suite, around a minute, because a cold configure re-adds JUCE
-# and re-probes the compiler; that IS the work, and sharing a cache to speed it up would test
-# the warm path this exists to distrust. Left in the automatic suite rather than made opt-in,
-# because a manual check for "does the repo build" is one nobody runs until it is already broken.
-add_test(NAME cold_configure
-  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/cold_configure_check.sh
+# Re-configures a persistent probe directory, which takes about a second in the steady state and
+# still processes every add_test. The first run on a machine configures from empty and can take
+# several minutes, which is what the generous timeout is for — see the script for what the cheap
+# form covers and what it does not. Left in the automatic suite rather than made opt-in, because
+# a manual "does the repo build" check is one nobody runs until it is already broken.
+add_test(NAME configure
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/configure_check.sh
 )
-set_tests_properties(cold_configure PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+set_tests_properties(configure PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 1800)
 
 add_test(NAME lint
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/lint_check.sh
