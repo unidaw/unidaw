@@ -417,6 +417,29 @@ Rejected as "just a feature list": velocity layers, round-robin, filter types, r
 
 ## 6. BUILD ORDER
 
+> ### ✅ ALL SEVEN STAGES ARE BUILT (status re-verified 2026-08-01)
+>
+> S6 and S7 said so in place; S1–S5 never did, and their prose still reads as a plan. That is not
+> a cosmetic gap — anything summarising this section (a handover note, a watchdog prompt, the next
+> agent) reads "S4 in progress, S5–S7 remaining" and goes looking for work that was finished days
+> ago. Each row below names the check that proves it, and all ten passed on the run that produced
+> this table.
+>
+> | stage | what it is | proved by |
+> |---|---|---|
+> | **S1** ✅ | the sampler exists and plays | `sampler_check`, `sampler_determinism` (bit-identical at 64/256/1024) |
+> | **S2** ✅ | the kit | `sampler_kit` |
+> | **S3** ✅ | loops, mip-map, quality, filter, all modulator targets | `sampler_loop`, `sampler_filter`, `sampler_dsp` |
+> | **S4** ✅ | the sound address | `sampler_sound_address`, `sound_addressed`. The bump it describes as 31 → 32 landed long ago; `kShmVersion` is **36**. |
+> | **S5** ✅ | slicing | `sampler_chop`, `slice_extent`, `slice_select` |
+> | **S6** ✅ | stems | `sampler_stem` — see the correction in place below |
+> | **S7** ✅ | the `.uni` module | `module`, and `module_state` for the plugin state it silently dropped |
+>
+> **The optional list at the end of this section is where the remaining work is**, and what is
+> left there is a decision rather than an implementation. The stage prose below is kept as
+> written, because the reasoning is worth more than a tidy status line — read it as history.
+
+
 **S1 — the sampler exists and plays. No contract bump.** `DeviceKind::Sampler`, `SamplerState` with one slot, `project.json` round-trip (`save_roundtrip_check.sh` + an *edited* fixture per `edited_roundtrip_check.sh`), channel-preserving decode, one voice class with Hermite, note-on/off through the existing dispatch, `add-device --kind sampler` and `sampler-load`. **This is the useful line**: load a sample, play it from the tracker. Verified with `DAW_CAPTURE_WAV` + `tools/perceptual.py`, not by ear — plus `tools/sampler_determinism_check.sh` (§3.5): one project rendered at 64, 256 and 1024 frames must come out **bit-identical**. That check belongs in S1 and not later, because it is the one that fails loudly the moment a voice starts on a block boundary instead of its own sample, and retrofitting sample-accurate starts after the rest is built is exactly the kind of rework this ordering exists to avoid.
 
 **Where it renders, decided by looking rather than assuming (2026-07-30).** The sampler generates into the **host input plane's main channels**, the way `runtime->patcherAudioChannels` already does (`apps/daw_engine_main.cpp:2172`, written at `:14280`) — *not* straight into the master sum the way placed audio clips do (`:868`). The difference is whether a VST effect can follow the sampler on the same track: audio mixed into master has already passed every plugin, so the easy path would have made "sampler → reverb" structurally impossible and would not have shown up until S3.
