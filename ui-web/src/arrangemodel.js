@@ -333,6 +333,17 @@ export function createArrangeBuffer(laneCount, clipCapacity = 128) {
                  srcId: 0, srcStatus: 0, srcFrames: 0,
                  /** The in-point, in SOURCE frames. */
                  startFrame: 0,
+                 /*
+                  * THE CLIP'S OWN FADES AND GAIN (opcode 95).
+                  *
+                  * Published per audio clip since audio clips existed, honoured by the
+                  * renderer, and drawn by nothing — so a clip with a two-second fade looked
+                  * exactly like one that started at full level, and the only way to know was
+                  * to listen. Integers on purpose: `gainMb` is MILLIBELS rather than dB for
+                  * the reason `ticksPerFrame` is guarded above — a fractional field is a heap
+                  * number on every store, and this one is written per clip per frame.
+                  */
+                 fadeInTicks: 0, fadeOutTicks: 0, gainMb: 0,
                  /** Nanoticks per source frame; 0 when unknown. */
                  ticksPerFrame: 0 };
   }
@@ -761,6 +772,7 @@ export function buildArrangeModel(opts, buf) {
       // frame or two after a load there are audio extents with no audio clip
       // record and that is not a fault.
       cl.srcId = 0; cl.srcStatus = 0; cl.srcFrames = 0; cl.startFrame = 0;
+      cl.fadeInTicks = 0; cl.fadeOutTicks = 0; cl.gainMb = 0;
       // Guarded for the same reason the write below is: once this field has held
       // a fraction it is a double field, and storing 0 into one is still a heap
       // number.
@@ -773,6 +785,12 @@ export function buildArrangeModel(opts, buf) {
           cl.srcStatus = src.status;
           cl.srcFrames = src.frames;
           cl.startFrame = ac.startFrame;
+          // Read from the CLIP record, not the source: two clips of one file carry their
+          // own fades and their own gain, which is the whole point of them being per clip.
+          // Rounded to an integer here so the store never boxes a double.
+          cl.fadeInTicks = ac.fadeInTicks | 0;
+          cl.fadeOutTicks = ac.fadeOutTicks | 0;
+          cl.gainMb = Math.round((ac.gainDb || 0) * 100);
           // Memoised on its two inputs, and guarded on the way out. This is the
           // one field here that is not an integer, and V8 has not had unboxed
           // double fields since 7.6: both the CALL, which returns a fraction, and
