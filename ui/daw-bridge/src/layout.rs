@@ -1291,6 +1291,11 @@ pub enum UiCommandType {
     /// bakes all four into the region it schedules — and until this, nothing wrote any of them, so
     /// an audio region was read-only from every surface.
     SetAudioClipField = 95,
+    /// Remove an automation point, addressed exactly as WriteAutomationPoint (60) addresses one.
+    /// Its own opcode rather than a flag on 60, following DeleteNote beside the note write: a
+    /// destructive operation reached by setting a bit on a constructive one is one typo away from
+    /// deleting what the caller meant to write.
+    DeleteAutomationPoint = 96,
 }
 
 /// Where a route points. Mirrors daw::TrackRouteKind.

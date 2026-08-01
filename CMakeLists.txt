@@ -732,6 +732,15 @@ add_test(NAME master_mixer
 )
 set_tests_properties(master_mixer PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# An automation point can be DELETED (opcode 96). Opcode 60 creates one and re-values one, and
+# nothing removed one, so a lane was draw-only and a UI drawing it had no eraser. Addressing is
+# asserted from both ends because the handler walks lanes and points, and an emptied lane is
+# removed rather than left as an empty clip that reappears on reload.
+add_test(NAME automation_delete
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/automation_delete_check.sh
+)
+set_tests_properties(automation_delete PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 # The kit read-back covers the slot the engine publishes. A NAMES-only ratchet, deliberately —
 # the behaviour is driven by sampler_kit, sampler_vintage, slice_extent and slot_rename, and this
 # is the guard those do not provide. Costs no engine, so it is nearly free.

@@ -9999,6 +9999,107 @@ struct TrackRuntime {
       return;
     }
 
+    // ---- DELETE AN AUTOMATION POINT (96). The other direction of the same edit.
+    //
+    // Opcode 60 creates a point and changes the value of one, and nothing removed one — so an
+    // automation lane was draw-only: a point written at the wrong tick could be neutralised by
+    // writing another beside it, and the mistake stayed in the curve. Reported by the web-UI
+    // agent as the reason their automation lane has no eraser.
+    //
+    // Addressed exactly as the write is, and sharing its payload: same trackId, same
+    // targetPluginIndex, same paramId, same tick. `value` is ignored.
+    if (entry.size == sizeof(daw::UiAutomationPointPayload) &&
+        commandType == daw::UiCommandType::DeleteAutomationPoint) {
+      daw::UiAutomationPointPayload ap{};
+      std::memcpy(&ap, entry.payload, sizeof(ap));
+      if (static_cast<daw::UiCommandType>(ap.commandType) != commandType) {
+        return;
+      }
+      const std::string paramId(ap.paramId, strnlen(ap.paramId, sizeof(ap.paramId)));
+      if (paramId.empty()) {
+        DAW_EVENT("automation.delete_rejected")
+            .field("track", ap.trackId)
+            .field("reason", "empty_param_id");
+        return;
+      }
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (ap.trackId < tracks.size() && tracks[ap.trackId]) {
+          runtime = tracks[ap.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("automation.delete_rejected")
+            .field("track", ap.trackId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      const uint64_t tick =
+          (static_cast<uint64_t>(ap.nanotickHi) << 32) | ap.nanotickLo;
+      bool sawLane = false;
+      bool removed = false;
+      uint32_t pointCount = 0;
+      bool laneEmptied = false;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto it = runtime->track.automationClips.begin();
+             it != runtime->track.automationClips.end(); ++it) {
+          if (it->paramId() != paramId) {
+            continue;
+          }
+          sawLane = true;
+          removed = it->removePoint(tick);
+          pointCount = static_cast<uint32_t>(it->points().size());
+          // AN EMPTIED LANE IS REMOVED, not left behind as an empty clip. An automation clip
+          // with no points still exists in the save and still declares its discreteOnly flag,
+          // so leaving it turns "I deleted my automation" into a lane that reappears on reload
+          // — visible, empty, and impossible to get rid of.
+          if (removed && it->points().empty()) {
+            runtime->track.automationClips.erase(it);
+            laneEmptied = true;
+          }
+          break;
+        }
+      }
+      if (!sawLane) {
+        DAW_EVENT("automation.delete_rejected")
+            .field("track", ap.trackId)
+            .field("param", paramId)
+            .field("reason", "no_such_lane");
+        return;
+      }
+      if (!removed) {
+        // NAMED, NOT SWALLOWED. Deleting a point that is not there is a caller working from a
+        // stale view of the curve; treating it as a successful no-op makes "the UI and the model
+        // disagree about what exists" unreportable.
+        DAW_EVENT("automation.delete_rejected")
+            .field("track", ap.trackId)
+            .field("param", paramId)
+            .field("nanotick", tick)
+            .field("reason", "no_point_at_tick");
+        return;
+      }
+      // Republish the snapshot, for the reason the write does: the RT scheduler reads automation
+      // from the track SNAPSHOT, so a point that is not republished is a point that still PLAYS
+      // after it has been deleted.
+      std::shared_ptr<const TrackStateSnapshot> snapshot;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        snapshot = buildTrackSnapshot(runtime->track);
+      }
+      std::atomic_store_explicit(&runtime->trackSnapshot, snapshot,
+                                 std::memory_order_release);
+      automationVersion.fetch_add(1, std::memory_order_acq_rel);
+      DAW_EVENT("automation.point_deleted")
+          .field("track", ap.trackId)
+          .field("param", paramId)
+          .field("nanotick", tick)
+          .field("points", pointCount)
+          .field("lane_removed", laneEmptied);
+      historyAppend("delete_automation_point", "received", ap.trackId, 0, "");
+      return;
+    }
     // M3.23 SECTION ops. All five are SONG-scoped: the spine belongs to no track, and
     // SetSectionLength moves placements on every track at once.
     // v29 MARKER ops — naming a position. TOTAL: they move no material, so there is nothing to

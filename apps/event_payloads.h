@@ -453,7 +453,22 @@ enum class UiCommandType : uint16_t {
   /// honours all four when it renders — and until this, no command wrote any of them. The audio
   /// clip was read-only from every surface: you could see its gain and only a text editor could
   /// change it. Found by giving persisted_field_reach a CLIP scope, which it had never had.
-  SetAudioClipField = 95,  // next free 96
+  SetAudioClipField = 95,
+
+  /// REMOVE an automation point, addressed exactly as WriteAutomationPoint (60) addresses one:
+  /// trackId + targetPluginIndex + paramId + nanotick. `value` is ignored.
+  ///
+  /// Its own opcode rather than a flag on 60, following DeleteNote (4) beside the note write and
+  /// the four marker opcodes that share one payload. A destructive operation reached by setting a
+  /// bit on a constructive one is one typo away from deleting what the caller meant to write, and
+  /// it is invisible to op_registry, which requires an opcode to have a CLI path and a name.
+  ///
+  /// A MOVE IS DELETE + WRITE, deliberately, and the arithmetic is why: commandType 2 + flags 2 +
+  /// trackId 4 + targetPluginIndex 4 + paramId 16 leaves twelve bytes for two eight-byte ticks.
+  /// Dropping the device index would fit and would silently break automation of a specific
+  /// plugin's parameter — the quiet cap this file argues against on SetAudioClipField. The ring
+  /// is ordered and single-consumer, so from one producer the pair arrives in order.
+  DeleteAutomationPoint = 96,  // next free 97
 };
 
 /// WHICH PROPERTY OF AN AUDIO CLIP. Field-addressed rather than four opcodes, so a fifth property
@@ -1196,6 +1211,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::SamplerSetFilter: return "sampler_set_filter";
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
+    case UiCommandType::DeleteAutomationPoint: return "delete_automation_point";
     case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";
     case UiCommandType::RequestAutomationLane: return "request_automation_lane";
     case UiCommandType::SetModLinkDepth: return "set_mod_link_depth";
@@ -1254,6 +1270,7 @@ inline bool uiCommandUsesGenericPayload(UiCommandType t) {
     // paramId[16]
     case UiCommandType::SetAutomationTarget:
     case UiCommandType::WriteAutomationPoint:
+    case UiCommandType::DeleteAutomationPoint:
     case UiCommandType::RequestAutomationLane:
     case UiCommandType::SetModLinkDepth:
       return false;

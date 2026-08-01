@@ -117,6 +117,11 @@ daw-cli — control surface for a running engine
                                    a global mode because forgetting the toggle fails loudly
                                    (the note appears everywhere) while the wrong mode fails
                                    quietly (a fix that does not propagate).
+  daw-cli do delete-automation --track N --param ID --nanotick T [--device D]
+  daw-cli do move-automation --track N --param ID --from T --to T2 --value V [--device D]
+                                   the other direction of `automation`: a lane was draw-only,
+                                   so a point at the wrong tick could only be neutralised by
+                                   writing another beside it. A move is delete + write.
   daw-cli do revert-overrides --track N --placement P
                                    clears every add and mute on one appearance, in one
                                    step — possible only because overrides are
@@ -3640,6 +3645,74 @@ fn main() {
                     match handle.send_automation_point(payload) {
                         Ok(()) => { println!("{{ \"sent\": \"automation\", \"param\": {param:?}, \"nanotick\": {tick}, \"value\": {value} }}"); 0 }
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                // THE OTHER DIRECTION OF THE SAME EDIT (opcode 96). Until this, an automation
+                // lane was draw-only: 60 creates a point and re-values one, and nothing removed
+                // one, so a point written at the wrong tick could only be neutralised by writing
+                // another beside it and leaving the mistake in the curve.
+                Some(&"delete-automation") | Some(&"move-automation") => {
+                    use daw_bridge::layout as L;
+                    let moving = rest.first().copied() == Some("move-automation");
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let param = match flag(&args, "--param") {
+                        Some(p) if !p.is_empty() => p,
+                        _ => { eprintln!("daw-cli: --param is required (the automation clip's id, e.g. index:0)"); std::process::exit(2) }
+                    };
+                    let param_id = match param_id_bytes(&param) {
+                        Ok(v) => v,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
+                    let device = flag_u64(&args, "--device", Some(0xFFFF_FFFF))
+                        .unwrap_or(0xFFFF_FFFF) as u32;
+                    // `--nanotick` for a delete, `--from` for a move; the move also needs where
+                    // it is going and what value to carry there.
+                    let from = match flag_u64(&args, if moving { "--from" } else { "--nanotick" }, None) {
+                        Ok(v) => v,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
+                    let mut payload = L::UiAutomationPointPayload {
+                        command_type: UiCommandType::DeleteAutomationPoint as u16,
+                        flags: 0,
+                        track_id: track,
+                        target_plugin_index: device,
+                        nanotick_lo: (from & 0xffff_ffff) as u32,
+                        nanotick_hi: (from >> 32) as u32,
+                        value: 0.0,
+                        param_id,
+                    };
+                    if let Err(err) = handle.send_automation_point(payload) {
+                        eprintln!("daw-cli: {err}");
+                        std::process::exit(1);
+                    }
+                    if !moving {
+                        println!("{{ \"sent\": \"delete-automation\", \"param\": {param:?}, \"nanotick\": {from} }}");
+                        0
+                    } else {
+                        // A MOVE IS DELETE THEN WRITE, in that order, and it is two ring entries
+                        // rather than one command because the pair does not fit: commandType,
+                        // flags, trackId, targetPluginIndex and a 16-byte paramId leave twelve
+                        // bytes for two eight-byte ticks. Dropping the device index would fit and
+                        // would silently break automation of a specific plugin's parameter.
+                        //
+                        // The ring is ordered and single-consumer, so from one producer these
+                        // arrive in order; the intermediate state is one command wide.
+                        let to = match flag_u64(&args, "--to", None) {
+                            Ok(v) => v,
+                            Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                        };
+                        let value = match flag_f64(&args, "--value", f64::NAN) {
+                            Ok(v) if !v.is_nan() => v as f32,
+                            _ => { eprintln!("daw-cli: move-automation needs --value: the point is re-written at its new tick, and the engine has no way to carry the old value across a delete"); std::process::exit(2) }
+                        };
+                        payload.command_type = UiCommandType::WriteAutomationPoint as u16;
+                        payload.nanotick_lo = (to & 0xffff_ffff) as u32;
+                        payload.nanotick_hi = (to >> 32) as u32;
+                        payload.value = value;
+                        match handle.send_automation_point(payload) {
+                            Ok(()) => { println!("{{ \"sent\": \"move-automation\", \"param\": {param:?}, \"from\": {from}, \"to\": {to}, \"value\": {value} }}"); 0 }
+                            Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                        }
                     }
                 }
                 Some(&"revert-overrides") => {

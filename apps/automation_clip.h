@@ -46,6 +46,30 @@ class AutomationClip {
     points_.insert(it, point);
   }
 
+  // REMOVE THE POINT AT EXACTLY THIS TICK, reporting whether there was one. Automation could be
+  // drawn and never undrawn: opcode 60 creates a point and changes the value of one, and until
+  // DeleteAutomationPoint (96) nothing removed one — a point written at the wrong tick could only
+  // be neutralised by writing another beside it and leaving the mistake in the curve.
+  //
+  // RETURNS false RATHER THAN SWALLOWING A MISS. Deleting a point that is not there is a caller
+  // working from a stale view of the curve, and the engine can say so; treating it as a no-op
+  // would make "the UI and the model disagree about what exists" unreportable.
+  //
+  // Exact tick, not nearest: the write is addressed by exact tick too, so the two halves of the
+  // same edit address the same way. A UI that has the point has its tick.
+  bool removePoint(uint64_t tick) {
+    const auto it = std::lower_bound(
+        points_.begin(), points_.end(), tick,
+        [](const AutomationPoint& lhs, uint64_t value) {
+          return lhs.nanotick < value;
+        });
+    if (it == points_.end() || it->nanotick != tick) {
+      return false;
+    }
+    points_.erase(it);
+    return true;
+  }
+
   float valueAt(uint64_t tick) const {
     if (points_.empty()) {
       return 0.0f;
