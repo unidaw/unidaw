@@ -65,11 +65,25 @@ why `run()` is the entry point to prefer.
 
 ## Tests
 
-    npm test        units + goldens + alloc   (fixtures; no engine needed)
-    npm run unit    pure functions only       (fast, DOM-free)
-    npm run perf    frame work per surface    (opens a real window)
-    npm run e2e     against a live engine     (needs tools/webstack.sh)
-    npm run soak    heap leak check           (fixtures; takes minutes)
+    npm test         units + goldens + alloc   (fixtures; no engine needed)
+    npm run unit     pure functions only       (fast, DOM-free)
+    npm run perf     frame work per surface    (opens a real window)
+    npm run e2e      one suite against a live engine
+    npm run e2e:all  EVERY engine-backed suite, one at a time
+    npm run soak     heap leak check           (fixtures; takes minutes)
+
+`npm run e2e` is one file. There are two dozen more suites that stand up a real
+engine, and until `e2e:all` existed they ran only when someone remembered them by
+name — which is how several went weeks without running, and how a suite can rot
+into permanent red with nobody noticing it went red. The runner goes one at a
+time on purpose: each suite starts an engine, a plugin host and a browser, and
+running several at once starves the audio producer and turns real checks into
+load-average failures that say nothing about the code.
+
+It prints what it did NOT run, and why, on every run. That is the point of it —
+"all suites passed" has to mean the set it listed, not the set that happened to
+be cheap that day. `--with-audio` adds the three needing a working output device;
+`--only kit,ops` runs just those.
 
 Or all of the engine-free ones at once, including the Rust side that `npm test`
 does not reach:

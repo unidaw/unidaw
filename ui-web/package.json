@@ -13,7 +13,8 @@
     "journey": "node test/journey.mjs",
     "audible": "node test/audible.mjs",
     "soak": "node test/soak.mjs",
-    "unit": "node --test test/unit.mjs"
+    "unit": "node --test test/unit.mjs",
+    "e2e:all": "node test/all.mjs"
   },
   "devDependencies": {
     "playwright": "^1.61.1"
