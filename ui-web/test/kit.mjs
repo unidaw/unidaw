@@ -678,12 +678,30 @@ const ask = async (track, device) => {
           // the reason the chop count above is — `>= 8` would pass on the wrong picture.
           'the sample view knows what to draw — the source, its length and every slice boundary',
           JSON.stringify(model && model.samples));
-    check(model && model.painted[0] === false,
-          'KNOWN: and cannot draw it. The engine\'s waveform store is keyed by PATH and '
-          + 'interned for audio-clip sources only, so a sampler source id addresses nothing in '
-          + 'it and no window ever arrives. The pad list stays up rather than swapping to an '
-          + 'empty canvas. Asked backend for a waveform id for sampler sources; this check '
-          + 'moves the day it lands.', JSON.stringify(model && model.painted));
+
+    /*
+     * ...AND IT DRAWS IT. Counting non-transparent pixels on the VISIBLE card's canvas, which is
+     * the only honest test of a painter: a box has a size whether or not anything ran, and this
+     * whole feature spent three attempts looking broken while the model was perfect.
+     *
+     * THE VISIBLE ONE. The rack pools its cards and hides the spares, so `.dv-card` is whichever
+     * happens to be first in DOM order — it measured 0x0 and read as a dead feature while the
+     * real card had 7,524 lit pixels on it. The same trap the tracker's ruler set earlier.
+     */
+    const drawn = await page.evaluate(() => {
+      const card = [...document.querySelectorAll('.dv-card')]
+        .find((e) => e.getBoundingClientRect().width > 4 && e.offsetParent !== null);
+      const c = card && card.querySelector('.dv-wave');
+      if (!c || !c.width) return { ink: -1 };
+      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      let ink = 0;
+      for (let i = 3; i < d.length; i += 4) if (d[i] > 8) ink++;
+      return { ink, w: c.width, h: c.height };
+    });
+    check(drawn.ink > 500,
+          'and DRAWS it — the sampler source resolves through the engine\'s path-keyed store '
+          + 'now (kWaveformRequestSamplerSource), so the audio a pad plays is finally visible',
+          JSON.stringify(drawn));
 
     // Back to the kit, because the rest of this file reads slot rows.
     await page.evaluate((t) => window.__uni.run(`bank ${t} 0 default-view 0`), ct);
