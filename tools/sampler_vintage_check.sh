@@ -171,11 +171,23 @@ grep -q '"rate_hz": *3000' "$SAVED" 2>/dev/null || \
   fail "rate_hz 3000 is not in the saved project"
 echo "  both fields persist into the saved project"
 
-# ---- REFUSED. The field means 2^n levels, so 17 is a caller with the wrong idea of the unit,
-# not a value a hair past 16. Clamping would hand back a sound nobody asked for.
-"$CLI" do sampler-vintage --track 0 --bits 17 >/dev/null 2>&1 && \
-  fail "a --bits above 16 was accepted"
-echo "  a bit depth outside 0..16 is refused"
+# ---- REFUSED BY THE ENGINE. The field means 2^n levels, so 17 is a caller with the wrong idea of
+# the unit, not a value a hair past 16. Clamping would hand back a sound nobody asked for.
+#
+# ASSERTED ON THE ENGINE'S REJECTION, not on daw-cli's exit code. This line used to read
+# `"$CLI" do ... && fail`, which asserted that the CLI refused — and the CLI had its own copy of
+# 0..16, so with the ENGINE's guard deleted this check still passed. The engine's copy is the one
+# every producer meets, including the web UI's sidecar writing to the ring directly, so daw-cli
+# now checks only that the number fits the payload's byte and the engine judges the range.
+"$CLI" do sampler-vintage --track 0 --bits 17 >/dev/null 2>&1 || true
+for _ in $(seq 1 60); do
+  grep -q '"event":"sampler.vintage_rejected".*"reason":"bit_depth_out_of_range"' "$TMP/projects/eng.log" && break
+  sleep 0.25
+done
+grep -q '"event":"sampler.vintage_rejected".*"reason":"bit_depth_out_of_range"' "$TMP/projects/eng.log" || \
+  fail "a --bits above 16 was not refused by the ENGINE — no sampler.vintage_rejected with
+        reason bit_depth_out_of_range in the log"
+echo "  a bit depth outside 0..16 is refused by the engine, with a reason"
 
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 

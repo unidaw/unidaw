@@ -110,25 +110,28 @@ echo "  track 1 is untouched: still 4"
 
 # ---- REFUSED, at both ends of the range and on a track that is not there.
 #
-# THESE TWO ASSERT THE CLI'S GUARD, and that is a real limitation worth stating rather than
-# implying. daw-cli refuses 0 and 32 before anything is sent, so the ENGINE's identical guard
-# cannot be reached from here and is not covered by these two lines. It was verified separately,
-# by removing the CLI's bounds check and sending a 32: the engine answered
-# track.lines_per_beat_rejected reason=out_of_range and the published value stayed at its old
-# one. The nonexistent-track case below is the engine guard this check CAN reach, which is why
-# it is here — without it nothing in ctest would exercise the engine's side at all.
-cli do lines-per-beat --track 0 --lines 0 >/dev/null 2>&1 && \
-  fail "--lines 0 was accepted. Zero is the clip-grid packer's sentinel for 'no grid on this
-        extent', so accepting it as a subdivision makes one value mean two things"
-cli do lines-per-beat --track 0 --lines 32 >/dev/null 2>&1 && \
-  fail "--lines 32 was accepted. The packer gives linesPerBeat five bits, so 32 packs as 0 and
-        the lane comes back with NO grid — clamping to 31 would be worse than refusing, because
-        it hands back a subdivision nobody asked for"
+# THESE TWO NOW ASSERT THE ENGINE'S GUARD, which is the change this block records. They used to
+# assert daw-cli's: the CLI carried its own copy of the range and refused 0 and 32 before anything
+# was sent, so the engine's identical guard could not be reached from here at all. This file said
+# so honestly and pointed at a manual verification, which is better than pretending — but a guard
+# nothing in ctest exercises is a guard that rots, and it is the copy every producer meets, since
+# the web UI's sidecar writes to the ring directly and never passes through daw-cli. So the CLI
+# validates shape, the engine validates domain, and this asserts the engine.
+lpbreason() { grep -q '"event":"track.lines_per_beat_rejected".*"reason":"out_of_range"' "$TMP/eng.log"; }
+cli do lines-per-beat --track 0 --lines 0 >/dev/null 2>&1 || true
+cli do lines-per-beat --track 0 --lines 32 >/dev/null 2>&1 || true
+for _ in $(seq 1 60); do lpbreason && break; sleep 0.25; done
+lpbreason || \
+  fail "neither 0 nor 32 was refused by the ENGINE — no track.lines_per_beat_rejected with
+        reason out_of_range in the log. Zero is the clip-grid packer's sentinel for 'no grid on
+        this extent', and 32 packs as 0 in five bits, so the lane would come back with NO grid;
+        clamping to 31 would be worse than refusing, because it hands back a subdivision nobody
+        asked for"
 STILL="$(lpb 0)"
 [ "$STILL" = "3" ] || \
   fail "a refused command still changed the value: track 0 reads '$STILL', was 3. A refusal that
         edits is not a refusal"
-echo "  0 and 32 are refused, and the refusal left the value alone"
+echo "  refused by the engine: 0 and 32, and the refusal left the value alone"
 
 # The ENGINE's own guard, not the CLI's: a track that does not exist is reachable through the
 # CLI's validation and must be refused on the other side, into the log.

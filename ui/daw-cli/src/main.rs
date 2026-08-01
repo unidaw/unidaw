@@ -96,11 +96,11 @@ daw-cli — control surface for a running engine
                                    TRUNCATES it in the document. Off by default
   daw-cli do clip-grid --track N --clip ID [--lines M] [--num N] [--den D]
                                    a CLIP's own subdivision and meter — drawn BEFORE the track's
-  daw-cli do lines-per-beat --track N --lines M
   daw-cli do audio-clip --track N --clip ID --field <start|gain|fade-in|fade-out> --value V
                                    an audio region's in-point (frames), gain (dB*100, signed,
                                    clamped -9600..2400) or either fade (nanoticks). One field
                                    per call; --value is required because 0 is legal for all four
+  daw-cli do lines-per-beat --track N --lines M
                                    a lane's SUBDIVISION: tracker rows per beat, 1..31. Out of
                                    range is refused — the clip grid packs it in five bits
   daw-cli do sound-addressed --track N [--on 0|1]
@@ -2781,10 +2781,24 @@ fn main() {
                     // being inferred from the value. Otherwise setting the rate would silently
                     // restore full bit depth.
                     let mut flags = 0u16;
+                    // 0..16 IS THE ENGINE'S RULE, and it used to be checked here too. Deleting the
+                    // ENGINE's guard left sampler_vintage_check passing, because this surface
+                    // refused first — the same blind spot found on audio-clip and shared by
+                    // clip-grid and lines-per-beat. The engine's copy is the one the web UI's
+                    // sidecar meets, so it is the one worth testing; refusals are named in
+                    // sampler.vintage_rejected with a reason.
+                    //
+                    // 255 rather than 16 here, and that is not the range creeping back: the wire
+                    // field is a u8, so a larger number would be TRUNCATED into a different, legal
+                    // bit depth and the engine would accept a value the caller never typed. That
+                    // is a shape rule about the payload, not a domain rule about the sound — the
+                    // same reason --rate still checks 65535 against its u16.
                     let bits = match flag_u64(&args, "--bits", None).ok() {
                         Some(v) => {
-                            if v > 16 {
-                                eprintln!("daw-cli: --bits is 0..16 (0 = off), got {v}");
+                            if v > 255 {
+                                eprintln!("daw-cli: --bits does not fit the payload's byte, got \
+                                           {v} — refused rather than truncated into a bit depth \
+                                           you did not ask for");
                                 std::process::exit(2);
                             }
                             flags |= daw_bridge::layout::SAMPLER_VINTAGE_SET_BITS;
@@ -2795,7 +2809,8 @@ fn main() {
                     let rate = match flag_u64(&args, "--rate", None).ok() {
                         Some(v) => {
                             if v > 65535 {
-                                eprintln!("daw-cli: --rate is 0..65535 Hz (0 = off), got {v}");
+                                eprintln!("daw-cli: --rate does not fit the payload's u16, got \
+                                           {v} — refused rather than truncated");
                                 std::process::exit(2);
                             }
                             flags |= daw_bridge::layout::SAMPLER_VINTAGE_SET_RATE;
@@ -3911,36 +3926,28 @@ removed is the whole command");
                     };
                     // ABSENT IS NOT ZERO, the same rule vintage follows: 0 is the packer's "no
                     // grid on this extent" sentinel, so it cannot double as "leave this alone".
+                    //
+                    // THE RANGES ARE THE ENGINE'S TO JUDGE, and they used to be checked here too.
+                    // That duplicate was not free: with the engine's guard deleted entirely,
+                    // clip_grid_check still passed, because this surface refused first and the
+                    // engine's copy — the one on the path EVERY producer takes, including the web
+                    // UI's sidecar writing to the ring directly — was never reached. Found on
+                    // audio-clip's guard and true here for the same reason. So this validates
+                    // SHAPE (a --clip, at least one field named) and the engine validates DOMAIN,
+                    // naming any refusal in clip.grid_rejected with a reason.
                     let mut flags = 0u16;
                     let mut lines = 0u32;
                     let mut num = 0u32;
                     let mut den = 0u32;
                     if let Ok(v) = flag_u64(&args, "--lines", None) {
-                        if v == 0 || v > 31 {
-                            eprintln!("daw-cli: --lines is 1..31 (five bits in the clip grid, and \
-                                       0 is its 'no grid' sentinel), got {v}");
-                            std::process::exit(2);
-                        }
                         flags |= daw_bridge::layout::CLIP_GRID_SET_LINES;
                         lines = v as u32;
                     }
                     if let Ok(v) = flag_u64(&args, "--num", None) {
-                        if v == 0 || v > 31 {
-                            eprintln!("daw-cli: --num is 1..31 (five bits), got {v}");
-                            std::process::exit(2);
-                        }
                         flags |= daw_bridge::layout::CLIP_GRID_SET_NUMERATOR;
                         num = v as u32;
                     }
                     if let Ok(v) = flag_u64(&args, "--den", None) {
-                        // A POWER OF TWO, because it is stored as a 3-bit exponent. Refused
-                        // rather than rounded — 6/8 is not a typo for 6/8, it is a caller with
-                        // the wrong idea, and rounding hands back a meter nobody asked for.
-                        if v == 0 || v > 128 || (v & (v - 1)) != 0 {
-                            eprintln!("daw-cli: --den must be a power of two in 1..128 (it is \
-                                       stored as an exponent), got {v}");
-                            std::process::exit(2);
-                        }
                         flags |= daw_bridge::layout::CLIP_GRID_SET_DENOMINATOR;
                         den = v as u32;
                     }
@@ -4061,14 +4068,14 @@ removed is the whole command");
                             std::process::exit(2);
                         }
                     };
-                    // REFUSED HERE TOO, not only in the engine. The packer gives linesPerBeat
-                    // five bits, so 32 packs as 0 and 0 means "no grid on this extent" — a
-                    // caller who typed 32 gets told, rather than getting a lane with no grid.
-                    if lines == 0 || lines > 31 {
-                        eprintln!("daw-cli: --lines is 1..31 (the clip grid packs it in five \
-                                   bits, and 0 is its 'no grid' sentinel), got {lines}");
-                        std::process::exit(2);
-                    }
+                    // THE RANGE IS THE ENGINE'S TO JUDGE, and it used to be checked here too. The
+                    // check's own comment recorded the consequence honestly: "daw-cli refuses 0
+                    // and 32 before anything is sent, so the ENGINE's identical guard cannot be
+                    // reached from here and is not covered". A guard nothing in ctest exercises
+                    // is a guard that rots, and it is the one every producer meets — the web UI's
+                    // sidecar writes to the ring directly and never sees this line. So this
+                    // surface validates SHAPE and the engine validates DOMAIN, naming a refusal
+                    // in track.lines_per_beat_rejected with a reason.
                     let mut payload = track_structure_command(
                         UiCommandType::SetTrackLinesPerBeat, track);
                     payload.value0 = lines as u32;

@@ -25,7 +25,10 @@
 #               "the load restored it" and "nothing happened" are distinguishable
 #   REFUSED     out of range is refused rather than clamped, at both ends and for the denominator
 #               specifically: it is stored as a 3-bit EXPONENT, so a non-power-of-two is a caller
-#               with the wrong idea and rounding hands back a meter nobody asked for
+#               with the wrong idea and rounding hands back a meter nobody asked for. Asserted on
+#               the ENGINE's rejection reason, not on daw-cli's exit code — the first version of
+#               this file asserted the CLI's copy of the ranges, and with the engine's guard
+#               deleted entirely it still passed
 #   NO SUCH CLIP  a clip id that does not exist is refused by the ENGINE, with a reason
 #
 # No audio device needed: a grid is drawn, not heard.
@@ -164,18 +167,33 @@ cli do clip-grid --track 0 --clip 7 --lines 3 >/dev/null 2>&1
 waitgrid 7 "3 5/4" || fail "could not restore the subdivision to 3 for the assertions below"
 echo "  independent both ways: the subdivision changed and the meter survived"
 
-# ---- REFUSED. Each bound is the packer's, not an opinion.
-cli do clip-grid --track 0 --clip 7 --den 6 >/dev/null 2>&1 && \
-  fail "a denominator of 6 was accepted. It is stored as a 3-bit EXPONENT, so it must be a power
-        of two; rounding would hand back a meter nobody asked for"
-cli do clip-grid --track 0 --clip 7 --lines 0 >/dev/null 2>&1 && \
-  fail "--lines 0 was accepted, and 0 is the packer's sentinel for 'no grid on this extent'"
-cli do clip-grid --track 0 --clip 7 --lines 32 >/dev/null 2>&1 && \
-  fail "--lines 32 was accepted; the field is five bits"
+# ---- REFUSED BY THE ENGINE. Each bound is the packer's, not an opinion.
+#
+# ASSERTED THROUGH THE ENGINE'S LOG, NOT THE CLI'S EXIT CODE. These three lines used to read
+# `cli do ... && fail`, which asserted that daw-cli refused — and daw-cli had a copy of the
+# ranges, so with the ENGINE's guard deleted entirely this check still passed. The engine's copy
+# is the one every producer meets, including the web UI's sidecar writing to the ring directly, so
+# it is the one worth testing. daw-cli now validates shape and the engine validates domain.
+reason() {  # reason <text> — did the engine refuse for this reason yet?
+  grep -q "\"event\":\"clip.grid_rejected\".*\"reason\":\"$1\"" "$TMP/eng.log"
+}
+cli do clip-grid --track 0 --clip 7 --den 6 >/dev/null 2>&1 || true
+cli do clip-grid --track 0 --clip 7 --lines 0 >/dev/null 2>&1 || true
+cli do clip-grid --track 0 --clip 7 --lines 32 >/dev/null 2>&1 || true
+for _ in $(seq 1 60); do
+  reason denominator_not_power_of_two && reason lines_out_of_range && break
+  sleep 0.25
+done
+reason denominator_not_power_of_two || \
+  fail "a denominator of 6 was not refused by the engine. It is stored as a 3-bit EXPONENT, so it
+        must be a power of two; rounding would hand back a meter nobody asked for"
+reason lines_out_of_range || \
+  fail "neither 0 nor 32 as a subdivision was refused by the engine. 0 is the packer's sentinel
+        for 'no grid on this extent' and the field is five bits, so 32 packs as 0"
 [ "$(grid 7)" = "3 5/4" ] || \
   fail "a refused command still changed the grid: clip 7 reads '$(grid 7)'. A refusal that edits
         is not a refusal"
-echo "  refused: 6 as a denominator, 0 and 32 as a subdivision — and the value did not move"
+echo "  refused by the engine: 6 as a denominator, 0 and 32 as a subdivision — value unmoved"
 
 # ---- NO SUCH CLIP, refused by the ENGINE rather than by the CLI's own validation.
 cli do clip-grid --track 0 --clip 999 --lines 5 >/dev/null 2>&1 || true
