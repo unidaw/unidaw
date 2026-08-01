@@ -24,18 +24,26 @@
 # before this file — which is how the whole musical layer that turns a degree into pitches went
 # unheard.
 #
-# A SPREAD WIDER THAN ONE AUDIO BLOCK STILL LOSES ITS LATER NOTES, and this check does NOT assert
-# otherwise. emitNoteOnWithOff drops a note whose sample lands outside the block being filled, and
-# a chord's spread pushes notes to ticks that belong to LATER blocks — so with a half-beat spread
-# only the first note is emitted (traced: one note.emit per chord, at the base tick). The old
-# duplicate did the same thing, so this is inherited rather than introduced. Fixing it means
-# expanding a chord into per-tick strikes where the retrigger path already does, and it is not
-# attempted here. What this check pins is that the chord SOUNDS and that the three fields ARRIVE;
-# the strum's width is deliberately not claimed.
+# THE STRUM'S WIDTH IS NOW ASSERTED, and it was not when this file was first written.
 #
-# FIVE PROPERTIES:
+# A spread pushes every note after the first to a LATER tick, and emitNoteOnWithOff drops anything
+# landing outside the block being filled — so a strum wider than one block (11 ms at 512/44100)
+# lost all but its first note. Traced with DAW_TRACE_NOTES: one note.emit per chord for a
+# half-beat spread that should produce three. It was never a strum, it was a chord with two notes
+# deleted, and the pre-existing hand-rolled emission did the same.
+#
+# Fixed by using the queue the retrigger path already has: a strike outside the current range goes
+# into runtime.pendingStrikes, drained each block when its tick comes into range, with the same
+# dedup (a chord re-enters the dispatch window once per loop pass, which chord.scheduled shows
+# directly). Now: ticks 960000 / 1200000 / 1440000, pitches 60 / 64 / 67, and a measured span of
+# 0.255 s against a requested 0.250 s.
+#
+# SIX PROPERTIES:
 #   SOUNDS      a chord renders audible audio — the regression guard on the tee fix above, and
 #               the assertion that was impossible to write yesterday
+#   STRUMS      a spread chord's notes arrive SPACED, by the width that was asked for. A count
+#               alone would pass on a strum firing everything one block apart; the SPAN is what
+#               catches a spread applied in the wrong unit, or dropped entirely
 #   SCHEDULED   the chord resolves and is scheduled, with its pitch count — every assertion below
 #               is a field ON that event
 #   CARRIED     spread and both humanize values arrive at the scheduler as sent, rather than as
@@ -156,6 +164,57 @@ if peak < 500:
     raise SystemExit(1)
 print("  sounds: a chord renders at peak %d" % peak)
 PYA
+
+# ---- STRUMS. The property this check declined to make when it was written, because the spread
+# was silently losing every note but the first.
+python3 - "$TMP/str.uniproj.json" "$TMP/ch.uniproj.json" "$Q" <<'PYT'
+import json, sys
+out, base, Q = sys.argv[1], sys.argv[2], int(sys.argv[3])
+d = json.load(open(base))
+d["meta"]["name"] = "str"
+# HALF A BEAT of spread, which at 120 bpm is 0.25 s — twenty times one audio block, so a strum
+# that only survives within a block cannot pass this by accident.
+d["clips"][0]["chords"] = [{"chord_id": 1, "nanotick": Q, "duration": Q, "column": 0,
+                            "degree": 1, "quality": 1, "inversion": 0, "base_octave": 4,
+                            "spread": Q // 2, "humanize_timing": 0, "humanize_velocity": 0}]
+json.dump(d, open(out, "w"))
+PYT
+( cd "$BUILD" && env DAW_UI_SHM_NAME="/chstr_$$" DAW_PROJECT_DIR="$TMP" \
+    ./daw_engine --project str --render strout --run-seconds 6 >"$TMP/str.log" 2>&1 )
+[ -s "$TMP/strout.wav" ] || fail "the strum render produced no file — see $TMP/str.log"
+python3 - "$TMP/strout.wav" <<'PYB' || fail "the strum is not the width that was asked for"
+import sys, wave, struct
+w = wave.open(sys.argv[1], 'rb')
+ch, sr = w.getnchannels(), w.getframerate()
+raw = w.readframes(w.getnframes())
+s = struct.unpack('<%dh' % (len(raw) // 2), raw)
+mono = [abs(s[i]) for i in range(0, len(s), ch)][:int(2.0 * sr)]   # bar 0 only
+peak = max(mono) if mono else 0
+if peak == 0:
+    print("  the strum render is silent"); raise SystemExit(1)
+# 30 ms coalescing: one 10 ms click with a decay tail can cross the threshold twice, and this
+# measures WHEN strikes happen, not how many samples are loud.
+thr, out, last = peak * 0.35, [], -10 ** 9
+for i, v in enumerate(mono):
+    if v > thr and i - last > sr * 3 // 100:
+        out.append(i)
+        last = i
+span = (out[-1] - out[0]) / sr if len(out) > 1 else 0.0
+if len(out) < 3:
+    print("  only %d strike(s) in the bar; a triad spread over half a beat is three." % len(out))
+    print("  A strike whose tick falls outside the block being filled is DROPPED unless it is")
+    print("  queued into pendingStrikes, so a spread wider than ~11 ms loses its later notes.")
+    raise SystemExit(1)
+# Half a beat at 120 bpm is 0.25 s. The window is generous because the click's decay blurs the
+# edges; it is there to catch a spread in the wrong UNIT or not applied at all, not to measure
+# the scheduler's precision — the note.emit ticks do that exactly.
+if not (0.15 <= span <= 0.40):
+    print("  the strum spans %.3f s and half a beat at 120 bpm is 0.250 s." % span)
+    print("  Out by more than the measurement can excuse, so the spread is reaching the")
+    print("  scheduler in the wrong unit or being applied to the wrong quantity.")
+    raise SystemExit(1)
+print("  strums: %d strikes spanning %.3f s, against a requested 0.250 s" % (len(out), span))
+PYB
 
 SHM="/chexp_$$"
 ( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \

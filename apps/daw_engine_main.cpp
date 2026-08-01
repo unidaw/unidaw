@@ -16719,6 +16719,7 @@ struct TrackRuntime {
                   .field("spread", spread)
                   .field("humanize_timing", static_cast<uint64_t>(humanizeTiming))
                   .field("humanize_velocity", static_cast<uint64_t>(humanizeVelocity));
+              std::vector<PendingStrike> chordQueued;
               for (size_t i = 0; i < chordPitches.size(); ++i) {
                 uint64_t offsetTicks = 0;
                 if (chordPitches.size() > 1 && spread > 0) {
@@ -16754,10 +16755,48 @@ struct TrackRuntime {
                 // Everything the duplicate did, the lambda does and does better: it handles the
                 // block-boundary drop, both tees, the activeNotes bookkeeping, and the loop-point
                 // wrap that the copy did not have.
-                emitNoteOnWithOff(static_cast<uint64_t>(onTick), duration,
-                                  clampMidi(chordPitches[i].midi),
-                                  clampMidi(static_cast<int>(baseVelocity) + velJitter),
-                                  column, chordPitches[i].cents);
+                // EMIT NOW OR QUEUE FOR THE BLOCK THAT OWNS IT — the same shape the retrigger
+                // path uses forty lines down, and for the same reason.
+                //
+                // A strike whose tick falls outside the range being filled cannot be emitted
+                // here: emitNoteOnWithOff drops anything landing outside the block, silently.
+                // The spread pushes every note after the first to a LATER tick, so a strum wider
+                // than one block (11 ms at 512/44100) lost all but its first note — measured
+                // with DAW_TRACE_NOTES as one note.emit per chord for a half-beat spread that
+                // should produce three. The old hand-rolled emission did the same, so this was
+                // never a strum, it was a chord with two notes deleted.
+                const uint64_t strikeTick = wrapTick(static_cast<uint64_t>(onTick));
+                const uint8_t strikePitch = clampMidi(chordPitches[i].midi);
+                const uint8_t strikeVel =
+                    clampMidi(static_cast<int>(baseVelocity) + velJitter);
+                if (strikeTick >= rangeStart && strikeTick < rangeEnd) {
+                  emitNoteOnWithOff(strikeTick, duration, strikePitch, strikeVel,
+                                    column, chordPitches[i].cents);
+                } else {
+                  chordQueued.push_back(PendingStrike{strikeTick, duration, strikePitch,
+                                                      strikeVel, column,
+                                                      chordPitches[i].cents, 0, 0});
+                }
+              }
+              if (!chordQueued.empty()) {
+                std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
+                for (const auto& q : chordQueued) {
+                  // DEDUPED, because a chord re-enters the dispatch window once per loop pass
+                  // and would otherwise queue the same strike again on every pass — the
+                  // chord.scheduled telemetry shows exactly that, one event per loop. The
+                  // retrigger path needs this for the same reason and says so.
+                  bool exists = false;
+                  for (const auto& ps : runtime.pendingStrikes) {
+                    if (ps.onTick == q.onTick && ps.pitch == q.pitch &&
+                        ps.column == q.column) {
+                      exists = true;
+                      break;
+                    }
+                  }
+                  if (!exists) {
+                    runtime.pendingStrikes.push_back(q);
+                  }
+                }
               }
               continue;
             }
