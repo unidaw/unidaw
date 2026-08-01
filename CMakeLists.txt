@@ -679,6 +679,14 @@ set_tests_properties(sampler_loop PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DI
 # every per-track field the engine publishes has a reader, and the values come back in the units
 # they were SENT in — a name comparison would pass on a read-back that leaked the wire's swing
 # bias, which is exactly what its negative control demonstrates.
+# The kit read-back covers the slot the engine publishes. A NAMES-only ratchet, deliberately —
+# the behaviour is driven by sampler_kit, sampler_vintage, slice_extent and slot_rename, and this
+# is the guard those do not provide. Costs no engine, so it is nearly free.
+add_test(NAME sampler_kit_fields
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_kit_fields_check.sh
+)
+set_tests_properties(sampler_kit_fields PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # Every published ROW OP can be read back, and the note id that addresses one is visible —
 # set-row-ops is addressed by an id `get notes` did not print, so the write path needed an
 # identifier the read path would not give you.
