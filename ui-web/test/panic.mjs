@@ -21,7 +21,7 @@
 
 import { existsSync } from 'node:fs';
 import { chromium } from 'playwright';
-import { startStack } from './stack.mjs';
+import { startStack, soundGate } from './stack.mjs';
 import { readWav, rmsBetween } from './wav.mjs';
 
 const WAV = '/tmp/panic_check.wav';
@@ -100,8 +100,11 @@ check(pageErrors.length === 0, 'nothing threw in the browser while this ran',
 await browser.close();
 stack.stop();
 
-if (!existsSync(WAV)) {
-  check(false, 'a capture was produced', WAV);
+/* See stack.mjs's soundGate: with no device there is no capture, and a panic that cannot be
+   heard is unanswerable rather than broken. */
+const { soundCheck, banner } = soundGate(stack, check);
+if (!stack.audioRunning || !existsSync(WAV)) {
+  soundCheck(false, 'a capture was produced', WAV);
 } else {
   /*
    * THE WINDOWS COME FROM THE HARNESS, not from arithmetic about how long setup took.
@@ -139,5 +142,5 @@ if (!existsSync(WAV)) {
         `${(playing / Math.max(stopped, 1e-9)).toFixed(0)}x`);
 }
 
-console.log(`\n${fail === 0 ? `ALL PASS (${pass} checks)` : `${fail} of ${pass + fail} FAILED`}`);
+console.log(banner(fail, pass));
 process.exit(fail === 0 ? 0 : 1);

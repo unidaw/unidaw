@@ -20,7 +20,7 @@
 
 import { spawn } from 'node:child_process';
 import { statSync } from 'node:fs';
-import { mkdtempSync, cpSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, cpSync, rmSync, existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -225,6 +225,23 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
   if (capture) {
     env.DAW_CAPTURE_WAV = capture;
     env.DAW_CAPTURE_SECONDS = String(captureSeconds);
+    /*
+     * DELETE LAST RUN'S CAPTURE. HERE, because this is where the path becomes this run's.
+     *
+     * A suite that asks for a capture and then reads it back has no way to tell "the engine
+     * wrote nothing" from "the engine wrote nothing and I am reading the file from last
+     * time" — the second is a PASS, on evidence from a different run of different code.
+     *
+     * Found 2026-08-01 with the device dead: `/tmp/bypass_check.wav` was 38 hours old and
+     * bypass.mjs had been reporting ALL PASS off it, including through two full sweeps that
+     * I then quoted as green. mods, panic and patchcfg read their captures the same way and
+     * had the same hole. note-off-cuts and three others delete theirs and carry a comment
+     * about why; putting it in each suite meant six of ten did not.
+     *
+     * A guard that is satisfied by its own leftovers is not a guard, and one that every
+     * caller has to remember is one half the callers will not.
+     */
+    try { unlinkSync(capture); } catch { /* absent is the normal case */ }
   }
   if (numBlocks) env.DAW_ENGINE_NUM_BLOCKS = String(numBlocks);
   // Where the API key lives, if the caller has said. The agent loop reads this
@@ -336,14 +353,39 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
    * The segment wait above is NOT the anchor: the segment exists well before the
    * device is open, which is exactly the gap that varies.
    */
+  /*
+   * WAIT FOR THE DEVICE TO ANSWER EITHER WAY.
+   *
+   * "Audio output started" used to be printed by the function that CALLED start(), whether or
+   * not the device ever pulled a block. The engine made it honest — it is printed only once a
+   * callback has actually landed, and a device that opens and never runs prints "Audio output
+   * OPENED BUT NEVER STARTED" instead.
+   *
+   * That is the right change and it broke this gate: on a machine whose device never calls
+   * back the line never appears, so every one of the nine suites that sets `capture` sat here
+   * for thirty seconds and then threw "timed out waiting for the audio device to open" —
+   * which is false twice over. The device opened immediately. It is not going to start.
+   *
+   * So: wait for EITHER, and carry the answer. A suite that only wants an engine gets on with
+   * it; a suite that wants SOUND reads `audioRunning` and says the run cannot answer rather
+   * than reporting its subject broken.
+   */
   let audioStartedAt = 0;
+  let audioRunning = false;
   if (capture) {
     const engineLog = join(root, 'engine.log');
+    const readLog = () => { try { return readFileSync(engineLog, 'utf8'); } catch { return ''; } };
     await until(() => {
-      try { return readFileSync(engineLog, 'utf8').includes('Audio output started'); }
-      catch { return false; }
-    }, 'the audio device to open', 30000, 50);
+      const log = readLog();
+      return log.includes('Audio output started')
+          || log.includes('Audio output OPENED BUT NEVER STARTED');
+    }, 'the audio device to answer, either way', 30000, 50);
+    audioRunning = readLog().includes('Audio output started');
     audioStartedAt = Date.now();
+    if (!audioRunning) {
+      console.log('  stack: the audio device opened and never started — this run cannot '
+                + 'answer any question about SOUND (see daw_audio_probe)');
+    }
   }
   /** Seconds into the capture WAV for a wall-clock instant, or -1 if not capturing. */
   const captureOffset = (atMs) => {
@@ -388,5 +430,53 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
   process.on('exit', stop);
 
   return { url: `http://127.0.0.1:${base}/index.html`, dir, root, shm, base,
-           capture, captureOffset, audioStartedAt, runSeconds, stop };
+           capture, captureOffset, audioStartedAt, runSeconds, stop,
+           /*
+            * Did the device actually PULL a block? The only honest basis for believing or
+            * disbelieving a silence — an empty capture from a device that never ran says
+            * nothing about the code that produced it. False when `capture` was not asked for.
+            */
+           audioRunning };
+}
+
+/**
+ * A GATE FOR CHECKS THAT CAN ONLY BE ANSWERED IF THE DEVICE RAN.
+ *
+ * `stack.audioRunning` is the engine's verdict at the device boundary — true only once a
+ * callback has actually landed. When it is false there is no capture, and every question
+ * about SOUND is unanswerable rather than answered "no".
+ *
+ * That signal is INDEPENDENT of what the suites test: it says nothing about whether bypass
+ * works or a modulator moves, only whether this run could observe it. That independence is
+ * the whole condition for an excuse being safe rather than a way of not looking — and it is
+ * the condition I got wrong once already, by reaching for "0 of 0 playback callbacks", which
+ * counts callbacks that had a track to play and reads 0 of 0 on a healthy idle engine.
+ *
+ * Shared rather than copied into each suite, because the version that lived in each suite
+ * was present in four of ten and keyed on the underrun count in the one place it mattered
+ * most.
+ *
+ *     const { soundCheck, banner } = soundGate(stack, check);
+ *     soundCheck(peak > 0.01, 'it makes a sound');
+ *     ...
+ *     console.log(banner(fail, pass));
+ */
+export function soundGate(stack, check) {
+  let blocked = 0;
+  const soundCheck = (ok, what, detail) => {
+    if (stack.audioRunning) return check(ok, what, detail);
+    blocked++;
+    console.log('  BLOCK', what, '— the audio device never started, so this run cannot answer it');
+    return undefined;
+  };
+  /* A BLOCKED run is not a pass, and the banner has to say so — a note in a line above it
+     scrolls away, and "ALL PASS" on a run that could not hear anything is how a suite stops
+     being read. */
+  const banner = (fail, pass) => {
+    const note = blocked
+      ? ` \u00b7 ${blocked} BLOCKED (the audio device never started — see daw_audio_probe)` : '';
+    return `\n${fail === 0 ? `ALL PASS (${pass} checks)${note}`
+                          : `${fail} of ${pass + fail} FAILED${note}`}`;
+  };
+  return { soundCheck, banner, blockedCount: () => blocked };
 }

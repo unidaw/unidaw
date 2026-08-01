@@ -130,8 +130,35 @@ await new Promise((r) => setTimeout(r, Math.max(0, t0 + RUN * 1000 + 2500 - Date
 stack.stop();
 
 const at = (ms) => stack.captureOffset(t0 + ms);
+
+/*
+ * THE SOUND HALF IS ONLY ANSWERABLE IF THE DEVICE RAN.
+ *
+ * `stack.audioRunning` is the engine's own verdict at the device boundary: it is true only
+ * once a callback has actually landed. A device that opens and never pulls a block produces
+ * no capture, and every question below is then unanswerable rather than answered "no".
+ *
+ * That signal is INDEPENDENT of what these checks test — it says nothing about whether
+ * bypass works, only whether this run could observe it — which is the whole condition for
+ * an excuse being safe rather than a way of not looking.
+ *
+ * This suite reported ALL PASS for 38 hours without it, on a capture file from a previous
+ * run that nothing deleted. The stack deletes it now, so the choice is a real answer or an
+ * honest blank.
+ */
+let blocked = 0;
+const soundCheck = (ok, what, detail) => {
+  if (stack.audioRunning) return check(ok, what, detail);
+  blocked++;
+  console.log('  BLOCK', what, '— the audio device never started, so this run cannot answer it');
+};
+
 let wav = null;
-try { wav = readWav(WAV); } catch (e) { check(false, 'a capture was produced', e.message); }
+if (!stack.audioRunning) {
+  soundCheck(false, 'a capture was produced');
+} else {
+  try { wav = readWav(WAV); } catch (e) { check(false, 'a capture was produced', e.message); }
+}
 
 if (wav) {
   const { mono, rate } = wav;
@@ -142,12 +169,19 @@ if (wav) {
   console.log(`  playing ${a.toFixed(5)}   bypassed ${b.toFixed(5)}` +
               `   back ${c.toFixed(5)}   (capture ${(mono.length / rate).toFixed(1)}s)`);
 
-  check(a > 0.005, 'the instrument was sounding to begin with', a.toFixed(5));
-  check(b < 0.0005, 'bypassing it left silence', b.toFixed(5));
-  check(c > 0.005, 'and switching it back on brought it back', c.toFixed(5));
-  check(c > b * 20, 'by a margin no decay accounts for',
+  soundCheck(a > 0.005, 'the instrument was sounding to begin with', a.toFixed(5));
+  soundCheck(b < 0.0005, 'bypassing it left silence', b.toFixed(5));
+  soundCheck(c > 0.005, 'and switching it back on brought it back', c.toFixed(5));
+  soundCheck(c > b * 20, 'by a margin no decay accounts for',
         `${(c / Math.max(b, 1e-9)).toFixed(0)}x`);
 }
 
-console.log(`\n${fail === 0 ? `ALL PASS (${pass} checks)` : `${fail} of ${pass + fail} FAILED`}`);
+/*
+ * A BLOCKED RUN IS NOT A PASS, and it says so in the banner rather than in a line above it
+ * that scrolls away. "ALL PASS" on a run that could not hear anything is how a suite stops
+ * being read.
+ */
+const note = blocked ? ` · ${blocked} BLOCKED (the audio device never started — see daw_audio_probe)` : '';
+console.log(`\n${fail === 0 ? `ALL PASS (${pass} checks)${note}`
+                            : `${fail} of ${pass + fail} FAILED${note}`}`);
 process.exit(fail === 0 ? 0 : 1);

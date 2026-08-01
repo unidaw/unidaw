@@ -42,7 +42,7 @@
  */
 
 import { chromium } from 'playwright';
-import { startStack } from './stack.mjs';
+import { startStack, soundGate } from './stack.mjs';
 import { readWav, rmsBetween, summarise } from './wav.mjs';
 import { existsSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -438,8 +438,11 @@ await browser.close();
 stack.stop();
 await new Promise((r) => setTimeout(r, 1500));
 
-if (!existsSync(WAV)) {
-  check(false, 'the engine wrote a capture to measure', WAV);
+/* See stack.mjs's soundGate. This suite read a 39-hour-old capture and reported ALL PASS
+   off it until the stack started deleting the file — a green on evidence from another run. */
+const { soundCheck, banner } = soundGate(stack, check);
+if (!stack.audioRunning || !existsSync(WAV)) {
+  soundCheck(false, 'the engine wrote a capture to measure', WAV);
 } else {
   const { rate, mono } = readWav(WAV);
   const dur = mono.length / rate;
@@ -475,5 +478,5 @@ if (!existsSync(WAV)) {
         `loud ${loud.toFixed(5)} vs quiet ${quiet.toFixed(5)}`);
 }
 
-console.log(`\n${fail === 0 ? `ALL PASS (${pass} checks)` : `${fail} of ${pass + fail} FAILED`}`);
+console.log(banner(fail, pass));
 process.exit(fail === 0 ? 0 : 1);

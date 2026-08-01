@@ -54,7 +54,7 @@
  */
 
 import { chromium } from 'playwright';
-import { startStack } from './stack.mjs';
+import { startStack, soundGate } from './stack.mjs';
 import { readWav, rmsBetween, zeroCrossingRate, loudFraction } from './wav.mjs';
 
 const WAV = '/tmp/patchcfg_check.wav';
@@ -196,8 +196,13 @@ await new Promise((r) => setTimeout(r, Math.max(0, t0 + RUN * 1000 + 2500 - Date
 stack.stop();
 
 const at = (ms) => stack.captureOffset(t0 + ms);
+/* See stack.mjs's soundGate: with no device there is no capture, and every question below
+   is unanswerable rather than answered "no". This suite read a 39-hour-old capture and
+   reported ALL PASS off it until the stack started deleting the file. */
+const { soundCheck, banner } = soundGate(stack, check);
 let wav = null;
-try { wav = readWav(WAV); } catch (e) { check(false, 'a capture was produced', e.message); }
+if (!stack.audioRunning) soundCheck(false, 'a capture was produced');
+else try { wav = readWav(WAV); } catch (e) { check(false, 'a capture was produced', e.message); }
 
 if (wav) {
   const { mono, rate } = wav;
@@ -215,10 +220,10 @@ if (wav) {
               ` -> at base 9 ${pitch(dAt).toFixed(0)}` +
               `   (capture ${(mono.length / rate).toFixed(1)}s, phase A at ${win(aAt)[0].toFixed(1)}s)`);
 
-  check(a > 0.005, 'the generator was sounding to begin with', a.toFixed(5));
-  check(b < a * 0.5, 'the quietest velocity made it quiet',
+  soundCheck(a > 0.005, 'the generator was sounding to begin with', a.toFixed(5));
+  soundCheck(b < a * 0.5, 'the quietest velocity made it quiet',
         `${b.toFixed(5)} vs ${a.toFixed(5)}`);
-  check(c > b * 3, 'and the loudest brought it back',
+  soundCheck(c > b * 3, 'and the loudest brought it back',
         `${(c / Math.max(b, 1e-9)).toFixed(1)}x`);
   /*
    * FIVE OCTAVES UP, so the crossing rate must MULTIPLY, not merely differ.
@@ -226,7 +231,7 @@ if (wav) {
    * the random degrees wandering, on a field that claimed to move the octave.
    * A ratio, not a difference, because the absolute rate depends on the patch.
    */
-  check(pitch(dAt) > pitch(cAt) * 3, 'base octave 9 plays in a far higher register',
+  soundCheck(pitch(dAt) > pitch(cAt) * 3, 'base octave 9 plays in a far higher register',
         `${pitch(cAt).toFixed(0)}/s -> ${pitch(dAt).toFixed(0)}/s`);
   /*
    * ZERO HITS IS ZERO HITS — measured as DENSITY, not as silence, and the
@@ -246,11 +251,11 @@ if (wav) {
    * loud in the same breath, so "both are quiet because the run was broken"
    * cannot pass.
    */
-  check(dens(dAt) > 0.9, 'the generator was running continuously before',
+  soundCheck(dens(dAt) > 0.9, 'the generator was running continuously before',
         dens(dAt).toFixed(2));
-  check(dens(eAt) < 0.3, 'and at zero hits it stops — 0 is not "use the default"',
+  soundCheck(dens(eAt) < 0.3, 'and at zero hits it stops — 0 is not "use the default"',
         `density ${dens(eAt).toFixed(2)}, rms ${e.toFixed(5)}`);
 }
 
-console.log(`\n${fail === 0 ? `ALL PASS (${pass} checks)` : `${fail} of ${pass + fail} FAILED`}`);
+console.log(banner(fail, pass));
 process.exit(fail === 0 ? 0 : 1);
