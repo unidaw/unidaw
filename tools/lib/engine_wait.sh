@@ -251,3 +251,23 @@ stop_engine() {
   echo "        process — it is most likely stuck in an uninterruptible wait"
   return 0
 }
+
+# ASSERT A CAPTURE EXISTS BEFORE MEASURING IT — one definition, because four checks were each
+# reading a wav that was not there and reporting it as an unhandled Python exception:
+#
+#   FileNotFoundError: [Errno 2] No such file or directory: '.../m.wav'
+#
+# That is the worst message this repo produces. It names no audio, no device and no capture; a
+# reader learns only that a file is missing, and the actual cause (a default output device that
+# never runs a playback callback) is three layers away and never mentioned. level_match_bypass,
+# midi_per_bus, preview_note and sidechain all failed exactly that way in one sweep.
+#
+#   require_capture <wavfile> <enginelog>
+#
+# Calls the caller's own `fail` when it has one, like the rest of this library.
+require_capture() {
+  [ -s "$1" ] && return 0
+  _engine_wait_fail "the live run captured no audio at $1, so nothing measured below would mean
+        anything. That is the harness rather than the thing under test — specifically:
+        $(capture_diagnosis "$2")"
+}

@@ -11,6 +11,7 @@
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tools/lib/engine_wait.sh"   # require_capture / capture_diagnosis
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 Q=960000
@@ -61,6 +62,7 @@ wait "$ENG"; ENG_RC=$?
 
 PLAYED="$(grep -c 'Transport Play' "$TMP/eng.log" || true)"
 NOTES="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum(len(c.get("notes",[])) for c in d.get("clips",[])))' "$TMP/e.uniproj.json" 2>/dev/null || echo -1)"
+require_capture "$TMP/m.wav" "$TMP/eng.log"
 AUDIO="$(python3 - "$TMP/m.wav" <<'PY'
 import sys,wave,struct
 w=wave.open(sys.argv[1],'rb');ch=w.getnchannels();n=w.getnframes();s=struct.unpack('<'+'h'*(n*ch),w.readframes(n));w.close()

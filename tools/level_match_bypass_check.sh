@@ -18,6 +18,7 @@
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tools/lib/engine_wait.sh"   # require_capture / capture_diagnosis
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
@@ -88,6 +89,8 @@ for r in matched raw; do
   fi
 done
 
+require_capture "$TMP/matched.wav" "$TMP/matched.log"
+require_capture "$TMP/raw.wav" "$TMP/raw.log"
 python3 - "$TMP/matched.wav" "$TMP/raw.wav" "$INSERT_GAIN" <<'PYX'
 import sys, wave, numpy as np
 # TIMING-FREE. Earlier versions picked wall-clock windows and kept mis-aligning with the

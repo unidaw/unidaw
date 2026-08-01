@@ -12,6 +12,7 @@
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tools/lib/engine_wait.sh"   # require_capture / capture_diagnosis
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 Q=960000
@@ -54,6 +55,7 @@ REFUSALS=$(grep -c 'clip.version_mismatch\|clip.unknown_track' "$LOG" || true)
 DAW_UI_SHM_NAME="$SHM" "$CLI" do play --force >/dev/null 2>&1 || true
 wait "$ENG"
 
+require_capture "$TMP/m.wav" "$LOG"
 PEAK=$(python3 - "$TMP/m.wav" <<'PY'
 import sys,wave,struct
 w=wave.open(sys.argv[1],'rb');ch=w.getnchannels();n=w.getnframes();s=struct.unpack('<'+'h'*(n*ch),w.readframes(n));w.close()

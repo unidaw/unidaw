@@ -238,8 +238,50 @@ if kill -0 "$STUB_PID" 2>/dev/null; then
 fi
 echo "  escalates: a SIGTERM-ignoring process is killed, and the escalation is reported"
 
+# ---- REQUIRES A CAPTURE, AND SAYS WHY WHEN THERE IS NONE. Four checks read a wav that was not
+# there and reported an unhandled Python FileNotFoundError — a message naming no audio, no device
+# and no capture. This is the guard that replaced it, so it has to do both halves: refuse the
+# missing file, and carry the diagnosis with it.
+cat >"$TMP/nocap.log" <<'EOS'
+Audio device: Built-in Output
+Audio underrun summary: 0 of 0 playback callbacks dropped a track (worst shortfall 0 blocks).
+EOS
+cat >"$TMP/reqcap.sh" <<EOF
+. "$LIB"
+fail() { echo "  FAIL: \$*"; exit 1; }
+require_capture "$TMP/definitely-absent.wav" "$TMP/nocap.log"
+echo "RETURNED-OK"
+EOF
+REQ="$(run_case "$TMP/reqcap.sh")"
+REQ_RC="$(printf '%s' "$REQ" | head -1 | cut -d' ' -f1)"
+REQ_OUT="$(printf '%s' "$REQ" | tail -n +2)"
+[ "$REQ_RC" != "0" ] || \
+  fail "require_capture RETURNED SUCCESS for a capture that does not exist, so every measurement
+        after it would run on a missing file — which is the FileNotFoundError this replaced"
+case "$REQ_OUT" in
+  *"NEVER RAN A PLAYBACK CALLBACK"*) : ;;
+  *) fail "require_capture refused the missing capture and did NOT carry the diagnosis. It said:
+        $REQ_OUT — which leaves the reader exactly where the traceback did" ;;
+esac
+# And it must NOT refuse a capture that IS there, or every live check fails on a working machine.
+printf 'x' >"$TMP/present.wav"
+cat >"$TMP/hascap.sh" <<EOF
+. "$LIB"
+fail() { echo "  FAIL: \$*"; exit 1; }
+require_capture "$TMP/present.wav" "$TMP/nocap.log"
+echo "RETURNED-OK"
+EOF
+HAS="$(run_case "$TMP/hascap.sh")"
+case "$(printf '%s' "$HAS" | tail -n +2)" in
+  *RETURNED-OK*) : ;;
+  *) fail "require_capture refused a capture that EXISTS, which would fail every live check on a
+        machine whose audio works" ;;
+esac
+echo "  require_capture: refuses a missing capture WITH the diagnosis, and passes a present one"
+
 echo "engine_wait_selftest: PASS — a corpse is diagnosed at once, a load-then-exit is not"
 echo "                      mistaken for a death, a hang reads differently from a death, and"
 echo "                      wait_for_loads counts,
                       start_engine's pid is the command itself, and stop_engine says when it
-                      had to escalate"
+                      had to escalate, and require_capture refuses a missing capture
+                      with a reason rather than a FileNotFoundError"

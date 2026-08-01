@@ -130,6 +130,8 @@ echo "=== unbound (no sidechain route) ==="
 run_capture unbound "$TMP/unbound.wav"
 
 echo "--- analysis ---"
+require_capture "$TMP/bound.wav" "$TMP/engine_bound.log"
+require_capture "$TMP/unbound.wav" "$TMP/engine_unbound.log"
 python3 - "$TMP/bound.wav" "$TMP/unbound.wav" <<'PY'
 import sys, wave, struct
 def stats(path):
