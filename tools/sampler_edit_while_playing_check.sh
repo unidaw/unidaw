@@ -31,7 +31,25 @@
 #
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD="$ROOT/build"
+# DAW_BUILD_DIR SO THE ADVICE BELOW IS ACTIONABLE. This file tells you to rebuild with
+# -fsanitize=address and re-run, and until this line that meant editing the script. Now:
+#
+#   cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+#     -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g -O1" \
+#     -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address" -DDAW_BUILD_PATCHER_RUST=ON
+#   cmake --build build-asan --target daw_engine juce_host_process -j8
+#   DAW_BUILD_DIR=$PWD/build-asan ASAN_OPTIONS=detect_leaks=0 \
+#     bash tools/sampler_edit_while_playing_check.sh 10
+#
+# RESULT ON 2026-08-02, recorded so nobody repeats it: 1200 edits over sounding voices under
+# AddressSanitizer, CLEAN. That matters because ASan catches a use-after-free at the moment of
+# the bad ACCESS rather than waiting for a segfault, so it is far more sensitive than this check
+# is on its own — and this check DID catch a real SIGSEGV in a full ctest run the night before.
+#
+# So the residual crash is NOT on the snapshot-lifetime path this fixture exercises. It is
+# somewhere else, or it needs conditions this fixture does not create. Naming that is worth more
+# than the 1200 edits: the obvious next step has been taken and did not find it.
+BUILD="${DAW_BUILD_DIR:-$ROOT/build}"
 ROUNDS="${1:-2}"
 Q=960000
 
