@@ -93,6 +93,16 @@ target_include_directories(daw_engine PRIVATE
 
 target_link_libraries(daw_engine PRIVATE platform_juce)
 
+# THE SMALLEST PROGRAM THAT CAN ANSWER "does audio work on this machine". No producer, no
+# threads, no shared memory, no plugin hosts, no transport — just the default output device and a
+# count of how many times it asks for audio, plus a real tone so the answer can also be heard.
+# Built because the engine could not answer this about itself: it opens the device, is told
+# isPlaying() is true, and receives zero callbacks, which every layer above reads as silence with
+# a hundred possible causes. See apps/audio_probe_main.cpp.
+add_executable(daw_audio_probe apps/audio_probe_main.cpp)
+target_include_directories(daw_audio_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(daw_audio_probe PRIVATE platform_juce)
+
 if (DAW_BUILD_PATCHER_RUST)
   set(PATCHER_RUST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/patcher_rust)
   set(PATCHER_RUST_TARGET_DIR ${CMAKE_CURRENT_BINARY_DIR}/patcher_rust)
