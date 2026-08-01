@@ -1,8 +1,27 @@
 # TRACKER GAP LIST — /Users/jak/src/daw
 
-**Read this first.** The single largest thing missing from trackers here is not a tracker feature. It is that **the engine cannot make a sound.** `DeviceKind` has five values — `PatcherEvent`, `PatcherInstrument`, `PatcherAudio`, `VstInstrument`, `VstEffect` (`/Users/jak/src/daw/apps/device_chain.h:13-19`) — and no sampler. Every note is a `MidiPayload` handed to a hosted plugin. Nine of the fifteen classic gaps below are *unreachable* until S1 of `docs/SAMPLER_DESIGN.md` lands, because they are things you do to a voice you own. That is not a reason to rank them low; it is a reason to say out loud that S1 is the gate, and that the four items above the gate are worth doing this week regardless.
+**Read this first — and note what has changed since it was written.**
 
-Also: I received the musician ranking intact but not the engineer ranking (it did not arrive in the brief). Rather than adjudicate a list I cannot see, I checked the musician list against the code. Five of its claims are wrong, and correcting them changes the ordering materially. Those corrections are marked **[CORRECTION]** below.
+> **THE GATE HAS LANDED.** This document opened by saying "the single largest thing missing
+> from trackers here is not a tracker feature — it is that **the engine cannot make a
+> sound**", because `DeviceKind` had five values and no sampler, so nine of the fifteen
+> classic gaps below were *unreachable* until S1 of `docs/SAMPLER_DESIGN.md`.
+>
+> `DeviceKind::Sampler = 5` exists (`apps/device_chain.h`), rendered in the engine rather
+> than in a host process, with slots, key ranges, slicing, envelopes, LFOs, a filter, vintage
+> bit/rate reduction, and both a console and a pointer surface for all of it (manual §7).
+> **The nine items that were blocked on it are no longer blocked**, and each has to be
+> re-costed against the sampler that exists rather than the one that was being designed.
+>
+> Anything below that still says "waits for S1" or "unreachable until the voice pool" is
+> describing a world that ended. The items themselves may well still be open — that is the
+> point of re-costing them — but the REASON given is gone, and a reason nobody re-checks is
+> indistinguishable from a real limitation.
+
+**Received-ranking note (original, unchanged):** the musician ranking arrived intact but the
+engineer ranking did not. Rather than adjudicate a list that could not be seen, the musician
+list was checked against the code; five of its claims were wrong, and correcting them changed
+the ordering materially. Those corrections are marked **[CORRECTION]** below.
 
 ---
 
