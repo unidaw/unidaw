@@ -173,6 +173,44 @@ CHORD = {
     "humanize_velocity": "WriteChord",
 }
 
+# ---------------------------------------------------------------------------------------------- the NOTE scope.
+#
+# Thirteen keys, and this one found NOTHING — which is worth having for the same reason the others
+# are. The point of a ratchet is that the debt cannot silently GROW; a scope that starts clean
+# locks in coverage that already exists, so the next field added to a note has to declare itself.
+NOTE = {
+    "note_id":        "EXEMPT:identity — a note is ADDRESSED by its id",
+    "nanotick":       "EXEMPT:identity — where the note IS; moving one is delete + write",
+    "pitch":          "WriteNote",
+    "velocity":       "WriteNote",
+    "duration":       "WriteNote",
+    "column":         "WriteNote",
+    # The row ops, all seven, through one masked command so clearing one does not resend the rest.
+    "retrigger":      "SetRowOps",
+    "probability":    "SetRowOps",
+    "sound":          "SetRowOps",
+    "sound_offset":   "SetRowOps",
+    "retrig_ramp":    "SetRowOps",
+    "trig_condition": "SetRowOps",
+    "delay":          "SetRowOps",
+}
+
+# ---------------------------------------------------------------------------------------- the PLACEMENT scope.
+#
+# A placement is an APPEARANCE of a clip on the timeline. Six keys, also clean.
+PLACEMENT = {
+    "id":                "EXEMPT:identity — a placement is ADDRESSED by its id",
+    "clip_id":           "AddPlacement",
+    "at":                "AddPlacement",
+    "length":            "AddPlacement",
+    # M2.57 scratch clips: the placement's OTHER clip, for A/B. `scratch fork` mints it, `swap`
+    # exchanges which is playing, `keep` drops the loser.
+    "alternate_clip_id": "ForkPlacementClip",
+    # M2.55 per-appearance edits: whether a note typed into THIS appearance becomes an override on
+    # it rather than a change to the clip every appearance shares.
+    "local_edits":       "SetPlacementEditScope",
+}
+
 # ---------------------------------------------------------------- what is actually persisted.
 def keys_in_block(path, begin_marker, span):
     text = open(os.path.join(root, path)).read().split("\n")
@@ -196,6 +234,8 @@ clip_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("clips")')
 # The chords live inside a clip's own array, so they are bounded by their own terminator the way
 # the slots are.
 chord_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("chords")')
+note_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("notes")')
+placement_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("placements")')
 
 # Keys that belong to nested objects inside the track block rather than to the track itself.
 NESTED = {"kind", "device_id", "capability_mask", "host_slot_index", "patcher_node_id", "bypass",
@@ -206,7 +246,9 @@ track_keys = [k for k in track_keys if k not in NESTED]
 # ---------------------------------------------------------------- the assertions.
 problems = []
 for label, keys, table in (("slot", slot_keys, SLOT), ("track", track_keys, TRACK),
-                           ("clip", clip_keys, CLIP), ("chord", chord_keys, CHORD)):
+                           ("clip", clip_keys, CLIP), ("chord", chord_keys, CHORD),
+                           ("note", note_keys, NOTE),
+                           ("placement", placement_keys, PLACEMENT)):
     for k in keys:
         if k not in table:
             problems.append(
@@ -224,8 +266,9 @@ for label, keys, table in (("slot", slot_keys, SLOT), ("track", track_keys, TRAC
             "        covering a field that does not exist. Remove it." % (label, k))
 
 if not problems:
-    print("  %d slot fields, %d track, %d clip, %d chord — all accounted for"
-          % (len(slot_keys), len(track_keys), len(clip_keys), len(chord_keys)))
+    print("  %d slot, %d track, %d clip, %d chord, %d note, %d placement — all accounted for"
+          % (len(slot_keys), len(track_keys), len(clip_keys), len(chord_keys),
+             len(note_keys), len(placement_keys)))
 if problems:
     print("\n".join(problems))
     raise SystemExit(1)
@@ -236,7 +279,8 @@ if problems:
 # line imply there is none. They do not fail the run, because they were true before this scope
 # existed and failing on them would only get the scope deleted.
 gaps = [(label, k, v) for label, table in (("slot", SLOT), ("track", TRACK), ("clip", CLIP),
-                                          ("chord", CHORD))
+                                          ("chord", CHORD), ("note", NOTE),
+                                          ("placement", PLACEMENT))
         for k, v in table.items() if v.startswith("GAP:")]
 if gaps:
     print("  %d KNOWN GAP(S) — persisted, and no command can write them:" % len(gaps))
@@ -248,7 +292,8 @@ if gaps:
 cmds = set(re.findall(r'^\s*([A-Za-z]+) = \d+,',
                       open(os.path.join(root, "apps/event_payloads.h")).read(), re.M))
 missing = []
-for label, table in (("slot", SLOT), ("track", TRACK), ("clip", CLIP), ("chord", CHORD)):
+for label, table in (("slot", SLOT), ("track", TRACK), ("clip", CLIP), ("chord", CHORD),
+                     ("note", NOTE), ("placement", PLACEMENT)):
     for k, v in table.items():
         if v.startswith("EXEMPT:") or v.startswith("GAP:"):
             continue
