@@ -1407,14 +1407,14 @@ chain in the rack), its own mixer entry, its own published slot — but it is no
 the tracker never draws a row for it and the mixer finds it by its published flag rather than
 by its position. Console: `main-gain <dB>` and `main-mute`.
 
-Two things about it are **read-back gaps in the engine**, both asserted by `master-strip.mjs`
-so they retire themselves the day they close:
+It had two read-back gaps when it landed, and both are closed. They were written into
+`master-strip.mjs` as **inverted checks** — assertions that the broken state held — so the
+day each was fixed the suite went red and its failure message said what to write instead.
+That is the whole reason to record a limitation as a check rather than as a sentence.
 
-- A master-only edit does not move `uiMixerVersion`, so the strip never receives an
-  acknowledgement and keeps its pending tint until something else changes the mixer. The
-  edit itself lands — the engine applies it and the audio callback reads it every block.
-- The master's peak is published as a constant zero, so **its meter cannot move**. An empty
-  master meter is not a statement about the mix.
+The master's meter is subject to the same thing every other meter here is: on a machine
+whose audio device never calls back, nothing sounds and every meter correctly reports
+silence. An empty meter on this machine is not a statement about the mix.
 
 **There are no sends, no returns and no pre/post switch.** Parent/child tracks exist in the
 engine (and `fold <track>` collapses a parent's children in the tracker), but the mixer draws
@@ -1801,12 +1801,8 @@ knowing before you trust anything below.
 
 - **Recording.** No engine command arms a take. The button is drawn disabled.
 - **Metronome.** Same. The `CLICK` chip is drawn unavailable.
-- **Sends, returns, aux, pre/post.** Grouping is track-to-track routing. The MASTER strip is
-  built — see the mixer section — but with two engine-side gaps that `master-strip.mjs`
-  asserts so they retire themselves: a master-only edit does not move `uiMixerVersion`, so
-  the strip never gets an acknowledgement and shows its pending styling until something else
-  changes; and the master's peak is published as a constant zero, so its meter cannot move.
-  Both are read-back gaps. The fader and mute themselves reach the engine and are applied.
+- **Sends, returns, aux, pre/post.** Grouping is track-to-track routing. The master strip
+  itself is built — see the mixer section.
 - **Selecting or editing a tuning.** The scale registry is a fixed built-in list. The harmony
   card's TET chip is a readout by construction.
 - **The scale roll's scale features** — degree gutter, in-key shading, cents column. The
