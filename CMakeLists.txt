@@ -70,6 +70,9 @@ add_executable(daw_engine
   apps/engine_sampler_commands.cpp
   apps/engine_automation_commands.cpp
   apps/engine_clip_commands.cpp
+  apps/engine_modlink_commands.cpp
+  apps/engine_module_commands.cpp
+  apps/engine_patcher_commands.cpp
   apps/audio_shm.cpp
   apps/clip_edit.cpp
   apps/chord_resolver.cpp
@@ -453,6 +456,36 @@ target_include_directories(engine_sampler_commands_tests PRIVATE
   ${Boost_INCLUDE_DIRS}
 )
 target_link_libraries(engine_sampler_commands_tests PRIVATE platform_juce)
+
+# The automation handlers' four refusal paths are SILENT — a structured event and a return, with
+# nothing on the wire. These tests point DAW_EVENT_LOG at a file and assert WHICH refusal fired,
+# because "no lane was created" is otherwise identical across all four.
+add_executable(engine_automation_commands_tests
+  apps/engine_automation_commands_tests_main.cpp
+  apps/engine_automation_commands.cpp
+  apps/engine_pure.cpp
+  apps/clip_edit.cpp
+  apps/project_file.cpp
+  apps/harmony_timeline.cpp
+  apps/scale_library.cpp
+  apps/patcher_graph.cpp
+  apps/patcher_preset.cpp
+  apps/patcher_preset_library.cpp
+  apps/patcher_abi.cpp
+  apps/device_chain.cpp
+  apps/event_log.cpp
+  apps/event_ring.cpp
+  apps/shared_memory.cpp
+  apps/host_controller.cpp
+  apps/ipc_io.cpp
+  apps/ui_snapshot.cpp
+  apps/audio_shm.cpp
+)
+target_include_directories(engine_automation_commands_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(engine_automation_commands_tests PRIVATE platform_juce)
 
 # Header-only tests for the per-clip grid packed into UiClipExtent.flags.
 add_executable(clip_grid_tests
@@ -1262,6 +1295,12 @@ add_test(NAME engine_sampler_commands
   COMMAND engine_sampler_commands_tests
 )
 set_tests_properties(engine_sampler_commands PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME engine_automation_commands
+  COMMAND engine_automation_commands_tests
+)
+set_tests_properties(engine_automation_commands PROPERTIES
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME clip_grid

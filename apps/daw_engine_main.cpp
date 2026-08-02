@@ -35,6 +35,9 @@
 #include "apps/engine_pure.h"
 #include "apps/engine_automation_commands.h"
 #include "apps/engine_clip_commands.h"
+#include "apps/engine_modlink_commands.h"
+#include "apps/engine_module_commands.h"
+#include "apps/engine_patcher_commands.h"
 #include "apps/engine_sampler_commands.h"
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
@@ -1628,80 +1631,6 @@ inline void getClipEventsInRange(const ClipSnapshot& snapshot,
   for (; it != events.end() && it->nanotickOffset < endTick; ++it) {
     out.push_back(&*it);
   }
-}
-
-// Decode a SetPatcherNodeConfig payload's config block and apply it to ONE graph state.
-//
-// Extracted so the shared-pool path and the per-device path share a single decoder. They had to:
-// the block is an explicit little-endian layout per node type rather than a struct memcpy, and
-// two copies of a hand-written layout is the same "two facts about one thing" that makes a
-// mirror go stale — the second copy would be correct on the day it was written and wrong the
-// first time a field moved.
-//
-// Returns false and sets `failure` when the node does not exist or the type carries no config.
-bool applyNodeConfigTo(daw::PatcherGraphState& state,
-                       const daw::UiPatcherNodeConfigPayload& p,
-                       const char** failure) {
-  const uint8_t* cfg = p.config;
-  auto rdU16 = [&](int i) -> uint32_t {
-    return static_cast<uint32_t>(cfg[i]) | (static_cast<uint32_t>(cfg[i + 1]) << 8);
-  };
-  auto rdU32 = [&](int i) -> uint32_t {
-    return static_cast<uint32_t>(cfg[i]) |
-           (static_cast<uint32_t>(cfg[i + 1]) << 8) |
-           (static_cast<uint32_t>(cfg[i + 2]) << 16) |
-           (static_cast<uint32_t>(cfg[i + 3]) << 24);
-  };
-  const auto type = static_cast<daw::PatcherNodeType>(p.configType);
-  bool updated = false;
-  switch (type) {
-    case daw::PatcherNodeType::Euclidean: {
-      daw::PatcherEuclideanConfig c{};
-      c.steps = rdU16(0);
-      c.hits = rdU16(2);
-      c.offset = rdU16(4);
-      c.degree = cfg[6];
-      c.octave_offset = static_cast<int8_t>(cfg[7]);
-      c.velocity = cfg[8];
-      c.base_octave = cfg[9];
-      c.duration_ticks = rdU32(12);
-      updated = daw::setEuclideanConfig(state, p.nodeId, c);
-      break;
-    }
-    case daw::PatcherNodeType::RandomDegree: {
-      daw::PatcherRandomDegreeConfig c{};
-      c.degree = cfg[0];
-      c.velocity = cfg[1];
-      c.duration_ticks = rdU32(4);
-      updated = daw::setRandomDegreeConfig(state, p.nodeId, c);
-      break;
-    }
-    case daw::PatcherNodeType::SliceSelect: {
-      daw::PatcherSliceSelectConfig c{};
-      c.base = static_cast<uint16_t>(rdU16(0));
-      c.count = static_cast<uint16_t>(rdU16(2));
-      updated = daw::setSliceSelectConfig(state, p.nodeId, c);
-      break;
-    }
-    case daw::PatcherNodeType::Lfo: {
-      daw::PatcherLfoConfig c{};
-      c.frequency_hz = static_cast<int32_t>(rdU32(0)) / 1000.0f;
-      c.depth = static_cast<int32_t>(rdU32(4)) / 1000.0f;
-      c.bias = static_cast<int32_t>(rdU32(8)) / 1000.0f;
-      c.phase_offset = static_cast<int32_t>(rdU32(12)) / 1000.0f;
-      updated = daw::setLfoConfig(state, p.nodeId, c);
-      break;
-    }
-    default:
-      if (failure) {
-        *failure = "invalid_type";
-      }
-      return false;
-  }
-  if (!updated && failure) {
-    *failure = "invalid_node";
-  }
-  return updated;
 }
 
 }  // namespace
@@ -9279,6 +9208,31 @@ int main(int argc, char** argv) {
       tracks, tracksMutex, clipVersion, uiShm,
       bumpClipVersionForFn, publishAudioClipTableFn, rebuildAudioRenderFn, writeUiClipExtentsFn};
 
+  const std::function<void(uint16_t, uint32_t, uint32_t)> emitModErrorFn = emitModError;
+  const std::function<void(TrackRuntime&)> emitModSnapshotFn = emitModSnapshot;
+  daw::engine::ModlinkCommandDeps modlinkCommandDeps{
+      tracks, tracksMutex, buildTrackSnapshotFn, emitModErrorFn, emitModSnapshotFn,
+      historyAppendFn};
+
+  const std::function<void(uint32_t, uint16_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
+                           uint32_t, uint32_t)> emitPatcherGraphDeltaFn = emitPatcherGraphDelta;
+  const std::function<void(uint16_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
+                           uint32_t)> emitPatcherGraphErrorFn = emitPatcherGraphError;
+  const std::function<void(const daw::UiDiffPayload&)> emitUiDiffFn = emitUiDiff;
+  const std::function<bool()> reassemblePatcherFromDevicesFn = reassemblePatcherFromDevices;
+  const std::function<void()> updatePatcherGraphSnapshotFn = updatePatcherGraphSnapshot;
+  daw::engine::PatcherCommandDeps patcherCommandDeps{
+      tracks, tracksMutex, patcherGraphState, patcherPoolEdited,
+      buildTrackSnapshotFn, emitPatcherGraphDeltaFn, emitPatcherGraphErrorFn, emitUiDiffFn,
+      reassemblePatcherFromDevicesFn, updatePatcherGraphSnapshotFn};
+
+  const std::function<bool(const std::string&, std::string*)> saveProjectToPathFn =
+      saveProjectToPath;
+  const std::function<bool(const std::string&, std::string*)> loadProjectFromPathFn =
+      loadProjectFromPath;
+  daw::engine::ModuleCommandDeps moduleCommandDeps{
+      loadedProjectDir, saveProjectToPathFn, loadProjectFromPathFn};
+
   auto handleUiEntry = [&](const daw::EventEntry& entry) {
     if (entry.type != static_cast<uint16_t>(daw::EventType::UiCommand)) {
       return;
@@ -9966,337 +9920,17 @@ int main(int argc, char** argv) {
         (commandType == daw::UiCommandType::AddModLink ||
          commandType == daw::UiCommandType::RemoveModLink ||
          commandType == daw::UiCommandType::SetModLinkDepth)) {
-      daw::UiModLinkCommandPayload modPayload{};
-      std::memcpy(&modPayload, entry.payload, sizeof(modPayload));
-      const auto commandType =
-          static_cast<daw::UiCommandType>(modPayload.commandType);
-      if (commandType != daw::UiCommandType::AddModLink &&
-          commandType != daw::UiCommandType::RemoveModLink &&
-          commandType != daw::UiCommandType::SetModLinkDepth) {
-        return;
-      }
-      constexpr uint16_t kModErrTrackMissing = 1;
-      constexpr uint16_t kModErrLinkMissing = 2;
-      constexpr uint16_t kModErrInvalidKind = 3;
-      constexpr uint16_t kModErrInvalidDevice = 4;
-      constexpr uint16_t kModErrOrderViolation = 5;
-      constexpr uint16_t kModErrLinkExists = 6;
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (modPayload.trackId < tracks.size()) {
-          runtime = tracks[modPayload.trackId].get();
-        }
-      }
-      if (!runtime) {
-        emitModError(kModErrTrackMissing, modPayload.trackId, modPayload.linkId);
-        return;
-      }
-      // A REMOVE NEEDS ONLY (track, link), AND A DEPTH CHANGE ONLY (track, link, depth). Both
-      // used to fall through the ADD's validation below — kind decoding, findDevicePos on both
-      // device ids, and the forward-order test — so a caller that knew a link's id still had to
-      // send the devices it happens to connect. Unstated ids default to 0, so on a project whose
-      // device ids start higher EVERY removal was refused as kModErrInvalidDevice while the
-      // caller was told it succeeded, and the links piled up. It looked correct only because
-      // rack.uniproj.json has a device 0, so the default resolved there.
-      //
-      // Reported by the frontend agent, who worked around it by looking each link up and sending
-      // its devices. Validating what a command does not use is how a command acquires arguments
-      // that have nothing to do with it.
-      if (commandType == daw::UiCommandType::RemoveModLink ||
-          commandType == daw::UiCommandType::SetModLinkDepth) {
-        const bool removing = commandType == daw::UiCommandType::RemoveModLink;
-        bool touched = false;
-        {
-          std::lock_guard<std::mutex> lock(runtime->trackMutex);
-          auto& links = runtime->track.modRegistry.links;
-          if (removing) {
-            const auto before = links.size();
-            links.erase(std::remove_if(links.begin(), links.end(),
-                                       [&](const daw::ModLink& link) {
-                                         return link.linkId == modPayload.linkId;
-                                       }),
-                        links.end());
-            touched = links.size() != before;
-          } else {
-            // IN PLACE, so the id, the uid16 and the source/target survive. Remove+add was the
-            // only way to change a depth, and it changed the id, dropped the uid16 (which
-            // silently disables the modulation) and was not atomic — which put a depth SLIDER
-            // out of reach, since a continuous gesture would tear the link down and rebuild it
-            // every frame. That was a UI limitation caused by the opcode set.
-            for (auto& link : links) {
-              if (link.linkId != modPayload.linkId) {
-                continue;
-              }
-              link.depth = modPayload.depth;
-              link.bias = modPayload.bias;
-              link.enabled = ((modPayload.flags >> 10) & 0x1u) != 0;
-              touched = true;
-              break;
-            }
-          }
-        }
-        if (!touched) {
-          emitModError(kModErrLinkMissing, modPayload.trackId, modPayload.linkId);
-          return;
-        }
-        std::shared_ptr<const TrackStateSnapshot> snapshot;
-        {
-          std::lock_guard<std::mutex> lock(runtime->trackMutex);
-          snapshot = buildTrackSnapshot(runtime->track);
-        }
-        std::atomic_store_explicit(&runtime->trackSnapshot, snapshot,
-                                   std::memory_order_release);
-        emitModSnapshot(*runtime);
-        DAW_EVENT(removing ? "modlink.removed" : "modlink.depth_set")
-            .field("track", modPayload.trackId)
-            .field("link", modPayload.linkId)
-            .field("depth", static_cast<double>(modPayload.depth))
-            .field("bias", static_cast<double>(modPayload.bias));
-        historyAppend(daw::uiCommandTypeName(commandType), "received",
-                      modPayload.trackId, 0, "");
-        return;
-      }
-
-      auto decodeSourceKind = [&](uint16_t flags) -> std::optional<daw::ModSourceKind> {
-        const uint8_t raw = static_cast<uint8_t>(flags & 0x0Fu);
-        if (raw > static_cast<uint8_t>(daw::ModSourceKind::PatcherNodeOutput)) {
-          return std::nullopt;
-        }
-        return static_cast<daw::ModSourceKind>(raw);
-      };
-      auto decodeTargetKind = [&](uint16_t flags) -> std::optional<daw::ModTargetKind> {
-        const uint8_t raw = static_cast<uint8_t>((flags >> 4) & 0x0Fu);
-        if (raw > static_cast<uint8_t>(daw::ModTargetKind::PatcherMacro)) {
-          return std::nullopt;
-        }
-        return static_cast<daw::ModTargetKind>(raw);
-      };
-      auto decodeRate = [&](uint16_t flags) -> std::optional<daw::ModRate> {
-        const uint8_t raw = static_cast<uint8_t>((flags >> 8) & 0x03u);
-        if (raw > static_cast<uint8_t>(daw::ModRate::SampleRate)) {
-          return std::nullopt;
-        }
-        return static_cast<daw::ModRate>(raw);
-      };
-      const bool enabled = ((modPayload.flags >> 10) & 0x1u) != 0;
-      auto sourceKind = decodeSourceKind(modPayload.flags);
-      auto targetKind = decodeTargetKind(modPayload.flags);
-      auto rate = decodeRate(modPayload.flags);
-      if (!sourceKind || !targetKind || !rate) {
-        emitModError(kModErrInvalidKind, modPayload.trackId, modPayload.linkId);
-        return;
-      }
-      std::vector<daw::Device> devices;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        devices = runtime->track.chain.devices;
-      }
-      auto findDevicePos = [&](uint32_t deviceId) -> std::optional<size_t> {
-        for (size_t i = 0; i < devices.size(); ++i) {
-          if (devices[i].id == deviceId) {
-            return i;
-          }
-        }
-        return std::nullopt;
-      };
-      auto sourcePos = findDevicePos(modPayload.sourceDeviceId);
-      auto targetPos = findDevicePos(modPayload.targetDeviceId);
-      if (!sourcePos || !targetPos) {
-        emitModError(kModErrInvalidDevice, modPayload.trackId, modPayload.linkId);
-        return;
-      }
-      // Modulation flows FORWARD, so a device later in the chain must not modulate an
-      // earlier one — by the time its value exists, the earlier device's audio has
-      // already gone past. SAME device is fine and is in fact the common case now that
-      // patchers are per-device: an LFO in device N's own graph driving device N's
-      // cutoff is the ordinary thing to want.
-      //
-      // This used to reject same-device links (>= rather than >), which meant the
-      // engine ACCEPTED from a file what it REFUSED from the UI — the loader installs
-      // mod links without this check. presets/projects/rack.uniproj.json ships exactly
-      // such a link, so the rack demo's modulation worked on load and could never be
-      // recreated by hand. Found by daw_lint (M2.20) on its first run over the presets.
-      if (*sourcePos > *targetPos) {
-        emitModError(kModErrOrderViolation, modPayload.trackId, modPayload.linkId);
-        return;
-      }
-      // ADD ONLY from here — remove and depth returned above.
-      bool updated = false;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        {
-          auto& links = runtime->track.modRegistry.links;
-          if (modPayload.linkId == daw::kModLinkIdAuto) {
-            uint32_t nextId = 1;
-            for (const auto& link : links) {
-              nextId = std::max(nextId, link.linkId + 1);
-            }
-            modPayload.linkId = nextId;
-            // SAY WHICH ID. The caller sent the AUTO sentinel, so until this event existed the
-            // only thing it could report was the sentinel itself — and a caller that then passed
-            // 4294967295 to RemoveModLink matched nothing. Same shape as addPatcherNode's
-            // UINT32_MAX-on-failure being reported as a new node id.
-            DAW_EVENT("modlink.added")
-                .field("track", modPayload.trackId)
-                .field("link", nextId)
-                .field("auto", true);
-          } else {
-            const bool exists =
-                std::any_of(links.begin(),
-                            links.end(),
-                            [&](const daw::ModLink& link) {
-                              return link.linkId == modPayload.linkId;
-                            });
-            if (exists) {
-              emitModError(kModErrLinkExists, modPayload.trackId,
-                           modPayload.linkId);
-              return;
-            }
-          }
-          daw::ModLink link{};
-          link.linkId = modPayload.linkId;
-          link.source.deviceId = modPayload.sourceDeviceId;
-          link.source.sourceId = modPayload.sourceId;
-          link.source.kind = *sourceKind;
-          link.target.deviceId = modPayload.targetDeviceId;
-          link.target.targetId = modPayload.targetId;
-          link.target.kind = *targetKind;
-          link.depth = modPayload.depth;
-          link.bias = modPayload.bias;
-          link.rate = *rate;
-          link.enabled = enabled;
-          links.push_back(link);
-          updated = true;
-        }
-      }
-      if (updated) {
-        std::shared_ptr<const TrackStateSnapshot> snapshot;
-        {
-          std::lock_guard<std::mutex> lock(runtime->trackMutex);
-          snapshot = buildTrackSnapshot(runtime->track);
-        }
-        std::atomic_store_explicit(&runtime->trackSnapshot,
-                                   snapshot,
-                                   std::memory_order_release);
-        emitModSnapshot(*runtime);
-      }
+      daw::engine::handleAddModLink(modlinkCommandDeps, entry, header, commandType);
       return;
     }
     if (entry.size == sizeof(daw::UiModLinkUid16Payload) &&
         commandType == daw::UiCommandType::SetModLinkUid16) {
-      daw::UiModLinkUid16Payload modPayload{};
-      std::memcpy(&modPayload, entry.payload, sizeof(modPayload));
-      if (modPayload.commandType !=
-          static_cast<uint16_t>(daw::UiCommandType::SetModLinkUid16)) {
-        return;
-      }
-      constexpr uint16_t kModErrTrackMissing = 1;
-      constexpr uint16_t kModErrLinkMissing = 2;
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (modPayload.trackId < tracks.size()) {
-          runtime = tracks[modPayload.trackId].get();
-        }
-      }
-      if (!runtime) {
-        emitModError(kModErrTrackMissing, modPayload.trackId, modPayload.linkId);
-        return;
-      }
-      bool updated = false;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        for (auto& link : runtime->track.modRegistry.links) {
-          if (link.linkId != modPayload.linkId) {
-            continue;
-          }
-          std::memcpy(link.target.uid16,
-                      modPayload.uid16,
-                      sizeof(link.target.uid16));
-          updated = true;
-          break;
-        }
-      }
-      if (updated) {
-        std::shared_ptr<const TrackStateSnapshot> snapshot;
-        {
-          std::lock_guard<std::mutex> lock(runtime->trackMutex);
-          snapshot = buildTrackSnapshot(runtime->track);
-        }
-        std::atomic_store_explicit(&runtime->trackSnapshot,
-                                   snapshot,
-                                   std::memory_order_release);
-        emitModSnapshot(*runtime);
-      } else {
-        emitModError(kModErrLinkMissing, modPayload.trackId, modPayload.linkId);
-      }
+      daw::engine::handleSetModLinkUid16(modlinkCommandDeps, entry, header, commandType);
       return;
     }
     if (entry.size == sizeof(daw::UiModSourceValuePayload) &&
         commandType == daw::UiCommandType::SetModSourceValue) {
-      daw::UiModSourceValuePayload modPayload{};
-      std::memcpy(&modPayload, entry.payload, sizeof(modPayload));
-      if (modPayload.commandType !=
-          static_cast<uint16_t>(daw::UiCommandType::SetModSourceValue)) {
-        return;
-      }
-      constexpr uint16_t kModErrTrackMissing = 1;
-      constexpr uint16_t kModErrInvalidKind = 3;
-      constexpr uint16_t kModErrInvalidDevice = 4;
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (modPayload.trackId < tracks.size()) {
-          runtime = tracks[modPayload.trackId].get();
-        }
-      }
-      if (!runtime) {
-        emitModError(kModErrTrackMissing, modPayload.trackId, 0);
-        return;
-      }
-      const uint8_t rawKind = static_cast<uint8_t>(modPayload.flags & 0x0Fu);
-      if (rawKind > static_cast<uint8_t>(daw::ModSourceKind::PatcherNodeOutput)) {
-        emitModError(kModErrInvalidKind, modPayload.trackId, 0);
-        return;
-      }
-      const auto kind = static_cast<daw::ModSourceKind>(rawKind);
-      bool deviceFound = false;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        for (const auto& device : runtime->track.chain.devices) {
-          if (device.id == modPayload.sourceDeviceId) {
-            deviceFound = true;
-            break;
-          }
-        }
-      }
-      if (!deviceFound) {
-        emitModError(kModErrInvalidDevice, modPayload.trackId, 0);
-        return;
-      }
-      {
-        std::lock_guard<std::mutex> lock(runtime->modSourcesMutex);
-        auto& sources = runtime->modSources;
-        bool updated = false;
-        for (auto& source : sources) {
-          if (source.ref.deviceId == modPayload.sourceDeviceId &&
-              source.ref.sourceId == modPayload.sourceId &&
-              source.ref.kind == kind) {
-            source.value = modPayload.value;
-            updated = true;
-            break;
-          }
-        }
-        if (!updated) {
-          daw::ModSourceState state{};
-          state.ref.deviceId = modPayload.sourceDeviceId;
-          state.ref.sourceId = modPayload.sourceId;
-          state.ref.kind = kind;
-          state.value = modPayload.value;
-          sources.push_back(state);
-        }
-      }
+      daw::engine::handleSetModSourceValue(modlinkCommandDeps, entry, header, commandType);
       return;
     }
     // PER-DEVICE PATCHER EDITS. "Patcher is a device" moved the DATA model and the read-back to
@@ -10316,355 +9950,12 @@ int main(int argc, char** argv) {
         (commandType == daw::UiCommandType::AddPatcherNode ||
          commandType == daw::UiCommandType::RemovePatcherNode ||
          commandType == daw::UiCommandType::ConnectPatcherNodes)) {
-      daw::UiPatcherGraphCommandPayload probe{};
-      std::memcpy(&probe, entry.payload, sizeof(probe));
-      if ((probe.flags & daw::kUiPatcherFlagHasDeviceId) != 0) {
-        const uint32_t deviceId =
-            static_cast<uint32_t>(probe.flags & daw::kUiPatcherDeviceIdMask);
-        TrackRuntime* runtime = nullptr;
-        {
-          std::lock_guard<std::mutex> lock(tracksMutex);
-          if (probe.trackId < tracks.size()) {
-            runtime = tracks[probe.trackId].get();
-          }
-        }
-        auto refuse = [&](const char* why) {
-          DAW_EVENT("patcher_device_edit.rejected")
-              .field("track", probe.trackId)
-              .field("device", deviceId)
-              .field("op", daw::uiCommandTypeName(commandType))
-              .field("reason", why);
-        };
-        if (!runtime) {
-          refuse("no_such_track");
-          return;
-        }
-        bool applied = false;
-        uint32_t newNodeId = 0;
-        const char* failure = nullptr;
-        {
-          std::lock_guard<std::mutex> lock(runtime->trackMutex);
-          daw::Device* device = nullptr;
-          for (auto& d : runtime->track.chain.devices) {
-            if (d.id == deviceId) {
-              device = &d;
-              break;
-            }
-          }
-          if (!device) {
-            failure = "no_such_device";
-          } else {
-            // Scratch state around THIS device's authored graph. nextNodeId comes from the
-            // graph itself so a new node cannot collide with one already in it.
-            daw::PatcherGraphState scratch;
-            scratch.graph = device->patcher;
-            uint32_t next = 0;
-            for (const auto& n : scratch.graph.nodes) {
-              next = std::max(next, n.id + 1);
-            }
-            scratch.nextNodeId = next;
-            if (commandType == daw::UiCommandType::AddPatcherNode) {
-              if (probe.nodeType >
-                  static_cast<uint32_t>(daw::kPatcherNodeTypeMax)) {
-                failure = "invalid_node_type";
-              } else {
-                newNodeId = daw::addPatcherNode(
-                    scratch, static_cast<daw::PatcherNodeType>(probe.nodeType));
-                // addPatcherNode returns UINT32_MAX when the graph will not BUILD with the new
-                // node and rolls it back. Treating that as success reported an edit that had been
-                // refused — and the report even carried 4294967295 as the new node id, which is
-                // the sentinel announcing itself.
-                applied = newNodeId != std::numeric_limits<uint32_t>::max();
-                if (!applied) {
-                  failure = "graph_would_not_build";
-                }
-              }
-            } else if (commandType == daw::UiCommandType::RemovePatcherNode) {
-              applied = daw::removePatcherNode(scratch, probe.nodeId);
-              if (!applied) {
-                failure = "invalid_node";
-              }
-            } else {
-              const auto result = daw::connectPatcherNodes(
-                  scratch, probe.srcNodeId, probe.srcPortId, probe.dstNodeId,
-                  probe.dstPortId,
-                  static_cast<daw::PatcherPortKind>(probe.edgeKind));
-              applied = result == daw::PatcherConnectResult::Ok;
-              if (!applied) {
-                failure = result == daw::PatcherConnectResult::InvalidNode
-                              ? "invalid_node"
-                              : (result == daw::PatcherConnectResult::InvalidPort
-                                     ? "invalid_port"
-                                     : (result == daw::PatcherConnectResult::Cycle
-                                            ? "cycle"
-                                            : "invalid_connection"));
-              }
-            }
-            if (applied) {
-              device->patcher = scratch.graph;
-              runtime->trackSnapshot = buildTrackSnapshot(runtime->track);
-            }
-          }
-        }
-        if (!applied) {
-          refuse(failure ? failure : "failed");
-          return;
-        }
-        // The pool is DERIVED from the device graphs, so re-derive it — otherwise the edit is
-        // saved and does nothing until the next load, which is its own kind of lie.
-        const bool executing = reassemblePatcherFromDevices();
-        DAW_EVENT("patcher_device_edit.applied")
-            .field("track", probe.trackId)
-            .field("device", deviceId)
-            .field("op", daw::uiCommandTypeName(commandType))
-            .field("node", newNodeId)
-            .field("executing", executing);
-        return;
-      }
-      daw::UiPatcherGraphCommandPayload graphPayload{};
-      std::memcpy(&graphPayload, entry.payload, sizeof(graphPayload));
-      constexpr uint16_t kGraphErrInvalidType = 1;
-      constexpr uint16_t kGraphErrInvalidNode = 2;
-      constexpr uint16_t kGraphErrCycle = 3;
-      constexpr uint16_t kGraphErrAddFailed = 4;
-      constexpr uint16_t kGraphErrInvalidConnection = 5;
-      constexpr uint16_t kGraphErrInvalidPort = 6;
-      if (commandType == daw::UiCommandType::AddPatcherNode) {
-        if (graphPayload.nodeType >
-            static_cast<uint32_t>(daw::kPatcherNodeTypeMax)) {
-          emitPatcherGraphError(kGraphErrInvalidType,
-                                graphPayload.trackId,
-                                graphPayload.nodeId,
-                                0,
-                                0,
-                                0,
-                                0,
-                                0);
-          return;
-        }
-        const auto nodeId = addPatcherNode(
-            patcherGraphState,
-            static_cast<daw::PatcherNodeType>(graphPayload.nodeType));
-        if (nodeId == std::numeric_limits<uint32_t>::max()) {
-          emitPatcherGraphError(kGraphErrAddFailed,
-                                graphPayload.trackId,
-                                graphPayload.nodeId,
-                                0,
-                                0,
-                                0,
-                                0,
-                                0);
-          return;
-        }
-        patcherPoolEdited.store(true, std::memory_order_release);
-        updatePatcherGraphSnapshot();
-        emitPatcherGraphDelta(graphPayload.trackId,
-                              0,
-                              nodeId,
-                              graphPayload.nodeType,
-                              0,
-                              0,
-                              0,
-                              0,
-                              0);
-        return;
-      }
-      if (commandType == daw::UiCommandType::RemovePatcherNode) {
-        if (!removePatcherNode(patcherGraphState, graphPayload.nodeId)) {
-          emitPatcherGraphError(kGraphErrInvalidNode,
-                                graphPayload.trackId,
-                                graphPayload.nodeId,
-                                0,
-                                0,
-                                0,
-                                0,
-                                0);
-          return;
-        }
-        patcherPoolEdited.store(true, std::memory_order_release);
-        updatePatcherGraphSnapshot();
-        emitPatcherGraphDelta(graphPayload.trackId,
-                              1,
-                              graphPayload.nodeId,
-                              0,
-                              0,
-                              0,
-                              0,
-                              0,
-                              0);
-        return;
-      }
-      if (commandType == daw::UiCommandType::ConnectPatcherNodes) {
-        if (graphPayload.edgeKind >
-            static_cast<uint32_t>(daw::PatcherPortKind::Control)) {
-          emitPatcherGraphError(kGraphErrInvalidConnection,
-                                graphPayload.trackId,
-                                0,
-                                graphPayload.srcNodeId,
-                                graphPayload.dstNodeId,
-                                graphPayload.srcPortId,
-                                graphPayload.dstPortId,
-                                graphPayload.edgeKind);
-          return;
-        }
-        if (graphPayload.srcNodeId == graphPayload.dstNodeId) {
-          emitPatcherGraphError(kGraphErrInvalidNode,
-                                graphPayload.trackId,
-                                0,
-                                graphPayload.srcNodeId,
-                                graphPayload.dstNodeId,
-                                graphPayload.srcPortId,
-                                graphPayload.dstPortId,
-                                graphPayload.edgeKind);
-          return;
-        }
-        const auto result = connectPatcherNodes(patcherGraphState,
-                                                graphPayload.srcNodeId,
-                                                graphPayload.srcPortId,
-                                                graphPayload.dstNodeId,
-                                                graphPayload.dstPortId,
-                                                static_cast<daw::PatcherPortKind>(
-                                                    graphPayload.edgeKind));
-        if (result != daw::PatcherConnectResult::Ok) {
-          const uint16_t errorCode =
-              result == daw::PatcherConnectResult::InvalidNode
-                  ? kGraphErrInvalidNode
-                  : (result == daw::PatcherConnectResult::InvalidPort
-                         ? kGraphErrInvalidPort
-                         : (result == daw::PatcherConnectResult::InvalidConnection
-                                ? kGraphErrInvalidConnection
-                                : kGraphErrCycle));
-          emitPatcherGraphError(errorCode,
-                                graphPayload.trackId,
-                                0,
-                                graphPayload.srcNodeId,
-                                graphPayload.dstNodeId,
-                                graphPayload.srcPortId,
-                                graphPayload.dstPortId,
-                                graphPayload.edgeKind);
-          return;
-        }
-        patcherPoolEdited.store(true, std::memory_order_release);
-        updatePatcherGraphSnapshot();
-        emitPatcherGraphDelta(graphPayload.trackId,
-                              2,
-                              0,
-                              0,
-                              graphPayload.srcNodeId,
-                              graphPayload.dstNodeId,
-                              graphPayload.srcPortId,
-                              graphPayload.dstPortId,
-                              graphPayload.edgeKind);
-        return;
-      }
+      daw::engine::handleAddPatcherNode(patcherCommandDeps, entry, header, commandType);
+      return;
     }
     if (entry.size == sizeof(daw::UiPatcherNodeConfigPayload) &&
         commandType == daw::UiCommandType::SetPatcherNodeConfig) {
-      daw::UiPatcherNodeConfigPayload configPayload{};
-      std::memcpy(&configPayload, entry.payload, sizeof(configPayload));
-      // A DEVICE'S OWN GRAPH, if the caller named one — same flag encoding the graph commands
-      // already use (bit 15 set, deviceId in bits 0-14).
-      //
-      // Without this the handler below edits `patcherGraphState`, the SHARED POOL, and since
-      // patcher-is-a-device the pool is not what a project renders. So NO node's config was
-      // editable by command on a per-device graph: not the new SliceSelect, and not euclidean's
-      // hits or the LFO's rate either — verified with a pre-existing node type before assuming
-      // it was the new one's wiring. Task #73 fixed exactly this for AddPatcherNode /
-      // RemovePatcherNode / ConnectPatcherNodes, which share a different payload; this command
-      // was never brought along.
-      //
-      // It reported SUCCESS the whole time: the pool has no node with that id, `updated` stays
-      // false, and the refusal goes into an SHM diff no CLI surfaces.
-      if ((configPayload.flags & daw::kUiPatcherFlagHasDeviceId) != 0) {
-        const uint32_t deviceId =
-            static_cast<uint32_t>(configPayload.flags & daw::kUiPatcherDeviceIdMask);
-        TrackRuntime* runtime = nullptr;
-        {
-          std::lock_guard<std::mutex> lock(tracksMutex);
-          if (configPayload.trackId < tracks.size()) {
-            runtime = tracks[configPayload.trackId].get();
-          }
-        }
-        auto refuseCfg = [&](const char* why) {
-          DAW_EVENT("patcher_device_edit.rejected")
-              .field("track", configPayload.trackId)
-              .field("device", deviceId)
-              .field("op", daw::uiCommandTypeName(commandType))
-              .field("reason", why);
-        };
-        if (!runtime) {
-          refuseCfg("no_such_track");
-          return;
-        }
-        bool applied = false;
-        const char* failure = nullptr;
-        {
-          std::lock_guard<std::mutex> lock(runtime->trackMutex);
-          daw::Device* device = nullptr;
-          for (auto& d : runtime->track.chain.devices) {
-            if (d.id == deviceId) {
-              device = &d;
-              break;
-            }
-          }
-          if (!device) {
-            failure = "no_such_device";
-          } else {
-            daw::PatcherGraphState scratch;
-            scratch.graph = device->patcher;
-            applied = applyNodeConfigTo(scratch, configPayload, &failure);
-            if (applied) {
-              device->patcher = scratch.graph;
-              runtime->trackSnapshot = buildTrackSnapshot(runtime->track);
-            }
-          }
-        }
-        if (!applied) {
-          refuseCfg(failure ? failure : "failed");
-          return;
-        }
-        // The pool is DERIVED from the device graphs, so re-derive it — otherwise the edit is
-        // saved and does nothing until the next load.
-        const bool executing = reassemblePatcherFromDevices();
-        DAW_EVENT("patcher_device_edit.applied")
-            .field("track", configPayload.trackId)
-            .field("device", deviceId)
-            .field("op", daw::uiCommandTypeName(commandType))
-            .field("node", configPayload.nodeId)
-            .field("executing", executing);
-        return;
-      }
-      constexpr uint16_t kGraphErrInvalidType = 1;
-      constexpr uint16_t kGraphErrInvalidNode = 2;
-      // THE SHARED POOL. Reached only when the caller did NOT name a device; the device branch
-      // above returns. Same decoder either way — see applyNodeConfigTo.
-      const char* cfgFailure = nullptr;
-      const bool updated =
-          applyNodeConfigTo(patcherGraphState, configPayload, &cfgFailure);
-      if (!updated) {
-        const bool badType =
-            cfgFailure != nullptr && std::strcmp(cfgFailure, "invalid_type") == 0;
-        emitPatcherGraphError(badType ? kGraphErrInvalidType : kGraphErrInvalidNode,
-                              configPayload.trackId,
-                              configPayload.nodeId,
-                              0,
-                              0,
-                              0,
-                              0,
-                              0);
-        return;
-      }
-      patcherPoolEdited.store(true, std::memory_order_release);
-      updatePatcherGraphSnapshot();
-      emitPatcherGraphDelta(configPayload.trackId,
-                            3,
-                            configPayload.nodeId,
-                            configPayload.configType,
-                            0,
-                            0,
-                            0,
-                            0,
-                            0);
+      daw::engine::handleSetPatcherNodeConfig(patcherCommandDeps, entry, header, commandType);
       return;
     }
     if (entry.size == sizeof(daw::UiPatcherPresetCommandPayload) &&
@@ -10879,76 +10170,7 @@ int main(int argc, char** argv) {
     if (entry.size == sizeof(daw::UiPatcherPresetCommandPayload) &&
         (commandType == daw::UiCommandType::SaveModule ||
          commandType == daw::UiCommandType::LoadModule)) {
-      daw::UiPatcherPresetCommandPayload np{};
-      std::memcpy(&np, entry.payload, sizeof(np));
-      std::string name(np.name, strnlen(np.name, sizeof(np.name)));
-      if (name.empty()) {
-        name = "default";
-      }
-      const std::string dir = daw::defaultProjectDir();
-      std::error_code ec;
-      std::filesystem::create_directories(dir, ec);
-      const std::string modulePath = (std::filesystem::path(dir) / (name + ".uni")).string();
-      std::string err;
-      if (commandType == daw::UiCommandType::SaveModule) {
-        // Assets resolve against the directory the project was LOADED from, which is where the
-        // sampler's project-relative names point. Using the save directory instead would work
-        // only when they happen to be the same, and fail silently when they are not.
-        // SAVE LOOSE FIRST, THEN PACK WHAT WAS SAVED. Not because it is fewer lines — it is
-        // more — but because building the document a SECOND way here would be a second answer to
-        // "what is this project", and the two would drift. saveProjectToPath already reads LIVE
-        // engine state, which is the part that is easy to get wrong; packing its output inherits
-        // that for free.
-        //
-        // It also leaves both forms on disk, which is the model: a directory you edit and diff,
-        // a file you send.
-        const std::string loosePath =
-            (std::filesystem::path(dir) / (name + ".uniproj.json")).string();
-        bool ok = saveProjectToPath(loosePath, &err);
-        if (ok) {
-          daw::ProjectDocument doc;
-          ok = daw::loadProject(doc, loosePath, &err);
-          if (ok) {
-            // Assets resolve against the directory the project was LOADED from, which is where
-            // the sampler's project-relative names point. Using the SAVE directory instead would
-            // work only when the two happen to coincide, and fail silently when they do not.
-            //
-            // PLUGIN STATE COMES FROM THE LOOSE SAVE JUST WRITTEN, not from wherever the project
-            // was loaded from. saveProjectToPath above wrote every plugin's blob beside
-            // `loosePath` moments ago, so that directory holds the CURRENT sound of every device;
-            // the load directory may hold a stale copy or none at all.
-            ok = daw::saveProjectModule(
-                doc, modulePath, loadedProjectDir.empty() ? dir : loadedProjectDir,
-                daw::pluginStateDirFor(loosePath), &err);
-          }
-        }
-        DAW_EVENT("project.module_saved")
-            .field("path", modulePath)
-            .field("ok", ok)
-            .field("error", ok ? std::string() : err);
-      } else {
-        // Unpacked BESIDE the module, into a directory named after it. The unpacked form is an
-        // ordinary loose project — the two forms are one document at two levels of packing, so
-        // opening a module leaves you working exactly as if you had never packed it.
-        const std::string unpackDir = (std::filesystem::path(dir) / name).string();
-        daw::ProjectDocument doc;
-        const bool ok = daw::loadProjectModule(doc, modulePath, unpackDir, &err);
-        if (ok) {
-          const std::string docPath =
-              (std::filesystem::path(unpackDir) / "project.json").string();
-          const bool applied = loadProjectFromPath(docPath, &err);
-          DAW_EVENT("project.module_loaded")
-              .field("path", modulePath)
-              .field("unpacked", unpackDir)
-              .field("ok", applied)
-              .field("error", applied ? std::string() : err);
-        } else {
-          DAW_EVENT("project.module_loaded")
-              .field("path", modulePath)
-              .field("ok", false)
-              .field("error", err);
-        }
-      }
+      daw::engine::handleSaveModule(moduleCommandDeps, entry, header, commandType);
       return;
     }
 
@@ -10994,55 +10216,7 @@ int main(int argc, char** argv) {
     }
     if (entry.size == sizeof(daw::UiPatcherPresetCommandPayload) &&
         commandType == daw::UiCommandType::SavePatcherPreset) {
-      daw::UiPatcherPresetCommandPayload presetPayload{};
-      std::memcpy(&presetPayload, entry.payload, sizeof(presetPayload));
-      std::string name(presetPayload.name,
-                       strnlen(presetPayload.name, sizeof(presetPayload.name)));
-      // Every exit from here reports the OUTCOME, including the early refusals. A caller that
-      // gets nothing back cannot tell "refused" from "still working" from "written", and the
-      // one thing it must not do is tell the user it saved.
-      auto reportPreset = [&](bool ok, const std::string& why) {
-        daw::UiPresetSavedPayload result{};
-        result.diffType = static_cast<uint16_t>(daw::UiDiffType::PresetSaved);
-        result.ok = ok ? 1u : 0u;
-        const size_t n = std::min(name.size(), sizeof(result.name) - 1);
-        std::memcpy(result.name, name.data(), n);
-        daw::UiDiffPayload asDiff{};
-        static_assert(sizeof(result) <= sizeof(asDiff),
-                      "the preset result must fit the diff slot it rides");
-        std::memcpy(&asDiff, &result, sizeof(result));
-        emitUiDiff(asDiff);
-        DAW_EVENT("patcher_preset.saved")
-            .field("name", name)
-            .field("ok", ok)
-            .field("error", why);
-      };
-      if (name.empty()) {
-        daw::LogLine() << "UI: SavePatcherPreset failed - empty name" << std::endl;
-        reportPreset(false, "empty_name");
-        return;
-      }
-      const std::string dir = daw::defaultPatcherPresetDir();
-      std::error_code ec;
-      std::filesystem::create_directories(dir, ec);
-      if (ec) {
-        daw::LogLine() << "UI: SavePatcherPreset failed - cannot create dir "
-                  << dir << std::endl;
-        reportPreset(false, "cannot_create_dir");
-        return;
-      }
-      const std::filesystem::path path =
-          std::filesystem::path(dir) / (name + ".json");
-      std::string error;
-      if (!daw::savePatcherPreset(patcherGraphState,
-                                  path.string(),
-                                  &error)) {
-        daw::LogLine() << "UI: SavePatcherPreset failed - " << error << std::endl;
-        reportPreset(false, error);
-      } else {
-        daw::LogLine() << "UI: Saved patcher preset " << path.string() << std::endl;
-        reportPreset(true, std::string());
-      }
+      daw::engine::handleSavePatcherPreset(patcherCommandDeps, entry, header, commandType);
       return;
     }
     if (entry.size == sizeof(daw::UiDeviceEuclideanConfigPayload) &&
