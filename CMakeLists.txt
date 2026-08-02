@@ -82,6 +82,7 @@ set_source_files_properties(${_engine_command_sources}
 add_executable(daw_engine
   apps/daw_engine_main.cpp
   apps/engine_pure.cpp
+  apps/engine_rt_helpers.cpp
   apps/engine_sampler_commands.cpp
   apps/engine_automation_commands.cpp
   apps/engine_clip_commands.cpp
@@ -511,6 +512,35 @@ target_include_directories(engine_automation_commands_tests PRIVATE
   ${Boost_INCLUDE_DIRS}
 )
 target_link_libraries(engine_automation_commands_tests PRIVATE platform_juce)
+
+# THE FIRST TESTS OF REAL-TIME-PATH CODE. These three rules run on the producer thread, which
+# calls elevateToAudioPriority(); until they were extracted, asking whether an unknown scaleId
+# still produces an audible pitch meant booting a process and rendering audio.
+add_executable(engine_rt_helpers_tests
+  apps/engine_rt_helpers_tests_main.cpp
+  apps/engine_rt_helpers.cpp
+  apps/scale_library.cpp
+  apps/harmony_timeline.cpp
+  apps/device_chain.cpp
+  apps/patcher_graph.cpp
+  apps/patcher_abi.cpp
+  apps/event_log.cpp
+  apps/event_ring.cpp
+  apps/shared_memory.cpp
+  apps/host_controller.cpp
+  apps/ipc_io.cpp
+  apps/project_file.cpp
+  apps/patcher_preset.cpp
+  apps/patcher_preset_library.cpp
+  apps/clip_edit.cpp
+  apps/ui_snapshot.cpp
+  apps/audio_shm.cpp
+)
+target_include_directories(engine_rt_helpers_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(engine_rt_helpers_tests PRIVATE platform_juce)
 
 # Header-only tests for the per-clip grid packed into UiClipExtent.flags.
 add_executable(clip_grid_tests
@@ -1326,6 +1356,12 @@ add_test(NAME engine_automation_commands
   COMMAND engine_automation_commands_tests
 )
 set_tests_properties(engine_automation_commands PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME engine_rt_helpers
+  COMMAND engine_rt_helpers_tests
+)
+set_tests_properties(engine_rt_helpers PROPERTIES
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME clip_grid

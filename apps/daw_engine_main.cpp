@@ -33,6 +33,7 @@
 #include "apps/engine_instance.h"
 #include "apps/engine_types.h"
 #include "apps/engine_pure.h"
+#include "apps/engine_rt_helpers.h"
 #include "apps/engine_automation_commands.h"
 #include "apps/engine_clip_commands.h"
 #include "apps/engine_modlink_commands.h"
@@ -3072,18 +3073,6 @@ int main(int argc, char** argv) {
               << gateSampleTime << std::endl;
   };
 
-  auto enqueueMirrorReplay = [&](TrackRuntime& runtime) {
-    // An aux child has no host of its own to mirror params to; when its notes overflow
-    // the PARENT's ring, flagging the CHILD's mirror would set mirrorPending that the
-    // priming/clearing loops (both hostReady-gated) can never service, permanently
-    // wedging the whole producer into mirrorOnly. A child is never mirrored.
-    if (runtime.isAuxChild.load(std::memory_order_acquire)) {
-      return;
-    }
-    runtime.mirrorGateSampleTime.store(0, std::memory_order_release);
-    runtime.mirrorPending.store(true, std::memory_order_release);
-    runtime.mirrorPrimed.store(false, std::memory_order_release);
-  };
 
   if (!uiTrack || getRingStd(*uiTrack).mask == 0 ||
       getRingCtrl(*uiTrack).mask == 0 || getRingUi().mask == 0 ||
@@ -3716,12 +3705,12 @@ int main(int argc, char** argv) {
     return daw::findHarmonyIndex(harmonyEvents, nanotick);
   };
 
+  // The LOCK stays here and the RULE moved to apps/engine_rt_helpers.h. Splitting them is what
+  // made the rule testable: a function that takes a mutex cannot be asked about its behaviour
+  // without also arranging its concurrency.
   auto getHarmonyAt = [&](uint64_t nanotick) -> std::optional<daw::HarmonyEvent> {
     std::lock_guard<std::mutex> lock(harmonyMutex);
-    if (harmonyEvents.empty()) {
-      return daw::HarmonyEvent{0, 0, 1, 0};
-    }
-    return daw::harmonyAt(harmonyEvents, nanotick);
+    return daw::engine::harmonyAtOrDefault(harmonyEvents, nanotick);
   };
 
   const auto& scaleRegistry = daw::ScaleRegistry::instance();
@@ -3730,13 +3719,11 @@ int main(int argc, char** argv) {
     return scaleRegistry.find(harmony.scaleId);
   };
 
+  // Binds the registry; the rule itself is in apps/engine_rt_helpers.h and has a unit test for
+  // the unknown-scale fallback, which no fixture in tools/ exercises.
   auto quantizePitch = [&](uint8_t pitch,
                            const daw::HarmonyEvent& harmony) -> daw::ResolvedPitch {
-    const auto* scale = getScaleForHarmony(harmony);
-    if (!scale) {
-      return daw::resolvedPitchFromCents(static_cast<double>(pitch) * 100.0);
-    }
-    return daw::quantizeToScale(pitch, harmony.root, *scale);
+    return daw::engine::quantizePitch(scaleRegistry, pitch, harmony);
   };
 
 
