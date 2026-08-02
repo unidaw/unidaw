@@ -26,6 +26,7 @@
 
 #include "apps/engine_types.h"
 #include "apps/harmony_timeline.h"
+#include "apps/patcher_graph.h"
 #include "apps/scale_library.h"
 
 namespace daw::engine {
@@ -57,5 +58,39 @@ daw::ResolvedPitch quantizePitch(const daw::ScaleRegistry& registry, uint8_t pit
 // loops — both gated on hostReady — can never service. The producer then wedges into mirrorOnly
 // permanently: nothing observable says why, the engine simply stops emitting.
 void enqueueMirrorReplay(TrackRuntime& runtime);
+
+// ---------------------------------------------------------------- THE RENDER BLOCK'S ARITHMETIC
+//
+// Five rules lifted out of renderTrack, the 1,910-line lambda nested inside the producer thread.
+// They are small on purpose: this is the arithmetic, not a shell around it. A dependency struct
+// of std::function wrapping renderTrack would move the line count and leave every rule exactly as
+// unprovable as before.
+
+// Ticks to samples at the block's current rate. Rounds rather than truncating: a truncating
+// conversion loses up to a sample per event, and the error accumulates across a block rather than
+// cancelling.
+uint64_t tickDeltaToSamples(uint64_t tickDelta, long double samplesPerTick);
+
+// Clamp a normalised control value. Its own function because the modulation path applies it in
+// four places and a clamp that disagrees with itself is a discontinuity you hear.
+float clamp01(float value);
+
+// Scale a velocity for a ramp, WITH A FLOOR OF 1 RATHER THAN 0.
+//
+// This is the rule worth knowing: velocity 0 is a NOTE-OFF in MIDI. A ramp that reached zero
+// would not produce a silent strike, it would produce a STUCK one — the note-on never arrives,
+// so the matching note-off never cuts anything, and the voice hangs. Reachable today only by
+// rendering audio and noticing a note that will not stop.
+uint8_t rampedVelocity(uint8_t velocity, uint16_t scaleMilli);
+
+// A patcher node's index from its id, or nothing. Two ways to be absent — an id past the end of
+// the table, and an id whose slot holds kPatcherInvalidNodeIndex — and both must answer "no"
+// rather than index out of bounds or return a garbage node.
+std::optional<uint32_t> nodeIndexForId(const daw::PatcherGraph& graph, uint32_t nodeId);
+
+// Drop a note id from a column's active list, and drop the column when it empties. Leaving an
+// empty vector behind is not merely untidy: the column then reads as "has active notes" to
+// anything testing presence, and a later cut-all walks a list that should not exist.
+void removeNoteIdFromColumn(TrackRuntime& runtime, uint8_t column, uint32_t noteId);
 
 }  // namespace daw::engine

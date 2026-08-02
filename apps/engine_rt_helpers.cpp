@@ -2,6 +2,9 @@
 // declaration; this file is the mechanics only.
 #include "apps/engine_rt_helpers.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace daw::engine {
 
 std::optional<daw::HarmonyEvent> harmonyAtOrDefault(
@@ -28,6 +31,49 @@ void enqueueMirrorReplay(TrackRuntime& runtime) {
   runtime.mirrorGateSampleTime.store(0, std::memory_order_release);
   runtime.mirrorPending.store(true, std::memory_order_release);
   runtime.mirrorPrimed.store(false, std::memory_order_release);
+}
+
+uint64_t tickDeltaToSamples(uint64_t tickDelta, long double samplesPerTick) {
+  return static_cast<uint64_t>(
+      std::llround(static_cast<long double>(tickDelta) * samplesPerTick));
+}
+
+float clamp01(float value) {
+  return std::max(0.0f, std::min(1.0f, value));
+}
+
+uint8_t rampedVelocity(uint8_t velocity, uint16_t scaleMilli) {
+  if (scaleMilli == 1000) {
+    return velocity;
+  }
+  const uint32_t scaled =
+      (static_cast<uint32_t>(velocity) * scaleMilli + 500u) / 1000u;
+  // Floor of 1, not 0: velocity 0 is a note-off in MIDI, so a ramp that reached
+  // zero would not be a silent strike but a stuck one.
+  return static_cast<uint8_t>(scaled < 1 ? 1 : (scaled > 127 ? 127 : scaled));
+}
+
+std::optional<uint32_t> nodeIndexForId(const daw::PatcherGraph& graph, uint32_t nodeId) {
+  if (nodeId >= graph.idToIndex.size()) {
+    return std::nullopt;
+  }
+  const uint32_t index = graph.idToIndex[nodeId];
+  if (index == daw::kPatcherInvalidNodeIndex) {
+    return std::nullopt;
+  }
+  return index;
+}
+
+void removeNoteIdFromColumn(TrackRuntime& runtime, uint8_t column, uint32_t noteId) {
+  auto columnIt = runtime.activeNoteByColumn.find(column);
+  if (columnIt == runtime.activeNoteByColumn.end()) {
+    return;
+  }
+  auto& notes = columnIt->second;
+  notes.erase(std::remove(notes.begin(), notes.end(), noteId), notes.end());
+  if (notes.empty()) {
+    runtime.activeNoteByColumn.erase(columnIt);
+  }
 }
 
 }  // namespace daw::engine

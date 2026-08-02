@@ -132,12 +132,105 @@ void testEnqueueMirrorReplaySkipsAuxChild() {
   CHECK(child.mirrorGateSampleTime.load(std::memory_order_acquire) == 42);
 }
 
+// ------------------------------------------------------ the render block's arithmetic
+void testTickDeltaToSamples() {
+  CHECK(tickDeltaToSamples(0, 1.0L) == 0);
+  CHECK(tickDeltaToSamples(100, 1.0L) == 100);
+  CHECK(tickDeltaToSamples(10, 4.0L) == 40);
+
+  // IT ROUNDS, IT DOES NOT TRUNCATE, and this is the assertion that tells the two apart:
+  // 3 ticks at 0.5 samples/tick is 1.5 samples. Truncation gives 1, rounding gives 2. A
+  // truncating conversion loses up to a sample per event and the error accumulates across a
+  // block instead of cancelling — audible as timing drift long before anyone calls it a bug.
+  CHECK(tickDeltaToSamples(3, 0.5L) == 2);
+  CHECK(tickDeltaToSamples(1, 0.5L) == 1);   // 0.5 rounds away from zero
+  CHECK(tickDeltaToSamples(1, 0.4L) == 0);   // 0.4 rounds down
+}
+
+void testClamp01() {
+  CHECK(clamp01(0.0f) == 0.0f);
+  CHECK(clamp01(1.0f) == 1.0f);
+  CHECK(clamp01(0.5f) == 0.5f);
+  CHECK(clamp01(-0.1f) == 0.0f);
+  CHECK(clamp01(1.1f) == 1.0f);
+  CHECK(clamp01(-1000.0f) == 0.0f);
+  CHECK(clamp01(1000.0f) == 1.0f);
+}
+
+void testRampedVelocity() {
+  // Unity is a pass-through, exactly — not a multiply that happens to round back.
+  CHECK(rampedVelocity(100, 1000) == 100);
+  CHECK(rampedVelocity(1, 1000) == 1);
+  CHECK(rampedVelocity(127, 1000) == 127);
+
+  CHECK(rampedVelocity(100, 500) == 50);
+  CHECK(rampedVelocity(100, 2000) == 127);   // capped, not wrapped
+
+  // Rounds to nearest: 3 * 0.5 = 1.5 -> 2.
+  CHECK(rampedVelocity(3, 500) == 2);
+
+  // THE FLOOR IS 1, NOT 0. Velocity 0 is a NOTE-OFF in MIDI, so a ramp reaching zero does not
+  // produce a silent strike — it produces a STUCK one: the note-on never arrives, the matching
+  // note-off cuts nothing, and the voice hangs until something else stops it. Any scale small
+  // enough to round to zero must still emit an audible-but-quiet note.
+  CHECK(rampedVelocity(1, 1) == 1);
+  CHECK(rampedVelocity(100, 0) == 1);
+  CHECK(rampedVelocity(1, 0) == 1);
+  CHECK(rampedVelocity(0, 500) == 1);
+}
+
+void testNodeIndexForId() {
+  daw::PatcherGraph g;
+  g.idToIndex = {5, daw::kPatcherInvalidNodeIndex, 7};
+
+  const auto ok = nodeIndexForId(g, 0);
+  CHECK(ok.has_value());
+  if (ok) CHECK(*ok == 5);
+
+  // TWO WAYS TO BE ABSENT, and both must answer "no" rather than index out of bounds or hand
+  // back a garbage node. An id whose slot holds the invalid sentinel is a node that was removed;
+  // an id past the end never existed.
+  CHECK(!nodeIndexForId(g, 1).has_value());
+  CHECK(!nodeIndexForId(g, 3).has_value());
+  CHECK(!nodeIndexForId(g, 99999).has_value());
+
+  daw::PatcherGraph empty;
+  CHECK(!nodeIndexForId(empty, 0).has_value());
+}
+
+void testRemoveNoteIdFromColumn() {
+  TrackRuntime rt;
+  rt.activeNoteByColumn[0] = {10, 11, 12};
+  rt.activeNoteByColumn[1] = {20};
+
+  removeNoteIdFromColumn(rt, 0, 11);
+  CHECK(rt.activeNoteByColumn[0].size() == 2);
+  CHECK(rt.activeNoteByColumn.count(1) == 1);
+
+  // THE COLUMN GOES WHEN IT EMPTIES. Leaving an empty vector behind is not untidiness: the
+  // column then still reads as present to anything testing for active notes, and a later
+  // cut-all walks a list that should no longer exist.
+  removeNoteIdFromColumn(rt, 1, 20);
+  CHECK(rt.activeNoteByColumn.count(1) == 0);
+
+  // Removing something that is not there changes nothing and does not create the column.
+  removeNoteIdFromColumn(rt, 7, 99);
+  CHECK(rt.activeNoteByColumn.count(7) == 0);
+  removeNoteIdFromColumn(rt, 0, 99);
+  CHECK(rt.activeNoteByColumn[0].size() == 2);
+}
+
 }  // namespace
 
 int main() {
   testHarmonyAtOrDefault();
   testQuantizePitchFallback();
   testEnqueueMirrorReplaySkipsAuxChild();
+  testTickDeltaToSamples();
+  testClamp01();
+  testRampedVelocity();
+  testNodeIndexForId();
+  testRemoveNoteIdFromColumn();
 
   if (g_fail == 0) {
     std::printf("engine_rt_helpers_tests: PASS\n");

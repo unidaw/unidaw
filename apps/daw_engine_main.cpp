@@ -11469,20 +11469,12 @@ int main(int argc, char** argv) {
         const long double samplesPerTick =
             (static_cast<long double>(engineConfig.sampleRate) * 60.0L) /
             (safeBpm * ticksPerQuarter);
+        // Binds the block's rate; the rounding rule is in apps/engine_rt_helpers.h with a test.
         auto tickDeltaToSamples = [&](uint64_t tickDelta) -> uint64_t {
-          return static_cast<uint64_t>(std::llround(
-              static_cast<long double>(tickDelta) * samplesPerTick));
+          return daw::engine::tickDeltaToSamples(tickDelta, samplesPerTick);
         };
         auto removeNoteIdFromColumn = [&](uint8_t column, uint32_t noteId) {
-          auto columnIt = runtime.activeNoteByColumn.find(column);
-          if (columnIt == runtime.activeNoteByColumn.end()) {
-            return;
-          }
-          auto& notes = columnIt->second;
-          notes.erase(std::remove(notes.begin(), notes.end(), noteId), notes.end());
-          if (notes.empty()) {
-            runtime.activeNoteByColumn.erase(columnIt);
-          }
+          daw::engine::removeNoteIdFromColumn(runtime, column, noteId);
         };
         auto& scratchpad = runtime.patcherScratchpad;
         if (scratchpad.size() < kPatcherScratchpadCapacity) {
@@ -11625,14 +11617,7 @@ int main(int argc, char** argv) {
         auto& nodeToDeviceId = runtime.patcherNodeToDeviceId;
         auto& modLinks = runtime.patcherModLinks;
         auto nodeIndexForId = [&](uint32_t nodeId) -> std::optional<uint32_t> {
-          if (nodeId >= graphSnapshot.idToIndex.size()) {
-            return std::nullopt;
-          }
-          const uint32_t index = graphSnapshot.idToIndex[nodeId];
-          if (index == daw::kPatcherInvalidNodeIndex) {
-            return std::nullopt;
-          }
-          return index;
+          return daw::engine::nodeIndexForId(graphSnapshot, nodeId);
         };
         chainOrder.clear();
         bool useNodeFilter = false;
@@ -12745,15 +12730,10 @@ int main(int argc, char** argv) {
               // PendingStrike that stored the authored velocity plus a factor would be two facts
               // about one thing, and the queue path is exactly where the second one gets lost —
               // which is how a retriggered note's later strikes lost their sound address before.
+              // The floor-of-1 rule moved to apps/engine_rt_helpers.h, where a test pins it:
+              // a ramp reaching velocity 0 emits a note-OFF and hangs the voice.
               auto rampedVelocity = [&](uint16_t scaleMilli) -> uint8_t {
-                if (scaleMilli == 1000) {
-                  return velocity;
-                }
-                const uint32_t scaled =
-                    (static_cast<uint32_t>(velocity) * scaleMilli + 500u) / 1000u;
-                // Floor of 1, not 0: velocity 0 is a note-off in MIDI, so a ramp that reached
-                // zero would not be a silent strike but a stuck one.
-                return static_cast<uint8_t>(scaled < 1 ? 1 : (scaled > 127 ? 127 : scaled));
+                return daw::engine::rampedVelocity(velocity, scaleMilli);
               };
               for (const auto& s : strikes) {
                 const uint64_t onTick = wrapTick(s.onTick);
@@ -13009,9 +12989,6 @@ int main(int argc, char** argv) {
               ++hostIndex;
             }
             return std::nullopt;
-          };
-          auto clamp01 = [](float value) {
-            return std::max(0.0f, std::min(1.0f, value));
           };
           for (const auto& link : trackState.modLinks) {
             if (!link.enabled || link.rate != daw::ModRate::BlockRate) {
