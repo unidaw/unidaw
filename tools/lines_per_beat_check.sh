@@ -35,7 +35,12 @@ CLI="$ROOT/ui/target/debug/daw-cli"
 
 TMP="$(mktemp -d)"
 ENG=""
-cleanup() { [ -n "$ENG" ] && kill "$ENG" 2>/dev/null; rm -rf "$TMP"; }
+# stop_engine, not a bare kill: it SIGTERMs, waits 10s, ESCALATES to SIGKILL and SAYS SO.
+# A hung engine that ignores SIGTERM is left running by a bare kill, and ctest then waits
+# about 1000s for it after timing the check out — measured across 18 runs, perfectly
+# correlated with the timeout count. The escalation notice is also the diagnostic: "engine
+# N ignored SIGTERM for 10s" names the hang instead of leaving it to be inferred.
+cleanup() { [ -n "$ENG" ] && stop_engine "$ENG"; rm -rf "$TMP"; }
 trap cleanup EXIT
 fail() { echo "  FAIL: $*"; exit 1; }
 
