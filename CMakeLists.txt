@@ -66,6 +66,7 @@ target_link_libraries(juce_host_process PRIVATE platform_juce)
 
 add_executable(daw_engine
   apps/daw_engine_main.cpp
+  apps/engine_pure.cpp
   apps/audio_shm.cpp
   apps/clip_edit.cpp
   apps/chord_resolver.cpp
@@ -395,6 +396,29 @@ target_include_directories(lane_quantize_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+# THE ENGINE'S PURE HELPERS — eleven rules that were lambdas inside a 20,000-line main() and so had
+# no name any other translation unit could say. Not one had a test; reaching `clampMidi` meant
+# booting an engine and driving a chord through a command ring. Extracting them to
+# apps/engine_pure.h is what made the tests possible, and the tests are the reason to extract them.
+add_executable(engine_pure_tests
+  apps/engine_pure_tests_main.cpp
+  apps/engine_pure.cpp
+  apps/clip_edit.cpp
+  apps/project_file.cpp
+  apps/harmony_timeline.cpp
+  apps/scale_library.cpp
+  apps/patcher_graph.cpp
+  apps/patcher_preset.cpp
+  apps/patcher_preset_library.cpp
+  apps/patcher_abi.cpp
+  apps/device_chain.cpp
+  apps/event_log.cpp
+  apps/shared_memory.cpp
+)
+target_include_directories(engine_pure_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
 
 # Header-only tests for the per-clip grid packed into UiClipExtent.flags.
 add_executable(clip_grid_tests
@@ -1195,6 +1219,10 @@ add_test(NAME lane_quantize
 )
 set_tests_properties(lane_quantize PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+add_test(NAME engine_pure
+  COMMAND engine_pure_tests
+)
+set_tests_properties(engine_pure PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME clip_grid
   COMMAND clip_grid_tests

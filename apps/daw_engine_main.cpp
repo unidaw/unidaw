@@ -31,6 +31,7 @@
 #include "platform_juce/juce_wrapper.h"
 #include "apps/audio_shm.h"
 #include "apps/engine_instance.h"
+#include "apps/engine_pure.h"
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
 #include "apps/rt_thread.h"
@@ -69,6 +70,11 @@
 #include "apps/chord_resolver.h"
 #include "apps/ui_snapshot.h"
 #include "apps/clip_edit.h"
+
+// The pure helpers that used to be lambdas in main(). They are unqualified at ~31 call sites and
+// stay that way: this keeps the extraction a pure move, and any name that failed to resolve — or
+// resolved to something else — is a compile error rather than a silent behaviour change.
+using namespace daw::engine;
 
 namespace {
 
@@ -2988,19 +2994,6 @@ struct TrackRuntime {
   // each carrying one) at load. Save then preserves each device's own graph rather
   // than parking the live single graph on one device (the legacy path).
   std::atomic<bool> patcherAssembledFromDevices{false};
-  // True when any device in the document carries its own patcher graph. The save must
-  // never park the global pool on a device in that case: the device graphs ARE the
-  // authored data, and the pool is a derived join of them.
-  auto documentHasPerDeviceGraphs = [](const daw::ProjectDocument& doc) -> bool {
-    for (const auto& track : doc.tracks) {
-      for (const auto& device : track.chain.devices) {
-        if (!device.patcher.nodes.empty()) {
-          return true;
-        }
-      }
-    }
-    return false;
-  };
   std::shared_ptr<daw::PatcherGraph> patcherGraphSnapshot;
   auto updatePatcherGraphSnapshot = [&]() {
     auto snapshot = std::make_shared<daw::PatcherGraph>();
@@ -4249,15 +4242,6 @@ struct TrackRuntime {
     return daw::quantizeToScale(pitch, harmony.root, *scale);
   };
 
-  auto clampMidi = [&](int pitch) -> uint8_t {
-    if (pitch < 0) {
-      return 0;
-    }
-    if (pitch > 127) {
-      return 127;
-    }
-    return static_cast<uint8_t>(pitch);
-  };
 
   std::atomic<uint64_t> lastOverflowTick{0};
   std::atomic<bool> running{true};
@@ -5001,20 +4985,6 @@ struct TrackRuntime {
     emitUiDiff(asDiff);
   };
 
-  // DERIVED FROM THE STRING THE LOG ALREADY CARRIES, rather than a second variable set beside it.
-  // Two handlers pick their reason at runtime into a `why` string; adding a parallel code would
-  // be two facts about one thing, and the first edit that touched only one of them would make the
-  // log and the wire disagree about why the same command was refused.
-  auto samplerReasonFor = [](const char* why) {
-    using R = daw::UiSamplerRejectReason;
-    if (why == nullptr) return R::BadValue;
-    if (std::strcmp(why, "no_such_slot") == 0) return R::NoSuchSlot;
-    if (std::strcmp(why, "no_such_mod_set") == 0) return R::NoSuchModSet;
-    if (std::strcmp(why, "no_such_modulator") == 0) return R::NoSuchModulator;
-    if (std::strcmp(why, "no_such_source") == 0) return R::NoSuchSource;
-    if (std::strcmp(why, "no_such_slice") == 0) return R::NoSuchSliceSet;
-    return R::BadValue;  // unknown_field, and anything added later that nobody mapped
-  };
 
   // A refusal, on the outbound ring, with the numbers that settle it. Everything the
   // caller needs to recover is here: which track the version was compared against, what
@@ -5200,21 +5170,6 @@ struct TrackRuntime {
   // afternoon on stale clip versions, and it applies to every CLI path added for these
   // ops. So: the diff still goes on the ring for the UI, and the same refusal is now
   // also an event and a journal line.
-  auto errorScopeName = [](const char* family, uint16_t code) -> std::string {
-    // Codes are per-family small integers; naming them here keeps the numbers out of
-    // the log, where nobody remembers what routing error 3 was.
-    static const std::unordered_map<std::string, std::vector<const char*>> kNames = {
-        {"routing", {"", "track_missing", "invalid_kind", "invalid_target"}},
-        {"chain", {"", "add_failed", "remove_failed", "move_failed", "update_failed"}},
-        {"mod", {"", "track_missing", "link_missing", "invalid_kind", "invalid_device",
-                 "order_violation", "link_exists"}},
-    };
-    auto it = kNames.find(family);
-    if (it != kNames.end() && code < it->second.size() && *it->second[code]) {
-      return it->second[code];
-    }
-    return "code:" + std::to_string(code);
-  };
 
   auto emitChainError = [&](uint16_t errorCode,
                             uint32_t trackId,
@@ -5552,36 +5507,6 @@ struct TrackRuntime {
     pushUndo(std::move(e));
   };
 
-  auto invertUndoEntry = [&](const daw::UndoEntry& entry) -> daw::UndoEntry {
-    daw::UndoEntry inverse = entry;
-    switch (entry.type) {
-      case daw::UndoType::AddNote:
-        inverse.type = daw::UndoType::RemoveNote;
-        break;
-      case daw::UndoType::RemoveNote:
-        inverse.type = daw::UndoType::AddNote;
-        break;
-      case daw::UndoType::AddHarmony:
-        inverse.type = daw::UndoType::RemoveHarmony;
-        break;
-      case daw::UndoType::RemoveHarmony:
-        inverse.type = daw::UndoType::AddHarmony;
-        break;
-      case daw::UndoType::UpdateHarmony: {
-        inverse.type = daw::UndoType::UpdateHarmony;
-        std::swap(inverse.harmonyRoot, inverse.harmonyRoot2);
-        std::swap(inverse.harmonyScaleId, inverse.harmonyScaleId2);
-        break;
-      }
-      case daw::UndoType::AddChord:
-        inverse.type = daw::UndoType::RemoveChord;
-        break;
-      case daw::UndoType::RemoveChord:
-        inverse.type = daw::UndoType::AddChord;
-        break;
-    }
-    return inverse;
-  };
 
   auto addOrUpdateHarmony = [&](uint64_t nanotick,
                                 uint32_t root,
@@ -5680,27 +5605,6 @@ struct TrackRuntime {
   // blobs are opaque and often large, and keeping them out keeps the document
   // diffable. The container shape (this, or the zip PROJECT_PERSISTENCE.md
   // describes) is still an open decision.
-  // The rule now lives in project_file.cpp as daw::pluginStateDirFor, because saveProjectModule
-  // needs it too: a lambda in here could be seen by the save that writes the blobs and the load
-  // that restores them, and NOT by the packer that has to find them, which is exactly why a
-  // `.uni` carried every sample and no plugin state at all.
-  auto pluginStateDir = [](const std::string& projectPath) -> std::filesystem::path {
-    return daw::pluginStateDirFor(projectPath);
-  };
-  auto pluginStateFileName = [](uint32_t trackId, uint32_t deviceId) -> std::string {
-    return "t" + std::to_string(trackId) + "_d" + std::to_string(deviceId) + ".bin";
-  };
-  // M0.3: the PARAMETER MANIFEST beside the opaque blob. The blob is the plugin's private state
-  // and says nothing to anyone but the plugin; this says what the knobs WERE — name, unit, range,
-  // default, whether each is a switch — in a form that is readable without the plugin installed
-  // and without the engine running.
-  //
-  // Its own file rather than a field in project.json, because it is DERIVED from the plugin
-  // rather than authored: a stale manifest must never look like part of the document, and losing
-  // it must cost nothing. It is a projection, and it is written next to the thing it projects.
-  auto pluginParamsFileName = [](uint32_t trackId, uint32_t deviceId) -> std::string {
-    return "t" + std::to_string(trackId) + "_d" + std::to_string(deviceId) + ".params.json";
-  };
 
   // The song's end: the furthest placement end across every LIVE track. Runs on the
   // command thread after any placement edit, never on the audio thread.
@@ -5794,20 +5698,6 @@ struct TrackRuntime {
   // Assumes runtime->trackMutex is held; the caller atomic_stores the returned
   // snapshot after unlocking. The audio thread reads only the snapshot, so
   // track.clip being derived is invisible to it.
-  // The tick just past the last event in a clip — its content extent.
-  auto clipContentEnd = [](const daw::MusicalClip& clip) -> uint64_t {
-    uint64_t end = 0;
-    for (const auto& e : clip.events()) {
-      uint64_t dur = 0;
-      if (e.type == daw::MusicalEventType::Note) {
-        dur = e.payload.note.durationNanoticks;
-      } else if (e.type == daw::MusicalEventType::Chord) {
-        dur = e.payload.chord.durationNanoticks;
-      }
-      end = std::max(end, e.nanotickOffset + dur);
-    }
-    return end;
-  };
 
   auto rebuildFlatAndPublish =
       [&](TrackRuntime& rt) -> std::shared_ptr<const ClipSnapshot> {
@@ -7122,7 +7012,7 @@ struct TrackRuntime {
 
     // Opaque plugin state lives beside the document, one file per device so a
     // blob is addressable by durable id rather than by position.
-    const std::filesystem::path stateDir = pluginStateDir(path);
+    const std::filesystem::path stateDir = daw::pluginStateDirFor(path);
     std::error_code ec;
     std::filesystem::create_directories(stateDir, ec);
     if (ec) {
@@ -8124,7 +8014,7 @@ struct TrackRuntime {
     // so on a clean reopen the live chain matches the saved one and state lands;
     // if a live reconcile diverged it is reported rather than pushed into the
     // wrong plugin.
-    const std::filesystem::path stateDir = pluginStateDir(path);
+    const std::filesystem::path stateDir = daw::pluginStateDirFor(path);
     for (const auto& source : document.tracks) {
       TrackRuntime* runtime = nullptr;
       {
@@ -8298,15 +8188,6 @@ struct TrackRuntime {
     return false;
   };
 
-  // A clip-edit diff carries the edited note's tick in clip-relative space (the
-  // owned clip the edit ran on). Shift it back onto the arrangement timeline by
-  // the placement anchor before it goes to the UI, which speaks absolute ticks.
-  auto shiftDiffTick = [](daw::UiDiffPayload& d, uint64_t placementAt) {
-    uint64_t t = (static_cast<uint64_t>(d.noteNanotickHi) << 32) | d.noteNanotickLo;
-    t += placementAt;
-    d.noteNanotickLo = static_cast<uint32_t>(t & 0xffffffffu);
-    d.noteNanotickHi = static_cast<uint32_t>((t >> 32) & 0xffffffffu);
-  };
 
   auto applyAddNote = [&](uint32_t trackId,
                           uint64_t nanotick,
@@ -9324,55 +9205,6 @@ struct TrackRuntime {
     return false;
   };
 
-  // FIND OR MINT the envelope modulating `target` in this mod set.
-  //
-  // The APPLY MODE follows from the target and is never the caller's to choose: Volume
-  // MULTIPLIES (an amp envelope that added would never reach silence, however deep it went) and
-  // everything else ADDS to a base value. Putting that on the wire would let a caller build a
-  // modulator that cannot do anything musical, and then wonder why.
-  //
-  // Minting rather than refusing is the same argument as the amp envelope's: every mod set
-  // starts with no modulators at all, so "edit the cutoff envelope" would otherwise depend on a
-  // command that creates one, which does not exist.
-  auto findOrMintEnvelope = [](daw::SamplerModSet& ms,
-                               daw::ModTarget target) -> daw::SamplerModulator* {
-    for (auto& m : ms.modulators) {
-      if (m.kind == daw::ModKind::Envelope && m.target == target) {
-        return &m;
-      }
-    }
-    daw::SamplerModulator fresh;
-    fresh.id = ms.nextModulatorId++;
-    fresh.kind = daw::ModKind::Envelope;
-    fresh.target = target;
-    fresh.apply = target == daw::ModTarget::Volume ? 1 : 0;
-    fresh.depthMilli = 1000;
-    ms.modulators.push_back(fresh);
-    return &ms.modulators.back();
-  };
-
-  // THE SAME ARGUMENT ONE LEVEL UP: a mod set to mint the modulator IN.
-  //
-  // A sampler can legitimately hold no mod sets — a device added to a chain and not yet loaded,
-  // or a project that saved none — and every envelope and LFO command iterates `modSets` looking
-  // for one. Over an empty vector that loop body never runs, so the command applies to nothing
-  // and reports "no_such_mod_set" to the engine's event log. A caller driving through daw-cli
-  // sees `{"sent": ...}` and a kit whose modMask stays 0, with no indication anywhere it looks
-  // that the command was refused. The web-UI agent hit exactly this, three ways, and stopped
-  // rather than guess — which is how it got reported instead of being worked around.
-  //
-  // MINTING IS ONLY RIGHT WHEN THE CALLER DID NOT NAME ONE. `--mod-set 0` means "the default",
-  // which is a request that can always be satisfied, so satisfying it is better than refusing on
-  // a bookkeeping detail the caller cannot see. `--mod-set 7` when there is no 7 is a caller
-  // naming something that does not exist, and that must still be refused — substituting a
-  // different mod set would silently edit the wrong thing, which is worse than doing nothing.
-  auto ensureDefaultModSet = [](daw::SamplerState& sampler, uint32_t requestedId) {
-    if (requestedId != 0 || !sampler.modSets.empty()) {
-      return;
-    }
-    sampler.modSets.push_back(daw::defaultModSet(1));
-    sampler.nextModSetId = 2;
-  };
 
   // ---- THE INWARD BULK CARRIER (opcode 83).
   //
