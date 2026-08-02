@@ -80,6 +80,9 @@ add_executable(daw_engine
   apps/engine_track_commands.cpp
   apps/engine_request_commands.cpp
   apps/engine_trackprops_commands.cpp
+  apps/engine_device_commands.cpp
+  apps/engine_note_commands.cpp
+  apps/engine_undo_commands.cpp
   apps/audio_shm.cpp
   apps/clip_edit.cpp
   apps/chord_resolver.cpp

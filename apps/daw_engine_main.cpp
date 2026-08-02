@@ -45,6 +45,9 @@
 #include "apps/engine_track_commands.h"
 #include "apps/engine_request_commands.h"
 #include "apps/engine_trackprops_commands.h"
+#include "apps/engine_device_commands.h"
+#include "apps/engine_note_commands.h"
+#include "apps/engine_undo_commands.h"
 #include "apps/engine_sampler_commands.h"
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
@@ -9282,6 +9285,45 @@ int main(int argc, char** argv) {
       tracks, tracksMutex, masterTrack, quantizeVersion,
       buildTrackSnapshotFn, rebuildFlatAndPublishFn};
 
+  const std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint8_t, bool)>
+      applyLocalNoteEditFn = applyLocalNoteEdit;
+  const std::function<bool(uint32_t, uint64_t, uint16_t)> editIsLocalScopeFn = editIsLocalScope;
+  const std::function<bool(uint32_t, uint64_t, uint8_t, uint16_t, bool)> applyRemoveNoteFn =
+      applyRemoveNote;
+  const std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint8_t, uint8_t,
+                           uint8_t, uint32_t, uint16_t, uint16_t, bool, std::optional<uint32_t>)>
+      applyAddChordFn = applyAddChord;
+  const std::function<bool(uint32_t, uint32_t, bool)> applyRemoveChordFn = applyRemoveChord;
+  const std::function<bool(uint32_t, uint64_t, uint8_t, bool)> applyRemoveChordAtFn =
+      applyRemoveChordAt;
+  const std::function<bool(uint64_t, uint32_t, uint32_t, bool)> addOrUpdateHarmonyFn =
+      addOrUpdateHarmony;
+  const std::function<bool(uint64_t, bool)> removeHarmonyFn = removeHarmony;
+  const std::function<bool(uint32_t, daw::UiCommandType)> requireMatchingHarmonyVersionFn =
+      requireMatchingHarmonyVersion;
+  daw::engine::NoteCommandDeps noteCommandDeps{
+      applyAddNoteFn, applyLocalNoteEditFn, editIsLocalScopeFn, applyRemoveNoteFn,
+      applyAddChordFn, applyRemoveChordFn, applyRemoveChordAtFn, addOrUpdateHarmonyFn,
+      removeHarmonyFn, requireMatchingClipVersionFn, requireMatchingHarmonyVersionFn};
+
+  const std::function<bool(const daw::UndoEntry&, bool)> applyUndoEntryFn = applyUndoEntry;
+  const std::function<bool(const SongStoreState&)> restoreSongStoreFn = restoreSongStore;
+  const std::function<bool(uint32_t, const TrackStoreState&)> restoreTrackStoreFn =
+      restoreTrackStore;
+  daw::engine::UndoCommandDeps undoCommandDeps{
+      tracks, tracksMutex, undoMutex, undoStack, redoStack,
+      applyUndoEntryFn, restoreSongStoreFn, restoreTrackStoreFn, requireMatchingClipVersionFn};
+
+  const std::function<TrackRuntime*(uint32_t, const std::string&)> ensureTrackFn = ensureTrack;
+  const std::function<std::optional<std::string>(uint32_t)> resolvePluginPathFn =
+      resolvePluginPath;
+  const std::function<void(TrackRuntime&, uint32_t)> updateTrackChainForInstrumentFn =
+      updateTrackChainForInstrument;
+  daw::engine::DeviceCommandDeps deviceCommandDeps{
+      tracks, tracksMutex, playing, audioPlaybackBlockId, pluginPath,
+      resolveDevicePluginPathFn, rebuildHostForChainFn, emitChainSnapshotFn, ensureTrackFn,
+      resolvePluginPathFn, updateTrackChainForInstrumentFn};
+
   auto handleUiEntry = [&](const daw::EventEntry& entry) {
     if (entry.type != static_cast<uint16_t>(daw::EventType::UiCommand)) {
       return;
@@ -10060,127 +10102,16 @@ int main(int argc, char** argv) {
     std::memcpy(&payload, entry.payload, sizeof(payload));
     if (payload.commandType ==
         static_cast<uint16_t>(daw::UiCommandType::LoadPluginOnTrack)) {
-      const uint32_t trackId = payload.trackId;
-      const uint32_t pluginIndex = payload.pluginIndex;
-      const auto pluginPath = resolvePluginPath(pluginIndex);
-      if (!pluginPath) {
-        daw::LogLine() << "UI: invalid plugin index " << pluginIndex << std::endl;
-        return;
-      }
-      if (auto* runtime = ensureTrack(trackId, *pluginPath)) {
-        updateTrackChainForInstrument(*runtime, pluginIndex);
-        emitChainSnapshot(*runtime);
-        std::cout << "UI: loaded plugin on track " << trackId
-                  << " from " << *pluginPath << std::endl;
-      } else {
-        daw::LogLine() << "UI: failed to load plugin for track " << trackId << std::endl;
-      }
+      daw::engine::handleLoadPluginOnTrack(deviceCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::OpenPluginEditor)) {
-      const uint32_t trackId = payload.trackId;
-      const uint32_t deviceId = payload.value0;
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (trackId < tracks.size()) {
-          runtime = tracks[trackId].get();
-        }
-      }
-      if (!runtime) {
-        daw::LogLine() << "UI: OpenPluginEditor failed - track "
-                  << trackId << " not found" << std::endl;
-        return;
-      }
-      std::vector<daw::Device> devices;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        devices = runtime->track.chain.devices;
-      }
-      auto resolveHostIndexForDevice =
-          [&](uint32_t targetDeviceId) -> std::optional<uint32_t> {
-            uint32_t hostIndex = 0;
-            for (const auto& device : devices) {
-              if (device.kind != daw::DeviceKind::VstInstrument &&
-                  device.kind != daw::DeviceKind::VstEffect) {
-                continue;
-              }
-              if (!resolveDevicePluginPath(*runtime, device.hostSlotIndex)) {
-                continue;
-              }
-              if (device.id == targetDeviceId) {
-                return hostIndex;
-              }
-              ++hostIndex;
-            }
-            return std::nullopt;
-          };
-      const auto hostIndex = resolveHostIndexForDevice(deviceId);
-      if (!hostIndex) {
-        daw::LogLine() << "UI: OpenPluginEditor failed - device "
-                  << deviceId << " not found" << std::endl;
-        return;
-      }
-      if (!runtime->hostReady.load(std::memory_order_acquire)) {
-        daw::LogLine() << "UI: OpenPluginEditor failed - host not ready for track "
-                  << trackId << std::endl;
-        return;
-      }
-      {
-        std::lock_guard<std::mutex> lock(runtime->controllerMutex);
-        if (!runtime->controller.sendOpenEditor(*hostIndex)) {
-          daw::LogLine() << "UI: OpenPluginEditor failed - host IPC error (track "
-                    << trackId << ")" << std::endl;
-        }
-      }
+      daw::engine::handleOpenPluginEditor(deviceCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::WriteNote)) {
-      if (!requireMatchingClipVersion(payload.baseVersion,
-                                      daw::UiCommandType::WriteNote,
-                                      payload.trackId)) {
-        return;
-      }
-      const uint64_t noteNanotick =
-          static_cast<uint64_t>(payload.noteNanotickLo) |
-          (static_cast<uint64_t>(payload.noteNanotickHi) << 32);
-      const uint64_t noteDuration =
-          static_cast<uint64_t>(payload.noteDurationLo) |
-          (static_cast<uint64_t>(payload.noteDurationHi) << 32);
-      const uint8_t pitch =
-          static_cast<uint8_t>(std::min<uint32_t>(payload.notePitch, 127));
-      const uint8_t velocity =
-          static_cast<uint8_t>(std::min<uint32_t>(payload.value0, 127));
-      const uint16_t flags = payload.flags;
-      // M3.24: the caller says whether this belongs to the CLIP (every appearance) or to
-      // THIS APPEARANCE. Default is clip scope, which is exactly today's behaviour.
-      if (editIsLocalScope(payload.trackId, noteNanotick, flags)) {
-        applyLocalNoteEdit(payload.trackId, noteNanotick, noteDuration, pitch, velocity,
-                           static_cast<uint8_t>(flags & daw::kUiEditColumnMask),
-                           /*deleting=*/false);
-      } else {
-        applyAddNote(payload.trackId, noteNanotick, noteDuration, pitch, velocity, flags,
-                     true);
-      }
+      daw::engine::handleWriteNote(noteCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::DeleteNote)) {
-      if (!requireMatchingClipVersion(payload.baseVersion,
-                                      daw::UiCommandType::DeleteNote,
-                                      payload.trackId)) {
-        return;
-      }
-      const uint64_t noteNanotick =
-          static_cast<uint64_t>(payload.noteNanotickLo) |
-          (static_cast<uint64_t>(payload.noteNanotickHi) << 32);
-      const uint8_t pitch =
-          static_cast<uint8_t>(std::min<uint32_t>(payload.notePitch, 127));
-      const uint16_t flags = payload.flags;
-      if (editIsLocalScope(payload.trackId, noteNanotick, flags)) {
-        applyLocalNoteEdit(payload.trackId, noteNanotick, /*duration=*/0, pitch,
-                           /*velocity=*/0,
-                           static_cast<uint8_t>(flags & daw::kUiEditColumnMask),
-                           /*deleting=*/true);
-      } else {
-        applyRemoveNote(payload.trackId, noteNanotick, pitch, flags, true);
-      }
+      daw::engine::handleDeleteNote(noteCommandDeps, entry, payload);
     } else if (payload.commandType ==
                    static_cast<uint16_t>(daw::UiCommandType::ForkPlacementClip) ||
                payload.commandType ==
@@ -10978,68 +10909,7 @@ int main(int argc, char** argv) {
       }
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetDeviceParam)) {
-      // A rack knob write: resolve deviceId -> host plugin index (same walk as the
-      // params read-back) and forward it to the host over the control socket. Fire-
-      // and-forget; the host setter is an atomic store, so no round-trip is needed.
-      daw::UiSetParamPayload sp{};
-      if (entry.size >= sizeof(sp)) {
-        std::memcpy(&sp, entry.payload, sizeof(sp));
-      }
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (sp.trackId < tracks.size()) {
-          runtime = tracks[sp.trackId].get();
-        }
-      }
-      uint32_t pluginIndex = 0;
-      bool found = false;
-      if (runtime) {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        uint32_t hostIndex = 0;
-        for (const auto& d : runtime->track.chain.devices) {
-          if (d.kind != daw::DeviceKind::VstInstrument &&
-              d.kind != daw::DeviceKind::VstEffect) {
-            continue;
-          }
-          // Count only devices that resolve to a host plugin. rebuildHostForChain
-          // omits a path-unresolvable device from the SetChain it sends, so the host's
-          // plugin vector is compacted; counting it here would shift every later
-          // device's index and route the write to the wrong plugin (or off the end).
-          if (!resolveDevicePluginPath(*runtime, d.hostSlotIndex)) {
-            continue;
-          }
-          if (d.id == sp.deviceId) {
-            pluginIndex = hostIndex;
-            found = true;
-            break;
-          }
-          hostIndex++;
-        }
-      }
-      bool forwarded = false;
-      if (runtime && found) {
-        const float normalized =
-            std::clamp(static_cast<float>(sp.valueMilli) / 1000.0f, 0.0f, 1.0f);
-        std::lock_guard<std::mutex> lock(runtime->controllerMutex);
-        forwarded = runtime->controller.sendSetParam(pluginIndex, sp.uid16, normalized);
-      }
-      // Always log the write. The host stores the value atomically, but it only
-      // takes effect when the plugin next processes a block — so on a headless
-      // engine (no audio device driving the callback) the store is real yet never
-      // applied, and used to be completely silent. audioActive says whether any
-      // block has played; !audioActive + forwarded = "stored, nothing to apply it".
-      const bool audioActive =
-          audioPlaybackBlockId.load(std::memory_order_acquire) > 0;
-      DAW_EVENT("device.set_param")
-          .field("track", sp.trackId)
-          .field("device", sp.deviceId)
-          .field("pluginIndex", pluginIndex)
-          .field("valueMilli", sp.valueMilli)
-          .field("found", found)
-          .field("forwarded", forwarded)
-          .field("playing", playing.load(std::memory_order_acquire))
-          .field("audioActive", audioActive);
+      daw::engine::handleSetDeviceParam(deviceCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RequestDeviceParams)) {
       daw::engine::handleRequestDeviceParams(requestCommandDeps, entry, payload);
@@ -11051,172 +10921,23 @@ int main(int argc, char** argv) {
       daw::engine::handleRequestClipWindow(requestCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::Undo)) {
-      if (!requireMatchingClipVersion(payload.baseVersion,
-                                      daw::UiCommandType::Undo,
-                                      payload.trackId)) {
-        return;
-      }
-      std::optional<EngineUndoEntry> undo;
-      {
-        std::lock_guard<std::mutex> lock(undoMutex);
-        if (!undoStack.empty()) {
-          undo = std::move(undoStack.back());
-          undoStack.pop_back();
-        }
-      }
-      if (!undo) {
-        return;
-      }
-      if (undo->song) {
-        // The whole song at once. A partial restore of a ripple is worse than none: the
-        // placements would be back where they were while the tempo change and the filter sweep
-        // stayed at their new positions.
-        if (restoreSongStore(undo->songBefore)) {
-          DAW_EVENT("undo.song").field("scope", "section_ripple");
-          std::lock_guard<std::mutex> lock(undoMutex);
-          redoStack.push_back(std::move(*undo));
-        }
-      } else if (undo->structural) {
-        // Store swap: restore the track's pre-edit placements + clips. A cross-track move
-        // restores BOTH tracks so the placement is never briefly in neither.
-        bool ok = restoreTrackStore(undo->trackId, undo->before);
-        if (undo->hasSecond) {
-          ok = restoreTrackStore(undo->secondTrackId, undo->secondBefore) || ok;
-        }
-        if (ok) {
-          std::lock_guard<std::mutex> lock(undoMutex);
-          redoStack.push_back(std::move(*undo));
-        }
-      } else {
-        const daw::UndoEntry redoHarmony = invertUndoEntry(undo->harmony);
-        if (applyUndoEntry(undo->harmony, false)) {
-          EngineUndoEntry e;
-          e.structural = false;
-          e.trackId = redoHarmony.trackId;
-          e.harmony = redoHarmony;
-          std::lock_guard<std::mutex> lock(undoMutex);
-          redoStack.push_back(std::move(e));
-        }
-      }
+      daw::engine::handleUndo(undoCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::Redo)) {
-      if (!requireMatchingClipVersion(payload.baseVersion,
-                                      daw::UiCommandType::Redo,
-                                      payload.trackId)) {
-        return;
-      }
-      std::optional<EngineUndoEntry> redo;
-      {
-        std::lock_guard<std::mutex> lock(undoMutex);
-        if (!redoStack.empty()) {
-          redo = std::move(redoStack.back());
-          redoStack.pop_back();
-        }
-      }
-      if (!redo) {
-        return;
-      }
-      if (redo->song) {
-        if (restoreSongStore(redo->songAfter)) {
-          DAW_EVENT("redo.song").field("scope", "section_ripple");
-          std::lock_guard<std::mutex> lock(undoMutex);
-          undoStack.push_back(std::move(*redo));
-        }
-      } else if (redo->structural) {
-        // Store swap: re-apply the track's post-edit placements + clips (both tracks for a
-        // cross-track move).
-        bool ok = restoreTrackStore(redo->trackId, redo->after);
-        if (redo->hasSecond) {
-          ok = restoreTrackStore(redo->secondTrackId, redo->secondAfter) || ok;
-        }
-        if (ok) {
-          std::lock_guard<std::mutex> lock(undoMutex);
-          undoStack.push_back(std::move(*redo));
-        }
-      } else {
-        const daw::UndoEntry undoHarmony = invertUndoEntry(redo->harmony);
-        if (applyUndoEntry(redo->harmony, false)) {
-          EngineUndoEntry e;
-          e.structural = false;
-          e.trackId = undoHarmony.trackId;
-          e.harmony = undoHarmony;
-          std::lock_guard<std::mutex> lock(undoMutex);
-          undoStack.push_back(std::move(e));
-        }
-      }
+      daw::engine::handleRedo(undoCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetTrackMixer)) {
       daw::engine::handleSetTrackMixer(trackpropsCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::WriteHarmony)) {
-      if (!requireMatchingHarmonyVersion(payload.baseVersion,
-                                         daw::UiCommandType::WriteHarmony)) {
-        return;
-      }
-      const uint64_t nanotick =
-          static_cast<uint64_t>(payload.noteNanotickLo) |
-          (static_cast<uint64_t>(payload.noteNanotickHi) << 32);
-      const uint32_t root = payload.notePitch % 12;
-      const uint32_t scaleId = payload.value0;
-      addOrUpdateHarmony(nanotick, root, scaleId, true);
+      daw::engine::handleWriteHarmony(noteCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::DeleteHarmony)) {
-      if (!requireMatchingHarmonyVersion(payload.baseVersion,
-                                         daw::UiCommandType::DeleteHarmony)) {
-        return;
-      }
-      const uint64_t nanotick =
-          static_cast<uint64_t>(payload.noteNanotickLo) |
-          (static_cast<uint64_t>(payload.noteNanotickHi) << 32);
-      if (!removeHarmony(nanotick, true)) {
-        daw::LogLine() << "UI: DeleteHarmony - event not found at nanotick "
-                  << nanotick << std::endl;
-      }
+      daw::engine::handleDeleteHarmony(noteCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::WriteChord) ||
                payload.commandType == static_cast<uint16_t>(daw::UiCommandType::DeleteChord)) {
-      daw::UiChordCommandPayload chordPayload{};
-      std::memcpy(&chordPayload, entry.payload, sizeof(chordPayload));
-      const auto commandType = payload.commandType ==
-          static_cast<uint16_t>(daw::UiCommandType::WriteChord)
-              ? daw::UiCommandType::WriteChord
-              : daw::UiCommandType::DeleteChord;
-      if (!requireMatchingClipVersion(chordPayload.baseVersion,
-                                      commandType,
-                                      chordPayload.trackId)) {
-        return;
-      }
-      const uint64_t nanotick =
-          static_cast<uint64_t>(chordPayload.nanotickLo) |
-          (static_cast<uint64_t>(chordPayload.nanotickHi) << 32);
-      if (payload.commandType ==
-          static_cast<uint16_t>(daw::UiCommandType::WriteChord)) {
-        const uint64_t duration =
-            static_cast<uint64_t>(chordPayload.durationLo) |
-            (static_cast<uint64_t>(chordPayload.durationHi) << 32);
-        const uint8_t column =
-            static_cast<uint8_t>(chordPayload.flags & 0xffu);
-        applyAddChord(chordPayload.trackId,
-                      nanotick,
-                      duration,
-                      static_cast<uint8_t>(chordPayload.degree),
-                      chordPayload.quality,
-                      chordPayload.inversion,
-                      chordPayload.baseOctave,
-                      column,
-                      chordPayload.spreadNanoticks,
-                      chordPayload.humanizeTiming,
-                      chordPayload.humanizeVelocity,
-                      true);
-      } else {
-        const uint32_t chordId = chordPayload.spreadNanoticks;
-        const uint8_t column = static_cast<uint8_t>(chordPayload.flags & 0xffu);
-        if (chordId == 0) {
-          applyRemoveChordAt(chordPayload.trackId, nanotick, column, true);
-        } else {
-          applyRemoveChord(chordPayload.trackId, chordId, true);
-        }
-      }
+      daw::engine::handleWriteChord(noteCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetTrackHarmonyQuantize)) {
       daw::engine::handleSetTrackHarmonyQuantize(trackpropsCommandDeps, entry, payload);
