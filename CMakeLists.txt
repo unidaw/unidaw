@@ -469,13 +469,13 @@ enable_testing()
 add_test(NAME contract_freshness
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/contract_freshness_check.sh
 )
-set_tests_properties(contract_freshness PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(contract_freshness PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # Every hand-written Rust mirror is pinned to the C++ struct bindgen generates from the header.
 add_test(NAME contract_layout
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/contract_layout_check.sh
 )
-set_tests_properties(contract_layout PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(contract_layout PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # THE RUST SIDE'S OWN TESTS, which had never run here. contract_layout proves every mirror is
 # LISTED in bindgen_matches_hand_written; that test is what actually compares the bytes, and it
@@ -484,37 +484,37 @@ set_tests_properties(contract_layout PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY
 add_test(NAME bridge_layout
   COMMAND cargo test --manifest-path ${CMAKE_CURRENT_SOURCE_DIR}/ui/Cargo.toml -p daw-bridge
 )
-set_tests_properties(bridge_layout PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(bridge_layout PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME patcher_resolution
   COMMAND patcher_tests
 )
-set_tests_properties(patcher_resolution PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(patcher_resolution PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME patcher_graph_edits
   COMMAND patcher_graph_tests
 )
-set_tests_properties(patcher_graph_edits PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(patcher_graph_edits PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME project_file_round_trip
   COMMAND project_file_tests ${CMAKE_CURRENT_SOURCE_DIR}/presets/projects
 )
-set_tests_properties(project_file_round_trip PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(project_file_round_trip PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME waveform_pyramid
   COMMAND waveform_pyramid_tests
 )
-set_tests_properties(waveform_pyramid PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(waveform_pyramid PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME waveform_store
   COMMAND waveform_store_tests
 )
-set_tests_properties(waveform_store PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(waveform_store PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME event_ring_mpsc
   COMMAND event_ring_mpsc_tests
 )
-set_tests_properties(event_ring_mpsc PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(event_ring_mpsc PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # M2.20: the linter's own coverage — every rule fires, clean input is silent, output is
 # deterministic. Pure file in / text out, so it needs no audio device and belongs here.
@@ -523,7 +523,7 @@ set_tests_properties(event_ring_mpsc PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY
 add_test(NAME op_registry
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/op_registry_check.sh
 )
-set_tests_properties(op_registry PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(op_registry PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # CAN CMAKE STILL PROCESS THIS TREE. Every other test here runs against an already-configured
 # build directory, so none of them can see a configure-time break — and main spent a day in one
@@ -545,7 +545,7 @@ set_tests_properties(configure PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} 
 add_test(NAME check_registry
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_registry_check.sh
 )
-set_tests_properties(check_registry PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(check_registry PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # SetClipText (98): a clip's name and its audio source path, the last two persisted_field_reach
 # GAPs. Renders offline, so no audio device.
@@ -563,32 +563,32 @@ set_tests_properties(marker_color PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DI
 add_test(NAME lint
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/lint_check.sh
 )
-set_tests_properties(lint PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(lint PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME markers
   COMMAND markers_tests
 )
-set_tests_properties(markers PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(markers PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME sampler_envelope
   COMMAND sampler_envelope_tests
 )
-set_tests_properties(sampler_envelope PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_envelope PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME sampler_check
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_check.sh
 )
-set_tests_properties(sampler_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME sampler_load
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_load_check.sh
 )
-set_tests_properties(sampler_load PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_load PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME module
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/module_check.sh
 )
-set_tests_properties(module PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(module PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # A module carries the SOUND of its plugins, not just their names. `module` cannot see this: its
 # fixture is a sampler, which has no opaque state, so every property it asserts passed while
@@ -596,129 +596,129 @@ set_tests_properties(module PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 add_test(NAME module_state
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/module_state_check.sh
 )
-set_tests_properties(module_state PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(module_state PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME sampler_chop
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_chop_check.sh
 )
-set_tests_properties(sampler_chop PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_chop PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME sampler_slice_stability
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_slice_stability_check.sh
 )
-set_tests_properties(sampler_slice_stability PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_slice_stability PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME sampler_sound_address
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_sound_address_check.sh
 )
-set_tests_properties(sampler_sound_address PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_sound_address PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME sampler_kit
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_kit_check.sh
 )
-set_tests_properties(sampler_kit PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_kit PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # A sampler built entirely by commands sounds, with no envelope sent.
 add_test(NAME sampler_default_sound
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_default_sound_check.sh
 )
-set_tests_properties(sampler_default_sound PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_default_sound PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # A sound-addressed-only track plays a DIFFERENT slot for the same note (section 8 Q2).
 add_test(NAME sound_addressed
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sound_addressed_check.sh
 )
-set_tests_properties(sound_addressed PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sound_addressed PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # A refused sampler command tells the CALLER, not just the engine's log.
 add_test(NAME sampler_reject
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_reject_check.sh
 )
-set_tests_properties(sampler_reject PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_reject PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # The retrigger ramp is heard, and a conditional trig skips the right passes — reproducibly.
 add_test(NAME elektron_ops
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/elektron_ops_check.sh
 )
-set_tests_properties(elektron_ops PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(elektron_ops PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # The bank's gate default seeds a NEW slot and leaves the existing ones alone (opcode 88).
 add_test(NAME sampler_default_gate
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_default_gate_check.sh
 )
-set_tests_properties(sampler_default_gate PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_default_gate PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # A pad can be repointed at another sample, and you hear the other sample.
 add_test(NAME slot_repoint
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/slot_repoint_check.sh
 )
-set_tests_properties(slot_repoint PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(slot_repoint PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # A folded track stays folded — the state can be SET, not only drawn.
 add_test(NAME track_collapse
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/track_collapse_check.sh
 )
-set_tests_properties(track_collapse PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(track_collapse PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # Nothing the project format remembers is unwritable without a reason recorded.
 add_test(NAME persisted_field_reach
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/persisted_field_reach_check.sh
 )
-set_tests_properties(persisted_field_reach PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(persisted_field_reach PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # The ops column's width is a property of the TRACK, not of what is on screen.
 add_test(NAME ops_width
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/ops_width_check.sh
 )
-set_tests_properties(ops_width PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(ops_width PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # The wait library's own diagnosis is correct — thirty-five checks depend on it to say WHY.
 add_test(NAME engine_wait_selftest
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/engine_wait_selftest.sh
 )
-set_tests_properties(engine_wait_selftest PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(engine_wait_selftest PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # A new clip lands on the bar the RULER draws, including after the meter changes.
 add_test(NAME clip_anchor_meter
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/clip_anchor_meter_check.sh
 )
-set_tests_properties(clip_anchor_meter PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(clip_anchor_meter PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # A pad has a name, you can read it, and you can change it.
 add_test(NAME slot_rename
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/slot_rename_check.sh
 )
-set_tests_properties(slot_rename PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(slot_rename PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # The slices of a chop tile the source — no gap, no overlap, nothing off the end.
 add_test(NAME slice_extent
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/slice_extent_check.sh
 )
-set_tests_properties(slice_extent PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(slice_extent PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # A note's default length follows the SONG's meter, not a hardcoded 4/4 bar.
 add_test(NAME meter_bar
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/meter_bar_check.sh
 )
-set_tests_properties(meter_bar PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(meter_bar PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # Every published patcher node names the device it came from.
 add_test(NAME patcher_node_owner
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/patcher_node_owner_check.sh
 )
-set_tests_properties(patcher_node_owner PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(patcher_node_owner PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # A gated note that fills its clip still sounds, and so does one shorter than a block.
 add_test(NAME full_length_note
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/full_length_note_check.sh
 )
-set_tests_properties(full_length_note PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(full_length_note PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # The sample loop is settable by command and audible when it is.
 add_test(NAME sampler_loop
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_loop_check.sh
 )
-set_tests_properties(sampler_loop PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_loop PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # The READ direction's ratchet, the one op_registry and persisted_field_reach did not cover:
 # every per-track field the engine publishes has a reader, and the values come back in the units
@@ -733,7 +733,7 @@ set_tests_properties(sampler_loop PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DI
 add_test(NAME clip_grid_check
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/clip_grid_check.sh
 )
-set_tests_properties(clip_grid_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(clip_grid_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # An AUDIO clip's in-point, gain and fades (opcode 95). Three layers have to move together and the
 # check asserts each one separately: the descriptor table (which was a load-time snapshot until
@@ -955,7 +955,7 @@ set_tests_properties(track_edit PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 add_test(NAME sampler_kit_fields
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_kit_fields_check.sh
 )
-set_tests_properties(sampler_kit_fields PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_kit_fields PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # Every published ROW OP can be read back, and the note id that addresses one is visible —
 # set-row-ops is addressed by an id `get notes` did not print, so the write path needed an
@@ -963,12 +963,12 @@ set_tests_properties(sampler_kit_fields PROPERTIES WORKING_DIRECTORY ${CMAKE_BIN
 add_test(NAME note_readback
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/note_readback_check.sh
 )
-set_tests_properties(note_readback PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(note_readback PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME track_readback
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/track_readback_check.sh
 )
-set_tests_properties(track_readback PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(track_readback PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # A sampler's audio is addressable for drawing, and it is the RIGHT audio. The load-bearing
 # property is the source NO audio clip names: every other assertion here passes with the sampler's
@@ -976,7 +976,7 @@ set_tests_properties(track_readback PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_
 add_test(NAME sampler_waveform
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_waveform_check.sh
 )
-set_tests_properties(sampler_waveform PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_waveform PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # Entering a note over a sounding one no longer has to destroy it. The last property renders the
 # default-NNA case on purpose: turning the lane flag on and testing with a Cut slot sounds like no
@@ -984,50 +984,50 @@ set_tests_properties(sampler_waveform PROPERTIES WORKING_DIRECTORY ${CMAKE_BINAR
 add_test(NAME note_overlap
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/note_overlap_check.sh
 )
-set_tests_properties(note_overlap PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(note_overlap PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # A lane's subdivision is settable at last, and it is the LANE's — a one-track fixture cannot
 # tell "set the track I asked for" from "set all of them".
 add_test(NAME lines_per_beat
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/lines_per_beat_check.sh
 )
-set_tests_properties(lines_per_beat PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(lines_per_beat PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # A generated note chooses its slice, and chooses the same one at any buffer size.
 add_test(NAME slice_select
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/slice_select_check.sh
 )
-set_tests_properties(slice_select PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(slice_select PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # Zero is not a device id: a sampler that is the FIRST device on its track must be played.
 add_test(NAME device_id_zero
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/device_id_zero_check.sh
 )
-set_tests_properties(device_id_zero PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(device_id_zero PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # The version on a kit answer describes that answer, and a reader gets the track it asked for.
 add_test(NAME kit_readback_version
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/kit_readback_version_check.sh
 )
-set_tests_properties(kit_readback_version PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(kit_readback_version PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # Every part of a chopped file is reachable, and a new sampler exists before it is loaded into.
 add_test(NAME sampler_chop_reach
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_chop_reach_check.sh
 )
-set_tests_properties(sampler_chop_reach PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_chop_reach PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # A sampler edit must not free the snapshot its sounding voices are reading.
 add_test(NAME sampler_edit_while_playing
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_edit_while_playing_check.sh
 )
-set_tests_properties(sampler_edit_while_playing PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_edit_while_playing PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # The filter can be turned on at all — the field nothing could write — and it is audible.
 add_test(NAME sampler_filter
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_filter_check.sh
 )
-set_tests_properties(sampler_filter PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_filter PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # Bit depth and rate reduction are two DIFFERENT effects, identified by opposite fingerprints:
 # bits collapse the distinct-value count, rate collapses the transition count. Asserting only
@@ -1036,32 +1036,32 @@ set_tests_properties(sampler_filter PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_
 add_test(NAME sampler_vintage
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_vintage_check.sh
 )
-set_tests_properties(sampler_vintage PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_vintage PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME sampler_determinism
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_determinism_check.sh
 )
-set_tests_properties(sampler_determinism PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_determinism PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # Four offline renders, one of which is the negative control that gives the others teeth.
 add_test(NAME sampler_stem
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_stem_check.sh
 )
-set_tests_properties(sampler_stem PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_stem PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # 8 is the ctest size: enough tracks to show whether cost grows linearly, small enough not to
 # dominate the suite. Run it by hand with a larger argument to find the actual ceiling.
 add_test(NAME producer_load
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/producer_load_check.sh 8
 )
-set_tests_properties(producer_load PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(producer_load PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # A patcher generator driving the built-in sampler — a path that did not exist at all until the
 # note tee was added to the patcher's event-resolution route.
 add_test(NAME patcher_plays_sampler
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/patcher_plays_sampler_check.sh
 )
-set_tests_properties(patcher_plays_sampler PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(patcher_plays_sampler PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # The pool through a REAL DEVICE in real time — the one place a late thread actually costs
 # something. Skips cleanly (exit 0, with a reason) on a machine with no audio device.
@@ -1070,108 +1070,108 @@ set_tests_properties(patcher_plays_sampler PROPERTIES WORKING_DIRECTORY ${CMAKE_
 add_test(NAME realtime_pool
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/realtime_pool_check.sh 24
 )
-set_tests_properties(realtime_pool PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(realtime_pool PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # The inward bulk carrier, verified by something AUDIBLE that came across it — a byte count
 # proves the transport, a drawn shape you can hear proves the whole path.
 add_test(NAME bulk_carrier
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/bulk_carrier_check.sh
 )
-set_tests_properties(bulk_carrier PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(bulk_carrier PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # A live engine sets the envelope, then the saved project is rendered OFFLINE and the audio is
 # measured — a check that read the numbers back would pass with the envelope never reaching a voice.
 add_test(NAME sampler_envelope_write
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_envelope_write_check.sh
 )
-set_tests_properties(sampler_envelope_write PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_envelope_write PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # A live engine, but it asserts on the DOCUMENT rather than on audio, so it needs no device.
 add_test(NAME row_ops_write
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/row_ops_write_check.sh
 )
-set_tests_properties(row_ops_write PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(row_ops_write PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # The thread count must not be observable in the output. Byte-for-byte, not a tolerance.
 add_test(NAME render_pool
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/render_pool_check.sh
 )
-set_tests_properties(render_pool PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(render_pool PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME sampler_state
   COMMAND sampler_state_tests
 )
-set_tests_properties(sampler_state PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_state PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME sampler_voice
   COMMAND sampler_voice_tests
 )
-set_tests_properties(sampler_voice PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_voice PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME zip_container
   COMMAND zip_container_tests
 )
-set_tests_properties(zip_container PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(zip_container PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME sampler_slice
   COMMAND sampler_slice_tests
 )
-set_tests_properties(sampler_slice PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_slice PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME sampler_dsp
   COMMAND sampler_dsp_tests
 )
-set_tests_properties(sampler_dsp PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_dsp PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME sampler_engine
   COMMAND sampler_engine_tests
 )
-set_tests_properties(sampler_engine PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_engine PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME placement_adds
   COMMAND placement_adds_tests
 )
-set_tests_properties(placement_adds PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(placement_adds PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME time_signature
   COMMAND time_signature_tests
 )
-set_tests_properties(time_signature PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(time_signature PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME tempo_integral
   COMMAND tempo_integral_tests
 )
-set_tests_properties(tempo_integral PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(tempo_integral PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME lane_quantize
   COMMAND lane_quantize_tests
 )
-set_tests_properties(lane_quantize PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(lane_quantize PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME clip_grid
   COMMAND clip_grid_tests
 )
-set_tests_properties(clip_grid PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(clip_grid PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME waveform_fixture
   COMMAND waveform_fixture_tests ${CMAKE_CURRENT_SOURCE_DIR}/presets/audio
 )
-set_tests_properties(waveform_fixture PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(waveform_fixture PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME device_chain_defaults
   COMMAND device_chain_tests
 )
-set_tests_properties(device_chain_defaults PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(device_chain_defaults PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME device_chain_ui
   COMMAND device_chain_ui_tests
 )
-set_tests_properties(device_chain_ui PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(device_chain_ui PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME device_chain_ui_live
   COMMAND device_chain_ui_live_tests
 )
-set_tests_properties(device_chain_ui_live PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(device_chain_ui_live PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # Where JUCE actually put the Identity bundle.
 #
@@ -1193,31 +1193,31 @@ add_test(NAME phase2_impulse
   COMMAND phase2_tests --test impulse
           --plugin ${IDENTITY_VST3}
 )
-set_tests_properties(phase2_impulse PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase2_impulse PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase2_param_priority
   COMMAND phase2_tests --test param_priority
           --plugin ${IDENTITY_VST3}
 )
-set_tests_properties(phase2_param_priority PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase2_param_priority PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase2_param_targeting
   COMMAND phase2_tests --test param_targeting
           --plugin ${IDENTITY_VST3}
 )
-set_tests_properties(phase2_param_targeting PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase2_param_targeting PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase2_chaos
   COMMAND phase2_tests --test chaos
           --plugin ${IDENTITY_VST3}
 )
-set_tests_properties(phase2_chaos PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase2_chaos PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase2_ui_visual
   COMMAND phase2_tests --test ui_visual
           --plugin ${IDENTITY_VST3}
 )
-set_tests_properties(phase2_ui_visual PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase2_ui_visual PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_executable(phase3_tests
   apps/phase3_tests_main.cpp
@@ -1243,113 +1243,113 @@ add_test(NAME phase3_timebase
   COMMAND phase3_tests --test timebase
           --plugin ${IDENTITY_VST3}
 )
-set_tests_properties(phase3_timebase PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_timebase PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase3_scheduler_ring
   COMMAND phase3_tests --test scheduler_ring
           --plugin ${IDENTITY_VST3}
 )
-set_tests_properties(phase3_scheduler_ring PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_scheduler_ring PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase3_automation_ring
   COMMAND phase3_tests --test automation_ring
           --plugin ${IDENTITY_VST3}
 )
-set_tests_properties(phase3_automation_ring PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_automation_ring PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase3_audio_region
   COMMAND phase3_tests --test audio_region
 )
-set_tests_properties(phase3_audio_region PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_audio_region PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME audio_io
   COMMAND audio_io_tests
 )
-set_tests_properties(audio_io PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(audio_io PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase3_harmony_quantize
   COMMAND phase3_tests --test harmony_quantize
 )
-set_tests_properties(phase3_harmony_quantize PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_harmony_quantize PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase3_chord_expansion
   COMMAND phase3_tests --test chord_expansion
 )
-set_tests_properties(phase3_chord_expansion PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_chord_expansion PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase3_humanize_determinism
   COMMAND phase3_tests --test humanize_determinism
 )
-set_tests_properties(phase3_humanize_determinism PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_humanize_determinism PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase3_harmony_order
   COMMAND phase3_tests --test harmony_order
 )
-set_tests_properties(phase3_harmony_order PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_harmony_order PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase3_snapshot
   COMMAND phase3_tests --test snapshot
 )
-set_tests_properties(phase3_snapshot PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_snapshot PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase3_undo_stack
   COMMAND phase3_tests --test undo_stack
 )
-set_tests_properties(phase3_undo_stack PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_undo_stack PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase3_note_duration
   COMMAND phase3_tests --test note_duration
 )
-set_tests_properties(phase3_note_duration PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_note_duration PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase3_row_op_probability
   COMMAND phase3_tests --test row_op_probability
 )
-set_tests_properties(phase3_row_op_probability PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_row_op_probability PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase3_row_op_expand
   COMMAND phase3_tests --test row_op_expand
 )
-set_tests_properties(phase3_row_op_expand PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_row_op_expand PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase3_placement_schedule
   COMMAND phase3_tests --test placement_schedule
 )
-set_tests_properties(phase3_placement_schedule PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_placement_schedule PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase3_note_entry
   COMMAND phase3_tests --test note_entry
 )
-set_tests_properties(phase3_note_entry PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_note_entry PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase3_resync_mismatch
   COMMAND phase3_tests --test resync_mismatch
 )
-set_tests_properties(phase3_resync_mismatch PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_resync_mismatch PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase3_pulse_full
   COMMAND phase3_tests --test pulse_full
           --plugin ${IDENTITY_VST3}
 )
-set_tests_properties(phase3_pulse_full PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_pulse_full PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase3_note_off_full
   COMMAND phase3_tests --test note_off_full
           --plugin ${IDENTITY_VST3}
 )
-set_tests_properties(phase3_note_off_full PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_note_off_full PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase3_resurrection_full
   COMMAND phase3_tests --test resurrection_full
           --plugin ${IDENTITY_VST3}
 )
-set_tests_properties(phase3_resurrection_full PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_resurrection_full PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME phase3_composition_full
   COMMAND phase3_tests --test composition_full
           --plugin ${IDENTITY_VST3}
 )
-set_tests_properties(phase3_composition_full PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(phase3_composition_full PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 
 # NOTE: this MUST stay at the very END of this file. `if (TARGET ...)` is false for a
