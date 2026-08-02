@@ -49,14 +49,18 @@ cmake = (root / "CMakeLists.txt").read_text()
 # Note the reasons are all about the SUBJECT of the check, never about it being slow, awkward or
 # occasionally flaky. A reason that could excuse anything excuses everything.
 DECLARED_UNREGISTERED = {
-    "level_match_bypass_check.sh": "toggles bypass MID-RUN, which a batch render cannot time",
-    "master_fx_check.sh":          "its subject is the one-block-latency host on the master sum",
-    "midi_per_bus_check.sh":       "types a note onto a DERIVED child at runtime; moving it into "
-                                   "the fixture would route it through aux-child persistence "
-                                   "instead of the runtime edit path it exists to test",
-    "panic_check.sh":              "interactive: sends a command MID-PLAYBACK",
-    "preview_note_check.sh":       "interactive: sends a command MID-PLAYBACK",
-    "sidechain_check.sh":          "cross-track pull under a real clock",
+    # EMPTY, AND THAT IS THE POINT OF THE LIST.
+    #
+    # It held six capture-dependent checks — level_match_bypass, master_fx, midi_per_bus, panic,
+    # preview_note, sidechain — which assert on a LIVE capture and so need an output device that
+    # runs its playback callback. This machine's did not for days: coreaudiod had been up 85 days
+    # and the device opened, reported its rate, answered isPlaying() TRUE and never called back.
+    #
+    # Jaakko restarted coreaudiod on 2026-08-02, all six passed, and they are registered in ctest.
+    # The list was built to SHRINK and not to grow silently, and this is it shrinking to nothing.
+    #
+    # Keep the mechanism. The next check that cannot run needs a reason here rather than a quiet
+    # absence from CMakeLists, which is what forty-three checks had before this ratchet existed.
 }
 
 checks = sorted(p.name for p in (root / "tools").glob("*_check.sh"))

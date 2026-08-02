@@ -395,6 +395,7 @@ target_include_directories(lane_quantize_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+
 # Header-only tests for the per-clip grid packed into UiClipExtent.flags.
 add_executable(clip_grid_tests
   apps/clip_grid_tests_main.cpp
@@ -566,6 +567,45 @@ add_test(NAME voice_telemetry
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/voice_telemetry_check.sh
 )
 set_tests_properties(voice_telemetry PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+# THE SIX CAPTURE-DEPENDENT CHECKS, registered 2026-08-02 — the first time they could run.
+# They assert on a LIVE capture through DAW_CAPTURE_WAV, so they need an output device that
+# actually runs its playback callback. This machine's did not for days (coreaudiod had been up 85
+# days; restarting it fixed the device), and they were declared unrunnable in
+# tools/check_registry_check.sh rather than left silently unregistered.
+#
+# All six pass. They are device-dependent by nature, so they are the first thing to go red if the
+# device dies again — which is correct: that is a real loss of coverage and should be loud.
+add_test(NAME level_match_bypass
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/level_match_bypass_check.sh
+)
+set_tests_properties(level_match_bypass PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME master_fx
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/master_fx_check.sh
+)
+set_tests_properties(master_fx PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME midi_per_bus
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/midi_per_bus_check.sh
+)
+set_tests_properties(midi_per_bus PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME panic
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/panic_check.sh
+)
+set_tests_properties(panic PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME preview_note
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/preview_note_check.sh
+)
+set_tests_properties(preview_note PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME sidechain
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sidechain_check.sh
+)
+set_tests_properties(sidechain PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 
 add_test(NAME lint
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/lint_check.sh
@@ -1154,6 +1194,7 @@ add_test(NAME lane_quantize
   COMMAND lane_quantize_tests
 )
 set_tests_properties(lane_quantize PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 
 add_test(NAME clip_grid
   COMMAND clip_grid_tests
