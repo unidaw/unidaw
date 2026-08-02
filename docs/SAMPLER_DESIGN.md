@@ -430,7 +430,7 @@ Rejected as "just a feature list": velocity layers, round-robin, filter types, r
 > | **S1** ✅ | the sampler exists and plays | `sampler_check`, `sampler_determinism` (bit-identical at 64/256/1024) |
 > | **S2** ✅ | the kit | `sampler_kit` |
 > | **S3** ✅ | loops, mip-map, quality, filter, all modulator targets | `sampler_loop`, `sampler_filter`, `sampler_dsp` |
-> | **S4** ✅ | the sound address | `sampler_sound_address`, `sound_addressed`. The bump it describes as 31 → 32 landed long ago; `kShmVersion` is **36**. |
+> | **S4** ✅ | the sound address | `sampler_sound_address`, `sound_addressed`. The bump it describes as 31 → 32 landed long ago. **The current `kShmVersion` is not restated here** — read `apps/shared_memory.h`. This cell said 36 and was already wrong within days, which is the exact failure the banner above is about; a version copied into prose is a claim that decays silently, and this file has grown contradictory copies of one before. |
 > | **S5** ✅ | slicing | `sampler_chop`, `slice_extent`, `slice_select` |
 > | **S6** ✅ | stems | `sampler_stem` — see the correction in place below |
 > | **S7** ✅ | the `.uni` module | `module`, and `module_state` for the plugin state it silently dropped |

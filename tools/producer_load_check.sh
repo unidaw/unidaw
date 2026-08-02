@@ -122,6 +122,17 @@ field() {
     grep -o "\"$2\":[0-9]*" | tail -1 | cut -d: -f2
 }
 
+# RENDER ONE PROJECT AND YIELD ITS SAMPLER MEAN. Extracted so the paired baseline below runs
+# through exactly the same path as the measurement it is compared against — a baseline taken a
+# different way is a second variable.
+sampler_us_of() {  # sampler_us_of <projectName> <tag>
+  ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/pload_$$_$2" \
+      DAW_ENGINE_RENDER_THREADS=1 \
+      ./daw_engine --project "$1" --render "$2" --run-seconds 8 --block-size 256 \
+      >"$TMP/$2.log" 2>&1 ) || return 1
+  field "$TMP/$2.log" sampler_mean_us
+}
+
 echo "  tracks   load(mean)  load(peak)   sampler us/blk   over budget"
 BASE_SAMPLER=0
 N=1
@@ -188,12 +199,49 @@ raise SystemExit(0 if $OVER <= max(2, $BLOCKS * 0.02) else 1)" || \
     # RECORDED, NOT FAILED YET. The verdict is deferred until the one-track baseline has been
     # RE-MEASURED after the run — see the block below the loop for why. A superlinear result on a
     # machine that moved under the measurement is a claim about the machine.
-    python3 -c "
-base = max(1, $BASE_SAMPLER)
-raise SystemExit(0 if $SAMP <= base * $N * 1.5 else 1)" || \
+    # A BASELINE TAKEN NEXT TO THE MEASUREMENT, not twenty seconds before it. The one-track
+    # cost is re-measured immediately after this N-track render, and the ratio is computed
+    # against THAT rather than against the baseline from the top of the loop.
+    #
+    # Why: the post-hoc drift guard below compares the first baseline against a final one and
+    # asks whether the box gave the same answer twice. That is independent of whether per-track
+    # work contends — but it is NOT independent of WHEN the contention happened. A busy period
+    # that starts after the first baseline and ends before the final one sits entirely inside
+    # the window being judged, and the check then reports "per-track work is CONTENDING", a
+    # claim about the CODE, with the machine's own noise as its evidence. That is what it did
+    # on 2026-08-02 inside a full ctest, while passing standalone at 26.95s minutes later.
+    #
+    # Adjacent samples share whatever the box is doing, so contention inflates both and mostly
+    # cancels in the ratio. It does not close the hole — contention lasting only the seconds of
+    # one render still fools it — it narrows the window from the whole run to a single render.
+    PAIRED="$(sampler_us_of "n1" "pair$N")" || \
+      fail "the paired one-track re-measurement for N=$N exited non-zero"
+    [ -n "${PAIRED:-}" ] || \
+      fail "the paired one-track re-measurement for N=$N produced no telemetry"
+    # TWO BASELINES, TREATED AS INDEPENDENT WITNESSES. The comparison is run against BOTH the
+    # baseline from the top of the run and the adjacent one, and the engine is accused only when
+    # they AGREE. If they disagree, the box moved between them and the honest answer is that
+    # this run cannot say — which is the BLOCKED state this check already has.
+    #
+    # Using the adjacent baseline ALONE would have been strictly more permissive, and I could
+    # not demonstrate that it changes any outcome: two attempts to reproduce the false accusation
+    # with synthetic load (8 and 16 spinners, started after the early baselines) failed to
+    # perturb a single-threaded render at all. Shipping a permissiveness change on an unproven
+    # benefit is how a guard turns into an excuse, so it takes two witnesses instead.
+    BAD_PAIRED="$(python3 -c "print(1 if $SAMP > max(1, $PAIRED) * $N * 1.5 else 0)")"
+    BAD_START="$(python3 -c "print(1 if $SAMP > max(1, $BASE_SAMPLER) * $N * 1.5 else 0)")"
+    if [ "$BAD_PAIRED" = "1" ] && [ "$BAD_START" = "1" ]; then
       SCALE_FAIL="$N sampler tracks cost ${SAMP}us of DSP per block, more than $N x the
-        one-track cost (${BASE_SAMPLER}us) plus 50% slack. Per-track work is CONTENDING, not
-        just adding up — and no amount of parallelism fixes contention"
+        one-track cost plus 50% slack. BOTH one-track baselines agree — ${BASE_SAMPLER}us at the
+        top of the run and ${PAIRED}us measured next to this render — so this is not the machine
+        moving under the measurement. Per-track work is CONTENDING, not just adding up, and no
+        amount of parallelism fixes contention"
+    elif [ "$BAD_PAIRED" != "$BAD_START" ]; then
+      SCALE_SPLIT="at $N tracks (${SAMP}us) the two one-track baselines DISAGREE about whether
+        that is superlinear: ${BASE_SAMPLER}us measured at the top of the run, ${PAIRED}us
+        measured immediately next to this render. One of them saw a different machine, so the
+        ratio says nothing about the engine either way"
+    fi
   fi
   N=$((N * 2))
 done
@@ -218,6 +266,15 @@ done
 #
 # BLOCKED IS REPORTED, NEVER SILENT. A check that excuses itself quietly is worse than one that
 # fails, because the excuse becomes furniture. The banner carries it.
+# DISAGREEING WITNESSES ARE NOT A VERDICT. Reported, never silent — a check that excuses itself
+# quietly is worse than one that fails, because the excuse becomes furniture.
+if [ -n "${SCALE_SPLIT:-}" ]; then
+  echo "  BLOCKED: $SCALE_SPLIT"
+  echo "producer_load_check: BLOCKED — the box was not stable enough to answer. Nothing here is a"
+  echo "                     verdict on the engine."
+  exit 0
+fi
+
 if [ -n "${SCALE_FAIL:-}" ]; then
   project "recheck" 1
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/pload_${$}_re" \
