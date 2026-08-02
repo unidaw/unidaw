@@ -97,7 +97,7 @@ json.dump({"schema_version": 4, "meta": {"name": "blank"}, "nanoticks_per_quarte
 PY
 
 SHM="/modchk_$$"
-( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$HOME_DIR" \
+( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$HOME_DIR" \
     ./daw_engine --run-seconds 40 >"$HOME_DIR/eng.log" 2>&1 ) &
 ENG=$!
 for _ in $(seq 1 120); do
@@ -167,7 +167,7 @@ fi
 
 # ---- REPRODUCIBLE. Saving twice with no edits must produce the same bytes, or every save is a
 # diff and "did anything actually change?" stops being answerable.
-( cd "$BUILD" && env DAW_UI_SHM_NAME="/modchk2_$$" DAW_PROJECT_DIR="$HOME_DIR" \
+( cd "$BUILD" && exec env DAW_UI_SHM_NAME="/modchk2_$$" DAW_PROJECT_DIR="$HOME_DIR" \
     ./daw_engine --run-seconds 20 >"$HOME_DIR/eng2.log" 2>&1 ) &
 ENG=$!
 for _ in $(seq 1 120); do
@@ -209,7 +209,7 @@ fi
 cp "$HOME_DIR/song.uni" "$AWAY_DIR/song.uni"
 rm -f "$HOME_DIR/tone.wav" "$HOME_DIR"/*.uniproj.json
 SHM3="/modchk3_$$"
-( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM3" DAW_PROJECT_DIR="$AWAY_DIR" \
+( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM3" DAW_PROJECT_DIR="$AWAY_DIR" \
     ./daw_engine --run-seconds 25 >"$AWAY_DIR/eng.log" 2>&1 ) &
 ENG=$!
 for _ in $(seq 1 120); do
@@ -245,7 +245,7 @@ b[200] ^= 0xFF
 open(sys.argv[2], 'wb').write(bytes(b))
 PYC
 SHM4="/modchk4_$$"
-( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM4" DAW_PROJECT_DIR="$AWAY_DIR" \
+( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM4" DAW_PROJECT_DIR="$AWAY_DIR" \
     ./daw_engine --run-seconds 15 >"$AWAY_DIR/eng2.log" 2>&1 ) &
 ENG=$!
 for _ in $(seq 1 120); do

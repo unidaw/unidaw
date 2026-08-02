@@ -299,7 +299,7 @@ identical b256 b1024 || fail "the slices chosen at 256 frames differ from those 
 CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
 if [ -x "$CLI" ]; then
-  ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/selcfg_$$" \
+  ( cd "$BUILD" && exec env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/selcfg_$$" \
       ./daw_engine --project sel --run-seconds 20 >"$TMP/cfg.log" 2>&1 ) &
   CFGENG=$!
   wait_for_boot "$TMP/cfg.log" "$CFGENG" 160

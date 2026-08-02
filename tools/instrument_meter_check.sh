@@ -52,7 +52,7 @@ cat > "$TMP/im.uniproj.json" <<EOF
       "mod_links": [], "placements": [] } ] }
 EOF
 
-( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
+( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
     DAW_FAKE_TONE_HZ=440 \
     ./daw_engine --run-seconds 16 >"$TMP/engine.log" 2>&1 ) &
 ENG=$!

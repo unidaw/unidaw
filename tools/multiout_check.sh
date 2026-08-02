@@ -58,7 +58,7 @@ run() {  # $1=name  -> prints the sorted active aux channels
   # instantly, the `do load` went into a ring nobody was reading, and the engine played the
   # startup project in silence. Only the FIRST pitch was ever really tested.
   local shm="${SHM_BASE}_$name"
-  ( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" \
+  ( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" \
       ./daw_engine --run-seconds 30 >"$log" 2>&1 ) &
   local e=$!
   # Readiness comes from THIS engine's own log, not from the shm — a segment answering is

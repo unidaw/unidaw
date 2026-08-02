@@ -98,7 +98,7 @@ PY
 entered_duration() {
   local proj="$1" name="$2"
   local shm="/meterbar_${$}_$name"
-  ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$shm" \
+  ( cd "$BUILD" && exec env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$shm" \
       ./daw_engine --project "$proj" --run-seconds 22 >"$TMP/$name.log" 2>&1 ) &
   ENG=$!
   wait_for_boot "$TMP/$name.log" "$ENG" 40

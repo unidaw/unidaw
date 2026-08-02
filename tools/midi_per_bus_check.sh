@@ -34,7 +34,7 @@ json.dump({"schema_version":4,"meta":{"name":"mo"},"nanoticks_per_quarter":Q,"te
 PY
 
 LOG="$TMP/eng.log"
-( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
+( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
     DAW_CAPTURE_WAV="$TMP/m.wav" DAW_CAPTURE_SECONDS=6 ./daw_engine --run-seconds 7 >"$LOG" 2>&1 ) &
 ENG=$!; sleep 2
 DAW_UI_SHM_NAME="$SHM" "$CLI" do load mo --force >/dev/null 2>&1 || true

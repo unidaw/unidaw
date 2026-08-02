@@ -189,7 +189,7 @@ echo "  flag on, project:       $ON Hz"
 # The engine must exit on its own — the capture wav is written during clean shutdown, so killing
 # it yields no file at all, which reads as silence and is not.
 SHM="/sndaddr_cmd_$$"
-( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$SHM" \
+( cd "$BUILD" && exec env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$SHM" \
     DAW_CAPTURE_WAV="$TMP/cmd.wav" DAW_CAPTURE_SECONDS=6 \
     ./daw_engine --project off --run-seconds 22 >"$TMP/cmd.log" 2>&1 ) &
 ENG=$!

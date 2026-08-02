@@ -167,7 +167,7 @@ echo "  loop on:  tail peak $ONPEAK"
 
 # ---- COMMANDED. The half that was missing: loopMode had no field id, so no command could set it.
 if [ -x "$CLI" ]; then
-  ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/loopcmd_$$" \
+  ( cd "$BUILD" && exec env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/loopcmd_$$" \
       ./daw_engine --project noloop --run-seconds 20 >"$TMP/cmd.log" 2>&1 ) &
   ENG=$!
   wait_for_boot "$TMP/cmd.log" "$ENG" 160

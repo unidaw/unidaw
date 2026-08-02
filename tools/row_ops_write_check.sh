@@ -86,7 +86,7 @@ json.dump({"schema_version": 4, "meta": {"name": "rowops"}, "nanoticks_per_quart
 PY
 
 start_engine() {  # $1=shm  $2=logfile
-  ( cd "$BUILD" && env DAW_UI_SHM_NAME="$1" DAW_PROJECT_DIR="$TMP" \
+  ( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$1" DAW_PROJECT_DIR="$TMP" \
       ./daw_engine --run-seconds 40 >"$2" 2>&1 ) &
   ENG=$!
   for _ in $(seq 1 160); do

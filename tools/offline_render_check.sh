@@ -120,7 +120,7 @@ echo "  deterministic: two renders are byte-identical"
 # pass both checks above. The comparison is musical rather than sample-exact on purpose: the
 # realtime capture has a device start transient and an arbitrary offset into its ring, so what
 # must agree is the MUSIC — how many onsets, how they are spaced, and how loud.
-( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_PROJECT_DIR="$TMP" \
+( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_PROJECT_DIR="$TMP" \
     DAW_UI_SHM_NAME="/offrend_rt_$$" DAW_CAPTURE_WAV="$TMP/rt.wav" \
     DAW_CAPTURE_SECONDS=$((SECS + 4)) \
     ./daw_engine --project rend --run-seconds $((SECS + 3)) >"$TMP/rt.log" 2>&1 ) &

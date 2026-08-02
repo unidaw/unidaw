@@ -61,7 +61,7 @@ EOF
 
 run() {  # run <extra-env> <name>
   local shm="/lmchk_${2}_$$"
-  ( cd "$BUILD" && env DAW_IDENTITY_PASSTHRU=1 DAW_FAKE_INSERT_GAIN=$INSERT_GAIN $1 \
+  ( cd "$BUILD" && exec env DAW_IDENTITY_PASSTHRU=1 DAW_FAKE_INSERT_GAIN=$INSERT_GAIN $1 \
       DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" DAW_CAPTURE_WAV="$TMP/$2.wav" \
       DAW_CAPTURE_SECONDS=14 ./daw_engine --run-seconds 18 >"$TMP/$2.log" 2>&1 ) &
   local eng=$!

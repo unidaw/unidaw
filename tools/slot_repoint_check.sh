@@ -144,7 +144,7 @@ echo "  before the repoint: $B Hz"
         playing what it says it plays, so a change below could not be attributed to the command"
 
 SHM="/repoint_cmd_$$"
-( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$SHM" \
+( cd "$BUILD" && exec env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$SHM" \
     ./daw_engine --project r --run-seconds 25 >"$TMP/eng.log" 2>&1 ) &
 ENG=$!
 wait_for_boot "$TMP/eng.log" "$ENG" 40

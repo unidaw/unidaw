@@ -34,7 +34,7 @@ tr={"track_id":0,"name":"T","harmony_quantize":False,"lines_per_beat":4,"mixer":
 json.dump({"schema_version":4,"meta":{"name":"e"},"nanoticks_per_quarter":Q,"tempo_map":[{"nanotick":0,"bpm":120.0}],"harmony_timeline":[],"clips":[clip],"tracks":[tr]},open(out,"w"))
 PY
 
-( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
+( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
     DAW_CAPTURE_WAV="$TMP/m.wav" DAW_CAPTURE_SECONDS=8 ./daw_engine --run-seconds 10 >"$TMP/eng.log" 2>&1 ) &
 ENG=$!
 sleep 2

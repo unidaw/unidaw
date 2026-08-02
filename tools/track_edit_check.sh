@@ -41,7 +41,7 @@ for tid,n in [(0,2),(1,2),(2,1)]:
 json.dump({"schema_version":4,"meta":{"name":"three"},"nanoticks_per_quarter":Q,"tempo_map":[{"nanotick":0,"bpm":120.0}],"harmony_timeline":[],"clips":clips,"tracks":tracks},open(out,"w"))
 PY
 
-( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
+( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 14 >"$TMP/eng.log" 2>&1 ) &
 ENG=$!
 sleep 2

@@ -55,7 +55,7 @@ LEN=$((NOTES * Q + 4 * Q))
   printf ' ] }\n'
 } > "$TMP/mpr.uniproj.json"
 
-( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
+( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 30 >"$TMP/engine.log" 2>&1 ) &
 ENG=$!
 sleep 2.5

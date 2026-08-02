@@ -46,7 +46,7 @@ cat > "$TMP/auto.uniproj.json" <<EOF
                       "notes": [], "chords": [], "mutes": [] } ] } ] }
 EOF
 
-( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
+( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 26 >"$TMP/engine.log" 2>&1 ) &
 ENG=$!
 sleep 2.5
@@ -117,7 +117,7 @@ echo "  persist: ticks and values survive the save"
 kill "$ENG" 2>/dev/null || true
 wait "$ENG" 2>/dev/null || true
 SHM2="/autochk2_$$"
-( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" \
+( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 22 >"$TMP/engine2.log" 2>&1 ) &
 ENG=$!
 sleep 2.5
@@ -169,7 +169,7 @@ grep -q '"event":"automation.rejected"' "$TMP/engine.log" && \
 #
 # A TOMBSTONE is the case this can build from nothing: add a track, remove it, write to it.
 SHM3="/autochk3_$$"
-( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM3" DAW_PROJECT_DIR="$TMP" \
+( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM3" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 14 >"$TMP/engine3.log" 2>&1 ) &
 ENG=$!
 sleep 2.5
@@ -209,7 +209,7 @@ echo "  refusal: automation on a track the save would discard is refused, not si
 # AddTrack refills the LOWEST tombstone, so removing track 1 and adding one lands back in
 # slot 1. That is what makes this reproducible rather than incidental.
 SHM4="/autochk4_$$"
-( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM4" DAW_PROJECT_DIR="$TMP" \
+( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM4" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 18 >"$TMP/engine4.log" 2>&1 ) &
 ENG=$!
 sleep 2.5

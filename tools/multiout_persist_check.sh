@@ -88,7 +88,7 @@ wait_for() {  # wait_for <shm> <track> <pitch> <want>
 # are derived at ids 2 and 3 while their BUSES are 1 and 2 — so ids and buses differ and an
 # engine keying on the wrong one is caught rather than accidentally right.
 SHM="/mop1_$$"
-( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
+( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 20 >"$TMP/eng1.log" 2>&1 ) &
 ENG=$!
 sleep 2
@@ -144,7 +144,7 @@ PY
 # ---- RELOAD IN A FRESH ENGINE. A new process starts with no notes anywhere, so a note
 # that comes back on a stem can only have come from the file.
 SHM2="/mop2_$$"
-( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" \
+( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 20 >"$TMP/eng2.log" 2>&1 ) &
 ENG=$!
 sleep 2
@@ -225,7 +225,7 @@ PYSHIFT
 [ $? -eq 0 ] || exit 1
 
 SHM3="/mop3_$$"
-( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM3" DAW_PROJECT_DIR="$TMP" \
+( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM3" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 20 >"$TMP/eng3.log" 2>&1 ) &
 ENG=$!
 sleep 2

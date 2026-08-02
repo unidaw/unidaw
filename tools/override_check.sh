@@ -62,7 +62,7 @@ cat > "$TMP/ovr.uniproj.json" <<EOF
         { "clip_id": 2, "id": 21, "at": $((16 * BAR)), "length": $((4 * BAR)), "notes": [], "chords": [], "mutes": [] } ] } ] }
 EOF
 
-( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
+( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 30 >"$TMP/engine.log" 2>&1 ) &
 ENG=$!
 sleep 2.5

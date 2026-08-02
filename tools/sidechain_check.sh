@@ -102,7 +102,7 @@ run_capture() {  # $1=name  $2=take
   # shutdown, so killing it early leaves no WAV at all. 16 seconds is setup plus generous
   # playback, not a wait for something.
   local shm="${SHM}_$name"
-  ( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$shm" \
+  ( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$shm" \
       DAW_PROJECT_DIR="$TMP" DAW_CAPTURE_WAV="$take" DAW_CAPTURE_SECONDS=20 \
       ./daw_engine --run-seconds 16 >"$log" 2>&1 ) &
   local engine=$!

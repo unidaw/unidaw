@@ -77,7 +77,7 @@ take() {
   local name="$1"; local threads="$2"
   local threadEnv=""
   [ "$threads" = "auto" ] || threadEnv="DAW_ENGINE_RENDER_THREADS=$threads"
-  ( cd "$BUILD" && env DAW_UI_SHM_NAME="/rtpool_$$_$name" DAW_PROJECT_DIR="$TMP" \
+  ( cd "$BUILD" && exec env DAW_UI_SHM_NAME="/rtpool_$$_$name" DAW_PROJECT_DIR="$TMP" \
       DAW_CAPTURE_WAV="$TMP/$name.wav" ${threadEnv} \
       ./daw_engine --project rt --run-seconds 10 >"$TMP/$name.log" 2>&1 ) &
   ENG=$!

@@ -41,7 +41,7 @@ tr={"track_id":0,"name":"T0","harmony_quantize":False,"lines_per_beat":4,"mixer"
 json.dump({"schema_version":4,"meta":{"name":"one"},"nanoticks_per_quarter":Q,"tempo_map":[{"nanotick":0,"bpm":120.0}],"harmony_timeline":[],"clips":[clip],"tracks":[tr]},open(out,"w"))
 PY
 
-( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
+( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 12 >"$TMP/eng.log" 2>&1 ) &
 ENG=$!
 sleep 2
@@ -86,7 +86,7 @@ wait "$ENG"; ENG_RC=$?
 #
 # A FRESH ENGINE is the point: the same process still holds the tracks from the edits above.
 SHM2="/addrm2_check_$$"
-( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" \
+( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 18 >"$TMP/eng2.log" 2>&1 ) &
 ENG2=$!
 for _ in $(seq 1 120); do

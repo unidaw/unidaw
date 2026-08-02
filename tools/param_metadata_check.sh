@@ -40,7 +40,17 @@ CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || { echo "build daw-cli first (cargo build -p daw-cli)"; exit 2; }
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+# THE ENGINE MUST DIE WHEN THIS CHECK DOES, including when ctest KILLS the check on a timeout.
+# This trap used to remove $TMP and leave the engine running: it was only stopped on the normal
+# path and inside fail(). A timed-out check therefore orphaned a possibly-hung engine, and ctest
+# then blocked on it — measured at about 1000s per timeout across 18 runs, perfectly correlated
+# with the timeout count. override showed it plainly: 909.87s against a TIMEOUT of 600, passing
+# standalone in 23.2s.
+#
+# stop_engine escalates to SIGKILL after 10s and SAYS SO, so a hang stops being something to
+# infer from a sample stack and becomes a line in the run.
+cleanup() { [ -n "${ENG:-}" ] && stop_engine "$ENG"; rm -rf "$TMP"; }
+trap cleanup EXIT
 ENG=""
 fail() {
   echo "  FAIL: $*"
@@ -67,7 +77,7 @@ json.dump({"schema_version": 4, "meta": {"name": "pm"}, "nanoticks_per_quarter":
 PY
 
 SHM="/pmchk_$$"
-( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
+( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 26 >"$TMP/eng.log" 2>&1 ) &
 ENG=$!
 for _ in $(seq 1 120); do

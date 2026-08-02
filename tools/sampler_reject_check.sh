@@ -98,7 +98,7 @@ json.dump({"schema_version": 4, "meta": {"name": "r"}, "nanoticks_per_quarter": 
 PY
 
 SHM="/samprej_$$"
-( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$SHM" \
+( cd "$BUILD" && exec env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$SHM" \
     ./daw_engine --project r --run-seconds 25 >"$TMP/eng.log" 2>&1 ) &
 ENG=$!
 wait_for_boot "$TMP/eng.log" "$ENG" 40

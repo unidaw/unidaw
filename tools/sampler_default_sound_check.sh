@@ -239,7 +239,7 @@ live_run() {  # live_run <name> <sendEnv 0|1>
   # LIFETIME COMFORTABLY EXCEEDS EVERYTHING. Boot wait is 10 s against a 22 s life; a wait budget
   # longer than --run-seconds means the script can be waiting for an engine that already exited
   # and then reports "never loaded", which is a statement about the harness. See task #106.
-  ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$shm" \
+  ( cd "$BUILD" && exec env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$shm" \
       DAW_CAPTURE_WAV="$TMP/$name.wav" DAW_CAPTURE_SECONDS=6 \
       ./daw_engine --project d --run-seconds 22 >"$TMP/$name.log" 2>&1 ) &
   ENG=$!

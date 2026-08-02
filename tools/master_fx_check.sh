@@ -67,7 +67,7 @@ gen withfx "$MASTER_TRACK"
 
 run() {  # run <name>
   local shm="/master_fx_${1}_$$"
-  ( cd "$BUILD" && env DAW_IDENTITY_PASSTHRU=1 DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" \
+  ( cd "$BUILD" && exec env DAW_IDENTITY_PASSTHRU=1 DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" \
       DAW_CAPTURE_WAV="$TMP/$1.wav" DAW_CAPTURE_SECONDS=6 \
       ./daw_engine --run-seconds 12 >"$TMP/$1.log" 2>&1 ) &
   local eng=$!
@@ -134,7 +134,7 @@ PY
 #    Sized at 2 it can never match a 6-channel master, and the gate then leaves the effect
 #    installed, hosted and completely inaudible — which is how this shipped at first.
 shm_s="/master_fx_sur_$$"
-( cd "$BUILD" && env DAW_MASTER_CHANNELS=6 DAW_IDENTITY_PASSTHRU=1 DAW_UI_SHM_NAME="$shm_s" \
+( cd "$BUILD" && exec env DAW_MASTER_CHANNELS=6 DAW_IDENTITY_PASSTHRU=1 DAW_UI_SHM_NAME="$shm_s" \
     DAW_PROJECT_DIR="$TMP" DAW_CAPTURE_WAV="$TMP/sur.wav" DAW_CAPTURE_SECONDS=6 \
     ./daw_engine --run-seconds 12 >"$TMP/sur.log" 2>&1 ) &
 eng_s=$!

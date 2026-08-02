@@ -37,7 +37,7 @@ run() {  # $1=numBlocks -> echoes the starve count
   local nb shm e
   nb="$1"
   shm="/audiostab_${nb}_$$"
-  ( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_FAKE_BUSY_US=9000 DAW_ENGINE_NUM_BLOCKS="$nb" \
+  ( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_FAKE_BUSY_US=9000 DAW_ENGINE_NUM_BLOCKS="$nb" \
       DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" ./daw_engine --run-seconds 10 >"$TMP/eng_$nb.log" 2>&1 ) &
   e=$!
   sleep 2
