@@ -33,6 +33,8 @@
 #include "apps/engine_instance.h"
 #include "apps/engine_types.h"
 #include "apps/engine_pure.h"
+#include "apps/engine_automation_commands.h"
+#include "apps/engine_clip_commands.h"
 #include "apps/engine_sampler_commands.h"
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
@@ -9255,6 +9257,28 @@ int main(int argc, char** argv) {
       uiShm, tracks, tracksMutex, tempoProvider,
       reportSamplerRejectFn, refreshSamplerForTrackFn, rebuildSamplerRenderFn, applyAddNoteFn};
 
+  // The automation and clip-field commands moved out too; same shape as the sampler family.
+  const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>
+      buildTrackSnapshotFn = buildTrackSnapshot;
+  const std::function<void(const char*, const char*, uint32_t, uint32_t, const std::string&)>
+      historyAppendFn = historyAppend;
+  const std::function<bool(const TrackRuntime&)> trackIsPersistedFn = trackIsPersisted;
+  const std::function<bool(uint32_t, daw::UiCommandType, uint32_t)>
+      requireMatchingClipVersionFn = requireMatchingClipVersion;
+  daw::engine::AutomationCommandDeps automationCommandDeps{
+      tracks, tracksMutex, automationVersion, uiShm,
+      buildTrackSnapshotFn, historyAppendFn, trackIsPersistedFn,
+      requireMatchingClipVersionFn};
+
+  const std::function<uint32_t(TrackRuntime*)> bumpClipVersionForFn = bumpClipVersionFor;
+  const std::function<void()> publishAudioClipTableFn = publishAudioClipTable;
+  const std::function<std::shared_ptr<const AudioRenderList>(const TrackRuntime&)>
+      rebuildAudioRenderFn = rebuildAudioRender;
+  const std::function<void(bool)> writeUiClipExtentsFn = writeUiClipExtents;
+  daw::engine::ClipCommandDeps clipCommandDeps{
+      tracks, tracksMutex, clipVersion, uiShm,
+      bumpClipVersionForFn, publishAudioClipTableFn, rebuildAudioRenderFn, writeUiClipExtentsFn};
+
   auto handleUiEntry = [&](const daw::EventEntry& entry) {
     if (entry.type != static_cast<uint16_t>(daw::EventType::UiCommand)) {
       return;
@@ -9363,55 +9387,7 @@ int main(int argc, char** argv) {
     }
     if (entry.size == sizeof(daw::UiAutomationCommandPayload) &&
         commandType == daw::UiCommandType::SetAutomationTarget) {
-      daw::UiAutomationCommandPayload autoPayload{};
-      std::memcpy(&autoPayload, entry.payload, sizeof(autoPayload));
-      if (autoPayload.commandType !=
-          static_cast<uint16_t>(daw::UiCommandType::SetAutomationTarget)) {
-        return;
-      }
-      if (!requireMatchingClipVersion(autoPayload.baseVersion,
-                                      daw::UiCommandType::SetAutomationTarget,
-                                      autoPayload.trackId)) {
-        return;
-      }
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (autoPayload.trackId < tracks.size()) {
-          runtime = tracks[autoPayload.trackId].get();
-        }
-      }
-      if (!runtime) {
-        daw::LogLine() << "UI: SetAutomationTarget failed - track "
-                  << autoPayload.trackId << " not found" << std::endl;
-        return;
-      }
-      bool updated = false;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        for (auto& clip : runtime->track.automationClips) {
-          const auto uid16 = daw::hashStableId16(clip.paramId());
-          if (std::memcmp(uid16.data(), autoPayload.uid16, uid16.size()) == 0) {
-            clip.setTargetPluginIndex(autoPayload.targetPluginIndex);
-            updated = true;
-            break;
-          }
-        }
-      }
-      if (updated) {
-        std::shared_ptr<const TrackStateSnapshot> snapshot;
-        {
-          std::lock_guard<std::mutex> lock(runtime->trackMutex);
-          snapshot = buildTrackSnapshot(runtime->track);
-        }
-        std::atomic_store_explicit(&runtime->trackSnapshot,
-                                   snapshot,
-                                   std::memory_order_release);
-      }
-      if (!updated) {
-        daw::LogLine() << "UI: SetAutomationTarget - automation clip not found (track "
-                  << autoPayload.trackId << ")" << std::endl;
-      }
+      daw::engine::handleSetAutomationTarget(automationCommandDeps, entry, header, commandType);
       return;
     }
     // v28: ANSWER one automation lane's points into a seqlock slot. Same shape as the windowed
@@ -9421,178 +9397,14 @@ int main(int argc, char** argv) {
     // answer to the one you asked.
     if (entry.size == sizeof(daw::UiAutomationLaneRequestPayload) &&
         commandType == daw::UiCommandType::RequestAutomationLane) {
-      daw::UiAutomationLaneRequestPayload req{};
-      std::memcpy(&req, entry.payload, sizeof(req));
-      if (!uiShm.header || uiShm.header->uiAutomationSlotOffset == 0) {
-        return;
-      }
-      const std::string paramId(req.paramId, strnlen(req.paramId, sizeof(req.paramId)));
-      auto* slotRegion = reinterpret_cast<daw::UiAutomationSlotRegion*>(
-          reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiAutomationSlotOffset);
-      // The CLIENT chose the slot. Not drain-to-latest: two lanes asked for in the same frame
-      // must both be answerable, and a reader that has to guess which slot holds its answer is
-      // the write-only interface this whole region exists to end.
-      const uint32_t seq = req.requestSeq;
-      daw::UiAutomationSlot& slot =
-          slotRegion->slots[seq % daw::kUiAutomationSlots];
-      // Seqlock: ODD while writing. A reader that lands mid-write sees the odd value and retries
-      // rather than reading half a curve.
-      slot.seq.store(slot.seq.load(std::memory_order_relaxed) | 1u,
-                     std::memory_order_release);
-      std::atomic_thread_fence(std::memory_order_release);
-      slot.requestSeq = seq;
-      slot.trackId = req.trackId;
-      slot.pointCount = 0;
-      slot.pointsTruncated = 0;
-      slot.flags = 0;
-      slot.found = 0;
-      std::memset(slot.paramId, 0, sizeof(slot.paramId));
-      const size_t idLen = std::min(paramId.size(), sizeof(slot.paramId) - 1);
-      std::memcpy(slot.paramId, paramId.data(), idLen);
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (req.trackId < tracks.size()) {
-          runtime = tracks[req.trackId].get();
-        }
-      }
-      // Same source as the lane list: the snapshot the RT scheduler reads. An answer taken from
-      // the model would describe the document; what a caller is asking about is the song.
-      std::shared_ptr<const TrackStateSnapshot> ts;
-      if (runtime) {
-        ts = std::atomic_load_explicit(&runtime->trackSnapshot, std::memory_order_acquire);
-      }
-      if (ts) {
-        for (const auto& clip : ts->automationClips) {
-          if (clip.paramId() != paramId) {
-            continue;
-          }
-          slot.found = 1;
-          slot.flags = clip.discreteOnly() ? daw::kUiAutomationFlagDiscrete : 0u;
-          for (const auto& pt : clip.points()) {
-            if (slot.pointCount >= daw::kUiMaxAutomationPoints) {
-              ++slot.pointsTruncated;  // the real total, not "at least one"
-              continue;
-            }
-            auto& out = slot.points[slot.pointCount++];
-            out.nanotick = pt.nanotick;
-            out.value = pt.value;
-          }
-          break;
-        }
-      }
-      // `found` 0 is an ANSWER, not silence: "no such lane" is what a caller needs to hear when it
-      // asked about a param nothing automates, and it is distinguishable from a request that never
-      // arrived only because the slot was filled and released.
-      std::atomic_thread_fence(std::memory_order_release);
-      slot.seq.store((slot.seq.load(std::memory_order_relaxed) + 1u) & ~1u,
-                     std::memory_order_release);
-      slotRegion->requestSeq.store(seq, std::memory_order_release);
-      DAW_EVENT("automation_lane.answered")
-          .field("track", req.trackId)
-          .field("param", paramId)
-          .field("found", slot.found != 0)
-          .field("points", slot.pointCount)
-          .field("truncated", slot.pointsTruncated);
+      daw::engine::handleRequestAutomationLane(automationCommandDeps, entry, header, commandType);
       return;
     }
     // M3.27: write an automation point. Automation playback has been built and tested
     // since M3 phase 1, but nothing ever CREATED a clip — this is the missing half.
     if (entry.size == sizeof(daw::UiAutomationPointPayload) &&
         commandType == daw::UiCommandType::WriteAutomationPoint) {
-      daw::UiAutomationPointPayload ap{};
-      std::memcpy(&ap, entry.payload, sizeof(ap));
-      if (static_cast<daw::UiCommandType>(ap.commandType) != commandType) {
-        return;
-      }
-      const std::string paramId(ap.paramId, strnlen(ap.paramId, sizeof(ap.paramId)));
-      if (paramId.empty()) {
-        DAW_EVENT("automation.rejected")
-            .field("track", ap.trackId)
-            .field("reason", "empty_param_id");
-        return;
-      }
-      // A name that FILLS the field with no terminator cannot be answered. The read-back slot
-      // nul-terminates inside its own 16 bytes, so a 16-byte id would be stored in full and read
-      // back one byte short: the write and the answer would name different lanes forever, and
-      // nothing would report it. Refuse the write rather than create a lane nobody can query.
-      if (paramId.size() >= sizeof(ap.paramId)) {
-        DAW_EVENT("automation.rejected")
-            .field("track", ap.trackId)
-            .field("param", paramId)
-            .field("reason", "param_id_not_representable");
-        return;
-      }
-      TrackRuntime* runtime = nullptr;
-      bool wouldNotPersist = false;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (ap.trackId < tracks.size() && tracks[ap.trackId]) {
-          runtime = tracks[ap.trackId].get();
-          // `trackId < tracks.size()` was the only test here, and it is true for three
-          // kinds of runtime the save then skips: a tombstone, a leftover slot past the
-          // live count, and an aux child. Writing automation to any of them was accepted
-          // and reported with created_clip:true, and the points were gone after the next
-          // save/reload with nothing having said no. Refuse instead — this is the same
-          // silent-loss shape as the mod links that were parsed but never installed.
-          wouldNotPersist = !trackIsPersisted(*runtime);
-        }
-      }
-      if (!runtime) {
-        DAW_EVENT("automation.rejected")
-            .field("track", ap.trackId)
-            .field("reason", "no_such_track");
-        return;
-      }
-      if (wouldNotPersist) {
-        DAW_EVENT("automation.rejected")
-            .field("track", ap.trackId)
-            .field("reason", "track_not_persisted");
-        return;
-      }
-      const uint64_t tick =
-          (static_cast<uint64_t>(ap.nanotickHi) << 32) | ap.nanotickLo;
-      const bool discrete = (ap.flags & daw::kUiAutomationDiscrete) != 0;
-      uint32_t pointCount = 0;
-      bool created = false;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        daw::AutomationClip* clip = nullptr;
-        for (auto& c : runtime->track.automationClips) {
-          if (c.paramId() == paramId) {
-            clip = &c;
-            break;
-          }
-        }
-        if (!clip) {
-          // discreteOnly belongs to the CLIP, so it is fixed at creation. A flag that
-          // changed meaning halfway through a curve would make the curve unreadable.
-          runtime->track.automationClips.emplace_back(paramId, discrete,
-                                                      ap.targetPluginIndex);
-          clip = &runtime->track.automationClips.back();
-          created = true;
-        }
-        clip->addPoint(daw::AutomationPoint{tick, ap.value});
-        pointCount = static_cast<uint32_t>(clip->points().size());
-      }
-      // The RT scheduler reads automation from the track SNAPSHOT, so a point that is not
-      // republished is a point that does not play — the same shape as every other derived
-      // read-back in this engine.
-      std::shared_ptr<const TrackStateSnapshot> snapshot;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        snapshot = buildTrackSnapshot(runtime->track);
-      }
-      std::atomic_store_explicit(&runtime->trackSnapshot, snapshot,
-                                 std::memory_order_release);
-      automationVersion.fetch_add(1, std::memory_order_acq_rel);
-      DAW_EVENT("automation.point")
-          .field("track", ap.trackId)
-          .field("param", paramId)
-          .field("nanotick", tick)
-          .field("points", pointCount)
-          .field("created_clip", created);
-      historyAppend("write_automation_point", "received", ap.trackId, 0, "");
+      daw::engine::handleWriteAutomationPoint(automationCommandDeps, entry, header, commandType);
       return;
     }
 
@@ -9607,94 +9419,7 @@ int main(int argc, char** argv) {
     // targetPluginIndex, same paramId, same tick. `value` is ignored.
     if (entry.size == sizeof(daw::UiAutomationPointPayload) &&
         commandType == daw::UiCommandType::DeleteAutomationPoint) {
-      daw::UiAutomationPointPayload ap{};
-      std::memcpy(&ap, entry.payload, sizeof(ap));
-      if (static_cast<daw::UiCommandType>(ap.commandType) != commandType) {
-        return;
-      }
-      const std::string paramId(ap.paramId, strnlen(ap.paramId, sizeof(ap.paramId)));
-      if (paramId.empty()) {
-        DAW_EVENT("automation.delete_rejected")
-            .field("track", ap.trackId)
-            .field("reason", "empty_param_id");
-        return;
-      }
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (ap.trackId < tracks.size() && tracks[ap.trackId]) {
-          runtime = tracks[ap.trackId].get();
-        }
-      }
-      if (!runtime) {
-        DAW_EVENT("automation.delete_rejected")
-            .field("track", ap.trackId)
-            .field("reason", "no_such_track");
-        return;
-      }
-      const uint64_t tick =
-          (static_cast<uint64_t>(ap.nanotickHi) << 32) | ap.nanotickLo;
-      bool sawLane = false;
-      bool removed = false;
-      uint32_t pointCount = 0;
-      bool laneEmptied = false;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        for (auto it = runtime->track.automationClips.begin();
-             it != runtime->track.automationClips.end(); ++it) {
-          if (it->paramId() != paramId) {
-            continue;
-          }
-          sawLane = true;
-          removed = it->removePoint(tick);
-          pointCount = static_cast<uint32_t>(it->points().size());
-          // AN EMPTIED LANE IS REMOVED, not left behind as an empty clip. An automation clip
-          // with no points still exists in the save and still declares its discreteOnly flag,
-          // so leaving it turns "I deleted my automation" into a lane that reappears on reload
-          // — visible, empty, and impossible to get rid of.
-          if (removed && it->points().empty()) {
-            runtime->track.automationClips.erase(it);
-            laneEmptied = true;
-          }
-          break;
-        }
-      }
-      if (!sawLane) {
-        DAW_EVENT("automation.delete_rejected")
-            .field("track", ap.trackId)
-            .field("param", paramId)
-            .field("reason", "no_such_lane");
-        return;
-      }
-      if (!removed) {
-        // NAMED, NOT SWALLOWED. Deleting a point that is not there is a caller working from a
-        // stale view of the curve; treating it as a successful no-op makes "the UI and the model
-        // disagree about what exists" unreportable.
-        DAW_EVENT("automation.delete_rejected")
-            .field("track", ap.trackId)
-            .field("param", paramId)
-            .field("nanotick", tick)
-            .field("reason", "no_point_at_tick");
-        return;
-      }
-      // Republish the snapshot, for the reason the write does: the RT scheduler reads automation
-      // from the track SNAPSHOT, so a point that is not republished is a point that still PLAYS
-      // after it has been deleted.
-      std::shared_ptr<const TrackStateSnapshot> snapshot;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        snapshot = buildTrackSnapshot(runtime->track);
-      }
-      std::atomic_store_explicit(&runtime->trackSnapshot, snapshot,
-                                 std::memory_order_release);
-      automationVersion.fetch_add(1, std::memory_order_acq_rel);
-      DAW_EVENT("automation.point_deleted")
-          .field("track", ap.trackId)
-          .field("param", paramId)
-          .field("nanotick", tick)
-          .field("points", pointCount)
-          .field("lane_removed", laneEmptied);
-      historyAppend("delete_automation_point", "received", ap.trackId, 0, "");
+      daw::engine::handleDeleteAutomationPoint(automationCommandDeps, entry, header, commandType);
       return;
     }
     // M3.23 SECTION ops. All five are SONG-scoped: the spine belongs to no track, and
@@ -11103,103 +10828,7 @@ int main(int argc, char** argv) {
     // hand-editing the project file.
     if (entry.size == sizeof(daw::UiSetClipGridPayload) &&
         commandType == daw::UiCommandType::SetClipGrid) {
-      daw::UiSetClipGridPayload p{};
-      std::memcpy(&p, entry.payload, sizeof(p));
-      if (p.flags == 0) {
-        DAW_EVENT("clip.grid_rejected")
-            .field("track", p.trackId)
-            .field("clip", p.clipId)
-            .field("reason", "no_field_named");
-        return;
-      }
-      // REFUSED, NOT CLAMPED, and each bound is the packer's rather than an opinion: five bits
-      // for the subdivision and the numerator, and a 3-bit EXPONENT for the denominator, so it
-      // must be a power of two. Clamping is packClipGrid's defence against a bad value reaching
-      // the wire; at this layer an out-of-range value is a caller with the wrong idea of the
-      // unit, and rounding a non-power-of-two denominator hands back a meter nobody asked for.
-      const char* bad = nullptr;
-      if ((p.flags & daw::kClipGridSetLines) != 0 &&
-          (p.linesPerBeat == 0 || p.linesPerBeat > 31)) {
-        bad = "lines_out_of_range";
-      } else if ((p.flags & daw::kClipGridSetNumerator) != 0 &&
-                 (p.timeSigNumerator == 0 || p.timeSigNumerator > 31)) {
-        bad = "numerator_out_of_range";
-      } else if ((p.flags & daw::kClipGridSetDenominator) != 0 &&
-                 (p.timeSigDenominator == 0 || p.timeSigDenominator > 128 ||
-                  (p.timeSigDenominator & (p.timeSigDenominator - 1)) != 0)) {
-        bad = "denominator_not_power_of_two";
-      }
-      if (bad != nullptr) {
-        DAW_EVENT("clip.grid_rejected")
-            .field("track", p.trackId)
-            .field("clip", p.clipId)
-            .field("lines", p.linesPerBeat)
-            .field("num", p.timeSigNumerator)
-            .field("den", p.timeSigDenominator)
-            .field("reason", bad);
-        return;
-      }
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (p.trackId < tracks.size()) {
-          runtime = tracks[p.trackId].get();
-        }
-      }
-      if (!runtime) {
-        DAW_EVENT("clip.grid_rejected")
-            .field("track", p.trackId)
-            .field("clip", p.clipId)
-            .field("reason", "no_such_track");
-        return;
-      }
-      bool applied = false;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        for (auto& oc : runtime->ownedClips) {
-          if (oc.id != p.clipId) {
-            continue;
-          }
-          // The flags are what makes "change the meter, keep the subdivision" expressible. There
-          // is no value that could mean "leave this alone": 0 is the packer's sentinel for no
-          // grid, not a spare.
-          if ((p.flags & daw::kClipGridSetLines) != 0) {
-            oc.linesPerBeat = p.linesPerBeat;
-          }
-          if ((p.flags & daw::kClipGridSetNumerator) != 0) {
-            oc.timeSigNumerator = p.timeSigNumerator;
-          }
-          if ((p.flags & daw::kClipGridSetDenominator) != 0) {
-            oc.timeSigDenominator = p.timeSigDenominator;
-          }
-          applied = true;
-          break;
-        }
-      }
-      if (!applied) {
-        DAW_EVENT("clip.grid_rejected")
-            .field("track", p.trackId)
-            .field("clip", p.clipId)
-            .field("reason", "no_such_clip");
-        return;
-      }
-      // BUMP THE CLIP VERSION, or the edit saves and is never SEEN. The extent publisher does
-      // read each clip's grid live out of ownedClips — but the whole publish is gated on
-      // `clipVersion` moving (writeUiClipExtents returns early when it has not), so a change that
-      // touches no note republishes nothing. Measured before this line existed: the command
-      // applied, the save carried 3 and 7/8, and `get extents` still said 4 and 4/4 — the exact
-      // "written and not drawn" half of the defect this command exists to fix.
-      //
-      // Through the helper rather than by hand: it advances the per-track counter and the global
-      // gate in that order, and the comment on it explains why the reverse deadlocks a track's
-      // published base one version behind forever.
-      bumpClipVersionFor(runtime);
-      DAW_EVENT("clip.grid_set")
-          .field("track", p.trackId)
-          .field("clip", p.clipId)
-          .field("lines", p.linesPerBeat)
-          .field("num", p.timeSigNumerator)
-          .field("den", p.timeSigDenominator);
+      daw::engine::handleSetClipGrid(clipCommandDeps, entry, header, commandType);
       return;
     }
 
@@ -11212,136 +10841,7 @@ int main(int argc, char** argv) {
     // persisted_field_reach a CLIP scope, which it had never had.
     if (entry.size == sizeof(daw::UiAudioClipFieldPayload) &&
         commandType == daw::UiCommandType::SetAudioClipField) {
-      daw::UiAudioClipFieldPayload p{};
-      std::memcpy(&p, entry.payload, sizeof(p));
-      const auto field = static_cast<daw::AudioClipField>(p.field);
-      const char* fieldName = nullptr;
-      switch (field) {
-        case daw::AudioClipField::SourceStartFrame: fieldName = "source_start_frame"; break;
-        case daw::AudioClipField::GainMillibels: fieldName = "gain_millibels"; break;
-        case daw::AudioClipField::FadeInNanoticks: fieldName = "fade_in_nanoticks"; break;
-        case daw::AudioClipField::FadeOutNanoticks: fieldName = "fade_out_nanoticks"; break;
-      }
-      if (fieldName == nullptr) {
-        DAW_EVENT("audio_clip.field_rejected")
-            .field("track", p.trackId)
-            .field("clip", p.clipId)
-            .field("field", static_cast<uint64_t>(p.field))
-            .field("reason", "no_field_named");
-        return;
-      }
-      // THE THREE TIME/FRAME FIELDS REFUSE A NEGATIVE. Negative is not "before the start", it is
-      // a caller with the wrong idea of the unit, and there is no natural limit to clamp toward —
-      // so refusing says so where clamping to 0 would silently accept a bug.
-      if (field != daw::AudioClipField::GainMillibels && p.value < 0) {
-        DAW_EVENT("audio_clip.field_rejected")
-            .field("track", p.trackId)
-            .field("clip", p.clipId)
-            .field("field", fieldName)
-            .field("value", p.value)
-            .field("reason", "negative_not_allowed");
-        return;
-      }
-      // GAIN IS CLAMPED, and that is not this file's habit relaxed. It is what the sampler slot
-      // does with exactly this quantity over exactly this range, because a gain is a continuous
-      // control with natural limits and a fader stopping at the end of its travel is what a
-      // person expects from a drag. Inventing a second policy for the same quantity one object
-      // along would be worse than either policy applied consistently.
-      constexpr int64_t kMinGainMillibels = -9600;
-      constexpr int64_t kMaxGainMillibels = 2400;
-      int64_t value = p.value;
-      bool clamped = false;
-      if (field == daw::AudioClipField::GainMillibels) {
-        const int64_t before = value;
-        value = std::max(kMinGainMillibels, std::min(kMaxGainMillibels, value));
-        clamped = value != before;
-      }
-
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (p.trackId < tracks.size()) {
-          runtime = tracks[p.trackId].get();
-        }
-      }
-      if (!runtime) {
-        DAW_EVENT("audio_clip.field_rejected")
-            .field("track", p.trackId)
-            .field("clip", p.clipId)
-            .field("field", fieldName)
-            .field("reason", "no_such_track");
-        return;
-      }
-      bool applied = false;
-      bool wrongKind = false;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        for (auto& oc : runtime->ownedClips) {
-          if (oc.id != p.clipId) {
-            continue;
-          }
-          // A SYMBOLIC CLIP HAS NO GAIN. Writing one would set a field the save path never emits
-          // for this kind and the renderer never reads — accepted, invisible, and gone on
-          // reload. Named rather than ignored, because "the command succeeded and nothing
-          // happened" is the failure this whole opcode exists to remove.
-          if (oc.kind != daw::ClipKind::Audio) {
-            wrongKind = true;
-            break;
-          }
-          switch (field) {
-            case daw::AudioClipField::SourceStartFrame:
-              oc.audio.sourceStartFrame = static_cast<uint64_t>(value);
-              break;
-            case daw::AudioClipField::GainMillibels:
-              oc.audio.gainDb = static_cast<double>(value) / 100.0;
-              break;
-            case daw::AudioClipField::FadeInNanoticks:
-              oc.audio.fadeInNanoticks = static_cast<uint64_t>(value);
-              break;
-            case daw::AudioClipField::FadeOutNanoticks:
-              oc.audio.fadeOutNanoticks = static_cast<uint64_t>(value);
-              break;
-          }
-          applied = true;
-          break;
-        }
-      }
-      if (wrongKind) {
-        DAW_EVENT("audio_clip.field_rejected")
-            .field("track", p.trackId)
-            .field("clip", p.clipId)
-            .field("field", fieldName)
-            .field("reason", "not_an_audio_clip");
-        return;
-      }
-      if (!applied) {
-        DAW_EVENT("audio_clip.field_rejected")
-            .field("track", p.trackId)
-            .field("clip", p.clipId)
-            .field("field", fieldName)
-            .field("reason", "no_such_clip");
-        return;
-      }
-      // RE-DERIVE THE RENDER, or the edit is saved and never HEARD. rebuildAudioRender bakes the
-      // gain into a linear multiplier and the fades and in-point into sample counts at build
-      // time; the audio thread reads only that baked list. Without this line the model changes,
-      // the file is right, the table below reports the new number, and the clip plays at the old
-      // gain until some unrelated edit happens to rebuild — the audio-domain twin of opcode 94's
-      // "saved correctly and drew nothing".
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        std::atomic_store_explicit(&runtime->audioRender, rebuildAudioRender(*runtime),
-                                   std::memory_order_release);
-      }
-      // AND REPUBLISH THE TABLE, or the edit is never SEEN. Same argument one layer out: the
-      // descriptor table carried these four fields as a load-time snapshot.
-      publishAudioClipTable();
-      DAW_EVENT("audio_clip.field_set")
-          .field("track", p.trackId)
-          .field("clip", p.clipId)
-          .field("field", fieldName)
-          .field("value", value)
-          .field("clamped", clamped ? 1u : 0u);
+      daw::engine::handleSetAudioClipField(clipCommandDeps, entry, header, commandType);
       return;
     }
 

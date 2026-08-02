@@ -68,6 +68,8 @@ add_executable(daw_engine
   apps/daw_engine_main.cpp
   apps/engine_pure.cpp
   apps/engine_sampler_commands.cpp
+  apps/engine_automation_commands.cpp
+  apps/engine_clip_commands.cpp
   apps/audio_shm.cpp
   apps/clip_edit.cpp
   apps/chord_resolver.cpp
