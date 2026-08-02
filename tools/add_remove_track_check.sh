@@ -104,7 +104,11 @@ for _ in $(seq 1 120); do
 done
 DAW_UI_SHM_NAME="$SHM2" "$CLI" do load result --force >/dev/null 2>&1 || true
 wait_for_boot "$TMP/eng2.log" "$ENG2" 80
-tracks_ready() { DAW_UI_SHM_NAME="$SHM2" "$CLI" get tracks 2>/dev/null | grep -q '"track_id"'; }
+# The MASTER always publishes and always has a track_id, so grepping for one is satisfied
+# before a single real track has come back — which is how this read an empty list and blamed the
+# loader. Wait for a NON-master, NON-absent track: the thing the assertion below is about.
+tracks_ready() { DAW_UI_SHM_NAME="$SHM2" "$CLI" get tracks 2>/dev/null \
+  | grep '"master": false' | grep -q '"absent": false'; }
 wait_until 20 tracks_ready || true
 # The ids that came back LIVE (a tombstone publishes with absent:true and is not a track).
 # `|| true` on the whole pipeline: if the engine is not answering yet the first grep matches

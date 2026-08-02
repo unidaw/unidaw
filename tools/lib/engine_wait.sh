@@ -364,6 +364,32 @@ require_capture() {
 # Both now poll. This helper is here so the remaining fifteen can be converted the same way rather
 # than each inventing its own loop, and so the reason is written down once.
 #
+# WAIT FOR A PUBLISHED VALUE, re-reading each time.
+#
+# wait_until takes a COMMAND, so `wait_until 30 test "$(field x)" = 1` evaluates the substitution
+# once, before the first poll — which is the very race it was meant to close. This takes the
+# ACCESSOR and calls it again on every iteration.
+#
+# USAGE:  wait_for_published <seconds> <expected> <accessor> [args...]
+#
+# Returns non-zero on timeout and the caller still asserts, exactly as wait_until documents: this
+# removes the race, it does not substitute for the assertion.
+wait_for_published() {
+  local secs="$1" want="$2"; shift 2
+  local tries=$(( secs * 4 ))
+  local i=0
+  local got=""
+  while [ "$i" -lt "$tries" ]; do
+    got="$("$@" 2>/dev/null)"
+    if [ "$got" = "$want" ]; then
+      return 0
+    fi
+    sleep 0.25
+    i=$((i + 1))
+  done
+  return 1
+}
+
 # USAGE:  wait_until <seconds> <command...>     — polls every 0.25s until the command succeeds.
 # Returns non-zero on timeout, and the CALLER still asserts: this removes the race, it does not
 # substitute for the assertion. A check whose poll times out must still fail with its own message

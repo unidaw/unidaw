@@ -77,6 +77,8 @@ print(str(t[int('$1')].get('collapsed')).lower() if len(t) > int('$1') else 'mis
 }
 
 # ---- STARTS OPEN.
+wait_for_published 30 "false" folded 0 || true
+wait_for_published 30 "false" folded 1 || true
 [ "$(folded 0)" = "false" ] && [ "$(folded 1)" = "false" ] || \
   fail "a track reads collapsed before anything was sent (0=$(folded 0), 1=$(folded 1)). The
         published bit is stuck, so 'it reads collapsed after the command' below would prove

@@ -113,8 +113,10 @@ reason() {
 }
 
 ok=1
+wait_for_published 30 "111111 0 Intro" mk 3 || true
 [ "$(mk 3)" = "111111 0 Intro" ] || fail "marker 3 reads '$(mk 3)', not the fixture's
         '111111 0 Intro' — so every assertion below would prove nothing"
+wait_for_published 30 "222222 3840000 Verse" mk 8 || true
 [ "$(mk 8)" = "222222 3840000 Verse" ] || fail "marker 8 reads '$(mk 8)'"
 echo "  both markers publish their fixture colours"
 

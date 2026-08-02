@@ -136,6 +136,7 @@ print(n[0].get('$1') if n else 'nonotes')
 }
 
 # ---- ADDRESSABLE. The id is printed AND it is the one the write path takes.
+wait_for_published 30 "42" note_field note_id || true
 ID="$(note_field note_id)"
 [ "$ID" = "42" ] || \
   fail "get notes reports note_id '$ID', and the fixture authored 42. Either the id is not

@@ -119,6 +119,7 @@ last_published() {
 }
 
 # ---- PUBLISHES ON LOAD. Two links in the file, so the load must publish two.
+wait_for_published 30 "2" last_published || true
 PUB="$(last_published)"
 [ "${PUB:-}" = "2" ] || \
   fail "a load published '${PUB:-nothing}' mod links for a project carrying 2. The per-track load

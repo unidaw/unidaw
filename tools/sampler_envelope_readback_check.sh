@@ -144,6 +144,7 @@ print(' '.join('%d:%d:%d' % (p['time'], p['value_milli'], p['tension'])
 }
 
 # ---- ABSENT. Before anything is written there is no envelope, and that is an ANSWER.
+wait_for_published 30 "False" env_field found --target amp || true
 [ "$(env_field found --target amp)" = "False" ] || \
   fail "before any write, the amp target reports found=$(env_field found --target amp); it should
         be false. If this says 'unreadable' the answer is not being published at all, and every

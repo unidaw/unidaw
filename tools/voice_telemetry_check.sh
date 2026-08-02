@@ -110,6 +110,7 @@ kitfield() {  # kitfield <name>
 }
 
 ok=1
+wait_for_published 30 "16" kitfield voice_cap || true
 CAP="$(kitfield voice_cap)"
 [ "${CAP:-0}" = "16" ] || \
   fail "voice_cap reads '${CAP:-missing}', not the project's 16 — the document's setting is not

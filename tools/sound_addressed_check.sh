@@ -214,6 +214,7 @@ t = d.get("tracks", [])
 print(str(t[0].get("sound_addressed")).lower() if t else "notracks")
 PYR
 }
+wait_for_published 30 "false" read_addressed || true
 BEFORE="$(read_addressed)"
 [ "$BEFORE" = "false" ] || \
   fail "before the command, the published sound_addressed bit reads '$BEFORE' and the project

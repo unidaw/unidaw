@@ -123,6 +123,7 @@ print(t[0].get('$1') if t else 'notracks')
 # pan 0.4 rather than 0.5, swing NEGATIVE. A read-back that returned zeroes, or that dropped a
 # sign, or that reported the wire's biased swing (which would be 350 here) is caught by the value
 # and not by its presence.
+wait_for_published 30 "0.0" field gain_db || true
 [ "$(field gain_db)" = "0.0" ] || fail "the fixture did not start at gain 0, so the change below
         proves nothing: it reads $(field gain_db)"
 cli do mixer --track 0 --gain-db -6.5 --pan 0.4 --mute 1 >/dev/null 2>&1
