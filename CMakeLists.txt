@@ -560,6 +560,13 @@ add_test(NAME marker_color
 )
 set_tests_properties(marker_color PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
 
+# The sampler's voice counters — published in UiSamplerKitRegion and asserted by nothing until
+# this check existed. Reads the published region, so it needs no working output device.
+add_test(NAME voice_telemetry
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/voice_telemetry_check.sh
+)
+set_tests_properties(voice_telemetry PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 add_test(NAME lint
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/lint_check.sh
 )
