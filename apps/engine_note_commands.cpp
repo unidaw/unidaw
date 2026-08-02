@@ -20,16 +20,7 @@ void handleWriteNote(NoteCommandDeps& deps,
   const auto& applyAddNote = deps.applyAddNote;
   const auto& applyLocalNoteEdit = deps.applyLocalNoteEdit;
   const auto& editIsLocalScope = deps.editIsLocalScope;
-  const auto& applyRemoveNote = deps.applyRemoveNote;
-  const auto& applyAddChord = deps.applyAddChord;
-  const auto& applyRemoveChord = deps.applyRemoveChord;
-  const auto& applyRemoveChordAt = deps.applyRemoveChordAt;
-  const auto& addOrUpdateHarmony = deps.addOrUpdateHarmony;
-  const auto& removeHarmony = deps.removeHarmony;
   const auto& requireMatchingClipVersion = deps.requireMatchingClipVersion;
-  const auto& requireMatchingHarmonyVersion = deps.requireMatchingHarmonyVersion;
-  (void)applyAddNote; (void)applyLocalNoteEdit; (void)editIsLocalScope; (void)applyRemoveNote; (void)applyAddChord; (void)applyRemoveChord; (void)applyRemoveChordAt; (void)addOrUpdateHarmony; (void)removeHarmony; (void)requireMatchingClipVersion; (void)requireMatchingHarmonyVersion;
-  (void)entry;
   {
   if (!requireMatchingClipVersion(payload.baseVersion,
                                   daw::UiCommandType::WriteNote,
@@ -66,19 +57,10 @@ void handleWriteNote(NoteCommandDeps& deps,
 void handleDeleteNote(NoteCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  const auto& applyAddNote = deps.applyAddNote;
   const auto& applyLocalNoteEdit = deps.applyLocalNoteEdit;
   const auto& editIsLocalScope = deps.editIsLocalScope;
   const auto& applyRemoveNote = deps.applyRemoveNote;
-  const auto& applyAddChord = deps.applyAddChord;
-  const auto& applyRemoveChord = deps.applyRemoveChord;
-  const auto& applyRemoveChordAt = deps.applyRemoveChordAt;
-  const auto& addOrUpdateHarmony = deps.addOrUpdateHarmony;
-  const auto& removeHarmony = deps.removeHarmony;
   const auto& requireMatchingClipVersion = deps.requireMatchingClipVersion;
-  const auto& requireMatchingHarmonyVersion = deps.requireMatchingHarmonyVersion;
-  (void)applyAddNote; (void)applyLocalNoteEdit; (void)editIsLocalScope; (void)applyRemoveNote; (void)applyAddChord; (void)applyRemoveChord; (void)applyRemoveChordAt; (void)addOrUpdateHarmony; (void)removeHarmony; (void)requireMatchingClipVersion; (void)requireMatchingHarmonyVersion;
-  (void)entry;
   {
   if (!requireMatchingClipVersion(payload.baseVersion,
                                   daw::UiCommandType::DeleteNote,
@@ -105,19 +87,8 @@ void handleDeleteNote(NoteCommandDeps& deps,
 void handleWriteHarmony(NoteCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  const auto& applyAddNote = deps.applyAddNote;
-  const auto& applyLocalNoteEdit = deps.applyLocalNoteEdit;
-  const auto& editIsLocalScope = deps.editIsLocalScope;
-  const auto& applyRemoveNote = deps.applyRemoveNote;
-  const auto& applyAddChord = deps.applyAddChord;
-  const auto& applyRemoveChord = deps.applyRemoveChord;
-  const auto& applyRemoveChordAt = deps.applyRemoveChordAt;
   const auto& addOrUpdateHarmony = deps.addOrUpdateHarmony;
-  const auto& removeHarmony = deps.removeHarmony;
-  const auto& requireMatchingClipVersion = deps.requireMatchingClipVersion;
   const auto& requireMatchingHarmonyVersion = deps.requireMatchingHarmonyVersion;
-  (void)applyAddNote; (void)applyLocalNoteEdit; (void)editIsLocalScope; (void)applyRemoveNote; (void)applyAddChord; (void)applyRemoveChord; (void)applyRemoveChordAt; (void)addOrUpdateHarmony; (void)removeHarmony; (void)requireMatchingClipVersion; (void)requireMatchingHarmonyVersion;
-  (void)entry;
   {
   if (!requireMatchingHarmonyVersion(payload.baseVersion,
                                      daw::UiCommandType::WriteHarmony)) {
@@ -135,19 +106,8 @@ void handleWriteHarmony(NoteCommandDeps& deps,
 void handleDeleteHarmony(NoteCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  const auto& applyAddNote = deps.applyAddNote;
-  const auto& applyLocalNoteEdit = deps.applyLocalNoteEdit;
-  const auto& editIsLocalScope = deps.editIsLocalScope;
-  const auto& applyRemoveNote = deps.applyRemoveNote;
-  const auto& applyAddChord = deps.applyAddChord;
-  const auto& applyRemoveChord = deps.applyRemoveChord;
-  const auto& applyRemoveChordAt = deps.applyRemoveChordAt;
-  const auto& addOrUpdateHarmony = deps.addOrUpdateHarmony;
   const auto& removeHarmony = deps.removeHarmony;
-  const auto& requireMatchingClipVersion = deps.requireMatchingClipVersion;
   const auto& requireMatchingHarmonyVersion = deps.requireMatchingHarmonyVersion;
-  (void)applyAddNote; (void)applyLocalNoteEdit; (void)editIsLocalScope; (void)applyRemoveNote; (void)applyAddChord; (void)applyRemoveChord; (void)applyRemoveChordAt; (void)addOrUpdateHarmony; (void)removeHarmony; (void)requireMatchingClipVersion; (void)requireMatchingHarmonyVersion;
-  (void)entry;
   {
   if (!requireMatchingHarmonyVersion(payload.baseVersion,
                                      daw::UiCommandType::DeleteHarmony)) {
@@ -166,19 +126,10 @@ void handleDeleteHarmony(NoteCommandDeps& deps,
 void handleWriteChord(NoteCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  const auto& applyAddNote = deps.applyAddNote;
-  const auto& applyLocalNoteEdit = deps.applyLocalNoteEdit;
-  const auto& editIsLocalScope = deps.editIsLocalScope;
-  const auto& applyRemoveNote = deps.applyRemoveNote;
   const auto& applyAddChord = deps.applyAddChord;
   const auto& applyRemoveChord = deps.applyRemoveChord;
   const auto& applyRemoveChordAt = deps.applyRemoveChordAt;
-  const auto& addOrUpdateHarmony = deps.addOrUpdateHarmony;
-  const auto& removeHarmony = deps.removeHarmony;
   const auto& requireMatchingClipVersion = deps.requireMatchingClipVersion;
-  const auto& requireMatchingHarmonyVersion = deps.requireMatchingHarmonyVersion;
-  (void)applyAddNote; (void)applyLocalNoteEdit; (void)editIsLocalScope; (void)applyRemoveNote; (void)applyAddChord; (void)applyRemoveChord; (void)applyRemoveChordAt; (void)addOrUpdateHarmony; (void)removeHarmony; (void)requireMatchingClipVersion; (void)requireMatchingHarmonyVersion;
-  (void)entry;
   {
   daw::UiChordCommandPayload chordPayload{};
   std::memcpy(&chordPayload, entry.payload, sizeof(chordPayload));

@@ -20,7 +20,6 @@ void handleAddDevice(ChainCommandDeps& deps,
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
   auto& masterTrack = deps.masterTrack;
-  auto& playing = deps.playing;
   auto& pluginCache = deps.pluginCache;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   const auto& emitChainError = deps.emitChainError;
@@ -28,8 +27,6 @@ void handleAddDevice(ChainCommandDeps& deps,
   const auto& rebuildHostForChain = deps.rebuildHostForChain;
   const auto& reconcileMasterHost = deps.reconcileMasterHost;
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
-  (void)tracks; (void)tracksMutex; (void)masterTrack; (void)playing; (void)pluginCache; (void)buildTrackSnapshot; (void)emitChainError; (void)emitChainSnapshot; (void)rebuildHostForChain; (void)reconcileMasterHost; (void)refreshSamplerForTrack;
-  (void)entry; (void)header; (void)commandType;
   {
   daw::UiChainCommandPayload chainPayload{};
   std::memcpy(&chainPayload, entry.payload, sizeof(chainPayload));

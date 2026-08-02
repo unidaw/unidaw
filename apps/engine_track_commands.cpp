@@ -22,8 +22,6 @@ void handleSetTrackRouting(TrackCommandDeps& deps,
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   const auto& emitRoutingError = deps.emitRoutingError;
   const auto& emitRoutingSnapshot = deps.emitRoutingSnapshot;
-  (void)tracks; (void)tracksMutex; (void)buildTrackSnapshot; (void)emitRoutingError; (void)emitRoutingSnapshot;
-  (void)entry; (void)header; (void)commandType;
   {
   daw::UiTrackRoutingPayload routingPayload{};
   std::memcpy(&routingPayload, entry.payload, sizeof(routingPayload));
@@ -110,11 +108,6 @@ void handleSetTrackName(TrackCommandDeps& deps,
             daw::UiCommandType commandType) {
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
-  const auto& emitRoutingError = deps.emitRoutingError;
-  const auto& emitRoutingSnapshot = deps.emitRoutingSnapshot;
-  (void)tracks; (void)tracksMutex; (void)buildTrackSnapshot; (void)emitRoutingError; (void)emitRoutingSnapshot;
-  (void)entry; (void)header; (void)commandType;
   {
   daw::UiPatcherPresetCommandPayload namePayload{};
   std::memcpy(&namePayload, entry.payload, sizeof(namePayload));
@@ -161,10 +154,6 @@ void handleSetDeviceEuclideanConfig(TrackCommandDeps& deps,
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
-  const auto& emitRoutingError = deps.emitRoutingError;
-  const auto& emitRoutingSnapshot = deps.emitRoutingSnapshot;
-  (void)tracks; (void)tracksMutex; (void)buildTrackSnapshot; (void)emitRoutingError; (void)emitRoutingSnapshot;
-  (void)entry; (void)header; (void)commandType;
   {
   daw::UiDeviceEuclideanConfigPayload configPayload{};
   std::memcpy(&configPayload, entry.payload, sizeof(configPayload));

@@ -16,18 +16,9 @@ namespace daw::engine {
 void handleRequestChainSnapshot(RequestCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& uiShm = deps.uiShm;
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& waveformStore = deps.waveformStore;
-  auto& clipWindowMutex = deps.clipWindowMutex;
-  auto& clipWindowPending = deps.clipWindowPending;
-  const auto& resolveSourcePath = deps.resolveSourcePath;
-  const auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
-  const auto& rebuildHostForChain = deps.rebuildHostForChain;
   const auto& emitChainSnapshot = deps.emitChainSnapshot;
-  (void)uiShm; (void)tracks; (void)tracksMutex; (void)waveformStore; (void)clipWindowMutex; (void)clipWindowPending; (void)resolveSourcePath; (void)resolveDevicePluginPath; (void)rebuildHostForChain; (void)emitChainSnapshot;
-  (void)entry;
   {
   // A UI that attached after the engine started has never seen a chain
   // diff, so let it ask. 0xFFFFFFFFu means every track; an unknown track is
@@ -58,15 +49,7 @@ void handleRequestDeviceParams(RequestCommandDeps& deps,
   auto& uiShm = deps.uiShm;
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& waveformStore = deps.waveformStore;
-  auto& clipWindowMutex = deps.clipWindowMutex;
-  auto& clipWindowPending = deps.clipWindowPending;
-  const auto& resolveSourcePath = deps.resolveSourcePath;
   const auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
-  const auto& rebuildHostForChain = deps.rebuildHostForChain;
-  const auto& emitChainSnapshot = deps.emitChainSnapshot;
-  (void)uiShm; (void)tracks; (void)tracksMutex; (void)waveformStore; (void)clipWindowMutex; (void)clipWindowPending; (void)resolveSourcePath; (void)resolveDevicePluginPath; (void)rebuildHostForChain; (void)emitChainSnapshot;
-  (void)entry;
   {
   // Publish one device's parameters into UiDeviceParamsRegion so the rack can
   // show real names + values. trackId + value0 (deviceId). The host query is a
@@ -203,14 +186,7 @@ void handleRequestWaveform(RequestCommandDeps& deps,
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
   auto& waveformStore = deps.waveformStore;
-  auto& clipWindowMutex = deps.clipWindowMutex;
-  auto& clipWindowPending = deps.clipWindowPending;
   const auto& resolveSourcePath = deps.resolveSourcePath;
-  const auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
-  const auto& rebuildHostForChain = deps.rebuildHostForChain;
-  const auto& emitChainSnapshot = deps.emitChainSnapshot;
-  (void)uiShm; (void)tracks; (void)tracksMutex; (void)waveformStore; (void)clipWindowMutex; (void)clipWindowPending; (void)resolveSourcePath; (void)resolveDevicePluginPath; (void)rebuildHostForChain; (void)emitChainSnapshot;
-  (void)entry;
   {
   // Answer a windowed waveform query by slicing the source's pyramid into a
   // seqlocked slot. Pure memory reads of state we already own — no host round-
@@ -358,18 +334,8 @@ void handleRequestWaveform(RequestCommandDeps& deps,
 void handleRequestClipWindow(RequestCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& uiShm = deps.uiShm;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
-  auto& waveformStore = deps.waveformStore;
   auto& clipWindowMutex = deps.clipWindowMutex;
   auto& clipWindowPending = deps.clipWindowPending;
-  const auto& resolveSourcePath = deps.resolveSourcePath;
-  const auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
-  const auto& rebuildHostForChain = deps.rebuildHostForChain;
-  const auto& emitChainSnapshot = deps.emitChainSnapshot;
-  (void)uiShm; (void)tracks; (void)tracksMutex; (void)waveformStore; (void)clipWindowMutex; (void)clipWindowPending; (void)resolveSourcePath; (void)resolveDevicePluginPath; (void)rebuildHostForChain; (void)emitChainSnapshot;
-  (void)entry;
   {
   daw::UiClipWindowCommandPayload windowPayload{};
   std::memcpy(&windowPayload, entry.payload, sizeof(windowPayload));

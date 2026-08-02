@@ -100,11 +100,8 @@ void handleAddPatcherNode(PatcherCommandDeps& deps,
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   const auto& emitPatcherGraphDelta = deps.emitPatcherGraphDelta;
   const auto& emitPatcherGraphError = deps.emitPatcherGraphError;
-  const auto& emitUiDiff = deps.emitUiDiff;
   const auto& reassemblePatcherFromDevices = deps.reassemblePatcherFromDevices;
   const auto& updatePatcherGraphSnapshot = deps.updatePatcherGraphSnapshot;
-  (void)tracks; (void)tracksMutex; (void)patcherGraphState; (void)patcherPoolEdited; (void)buildTrackSnapshot; (void)emitPatcherGraphDelta; (void)emitPatcherGraphError; (void)emitUiDiff; (void)reassemblePatcherFromDevices; (void)updatePatcherGraphSnapshot;
-  (void)entry; (void)header; (void)commandType;
   {
   daw::UiPatcherGraphCommandPayload probe{};
   std::memcpy(&probe, entry.payload, sizeof(probe));
@@ -361,11 +358,8 @@ void handleSetPatcherNodeConfig(PatcherCommandDeps& deps,
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   const auto& emitPatcherGraphDelta = deps.emitPatcherGraphDelta;
   const auto& emitPatcherGraphError = deps.emitPatcherGraphError;
-  const auto& emitUiDiff = deps.emitUiDiff;
   const auto& reassemblePatcherFromDevices = deps.reassemblePatcherFromDevices;
   const auto& updatePatcherGraphSnapshot = deps.updatePatcherGraphSnapshot;
-  (void)tracks; (void)tracksMutex; (void)patcherGraphState; (void)patcherPoolEdited; (void)buildTrackSnapshot; (void)emitPatcherGraphDelta; (void)emitPatcherGraphError; (void)emitUiDiff; (void)reassemblePatcherFromDevices; (void)updatePatcherGraphSnapshot;
-  (void)entry; (void)header; (void)commandType;
   {
   daw::UiPatcherNodeConfigPayload configPayload{};
   std::memcpy(&configPayload, entry.payload, sizeof(configPayload));
@@ -480,18 +474,8 @@ void handleSavePatcherPreset(PatcherCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
   auto& patcherGraphState = deps.patcherGraphState;
-  auto& patcherPoolEdited = deps.patcherPoolEdited;
-  const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
-  const auto& emitPatcherGraphDelta = deps.emitPatcherGraphDelta;
-  const auto& emitPatcherGraphError = deps.emitPatcherGraphError;
   const auto& emitUiDiff = deps.emitUiDiff;
-  const auto& reassemblePatcherFromDevices = deps.reassemblePatcherFromDevices;
-  const auto& updatePatcherGraphSnapshot = deps.updatePatcherGraphSnapshot;
-  (void)tracks; (void)tracksMutex; (void)patcherGraphState; (void)patcherPoolEdited; (void)buildTrackSnapshot; (void)emitPatcherGraphDelta; (void)emitPatcherGraphError; (void)emitUiDiff; (void)reassemblePatcherFromDevices; (void)updatePatcherGraphSnapshot;
-  (void)entry; (void)header; (void)commandType;
   {
   daw::UiPatcherPresetCommandPayload presetPayload{};
   std::memcpy(&presetPayload, entry.payload, sizeof(presetPayload));

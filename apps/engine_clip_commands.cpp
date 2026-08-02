@@ -16,14 +16,7 @@ void handleSetClipGrid(ClipCommandDeps& deps,
             daw::UiCommandType commandType) {
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& clipVersion = deps.clipVersion;
-  auto& uiShm = deps.uiShm;
   const auto& bumpClipVersionFor = deps.bumpClipVersionFor;
-  const auto& publishAudioClipTable = deps.publishAudioClipTable;
-  const auto& rebuildAudioRender = deps.rebuildAudioRender;
-  const auto& writeUiClipExtents = deps.writeUiClipExtents;
-  (void)tracks; (void)tracksMutex; (void)clipVersion; (void)uiShm; (void)bumpClipVersionFor; (void)publishAudioClipTable; (void)rebuildAudioRender; (void)writeUiClipExtents;
-  (void)entry; (void)header; (void)commandType;
   daw::UiSetClipGridPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   if (p.flags == 0) {
@@ -130,14 +123,8 @@ void handleSetAudioClipField(ClipCommandDeps& deps,
             daw::UiCommandType commandType) {
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& clipVersion = deps.clipVersion;
-  auto& uiShm = deps.uiShm;
-  const auto& bumpClipVersionFor = deps.bumpClipVersionFor;
   const auto& publishAudioClipTable = deps.publishAudioClipTable;
   const auto& rebuildAudioRender = deps.rebuildAudioRender;
-  const auto& writeUiClipExtents = deps.writeUiClipExtents;
-  (void)tracks; (void)tracksMutex; (void)clipVersion; (void)uiShm; (void)bumpClipVersionFor; (void)publishAudioClipTable; (void)rebuildAudioRender; (void)writeUiClipExtents;
-  (void)entry; (void)header; (void)commandType;
   daw::UiAudioClipFieldPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   const auto field = static_cast<daw::AudioClipField>(p.field);

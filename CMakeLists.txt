@@ -64,6 +64,21 @@ target_include_directories(juce_host_process PRIVATE
 
 target_link_libraries(juce_host_process PRIVATE platform_juce)
 
+# THE DEPENDENCY LISTS RATCHET, rather than being minimal by hand.
+#
+# Each extracted command module aliases its deps at the top of every handler. When those were
+# written, a blanket `(void)a; (void)b;` line followed to silence unused-variable warnings — which
+# also silenced the only mechanism that could tell us a dependency is no longer needed. A
+# re-grading panel pointed out that the lists were therefore minimal only because someone checked
+# by hand, and hands stop checking.
+#
+# The discards are gone and these sources compile with -Wunused-variable. An alias nobody uses is
+# now a warning naming the member that can leave the struct.
+set(engine_commands_warnings -Wunused-variable)
+file(GLOB _engine_command_sources ${CMAKE_CURRENT_SOURCE_DIR}/apps/engine_*_commands.cpp)
+set_source_files_properties(${_engine_command_sources}
+  PROPERTIES COMPILE_OPTIONS "${engine_commands_warnings}")
+
 add_executable(daw_engine
   apps/daw_engine_main.cpp
   apps/engine_pure.cpp

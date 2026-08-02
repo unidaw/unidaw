@@ -23,8 +23,6 @@ void handleAddModLink(ModlinkCommandDeps& deps,
   const auto& emitModError = deps.emitModError;
   const auto& emitModSnapshot = deps.emitModSnapshot;
   const auto& historyAppend = deps.historyAppend;
-  (void)tracks; (void)tracksMutex; (void)buildTrackSnapshot; (void)emitModError; (void)emitModSnapshot; (void)historyAppend;
-  (void)entry; (void)header; (void)commandType;
   {
   daw::UiModLinkCommandPayload modPayload{};
   std::memcpy(&modPayload, entry.payload, sizeof(modPayload));
@@ -254,9 +252,6 @@ void handleSetModLinkUid16(ModlinkCommandDeps& deps,
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   const auto& emitModError = deps.emitModError;
   const auto& emitModSnapshot = deps.emitModSnapshot;
-  const auto& historyAppend = deps.historyAppend;
-  (void)tracks; (void)tracksMutex; (void)buildTrackSnapshot; (void)emitModError; (void)emitModSnapshot; (void)historyAppend;
-  (void)entry; (void)header; (void)commandType;
   {
   daw::UiModLinkUid16Payload modPayload{};
   std::memcpy(&modPayload, entry.payload, sizeof(modPayload));
@@ -314,12 +309,7 @@ void handleSetModSourceValue(ModlinkCommandDeps& deps,
             daw::UiCommandType commandType) {
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   const auto& emitModError = deps.emitModError;
-  const auto& emitModSnapshot = deps.emitModSnapshot;
-  const auto& historyAppend = deps.historyAppend;
-  (void)tracks; (void)tracksMutex; (void)buildTrackSnapshot; (void)emitModError; (void)emitModSnapshot; (void)historyAppend;
-  (void)entry; (void)header; (void)commandType;
   {
   daw::UiModSourceValuePayload modPayload{};
   std::memcpy(&modPayload, entry.payload, sizeof(modPayload));

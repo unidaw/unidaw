@@ -16,14 +16,8 @@ void handleSetAutomationTarget(AutomationCommandDeps& deps,
             daw::UiCommandType commandType) {
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& automationVersion = deps.automationVersion;
-  auto& uiShm = deps.uiShm;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
-  const auto& historyAppend = deps.historyAppend;
-  const auto& trackIsPersisted = deps.trackIsPersisted;
   const auto& requireMatchingClipVersion = deps.requireMatchingClipVersion;
-  (void)tracks; (void)tracksMutex; (void)automationVersion; (void)uiShm; (void)buildTrackSnapshot; (void)historyAppend; (void)trackIsPersisted; (void)requireMatchingClipVersion;
-  (void)entry; (void)header; (void)commandType;
   daw::UiAutomationCommandPayload autoPayload{};
   std::memcpy(&autoPayload, entry.payload, sizeof(autoPayload));
   if (autoPayload.commandType !=
@@ -82,14 +76,7 @@ void handleRequestAutomationLane(AutomationCommandDeps& deps,
             daw::UiCommandType commandType) {
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& automationVersion = deps.automationVersion;
   auto& uiShm = deps.uiShm;
-  const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
-  const auto& historyAppend = deps.historyAppend;
-  const auto& trackIsPersisted = deps.trackIsPersisted;
-  const auto& requireMatchingClipVersion = deps.requireMatchingClipVersion;
-  (void)tracks; (void)tracksMutex; (void)automationVersion; (void)uiShm; (void)buildTrackSnapshot; (void)historyAppend; (void)trackIsPersisted; (void)requireMatchingClipVersion;
-  (void)entry; (void)header; (void)commandType;
   daw::UiAutomationLaneRequestPayload req{};
   std::memcpy(&req, entry.payload, sizeof(req));
   if (!uiShm.header || uiShm.header->uiAutomationSlotOffset == 0) {
@@ -173,13 +160,9 @@ void handleWriteAutomationPoint(AutomationCommandDeps& deps,
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
   auto& automationVersion = deps.automationVersion;
-  auto& uiShm = deps.uiShm;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   const auto& historyAppend = deps.historyAppend;
   const auto& trackIsPersisted = deps.trackIsPersisted;
-  const auto& requireMatchingClipVersion = deps.requireMatchingClipVersion;
-  (void)tracks; (void)tracksMutex; (void)automationVersion; (void)uiShm; (void)buildTrackSnapshot; (void)historyAppend; (void)trackIsPersisted; (void)requireMatchingClipVersion;
-  (void)entry; (void)header; (void)commandType;
   daw::UiAutomationPointPayload ap{};
   std::memcpy(&ap, entry.payload, sizeof(ap));
   if (static_cast<daw::UiCommandType>(ap.commandType) != commandType) {
@@ -283,13 +266,8 @@ void handleDeleteAutomationPoint(AutomationCommandDeps& deps,
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
   auto& automationVersion = deps.automationVersion;
-  auto& uiShm = deps.uiShm;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   const auto& historyAppend = deps.historyAppend;
-  const auto& trackIsPersisted = deps.trackIsPersisted;
-  const auto& requireMatchingClipVersion = deps.requireMatchingClipVersion;
-  (void)tracks; (void)tracksMutex; (void)automationVersion; (void)uiShm; (void)buildTrackSnapshot; (void)historyAppend; (void)trackIsPersisted; (void)requireMatchingClipVersion;
-  (void)entry; (void)header; (void)commandType;
   daw::UiAutomationPointPayload ap{};
   std::memcpy(&ap, entry.payload, sizeof(ap));
   if (static_cast<daw::UiCommandType>(ap.commandType) != commandType) {

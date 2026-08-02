@@ -16,8 +16,6 @@ namespace daw::engine {
 void handleUndo(UndoCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
   auto& undoMutex = deps.undoMutex;
   auto& undoStack = deps.undoStack;
   auto& redoStack = deps.redoStack;
@@ -25,8 +23,6 @@ void handleUndo(UndoCommandDeps& deps,
   const auto& restoreSongStore = deps.restoreSongStore;
   const auto& restoreTrackStore = deps.restoreTrackStore;
   const auto& requireMatchingClipVersion = deps.requireMatchingClipVersion;
-  (void)tracks; (void)tracksMutex; (void)undoMutex; (void)undoStack; (void)redoStack; (void)applyUndoEntry; (void)restoreSongStore; (void)restoreTrackStore; (void)requireMatchingClipVersion;
-  (void)entry;
   {
   if (!requireMatchingClipVersion(payload.baseVersion,
                                   daw::UiCommandType::Undo,
@@ -81,8 +77,6 @@ void handleUndo(UndoCommandDeps& deps,
 void handleRedo(UndoCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
   auto& undoMutex = deps.undoMutex;
   auto& undoStack = deps.undoStack;
   auto& redoStack = deps.redoStack;
@@ -90,8 +84,6 @@ void handleRedo(UndoCommandDeps& deps,
   const auto& restoreSongStore = deps.restoreSongStore;
   const auto& restoreTrackStore = deps.restoreTrackStore;
   const auto& requireMatchingClipVersion = deps.requireMatchingClipVersion;
-  (void)tracks; (void)tracksMutex; (void)undoMutex; (void)undoStack; (void)redoStack; (void)applyUndoEntry; (void)restoreSongStore; (void)restoreTrackStore; (void)requireMatchingClipVersion;
-  (void)entry;
   {
   if (!requireMatchingClipVersion(payload.baseVersion,
                                   daw::UiCommandType::Redo,

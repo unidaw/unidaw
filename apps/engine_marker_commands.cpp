@@ -21,8 +21,6 @@ void handleAddMarker(MarkerCommandDeps& deps,
   auto& arrangeMutex = deps.arrangeMutex;
   auto& arrangeVersion = deps.arrangeVersion;
   const auto& historyAppend = deps.historyAppend;
-  (void)markerList; (void)arrangeMutex; (void)arrangeVersion; (void)historyAppend;
-  (void)entry; (void)header; (void)commandType;
   {
   daw::UiMarkerCommandPayload mp{};
   std::memcpy(&mp, entry.payload, sizeof(mp));

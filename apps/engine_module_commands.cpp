@@ -21,8 +21,6 @@ void handleSaveModule(ModuleCommandDeps& deps,
   auto& loadedProjectDir = deps.loadedProjectDir;
   const auto& saveProjectToPath = deps.saveProjectToPath;
   const auto& loadProjectFromPath = deps.loadProjectFromPath;
-  (void)loadedProjectDir; (void)saveProjectToPath; (void)loadProjectFromPath;
-  (void)entry; (void)header; (void)commandType;
   {
   daw::UiPatcherPresetCommandPayload np{};
   std::memcpy(&np, entry.payload, sizeof(np));

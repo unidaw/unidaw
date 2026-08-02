@@ -19,11 +19,6 @@ void handleSetTrackMixer(TrackpropsCommandDeps& deps,
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
   auto& masterTrack = deps.masterTrack;
-  auto& quantizeVersion = deps.quantizeVersion;
-  const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
-  const auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
-  (void)tracks; (void)tracksMutex; (void)masterTrack; (void)quantizeVersion; (void)buildTrackSnapshot; (void)rebuildFlatAndPublish;
-  (void)entry;
   {
   TrackRuntime* runtime = nullptr;
   if (payload.trackId == daw::kMasterTrackId) {
@@ -64,12 +59,7 @@ void handleSetTrackHarmonyQuantize(TrackpropsCommandDeps& deps,
             const daw::UiCommandPayload& payload) {
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& masterTrack = deps.masterTrack;
-  auto& quantizeVersion = deps.quantizeVersion;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
-  const auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
-  (void)tracks; (void)tracksMutex; (void)masterTrack; (void)quantizeVersion; (void)buildTrackSnapshot; (void)rebuildFlatAndPublish;
-  (void)entry;
   {
   TrackRuntime* runtime = nullptr;
   {
@@ -102,12 +92,7 @@ void handleSetTrackSoundAddressed(TrackpropsCommandDeps& deps,
             const daw::UiCommandPayload& payload) {
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& masterTrack = deps.masterTrack;
-  auto& quantizeVersion = deps.quantizeVersion;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
-  const auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
-  (void)tracks; (void)tracksMutex; (void)masterTrack; (void)quantizeVersion; (void)buildTrackSnapshot; (void)rebuildFlatAndPublish;
-  (void)entry;
   {
   TrackRuntime* runtime = nullptr;
   {
@@ -143,12 +128,6 @@ void handleSetTrackCollapsed(TrackpropsCommandDeps& deps,
             const daw::UiCommandPayload& payload) {
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& masterTrack = deps.masterTrack;
-  auto& quantizeVersion = deps.quantizeVersion;
-  const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
-  const auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
-  (void)tracks; (void)tracksMutex; (void)masterTrack; (void)quantizeVersion; (void)buildTrackSnapshot; (void)rebuildFlatAndPublish;
-  (void)entry;
   {
   TrackRuntime* runtime = nullptr;
   {
@@ -178,12 +157,6 @@ void handleSetTrackLinesPerBeat(TrackpropsCommandDeps& deps,
             const daw::UiCommandPayload& payload) {
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& masterTrack = deps.masterTrack;
-  auto& quantizeVersion = deps.quantizeVersion;
-  const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
-  const auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
-  (void)tracks; (void)tracksMutex; (void)masterTrack; (void)quantizeVersion; (void)buildTrackSnapshot; (void)rebuildFlatAndPublish;
-  (void)entry;
   {
   // THE LAST PIECE OF PER-LANE GRIDS. lines_per_beat has been per track in the project
   // format, published in uiLinesPerBeat and honoured by the tracker's grid since v10, and
@@ -228,12 +201,6 @@ void handleSetTrackAllowNoteOverlap(TrackpropsCommandDeps& deps,
             const daw::UiCommandPayload& payload) {
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& masterTrack = deps.masterTrack;
-  auto& quantizeVersion = deps.quantizeVersion;
-  const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
-  const auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
-  (void)tracks; (void)tracksMutex; (void)masterTrack; (void)quantizeVersion; (void)buildTrackSnapshot; (void)rebuildFlatAndPublish;
-  (void)entry;
   {
   // THE ONLY SETTING IN THE TRACKER THAT DECIDES WHETHER AN EDIT LOSES DATA. Off, entering a
   // note over a sounding one truncates the sounding note IN THE DOCUMENT. On, it is left
@@ -266,12 +233,8 @@ void handleSetLaneQuantize(TrackpropsCommandDeps& deps,
             const daw::UiCommandPayload& payload) {
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& masterTrack = deps.masterTrack;
   auto& quantizeVersion = deps.quantizeVersion;
-  const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   const auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
-  (void)tracks; (void)tracksMutex; (void)masterTrack; (void)quantizeVersion; (void)buildTrackSnapshot; (void)rebuildFlatAndPublish;
-  (void)entry;
   {
   TrackRuntime* runtime = nullptr;
   {

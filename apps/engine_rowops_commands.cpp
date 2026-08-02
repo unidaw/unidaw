@@ -19,8 +19,6 @@ void handleSetRowOps(RowopsCommandDeps& deps,
             daw::UiCommandType commandType) {
   const auto& applySetRowOps = deps.applySetRowOps;
   const auto& emitClipReject = deps.emitClipReject;
-  (void)applySetRowOps; (void)emitClipReject;
-  (void)entry; (void)header; (void)commandType;
   {
   daw::UiSetRowOpsPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));

@@ -22,8 +22,6 @@ void handleSaveProject(ProjectCommandDeps& deps,
   auto& projectLoadSeq = deps.projectLoadSeq;
   const auto& saveProjectToPath = deps.saveProjectToPath;
   const auto& loadProjectFromPath = deps.loadProjectFromPath;
-  (void)projectLoadOk; (void)projectLoadSeq; (void)saveProjectToPath; (void)loadProjectFromPath;
-  (void)entry; (void)header; (void)commandType;
   {
   daw::UiPatcherPresetCommandPayload projectPayload{};
   std::memcpy(&projectPayload, entry.payload, sizeof(projectPayload));

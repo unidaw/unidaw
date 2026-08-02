@@ -3119,11 +3119,6 @@ int main(int argc, char** argv) {
   // not build is REPORTED and the previous one is left running — a bad edge in one device must not
   // silently take down every other device's graph.
   auto reassemblePatcherFromDevices = [&]() -> bool {
-    struct DevOut {
-      uint32_t trackId;
-      uint32_t deviceId;
-      uint32_t node;
-    };
     daw::PatcherGraph pool;
     std::vector<DevOut> outputs;
     uint32_t base = 0;
@@ -6923,11 +6918,6 @@ int main(int argc, char** argv) {
     // first instrument" branch onto "preserve each device's own graph": the same data for one
     // device, and it retires the boot-demo-graph litter described at the top of this file.
     if (deviceGraphCount >= 1) {
-      struct DevOut {
-        uint32_t trackId;
-        uint32_t deviceId;
-        uint32_t node;
-      };
       daw::PatcherGraph pool;
       std::vector<DevOut> outputs;
       uint32_t base = 0;

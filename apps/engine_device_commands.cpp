@@ -16,19 +16,10 @@ namespace daw::engine {
 void handleLoadPluginOnTrack(DeviceCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
-  auto& playing = deps.playing;
-  auto& audioPlaybackBlockId = deps.audioPlaybackBlockId;
-  auto& pluginPath = deps.pluginPath;
-  const auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
-  const auto& rebuildHostForChain = deps.rebuildHostForChain;
   const auto& emitChainSnapshot = deps.emitChainSnapshot;
   const auto& ensureTrack = deps.ensureTrack;
   const auto& resolvePluginPath = deps.resolvePluginPath;
   const auto& updateTrackChainForInstrument = deps.updateTrackChainForInstrument;
-  (void)tracks; (void)tracksMutex; (void)playing; (void)audioPlaybackBlockId; (void)pluginPath; (void)resolveDevicePluginPath; (void)rebuildHostForChain; (void)emitChainSnapshot; (void)ensureTrack; (void)resolvePluginPath; (void)updateTrackChainForInstrument;
-  (void)entry;
   {
   const uint32_t trackId = payload.trackId;
   const uint32_t pluginIndex = payload.pluginIndex;
@@ -53,17 +44,7 @@ void handleOpenPluginEditor(DeviceCommandDeps& deps,
             const daw::UiCommandPayload& payload) {
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& playing = deps.playing;
-  auto& audioPlaybackBlockId = deps.audioPlaybackBlockId;
-  auto& pluginPath = deps.pluginPath;
   const auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
-  const auto& rebuildHostForChain = deps.rebuildHostForChain;
-  const auto& emitChainSnapshot = deps.emitChainSnapshot;
-  const auto& ensureTrack = deps.ensureTrack;
-  const auto& resolvePluginPath = deps.resolvePluginPath;
-  const auto& updateTrackChainForInstrument = deps.updateTrackChainForInstrument;
-  (void)tracks; (void)tracksMutex; (void)playing; (void)audioPlaybackBlockId; (void)pluginPath; (void)resolveDevicePluginPath; (void)rebuildHostForChain; (void)emitChainSnapshot; (void)ensureTrack; (void)resolvePluginPath; (void)updateTrackChainForInstrument;
-  (void)entry;
   {
   const uint32_t trackId = payload.trackId;
   const uint32_t deviceId = payload.value0;
@@ -130,15 +111,7 @@ void handleSetDeviceParam(DeviceCommandDeps& deps,
   auto& tracksMutex = deps.tracksMutex;
   auto& playing = deps.playing;
   auto& audioPlaybackBlockId = deps.audioPlaybackBlockId;
-  auto& pluginPath = deps.pluginPath;
   const auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
-  const auto& rebuildHostForChain = deps.rebuildHostForChain;
-  const auto& emitChainSnapshot = deps.emitChainSnapshot;
-  const auto& ensureTrack = deps.ensureTrack;
-  const auto& resolvePluginPath = deps.resolvePluginPath;
-  const auto& updateTrackChainForInstrument = deps.updateTrackChainForInstrument;
-  (void)tracks; (void)tracksMutex; (void)playing; (void)audioPlaybackBlockId; (void)pluginPath; (void)resolveDevicePluginPath; (void)rebuildHostForChain; (void)emitChainSnapshot; (void)ensureTrack; (void)resolvePluginPath; (void)updateTrackChainForInstrument;
-  (void)entry;
   {
   // A rack knob write: resolve deviceId -> host plugin index (same walk as the
   // params read-back) and forward it to the host over the control socket. Fire-

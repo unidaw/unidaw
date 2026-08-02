@@ -22,17 +22,11 @@ void handleSamplerEmitRows(SamplerCommandDeps& deps,
   // every name they used from main's scope resolves here to the same object, by reference. Not a
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
-  auto& uiShm = deps.uiShm;
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
   auto& tempoProvider = deps.tempoProvider;
   const auto& reportSamplerReject = deps.reportSamplerReject;
-  const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
-  const auto& rebuildSamplerRender = deps.rebuildSamplerRender;
   const auto& applyAddNote = deps.applyAddNote;
-  (void)uiShm; (void)tracks; (void)tracksMutex; (void)tempoProvider; (void)reportSamplerReject;
-  (void)refreshSamplerForTrack; (void)rebuildSamplerRender; (void)applyAddNote;
-  (void)entry; (void)header; (void)commandType;
   daw::UiSamplerEmitRowsPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   TrackRuntime* runtime = nullptr;
@@ -166,17 +160,11 @@ void handleSamplerSlice(SamplerCommandDeps& deps,
   // every name they used from main's scope resolves here to the same object, by reference. Not a
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
-  auto& uiShm = deps.uiShm;
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
   auto& tempoProvider = deps.tempoProvider;
   const auto& reportSamplerReject = deps.reportSamplerReject;
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
-  const auto& rebuildSamplerRender = deps.rebuildSamplerRender;
-  const auto& applyAddNote = deps.applyAddNote;
-  (void)uiShm; (void)tracks; (void)tracksMutex; (void)tempoProvider; (void)reportSamplerReject;
-  (void)refreshSamplerForTrack; (void)rebuildSamplerRender; (void)applyAddNote;
-  (void)entry; (void)header; (void)commandType;
   const bool isSlice = commandType == daw::UiCommandType::SamplerSlice;
   daw::UiSamplerSlicePayload sp{};
   daw::UiSamplerMarkerPayload mp{};
@@ -398,14 +386,6 @@ void handleRequestSamplerEnvelope(SamplerCommandDeps& deps,
   auto& uiShm = deps.uiShm;
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& tempoProvider = deps.tempoProvider;
-  const auto& reportSamplerReject = deps.reportSamplerReject;
-  const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
-  const auto& rebuildSamplerRender = deps.rebuildSamplerRender;
-  const auto& applyAddNote = deps.applyAddNote;
-  (void)uiShm; (void)tracks; (void)tracksMutex; (void)tempoProvider; (void)reportSamplerReject;
-  (void)refreshSamplerForTrack; (void)rebuildSamplerRender; (void)applyAddNote;
-  (void)entry; (void)header; (void)commandType;
   daw::UiSamplerEnvelopeRequestPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   if (!uiShm.header || uiShm.header->uiSamplerEnvelopeOffset == 0) {
@@ -532,14 +512,6 @@ void handleRequestSamplerKit(SamplerCommandDeps& deps,
   auto& uiShm = deps.uiShm;
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& tempoProvider = deps.tempoProvider;
-  const auto& reportSamplerReject = deps.reportSamplerReject;
-  const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
-  const auto& rebuildSamplerRender = deps.rebuildSamplerRender;
-  const auto& applyAddNote = deps.applyAddNote;
-  (void)uiShm; (void)tracks; (void)tracksMutex; (void)tempoProvider; (void)reportSamplerReject;
-  (void)refreshSamplerForTrack; (void)rebuildSamplerRender; (void)applyAddNote;
-  (void)entry; (void)header; (void)commandType;
   daw::UiSamplerKitRequestPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   if (!uiShm.header || uiShm.header->uiSamplerKitOffset == 0) {
@@ -738,17 +710,10 @@ void handleSamplerSetSlot(SamplerCommandDeps& deps,
   // every name they used from main's scope resolves here to the same object, by reference. Not a
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
-  auto& uiShm = deps.uiShm;
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& tempoProvider = deps.tempoProvider;
   const auto& reportSamplerReject = deps.reportSamplerReject;
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
-  const auto& rebuildSamplerRender = deps.rebuildSamplerRender;
-  const auto& applyAddNote = deps.applyAddNote;
-  (void)uiShm; (void)tracks; (void)tracksMutex; (void)tempoProvider; (void)reportSamplerReject;
-  (void)refreshSamplerForTrack; (void)rebuildSamplerRender; (void)applyAddNote;
-  (void)entry; (void)header; (void)commandType;
   daw::UiSamplerSetSlotPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   TrackRuntime* runtime = nullptr;
@@ -940,17 +905,10 @@ void handleSamplerSetDevice(SamplerCommandDeps& deps,
   // every name they used from main's scope resolves here to the same object, by reference. Not a
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
-  auto& uiShm = deps.uiShm;
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& tempoProvider = deps.tempoProvider;
   const auto& reportSamplerReject = deps.reportSamplerReject;
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
-  const auto& rebuildSamplerRender = deps.rebuildSamplerRender;
-  const auto& applyAddNote = deps.applyAddNote;
-  (void)uiShm; (void)tracks; (void)tracksMutex; (void)tempoProvider; (void)reportSamplerReject;
-  (void)refreshSamplerForTrack; (void)rebuildSamplerRender; (void)applyAddNote;
-  (void)entry; (void)header; (void)commandType;
   daw::UiSamplerSetDevicePayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   TrackRuntime* runtime = nullptr;
@@ -1050,17 +1008,10 @@ void handleSamplerSetFilter(SamplerCommandDeps& deps,
   // every name they used from main's scope resolves here to the same object, by reference. Not a
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
-  auto& uiShm = deps.uiShm;
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& tempoProvider = deps.tempoProvider;
   const auto& reportSamplerReject = deps.reportSamplerReject;
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
-  const auto& rebuildSamplerRender = deps.rebuildSamplerRender;
-  const auto& applyAddNote = deps.applyAddNote;
-  (void)uiShm; (void)tracks; (void)tracksMutex; (void)tempoProvider; (void)reportSamplerReject;
-  (void)refreshSamplerForTrack; (void)rebuildSamplerRender; (void)applyAddNote;
-  (void)entry; (void)header; (void)commandType;
   daw::UiSamplerFilterPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   TrackRuntime* runtime = nullptr;
@@ -1154,17 +1105,10 @@ void handleSamplerSetVintage(SamplerCommandDeps& deps,
   // every name they used from main's scope resolves here to the same object, by reference. Not a
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
-  auto& uiShm = deps.uiShm;
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& tempoProvider = deps.tempoProvider;
   const auto& reportSamplerReject = deps.reportSamplerReject;
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
-  const auto& rebuildSamplerRender = deps.rebuildSamplerRender;
-  const auto& applyAddNote = deps.applyAddNote;
-  (void)uiShm; (void)tracks; (void)tracksMutex; (void)tempoProvider; (void)reportSamplerReject;
-  (void)refreshSamplerForTrack; (void)rebuildSamplerRender; (void)applyAddNote;
-  (void)entry; (void)header; (void)commandType;
   daw::UiSamplerVintagePayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   TrackRuntime* runtime = nullptr;
@@ -1258,17 +1202,10 @@ void handleSamplerSetLfo(SamplerCommandDeps& deps,
   // every name they used from main's scope resolves here to the same object, by reference. Not a
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
-  auto& uiShm = deps.uiShm;
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& tempoProvider = deps.tempoProvider;
   const auto& reportSamplerReject = deps.reportSamplerReject;
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
-  const auto& rebuildSamplerRender = deps.rebuildSamplerRender;
-  const auto& applyAddNote = deps.applyAddNote;
-  (void)uiShm; (void)tracks; (void)tracksMutex; (void)tempoProvider; (void)reportSamplerReject;
-  (void)refreshSamplerForTrack; (void)rebuildSamplerRender; (void)applyAddNote;
-  (void)entry; (void)header; (void)commandType;
   daw::UiSamplerLfoPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   TrackRuntime* runtime = nullptr;
@@ -1378,17 +1315,10 @@ void handleSamplerSetEnvelope(SamplerCommandDeps& deps,
   // every name they used from main's scope resolves here to the same object, by reference. Not a
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
-  auto& uiShm = deps.uiShm;
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& tempoProvider = deps.tempoProvider;
   const auto& reportSamplerReject = deps.reportSamplerReject;
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
-  const auto& rebuildSamplerRender = deps.rebuildSamplerRender;
-  const auto& applyAddNote = deps.applyAddNote;
-  (void)uiShm; (void)tracks; (void)tracksMutex; (void)tempoProvider; (void)reportSamplerReject;
-  (void)refreshSamplerForTrack; (void)rebuildSamplerRender; (void)applyAddNote;
-  (void)entry; (void)header; (void)commandType;
   daw::UiSamplerEnvelopePayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   TrackRuntime* runtime = nullptr;
@@ -1512,17 +1442,10 @@ void handleSamplerLoad(SamplerCommandDeps& deps,
   // every name they used from main's scope resolves here to the same object, by reference. Not a
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
-  auto& uiShm = deps.uiShm;
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& tempoProvider = deps.tempoProvider;
   const auto& reportSamplerReject = deps.reportSamplerReject;
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
-  const auto& rebuildSamplerRender = deps.rebuildSamplerRender;
-  const auto& applyAddNote = deps.applyAddNote;
-  (void)uiShm; (void)tracks; (void)tracksMutex; (void)tempoProvider; (void)reportSamplerReject;
-  (void)refreshSamplerForTrack; (void)rebuildSamplerRender; (void)applyAddNote;
-  (void)entry; (void)header; (void)commandType;
   daw::UiSamplerLoadPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   const std::string name(p.name, strnlen(p.name, sizeof(p.name)));
