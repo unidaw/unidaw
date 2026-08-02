@@ -117,15 +117,8 @@ COUNT="$(echo "$BEFORE" | wc -w | tr -d ' ')"
 # BOUNDED POLL, not a single read: the notes region is published shortly AFTER project.load, so
 # a one-shot read here races the publish. Still fails if the fixture genuinely did not load —
 # it just no longer fails when the engine was merely slow.
-notes_published=0
-for _ in $(seq 1 80); do
-  if cli get notes --track 0 2>/dev/null | grep -q '"nanotick"'; then
-    notes_published=1
-    break
-  fi
-  sleep 0.25
-done
-[ "$notes_published" = "1" ] || \
+notes_ready() { cli get notes --track 0 2>/dev/null | grep -q '"nanotick"'; }
+wait_until 20 notes_ready || \
   fail "no published notes for track 0 after 20s — the fixture did not load"
 echo "  authored notes: $COUNT"
 

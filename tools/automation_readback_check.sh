@@ -116,7 +116,26 @@ done
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load ar --force >/dev/null 2>&1 || true
 wait_for_boot "$TMP/eng.log" "$ENG" 80
-sleep 1.5
+
+# POLL FOR THE LANES, do not sleep at them. This was `sleep 1.5`, and it failed inside a full
+# ctest with "lane 'cutoff' on track 0 reports MISSING points" while passing 6/6 standalone.
+# MISSING is the check's own name for "the lane list does not include it at all", which reads as a
+# serious product defect and was in fact a read that arrived before the publish.
+#
+# wait_for_boot returning means the project LOADED. It does not mean the automation region has
+# been PUBLISHED, and `get automation` reads the region — the same proxy-wait mistake that made
+# lane_quantize_check flake one run in three. Wait on the condition you are about to assert on.
+lanes_ready() {
+  cli get automation 2>/dev/null | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if len(d.get("lanes", [])) >= 2 else 1)'
+}
+# Bounded: on timeout the assertions below still run and still fail with their own message, which
+# is the point — the poll removes the race, it does not stand in for the check.
+wait_until 30 lanes_ready || true
 
 # Read helpers. Each shells out to python3 over the CLI's JSON rather than grepping it: a grep that
 # matches the wrong line is how a check passes with the bug present.

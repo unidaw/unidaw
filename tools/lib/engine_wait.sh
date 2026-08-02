@@ -346,3 +346,38 @@ require_capture() {
         anything. That is the harness rather than the thing under test — specifically:
         $(capture_diagnosis "$2")"
 }
+
+# WAIT FOR THE THING YOU ARE ABOUT TO ASSERT ON, not for an event that normally precedes it.
+#
+# `wait_for_boot` returning means the engine LOADED the project. It does not mean any published
+# REGION has been written yet, and most checks go straight on to read one. Seventeen checks bridge
+# that gap with a fixed `sleep 1.0`-`sleep 1.5`, which is a bet on how busy the machine is:
+#
+#   lane_quantize_check    failed ~1 run in 3 with "no published notes for track 0 — the fixture
+#                          did not load". The fixture was fine; the read was early. Replacing the
+#                          sleeps with wait_for_boot did NOT fix it (4 failures in 12) — only
+#                          polling for the notes themselves did (0 in 12).
+#   automation_readback    failed inside a full ctest with "lane 'cutoff' reports MISSING points",
+#                          which is that check's name for "the lane list does not include it at
+#                          all" — a serious-looking product defect that was a race. 6/6 standalone.
+#
+# Both now poll. This helper is here so the remaining fifteen can be converted the same way rather
+# than each inventing its own loop, and so the reason is written down once.
+#
+# USAGE:  wait_until <seconds> <command...>     — polls every 0.25s until the command succeeds.
+# Returns non-zero on timeout, and the CALLER still asserts: this removes the race, it does not
+# substitute for the assertion. A check whose poll times out must still fail with its own message
+# naming what was missing, or the poll has merely moved the silence.
+wait_until() {
+  local secs="$1"; shift
+  local tries=$(( secs * 4 ))
+  local i=0
+  while [ "$i" -lt "$tries" ]; do
+    if "$@" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.25
+    i=$((i + 1))
+  done
+  return 1
+}
