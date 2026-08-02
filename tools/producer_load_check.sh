@@ -231,11 +231,19 @@ raise SystemExit(0 if $OVER <= max(2, $BLOCKS * 0.02) else 1)" || \
     BAD_PAIRED="$(python3 -c "print(1 if $SAMP > max(1, $PAIRED) * $N * 1.5 else 0)")"
     BAD_START="$(python3 -c "print(1 if $SAMP > max(1, $BASE_SAMPLER) * $N * 1.5 else 0)")"
     if [ "$BAD_PAIRED" = "1" ] && [ "$BAD_START" = "1" ]; then
-      SCALE_FAIL="$N sampler tracks cost ${SAMP}us of DSP per block, more than $N x the
-        one-track cost plus 50% slack. BOTH one-track baselines agree — ${BASE_SAMPLER}us at the
-        top of the run and ${PAIRED}us measured next to this render — so this is not the machine
-        moving under the measurement. Per-track work is CONTENDING, not just adding up, and no
-        amount of parallelism fixes contention"
+      SCALE_FAIL="$N sampler tracks cost ${SAMP}us of DSP per block, which is
+        $(python3 -c "print('%.1f' % ($SAMP / max(1, $PAIRED)))")x the one-track cost against a
+        threshold of $(python3 -c "print('%.1f' % ($N * 1.5))")x. BOTH one-track baselines agree —
+        ${BASE_SAMPLER}us at the top of the run and ${PAIRED}us measured next to this render — so
+        this is not the machine moving under the measurement.
+
+        BEFORE READING THIS AS A REGRESSION, note the threshold is close to the measured
+        behaviour. On 2026-08-02 the same binary gave 13.2x in-suite (196us -> 2580us) and 11.4x
+        standalone (250us -> 2849us), against a 12x threshold: the ABSOLUTE eight-track cost
+        barely moved, and the verdict flipped on the baseline, which is a small noisy number in
+        the denominator. Two agreeing witnesses rule out the box CHANGING; they do not rule out
+        the box being uniformly BUSY. If this fires near the line, it is a calibration question
+        and not yet an engine defect — the slack has never been derived from measured data."
     elif [ "$BAD_PAIRED" != "$BAD_START" ]; then
       SCALE_SPLIT="at $N tracks (${SAMP}us) the two one-track baselines DISAGREE about whether
         that is superlinear: ${BASE_SAMPLER}us measured at the top of the run, ${PAIRED}us

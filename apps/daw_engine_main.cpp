@@ -20377,6 +20377,35 @@ struct TrackRuntime {
     ::shm_unlink(uiShm.name.c_str());
   }
 
+  // DO NOT TEAR DOWN AN AUDIO DEVICE THAT NEVER RAN A CALLBACK. It hangs, forever, and that hang
+  // is the whole of the ctest "stall" family.
+  //
+  // JUCE's CoreAudioInternal::stop() polls until the device confirms it has stopped. On a machine
+  // whose default output opens, reports its rate and block size, answers isPlaying() with true and
+  // then never runs a single IO callback, that confirmation never comes — so ~AudioDeviceManager
+  // sleeps indefinitely inside ~JuceAudioBackend, at the closing brace of main.
+  //
+  // What that looked like from outside, for days: individual checks stalling for MINUTES inside a
+  // full ctest and passing standalone. The engine had already finished its work — the render was
+  // written, the run-seconds had elapsed — and then hung in teardown. Its check finished or was
+  // killed, the engine was reparented to init, and it sat there burning CPU and starving whatever
+  // ran next. Two caught in the act: `--run-seconds 30` alive at 953s, and an OFFLINE RENDER with
+  // `--run-seconds 5` alive at 922s, both with this exact stack.
+  //
+  // Six other explanations were tested and refuted first (subshell orphaning, SIGTERM being
+  // ignored, orphan accumulation, load average, realtime host threads starving normal ones, and
+  // concurrency alone). None of them was it. A stack from `sample` on a stuck process was.
+  //
+  // The leak is deliberate and bounded: this is the last statement of main, every thread is
+  // joined, and the OS reclaims the device and the memory on exit. Gated on the callback count
+  // rather than applied always, because on a machine where the device WORKS a clean stop is the
+  // correct thing to do and this path must not change it.
+  if (audioBackend && audioBackend->deviceCallbacks() == 0) {
+    DAW_EVENT("audio.teardown_skipped")
+        .field("reason", "device never ran a callback; its stop() would not return");
+    (void)audioBackend.release();
+  }
+
   // A render that stalled or had nothing to render exits NON-ZERO. A shell check that reads
   // only the exit code must not be told a silent or truncated file was a success — the whole
   // point of the loud-failure discipline is that the caller does not have to go looking.

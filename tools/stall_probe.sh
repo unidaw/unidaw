@@ -53,6 +53,29 @@ PY
     echo "    cmd: $cmdline" >> "$OUT/log.txt"
     sample "$pid" 3 -file "$OUT/sample_${comm##*/}_$pid.txt" >/dev/null 2>&1 || \
       echo "    (sample failed — needs the same user or developer mode)" >> "$OUT/log.txt"
+    # AND ITS OWN LOG, which is the half a stack cannot give. The engine stamps every event with
+    # ts_ms, so the log says WHERE the time went — and the first thing to settle is whether a
+    # stalled engine is slow in SETUP or slow in the --run-seconds sleep the stack shows it in.
+    # A stack caught inside sleep_for at t=240 with --run-seconds 45 looks like a 5x overshoot and
+    # is equally consistent with 195s spent before the sleep ever started.
+    #
+    # The log path is not in the command line (it is a shell redirect), so it is recovered from the
+    # process's open files.
+    logpath="$(lsof -p "$pid" 2>/dev/null | awk '$NF ~ /\.log$/ {print $NF; exit}')"
+    if [ -n "${logpath:-}" ] && [ -r "$logpath" ]; then
+      cp "$logpath" "$OUT/log_${comm##*/}_$pid.log" 2>/dev/null
+      echo "    log: $logpath ($(wc -l < "$logpath" | tr -d ' ') lines) -> copied" >> "$OUT/log.txt"
+      # First and last stamped event: the elapsed time the engine itself believes it has used.
+      python3 - "$logpath" >> "$OUT/log.txt" 2>/dev/null <<'PYE'
+import re, sys
+ts = [int(m) for m in re.findall(r'"ts_ms":(\d+)', open(sys.argv[1], errors='ignore').read())]
+if len(ts) >= 2:
+    print("    engine timeline: %.1fs from first event to last (%d events)"
+          % ((ts[-1] - ts[0]) / 1000.0, len(ts)))
+PYE
+    else
+      echo "    log: not found via lsof" >> "$OUT/log.txt"
+    fi
   done < <(ps -ax -o pid=,etime=,comm= | grep -E "daw_engine|juce_host_process" | grep -v grep)
   sleep 10
 done
