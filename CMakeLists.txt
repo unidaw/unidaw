@@ -554,6 +554,12 @@ add_test(NAME clip_text
 )
 set_tests_properties(clip_text PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
 
+# SetMarkerColor (99): a marker's colour was write-once. Model and shared memory only.
+add_test(NAME marker_color
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/marker_color_check.sh
+)
+set_tests_properties(marker_color PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+
 add_test(NAME lint
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/lint_check.sh
 )

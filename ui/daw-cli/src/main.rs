@@ -2045,9 +2045,14 @@ fn main() {
                                 } else {
                                     r.song_end_tick
                                 };
+                                // COLOUR, published in UiMarker since the region existed and
+                                // printed by nothing — unreadable from every client, in the same
+                                // way a field with no writer is unreachable. It had no writer
+                                // either until SetMarkerColor (99); now that one exists, a caller
+                                // has to be able to see the result.
                                 println!(
-                                    "    {{ \"id\": {}, \"name\": {:?}, \"bar\": {}, \"beat\": {}, \"nanotick\": {}, \"span_end\": {} }}{comma}",
-                                    m.id, name, m.bar, m.beat, m.nanotick, span_end
+                                    "    {{ \"id\": {}, \"name\": {:?}, \"bar\": {}, \"beat\": {}, \"nanotick\": {}, \"color_rgb\": {}, \"span_end\": {} }}{comma}",
+                                    m.id, name, m.bar, m.beat, m.nanotick, m.color_rgb, span_end
                                 );
                             }
                             println!("  ],");
@@ -4033,8 +4038,9 @@ fn main() {
                         "remove" => UiCommandType::RemoveMarker,
                         "rename" => UiCommandType::RenameMarker,
                         "move" => UiCommandType::MoveMarker,
+                        "color" => UiCommandType::SetMarkerColor,
                         other => {
-                            eprintln!("daw-cli: marker {other:?}: expected add|remove|rename|move");
+                            eprintln!("daw-cli: marker {other:?}: expected add|remove|rename|move|color");
                             std::process::exit(2)
                         }
                     };
@@ -4051,9 +4057,19 @@ fn main() {
                         eprintln!("daw-cli: --name is required for marker rename");
                         std::process::exit(2);
                     }
+                    // REQUIRED, because the default below is 0 and 0 is BLACK, not "leave it
+                    // alone". Every 24-bit value is a legal colour, so an omitted --color cannot
+                    // be told from a chosen one once it is on the wire — the same reason this is
+                    // its own opcode rather than a flag on rename.
+                    if matches!(cmd, UiCommandType::SetMarkerColor)
+                        && flag(&args, "--color").is_none()
+                    {
+                        eprintln!("daw-cli: --color is required for marker color (0 is black, not \"unchanged\")");
+                        std::process::exit(2);
+                    }
                     if matches!(cmd,
                                 UiCommandType::RemoveMarker | UiCommandType::RenameMarker
-                                    | UiCommandType::MoveMarker)
+                                    | UiCommandType::MoveMarker | UiCommandType::SetMarkerColor)
                         && flag(&args, "--id").is_none()
                     {
                         eprintln!("daw-cli: --id is required for marker {sub}");

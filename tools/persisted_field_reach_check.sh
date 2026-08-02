@@ -322,12 +322,11 @@ MARKER = {
     "id":                   "EXEMPT:identity — a marker is addressed BY its id",
     "name":                 "RenameMarker",
     "nanotick":             "MoveMarker",
-    "color_rgb":            "GAP:no writer after creation — AddMarker takes a colour and nothing "
-                            "can change it afterwards. The payload already carries the field, so "
-                            "closing it is an opcode, not a wire change. Prefer a separate "
-                            "SetMarkerColor over a flag on RenameMarker: a rename that also "
-                            "carried colour would paint every renamed marker with whatever the "
-                            "caller left at zero, which is the omitted-is-not-zero trap",
+    # Was the last GAP in this table. Closed by SetMarkerColor (99), which reuses
+    # UiMarkerCommandPayload — the field was already on the wire, so nothing about the contract
+    # changed and only the opcode was missing. Its own command rather than a flag on
+    # RenameMarker, because 0 is a legal colour and could not be told from "not supplied".
+    "color_rgb":            "SetMarkerColor",
 }
 
 # --------------------------------------------------------------------------- the TIMESIG scope.

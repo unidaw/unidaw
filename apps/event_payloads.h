@@ -486,7 +486,21 @@ enum class UiCommandType : uint16_t {
   /// writer. They were the last two GAPs in persisted_field_reach: persisted, published, rendered,
   /// and unreachable from every surface, so a UI could draw a clip's name and never change it and
   /// an audio clip could not be repointed at another file without a text editor.
-  SetClipText = 98,  // next free 99
+  SetClipText = 98,
+
+  /// RECOLOUR AN EXISTING MARKER. Uses UiMarkerCommandPayload unchanged — it has carried
+  /// `colorRgb` since v29 — so this is one more opcode in the Add/Remove/Rename/Move family and
+  /// not a wire change.
+  ///
+  /// A marker's colour was write-once: AddMarker assigned it and nothing could change it
+  /// afterwards, on a field that is both persisted and published. Found by giving
+  /// persisted_field_reach a MARKER scope.
+  ///
+  /// ITS OWN OPCODE RATHER THAN A FLAG ON RenameMarker, because a rename that also carried colour
+  /// would paint the marker with whatever the caller left at zero. On this wire, absent is not
+  /// zero-means-unchanged — it is a value, and black is a legal one, so the failure would be
+  /// silent and would look like a UI bug.
+  SetMarkerColor = 99,  // next free 100
 };
 
 // ASK FOR ONE MODULATOR'S ENVELOPE (opcode 97). 40 bytes.
@@ -1262,6 +1276,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::AddMarker: return "add_marker";
     case UiCommandType::RemoveMarker: return "remove_marker";
     case UiCommandType::RenameMarker: return "rename_marker";
+    case UiCommandType::SetMarkerColor: return "set_marker_color";
     case UiCommandType::MoveMarker: return "move_marker";
     case UiCommandType::SetTimeSignature: return "set_time_signature";
     case UiCommandType::InsertRemoveTime: return "insert_remove_time";
@@ -1337,6 +1352,7 @@ inline bool uiCommandUsesGenericPayload(UiCommandType t) {
     case UiCommandType::RemoveMarker:
     case UiCommandType::RenameMarker:
     case UiCommandType::MoveMarker:
+    case UiCommandType::SetMarkerColor:
     // UiArrangeTimeCommandPayload
     case UiCommandType::SetTimeSignature:
     case UiCommandType::InsertRemoveTime:
@@ -1410,6 +1426,7 @@ inline bool uiCommandIsGlobalScope(UiCommandType t) {
     case UiCommandType::RemoveMarker:
     case UiCommandType::RenameMarker:
     case UiCommandType::MoveMarker:
+    case UiCommandType::SetMarkerColor:
     case UiCommandType::SetTimeSignature:
     case UiCommandType::InsertRemoveTime:
       return true;

@@ -123,6 +123,19 @@ class MarkerList {
     return false;
   }
 
+  // RECOLOUR (opcode 99). Every 24-bit value is a legal colour, so there is nothing to validate
+  // and the only failure is an id that is not here — which is why this returns bool like its
+  // three siblings rather than void: "no such marker" must be distinguishable from "done".
+  bool setColor(uint32_t id, uint32_t colorRgb) {
+    for (auto& m : markers_) {
+      if (m.id == id) {
+        m.colorRgb = colorRgb;
+        return true;
+      }
+    }
+    return false;
+  }
+
   bool moveTo(uint32_t id, uint64_t nanotick) {
     for (auto& m : markers_) {
       if (m.id == id) {

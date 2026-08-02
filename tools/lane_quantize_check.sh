@@ -24,6 +24,7 @@
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tools/lib/engine_wait.sh"
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
@@ -64,13 +65,28 @@ cat > "$TMP/lq.uniproj.json" <<EOF
                         "notes": [], "chords": [], "mutes": [] } ] } ] }
 EOF
 
+# BOOTED WITH THE PROJECT, AND WAITED FOR. This check used to launch a bare engine, `sleep 2.5`,
+# send `do load`, and `sleep 1.5` — two bets on a busy machine, and it failed roughly one run in
+# three with "no published notes for track 0 — the fixture did not load". A true observation and
+# the wrong conclusion: the fixture is fine, the read just arrives too early.
+#
+# The repo has had wait_for_boot for this since the boot-wait sweep (task #106) and the sweep
+# missed this file — at the time it was one of the 43 checks nobody had registered in ctest, so
+# nothing it did could be observed to be wrong. Registering it is what exposed this.
+#
+# BUT WAIT_FOR_BOOT ALONE DID NOT FIX IT — 4 failures in 12 runs with the sleeps replaced, which
+# is the only reason the real cause was found rather than assumed. `project.load` firing means the
+# engine has LOADED; it does not mean the notes region has been PUBLISHED, and `get notes` reads
+# the region. The boot event is a proxy for what this check actually needs, and a proxy that is
+# usually close enough is exactly the kind of wait that fails under load.
+#
+# So the assertion below POLLS FOR THE THING IT NEEDS instead. General rule, paid for twice here:
+# wait on the condition you are about to assert on, not on an event that normally precedes it.
 ( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
-    ./daw_engine --run-seconds 26 >"$TMP/engine.log" 2>&1 ) &
+    ./daw_engine --project lq --run-seconds 26 >"$TMP/engine.log" 2>&1 ) &
 ENG=$!
-sleep 2.5
+wait_for_boot "$TMP/engine.log" "$ENG" 120
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
-cli do load lq >/dev/null 2>&1 || true
-sleep 1.5
 
 fail() { echo "  FAIL: $*"; kill "$ENG" 2>/dev/null || true; wait "$ENG" 2>/dev/null || true; exit 1; }
 
@@ -98,8 +114,19 @@ BEFORE="$(ticks_of "$TMP/lq.uniproj.json")"
 COUNT="$(echo "$BEFORE" | wc -w | tr -d ' ')"
 [ "$COUNT" = "8" ] || fail "the fixture should have 8 notes, parsed $COUNT"
 
-cli get notes --track 0 | grep -q '"nanotick"' || \
-  fail "no published notes for track 0 — the fixture did not load"
+# BOUNDED POLL, not a single read: the notes region is published shortly AFTER project.load, so
+# a one-shot read here races the publish. Still fails if the fixture genuinely did not load —
+# it just no longer fails when the engine was merely slow.
+notes_published=0
+for _ in $(seq 1 80); do
+  if cli get notes --track 0 2>/dev/null | grep -q '"nanotick"'; then
+    notes_published=1
+    break
+  fi
+  sleep 0.25
+done
+[ "$notes_published" = "1" ] || \
+  fail "no published notes for track 0 after 20s — the fixture did not load"
 echo "  authored notes: $COUNT"
 
 # Turn quantize on: hard onto the 16th grid, then save and read back what was stored.

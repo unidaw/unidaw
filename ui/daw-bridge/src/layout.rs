@@ -1240,6 +1240,10 @@ pub enum UiCommandType {
     RemoveMarker = 65,
     RenameMarker = 66,
     MoveMarker = 67,
+    /// Recolour an existing marker. Reuses UiMarkerCommandPayload — it has carried `color_rgb`
+    /// since v29 — so this is one more opcode in the marker family, not a wire change. A colour
+    /// was write-once until this existed: AddMarker set it and nothing could change it.
+    SetMarkerColor = 99,
     /// Insert or replace a meter point (flags bit0 = flatten to this one signature). THIS is
     /// where mid-song meter is authored; a Section's meter was reachable from no command at all.
     SetTimeSignature = 68,

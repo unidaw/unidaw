@@ -10308,7 +10308,8 @@ struct TrackRuntime {
         (commandType == daw::UiCommandType::AddMarker ||
          commandType == daw::UiCommandType::RemoveMarker ||
          commandType == daw::UiCommandType::RenameMarker ||
-         commandType == daw::UiCommandType::MoveMarker)) {
+         commandType == daw::UiCommandType::MoveMarker ||
+         commandType == daw::UiCommandType::SetMarkerColor)) {
       daw::UiMarkerCommandPayload mp{};
       std::memcpy(&mp, entry.payload, sizeof(mp));
       if (static_cast<daw::UiCommandType>(mp.commandType) != commandType) {
@@ -10344,6 +10345,13 @@ struct TrackRuntime {
             ok = markerList.rename(mp.markerId, name);
           }
           what = "renamed";
+        } else if (commandType == daw::UiCommandType::SetMarkerColor) {
+          // NO VALIDATION. Every 24-bit value is a legal colour, including 0 — so unlike the
+          // rename above there is no "empty" case to refuse, and the only way this fails is an
+          // id that is not there. That is also the reason this is not a flag on RenameMarker:
+          // black being legal means an omitted colour could not be told from a chosen one.
+          ok = markerList.setColor(mp.markerId, mp.colorRgb);
+          what = "recoloured";
         } else {
           ok = markerList.moveTo(mp.markerId, tick);
           what = "moved";
