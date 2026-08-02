@@ -311,6 +311,82 @@ def block_until_endarray(path, begin_marker):
     return sorted({m for l in text[start:end + 1]
                    for m in re.findall(r'key\("([a-z_0-9]+)"', l)})
 
+# ---------------------------------------------------------------------------- the MARKER scope.
+#
+# Markers persist four keys and three commands reach them. The fourth is the find: `color_rgb`
+# rides in UiMarkerCommandPayload and daw_engine_main.cpp assigns it under AddMarker ONLY —
+# RenameMarker sets the name, MoveMarker sets the tick, and nothing sets the colour. So a
+# marker's colour is chosen once, at creation, and can never be changed. It is persisted AND
+# published (the arrangement publish copies it out), so something depends on it.
+MARKER = {
+    "id":                   "EXEMPT:identity — a marker is addressed BY its id",
+    "name":                 "RenameMarker",
+    "nanotick":             "MoveMarker",
+    "color_rgb":            "GAP:no writer after creation — AddMarker takes a colour and nothing "
+                            "can change it afterwards. The payload already carries the field, so "
+                            "closing it is an opcode, not a wire change. Prefer a separate "
+                            "SetMarkerColor over a flag on RenameMarker: a rename that also "
+                            "carried colour would paint every renamed marker with whatever the "
+                            "caller left at zero, which is the omitted-is-not-zero trap",
+}
+
+# --------------------------------------------------------------------------- the TIMESIG scope.
+TIMESIG = {
+    "nanotick":             "SetTimeSignature",
+    "numerator":            "SetTimeSignature",
+    "denominator":          "SetTimeSignature",
+}
+
+# ----------------------------------------------------------------------------- the TEMPO scope.
+TEMPO = {
+    "nanotick":             "SetTempo",
+    "bpm":                  "SetTempo",
+}
+
+# --------------------------------------------------------------------------- the HARMONY scope.
+#
+# `flags` is a different animal from every other entry in this file and the difference is the
+# whole reason the exemption reasons are worded the way they are. It is persisted, parsed back,
+# and copied through the snapshot — and `addOrUpdateHarmony(nanotick, root, scaleId, recordUndo)`
+# has no flags parameter, so nothing writes it, AND a search for any read of a harmony event's
+# flags finds none: not the renderer, not the quantiser, not the publish.
+#
+# So it is NOT a GAP. A GAP means something depends on a field that cannot be written; here
+# nothing depends on it at all. Marking it GAP would put a permanent line in the debt list for
+# work that has no user. Recorded as legacy, with the citation, so the claim is held by the
+# ratchet rather than by a comment alone — and the day something starts reading it, this
+# exemption is a lie that a reader has a reason to catch.
+HARMONY = {
+    "nanotick":             "WriteHarmony",
+    "root":                 "WriteHarmony",
+    "scale_id":             "WriteHarmony",
+    "flags":                "EXEMPT:legacy — persisted and round-tripped, written by no command "
+                            "and READ BY NOTHING. Removing it is a project-format change and "
+                            "therefore Jaakko's call, so it stays and is declared",
+}
+
+# ------------------------------------------------------------------------ the AUTOMATION scope.
+#
+# All three lane fields are set together at lane creation, from the WriteAutomationPoint payload:
+# automationClips.emplace_back(paramId, discrete, ap.targetPluginIndex).
+#
+# `discrete` is immutable after that, and it LOOKS like the marker colour above. It is not, and
+# the difference is that somebody decided: the comment at the emplace says "discreteOnly belongs
+# to the CLIP, so it is fixed at creation. A flag that changed meaning halfway through a curve
+# would make the curve unreadable." Same observable shape, opposite verdict. Do not let the
+# resemblance collapse them — that judgement is the only thing this table is really recording.
+AUTOMATION = {
+    "param_id":             "EXEMPT:identity — a lane is addressed by (param_id, target)",
+    "target_plugin_index":  "EXEMPT:identity — the other half of the lane's address",
+    "discrete":             "WriteAutomationPoint",
+}
+
+# ----------------------------------------------------------------------------- the POINT scope.
+POINT = {
+    "nanotick":             "WriteAutomationPoint",
+    "value":                "WriteAutomationPoint",
+}
+
 slot_keys = block_until_endarray("apps/sampler_serialize.h", 'beginArray("slots")')
 # The track object is not an array element with a tidy terminator, so it is bounded by span. If
 # the writer grows past this the check will simply see fewer keys — which is why the COUNT is
@@ -326,6 +402,19 @@ modlink_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("mod_li
 node_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("nodes")')
 edge_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("edges")')
 device_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("device_chain")')
+marker_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("markers")')
+timesig_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("time_sig_map")')
+tempo_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("tempo_map")')
+harmony_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("harmony_timeline")')
+point_keys = block_until_endarray("apps/project_file.cpp", 'beginArray("points")')
+# The automation block NESTS points, so it picks up their keys. Stripped the same way the track
+# block strips NESTED rather than inventing a second mechanism for the same situation.
+automation_keys = [k for k in
+                   block_until_endarray("apps/project_file.cpp", 'beginArray("automation")')
+                   if k not in point_keys]
+# `mutes` deliberately has NO scope: block_until_endarray returns zero keys for it because the
+# array holds bare placement ids rather than keyed objects. Left unscoped on purpose, said out
+# loud so the next reader does not "fix" the omission by inventing a table for it.
 
 # Keys that belong to nested objects inside the track block rather than to the track itself.
 NESTED = {"kind", "device_id", "capability_mask", "host_slot_index", "patcher_node_id", "bypass",
@@ -333,16 +422,27 @@ NESTED = {"kind", "device_id", "capability_mask", "host_slot_index", "patcher_no
           "velocity", "base_octave", "duration_ticks"}
 track_keys = [k for k in track_keys if k not in NESTED]
 
+# ONE LIST OF SCOPES, USED FOR EVERYTHING BELOW. There were four copies of it — the assertion
+# loop, the GAP collection, the writer resolver, and a hand-written banner — and adding six scopes
+# updated three of them. The resolver kept its old ten, so a table entry naming a command that does
+# not exist went UNDETECTED in every new scope: the third of this check's three controls, silently
+# not applying. Caught by running that control rather than by reading the code, which is the only
+# reason it is not still true.
+#
+# The shape of the bug is the shape of the check's own subject: a list maintained by hand in more
+# than one place drifts, and the copy nobody looks at is the one that rots.
+SCOPES = [("slot", slot_keys, SLOT), ("track", track_keys, TRACK), ("clip", clip_keys, CLIP),
+          ("chord", chord_keys, CHORD), ("note", note_keys, NOTE),
+          ("placement", placement_keys, PLACEMENT), ("mod link", modlink_keys, MODLINK),
+          ("patcher node", node_keys, PATCHERNODE), ("patcher edge", edge_keys, PATCHEREDGE),
+          ("device", device_keys, DEVICE), ("marker", marker_keys, MARKER),
+          ("time signature", timesig_keys, TIMESIG), ("tempo", tempo_keys, TEMPO),
+          ("harmony", harmony_keys, HARMONY), ("automation lane", automation_keys, AUTOMATION),
+          ("automation point", point_keys, POINT)]
+
 # ---------------------------------------------------------------- the assertions.
 problems = []
-for label, keys, table in (("slot", slot_keys, SLOT), ("track", track_keys, TRACK),
-                           ("clip", clip_keys, CLIP), ("chord", chord_keys, CHORD),
-                           ("note", note_keys, NOTE),
-                           ("placement", placement_keys, PLACEMENT),
-                           ("mod link", modlink_keys, MODLINK),
-                           ("patcher node", node_keys, PATCHERNODE),
-                           ("patcher edge", edge_keys, PATCHEREDGE),
-                           ("device", device_keys, DEVICE)):
+for label, keys, table in SCOPES:
     for k in keys:
         if k not in table:
             problems.append(
@@ -360,15 +460,13 @@ for label, keys, table in (("slot", slot_keys, SLOT), ("track", track_keys, TRAC
             "        covering a field that does not exist. Remove it." % (label, k))
 
 if not problems:
-    print("  %d keys across ten scopes — slot %d, track %d, clip %d, chord %d, note %d,"
-          % (len(slot_keys) + len(track_keys) + len(clip_keys) + len(chord_keys) +
-             len(note_keys) + len(placement_keys) + len(modlink_keys) + len(node_keys) +
-             len(edge_keys) + len(device_keys),
-             len(slot_keys), len(track_keys), len(clip_keys), len(chord_keys), len(note_keys)))
-    print("  placement %d, mod link %d, patcher node %d, patcher edge %d, device %d — all"
-          " accounted for"
-          % (len(placement_keys), len(modlink_keys), len(node_keys), len(edge_keys),
-             len(device_keys)))
+    # COUNTED, NOT WRITTEN DOWN. The banner used to say "ten scopes" as a literal and the total
+    # as a literal sum, so adding six scopes left it announcing the old coverage — a check
+    # understating its own reach is a stale claim in the one place a reader trusts most.
+    scopes = [(n, k) for n, k, _t in SCOPES]
+    print("  %d keys across %d scopes — %s — all accounted for"
+          % (sum(len(k) for _, k in scopes), len(scopes),
+             ", ".join("%s %d" % (n, len(k)) for n, k in scopes)))
 if problems:
     print("\n".join(problems))
     raise SystemExit(1)
@@ -378,11 +476,7 @@ if problems:
 # Printing the count keeps the debt in front of whoever runs the suite instead of letting a green
 # line imply there is none. They do not fail the run, because they were true before this scope
 # existed and failing on them would only get the scope deleted.
-gaps = [(label, k, v) for label, table in (("slot", SLOT), ("track", TRACK), ("clip", CLIP),
-                                          ("chord", CHORD), ("note", NOTE),
-                                          ("placement", PLACEMENT), ("mod link", MODLINK),
-                                          ("patcher node", PATCHERNODE),
-                                          ("patcher edge", PATCHEREDGE), ("device", DEVICE))
+gaps = [(label, k, v) for label, _keys, table in SCOPES
         for k, v in table.items() if v.startswith("GAP:")]
 if gaps:
     print("  %d KNOWN GAP(S) — persisted, and no command can write them:" % len(gaps))
@@ -403,10 +497,7 @@ if gaps:
 cmds = set(re.findall(r'^\s*([A-Za-z][A-Za-z0-9]*) = \d+,',
                       open(os.path.join(root, "apps/event_payloads.h")).read(), re.M))
 missing = []
-for label, table in (("slot", SLOT), ("track", TRACK), ("clip", CLIP), ("chord", CHORD),
-                     ("note", NOTE), ("placement", PLACEMENT), ("mod link", MODLINK),
-                     ("patcher node", PATCHERNODE), ("patcher edge", PATCHEREDGE),
-                     ("device", DEVICE)):
+for label, _keys, table in SCOPES:
     for k, v in table.items():
         if v.startswith("EXEMPT:") or v.startswith("GAP:"):
             continue
