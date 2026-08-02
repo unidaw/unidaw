@@ -133,7 +133,7 @@ struct TrackStateSnapshot {
     void* base = nullptr;
     size_t size = 0;
     daw::ShmHeader* header = nullptr;
-  } uiShm;
+  };
 
   struct ParamKeyLess {
     bool operator()(const std::array<uint8_t, 16>& a,

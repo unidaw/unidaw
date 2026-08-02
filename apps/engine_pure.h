@@ -111,4 +111,17 @@ void ensureDefaultModSet(daw::SamplerState& sampler, uint32_t requestedId);
 // the keyboard rather than a caller error — so it saturates and stays silent about it.
 uint8_t clampMidi(int pitch);
 
+
+// THE DISPLAY NAME A SAMPLE FILE SEEDS A SLOT WITH: the basename with its extension dropped.
+//
+// `sampler-load` used to stamp the WHOLE PATH onto slot.name — the same string it matches against
+// SamplerSource::path — which was invisible until v36 published the name and would have drawn
+// /Users/jak/samples/kicks/BD_808.wav on a pad. The path still lives on the SOURCE, which is what
+// actually needs to find the file again; the slot gets something a person can read.
+//
+// Clamped to the published width so a long filename seeds a name that survives the trip out. This
+// is the ONE place a name is shortened rather than refused, and it is the right place: nobody
+// typed it, so there is no write to reject and nothing to look like it worked.
+std::string sampleDisplayName(const std::string& path);
+
 }  // namespace daw::engine

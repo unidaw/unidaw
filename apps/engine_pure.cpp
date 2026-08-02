@@ -3,6 +3,7 @@
 #include "apps/engine_pure.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <cstring>
 #include <unordered_map>
 #include <vector>
@@ -140,6 +141,14 @@ uint8_t clampMidi(int pitch) {
     return 127;
   }
   return static_cast<uint8_t>(pitch);
+}
+
+std::string sampleDisplayName(const std::string& path) {
+  std::string stem = std::filesystem::path(path).stem().string();
+  if (stem.size() >= daw::kUiSamplerSlotNameBytes) {
+    stem.resize(daw::kUiSamplerSlotNameBytes - 1);
+  }
+  return stem;
 }
 
 }  // namespace daw::engine
