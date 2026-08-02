@@ -95,7 +95,8 @@ for _ in $(seq 1 120); do
 done
 DAW_UI_SHM_NAME="$SHM2" "$CLI" do load result --force >/dev/null 2>&1 || true
 wait_for_boot "$TMP/eng2.log" "$ENG2" 80
-sleep 1.5
+tracks_ready() { DAW_UI_SHM_NAME="$SHM2" "$CLI" get tracks 2>/dev/null | grep -q '"track_id"'; }
+wait_until 20 tracks_ready || true
 # The ids that came back LIVE (a tombstone publishes with absent:true and is not a track).
 # `|| true` on the whole pipeline: if the engine is not answering yet the first grep matches
 # nothing, exits 1, and under `set -o pipefail` inside a command substitution that kills the

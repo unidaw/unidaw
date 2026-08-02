@@ -41,7 +41,9 @@ CLI="$ROOT/ui/target/debug/daw-cli"
 
 TMP="$(mktemp -d)"
 ENG=""
-cleanup() { [ -n "$ENG" ] && kill "$ENG" 2>/dev/null; rm -rf "$TMP"; }
+# `wait` after the kill, or the shell prints its own "Terminated" job notice AFTER the verdict
+# line, which reads like the check crashed at the end of a successful run.
+cleanup() { [ -n "$ENG" ] && { kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; }; rm -rf "$TMP"; }
 trap cleanup EXIT
 fail() { echo "  FAIL: $*"; exit 1; }
 
@@ -91,7 +93,10 @@ SHM="/opswidth_$$"
 ENG=$!
 wait_for_boot "$TMP/eng.log" "$ENG" 40
 ocli() { env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$SHM" "$CLI" "$@"; }
-sleep 1.0
+# POLL FOR THE TRACK REGION rather than sleeping at it — wait_for_boot says the project loaded,
+# not that `get tracks` has anything to read.
+tracks_ready() { ocli get tracks 2>/dev/null | grep -q '"track_id"'; }
+wait_until 20 tracks_ready || true
 
 width() {  # width <trackIndex>
   ocli get tracks 2>/dev/null | python3 -c "

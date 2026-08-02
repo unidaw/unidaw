@@ -85,7 +85,8 @@ done
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load many --force >/dev/null 2>&1 || true
 wait_for_boot "$TMP/eng.log" "$ENG" 80
-sleep 1.5
+extents_ready() { cli get extents 2>/dev/null | grep -q '"placement":'; }
+wait_until 20 extents_ready || true
 
 # The list itself must be FULL — a cap that publishes less than its capacity is a different bug
 # and would make the shortfall number meaningless.

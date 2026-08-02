@@ -89,7 +89,22 @@ done
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load ar --force >/dev/null 2>&1 || true
 wait_for_boot "$TMP/eng.log" "$ENG" 80
-sleep 1.5
+# POLL FOR THE ARRANGEMENT REGION. Every assertion below reads it, so a fixed sleep here is a bet
+# on how busy the machine is.
+# THE PREDICATE MUST REQUIRE CONTENT, NOT THE KEY. My first version grepped for '"markers"',
+# which `get arrangement` prints even when the list is EMPTY — so it was satisfied instantly and
+# the read still raced. It turned a check that mostly passed on a fixed sleep into one that failed
+# in the gating run with "markers ... became []". A poll predicate needs the same scrutiny as an
+# assertion: waiting for a key that is always present is not waiting at all.
+arr_ready() {
+  cli get arrangement 2>/dev/null | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if d.get("markers") else 1)'
+}
+wait_until 20 arr_ready || true
 
 # Read the published arrangement through python rather than grepping it: a grep that matches the
 # wrong line is how a check passes with the bug present.
@@ -208,7 +223,9 @@ done
 cli() { DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load arout --force >/dev/null 2>&1 || true
 wait_for_boot "$TMP/eng2.log" "$ENG" 80
-sleep 1.5
+# Same again for the RELOADED engine — this one compares against what the first run published, so
+# an early read here reports a save/reload mismatch that is pure timing.
+wait_until 20 arr_ready || true
 RELOAD_M="$(arr | field '",".join("%s@%d" % (m["name"], m["nanotick"]) for m in d["markers"])')"
 RELOAD_S="$(arr | field '",".join("%d:%s" % (p["nanotick"], p["sig"]) for p in d["time_sig"])')"
 [ "$RELOAD_M" = "$AFTER_M" ] || \
