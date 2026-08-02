@@ -21,6 +21,7 @@
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tools/lib/engine_wait.sh"
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
@@ -32,7 +33,11 @@ BAR=$((4 * Q))
 
 TMP="$(mktemp -d)"
 SHM="/autochk_$$"
-trap 'rm -rf "$TMP"' EXIT
+# THE ENGINE GOES WITH THE CHECK, including when ctest KILLS it on a timeout. Without this the
+# engine was orphaned and ctest then blocked on it — ~1000s per timeout, measured across 18 runs.
+# stop_engine escalates to SIGKILL after 10s and says so.
+cleanup() { [ -n "${ENG:-}" ] && stop_engine "$ENG"; rm -rf "$TMP"; }
+trap cleanup EXIT
 
 # One 4-bar intro section, and a placement inside it plus one after it.
 cat > "$TMP/auto.uniproj.json" <<EOF

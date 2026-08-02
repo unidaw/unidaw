@@ -160,7 +160,7 @@ json.dump({"schema_version": 4, "meta": {"name": "e"}, "nanoticks_per_quarter": 
            "tempo_map": [{"nanotick": 0, "bpm": 120.0}], "harmony_timeline": [],
            "clips": [], "tracks": [tr]}, open(out, "w"))
 PY
-( cd "$BUILD" && ./daw_engine --project empty --run-seconds 25 >"$TMP/add.log" 2>&1 ) &
+( cd "$BUILD" && exec ./daw_engine --project empty --run-seconds 25 >"$TMP/add.log" 2>&1 ) &
 ENG=$!
 # project.load, not "starting threads": that line is printed BEFORE the startup project is
 # loaded, and a command sent on it reaches an engine whose tracks do not exist yet.

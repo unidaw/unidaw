@@ -123,7 +123,7 @@ SHM="/filtchk_$$"
 export DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP/projects"
 
 up() {  # bring the engine up and wait for it
-  ( cd "$BUILD" && ./daw_engine --project f --run-seconds 30 >"$TMP/projects/eng.log" 2>&1 ) &
+  ( cd "$BUILD" && exec ./daw_engine --project f --run-seconds 30 >"$TMP/projects/eng.log" 2>&1 ) &
   ENG=$!
   # WAITS FOR THE PROJECT, NOT FOR THE THREADS. "starting threads" is printed before the startup
   # project has been loaded, so a command sent on that signal can arrive at an engine whose tracks

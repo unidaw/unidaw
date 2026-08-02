@@ -97,7 +97,7 @@ json.dump({"schema_version": 4, "meta": {"name": "k"}, "nanoticks_per_quarter": 
 PY
 
 export DAW_UI_SHM_NAME="/kitver_$$" DAW_PROJECT_DIR="$TMP"
-( cd "$BUILD" && ./daw_engine --project k --run-seconds 30 >"$TMP/eng.log" 2>&1 ) &
+( cd "$BUILD" && exec ./daw_engine --project k --run-seconds 30 >"$TMP/eng.log" 2>&1 ) &
 ENG=$!
 # WAITS FOR THE PROJECT, NOT FOR THE THREADS. "starting threads" is printed before the startup
 # project has been loaded, so a command sent on that signal can arrive at an engine whose tracks

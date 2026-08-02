@@ -18,6 +18,7 @@
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tools/lib/engine_wait.sh"
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
@@ -30,7 +31,11 @@ NOTES=48   # per producer; 4x48 = 192 ring writes crammed into a few millisecond
 
 TMP="$(mktemp -d)"
 SHM="/mprchk_$$"
-trap 'rm -rf "$TMP"' EXIT
+# THE ENGINE GOES WITH THE CHECK, including when ctest KILLS it on a timeout. Without this the
+# engine was orphaned and ctest then blocked on it — ~1000s per timeout, measured across 18 runs.
+# stop_engine escalates to SIGKILL after 10s and says so.
+cleanup() { [ -n "${ENG:-}" ] && stop_engine "$ENG"; rm -rf "$TMP"; }
+trap cleanup EXIT
 
 # One track per producer, each with a placement long enough to hold the phrase.
 LEN=$((NOTES * Q + 4 * Q))

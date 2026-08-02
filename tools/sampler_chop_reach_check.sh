@@ -97,7 +97,7 @@ json.dump({"schema_version": 4, "meta": {"name": "c"}, "nanoticks_per_quarter": 
 PY
 
 export DAW_UI_SHM_NAME="/chopreach_$$" DAW_PROJECT_DIR="$TMP/projects"
-( cd "$BUILD" && ./daw_engine --project c --run-seconds 30 >"$TMP/projects/eng.log" 2>&1 ) &
+( cd "$BUILD" && exec ./daw_engine --project c --run-seconds 30 >"$TMP/projects/eng.log" 2>&1 ) &
 ENG=$!
 # WAITS FOR THE PROJECT, NOT FOR THE THREADS. "starting threads" is printed before the startup
 # project has been loaded, so a command sent on that signal can arrive at an engine whose tracks

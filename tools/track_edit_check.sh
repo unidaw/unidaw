@@ -13,6 +13,7 @@
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tools/lib/engine_wait.sh"
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 Q=960000
@@ -44,6 +45,12 @@ PY
 ( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 14 >"$TMP/eng.log" 2>&1 ) &
 ENG=$!
+# THE ENGINE GOES WITH THE CHECK, including when ctest KILLS it on a timeout. Without this the
+# engine was orphaned and ctest then blocked on it — ~1000s per timeout, measured across 18 runs.
+# stop_engine escalates to SIGKILL after 10s and says so.
+# There was NO EXIT TRAP here at all, so a timed-out check was guaranteed to orphan.
+cleanup() { [ -n "${ENG:-}" ] && stop_engine "$ENG"; rm -rf "$TMP"; }
+trap cleanup EXIT
 sleep 2
 DAW_UI_SHM_NAME="$SHM" "$CLI" do load three --force >/dev/null 2>&1 || true
 sleep 1

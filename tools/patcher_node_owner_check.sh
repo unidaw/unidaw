@@ -113,7 +113,7 @@ run_case() {
   echo "  --- $ndev-device project ---"
   fixture "$TMP/$name.uniproj.json" "$ndev"
   export DAW_UI_SHM_NAME="/powner_${$}_$name" DAW_PROJECT_DIR="$TMP"
-  ( cd "$BUILD" && ./daw_engine --project "$name" --run-seconds 20 >"$TMP/$name.log" 2>&1 ) &
+  ( cd "$BUILD" && exec ./daw_engine --project "$name" --run-seconds 20 >"$TMP/$name.log" 2>&1 ) &
   ENG=$!
   wait_for_boot "$TMP/$name.log" "$ENG" 160
   grep -q '"event":"project.load"' "$TMP/$name.log" 2>/dev/null || \

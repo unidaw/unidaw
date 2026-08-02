@@ -91,7 +91,7 @@ json.dump({"schema_version": 4, "meta": {"name": "d"}, "nanoticks_per_quarter": 
 PY
 
 export DAW_UI_SHM_NAME="/defsnd_$$" DAW_PROJECT_DIR="$TMP"
-( cd "$BUILD" && ./daw_engine --project d --run-seconds 20 >"$TMP/eng.log" 2>&1 ) &
+( cd "$BUILD" && exec ./daw_engine --project d --run-seconds 20 >"$TMP/eng.log" 2>&1 ) &
 ENG=$!
 wait_for_boot "$TMP/eng.log" "$ENG" 160
 grep -q '"event":"project.load"' "$TMP/eng.log" 2>/dev/null || \
