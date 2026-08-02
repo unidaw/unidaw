@@ -38,6 +38,11 @@
 #include "apps/engine_modlink_commands.h"
 #include "apps/engine_module_commands.h"
 #include "apps/engine_patcher_commands.h"
+#include "apps/engine_chain_commands.h"
+#include "apps/engine_marker_commands.h"
+#include "apps/engine_project_commands.h"
+#include "apps/engine_rowops_commands.h"
+#include "apps/engine_track_commands.h"
 #include "apps/engine_sampler_commands.h"
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
@@ -9233,6 +9238,34 @@ int main(int argc, char** argv) {
   daw::engine::ModuleCommandDeps moduleCommandDeps{
       loadedProjectDir, saveProjectToPathFn, loadProjectFromPathFn};
 
+  const std::function<void(uint16_t, uint32_t)> emitRoutingErrorFn = emitRoutingError;
+  const std::function<void(TrackRuntime&)> emitRoutingSnapshotFn = emitRoutingSnapshot;
+  daw::engine::TrackCommandDeps trackCommandDeps{
+      tracks, tracksMutex, buildTrackSnapshotFn, emitRoutingErrorFn, emitRoutingSnapshotFn};
+
+  daw::engine::MarkerCommandDeps markerCommandDeps{
+      markerList, arrangeMutex, arrangeVersion, historyAppendFn};
+
+  daw::engine::ProjectCommandDeps projectCommandDeps{
+      projectLoadOk, projectLoadSeq, saveProjectToPathFn, loadProjectFromPathFn};
+
+  const std::function<void(uint16_t, uint32_t, uint32_t, uint32_t, uint32_t)> emitChainErrorFn =
+      emitChainError;
+  const std::function<void(TrackRuntime&)> emitChainSnapshotFn = emitChainSnapshot;
+  const std::function<void(TrackRuntime&)> rebuildHostForChainFn = rebuildHostForChain;
+  const std::function<void()> reconcileMasterHostFn = reconcileMasterHost;
+  const std::function<void(TrackRuntime&)> refreshSamplerForTrackFn2 = refreshSamplerForTrack;
+  daw::engine::ChainCommandDeps chainCommandDeps{
+      tracks, tracksMutex, masterTrack, playing, pluginCache,
+      buildTrackSnapshotFn, emitChainErrorFn, emitChainSnapshotFn, rebuildHostForChainFn,
+      reconcileMasterHostFn, refreshSamplerForTrackFn2};
+
+  const std::function<bool(uint32_t, uint32_t, daw::EventId, const daw::RowOpEdit&, bool,
+                           daw::UiClipRejectReason&)> applySetRowOpsFn = applySetRowOps;
+  const std::function<void(daw::UiClipRejectReason, uint32_t, uint32_t, uint32_t,
+                           daw::UiCommandType)> emitClipRejectFn = emitClipReject;
+  daw::engine::RowopsCommandDeps rowopsCommandDeps{applySetRowOpsFn, emitClipRejectFn};
+
   auto handleUiEntry = [&](const daw::EventEntry& entry) {
     if (entry.type != static_cast<uint16_t>(daw::EventType::UiCommand)) {
       return;
@@ -9389,69 +9422,7 @@ int main(int argc, char** argv) {
          commandType == daw::UiCommandType::RenameMarker ||
          commandType == daw::UiCommandType::MoveMarker ||
          commandType == daw::UiCommandType::SetMarkerColor)) {
-      daw::UiMarkerCommandPayload mp{};
-      std::memcpy(&mp, entry.payload, sizeof(mp));
-      if (static_cast<daw::UiCommandType>(mp.commandType) != commandType) {
-        return;
-      }
-      const std::string name(mp.name, strnlen(mp.name, sizeof(mp.name)));
-      const uint64_t tick = (static_cast<uint64_t>(mp.nanotickHi) << 32) | mp.nanotickLo;
-      bool ok = false;
-      const char* what = "";
-      const char* reason = "no_such_marker";
-      uint32_t markerId = mp.markerId;
-      {
-        std::lock_guard<std::mutex> alock(arrangeMutex);
-        if (commandType == daw::UiCommandType::AddMarker) {
-          daw::Marker m;
-          m.id = mp.markerId;  // 0 = let the list assign from its watermark
-          m.nanotick = tick;
-          m.name = name.empty() ? "Marker" : name;
-          m.colorRgb = mp.colorRgb;
-          // The ASSIGNED id comes back, so a caller that sent 0 learns which marker it made.
-          // Reporting the sentinel instead is a mistake this codebase has made twice already.
-          markerId = markerList.add(std::move(m));
-          ok = markerId != 0;
-          reason = "id_exists";
-          what = "added";
-        } else if (commandType == daw::UiCommandType::RemoveMarker) {
-          ok = markerList.remove(mp.markerId);
-          what = "removed";
-        } else if (commandType == daw::UiCommandType::RenameMarker) {
-          if (name.empty()) {
-            reason = "empty_name";  // a marker with no name is a flag with nothing to read
-          } else {
-            ok = markerList.rename(mp.markerId, name);
-          }
-          what = "renamed";
-        } else if (commandType == daw::UiCommandType::SetMarkerColor) {
-          // NO VALIDATION. Every 24-bit value is a legal colour, including 0 — so unlike the
-          // rename above there is no "empty" case to refuse, and the only way this fails is an
-          // id that is not there. That is also the reason this is not a flag on RenameMarker:
-          // black being legal means an omitted colour could not be told from a chosen one.
-          ok = markerList.setColor(mp.markerId, mp.colorRgb);
-          what = "recoloured";
-        } else {
-          ok = markerList.moveTo(mp.markerId, tick);
-          what = "moved";
-        }
-      }
-      if (!ok) {
-        DAW_EVENT("marker.rejected")
-            .field("op", daw::uiCommandTypeName(commandType))
-            .field("marker", mp.markerId)
-            .field("reason", reason);
-        historyAppend(daw::uiCommandTypeName(commandType),
-                      (std::string("rejected:") + reason).c_str(), 0xFFFFFFFFu, 0, "");
-        return;
-      }
-      arrangeVersion.fetch_add(1, std::memory_order_acq_rel);
-      DAW_EVENT("marker.changed")
-          .field("op", daw::uiCommandTypeName(commandType))
-          .field("marker", markerId)
-          .field("nanotick", tick)
-          .field("what", what);
-      historyAppend(daw::uiCommandTypeName(commandType), "received", 0xFFFFFFFFu, 0, "");
+      daw::engine::handleAddMarker(markerCommandDeps, entry, header, commandType);
       return;
     }
 
@@ -9839,81 +9810,7 @@ int main(int argc, char** argv) {
     }
     if (entry.size == sizeof(daw::UiTrackRoutingPayload) &&
         commandType == daw::UiCommandType::SetTrackRouting) {
-      daw::UiTrackRoutingPayload routingPayload{};
-      std::memcpy(&routingPayload, entry.payload, sizeof(routingPayload));
-      if (routingPayload.commandType !=
-          static_cast<uint16_t>(daw::UiCommandType::SetTrackRouting)) {
-        return;
-      }
-      constexpr uint16_t kRoutingErrTrackMissing = 1;
-      constexpr uint16_t kRoutingErrInvalidKind = 2;
-      constexpr uint16_t kRoutingErrInvalidTarget = 3;
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (routingPayload.trackId < tracks.size()) {
-          runtime = tracks[routingPayload.trackId].get();
-        }
-      }
-      if (!runtime) {
-        emitRoutingError(kRoutingErrTrackMissing, routingPayload.trackId);
-        return;
-      }
-      auto validRouteKind = [](uint8_t kind) -> bool {
-        return kind <= static_cast<uint8_t>(daw::TrackRouteKind::ExternalInput);
-      };
-      if (!validRouteKind(routingPayload.midiInKind) ||
-          !validRouteKind(routingPayload.midiOutKind) ||
-          !validRouteKind(routingPayload.audioInKind) ||
-          !validRouteKind(routingPayload.audioOutKind)) {
-        emitRoutingError(kRoutingErrInvalidKind, routingPayload.trackId);
-        return;
-      }
-      auto validateTrackRoute = [&](uint8_t kind,
-                                    uint32_t targetTrackId) -> bool {
-        if (kind != static_cast<uint8_t>(daw::TrackRouteKind::Track)) {
-          return true;
-        }
-        if (targetTrackId >= tracks.size()) {
-          return false;
-        }
-        return targetTrackId != routingPayload.trackId;
-      };
-      if (!validateTrackRoute(routingPayload.midiInKind,
-                              routingPayload.midiInTrackId) ||
-          !validateTrackRoute(routingPayload.midiOutKind,
-                              routingPayload.midiOutTrackId) ||
-          !validateTrackRoute(routingPayload.audioInKind,
-                              routingPayload.audioInTrackId) ||
-          !validateTrackRoute(routingPayload.audioOutKind,
-                              routingPayload.audioOutTrackId)) {
-        emitRoutingError(kRoutingErrInvalidTarget, routingPayload.trackId);
-        return;
-      }
-      std::shared_ptr<const TrackStateSnapshot> snapshot;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        runtime->track.routing.midiIn.kind =
-            static_cast<daw::TrackRouteKind>(routingPayload.midiInKind);
-        runtime->track.routing.midiOut.kind =
-            static_cast<daw::TrackRouteKind>(routingPayload.midiOutKind);
-        runtime->track.routing.audioIn.kind =
-            static_cast<daw::TrackRouteKind>(routingPayload.audioInKind);
-        runtime->track.routing.audioOut.kind =
-            static_cast<daw::TrackRouteKind>(routingPayload.audioOutKind);
-        runtime->track.routing.midiIn.trackId = routingPayload.midiInTrackId;
-        runtime->track.routing.midiOut.trackId = routingPayload.midiOutTrackId;
-        runtime->track.routing.audioIn.trackId = routingPayload.audioInTrackId;
-        runtime->track.routing.audioOut.trackId = routingPayload.audioOutTrackId;
-        runtime->track.routing.midiIn.inputId = routingPayload.midiInInputId;
-        runtime->track.routing.audioIn.inputId = routingPayload.audioInInputId;
-        runtime->track.routing.preFaderSend = (routingPayload.flags & 0x1u) != 0;
-        snapshot = buildTrackSnapshot(runtime->track);
-      }
-      std::atomic_store_explicit(&runtime->trackSnapshot,
-                                 snapshot,
-                                 std::memory_order_release);
-      emitRoutingSnapshot(*runtime);
+      daw::engine::handleSetTrackRouting(trackCommandDeps, entry, header, commandType);
       return;
     }
     if (entry.size == sizeof(daw::UiModLinkCommandPayload) &&
@@ -9960,40 +9857,7 @@ int main(int argc, char** argv) {
     }
     if (entry.size == sizeof(daw::UiPatcherPresetCommandPayload) &&
         commandType == daw::UiCommandType::SetTrackName) {
-      daw::UiPatcherPresetCommandPayload namePayload{};
-      std::memcpy(&namePayload, entry.payload, sizeof(namePayload));
-      std::string name(namePayload.name,
-                       strnlen(namePayload.name, sizeof(namePayload.name)));
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (namePayload.trackId < tracks.size()) {
-          runtime = tracks[namePayload.trackId].get();
-        }
-      }
-      if (!runtime) {
-        DAW_EVENT("track.rename_rejected")
-            .field("track", namePayload.trackId)
-            .field("reason", "no_such_track");
-        return;
-      }
-      if (name.empty()) {
-        // An empty name is not a rename, and silently doing nothing is how a caller with
-        // a payload bug concludes the engine is broken. A track with no name of its own
-        // falls back to "Track N" at save time; clearing one is not expressible and does
-        // not need to be.
-        DAW_EVENT("track.rename_rejected")
-            .field("track", namePayload.trackId)
-            .field("reason", "empty_name");
-        return;
-      }
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        runtime->trackName = name;
-      }
-      DAW_EVENT("track.renamed")
-          .field("track", namePayload.trackId)
-          .field("name", name);
+      daw::engine::handleSetTrackName(trackCommandDeps, entry, header, commandType);
       return;
     }
     // ---- SAMPLER EMIT ROWS (78). Writes the pattern that reproduces the chop.
@@ -10010,35 +9874,7 @@ int main(int argc, char** argv) {
     // branch happened to be tested first.
     if (entry.size == sizeof(daw::UiSetRowOpsPayload) &&
         commandType == daw::UiCommandType::SetRowOps) {
-      daw::UiSetRowOpsPayload p{};
-      std::memcpy(&p, entry.payload, sizeof(p));
-      daw::RowOpEdit edit;
-      edit.mask = p.mask;
-      edit.retrigger = p.retrigger;
-      edit.probability = p.probability;
-      edit.retrigRamp = p.retrigRamp;
-      edit.trigCondition = p.trigCondition;
-      edit.sound = p.sound;
-      edit.soundOffset = p.soundOffset;
-      edit.delayNanoticks = p.delayNanoticks;
-      // REASSEMBLED IN ONE PLACE. The id is 64 bits carried as two 32-bit halves — see the
-      // payload's comment for why it is split rather than moved — and this is the only site
-      // that puts them back together, so there is no second reading of the same value to
-      // disagree with this one.
-      const daw::EventId noteId =
-          (static_cast<uint64_t>(p.noteIdHi) << 32) | static_cast<uint64_t>(p.noteIdLo);
-      // A REFUSAL THE UI CAN SEE. rowops.rejected was a log line and nothing else, so from the
-      // page the sequence was: the sidecar replies ok, the engine refuses into its own log, the
-      // cell does not change, and the person is told nothing. That is the same silence the
-      // stale-base clip edit had before ClipRejected existed — so this rides the same diff,
-      // which already carries the refused commandType.
-      daw::UiClipRejectReason rejectReason = daw::UiClipRejectReason::None;
-      if (!applySetRowOps(p.trackId, p.clipId, noteId, edit, /*recordUndo=*/true,
-                          rejectReason) &&
-          rejectReason != daw::UiClipRejectReason::None) {
-        emitClipReject(rejectReason, p.trackId, /*sentBase=*/0, /*currentBase=*/0,
-                       daw::UiCommandType::SetRowOps);
-      }
+      daw::engine::handleSetRowOps(rowopsCommandDeps, entry, header, commandType);
       return;
     }
 
@@ -10177,41 +10013,7 @@ int main(int argc, char** argv) {
     if (entry.size == sizeof(daw::UiPatcherPresetCommandPayload) &&
         (commandType == daw::UiCommandType::SaveProject ||
          commandType == daw::UiCommandType::LoadProject)) {
-      daw::UiPatcherPresetCommandPayload projectPayload{};
-      std::memcpy(&projectPayload, entry.payload, sizeof(projectPayload));
-      std::string name(projectPayload.name,
-                       strnlen(projectPayload.name, sizeof(projectPayload.name)));
-      if (name.empty()) {
-        name = "default";
-      }
-      const std::string dir = daw::defaultProjectDir();
-      std::error_code ec;
-      std::filesystem::create_directories(dir, ec);
-      if (ec) {
-        daw::LogLine() << "UI: Project failed - cannot create dir " << dir << std::endl;
-        return;
-      }
-      const std::filesystem::path path =
-          std::filesystem::path(dir) / (name + ".uniproj.json");
-      std::string error;
-      if (commandType == daw::UiCommandType::SaveProject) {
-        const bool ok = saveProjectToPath(path.string(), &error);
-        DAW_EVENT("project.save")
-            .field("path", path.string())
-            .field("ok", ok)
-            .field("error", ok ? std::string() : error);
-      } else {
-        const bool ok = loadProjectFromPath(path.string(), &error);
-        // Publish the result (ok first, then the seq the UI watches) so a failed
-        // load is distinguishable from a no-op rather than silently keeping the
-        // old project.
-        projectLoadOk.store(ok ? 1u : 0u, std::memory_order_release);
-        projectLoadSeq.fetch_add(1, std::memory_order_acq_rel);
-        DAW_EVENT("project.load")
-            .field("path", path.string())
-            .field("ok", ok)
-            .field("error", ok ? std::string() : error);
-      }
+      daw::engine::handleSaveProject(projectCommandDeps, entry, header, commandType);
       return;
     }
     if (entry.size == sizeof(daw::UiPatcherPresetCommandPayload) &&
@@ -10221,53 +10023,7 @@ int main(int argc, char** argv) {
     }
     if (entry.size == sizeof(daw::UiDeviceEuclideanConfigPayload) &&
         commandType == daw::UiCommandType::SetDeviceEuclideanConfig) {
-      daw::UiDeviceEuclideanConfigPayload configPayload{};
-      std::memcpy(&configPayload, entry.payload, sizeof(configPayload));
-      if (configPayload.commandType !=
-          static_cast<uint16_t>(daw::UiCommandType::SetDeviceEuclideanConfig)) {
-        return;
-      }
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (configPayload.trackId < tracks.size()) {
-          runtime = tracks[configPayload.trackId].get();
-        }
-      }
-      if (!runtime) {
-        daw::LogLine() << "UI: SetDeviceEuclideanConfig failed - track "
-                  << configPayload.trackId << " not found" << std::endl;
-        return;
-      }
-      daw::PatcherEuclideanConfig config{};
-      config.steps = configPayload.steps;
-      config.hits = configPayload.hits;
-      config.offset = configPayload.offset;
-      config.duration_ticks = configPayload.durationTicks;
-      config.degree = configPayload.degree;
-      config.octave_offset = configPayload.octaveOffset;
-      config.velocity = configPayload.velocity;
-      config.base_octave = configPayload.baseOctave;
-      bool updated = false;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        updated = daw::setDeviceEuclideanConfig(runtime->track.chain,
-                                                configPayload.deviceId,
-                                                config);
-      }
-      if (updated) {
-        std::shared_ptr<const TrackStateSnapshot> snapshot;
-        {
-          std::lock_guard<std::mutex> lock(runtime->trackMutex);
-          snapshot = buildTrackSnapshot(runtime->track);
-        }
-        std::atomic_store_explicit(&runtime->trackSnapshot,
-                                   snapshot,
-                                   std::memory_order_release);
-      } else {
-        daw::LogLine() << "UI: SetDeviceEuclideanConfig failed - device "
-                  << configPayload.deviceId << " not found" << std::endl;
-      }
+      daw::engine::handleSetDeviceEuclideanConfig(trackCommandDeps, entry, header, commandType);
       return;
     }
     if (entry.size == sizeof(daw::UiChainCommandPayload) &&
@@ -10275,180 +10031,7 @@ int main(int argc, char** argv) {
          commandType == daw::UiCommandType::RemoveDevice ||
          commandType == daw::UiCommandType::MoveDevice ||
          commandType == daw::UiCommandType::UpdateDevice)) {
-      daw::UiChainCommandPayload chainPayload{};
-      std::memcpy(&chainPayload, entry.payload, sizeof(chainPayload));
-      const auto commandType =
-          static_cast<daw::UiCommandType>(chainPayload.commandType);
-      TrackRuntime* runtime = nullptr;
-      if (chainPayload.trackId == daw::kMasterTrackId) {
-        // The master is addressed by its stable id, not a slot; it lives outside the
-        // tracks vector. Its chain accepts the same device edits as any track.
-        runtime = masterTrack.get();
-      } else {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (chainPayload.trackId < tracks.size()) {
-          runtime = tracks[chainPayload.trackId].get();
-        }
-      }
-      if (!runtime) {
-        daw::LogLine() << "UI: Chain command failed - track "
-                  << chainPayload.trackId << " not found" << std::endl;
-        return;
-      }
-      auto capabilityMaskForKind = [&](daw::DeviceKind kind) -> uint8_t {
-        switch (kind) {
-          case daw::DeviceKind::PatcherEvent:
-            return daw::DeviceCapabilityProducesMidi;
-          case daw::DeviceKind::PatcherInstrument:
-            return static_cast<uint8_t>(daw::DeviceCapabilityConsumesMidi |
-                                        daw::DeviceCapabilityProcessesAudio);
-          case daw::DeviceKind::PatcherAudio:
-            return daw::DeviceCapabilityProcessesAudio;
-          case daw::DeviceKind::VstInstrument:
-            return static_cast<uint8_t>(daw::DeviceCapabilityConsumesMidi |
-                                        daw::DeviceCapabilityProcessesAudio);
-          case daw::DeviceKind::VstEffect:
-            return daw::DeviceCapabilityProcessesAudio;
-          case daw::DeviceKind::Sampler:
-            // Consumes MIDI and produces audio, exactly like a VST instrument — the difference
-            // is WHERE it renders, not what it is.
-            return static_cast<uint8_t>(daw::DeviceCapabilityConsumesMidi |
-                                        daw::DeviceCapabilityProcessesAudio);
-        }
-        return daw::DeviceCapabilityNone;
-      };
-      bool chainChanged = false;
-      bool emitError = false;
-      uint16_t errorCode = 0;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        if (commandType == daw::UiCommandType::AddDevice) {
-          daw::Device device;
-          // ZERO MEANS "PICK ONE", not "call it zero". Everywhere else on this wire a deviceId of
-          // 0 means unspecified — the sampler commands all read it as "the first sampler on the
-          // track, whichever that is" — and callers send 0 when they do not care. This took it
-          // literally, so `add-device --kind sampler` on a fresh track created a device whose id
-          // WAS 0, which is the same value the engine uses for "this track has no sampler".
-          // Nine guards then skipped it and the instrument was never sent a note.
-          device.id = chainPayload.deviceId != 0 ? chainPayload.deviceId : daw::kDeviceIdAuto;
-          device.kind = static_cast<daw::DeviceKind>(chainPayload.deviceKind);
-          device.patcherNodeId = chainPayload.patcherNodeId;
-          device.hostSlotIndex = chainPayload.hostSlotIndex;
-          // Record the DURABLE plugin identity too, not just the volatile scan index.
-          // hostSlotIndex names a different plugin the moment anything is installed or
-          // removed, so a project saved with only the index reloads the wrong plugin
-          // silently. vstRef is what the loader actually keys on; fill it from the
-          // cache entry the slot resolves to, so a device added through AddDevice is
-          // as durable as one from a loaded project.
-          if ((device.kind == daw::DeviceKind::VstInstrument ||
-               device.kind == daw::DeviceKind::VstEffect) &&
-              device.hostSlotIndex < pluginCache.entries.size()) {
-            const auto& entry = pluginCache.entries[device.hostSlotIndex];
-            device.vstRef.vendor = entry.vendor;
-            device.vstRef.name = entry.name;
-            device.vstRef.path = entry.path;
-            device.vstRef.uid16 = entry.pluginUid16;
-          }
-          // A NEW SAMPLER ARRIVES ABLE TO MAKE A SOUND. It has one mod set with an amp
-          // envelope whose attack is INSTANT, because the first thing anyone drops on a sampler
-          // is a drum and a 10 ms attack on a kick is a defect you have to go looking for. It
-          // has no slots yet — sampler-load mints those — so it is silent until a sample is
-          // loaded, which is honest rather than surprising.
-          if (device.kind == daw::DeviceKind::Sampler) {
-            device.hasSampler = true;
-            device.sampler = daw::SamplerState{};
-            device.sampler.modSets.push_back(daw::defaultModSet(1));
-            device.sampler.nextModSetId = 2;
-          }
-          device.bypass = chainPayload.bypass != 0;
-          device.capabilityMask = capabilityMaskForKind(device.kind);
-          chainChanged = daw::addDevice(runtime->track.chain,
-                                        device,
-                                        chainPayload.insertIndex);
-          if (!chainChanged) {
-            emitError = true;
-            errorCode = 1;
-          }
-        } else if (commandType == daw::UiCommandType::RemoveDevice) {
-          chainChanged = daw::removeDeviceById(runtime->track.chain,
-                                               chainPayload.deviceId);
-          if (!chainChanged) {
-            emitError = true;
-            errorCode = 2;
-          }
-        } else if (commandType == daw::UiCommandType::MoveDevice) {
-          chainChanged = daw::moveDeviceById(runtime->track.chain,
-                                             chainPayload.deviceId,
-                                             chainPayload.insertIndex);
-          if (!chainChanged) {
-            emitError = true;
-            errorCode = 3;
-          }
-        } else if (commandType == daw::UiCommandType::UpdateDevice) {
-          const uint16_t flags = chainPayload.flags;
-          if (flags & 0x1u) {
-            chainChanged |= daw::setDeviceBypass(runtime->track.chain,
-                                                 chainPayload.deviceId,
-                                                 chainPayload.bypass != 0);
-          }
-          if (flags & 0x2u) {
-            chainChanged |= daw::setDevicePatcherNodeId(runtime->track.chain,
-                                                        chainPayload.deviceId,
-                                                        chainPayload.patcherNodeId);
-          }
-          if (flags & 0x4u) {
-            chainChanged |= daw::setDeviceHostSlotIndex(runtime->track.chain,
-                                                        chainPayload.deviceId,
-                                                        chainPayload.hostSlotIndex);
-          }
-          if (!chainChanged) {
-            emitError = true;
-            errorCode = 4;
-          }
-        }
-      }
-      if (chainChanged) {
-        std::shared_ptr<const TrackStateSnapshot> snapshot;
-        {
-          std::lock_guard<std::mutex> lock(runtime->trackMutex);
-          // ADD, REMOVE AND MOVE ALL CHANGE WHETHER A TRACK HAS A SAMPLER, and none of them said
-          // so. refreshSamplerForTrack's own comment claims it is "called from EVERY site that
-          // changes a chain, so 'did you remember to rebuild the sampler' is not a question
-          // anyone has to answer twice" — and this, the site that adds and removes devices, was
-          // not one of them. The comment was the assertion, and comments do not run.
-          //
-          // A sampler added through AddDevice therefore had no snapshot: not installed on the
-          // audio thread, and its kit read-back answering found:false, which is the same answer
-          // as "there is no sampler on that device". That is exactly the interval — created but
-          // not yet loaded — when a UI most wants to say "here it is, put something in it", and
-          // it could say nothing. Reported by the web-UI agent from the outside, as the only
-          // symptom visible from there.
-          //
-          // Removing a sampler matters just as much in the other direction: without this the
-          // snapshot outlives the device and the track keeps playing an instrument that is no
-          // longer in its chain.
-          refreshSamplerForTrack(*runtime);
-          snapshot = buildTrackSnapshot(runtime->track);
-        }
-        std::atomic_store_explicit(&runtime->trackSnapshot,
-                                   snapshot,
-                                   std::memory_order_release);
-        // Reconcile the host. The master runs its own lifecycle (it is not in the tracks
-        // vector); a patcher/mod-only master resolves to no plugins and launches nothing,
-        // while a VST effect on the master brings its host up for the 4b sum-processing path.
-        if (chainPayload.trackId == daw::kMasterTrackId) {
-          reconcileMasterHost();
-        } else {
-          rebuildHostForChain(*runtime);
-        }
-        emitChainSnapshot(*runtime);
-      } else if (emitError) {
-        emitChainError(errorCode,
-                       chainPayload.trackId,
-                       chainPayload.deviceId,
-                       chainPayload.deviceKind,
-                       chainPayload.insertIndex);
-      }
+      daw::engine::handleAddDevice(chainCommandDeps, entry, header, commandType);
       return;
     }
     if (entry.size != sizeof(daw::UiCommandPayload)) {

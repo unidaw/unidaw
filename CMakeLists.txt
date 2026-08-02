@@ -73,6 +73,11 @@ add_executable(daw_engine
   apps/engine_modlink_commands.cpp
   apps/engine_module_commands.cpp
   apps/engine_patcher_commands.cpp
+  apps/engine_chain_commands.cpp
+  apps/engine_marker_commands.cpp
+  apps/engine_project_commands.cpp
+  apps/engine_rowops_commands.cpp
+  apps/engine_track_commands.cpp
   apps/audio_shm.cpp
   apps/clip_edit.cpp
   apps/chord_resolver.cpp
