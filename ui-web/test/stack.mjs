@@ -308,6 +308,26 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
                        { cwd: UIWEB, stdio: ['ignore', log('serve'), log('serve')] });
   procs.push(server);
 
+/*
+ * FROM HERE ON, A FAILURE MUST TAKE ITS PROCESSES WITH IT.
+ *
+ * Everything below can time out, and until 2026-08-02 a timeout threw straight out of
+ * startStack — before `stop` was even defined — leaving the engine, the sidecar and the page
+ * server running. The engine is spawned WITHOUT `--run-seconds` unless a caller asks for one,
+ * so a leaked one runs for ever.
+ *
+ * That cascades: a leaked engine holds a plugin host and the machine, the next run is slower,
+ * IT times out, and leaks another. Three accumulated inside five minutes here, and the second
+ * and third failures were caused by the first.
+ *
+ * So the waits run inside a guard that kills what this function started and re-throws with the
+ * cleanup noted, because "timed out" plus a silently leaked engine is a far more confusing
+ * report than "timed out".
+ */
+const killSpawned = () => {
+  for (const p of procs) { try { p.kill('SIGKILL'); } catch { /* already gone */ } }
+};
+try {
   await until(() => listening(base), `page server on ${base}`);
   await until(() => listening(base + 1), `sidecar on ${base + 1}`);
   /*
@@ -437,6 +457,13 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
             * nothing about the code that produced it. False when `capture` was not asked for.
             */
            audioRunning };
+} catch (e) {
+  killSpawned();
+  throw new Error(`${e && e.message ? e.message : e} — the stack's own engine, sidecar and `
+                + 'page server were killed rather than left running. An engine spawned without '
+                + '--run-seconds never exits on its own, and a leaked one makes the NEXT run '
+                + 'slow enough to time out too.');
+}
 }
 
 /**
