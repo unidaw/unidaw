@@ -131,11 +131,21 @@ class SamplerRuntime {
   //
   // Collected here rather than on a timer: a sustained note can hold its snapshot for as long as
   // it sounds, so any grace period short enough to bound memory is short enough to be wrong.
+  // CALLED ON THE COMMAND THREAD, while the producer is rendering. `snap_` is therefore touched
+  // by two threads and every access to it goes through atomic_load/atomic_store — a plain
+  // shared_ptr is NOT safe for concurrent read/write of the same instance, and the pointer and
+  // its control block can both be torn.
+  //
+  // ThreadSanitizer named this on 2026-08-02: the command thread ran ~SamplerState via
+  // __on_zero_shared() while the producer was inside SamplerRuntime::render, 22 races in one run.
+  // The crash it produced was EXC_BAD_ACCESS in SamplerVoice::readLevel — a sounding voice
+  // reading sample planes out of a freed snapshot.
   void setSnapshot(std::shared_ptr<const SamplerRender> snap) {
-    if (snap_ && snap_ != snap) {
-      retired_.push_back(std::move(snap_));
+    auto prev = std::atomic_load_explicit(&snap_, std::memory_order_acquire);
+    if (prev && prev != snap) {
+      retired_.push_back(std::move(prev));
     }
-    snap_ = std::move(snap);
+    std::atomic_store_explicit(&snap_, std::move(snap), std::memory_order_release);
     for (size_t i = retired_.size(); i-- > 0;) {
       if (retired_[i].use_count() == 1) {
         retired_[i] = std::move(retired_.back());
@@ -143,7 +153,13 @@ class SamplerRuntime {
       }
     }
   }
-  const SamplerRender* snapshot() const { return snap_.get(); }
+  // RETURNS A STRONG REFERENCE, not a raw pointer. The old form handed the caller a bare
+  // `const SamplerRender*` with nothing keeping it alive: the command thread could drop the last
+  // reference between the caller's null check and its next dereference. Both call sites in the
+  // engine did exactly that.
+  std::shared_ptr<const SamplerRender> snapshot() const {
+    return std::atomic_load_explicit(&snap_, std::memory_order_acquire);
+  }
   // Snapshots kept alive only because a voice is still sounding from them. Telemetry: a number
   // that climbs and never falls means the collection rule above has stopped working.
   size_t retiredSnapshots() const { return retired_.size(); }
@@ -181,6 +197,19 @@ class SamplerRuntime {
     if (!out || outChannels == 0 || numFrames == 0) {
       return;
     }
+    // ONE STRONG REFERENCE, HELD FOR THE WHOLE BLOCK. Everything below — the slot lookups, the
+    // keymap, the audio the voices are handed — reads through this snapshot, and until now it
+    // read through `snap_` directly while the command thread was free to drop the last reference
+    // to it mid-block. The voice pins were never the gap: they protect a voice's own spec_ once
+    // it is sounding, and say nothing about the render call dereferencing the snapshot itself.
+    //
+    // Cleared at the end of the call so a retired snapshot can be collected as soon as the last
+    // voice reading it finishes — setSnapshot's use_count() test counts this reference too.
+    active_ = std::atomic_load_explicit(&snap_, std::memory_order_acquire);
+    struct ActiveGuard {
+      SamplerRuntime* self;
+      ~ActiveGuard() { self->active_.reset(); }
+    } activeGuard{this};
     uint32_t cursor = 0;
     uint32_t ei = 0;
     while (cursor < numFrames) {
@@ -200,7 +229,7 @@ class SamplerRuntime {
           if (!v.active()) {
             continue;
           }
-          const SamplerSlot* slot = snap_ ? snap_->state.findSlot(v.slotId()) : nullptr;
+          const SamplerSlot* slot = active_ ? active_->state.findSlot(v.slotId()) : nullptr;
           const uint8_t stem = slot ? slot->outputStem : 0;
           if (stem > 0 && stemPlanes_ && stem <= stemCount_) {
             float* pair[2] = {stemPlanes_[(stem - 1) * 2], stemPlanes_[(stem - 1) * 2 + 1]};
@@ -249,7 +278,7 @@ class SamplerRuntime {
       if (!v.active() || v.noteId() != e.noteId) {
         continue;
       }
-      const SamplerSlot* slot = snap_ ? snap_->state.findSlot(v.slotId()) : nullptr;
+      const SamplerSlot* slot = active_ ? active_->state.findSlot(v.slotId()) : nullptr;
       // A ONE-SHOT IGNORES NOTE-OFF. That is the difference between a drum and a pad, and it is
       // the slot's decision — the tracker's authored OFF still arrives, it just does not apply.
       if (slot && slot->gate == 0) {
@@ -260,10 +289,10 @@ class SamplerRuntime {
   }
 
   void noteOn(const SamplerEvent& e) {
-    if (!snap_) {
+    if (!active_) {
       return;
     }
-    const SamplerState& st = snap_->state;
+    const SamplerState& st = active_->state;
     // R2's resolution rule, in the one place it is implemented:
     //   sound != 0 -> that slot, and pitch is varispeed relative to its rootKey
     //   sound == 0 -> the keymap, and pitch means exactly the same thing
@@ -276,7 +305,7 @@ class SamplerRuntime {
         // longer play the kit" is the very thing the ruling was weighing.
         slotId = st.lowestSlotId();
       } else {
-        slotId = resolveSlot(st, snap_->keymap, e.pitch, e.velocity,
+        slotId = resolveSlot(st, active_->keymap, e.pitch, e.velocity,
                              rrCounter_[e.pitch & 127]++);
       }
     }
@@ -288,7 +317,7 @@ class SamplerRuntime {
       ++unmapped_;
       return;
     }
-    const SamplerSourceAudio* audio = snap_->audioFor(slot->sourceLocalId);
+    const SamplerSourceAudio* audio = active_->audioFor(slot->sourceLocalId);
     if (!audio || audio->frames == 0) {
       ++unmapped_;
       return;
@@ -397,7 +426,7 @@ class SamplerRuntime {
     spec.gain = db2lin(static_cast<float>(slot->gainMillibels) / 100.0f) *
                 (static_cast<float>(e.velocity) / 127.0f);
     spec.pan = static_cast<float>(slot->panThousandths) / 1000.0f;
-    spec.ratio = playbackRatio(*slot, e.pitch, audio->sampleRate, snap_->sampleRate);
+    spec.ratio = playbackRatio(*slot, e.pitch, audio->sampleRate, active_->sampleRate);
 
     const SamplerModSet* mod = st.findModSet(slot->modSetId);
     const SamplerModulator* amp = mod ? mod->ampEnvelope() : nullptr;
@@ -413,15 +442,15 @@ class SamplerRuntime {
       const float norm = static_cast<float>(mod->cutoffMilli) / 1000.0f;
       spec.cutoffHz = 20.0f * std::pow(1000.0f, std::clamp(norm, 0.0f, 1.0f));
       spec.resonance = 0.7f + static_cast<float>(mod->resonanceMilli) / 1000.0f * 9.3f;
-      spec.sampleRate = snap_->sampleRate;
+      spec.sampleRate = active_->sampleRate;
       // VINTAGE. The target RATE becomes a hold LENGTH here, at this one boundary, so the
       // per-sample path does no unit arithmetic — the same rule the envelope clock and the LFOs
       // follow. A rate at or above the engine's own is not a reduction, so it holds for one
       // frame, which is no reduction at all.
       spec.bitDepth = mod->bitDepth;
       spec.holdFrames = 0;
-      if (mod->rateHz > 0 && static_cast<double>(mod->rateHz) < snap_->sampleRate) {
-        const double hold = snap_->sampleRate / static_cast<double>(mod->rateHz);
+      if (mod->rateHz > 0 && static_cast<double>(mod->rateHz) < active_->sampleRate) {
+        const double hold = active_->sampleRate / static_cast<double>(mod->rateHz);
         spec.holdFrames = static_cast<uint32_t>(std::max(1.0, std::floor(hold)));
       }
       // EVERY ENVELOPE GETS ITS OWN CLOCK, from its OWN modulator. Sharing the amp envelope's
@@ -429,7 +458,7 @@ class SamplerRuntime {
       // cutoff sweep never moved at all; and where an amp envelope did exist, a modulator with
       // a different timeBase or rate silently ran at the amp's instead of its own.
       auto unitsPerFrame = [&](const SamplerModulator& m) -> double {
-        double u = m.timeBase == 0 ? 1000000.0 / snap_->sampleRate : nanotickPerFrame_;
+        double u = m.timeBase == 0 ? 1000000.0 / active_->sampleRate : nanotickPerFrame_;
         if (m.rateMilli != 0) {
           u *= 1000.0 / static_cast<double>(m.rateMilli);
         }
@@ -446,7 +475,7 @@ class SamplerRuntime {
                          SamplerVoiceSpec::VoiceLfo& out) {
         const float d = static_cast<float>(m.depthMilli) / 1000.0f;
         out.cyclesPerFrame =
-            static_cast<float>(m.lfo.frequency_hz / std::max(1.0, snap_->sampleRate));
+            static_cast<float>(m.lfo.frequency_hz / std::max(1.0, active_->sampleRate));
         out.phase0 = m.lfo.phase_offset;
         out.amp = m.lfo.depth * d * targetScale;
         out.bias = m.lfo.bias * d * targetScale;
@@ -510,7 +539,7 @@ class SamplerRuntime {
       // supplies via setTempo(); a cached ratio would detune the envelope across a tempo ramp.
       // `rate` scales the clock. Both live in one helper above so the amp envelope and every
       // other envelope cannot disagree about what a unit is.
-      double u = amp->timeBase == 0 ? 1000000.0 / snap_->sampleRate : nanotickPerFrame_;
+      double u = amp->timeBase == 0 ? 1000000.0 / active_->sampleRate : nanotickPerFrame_;
       if (amp->rateMilli != 0) {
         u *= 1000.0 / static_cast<double>(amp->rateMilli);
       }
@@ -519,7 +548,7 @@ class SamplerRuntime {
     // THE VOICE PINS THE SNAPSHOT ITS spec POINTS INTO. Without this the retire list in
     // setSnapshot has nothing to observe — every retired snapshot would look unreferenced and be
     // freed immediately, which is exactly the use-after-free it exists to prevent.
-    target->start(spec, e.noteId, slotId, e.column, snap_);
+    target->start(spec, e.noteId, slotId, e.column, active_);
     if (stolen) {
       target->fadeIn(fadeFrames(kStealFadeMs));
     }
@@ -546,7 +575,12 @@ class SamplerRuntime {
 
  private:
   std::vector<SamplerVoice> voices_;
+  // WRITTEN BY THE COMMAND THREAD, READ BY THE PRODUCER — atomic access only, never a plain
+  // read or assignment. See setSnapshot.
   std::shared_ptr<const SamplerRender> snap_;
+  // The snapshot the CURRENT render call is reading, held for the duration of that call so it
+  // cannot be freed underneath it. Producer thread only.
+  std::shared_ptr<const SamplerRender> active_;
   // Snapshots replaced by an edit while voices were still sounding from them. Held until no
   // voice references them; see setSnapshot for why use_count() is a sound test here.
   std::vector<std::shared_ptr<const SamplerRender>> retired_;

@@ -2550,7 +2550,11 @@ struct TrackRuntime {
     // to the aux OUTPUT plane where the child tracks read.
     std::vector<float> samplerStemBuffer;
     uint32_t samplerStemCount = 0;
-    uint32_t samplerDeviceId = 0;                   // 0 = this track has no sampler
+    // ATOMIC: written by the COMMAND thread in refreshSamplerForTrack and read by the PRODUCER
+    // on every block. ThreadSanitizer named it alongside the snapshot race this sits next to —
+    // a plain uint32_t here is UB even where the load happens to be indivisible on this CPU, and
+    // the value gates whether the sampler renders at all.
+    std::atomic<uint32_t> samplerDeviceId{0};       // 0 = this track has no sampler
     std::shared_ptr<const daw::SamplerRender> samplerSnapshot;
     std::vector<daw::EventEntry> patcherScratchpad;
     std::vector<PatcherNodeBuffer> patcherNodeBuffers;
@@ -6117,12 +6121,12 @@ struct TrackRuntime {
       }
     }
     if (!found) {
-      rt.samplerDeviceId = 0;
+      rt.samplerDeviceId.store(0, std::memory_order_release);
       rt.samplerSnapshot.reset();
       rt.samplerRuntime.setSnapshot(nullptr);
       return;
     }
-    rt.samplerDeviceId = found->id;
+    rt.samplerDeviceId.store(found->id, std::memory_order_release);
     auto built = rebuildSamplerRender(found->sampler, rt.trackId, found->id);
     // Stamped before it is shared, which is the only moment it can be: everything downstream
     // holds it as const, which is what makes a snapshot safe to read from the audio thread.
@@ -12024,7 +12028,7 @@ struct TrackRuntime {
           std::lock_guard<std::mutex> lock(runtime->trackMutex);
           snap = runtime->samplerSnapshot;
         }
-        if (snap && (p.deviceId == 0 || runtime->samplerDeviceId == p.deviceId)) {
+        if (snap && (p.deviceId == 0 || runtime->samplerDeviceId.load(std::memory_order_acquire) == p.deviceId)) {
           const bool byTarget = (p.flags & daw::kSamplerEnvByTarget) != 0;
           for (const auto& ms : snap->state.modSets) {
             if (p.modSetId != 0 && ms.id != p.modSetId) {
@@ -12041,7 +12045,7 @@ struct TrackRuntime {
                 continue;
               }
               slot.found = 1;
-              slot.deviceId = runtime->samplerDeviceId;
+              slot.deviceId = runtime->samplerDeviceId.load(std::memory_order_acquire);
               slot.modSetId = ms.id;
               slot.modulatorId = mod.id;
               slot.target = static_cast<uint8_t>(mod.target);
@@ -12141,9 +12145,9 @@ struct TrackRuntime {
           std::lock_guard<std::mutex> lock(runtime->trackMutex);
           snap = runtime->samplerSnapshot;
         }
-        if (snap && (p.deviceId == 0 || runtime->samplerDeviceId == p.deviceId)) {
+        if (snap && (p.deviceId == 0 || runtime->samplerDeviceId.load(std::memory_order_acquire) == p.deviceId)) {
           slot.found = 1;
-          slot.deviceId = runtime->samplerDeviceId;
+          slot.deviceId = runtime->samplerDeviceId.load(std::memory_order_acquire);
           slot.voiceCap = snap->state.voiceCap;
           slot.defaultGate = snap->state.defaultGate;
           slot.defaultView = snap->state.defaultView;
@@ -16648,7 +16652,7 @@ struct TrackRuntime {
               offPayload.noteId = activeNote.noteId;
               std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
               pushScratchpad(noteOffEntry, activeNote.endNanotick);
-              if (runtime.samplerDeviceId != 0) {
+              if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
                 daw::SamplerEvent se;
                 const int64_t off = static_cast<int64_t>(eventSample) -
                                     static_cast<int64_t>(blockSampleStart);
@@ -16696,7 +16700,7 @@ struct TrackRuntime {
               offPayload.noteId = activeNote.noteId;
               std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
               pushScratchpad(noteOffEntry, activeNote.endNanotick);
-              if (runtime.samplerDeviceId != 0) {
+              if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
                 daw::SamplerEvent se;
                 const int64_t off = static_cast<int64_t>(eventSample) -
                                     static_cast<int64_t>(blockSampleStart);
@@ -16751,7 +16755,7 @@ struct TrackRuntime {
             // computes and then throws away (MidiEvent.sampleOffset is never populated — see
             // docs/SAMPLER_DESIGN.md §3.5). `offset` above is already the exact frame within
             // this block, so the sampler starts the voice THERE rather than at the boundary.
-            if (runtime.samplerDeviceId != 0) {
+            if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
               daw::SamplerEvent se;
               se.offsetInBlock = static_cast<uint32_t>(offset);
               se.kind = daw::SamplerEventKind::NoteOn;
@@ -16832,7 +16836,7 @@ struct TrackRuntime {
                 offPayload.noteId = noteId;
                 std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
                 pushScratchpad(noteOffEntry, noteEndTick);
-              if (runtime.samplerDeviceId != 0) {
+              if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
                 daw::SamplerEvent se;
                 // offSample, NOT eventSample. This read the NOTE-ON's sample time, so a note
                 // whose on and off fall in the SAME block handed the sampler its note-off at
@@ -16925,7 +16929,7 @@ struct TrackRuntime {
                   offPayload.noteId = activeNote.noteId;
                   std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
                   pushScratchpad(noteOffEntry, activeNote.endNanotick);
-              if (runtime.samplerDeviceId != 0) {
+              if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
                 daw::SamplerEvent se;
                 const int64_t off = offOffset;
                 se.offsetInBlock = static_cast<uint32_t>(
@@ -17675,7 +17679,7 @@ struct TrackRuntime {
             // slot from the resolved pitch — which is the right default and the one every drum
             // kit already relies on. A node that chooses a slice (docs/SAMPLER_DESIGN.md's
             // SliceSelect) is what would fill that field, and it needs this path to exist first.
-            if (runtime.samplerDeviceId != 0) {
+            if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
               daw::SamplerEvent se;
               se.offsetInBlock = static_cast<uint32_t>(offsetSamples);
               se.kind = daw::SamplerEventKind::NoteOn;
@@ -17725,7 +17729,7 @@ struct TrackRuntime {
                   offPayload.noteId = noteId;
                   std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
                   appendScratchpad(noteOffEntry, noteEndTick);
-                  if (runtime.samplerDeviceId != 0) {
+                  if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
                     daw::SamplerEvent se;
                     se.offsetInBlock = static_cast<uint32_t>(offOffset);
                     se.kind = daw::SamplerEventKind::NoteOff;
@@ -18388,7 +18392,12 @@ struct TrackRuntime {
         // already passed every plugin, so a VST effect could never follow the sampler on the
         // same track). Its output goes into the host input plane below, AHEAD of the chain.
         runtime->samplerAudioValid = false;
-        if (runtime->samplerDeviceId != 0 && runtime->samplerRuntime.snapshot()) {
+        // ONE STRONG REFERENCE for this whole block. snapshot() used to hand back a bare
+        // pointer, and the command thread could free the snapshot between this null check and
+        // the stemCount read below — which is exactly the use-after-free ThreadSanitizer named.
+        const std::shared_ptr<const daw::SamplerRender> samplerSnap =
+            runtime->samplerRuntime.snapshot();
+        if (runtime->samplerDeviceId.load(std::memory_order_acquire) != 0 && samplerSnap) {
           const uint32_t channels = std::max<uint32_t>(engineConfig.numChannelsOut, 2u);
           const size_t need = static_cast<size_t>(channels) * engineConfig.blockSize;
           if (runtime->samplerAudioBuffer.size() != need) {
@@ -18425,8 +18434,7 @@ struct TrackRuntime {
           // host copies to the aux OUTPUT plane, where reconcileChildTracks reads it. The
           // sampler's stems therefore travel the same route as a multi-out plugin's, and the
           // child-track machinery does not need to know which produced them.
-          const daw::SamplerRender* snapPtr = runtime->samplerRuntime.snapshot();
-          const uint32_t stems = snapPtr ? snapPtr->state.stemCount : 0;
+          const uint32_t stems = samplerSnap->state.stemCount;
           std::vector<float*> stemPlanes;
           if (stems > 0) {
             const size_t need = static_cast<size_t>(stems) * 2 * engineConfig.blockSize;
