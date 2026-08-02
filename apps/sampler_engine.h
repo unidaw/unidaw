@@ -106,10 +106,17 @@ class SamplerRuntime {
   // raised the CPU ceiling the setting exists to bound. Stealing instead REUSES the victim's slot
   // and ramps the new note in over kStealFadeMs, which is what actually removes the click; the
   // victim's tail is lost, which is the honest cost of a pool that has run out.
+  // PUBLISHES; THE PRODUCER ADOPTS. Called on the COMMAND thread, and `voices_` is walked and
+  // mutated by the producer on every block — so resizing here reallocated the pool underneath a
+  // thread that was iterating it. Latent rather than fatal only because resize() is a no-op when
+  // the cap is unchanged, which it almost always is; change voiceCap while the transport rolls
+  // and it is the snapshot use-after-free again, one object along.
+  //
+  // Same shape as setSnapshot, deliberately: the command thread states what it wants and the
+  // producer picks it up at a block boundary, where it is the only thread touching the pool.
   void configure(uint8_t voiceCap, double sampleRate) {
-    sampleRate_ = sampleRate;
-    voices_.resize(voiceCap > 0 ? voiceCap : 1);
-    cap_ = voiceCap;
+    pendingRate_.store(sampleRate, std::memory_order_release);
+    pendingCap_.store(voiceCap > 0 ? voiceCap : 1, std::memory_order_release);
   }
 
   // A RETIRED SNAPSHOT IS NOT FREED WHILE A VOICE IS STILL READING IT.
@@ -164,20 +171,17 @@ class SamplerRuntime {
   // that climbs and never falls means the collection rule above has stopped working.
   size_t retiredSnapshots() const { return retired_.size(); }
 
-  uint32_t activeVoices() const {
-    uint32_t n = 0;
-    for (const auto& v : voices_) {
-      if (v.active()) {
-        ++n;
-      }
-    }
-    return n;
-  }
+  // READS A PUBLISHED COUNT, and does not walk the pool. This is called from the COMMAND thread
+  // on every telemetry publish while the producer is starting, stealing and retiring voices —
+  // so the old loop read `v.active()` on objects another thread was mutating. ThreadSanitizer
+  // never reported it because the crash scenario did not exercise the publish path, which is a
+  // reminder that a clean TSan run is a statement about the paths that RAN.
+  uint32_t activeVoices() const { return activeCount_.load(std::memory_order_relaxed); }
   // Counts note-ons that had to steal a sounding voice. Published as telemetry rather than left
   // to be noticed as "the roll sounds wrong" — a pool running out is a musical fact the user
   // should be told about, not a silent truncation.
-  uint64_t stealCount() const { return steals_; }
-  uint64_t unmappedCount() const { return unmapped_; }
+  uint64_t stealCount() const { return steals_.load(std::memory_order_relaxed); }
+  uint64_t unmappedCount() const { return unmapped_.load(std::memory_order_relaxed); }
 
   // Renders one block into MAIN out, plus optional per-STEM stereo pairs.
   //
@@ -208,8 +212,31 @@ class SamplerRuntime {
     active_ = std::atomic_load_explicit(&snap_, std::memory_order_acquire);
     struct ActiveGuard {
       SamplerRuntime* self;
-      ~ActiveGuard() { self->active_.reset(); }
+      ~ActiveGuard() {
+        self->active_.reset();
+        // The count the command thread reads, refreshed once per block on the only thread that
+        // may walk the pool.
+        uint32_t n = 0;
+        for (const auto& v : self->voices_) {
+          if (v.active()) {
+            ++n;
+          }
+        }
+        self->activeCount_.store(n, std::memory_order_relaxed);
+      }
     } activeGuard{this};
+    // ADOPT A PENDING POOL SIZE HERE — on the producer, before anything touches voices_, which
+    // is the one point where no other thread is walking them. See configure().
+    if (const uint8_t want = pendingCap_.exchange(0, std::memory_order_acquire)) {
+      if (voices_.size() != want) {
+        voices_.resize(want);
+      }
+      cap_ = want;
+    }
+    if (const double wantRate = pendingRate_.exchange(0.0, std::memory_order_acquire);
+        wantRate > 0.0) {
+      sampleRate_ = wantRate;
+    }
     uint32_t cursor = 0;
     uint32_t ei = 0;
     while (cursor < numFrames) {
@@ -314,12 +341,12 @@ class SamplerRuntime {
       // Nothing mapped here. Counted, not logged — this runs on the producer thread and a note
       // into an empty key is a normal authoring state, not an error, but a kit that is silent
       // everywhere should be diagnosable without a debugger.
-      ++unmapped_;
+      unmapped_.fetch_add(1, std::memory_order_relaxed);
       return;
     }
     const SamplerSourceAudio* audio = active_->audioFor(slot->sourceLocalId);
     if (!audio || audio->frames == 0) {
-      ++unmapped_;
+      unmapped_.fetch_add(1, std::memory_order_relaxed);
       return;
     }
 
@@ -374,7 +401,7 @@ class SamplerRuntime {
         }
       }
       stolen = true;
-      ++steals_;
+      steals_.fetch_add(1, std::memory_order_relaxed);
     }
     if (!target) {
       return;
@@ -400,7 +427,7 @@ class SamplerRuntime {
         } else {
           // The slice was REMOVED. The slot is silent rather than falling back to the whole
           // sample — a chop whose slice is gone should not suddenly play the entire break.
-          ++unmapped_;
+          unmapped_.fetch_add(1, std::memory_order_relaxed);
           return;
         }
         break;
@@ -587,8 +614,14 @@ class SamplerRuntime {
   double sampleRate_ = 48000.0;
   double nanotickPerFrame_ = 0.0;
   uint8_t cap_ = 64;
-  uint64_t steals_ = 0;
-  uint64_t unmapped_ = 0;
+  // Published by configure() on the command thread, adopted by render() on the producer.
+  std::atomic<uint8_t> pendingCap_{0};
+  std::atomic<double> pendingRate_{0.0};
+  // Producer writes, command thread reads for telemetry. Relaxed is right for counters: they are
+  // reported, never used to order anything.
+  std::atomic<uint32_t> activeCount_{0};
+  std::atomic<uint64_t> steals_{0};
+  std::atomic<uint64_t> unmapped_{0};
   // Per-key round-robin counters, so two toms cycling their alternates do not steal each other's
   // turn. A single global counter would make every round-robin in the kit advance together.
   uint32_t rrCounter_[128]{};
