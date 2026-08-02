@@ -99,7 +99,8 @@ done
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load ml --force >/dev/null 2>&1 || true
 wait_for_boot "$TMP/eng.log" "$ENG" 80
-sleep 1.5
+wait_for_event "$TMP/eng.log" '"event":"modsnapshot.published"' 80 "the first mod snapshot" \
+  || true
 
 # The count of links in the LAST snapshot the engine published for track 0.
 last_published() {

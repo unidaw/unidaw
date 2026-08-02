@@ -87,7 +87,7 @@ sleep 1.0
 cli do add-device --track 0 --kind sampler --device-id 1 >/dev/null 2>&1 || true
 sleep 1.0
 cli do sampler-load --track 0 --device 1 --file brk.wav --root 60 >/dev/null 2>&1 || true
-sleep 1.5
+wait_for_event "$TMP/eng.log" '"event":"sampler.loaded"' 80 "the sampler load" || true
 grep -q '"event":"sampler.loaded"' "$TMP/eng.log" || fail "the break did not load"
 
 # ---- DETECTS, AND MAKES SLOTS. One command: chop and mint a playable slot per slice.

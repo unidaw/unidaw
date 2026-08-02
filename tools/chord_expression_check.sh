@@ -68,7 +68,22 @@ Q=960000
 
 TMP="$(mktemp -d)"
 ENG=""
-cleanup() { [ -n "$ENG" ] && kill "$ENG" 2>/dev/null; rm -rf "$TMP"; }
+KEEP="${TMPDIR:-/tmp}/chord_expression_fail.$$"
+preserve() {
+  mkdir -p "$KEEP" 2>/dev/null || return 0
+  cp -R "$TMP"/. "$KEEP/" 2>/dev/null || true
+  echo "  evidence kept: $KEEP (the project and the engine log)"
+  echo "  next step: grep history.jsonl for 'rejected:' — NOT eng.log. Verified by forcing this"
+  echo "  failure: the engine log carried no rejection event at all, while the journal said"
+  echo "  \"op\":\"write_chord\",\"outcome\":\"rejected:no_track\". That is what separates a"
+  echo "  refused command from a transport that had not reached the chord yet."
+}
+cleanup() {
+  local rc=$?
+  [ "$rc" != "0" ] && preserve
+  [ -n "$ENG" ] && { kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; }
+  rm -rf "$TMP"
+}
 trap cleanup EXIT
 fail() { echo "  FAIL: $*"; exit 1; }
 
