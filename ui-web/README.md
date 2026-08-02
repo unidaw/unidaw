@@ -1,7 +1,7 @@
 # ui-web — the Uni frontend
 
 A web frontend for the Uni engine. HTML and CSS, no framework, no build step for
-the app itself. It talks to the engine through a small Rust sidecar that owns the
+the app itself. It talks to the engine through a Rust sidecar that owns the
 shared-memory bridge.
 
     ┌──────────┐   POSIX shm    ┌──────────────┐   WebSocket   ┌─────────┐
@@ -9,32 +9,28 @@ shared-memory bridge.
     │  (C++)   │ ◄───────────── │    (Rust)    │ ◄──────────── │  (JS)   │
     └──────────┘  command ring  └──────────────┘   commands    └─────────┘
 
-Two sockets, deliberately: **8174** carries state and is write-only from the
-sidecar's side, **8175** carries commands and has a blocking reader. Trying to
-make one socket duplex broke it twice — a non-blocking socket reports `WouldBlock`
-under ordinary backpressure, and a read timeout that fires mid-frame corrupts the
-stream.
+Two sockets. **8174** carries state, write-only from the sidecar's side. **8175**
+carries commands, with a blocking reader. One duplex socket does not work: a
+non-blocking socket reports `WouldBlock` under ordinary backpressure, and a read
+timeout that fires mid-frame corrupts the stream.
 
 ## The manual
 
 **[docs/MANUAL.md](../docs/MANUAL.md)** — how to use the thing, for someone who already knows
-trackers and DAWs. Written against the source rather than against intent, so it names what
-refuses as well as what works. Read it before this file if you want to make a noise rather than
-change the code.
-
-This README is the frontend's *architecture*: what talks to what, and why it is shaped this way.
+trackers and DAWs. It names what refuses as well as what works. Read it before this file if
+you want to make a noise rather than change the code. This README is the frontend's
+*architecture*.
 
 ## Running it
 
     tools/webstack.sh            # engine + sidecar + page server, or says why not
     open http://127.0.0.1:8173/index.html
 
-From a script or an agent, background it: the processes it starts are orphaned
-out of its process group, but a caller that waits on the group will still wait.
+Background it from a script or an agent: the processes it starts are orphaned out
+of its process group, but a caller that waits on the group will still wait.
 
-The script starts exactly one of each and refuses rather than guessing. Read the
-comments in it before changing how it picks binaries — every line there is the
-result of something that went wrong.
+It starts exactly one of each and refuses rather than guessing. Read the comments
+in it before changing how it picks binaries.
 
 ## Surfaces
 
@@ -53,10 +49,9 @@ Six, all consuming the same published snapshot. `Tab` cycles the graphical ones;
 
 ## Driving it from code
 
-`window.__uni` is the whole surface: `probe()`, `state()`, per-surface probes,
-and `run(line)` for the dock's command grammar. Every console command routes
-through the same functions the keyboard does, so the two cannot drift — which is
-why `run()` is the entry point to prefer.
+`window.__uni` is the whole surface: `probe()`, `state()`, per-surface probes, and
+`run(line)` for the dock's command grammar. Console commands route through the
+same functions the keyboard does, so prefer `run()`.
 
     window.__uni.run('load webtest')
     window.__uni.run('goto 16 2')
@@ -72,68 +67,38 @@ why `run()` is the entry point to prefer.
     npm run e2e:all  EVERY engine-backed suite, one at a time
     npm run soak     heap leak check           (fixtures; takes minutes)
 
-`npm run e2e` is one file. There are two dozen more suites that stand up a real
-engine, and until `e2e:all` existed they ran only when someone remembered them by
-name — which is how several went weeks without running, and how a suite can rot
-into permanent red with nobody noticing it went red. The runner goes one at a
-time on purpose: each suite starts an engine, a plugin host and a browser, and
-running several at once starves the audio producer and turns real checks into
-load-average failures that say nothing about the code.
+`npm run e2e` is one file; `e2e:all` runs the two dozen other engine-backed
+suites. One at a time: each starts an engine, a plugin host and a browser, and
+several at once starve the audio producer. It prints what it did NOT run, and why,
+on every run. `--only kit,ops` runs just those. `--with-audio` adds the five
+suites that measure sound through a live capture.
 
-It prints what it did NOT run, and why, on every run. That is the point of it —
-"all suites passed" has to mean the set it listed, not the set that happened to
-be cheap that day. `--only kit,ops` runs just those.
-
-**Five suites measure sound through a live capture and are held out**, because
-this machine produces no audio at all: the engine opens the default output, the
-device reports its name, rate and block size, `isPlaying()` answers true, and
-CoreAudio never invokes the IO proc. Not device-specific — the built-in speakers
-behave the same on a quiet machine. Root cause open. Nothing is capturable until
-it is fixed, and the checks would fail for a reason that has nothing to do with
-the code they test. `--with-audio` runs them anyway, which is the right thing on a
-machine whose device works.
-
-The signal to read is the one at the device boundary:
+The signal to read is the one at the device boundary; zero from the device means
+the device never asked for audio.
 
     Audio device callbacks: N from the DEVICE, M reaching the engine
 
-Zero from the device means the device never asked for audio. That line exists
-because the older one did not mean what it was read as: `0 of 0 playback
-callbacks` counts callbacks **that had a track to play**, so a healthy device with
-the transport stopped prints `0 of 0` too. It was cited here as the independent
-signal justifying these exclusions and it was not one — the exclusions are right
-and the reason given for them was wrong.
+Not the older `0 of 0 playback callbacks`, which counts callbacks **that had a
+track to play**, so a healthy device with the transport stopped prints `0 of 0`
+too. "The producer reported no underruns" is not independent either — zero
+callbacks produce zero underruns.
 
-The rule stands: an excuse is safe only when the second signal is **independent of
-the failure mode**. "The producer reported no underruns" is not independent — zero
-callbacks produce zero underruns — which is how a dead device once got reported as
-a failure of the sampler. Check what a number counts before leaning on it.
-
-Or all of the engine-free ones at once, including the Rust side that `npm test`
-does not reach:
+All engine-free checks at once, including the Rust side `npm test` does not reach:
 
     ../tools/verify.sh           rust + units + goldens + allocation
     ../tools/verify.sh --all     also frame work and a 4-minute soak
 
-The split is deliberate. `npm test` must not depend on whether a sidecar happens
-to be running — a test that changes with the weather is not a test. But that
-leaves the engine boundary unexercised, and nearly every serious bug in this
-codebase has lived exactly there, so `npm run e2e` covers the other half.
+`npm test` never depends on a running sidecar, which leaves the engine boundary to
+`npm run e2e`.
 
 Goldens are committed PNGs; `npm run bless` accepts new ones. Look at the image
-before you bless it. That is not a formality — the track headers spent months
-labelled with the *next* track's name, and the last one blank, purely because the
-baseline was blessed with it in place. Sixteen plausible labels photograph
-exactly like sixteen correct ones.
+before you bless it.
 
 `npm run alloc` measures **bytes allocated per draw**, using the sampling heap
 profiler with `includeObjectsCollectedByMinorGC` — allocation, not retained heap.
-The distinction is the whole point and it is explained at the top of
-`test/alloc.mjs`: the version that bracketed the loop with `collectGarbage`
-reported 14–40 bytes/draw while the renderers were throwing away hundreds of
-strings a frame, because it collected the evidence before measuring it.
-
-Where the draw path stands today, at 1500×760 with a loaded project:
+See the top of `test/alloc.mjs`; do not bracket the measured loop with
+`collectGarbage`, which under-reports at 14–40 bytes/draw. At 1500×760 with a
+loaded project:
 
 | | bytes/draw |
 |---|---:|
@@ -144,12 +109,11 @@ Where the draw path stands today, at 1500×760 with a loaded project:
 | mixer, meters moving | 210 |
 | device chain | 19 |
 
-Frame work is under 1% of the 16.6 ms budget on every surface, including a
-busy project three thousand bars in.
+Frame work is under 1% of the 16.6 ms budget on every surface, including a busy
+project three thousand bars in.
 
 ## Before you change anything
 
-Read `GUIDELINES.md`. Sections 2 and 2.1 in particular: the domain model, and the
-one bug this project keeps having (a cache key that does not name everything the
-cached value depends on — six instances so far, every one of them rendering
-something plausible while being wrong).
+Read `GUIDELINES.md`, sections 2 and 2.1: the domain model, and the one bug this
+project keeps having — a cache key that does not name everything the cached value
+depends on. Six instances so far, each rendering something plausible while wrong.
