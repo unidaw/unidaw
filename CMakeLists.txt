@@ -78,6 +78,8 @@ add_executable(daw_engine
   apps/engine_project_commands.cpp
   apps/engine_rowops_commands.cpp
   apps/engine_track_commands.cpp
+  apps/engine_request_commands.cpp
+  apps/engine_trackprops_commands.cpp
   apps/audio_shm.cpp
   apps/clip_edit.cpp
   apps/chord_resolver.cpp

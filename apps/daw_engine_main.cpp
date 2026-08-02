@@ -43,6 +43,8 @@
 #include "apps/engine_project_commands.h"
 #include "apps/engine_rowops_commands.h"
 #include "apps/engine_track_commands.h"
+#include "apps/engine_request_commands.h"
+#include "apps/engine_trackprops_commands.h"
 #include "apps/engine_sampler_commands.h"
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
@@ -9266,6 +9268,20 @@ int main(int argc, char** argv) {
                            daw::UiCommandType)> emitClipRejectFn = emitClipReject;
   daw::engine::RowopsCommandDeps rowopsCommandDeps{applySetRowOpsFn, emitClipRejectFn};
 
+  const std::function<std::string(const std::string&)> resolveSourcePathFn = resolveSourcePath;
+  const std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)>
+      resolveDevicePluginPathFn = resolveDevicePluginPath;
+  daw::engine::RequestCommandDeps requestCommandDeps{
+      uiShm, tracks, tracksMutex, waveformStore, clipWindowMutex, clipWindowPending,
+      resolveSourcePathFn, resolveDevicePluginPathFn, rebuildHostForChainFn,
+      emitChainSnapshotFn};
+
+  const std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&)>
+      rebuildFlatAndPublishFn = rebuildFlatAndPublish;
+  daw::engine::TrackpropsCommandDeps trackpropsCommandDeps{
+      tracks, tracksMutex, masterTrack, quantizeVersion,
+      buildTrackSnapshotFn, rebuildFlatAndPublishFn};
+
   auto handleUiEntry = [&](const daw::EventEntry& entry) {
     if (entry.type != static_cast<uint16_t>(daw::EventType::UiCommand)) {
       return;
@@ -10904,26 +10920,7 @@ int main(int argc, char** argv) {
       std::cout << "UI: Transport SetPosition " << clamped << std::endl;
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RequestChainSnapshot)) {
-      // A UI that attached after the engine started has never seen a chain
-      // diff, so let it ask. 0xFFFFFFFFu means every track; an unknown track is
-      // simply nothing to publish, not an error.
-      std::vector<TrackRuntime*> targets;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (payload.trackId == 0xFFFFFFFFu) {
-          for (auto& runtime : tracks) {
-            if (runtime) {
-              targets.push_back(runtime.get());
-            }
-          }
-        } else if (payload.trackId < tracks.size() && tracks[payload.trackId]) {
-          targets.push_back(tracks[payload.trackId].get());
-        }
-      }
-      // Outside tracksMutex: emitChainSnapshot takes the per-track lock itself.
-      for (auto* runtime : targets) {
-        emitChainSnapshot(*runtime);
-      }
+      daw::engine::handleRequestChainSnapshot(requestCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::Quit)) {
       // The last UI went away. Silence first, then exit: `running` unwinds through
@@ -11045,291 +11042,13 @@ int main(int argc, char** argv) {
           .field("audioActive", audioActive);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RequestDeviceParams)) {
-      // Publish one device's parameters into UiDeviceParamsRegion so the rack can
-      // show real names + values. trackId + value0 (deviceId). The host query is a
-      // blocking round-trip (like save's requestPluginState) — fine off the audio
-      // thread. Bumps region->version after writing so a polling UI sees the swap.
-      const uint32_t trackId = payload.trackId;
-      const uint32_t deviceId = payload.value0;
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (trackId < tracks.size()) {
-          runtime = tracks[trackId].get();
-        }
-      }
-      std::string deviceName;
-      uint32_t pluginIndex = 0;
-      bool found = false;
-      if (runtime) {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        uint32_t hostIndex = 0;
-        for (const auto& d : runtime->track.chain.devices) {
-          if (d.kind != daw::DeviceKind::VstInstrument &&
-              d.kind != daw::DeviceKind::VstEffect) {
-            continue;
-          }
-          // Skip a device that does not resolve to a host plugin, matching the host's
-          // compacted plugin vector (rebuildHostForChain omits it from SetChain);
-          // otherwise the read-back reports a shifted / wrong plugin's params.
-          if (!resolveDevicePluginPath(*runtime, d.hostSlotIndex)) {
-            continue;
-          }
-          if (d.id == deviceId) {
-            pluginIndex = hostIndex;
-            deviceName = d.vstRef.name;
-            found = true;
-            break;
-          }
-          hostIndex++;
-        }
-      }
-      // A request for a device that does not resolve wrote nothing to the region
-      // and emitted no query event, so an empty rack looked identical whether the
-      // device was missing or the host round-trip failed. Make the miss visible.
-      if (!runtime || !found) {
-        DAW_EVENT("device.params_query.unresolved")
-            .field("track", trackId)
-            .field("device", deviceId)
-            .field("hasRuntime", runtime != nullptr)
-            .field("found", found);
-      }
-      if (runtime && found && uiShm.header &&
-          uiShm.header->uiDeviceParamsOffset != 0) {
-        std::vector<daw::HostParamWire> wire;
-        std::string hostName;
-        bool queryOk = false;
-        {
-          std::lock_guard<std::mutex> lock(runtime->controllerMutex);
-          queryOk =
-              runtime->controller.requestPluginParams(pluginIndex, wire, hostName);
-        }
-        // The query silently returning empty was invisible; log where it lands so
-        // an empty rack can be told apart from a failed round-trip.
-        DAW_EVENT("device.params_query")
-            .field("track", trackId)
-            .field("device", deviceId)
-            .field("pluginIndex", pluginIndex)
-            .field("ok", queryOk)
-            .field("count", static_cast<uint64_t>(wire.size()))
-            .field("hostName", hostName);
-        // Prefer the actually-loaded plugin's name (authoritative) over the stored
-        // vstRef name, which can drift if resolution loaded a different plugin.
-        const std::string& shownName = !hostName.empty() ? hostName : deviceName;
-        auto* region = reinterpret_cast<daw::UiDeviceParamsRegion*>(
-            reinterpret_cast<uint8_t*>(uiShm.base) +
-            uiShm.header->uiDeviceParamsOffset);
-        region->trackId = trackId;
-        region->deviceId = deviceId;
-        std::memset(region->deviceName, 0, sizeof(region->deviceName));
-        std::memcpy(region->deviceName, shownName.data(),
-                    std::min(shownName.size(), sizeof(region->deviceName) - 1));
-        const uint32_t n =
-            std::min<uint32_t>(static_cast<uint32_t>(wire.size()),
-                               daw::kUiMaxDeviceParams);
-        for (uint32_t i = 0; i < n; ++i) {
-          daw::UiDeviceParam& out = region->params[i];
-          out.index = wire[i].index;
-          out.valueMilli = static_cast<int32_t>(std::lround(
-              std::clamp(wire[i].normalized, 0.0f, 1.0f) * 1000.0f));
-          const std::string sid(
-              wire[i].stableId,
-              ::strnlen(wire[i].stableId, sizeof(wire[i].stableId)));
-          const auto uid = daw::hashStableId16(sid);
-          std::memcpy(out.uid16, uid.data(), sizeof(out.uid16));
-          std::memset(out.name, 0, sizeof(out.name));
-          std::memcpy(out.name, wire[i].name,
-                      ::strnlen(wire[i].name, sizeof(out.name) - 1));
-          std::memset(out.display, 0, sizeof(out.display));
-          std::memcpy(out.display, wire[i].display,
-                      ::strnlen(wire[i].display, sizeof(out.display) - 1));
-          // v30: what the parameter IS. Carried by the wrapper from the first day and dropped
-          // here until now.
-          auto copyText = [](char* dst, size_t cap, const char* src, size_t srcCap) {
-            std::memset(dst, 0, cap);
-            std::memcpy(dst, src, ::strnlen(src, std::min(cap - 1, srcCap)));
-          };
-          copyText(out.label, sizeof(out.label), wire[i].label, sizeof(wire[i].label));
-          copyText(out.minText, sizeof(out.minText), wire[i].minText,
-                   sizeof(wire[i].minText));
-          copyText(out.maxText, sizeof(out.maxText), wire[i].maxText,
-                   sizeof(wire[i].maxText));
-          // On the SAME 0..1000 scale as valueMilli, so a caller compares like with like rather
-          // than discovering that one field is normalised and its neighbour is not.
-          out.defaultMilli = static_cast<int32_t>(std::lround(
-              std::clamp(wire[i].defaultNormalized, 0.0f, 1.0f) * 1000.0f));
-          out.minMilli = static_cast<int32_t>(std::lround(wire[i].minValue * 1000.0f));
-          out.maxMilli = static_cast<int32_t>(std::lround(wire[i].maxValue * 1000.0f));
-          out.stepCount = wire[i].stepCount;
-          out.flags =
-              ((wire[i].flags & daw::kHostParamDiscrete) ? daw::kUiParamDiscrete : 0u) |
-              ((wire[i].flags & daw::kHostParamAutomatable) ? daw::kUiParamAutomatable
-                                                            : 0u);
-        }
-        region->paramCount = n;
-        std::atomic_thread_fence(std::memory_order_release);
-        region->version += 1;
-      }
+      daw::engine::handleRequestDeviceParams(requestCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RequestWaveform)) {
-      // Answer a windowed waveform query by slicing the source's pyramid into a
-      // seqlocked slot. Pure memory reads of state we already own — no host round-
-      // trip (contract §2.3). Every request in the drain is answered into
-      // slot = requestSeq % slots; NOT drain-to-latest, which makes tiled answers
-      // uncompletable.
-      daw::UiWaveformRequestPayload req{};
-      std::memcpy(&req, entry.payload, sizeof(req));
-      if (!uiShm.header || uiShm.header->uiWaveformOffset == 0) {
-        return;
-      }
-      auto* region = reinterpret_cast<daw::UiWaveformRegion*>(
-          reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiWaveformOffset);
-      daw::UiWaveformSlot& slot =
-          region->slots[req.requestSeq % daw::kUiWaveformSlots];
-      const uint64_t firstFrame = static_cast<uint64_t>(req.firstFrameLo) |
-                                  (static_cast<uint64_t>(req.firstFrameHi) << 32);
-
-      // A SAMPLER SOURCE IS ADDRESSED BY (track, device, localId) AND TRANSLATED HERE, once, into
-      // the store id the rest of this handler already understands. The translation lives on this
-      // side of the wire so the sampler's per-device counter never has to become a public id —
-      // and so both kinds of source end up in the SAME path-keyed store, which is what makes one
-      // file loaded two ways share one pyramid.
-      uint32_t storeId = req.sourceId;
-      if ((req.flags & daw::kWaveformRequestSamplerSource) != 0) {
-        storeId = 0;
-        TrackRuntime* rt = nullptr;
-        {
-          std::lock_guard<std::mutex> lock(tracksMutex);
-          if (req.reserved0 < tracks.size()) {
-            rt = tracks[req.reserved0].get();
-          }
-        }
-        if (rt) {
-          std::lock_guard<std::mutex> lock(rt->trackMutex);
-          for (const auto& d : rt->track.chain.devices) {
-            if (d.kind != daw::DeviceKind::Sampler || !d.hasSampler) {
-              continue;
-            }
-            // deviceId 0 = the first sampler on the track, the same rule every other sampler
-            // command uses. One addressing convention, not a second one for drawing.
-            if (req.reserved1 != 0 && d.id != req.reserved1) {
-              continue;
-            }
-            for (const auto& src : d.sampler.sources) {
-              if (src.localId == req.sourceId) {
-                storeId = waveformStore.sourceIdForPath(resolveSourcePath(src.path));
-                break;
-              }
-            }
-            break;
-          }
-        }
-        if (storeId == 0) {
-          // 0 is "not interned", which lookup below reports as badrequest — the honest answer.
-          // Logged because "the pad names a source the store never saw" and "you asked for a
-          // track that is not there" are different mistakes and the caller cannot tell them
-          // apart from a status code.
-          DAW_EVENT("waveform.sampler_source_unresolved")
-              .field("track", req.reserved0)
-              .field("device", req.reserved1)
-              .field("local", req.sourceId);
-        }
-      }
-
-      // Resolve the source + its pyramid (a copy of the entry keeps the pyramid
-      // alive past a concurrent beginLoad).
-      daw::WaveformSourceEntry entryCopy{};
-      const bool known = waveformStore.lookup(storeId, entryCopy);
-
-      // Which published channels the mask actually selects, in ascending order.
-      uint32_t sel[2] = {0, 0};
-      uint32_t outChannels = 0;
-      const uint32_t waveCh = entryCopy.pyramid ? entryCopy.pyramid->channels : 0;
-      for (uint32_t c = 0; c < waveCh && c < 2; ++c) {
-        if (req.channelMask & (1u << c)) sel[outChannels++] = c;
-      }
-
-      const bool pow2 = req.decimation != 0 &&
-                        (req.decimation & (req.decimation - 1)) == 0;
-      const bool aligned = req.decimation != 0 && firstFrame % req.decimation == 0;
-      const bool capOk =
-          static_cast<uint64_t>(req.columns) * (outChannels ? outChannels : 1) <=
-          daw::kUiWaveformMaxPairs;
-
-      uint32_t status;         // 0 ok, 1 truncated, 2 notready, 3 badrequest
-      uint32_t flags = 0;      // bit0 = window ran past EOF
-      uint32_t outColumns = 0;
-      uint64_t frameCount = 0;
-      uint32_t writtenChannels = 0;
-      if (!known || !pow2 || !aligned || req.columns == 0 || outChannels == 0 ||
-          !capOk) {
-        status = 3;  // badrequest
-      } else if (!entryCopy.pyramid) {
-        status = 2;  // source known but not ready (decode failed / pending)
-      } else {
-        // Seqlock is entered below; slice straight into the shared pairs buffer,
-        // which the reader ignores while seq is odd.
-        status = 0;  // provisional; set to truncated after the slice if short
-        writtenChannels = outChannels;
-      }
-
-      // Publish under the seqlock: seq odd while writing, release-fenced, then even.
-      const uint32_t s = slot.seq.load(std::memory_order_relaxed);
-      slot.seq.store(s | 1u, std::memory_order_relaxed);
-      if (status == 0) {
-        const daw::WaveformSlice sl =
-            daw::sliceWaveform(*entryCopy.pyramid, sel, outChannels, firstFrame,
-                               req.decimation, req.columns, slot.pairs);
-        outColumns = sl.columns;
-        frameCount = sl.frameCount;
-        if (sl.truncated) status = 1;
-        if (sl.pastEof) flags |= 1u;
-      }
-      slot.requestSeq = req.requestSeq;
-      slot.sourceId = req.sourceId;
-      slot.contentKeyLo = static_cast<uint32_t>(entryCopy.contentKey & 0xffffffffu);
-      slot.contentKeyHi = static_cast<uint32_t>(entryCopy.contentKey >> 32);
-      slot.decimation = req.decimation;
-      slot.columns = outColumns;
-      slot.channels = writtenChannels;
-      slot.firstFrame = firstFrame;
-      slot.frameCount = frameCount;
-      slot.status = status;
-      // THE ANSWER SAYS WHICH SAMPLER SOURCE IT IS, because sourceId alone does not: a local id
-      // is a per-device counter, so local id 1 of two different samplers is one cache key for a
-      // reader that files answers by what they describe. Same key, different audio, and the
-      // second pad draws the first one's waveform.
-      //
-      // Written even when the request FAILED, so a badrequest is attributable to the triple that
-      // caused it rather than arriving anonymous.
-      if ((req.flags & daw::kWaveformRequestSamplerSource) != 0) {
-        flags |= daw::kUiWaveformFlagSamplerSource;
-        slot.samplerAddr = daw::packSamplerAddr(req.reserved0, req.reserved1);
-      } else {
-        slot.samplerAddr = 0;
-      }
-      slot.flags = flags;
-      slot.formatVersion = daw::kWaveformFormatVersion;
-      std::atomic_thread_fence(std::memory_order_release);
-      slot.seq.store((s | 1u) + 1u, std::memory_order_relaxed);
+      daw::engine::handleRequestWaveform(requestCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RequestClipWindow)) {
-      daw::UiClipWindowCommandPayload windowPayload{};
-      std::memcpy(&windowPayload, entry.payload, sizeof(windowPayload));
-      daw::ClipWindowRequest request{};
-      request.trackId = windowPayload.trackId;
-      request.requestId = windowPayload.requestId;
-      request.cursorEventIndex = windowPayload.cursorEventIndex;
-      request.windowStartNanotick =
-          static_cast<uint64_t>(windowPayload.windowStartLo) |
-          (static_cast<uint64_t>(windowPayload.windowStartHi) << 32);
-      request.windowEndNanotick =
-          static_cast<uint64_t>(windowPayload.windowEndLo) |
-          (static_cast<uint64_t>(windowPayload.windowEndHi) << 32);
-      {
-        std::lock_guard<std::mutex> lock(clipWindowMutex);
-        clipWindowPending = ClipWindowPending{request};
-      }
+      daw::engine::handleRequestClipWindow(requestCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::Undo)) {
       if (!requireMatchingClipVersion(payload.baseVersion,
@@ -11427,37 +11146,7 @@ int main(int argc, char** argv) {
       }
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetTrackMixer)) {
-      TrackRuntime* runtime = nullptr;
-      if (payload.trackId == daw::kMasterTrackId) {
-        // The master fader (gain/mute) is a real mixer target; the audio callback
-        // reads these atomics each block to attenuate the summed output.
-        runtime = masterTrack.get();
-      } else {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (payload.trackId < tracks.size()) {
-          runtime = tracks[payload.trackId].get();
-        }
-      }
-      if (!runtime) {
-        return;
-      }
-      const double gainDb = static_cast<double>(static_cast<int32_t>(payload.value0)) / 100.0;
-      const double pan =
-          static_cast<double>(static_cast<int32_t>(payload.pluginIndex)) / 1000.0;
-      const float gainLinear = static_cast<float>(std::pow(10.0, gainDb / 20.0));
-      runtime->mixGainLinear.store(gainLinear, std::memory_order_relaxed);
-      runtime->mixPan.store(static_cast<float>(std::clamp(pan, -1.0, 1.0)),
-                            std::memory_order_relaxed);
-      runtime->mixMute.store((payload.flags & daw::kMixerFlagMute) != 0,
-                             std::memory_order_relaxed);
-      runtime->mixSolo.store((payload.flags & daw::kMixerFlagSolo) != 0,
-                             std::memory_order_relaxed);
-      DAW_EVENT("mixer.set")
-          .field("track", payload.trackId)
-          .field("gain_db", gainDb)
-          .field("pan", pan)
-          .field("mute", (payload.flags & daw::kMixerFlagMute) != 0)
-          .field("solo", (payload.flags & daw::kMixerFlagSolo) != 0);
+      daw::engine::handleSetTrackMixer(trackpropsCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::WriteHarmony)) {
       if (!requireMatchingHarmonyVersion(payload.baseVersion,
@@ -11530,211 +11219,22 @@ int main(int argc, char** argv) {
       }
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetTrackHarmonyQuantize)) {
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (payload.trackId < tracks.size()) {
-          runtime = tracks[payload.trackId].get();
-        }
-      }
-      if (!runtime) {
-        daw::LogLine() << "UI: SetTrackHarmonyQuantize failed - track "
-                  << payload.trackId << " not found" << std::endl;
-        return;
-      }
-      const bool enable = payload.value0 != 0;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        runtime->track.harmonyQuantize = enable;
-      }
-      std::atomic_store_explicit(
-          &runtime->trackSnapshot,
-          buildTrackSnapshot(runtime->track),
-          std::memory_order_release);
-      std::cout << "UI: Track " << payload.trackId
-                << " harmony quantize " << (enable ? "on" : "off") << std::endl;
+      daw::engine::handleSetTrackHarmonyQuantize(trackpropsCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetTrackSoundAddressed)) {
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (payload.trackId < tracks.size()) {
-          runtime = tracks[payload.trackId].get();
-        }
-      }
-      if (!runtime) {
-        daw::LogLine() << "UI: SetTrackSoundAddressed failed - track "
-                       << payload.trackId << " not found" << std::endl;
-        return;
-      }
-      const bool enable = payload.value0 != 0;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        runtime->track.soundAddressedOnly = enable;
-      }
-      // PUBLISH THE SNAPSHOT, or the RT keeps dispatching under the old rule. The model and the
-      // snapshot are two facts about one thing and the dispatch path reads only the second.
-      std::atomic_store_explicit(
-          &runtime->trackSnapshot,
-          buildTrackSnapshot(runtime->track),
-          std::memory_order_release);
-      DAW_EVENT("track.sound_addressed")
-          .field("track", payload.trackId)
-          .field("enabled", enable);
+      daw::engine::handleSetTrackSoundAddressed(trackpropsCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetTrackCollapsed)) {
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (payload.trackId < tracks.size()) {
-          runtime = tracks[payload.trackId].get();
-        }
-      }
-      if (!runtime) {
-        daw::LogLine() << "UI: SetTrackCollapsed failed - track "
-                       << payload.trackId << " not found" << std::endl;
-        return;
-      }
-      // AN ATOMIC, not the track struct under its mutex: `collapsed` lives beside the other
-      // per-track atomics the publisher reads every frame, and the save copies it out from there.
-      // No snapshot rebuild — it changes nothing the RT plays.
-      const bool folded = payload.value0 != 0;
-      runtime->collapsed.store(folded, std::memory_order_relaxed);
-      DAW_EVENT("track.collapsed")
-          .field("track", payload.trackId)
-          .field("collapsed", folded);
+      daw::engine::handleSetTrackCollapsed(trackpropsCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetTrackLinesPerBeat)) {
-      // THE LAST PIECE OF PER-LANE GRIDS. lines_per_beat has been per track in the project
-      // format, published in uiLinesPerBeat and honoured by the tracker's grid since v10, and
-      // nothing could set it: a project could CARRY a 3-rows-per-beat lane and no surface could
-      // MAKE one.
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (payload.trackId < tracks.size()) {
-          runtime = tracks[payload.trackId].get();
-        }
-      }
-      if (!runtime) {
-        DAW_EVENT("track.lines_per_beat_rejected")
-            .field("track", payload.trackId)
-            .field("reason", "no_such_track");
-        return;
-      }
-      // REFUSED, NOT CLAMPED, at both ends. 0 is the clip-grid packer's sentinel for "no grid on
-      // this extent", and anything past 31 does not fit the five bits it gets — a 32 packs as a 0
-      // and the lane comes back with no grid at all. Clamping either end hands back a subdivision
-      // nobody asked for, with nothing to notice it by.
-      if (payload.value0 == 0 || payload.value0 > 31) {
-        DAW_EVENT("track.lines_per_beat_rejected")
-            .field("track", payload.trackId)
-            .field("lines", payload.value0)
-            .field("reason", "out_of_range");
-        return;
-      }
-      // AN ATOMIC, like `collapsed` beside it: the publisher reads it every frame and the save
-      // copies it out from there. No snapshot rebuild — the grid is how notes are DRAWN and
-      // entered, not how they are dispatched, so nothing the RT plays changes.
-      runtime->linesPerBeat.store(payload.value0, std::memory_order_relaxed);
-      DAW_EVENT("track.lines_per_beat")
-          .field("track", payload.trackId)
-          .field("lines", payload.value0);
+      daw::engine::handleSetTrackLinesPerBeat(trackpropsCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetTrackAllowNoteOverlap)) {
-      // THE ONLY SETTING IN THE TRACKER THAT DECIDES WHETHER AN EDIT LOSES DATA. Off, entering a
-      // note over a sounding one truncates the sounding note IN THE DOCUMENT. On, it is left
-      // alone and both keep the durations they were given.
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (payload.trackId < tracks.size()) {
-          runtime = tracks[payload.trackId].get();
-        }
-      }
-      if (!runtime) {
-        DAW_EVENT("track.allow_note_overlap_rejected")
-            .field("track", payload.trackId)
-            .field("reason", "no_such_track");
-        return;
-      }
-      // No snapshot rebuild: this changes how notes are ENTERED, not how they are dispatched, so
-      // nothing the RT plays depends on it. The next edit reads the atomic directly.
-      const bool allow = payload.value0 != 0;
-      runtime->allowNoteOverlap.store(allow, std::memory_order_relaxed);
-      DAW_EVENT("track.allow_note_overlap")
-          .field("track", payload.trackId)
-          .field("allow", allow);
+      daw::engine::handleSetTrackAllowNoteOverlap(trackpropsCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetLaneQuantize)) {
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (payload.trackId < tracks.size()) {
-          runtime = tracks[payload.trackId].get();
-        }
-      }
-      if (!runtime) {
-        daw::LogLine() << "UI: SetLaneQuantize failed - track " << payload.trackId
-                  << " not found" << std::endl;
-        return;
-      }
-      daw::LaneQuantize q;
-      q.gridNanoticks = (static_cast<uint64_t>(payload.noteNanotickHi) << 32) |
-                        payload.noteNanotickLo;
-      q.strengthMilli =
-          std::min<uint32_t>(payload.value0, daw::kLaneQuantizeMaxStrength);
-      q.swingMilli = std::clamp(
-          static_cast<int32_t>(payload.notePitch) -
-              static_cast<int32_t>(daw::kLaneQuantizeSwingBias),
-          -daw::kLaneQuantizeMaxSwing, daw::kLaneQuantizeMaxSwing);
-      runtime->quantizeGrid.store(q.gridNanoticks, std::memory_order_release);
-      runtime->quantizeStrength.store(q.strengthMilli, std::memory_order_release);
-      runtime->quantizeSwing.store(q.swingMilli, std::memory_order_release);
-      std::shared_ptr<const ClipSnapshot> snapshot;
-      {
-        // The scheduling copy is derived from the lane's quantize, so changing it has
-        // to rebuild that copy — otherwise the setting is stored and inaudible until
-        // the next unrelated edit happens to rebuild.
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        snapshot = rebuildFlatAndPublish(*runtime);
-      }
-      if (snapshot) {
-        std::atomic_store_explicit(&runtime->clipSnapshot, snapshot,
-                                   std::memory_order_release);
-      }
-      // The AUTHORED notes did not change, so this is not a clip edit and must not
-      // advance a clip version: doing so would reject every editor's in-flight edit
-      // for a change that moved no note. It does change what the UI must draw (the
-      // deviation bars), which is what the published per-lane quantize is for.
-      quantizeVersion.fetch_add(1, std::memory_order_acq_rel);
-      // How many events the scheduling copy actually moved. This is the only externally
-      // visible proof that quantize is WIRED rather than merely stored: the authored
-      // clip is unchanged by design, so "the notes did not move" is true either way, and
-      // the audible half needs a number to assert on. Counted against the same snapshot
-      // the producer will schedule from.
-      uint32_t movedEvents = 0;
-      if (snapshot) {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        const auto& authored = runtime->track.clip.events();
-        const auto& scheduled = snapshot->events;
-        if (authored.size() == scheduled.size()) {
-          for (size_t i = 0; i < authored.size(); ++i) {
-            if (authored[i].nanotickOffset != scheduled[i].nanotickOffset) {
-              ++movedEvents;
-            }
-          }
-        }
-      }
-      DAW_EVENT("lane.quantize")
-          .field("track", payload.trackId)
-          .field("grid", q.gridNanoticks)
-          .field("strength", q.strengthMilli)
-          .field("moved", movedEvents)
-          .field("swing", static_cast<uint32_t>(q.swingMilli + daw::kLaneQuantizeSwingBias));
-      std::cout << "UI: Track " << payload.trackId << " quantize grid "
-                << q.gridNanoticks << " strength " << q.strengthMilli
-                << " swing " << q.swingMilli << std::endl;
+      daw::engine::handleSetLaneQuantize(trackpropsCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetLoopRange)) {
       const uint64_t start =
