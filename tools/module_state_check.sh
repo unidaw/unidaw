@@ -40,7 +40,12 @@ CLI="$ROOT/ui/target/debug/daw-cli"
 
 HOME_DIR="$(mktemp -d)"   # where the song is made
 AWAY_DIR="$(mktemp -d)"   # the other machine
-trap 'rm -rf "$HOME_DIR" "$AWAY_DIR"' EXIT
+# THE ENGINE GOES WITH THE CHECK, including when ctest KILLS the check on a timeout. This trap
+# removed both trees and left the engine running: a timed-out check orphaned it and ctest then
+# blocked on it, ~1000s per timeout measured across 18 runs. stop_engine escalates to SIGKILL
+# after 10s and says so.
+cleanup() { [ -n "${ENG:-}" ] && stop_engine "$ENG"; rm -rf "$HOME_DIR" "$AWAY_DIR"; }
+trap cleanup EXIT
 ENG=""
 fail() {
   echo "  FAIL: $*"

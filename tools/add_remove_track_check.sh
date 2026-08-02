@@ -44,6 +44,15 @@ PY
 ( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 12 >"$TMP/eng.log" 2>&1 ) &
 ENG=$!
+# NO TRAP AT ALL until now, so a check killed by a ctest timeout left its engine running and ctest
+# blocked on the orphan. Two engines here, hence two names; ${..:-} because the trap is installed
+# before the second one exists.
+cleanup() {
+  [ -n "${ENG:-}" ] && stop_engine "$ENG"
+  [ -n "${ENG2:-}" ] && stop_engine "$ENG2"
+  rm -rf "$TMP"
+}
+trap cleanup EXIT
 sleep 2
 DAW_UI_SHM_NAME="$SHM" "$CLI" do load one --force >/dev/null 2>&1 || true
 sleep 1
