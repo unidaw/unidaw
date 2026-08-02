@@ -27,12 +27,18 @@
 #
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tools/lib/engine_wait.sh"
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
 Q=960000
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+# THE ENGINE GOES WITH THE CHECK, including when ctest KILLS it on a timeout. This trap removed
+# $TMP and left the engine running, so a timed-out check orphaned it and ctest then blocked on the
+# orphan — ~1000s per timeout, measured across 18 runs. override was the demonstrated case: 909.87s
+# against a TIMEOUT of 600 while passing standalone in 23.2s.
+cleanup() { [ -n "${ENG:-}" ] && stop_engine "$ENG"; rm -rf "$TMP"; }
+trap cleanup EXIT
 
 [ -x "$BUILD/daw_engine" ] || { echo "build daw_engine first"; exit 2; }
 [ -x "$CLI" ] || { echo "build daw-cli first (cargo build -p daw-cli)"; exit 2; }
