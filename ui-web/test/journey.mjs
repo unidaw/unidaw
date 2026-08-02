@@ -179,7 +179,24 @@ for (let i = 0; i < 3; i++) {
   await settle(600);
   added++;
 }
-const afterAdd = (await st()).engine;
+/*
+ * WAIT FOR THE COUNT, DO NOT SAMPLE IT AFTER A GUESSED INTERVAL.
+ *
+ * This read the track count once, 600 ms after the last click. A click here is a round trip
+ * — command ring, engine applies it, engine republishes, sidecar forwards, page decodes —
+ * and under load that outruns 600 ms, so the suite reported "2 + 3 -> 4" and accused the
+ * button of dropping a press when the third track existed and had not been published yet.
+ *
+ * Waiting for the expected value keeps the check honest rather than weakening it: a click
+ * that is genuinely lost never arrives, and this still fails. What it stops failing for is
+ * the answer being in flight, which is the difference between a test and a stopwatch.
+ */
+let afterAdd = null;
+for (let i = 0; i < 40; i++) {
+  afterAdd = (await st()).engine;
+  if (afterAdd && afterAdd.trackCount === startTracks + added) break;
+  await page.waitForTimeout(150);
+}
 ok(afterAdd && afterAdd.trackCount === startTracks + added,
    'clicking add-track adds a track each time',
    `${startTracks} + ${added} -> ${afterAdd && afterAdd.trackCount}`);
