@@ -79,26 +79,17 @@ file(GLOB _engine_command_sources ${CMAKE_CURRENT_SOURCE_DIR}/apps/engine_*_comm
 set_source_files_properties(${_engine_command_sources}
   PROPERTIES COMPILE_OPTIONS "${engine_commands_warnings}")
 
-add_executable(daw_engine
-  apps/daw_engine_main.cpp
-  apps/engine_pure.cpp
-  apps/engine_rt_helpers.cpp
-  apps/engine_sampler_commands.cpp
-  apps/engine_automation_commands.cpp
-  apps/engine_clip_commands.cpp
-  apps/engine_modlink_commands.cpp
-  apps/engine_module_commands.cpp
-  apps/engine_patcher_commands.cpp
-  apps/engine_chain_commands.cpp
-  apps/engine_marker_commands.cpp
-  apps/engine_project_commands.cpp
-  apps/engine_rowops_commands.cpp
-  apps/engine_track_commands.cpp
-  apps/engine_request_commands.cpp
-  apps/engine_trackprops_commands.cpp
-  apps/engine_device_commands.cpp
-  apps/engine_note_commands.cpp
-  apps/engine_undo_commands.cpp
+# THE ENGINE, AS TWO LIBRARIES AND A main.cpp.
+#
+# The sixteen command modules used to compile only into this executable, so nothing else could
+# link them: each test binary re-listed a dozen support sources by hand, and adding a test for any
+# of the remaining untested handlers meant copying that list again. That friction is why they were
+# untested. Measured cost of an edit-build-run cycle on an extracted command: 2.74s against 14.36s
+# to compile and link daw_engine.
+#
+# No code moved and no file changed. This is a build-graph edit whose whole purpose is to make the
+# next test three lines instead of twenty.
+add_library(engine_core STATIC
   apps/audio_shm.cpp
   apps/clip_edit.cpp
   apps/chord_resolver.cpp
@@ -118,13 +109,44 @@ add_executable(daw_engine
   apps/ui_snapshot.cpp
   apps/shared_memory.cpp
 )
+target_include_directories(engine_core PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(engine_core PUBLIC platform_juce)
+
+add_library(engine_commands STATIC
+  apps/engine_pure.cpp
+  apps/engine_rt_helpers.cpp
+  apps/engine_sampler_commands.cpp
+  apps/engine_automation_commands.cpp
+  apps/engine_clip_commands.cpp
+  apps/engine_modlink_commands.cpp
+  apps/engine_module_commands.cpp
+  apps/engine_patcher_commands.cpp
+  apps/engine_chain_commands.cpp
+  apps/engine_marker_commands.cpp
+  apps/engine_project_commands.cpp
+  apps/engine_rowops_commands.cpp
+  apps/engine_track_commands.cpp
+  apps/engine_request_commands.cpp
+  apps/engine_trackprops_commands.cpp
+  apps/engine_device_commands.cpp
+  apps/engine_note_commands.cpp
+  apps/engine_undo_commands.cpp
+)
+target_link_libraries(engine_commands PUBLIC engine_core)
+
+add_executable(daw_engine
+  apps/daw_engine_main.cpp
+)
 
 target_include_directories(daw_engine PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${Boost_INCLUDE_DIRS}
 )
 
-target_link_libraries(daw_engine PRIVATE platform_juce)
+target_link_libraries(daw_engine PRIVATE engine_commands)
 
 # THE SMALLEST PROGRAM THAT CAN ANSWER "does audio work on this machine". No producer, no
 # threads, no shared memory, no plugin hosts, no transport — just the default output device and a
@@ -434,23 +456,12 @@ target_include_directories(lane_quantize_tests PRIVATE
 # apps/engine_pure.h is what made the tests possible, and the tests are the reason to extract them.
 add_executable(engine_pure_tests
   apps/engine_pure_tests_main.cpp
-  apps/engine_pure.cpp
-  apps/clip_edit.cpp
-  apps/project_file.cpp
-  apps/harmony_timeline.cpp
-  apps/scale_library.cpp
-  apps/patcher_graph.cpp
-  apps/patcher_preset.cpp
-  apps/patcher_preset_library.cpp
-  apps/patcher_abi.cpp
-  apps/device_chain.cpp
-  apps/event_log.cpp
-  apps/shared_memory.cpp
 )
 target_include_directories(engine_pure_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${Boost_INCLUDE_DIRS}
 )
+target_link_libraries(engine_pure_tests PRIVATE engine_commands)
 
 # THE FIRST UNIT TESTS OF A UI COMMAND. Until these handlers were extracted from handleUiEntry
 # there was no way to ask a command a question without building an engine, mapping shared memory
@@ -458,89 +469,36 @@ target_include_directories(engine_pure_tests PRIVATE
 # do, had no direct coverage at all.
 add_executable(engine_sampler_commands_tests
   apps/engine_sampler_commands_tests_main.cpp
-  apps/engine_sampler_commands.cpp
-  apps/engine_pure.cpp
-  apps/clip_edit.cpp
-  apps/project_file.cpp
-  apps/harmony_timeline.cpp
-  apps/scale_library.cpp
-  apps/patcher_graph.cpp
-  apps/patcher_preset.cpp
-  apps/patcher_preset_library.cpp
-  apps/patcher_abi.cpp
-  apps/device_chain.cpp
-  apps/event_log.cpp
-  apps/event_ring.cpp
-  apps/shared_memory.cpp
-  apps/host_controller.cpp
-  apps/ipc_io.cpp
-  apps/ui_snapshot.cpp
-  apps/audio_shm.cpp
 )
 target_include_directories(engine_sampler_commands_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${Boost_INCLUDE_DIRS}
 )
-target_link_libraries(engine_sampler_commands_tests PRIVATE platform_juce)
+target_link_libraries(engine_sampler_commands_tests PRIVATE engine_commands)
 
 # The automation handlers' four refusal paths are SILENT — a structured event and a return, with
 # nothing on the wire. These tests point DAW_EVENT_LOG at a file and assert WHICH refusal fired,
 # because "no lane was created" is otherwise identical across all four.
 add_executable(engine_automation_commands_tests
   apps/engine_automation_commands_tests_main.cpp
-  apps/engine_automation_commands.cpp
-  apps/engine_pure.cpp
-  apps/clip_edit.cpp
-  apps/project_file.cpp
-  apps/harmony_timeline.cpp
-  apps/scale_library.cpp
-  apps/patcher_graph.cpp
-  apps/patcher_preset.cpp
-  apps/patcher_preset_library.cpp
-  apps/patcher_abi.cpp
-  apps/device_chain.cpp
-  apps/event_log.cpp
-  apps/event_ring.cpp
-  apps/shared_memory.cpp
-  apps/host_controller.cpp
-  apps/ipc_io.cpp
-  apps/ui_snapshot.cpp
-  apps/audio_shm.cpp
 )
 target_include_directories(engine_automation_commands_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${Boost_INCLUDE_DIRS}
 )
-target_link_libraries(engine_automation_commands_tests PRIVATE platform_juce)
+target_link_libraries(engine_automation_commands_tests PRIVATE engine_commands)
 
 # THE FIRST TESTS OF REAL-TIME-PATH CODE. These three rules run on the producer thread, which
 # calls elevateToAudioPriority(); until they were extracted, asking whether an unknown scaleId
 # still produces an audible pitch meant booting a process and rendering audio.
 add_executable(engine_rt_helpers_tests
   apps/engine_rt_helpers_tests_main.cpp
-  apps/engine_rt_helpers.cpp
-  apps/scale_library.cpp
-  apps/harmony_timeline.cpp
-  apps/device_chain.cpp
-  apps/patcher_graph.cpp
-  apps/patcher_abi.cpp
-  apps/event_log.cpp
-  apps/event_ring.cpp
-  apps/shared_memory.cpp
-  apps/host_controller.cpp
-  apps/ipc_io.cpp
-  apps/project_file.cpp
-  apps/patcher_preset.cpp
-  apps/patcher_preset_library.cpp
-  apps/clip_edit.cpp
-  apps/ui_snapshot.cpp
-  apps/audio_shm.cpp
 )
 target_include_directories(engine_rt_helpers_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${Boost_INCLUDE_DIRS}
 )
-target_link_libraries(engine_rt_helpers_tests PRIVATE platform_juce)
+target_link_libraries(engine_rt_helpers_tests PRIVATE engine_commands)
 
 # Header-only tests for the per-clip grid packed into UiClipExtent.flags.
 add_executable(clip_grid_tests
