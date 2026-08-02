@@ -103,7 +103,11 @@ done
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load sc --force >/dev/null 2>&1 || true
 wait_for_boot "$TMP/eng.log" "$ENG" 80
-sleep 1.5
+# POLL FOR THE REGION THIS CHECK READS, not a fixed interval. wait_for_boot means the project
+# LOADED; it does not mean the clip-extent region has been published. That gap is what made
+# lane_quantize flake one run in three and automation_readback report MISSING lanes.
+extents_ready() { cli get extents 2>/dev/null | grep -q '"placement"'; }
+wait_until 20 extents_ready || true
 
 # "placement:clip" per appearance, and whether it has an alternate — read through python so a
 # grep that matches the wrong line cannot pass the check.

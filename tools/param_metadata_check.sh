@@ -87,7 +87,22 @@ done
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load pm --force >/dev/null 2>&1 || true
 wait_for_boot "$TMP/eng.log" "$ENG" 80
-sleep 1.5
+# POLL FOR THE REGION THIS CHECK READS, not a fixed interval. wait_for_boot means the project
+# LOADED; it does not mean the device-param region has been published — the gap that made
+# lane_quantize flake one run in three.
+#
+# PARSES AND REQUIRES CONTENT rather than grepping a key. My first attempt grepped '"param"',
+# which never matches (the array is "params"), so the poll timed out and the check failed —
+# a predicate that can never be true is as bad as one that is always true.
+params_ready() {
+  cli get device-params 0 0 2>/dev/null | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if d.get("params") else 1)'
+}
+wait_until 20 params_ready || true
 
 PARAMS="$(cli get device-params 0 0 2>/dev/null)"
 echo "$PARAMS" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null || \
