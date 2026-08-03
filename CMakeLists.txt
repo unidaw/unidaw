@@ -652,6 +652,11 @@ add_test(NAME doc_citation
 )
 set_tests_properties(doc_citation PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+add_test(NAME clip_reject
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/clip_reject_check.sh
+)
+set_tests_properties(clip_reject PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 add_test(NAME progress_doc
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/progress_check.sh
 )

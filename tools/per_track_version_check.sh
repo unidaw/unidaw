@@ -87,7 +87,21 @@ sleep 0.6
 cli do note --force --track 1 --base "$BASE1" --nanotick 0 --pitch 64 --duration $Q >/dev/null
 sleep 0.6
 # --- A writes track 0 again against the SAME (now stale) base: must be refused.
-cli do note --force --track 0 --base "$BASE0" --nanotick $((4*Q)) --pitch 67 --duration $Q >/dev/null
+#
+# EXPECTED TO EXIT NON-ZERO, and that is now an assertion rather than something to survive.
+# daw-cli used to print "sent" and exit 0 on an edit the engine had thrown away, so the only
+# evidence of the refusal was the journal line checked below. It reports the refusal now, which
+# means the exit code IS the direct evidence — but this script runs under `set -e`, so the
+# expected failure has to be caught rather than allowed to abort the run.
+set +e
+cli do note --force --track 0 --base "$BASE0" --nanotick $((4*Q)) --pitch 67 --duration $Q >/dev/null 2>"$TMP/reject.err"
+STALE_RC=$?
+set -e
+[ "$STALE_RC" -ne 0 ] || fail "the deliberately stale write exited 0. Either the engine accepted
+        an edit against a version it had already moved past — which is version checking not
+        working at all — or the client is not reading the refusal it was sent"
+grep -q "REFUSED" "$TMP/reject.err" || fail "the stale write exited $STALE_RC but said nothing
+        about being refused; a caller cannot tell which edit was lost from an exit code alone"
 sleep 0.8
 
 N0="$(cli get notes --track 0 | sed -n 's/.*"note_count": \([0-9]*\).*/\1/p')"

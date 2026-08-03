@@ -254,8 +254,13 @@ waitsched() {
   return 1
 }
 
+# --retry-stale, because this check is the only writer and the version it reads can move
+# between the read and the send: the engine bumps the clip version during the startup load and
+# publishes it a moment later, so a command sent in that window is refused with resync_requested.
+# Without the retry the chord is silently dropped and the failure surfaces here as "no
+# chord.scheduled" — which reads as a scheduler bug rather than a lost command.
 cli do chord --track 0 --nanotick 0 --degree 1 --duration "$Q" \
-     --spread 480000 --humanize-timing 30 --humanize-velocity 40 >/dev/null 2>&1
+     --spread 480000 --humanize-timing 30 --humanize-velocity 40 --retry-stale >/dev/null 2>&1
 cli do play >/dev/null 2>&1
 
 # ---- SCHEDULED. Every assertion below is a field on this event, so its absence is the first

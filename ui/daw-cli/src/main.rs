@@ -1080,6 +1080,64 @@ fn mixer_command(args: &[String]) -> Result<UiCommandPayload, String> {
     })
 }
 
+/// WHAT THE ENGINE DID WITH THE COMMAND WE JUST SENT.
+///
+/// A clip edit carries the base version the caller read. If the engine has moved on, the edit is
+/// REFUSED and a `ClipRejected` diff comes back carrying `currentBase` — which the payload's own
+/// comment calls "the value to retry with". Nothing on this side read it, so a refused edit
+/// printed `{"sent": ...}` and exited 0: the edit was lost and the caller was told it worked.
+///
+/// ONLY DIFFS NEWER THAN OUR SEND ARE CONSIDERED. The ring is PEEKED, not drained — the real UI
+/// is its consumer and a tool that drained here would steal diffs from the app it is observing —
+/// so refusals from earlier commands stay visible indefinitely. Matching on (track, command,
+/// sentBase) alone therefore matches somebody else's refusal, and the first version of this did:
+/// it re-sent an edit that had already been applied, and `override` failed with a redo that
+/// restored nothing. `before_len` is the ring's length at send time; anything at or past it is
+/// ours.
+///
+/// ACCEPTANCE HAS A POSITIVE SIGNAL, so the common path does not pay the timeout. The engine
+/// advances the track's clip version on every applied edit, so a version that has moved is an
+/// acknowledgement. Without that, every successful command waited out the full poll window —
+/// which is not just slow, it changes the timing of anything driving several edits in sequence.
+enum ClipOutcome {
+    Applied,
+    Refused { reason: u16, current: u32 },
+    /// Neither signal arrived in time. Treated as applied, which is what this tool did for its
+    /// whole life before the refusal was readable at all — reporting a refusal we did not observe
+    /// would be worse than the silence it replaces.
+    Unknown,
+}
+
+fn await_clip_outcome(
+    handle: &EngineHandle,
+    track: u32,
+    command_type: u16,
+    sent_base: u32,
+    before_len: usize,
+    version_before: u32,
+) -> ClipOutcome {
+    for _ in 0..120 {
+        let diffs = handle.peek_ui_diffs();
+        for (diff_type, payload) in diffs.iter().skip(before_len) {
+            if *diff_type != daw_bridge::layout::UiDiffType::ClipRejected as u16 {
+                continue;
+            }
+            let u16at = |o: usize| u16::from_le_bytes([payload[o], payload[o + 1]]);
+            let u32at = |o: usize| {
+                u32::from_le_bytes([payload[o], payload[o + 1], payload[o + 2], payload[o + 3]])
+            };
+            if u32at(4) == track && u16at(16) == command_type && u32at(8) == sent_base {
+                return ClipOutcome::Refused { reason: u16at(2), current: u32at(12) };
+            }
+        }
+        if handle.clip_version_for_track(track) != version_before {
+            return ClipOutcome::Applied;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    ClipOutcome::Unknown
+}
+
 fn chord_command(
     args: &[String],
     base_version: u32,
@@ -2173,14 +2231,59 @@ fn main() {
                         Ok(v) if v != u64::MAX => v as u32,
                         _ => handle.clip_version_for_track(track),
                     };
+                    // RETRY UNLESS THE CALLER PINNED A BASE, and that distinction is the whole
+                    // policy. Passing --base means "I read this version earlier and I am writing
+                    // against it" — a concurrent author, deliberately testing staleness — so a
+                    // refusal is the ANSWER they asked for and must be reported, not papered over.
+                    // Omitting it means "apply this now"; the caller has no opinion about a
+                    // version, so a stale-base refusal is pure noise from a publish that had not
+                    // caught up, and retrying against the version the engine handed back is
+                    // exactly what it asked for with resync_requested.
+                    let pinned_base = matches!(flag_u64(&args, "--base", Some(u64::MAX)),
+                                               Ok(v) if v != u64::MAX);
+                    let retry_stale = !pinned_base || args.iter().any(|a| *a == "--retry-stale");
+                    let before_len = handle.peek_ui_diffs().len();
+                    let ver_before = handle.clip_version_for_track(track);
                     match note_command(command, &args, base) {
                         Ok(payload) => match handle.send_command(payload) {
                             Ok(()) => {
                                 let label = if is_write { "note" } else { "delete-note" };
-                                println!(
-                                    "{{ \"sent\": \"{label}\", \"base_version\": {base} }}"
-                                );
-                                0
+                                let cmd = command as u16;
+                                match await_clip_outcome(&handle, track, cmd, base, before_len, ver_before) {
+                                    ClipOutcome::Applied | ClipOutcome::Unknown => {
+                                        println!(
+                                            "{{ \"sent\": \"{label}\", \"base_version\": {base} }}"
+                                        );
+                                        0
+                                    }
+                                    ClipOutcome::Refused { reason, current } if retry_stale
+                                        && reason == daw_bridge::layout::UiClipRejectReason::StaleBase as u16 => {
+                                        match note_command(command, &args, current) {
+                                            Ok(again) => match handle.send_command(again) {
+                                                Ok(()) => match await_clip_outcome(&handle, track, cmd, current, handle.peek_ui_diffs().len(), handle.clip_version_for_track(track)) {
+                                                    ClipOutcome::Applied | ClipOutcome::Unknown => {
+                                                        eprintln!("daw-cli: base {base} was stale; retried at {current}");
+                                                        println!("{{ \"sent\": \"{label}\", \"base_version\": {current}, \"retried\": true }}");
+                                                        0
+                                                    }
+                                                    ClipOutcome::Refused { reason: r2, current: c2 } => {
+                                                        eprintln!("daw-cli: {label} REFUSED again after retry (reason {r2}, engine now at {c2})");
+                                                        3
+                                                    }
+                                                },
+                                                Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                                            },
+                                            Err(err) => { eprintln!("daw-cli: {err}"); 2 }
+                                        }
+                                    }
+                                    ClipOutcome::Refused { reason, current } => {
+                                        eprintln!("daw-cli: the engine REFUSED this {label} — reason {reason}, \
+                                                   presented base {base}, engine holds {current}. \
+                                                   The edit was NOT applied. Re-read the clip version \
+                                                   and send again, or pass --retry-stale.");
+                                        3
+                                    }
+                                }
                             }
                             Err(err) => {
                                 eprintln!("daw-cli: {err}");
@@ -4500,12 +4603,60 @@ removed is the whole command");
                 },
                 Some(&"chord") => {
                     let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    // `do chord` has no --base, so the caller never pins a version: every send
+                    // means "apply this now". A stale-base refusal here is therefore always noise
+                    // from a publish that had not caught up, and retrying against the version the
+                    // engine handed back is what resync_requested asks for. The refusal is still
+                    // reported if the RETRY is refused too, which is the case that means something.
+                    let retry_stale = true;
                     let base = handle.clip_version_for_track(track);  // M2.17: per track
+                    // Sampled BEFORE the send, so the outcome check can tell our own refusal from
+                    // one already sitting in the peeked ring, and can recognise acceptance by the
+                    // version moving.
+                    let before_len = handle.peek_ui_diffs().len();
+                    let ver_before = handle.clip_version_for_track(track);
                     match chord_command(&args, base) {
                         Ok(payload) => match handle.send_chord_command(payload) {
                             Ok(()) => {
-                                println!("{{ \"sent\": \"chord\", \"base_version\": {base} }}");
-                                0
+                                let cmd = payload.command_type;
+                                match await_clip_outcome(&handle, track, cmd, base, before_len, ver_before) {
+                                    ClipOutcome::Applied | ClipOutcome::Unknown => {
+                                        println!("{{ \"sent\": \"chord\", \"base_version\": {base} }}");
+                                        0
+                                    }
+                                    ClipOutcome::Refused { reason, current } if retry_stale
+                                        && reason == daw_bridge::layout::UiClipRejectReason::StaleBase as u16 => {
+                                        // Rebuilt against the version the engine handed back,
+                                        // rather than re-sending the payload with a patched field:
+                                        // the base is not the only thing derived from it.
+                                        match chord_command(&args, current) {
+                                            Ok(again) => match handle.send_chord_command(again) {
+                                                Ok(()) => match await_clip_outcome(&handle, track, cmd, current, handle.peek_ui_diffs().len(), handle.clip_version_for_track(track)) {
+                                                    ClipOutcome::Applied | ClipOutcome::Unknown => {
+                                                        eprintln!("daw-cli: base {base} was stale; retried at {current}");
+                                                        println!("{{ \"sent\": \"chord\", \"base_version\": {current}, \"retried\": true }}");
+                                                        0
+                                                    }
+                                                    ClipOutcome::Refused { reason: r2, current: c2 } => {
+                                                        eprintln!("daw-cli: chord REFUSED again after retry (reason {r2}, engine now at {c2}). The version is moving faster than a retry can follow.");
+                                                        3
+                                                    }
+                                                },
+                                                Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                                            },
+                                            Err(err) => { eprintln!("daw-cli: {err}"); 2 }
+                                        }
+                                    }
+                                    ClipOutcome::Refused { reason, current } => {
+                                        // LOUD, AND NON-ZERO. This used to print "sent" and exit
+                                        // 0 on an edit the engine had thrown away.
+                                        eprintln!("daw-cli: the engine REFUSED this chord — reason {reason}, \
+                                                   presented base {base}, engine holds {current}. \
+                                                   The edit was NOT applied. Re-read the clip version \
+                                                   and send again, or pass --retry-stale.");
+                                        3
+                                    }
+                                }
                             }
                             Err(err) => {
                                 eprintln!("daw-cli: {err}");
