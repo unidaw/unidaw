@@ -97,4 +97,16 @@ daw::EventEntry makeNoteOffEntry(uint64_t sampleTime, uint32_t blockId, uint8_t 
   return entry;
 }
 
+daw::SamplerEvent samplerNoteOffFor(const daw::EventEntry& noteOff, uint64_t blockSampleStart,
+                                    uint32_t blockSize, uint32_t noteId) {
+  daw::SamplerEvent se;
+  const int64_t off =
+      static_cast<int64_t>(noteOff.sampleTime) - static_cast<int64_t>(blockSampleStart);
+  se.offsetInBlock = static_cast<uint32_t>(
+      off < 0 ? 0 : (off >= static_cast<int64_t>(blockSize) ? blockSize - 1 : off));
+  se.kind = daw::SamplerEventKind::NoteOff;
+  se.noteId = noteId;
+  return se;
+}
+
 }  // namespace daw::engine

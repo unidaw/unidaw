@@ -28,6 +28,7 @@
 #include "apps/harmony_timeline.h"
 #include "apps/patcher_graph.h"
 #include "apps/shared_memory.h"
+#include "apps/sampler_engine.h"
 #include "apps/scale_library.h"
 
 namespace daw::engine {
@@ -118,5 +119,29 @@ void removeNoteIdFromColumn(TrackRuntime& runtime, uint8_t column, uint32_t note
 daw::EventEntry makeNoteOffEntry(uint64_t sampleTime, uint32_t blockId, uint8_t pitch,
                                  uint8_t channel, int16_t tuningCents, uint32_t noteId,
                                  uint32_t flags = 0);
+
+// THE SAMPLER TEE FOR A NOTE-OFF, DERIVED FROM THE ENTRY IT ACCOMPANIES.
+//
+// The in-engine sampler is fed a parallel stream of SamplerEvents beside the MIDI ring, and a
+// note-off has to reach both at the SAME sample time. That rule is currently maintained by a
+// comment, across seven sites, and it has already been broken once. From the surviving note in
+// renderTrack:
+//
+//     "offSample, NOT eventSample. This read the NOTE-ON's sample time, so a note whose on and
+//      off fall in the SAME block handed the sampler its note-off at the note-ON's offset and
+//      released the voice at the instant it started. The MIDI entry three lines up already used
+//      offSample — the two disagreed, and only the in-engine tee was wrong, so the same note
+//      through a hosted plugin sounded correct."
+//
+// A rule that is only true because someone remembered it, whose violation is inaudible through
+// one device and audible through another, is a rule that will break again. Taking the note-off
+// ENTRY and reading its own sampleTime makes disagreement impossible rather than unlikely: there
+// is no second value to get wrong.
+//
+// The offset is pinned to the block rather than wrapped. An event before the block belongs at its
+// first sample and one past the end at its last; wrapping would move a release to the wrong side
+// of the buffer.
+daw::SamplerEvent samplerNoteOffFor(const daw::EventEntry& noteOff, uint64_t blockSampleStart,
+                                    uint32_t blockSize, uint32_t noteId);
 
 }  // namespace daw::engine

@@ -12125,16 +12125,11 @@ int main(int argc, char** argv) {
                   midiChannel, activeNote.tuningCents, activeNote.noteId);
               pushScratchpad(noteOffEntry, activeNote.endNanotick);
               if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
-                daw::SamplerEvent se;
-                const int64_t off = static_cast<int64_t>(eventSample) -
-                                    static_cast<int64_t>(blockSampleStart);
-                se.offsetInBlock = static_cast<uint32_t>(
-                    off < 0 ? 0 : (off >= static_cast<int64_t>(engineConfig.blockSize)
-                                       ? engineConfig.blockSize - 1
-                                       : off));
-                se.kind = daw::SamplerEventKind::NoteOff;
-                se.noteId = activeNote.noteId;
-                runtime.samplerEvents.push_back(se);
+                // The tee is DERIVED from the note-off entry above, so the two cannot disagree about
+                // when the release happens. That rule used to live in a comment and had already been
+                // broken once; see samplerNoteOffFor in apps/engine_rt_helpers.h.
+                runtime.samplerEvents.push_back(daw::engine::samplerNoteOffFor(
+                    noteOffEntry, blockSampleStart, engineConfig.blockSize, activeNote.noteId));
               }
               runtime.activeNotes.erase(noteIt);
               removeNoteIdFromColumn(column, noteId);
@@ -12163,16 +12158,11 @@ int main(int argc, char** argv) {
                   midiChannel, activeNote.tuningCents, activeNote.noteId);
               pushScratchpad(noteOffEntry, activeNote.endNanotick);
               if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
-                daw::SamplerEvent se;
-                const int64_t off = static_cast<int64_t>(eventSample) -
-                                    static_cast<int64_t>(blockSampleStart);
-                se.offsetInBlock = static_cast<uint32_t>(
-                    off < 0 ? 0 : (off >= static_cast<int64_t>(engineConfig.blockSize)
-                                       ? engineConfig.blockSize - 1
-                                       : off));
-                se.kind = daw::SamplerEventKind::NoteOff;
-                se.noteId = activeNote.noteId;
-                runtime.samplerEvents.push_back(se);
+                // The tee is DERIVED from the note-off entry above, so the two cannot disagree about
+                // when the release happens. That rule used to live in a comment and had already been
+                // broken once; see samplerNoteOffFor in apps/engine_rt_helpers.h.
+                runtime.samplerEvents.push_back(daw::engine::samplerNoteOffFor(
+                    noteOffEntry, blockSampleStart, engineConfig.blockSize, activeNote.noteId));
               }
               runtime.activeNotes.erase(noteIt);
               removeNoteIdFromColumn(activeNote.column, noteId);
@@ -12289,23 +12279,11 @@ int main(int argc, char** argv) {
                     midiChannel, noteTuningCents, noteId);
                 pushScratchpad(noteOffEntry, noteEndTick);
               if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
-                daw::SamplerEvent se;
-                // offSample, NOT eventSample. This read the NOTE-ON's sample time, so a note
-                // whose on and off fall in the SAME block handed the sampler its note-off at
-                // the note-ON's offset and released the voice at the instant it started. The
-                // MIDI entry three lines up already used offSample — the two disagreed, and
-                // only the in-engine tee was wrong, so the same note through a hosted plugin
-                // sounded correct. Two other tees in this file legitimately use eventSample,
-                // because THEIR note-off entry does too; they are left alone.
-                const int64_t off = static_cast<int64_t>(offSample) -
-                                    static_cast<int64_t>(blockSampleStart);
-                se.offsetInBlock = static_cast<uint32_t>(
-                    off < 0 ? 0 : (off >= static_cast<int64_t>(engineConfig.blockSize)
-                                       ? engineConfig.blockSize - 1
-                                       : off));
-                se.kind = daw::SamplerEventKind::NoteOff;
-                se.noteId = noteId;
-                runtime.samplerEvents.push_back(se);
+                // The tee is DERIVED from the note-off entry above, so the two cannot disagree about
+                // when the release happens. That rule used to live in a comment and had already been
+                // broken once; see samplerNoteOffFor in apps/engine_rt_helpers.h.
+                runtime.samplerEvents.push_back(daw::engine::samplerNoteOffFor(
+                    noteOffEntry, blockSampleStart, engineConfig.blockSize, noteId));
               }
               }
             } else {
@@ -12372,15 +12350,11 @@ int main(int argc, char** argv) {
                       midiChannel, activeNote.tuningCents, activeNote.noteId);
                   pushScratchpad(noteOffEntry, activeNote.endNanotick);
               if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
-                daw::SamplerEvent se;
-                const int64_t off = offOffset;
-                se.offsetInBlock = static_cast<uint32_t>(
-                    off < 0 ? 0 : (off >= static_cast<int64_t>(engineConfig.blockSize)
-                                       ? engineConfig.blockSize - 1
-                                       : off));
-                se.kind = daw::SamplerEventKind::NoteOff;
-                se.noteId = activeNote.noteId;
-                runtime.samplerEvents.push_back(se);
+                // The tee is DERIVED from the note-off entry above, so the two cannot disagree about
+                // when the release happens. That rule used to live in a comment and had already been
+                // broken once; see samplerNoteOffFor in apps/engine_rt_helpers.h.
+                runtime.samplerEvents.push_back(daw::engine::samplerNoteOffFor(
+                    noteOffEntry, blockSampleStart, engineConfig.blockSize, activeNote.noteId));
               }
                   notesToRemove.push_back(noteId);
                 }

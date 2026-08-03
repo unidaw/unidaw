@@ -260,6 +260,34 @@ void testMakeNoteOffEntry() {
   CHECK(neg.tuningCents == -1200);
 }
 
+// ------------------------------------- the tee cannot disagree with the entry it accompanies
+void testSamplerNoteOffFor() {
+  const auto entry = makeNoteOffEntry(/*sampleTime=*/1500, 0, 60, 0, 0, 77);
+
+  const auto se = samplerNoteOffFor(entry, /*blockSampleStart=*/1000, /*blockSize=*/512, 77);
+  CHECK(se.kind == daw::SamplerEventKind::NoteOff);
+  CHECK(se.noteId == 77);
+  // 1500 - 1000 = 500, inside a 512-sample block.
+  CHECK(se.offsetInBlock == 500);
+
+  // THE POINT OF THE FUNCTION: the offset comes from the ENTRY, so moving the entry moves the tee
+  // with it. The bug this replaces was a tee reading the note-ON's time while its own entry used
+  // the note-OFF's — the voice released at the instant it started, and only through the in-engine
+  // sampler, so the same note through a hosted plugin sounded correct.
+  const auto moved = makeNoteOffEntry(/*sampleTime=*/1200, 0, 60, 0, 0, 77);
+  CHECK(samplerNoteOffFor(moved, 1000, 512, 77).offsetInBlock == 200);
+
+  // PINNED TO THE BLOCK, NOT WRAPPED. Before the block belongs at the first sample; past the end
+  // at the last. Wrapping would put a release on the wrong side of the buffer, and an unclamped
+  // cast of a negative offset to uint32_t would produce an enormous one.
+  const auto early = makeNoteOffEntry(/*sampleTime=*/900, 0, 60, 0, 0, 1);
+  CHECK(samplerNoteOffFor(early, 1000, 512, 1).offsetInBlock == 0);
+  const auto late = makeNoteOffEntry(/*sampleTime=*/9999, 0, 60, 0, 0, 1);
+  CHECK(samplerNoteOffFor(late, 1000, 512, 1).offsetInBlock == 511);
+  const auto edge = makeNoteOffEntry(/*sampleTime=*/1512, 0, 60, 0, 0, 1);
+  CHECK(samplerNoteOffFor(edge, 1000, 512, 1).offsetInBlock == 511);   // first sample past the end
+}
+
 }  // namespace
 
 int main() {
@@ -272,6 +300,7 @@ int main() {
   testNodeIndexForId();
   testRemoveNoteIdFromColumn();
   testMakeNoteOffEntry();
+  testSamplerNoteOffFor();
 
   if (g_fail == 0) {
     std::printf("engine_rt_helpers_tests: PASS\n");
