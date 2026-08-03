@@ -696,6 +696,11 @@ add_test(NAME hazard_order
 )
 set_tests_properties(hazard_order PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+add_test(NAME deps_order
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/deps_order_check.sh
+)
+set_tests_properties(deps_order PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 add_test(NAME check_registry
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_registry_check.sh
 )
