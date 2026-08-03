@@ -10528,17 +10528,12 @@ int main(int argc, char** argv) {
       const uint64_t target =
           static_cast<uint64_t>(payload.noteNanotickLo) |
           (static_cast<uint64_t>(payload.noteNanotickHi) << 32);
-      uint64_t start = loopStartNanotick.load(std::memory_order_acquire);
-      uint64_t end = loopEndNanotick.load(std::memory_order_acquire);
-      if (end <= start) {
-        start = 0;
-        end = patternTicks;
-      }
-      // Clamp into the loop; end is exclusive so the last tick is end-1.
-      uint64_t clamped = target < start ? start : target;
-      if (end > 0 && clamped >= end) {
-        clamped = end - 1;
-      }
+      const auto loop = daw::engine::effectiveLoop(
+          loopStartNanotick.load(std::memory_order_acquire),
+          loopEndNanotick.load(std::memory_order_acquire), patternTicks);
+      // CLAMPED, NOT WRAPPED, and the two are a deliberate pair — see clampTickIntoLoop.
+      const uint64_t clamped =
+          daw::engine::clampTickIntoLoop(target, loop.startTick, loop.endTick);
       transportNanotick.store(clamped, std::memory_order_release);
       // A SEEK RESTARTS THE PASS COUNT. Carrying it across a seek would make a conditional trig
       // depend on how the playhead got here, which is exactly the "depends on the session's
@@ -10884,14 +10879,11 @@ int main(int argc, char** argv) {
       }
       const bool isPlaying = playing.load(std::memory_order_acquire);
       auto advanceTransport = [&]() {
-        uint64_t loopStartTicks =
-            loopStartNanotick.load(std::memory_order_acquire);
-        uint64_t loopEndTicks =
-            loopEndNanotick.load(std::memory_order_acquire);
-        if (loopEndTicks <= loopStartTicks) {
-          loopStartTicks = 0;
-          loopEndTicks = patternTicks;
-        }
+        const auto loop = daw::engine::effectiveLoop(
+            loopStartNanotick.load(std::memory_order_acquire),
+            loopEndNanotick.load(std::memory_order_acquire), patternTicks);
+        const uint64_t loopStartTicks = loop.startTick;
+        const uint64_t loopEndTicks = loop.endTick;
         const uint64_t loopLen =
             loopEndTicks > loopStartTicks ? loopEndTicks - loopStartTicks : 0;
         const uint64_t currentTicks =
@@ -11105,14 +11097,11 @@ int main(int argc, char** argv) {
           static_cast<uint64_t>(blockId - 1);
 
       const uint64_t pluginSampleStart = latencyMgr.getCompensatedStart(sampleStart);
-      uint64_t loopStartTicks =
-          loopStartNanotick.load(std::memory_order_acquire);
-      uint64_t loopEndTicks =
-          loopEndNanotick.load(std::memory_order_acquire);
-      if (loopEndTicks <= loopStartTicks) {
-        loopStartTicks = 0;
-        loopEndTicks = patternTicks;
-      }
+      const auto loop = daw::engine::effectiveLoop(
+          loopStartNanotick.load(std::memory_order_acquire),
+          loopEndNanotick.load(std::memory_order_acquire), patternTicks);
+      const uint64_t loopStartTicks = loop.startTick;
+      const uint64_t loopEndTicks = loop.endTick;
       const uint64_t loopLen =
           loopEndTicks > loopStartTicks ? loopEndTicks - loopStartTicks : 0;
       auto wrapTick = [&](uint64_t tick) -> uint64_t {

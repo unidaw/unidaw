@@ -393,4 +393,29 @@ struct LoopSplit {
 LoopSplit splitWindowAtLoopEnd(uint64_t windowStart, uint64_t windowEnd,
                                uint64_t loopStartTick, uint64_t loopEndTick);
 
+
+// The loop the transport actually uses, which is not always the loop that was set.
+//
+// AN UNSET OR INVERTED LOOP MEANS THE WHOLE PATTERN, not "no loop". A project with no loop points
+// still plays and still repeats; treating an empty range as "no looping" would run the transport
+// off the end of the material and leave it there. Written out at three call sites, once per
+// caller that needed to know where the loop is.
+struct LoopBounds {
+  uint64_t startTick = 0;
+  uint64_t endTick = 0;
+};
+LoopBounds effectiveLoop(uint64_t loopStartTick, uint64_t loopEndTick, uint64_t patternTicks);
+
+// Put a SEEK target inside the loop. The third edge behaviour, and the one that must not be
+// folded into the two above.
+//
+// A seek is the user naming a position. Past the end, the answer is the LAST playable tick — not
+// the wrapped one, because wrapping would drop them at the top of the loop when they asked for
+// the bottom, and they would have no way to tell that from the seek having been ignored. The
+// transport wraps because running off the end is what a loop is FOR; a seek clamps because
+// overshooting a request is not the same event.
+//
+// The end is exclusive, so the last playable tick is endTick - 1.
+uint64_t clampTickIntoLoop(uint64_t tick, uint64_t loopStartTick, uint64_t loopEndTick);
+
 }  // namespace daw::engine

@@ -436,4 +436,20 @@ LoopSplit splitWindowAtLoopEnd(uint64_t windowStart, uint64_t windowEnd,
   return out;
 }
 
+
+LoopBounds effectiveLoop(uint64_t loopStartTick, uint64_t loopEndTick, uint64_t patternTicks) {
+  if (loopEndTick <= loopStartTick) {
+    return LoopBounds{0, patternTicks};
+  }
+  return LoopBounds{loopStartTick, loopEndTick};
+}
+
+uint64_t clampTickIntoLoop(uint64_t tick, uint64_t loopStartTick, uint64_t loopEndTick) {
+  uint64_t clamped = tick < loopStartTick ? loopStartTick : tick;
+  if (loopEndTick > 0 && clamped >= loopEndTick) {
+    clamped = loopEndTick - 1;
+  }
+  return clamped;
+}
+
 }  // namespace daw::engine

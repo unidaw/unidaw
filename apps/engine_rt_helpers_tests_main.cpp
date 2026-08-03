@@ -839,6 +839,78 @@ void testSplitWindowAtLoopEnd() {
   }
 }
 
+
+// ------------------------------------------- the effective loop, and the third edge behaviour
+void testEffectiveLoop() {
+  const uint64_t PATTERN = 16000;
+
+  // A real loop is used as given.
+  {
+    const LoopBounds b = effectiveLoop(1000, 5000, PATTERN);
+    CHECK(b.startTick == 1000);
+    CHECK(b.endTick == 5000);
+  }
+
+  // AN UNSET LOOP MEANS THE WHOLE PATTERN, NOT "NO LOOP". This is the assertion that matters:
+  // returning an empty range here would run the transport off the end of the material and leave
+  // it there, which is silence that looks like a stopped engine.
+  {
+    const LoopBounds b = effectiveLoop(0, 0, PATTERN);
+    CHECK(b.startTick == 0);
+    CHECK(b.endTick == PATTERN);
+  }
+
+  // Inverted and degenerate ranges take the same route.
+  {
+    const LoopBounds b = effectiveLoop(9000, 2000, PATTERN);
+    CHECK(b.startTick == 0);
+    CHECK(b.endTick == PATTERN);
+  }
+  {
+    const LoopBounds b = effectiveLoop(5000, 5000, PATTERN);  // zero-length
+    CHECK(b.startTick == 0);
+    CHECK(b.endTick == PATTERN);
+  }
+
+  // The fallback is the PATTERN, not zero — a caller that got {0,0} back would divide by a
+  // zero-length loop, and the wrap rules would then pass every tick through unchanged.
+  {
+    const LoopBounds b = effectiveLoop(0, 0, 0);
+    CHECK(b.endTick == 0);  // an empty pattern is genuinely empty; nothing to invent
+  }
+}
+
+void testClampTickIntoLoop() {
+  const uint64_t S = 1000, E = 5000;
+
+  CHECK(clampTickIntoLoop(3000, S, E) == 3000);
+  CHECK(clampTickIntoLoop(S, S, E) == S);
+
+  // Below the loop: the start.
+  CHECK(clampTickIntoLoop(0, S, E) == S);
+  CHECK(clampTickIntoLoop(999, S, E) == S);
+
+  // THE END IS EXCLUSIVE, so the last playable tick is E - 1. Off by one here and a seek to the
+  // end of the loop lands on the first tick of the next pass.
+  CHECK(clampTickIntoLoop(E, S, E) == E - 1);
+  CHECK(clampTickIntoLoop(E - 1, S, E) == E - 1);
+  CHECK(clampTickIntoLoop(999999, S, E) == E - 1);
+
+  // AND HERE IS THE PAIR THAT MUST NOT BE MERGED. A seek past the end CLAMPS; the transport
+  // WRAPS. Both are correct for what they do: running off the end is what a loop is for, but a
+  // seek is the user naming a position, and wrapping would put them at the top of the loop when
+  // they asked for the bottom — indistinguishable, from the outside, from the seek being ignored.
+  CHECK(clampTickIntoLoop(E, S, E) != wrapTickIntoLoop(E, S, E));
+  CHECK(wrapTickIntoLoop(E, S, E) == S);
+  CHECK(clampTickIntoLoop(E, S, E) == E - 1);
+
+  // They AGREE below the loop, which is why only the high edge distinguishes them.
+  CHECK(clampTickIntoLoop(0, S, E) == wrapTickIntoLoop(0, S, E));
+
+  // A zero end is "no loop at all": nothing to clamp against on the high side.
+  CHECK(clampTickIntoLoop(999999, 0, 0) == 999999);
+}
+
 }  // namespace
 
 int main() {
@@ -866,6 +938,8 @@ int main() {
   testAdvanceTransportTick();
   testWrapTickIntoLoop();
   testSplitWindowAtLoopEnd();
+  testEffectiveLoop();
+  testClampTickIntoLoop();
   testCutActiveNotes();
   testPushScratchpadOverflow();
 
