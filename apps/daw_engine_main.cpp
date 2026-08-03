@@ -11884,15 +11884,13 @@ int main(int argc, char** argv) {
           for (const auto* point : points) {
             const uint64_t tickDelta =
                 baseTickDelta + (point->nanotick - rangeStart);
-            const uint64_t eventSample =
-                blockSampleStart + tickDeltaToSamples(tickDelta);
-            const int64_t offset =
-                static_cast<int64_t>(eventSample) -
-                static_cast<int64_t>(blockSampleStart);
-            if (offset < 0 ||
-                offset >= static_cast<int64_t>(engineConfig.blockSize)) {
+            const auto placed = daw::engine::placeInBlock(tickDelta, blockSampleStart,
+                                                         samplesPerTick, engineConfig.blockSize);
+            if (!placed) {
               continue;
             }
+            const uint64_t eventSample = placed->sampleTime;
+            const int64_t offset = static_cast<int64_t>(placed->offsetInBlock);
             daw::EventEntry paramEntry;
             paramEntry.sampleTime = eventSample;
             paramEntry.blockId = 0;
@@ -11936,14 +11934,13 @@ int main(int argc, char** argv) {
                                        uint8_t noteColumn, float noteTuningCents,
                                        uint16_t sound = 0, uint16_t soundOffset = 0) {
             const uint64_t tickDelta = baseTickDelta + (onTick - rangeStart);
-            const uint64_t eventSample =
-                blockSampleStart + tickDeltaToSamples(tickDelta);
-            const int64_t offset = static_cast<int64_t>(eventSample) -
-                                   static_cast<int64_t>(blockSampleStart);
-            if (offset < 0 ||
-                offset >= static_cast<int64_t>(engineConfig.blockSize)) {
+            const auto placed = daw::engine::placeInBlock(tickDelta, blockSampleStart,
+                                                         samplesPerTick, engineConfig.blockSize);
+            if (!placed) {
               return;
             }
+            const uint64_t eventSample = placed->sampleTime;
+            const int64_t offset = static_cast<int64_t>(placed->offsetInBlock);
             const uint32_t noteId =
                 nextNoteId.fetch_add(1, std::memory_order_acq_rel);
             const daw::EventEntry midiEntry = daw::engine::makeNoteOnEntry(
@@ -12123,15 +12120,13 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
             if (event->type == daw::MusicalEventType::Param) {
               const uint64_t tickDelta =
                   baseTickDelta + (event->nanotickOffset - rangeStart);
-              const uint64_t eventSample =
-                  blockSampleStart + tickDeltaToSamples(tickDelta);
-              const int64_t offset =
-                  static_cast<int64_t>(eventSample) -
-                  static_cast<int64_t>(blockSampleStart);
-              if (offset < 0 ||
-                  offset >= static_cast<int64_t>(engineConfig.blockSize)) {
+              const auto placed = daw::engine::placeInBlock(tickDelta, blockSampleStart,
+                                                           samplesPerTick, engineConfig.blockSize);
+              if (!placed) {
                 continue;
               }
+              const uint64_t eventSample = placed->sampleTime;
+              const int64_t offset = static_cast<int64_t>(placed->offsetInBlock);
               daw::EventEntry paramEntry;
               paramEntry.sampleTime = eventSample;
               paramEntry.blockId = 0;
@@ -12284,15 +12279,13 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
             }
             const uint64_t tickDelta =
                 baseTickDelta + (event->nanotickOffset - rangeStart);
-            const uint64_t eventSample =
-                blockSampleStart + tickDeltaToSamples(tickDelta);
-            const int64_t offset =
-                static_cast<int64_t>(eventSample) -
-                static_cast<int64_t>(blockSampleStart);
-            if (offset < 0 ||
-                offset >= static_cast<int64_t>(engineConfig.blockSize)) {
+            const auto placed = daw::engine::placeInBlock(tickDelta, blockSampleStart,
+                                                         samplesPerTick, engineConfig.blockSize);
+            if (!placed) {
               continue;
             }
+            const uint64_t eventSample = placed->sampleTime;
+            const int64_t offset = static_cast<int64_t>(placed->offsetInBlock);
 
             const uint8_t column = event->payload.note.column;
             // Length is stored, so playback infers nothing: no OFF sentinels

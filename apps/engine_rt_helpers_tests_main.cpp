@@ -451,6 +451,44 @@ void testSamplerNoteOnFor() {
   CHECK(samplerNoteOnFor(0, 0, 0, 0, 0, 0, false, 0).soundAddressedOnly == false);
 }
 
+// ------------------------------------------------- where an event lands in this block, or not
+void testPlaceInBlock() {
+  // 100 ticks at 2 samples/tick = 200 samples past a block starting at 1000.
+  const auto in = placeInBlock(/*tickDelta=*/100, /*blockSampleStart=*/1000,
+                               /*samplesPerTick=*/2.0L, /*blockSize=*/512);
+  CHECK(in.has_value());
+  if (in) {
+    CHECK(in->sampleTime == 1200);
+    CHECK(in->offsetInBlock == 200);
+  }
+
+  // Tick zero is the block's first sample, not a rejection.
+  const auto zero = placeInBlock(0, 1000, 2.0L, 512);
+  CHECK(zero.has_value());
+  if (zero) {
+    CHECK(zero->sampleTime == 1000);
+    CHECK(zero->offsetInBlock == 0);
+  }
+
+  // OUTSIDE THE BLOCK IS NOTHING, not a clamped offset. These events belong to a LATER block and
+  // will be emitted when it comes round; pinning them to the last sample instead would bunch every
+  // future event onto the block boundary and play them all at once.
+  CHECK(!placeInBlock(256, 1000, 2.0L, 512).has_value());   // 512 == blockSize, first sample past
+  CHECK(!placeInBlock(1000, 1000, 2.0L, 512).has_value());
+
+  // The last sample IN the block is accepted — the boundary is exclusive at the top only.
+  const auto last = placeInBlock(511, 1000, 1.0L, 512);
+  CHECK(last.has_value());
+  if (last) CHECK(last->offsetInBlock == 511);
+
+  // sampleTime and offsetInBlock are one computation: the offset is always sampleTime minus the
+  // block start, and a helper that let them disagree would place the entry and its sampler tee at
+  // different moments.
+  const auto p = placeInBlock(77, 4321, 1.5L, 512);
+  CHECK(p.has_value());
+  if (p) CHECK(p->sampleTime - 4321 == p->offsetInBlock);
+}
+
 }  // namespace
 
 int main() {
@@ -466,6 +504,7 @@ int main() {
   testSamplerNoteOffFor();
   testMakeNoteOnEntry();
   testSamplerNoteOnFor();
+  testPlaceInBlock();
   testCutActiveNotes();
   testPushScratchpadOverflow();
 

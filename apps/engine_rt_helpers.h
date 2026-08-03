@@ -196,4 +196,35 @@ daw::SamplerEvent samplerNoteOnFor(uint32_t offsetInBlock, uint8_t pitch, uint8_
                                    uint8_t column, uint16_t sound, uint16_t offsetFrac,
                                    bool soundAddressedOnly, uint32_t noteId);
 
+// WHERE AN EVENT LANDS IN THIS BLOCK, or nothing if it falls outside it.
+//
+// Four sites computed this identically: convert the tick delta to samples, add the block start,
+// subtract the block start again to get the offset, and skip the event if the offset is outside
+// the block. The round-trip is why `offset` is exactly tickDeltaToSamples(tickDelta) — the two
+// returned values are one computation, and separating them is how they could drift.
+//
+// WHAT THE CALLER DOES ON FAILURE IS THE CALLER'S BUSINESS: three of the four `continue` in a loop
+// and one `return`s from the emitter. That difference stays at the call site, which is the only
+// part of these four that was ever genuinely different.
+struct BlockPlacement {
+  uint64_t sampleTime;      // absolute, for the event entry
+  uint32_t offsetInBlock;   // relative, for the sampler tee
+};
+std::optional<BlockPlacement> placeInBlock(uint64_t tickDelta, uint64_t blockSampleStart,
+                                           long double samplesPerTick, uint32_t blockSize);
+
+// QUEUE STRIKES THAT FALL OUTSIDE THIS BLOCK, skipping ones already pending.
+//
+// Written out twice, identically apart from the container name: once for chord strikes and once
+// for note strikes. Both spread/strum and retrig/delay can push a strike past the end of the
+// current range, and it has to wait for the block that contains it.
+//
+// THE DEDUP KEY IS (onTick, pitch, column), and that is the rule worth stating. A strike can be
+// re-derived on a later pass over the same range — the producer re-reads the window each block —
+// so without the check the same note is queued twice and sounds twice. Matching on onTick alone
+// would collapse a chord, which is several strikes at one tick differing only in pitch.
+//
+// Takes runtime.activeNotesMutex, which is why it is here rather than in a lock-free helper.
+void queuePendingStrikes(TrackRuntime& runtime, const std::vector<PendingStrike>& strikes);
+
 }  // namespace daw::engine

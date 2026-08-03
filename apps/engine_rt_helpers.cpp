@@ -189,4 +189,34 @@ daw::SamplerEvent samplerNoteOnFor(uint32_t offsetInBlock, uint8_t pitch, uint8_
   return se;
 }
 
+std::optional<BlockPlacement> placeInBlock(uint64_t tickDelta, uint64_t blockSampleStart,
+                                           long double samplesPerTick, uint32_t blockSize) {
+  const uint64_t sampleTime = blockSampleStart + tickDeltaToSamples(tickDelta, samplesPerTick);
+  const int64_t offset =
+      static_cast<int64_t>(sampleTime) - static_cast<int64_t>(blockSampleStart);
+  if (offset < 0 || offset >= static_cast<int64_t>(blockSize)) {
+    return std::nullopt;
+  }
+  return BlockPlacement{sampleTime, static_cast<uint32_t>(offset)};
+}
+
+void queuePendingStrikes(TrackRuntime& runtime, const std::vector<PendingStrike>& strikes) {
+  if (strikes.empty()) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
+  for (const auto& q : strikes) {
+    bool exists = false;
+    for (const auto& ps : runtime.pendingStrikes) {
+      if (ps.onTick == q.onTick && ps.pitch == q.pitch && ps.column == q.column) {
+        exists = true;
+        break;
+      }
+    }
+    if (!exists) {
+      runtime.pendingStrikes.push_back(q);
+    }
+  }
+}
+
 }  // namespace daw::engine
