@@ -881,8 +881,6 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
       const int pluginInputCount =
           pluginInputPtrs ? std::min(pluginInputs, numInputs) : 0;
       if (!isLast) {
-        const size_t bufferSamples =
-            static_cast<size_t>(channelsOut) * state.header->blockSize;
         if (((index - segmentStart) % 2) == 0) {
           std::fill(state.chainBufferA.begin(), state.chainBufferA.end(), 0.0f);
         } else {

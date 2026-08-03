@@ -306,7 +306,6 @@ int main(int argc, char** argv) {
   }
 
   std::atomic<int64_t> sampleCounter{0};
-  std::atomic<int> blockCounter{0};
   NoteSchedule schedule;
   schedule.noteOnSample = static_cast<int64_t>(sampleRate * 0.25);
   schedule.noteOffSample = schedule.noteOnSample + static_cast<int64_t>(sampleRate * 4.0);
@@ -369,19 +368,6 @@ int main(int argc, char** argv) {
         std::cout << "Underrun count: " << underruns << std::endl;
       }
     }
-
-    double sumSquares = 0.0;
-    int samples = numChannels * numFrames;
-    for (int ch = 0; ch < numChannels; ++ch) {
-      const float* channelData = outputs[ch];
-      for (int i = 0; i < numFrames; ++i) {
-        const float sample = channelData[i];
-        sumSquares += static_cast<double>(sample) * sample;
-      }
-    }
-
-    const double rms = samples > 0 ? std::sqrt(sumSquares / samples) : 0.0;
-    const int blockIndex = blockCounter.fetch_add(1);
 
     sampleCounter.store(blockStart + numFrames);
   };

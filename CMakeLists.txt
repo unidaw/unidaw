@@ -153,6 +153,13 @@ add_executable(daw_engine
 )
 target_compile_options(daw_engine PRIVATE -Werror=unused-variable)
 
+# The host processes get the same gate as the engine. Dead code hid in main.cpp for as long as it
+# did because that file was never compiled with this warning; leaving the two hosts uncovered
+# would just move the hiding place.
+target_compile_options(juce_host PRIVATE -Werror=unused-variable)
+target_compile_options(juce_host_process PRIVATE -Werror=unused-variable)
+
+
 target_include_directories(daw_engine PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${Boost_INCLUDE_DIRS}
