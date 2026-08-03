@@ -4469,12 +4469,7 @@ int main(int argc, char** argv) {
     payload.sentBase = sentBase;
     payload.currentBase = currentBase;
     payload.commandType = static_cast<uint16_t>(commandType);
-    daw::EventEntry entry;
-    entry.sampleTime = 0;
-    entry.blockId = 0;
-    entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
-    entry.size = sizeof(daw::UiClipRejectPayload);
-    std::memcpy(entry.payload, &payload, sizeof(payload));
+    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
     if (daw::ringWrite(ringUiOut, entry)) {
       uiDiffSent.fetch_add(1, std::memory_order_relaxed);
     } else {
@@ -4653,12 +4648,7 @@ int main(int argc, char** argv) {
     payload.deviceId = deviceId;
     payload.deviceKind = deviceKind;
     payload.insertIndex = insertIndex;
-    daw::EventEntry entry;
-    entry.sampleTime = 0;
-    entry.blockId = 0;
-    entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
-    entry.size = sizeof(payload);
-    std::memcpy(entry.payload, &payload, sizeof(payload));
+    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
     daw::ringWrite(ringUiOut, entry);
     DAW_EVENT("chain.rejected")
         .field("track", trackId)
@@ -4697,12 +4687,7 @@ int main(int argc, char** argv) {
     if (routing.preFaderSend) {
       payload.flags |= 0x1u;
     }
-    daw::EventEntry entry{};
-    entry.sampleTime = 0;
-    entry.blockId = 0;
-    entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
-    entry.size = sizeof(payload);
-    std::memcpy(entry.payload, &payload, sizeof(payload));
+    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
     daw::ringWrite(ringUiOut, entry);
   };
 
@@ -4715,12 +4700,7 @@ int main(int argc, char** argv) {
     payload.diffType = static_cast<uint16_t>(daw::UiDiffType::RoutingError);
     payload.errorCode = errorCode;
     payload.trackId = trackId;
-    daw::EventEntry entry{};
-    entry.sampleTime = 0;
-    entry.blockId = 0;
-    entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
-    entry.size = sizeof(payload);
-    std::memcpy(entry.payload, &payload, sizeof(payload));
+    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
     daw::ringWrite(ringUiOut, entry);
     DAW_EVENT("routing.rejected")
         .field("track", trackId)
@@ -4771,12 +4751,7 @@ int main(int argc, char** argv) {
           .field("links", 0)
           .field("version", version)
           .field("empty_sentinel", true);
-      daw::EventEntry entry{};
-      entry.sampleTime = 0;
-      entry.blockId = 0;
-      entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
-      entry.size = sizeof(payload);
-      std::memcpy(entry.payload, &payload, sizeof(payload));
+      const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
       daw::ringWrite(ringUiOut, entry);
       return;
     }
@@ -4793,12 +4768,7 @@ int main(int argc, char** argv) {
       payload.targetId = link.target.targetId;
       payload.depth = link.depth;
       payload.bias = link.bias;
-      daw::EventEntry entry{};
-      entry.sampleTime = 0;
-      entry.blockId = 0;
-      entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
-      entry.size = sizeof(payload);
-      std::memcpy(entry.payload, &payload, sizeof(payload));
+      const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
       daw::ringWrite(ringUiOut, entry);
       ++published;
       if (link.target.kind == daw::ModTargetKind::VstParam) {
@@ -4834,12 +4804,7 @@ int main(int argc, char** argv) {
     payload.errorCode = errorCode;
     payload.trackId = trackId;
     payload.linkId = linkId;
-    daw::EventEntry entry{};
-    entry.sampleTime = 0;
-    entry.blockId = 0;
-    entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
-    entry.size = sizeof(payload);
-    std::memcpy(entry.payload, &payload, sizeof(payload));
+    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
     daw::ringWrite(ringUiOut, entry);
     DAW_EVENT("modlink.rejected")
         .field("track", trackId)
@@ -4879,12 +4844,7 @@ int main(int argc, char** argv) {
     payload.srcPortId = srcPortId;
     payload.dstPortId = dstPortId;
     payload.edgeKind = edgeKind;
-    daw::EventEntry entry{};
-    entry.sampleTime = 0;
-    entry.blockId = 0;
-    entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
-    entry.size = sizeof(payload);
-    std::memcpy(entry.payload, &payload, sizeof(payload));
+    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
     daw::ringWrite(ringUiOut, entry);
   };
 
@@ -4910,12 +4870,7 @@ int main(int argc, char** argv) {
     payload.srcPortId = srcPortId;
     payload.dstPortId = dstPortId;
     payload.edgeKind = edgeKind;
-    daw::EventEntry entry{};
-    entry.sampleTime = 0;
-    entry.blockId = 0;
-    entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
-    entry.size = sizeof(payload);
-    std::memcpy(entry.payload, &payload, sizeof(payload));
+    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
     daw::ringWrite(ringUiOut, entry);
   };
 

@@ -22,6 +22,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <map>
 #include <memory>
@@ -576,6 +577,27 @@ inline TrackRuntime* trackAt(std::vector<std::unique_ptr<TrackRuntime>>& tracks,
     return tracks[trackId].get();
   }
   return nullptr;
+}
+
+
+// AN OUTBOUND UI DIFF, with its size taken from the payload it carries.
+//
+// The receiver validates `entry.size == sizeof(X)` and silently drops anything that disagrees, so
+// the declared size and the copied bytes must always describe the same type. Written by hand this
+// is two statements that have to be kept in step; here there is only one type to name, and the
+// size is derived from it.
+//
+// sampleTime and blockId are zero for every UI diff: these are answers to a command, not events on
+// the timeline, and nothing downstream schedules them.
+template <typename Payload>
+inline daw::EventEntry makeUiDiffEntry(const Payload& payload) {
+  daw::EventEntry entry;
+  entry.sampleTime = 0;
+  entry.blockId = 0;
+  entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
+  entry.size = sizeof(Payload);
+  std::memcpy(entry.payload, &payload, sizeof(Payload));
+  return entry;
 }
 
 }  // namespace daw::engine
