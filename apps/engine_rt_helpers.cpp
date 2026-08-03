@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace daw::engine {
 
@@ -74,6 +75,26 @@ void removeNoteIdFromColumn(TrackRuntime& runtime, uint8_t column, uint32_t note
   if (notes.empty()) {
     runtime.activeNoteByColumn.erase(columnIt);
   }
+}
+
+daw::EventEntry makeNoteOffEntry(uint64_t sampleTime, uint32_t blockId, uint8_t pitch,
+                                 uint8_t channel, int16_t tuningCents, uint32_t noteId,
+                                 uint32_t flags) {
+  daw::EventEntry entry;
+  entry.sampleTime = sampleTime;
+  entry.blockId = blockId;
+  entry.type = static_cast<uint16_t>(daw::EventType::Midi);
+  entry.size = sizeof(daw::MidiPayload);
+  entry.flags = flags;
+  daw::MidiPayload off{};
+  off.status = 0x80;
+  off.data1 = pitch;
+  off.data2 = 0;
+  off.channel = channel;
+  off.tuningCents = tuningCents;
+  off.noteId = noteId;
+  std::memcpy(entry.payload, &off, sizeof(off));
+  return entry;
 }
 
 }  // namespace daw::engine

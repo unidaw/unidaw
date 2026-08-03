@@ -15,6 +15,7 @@
 #include "apps/engine_rt_helpers.h"
 
 #include <cstdio>
+#include <cstring>
 #include <vector>
 
 using namespace daw;
@@ -220,6 +221,45 @@ void testRemoveNoteIdFromColumn() {
   CHECK(rt.activeNoteByColumn[0].size() == 2);
 }
 
+// -------------------------------------------------- one note-off entry, where there were six
+void testMakeNoteOffEntry() {
+  const auto e = makeNoteOffEntry(1234, 7, 60, 3, -25, 99);
+  CHECK(e.sampleTime == 1234);
+  CHECK(e.blockId == 7);
+  CHECK(e.type == static_cast<uint16_t>(daw::EventType::Midi));
+  CHECK(e.size == sizeof(daw::MidiPayload));
+  CHECK(e.flags == 0);                       // defaulted, matching five of the six call sites
+
+  daw::MidiPayload p{};
+  std::memcpy(&p, e.payload, sizeof(p));
+  // 0x80 IS NOTE-OFF. A note-on status here would leave every cut note sounding forever, which is
+  // the failure the six copies existed to perform correctly and independently.
+  CHECK(p.status == 0x80);
+  CHECK(p.data1 == 60);
+  CHECK(p.data2 == 0);                       // release velocity is always zero on this path
+  CHECK(p.channel == 3);
+  CHECK(p.tuningCents == -25);
+  CHECK(p.noteId == 99);
+
+  // THE TWO FIELDS THE COPIES DISAGREED ON ARE PARAMETERS NOW, so both settings are reachable and
+  // neither is inherited by accident.
+  // kEventFlagMusicalLogic is still a file-scope constant in daw_engine_main.cpp (1u << 0), so
+  // this test names its VALUE. That the flag lives outside any header while being part of the
+  // note-off contract is itself worth noting — it is why the sixth copy could carry it without
+  // anything else being able to.
+  const auto flagged = makeNoteOffEntry(0, 0, 1, 0, 0, 1, 1u /* kEventFlagMusicalLogic */);
+  CHECK(flagged.flags == 1u);
+  CHECK(makeNoteOffEntry(0, 42, 1, 0, 0, 1).blockId == 42);
+  CHECK(makeNoteOffEntry(0, 0, 1, 0, 0, 1).blockId == 0);
+
+  // Tuning is SIGNED. Carrying it through an unsigned field is how -1 became 4294967295 in this
+  // repo's euclidean config, and a note-off that retunes on release is audible.
+  CHECK(makeNoteOffEntry(0, 0, 60, 0, -1200, 1).payload[0] != 0);
+  daw::MidiPayload neg{};
+  std::memcpy(&neg, makeNoteOffEntry(0, 0, 60, 0, -1200, 1).payload, sizeof(neg));
+  CHECK(neg.tuningCents == -1200);
+}
+
 }  // namespace
 
 int main() {
@@ -231,6 +271,7 @@ int main() {
   testRampedVelocity();
   testNodeIndexForId();
   testRemoveNoteIdFromColumn();
+  testMakeNoteOffEntry();
 
   if (g_fail == 0) {
     std::printf("engine_rt_helpers_tests: PASS\n");

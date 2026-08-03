@@ -12120,19 +12120,9 @@ int main(int argc, char** argv) {
                 continue;
               }
               const ActiveNote activeNote = noteIt->second;
-              daw::EventEntry noteOffEntry;
-              noteOffEntry.sampleTime = eventSample;
-              noteOffEntry.blockId = 0;
-              noteOffEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
-              noteOffEntry.size = sizeof(daw::MidiPayload);
-              daw::MidiPayload offPayload{};
-              offPayload.status = 0x80;
-              offPayload.data1 = activeNote.pitch;
-              offPayload.data2 = 0;
-              offPayload.channel = midiChannel;
-              offPayload.tuningCents = activeNote.tuningCents;
-              offPayload.noteId = activeNote.noteId;
-              std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
+              daw::EventEntry noteOffEntry = daw::engine::makeNoteOffEntry(
+                  eventSample, 0, activeNote.pitch,
+                  midiChannel, activeNote.tuningCents, activeNote.noteId);
               pushScratchpad(noteOffEntry, activeNote.endNanotick);
               if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
                 daw::SamplerEvent se;
@@ -12168,19 +12158,9 @@ int main(int argc, char** argv) {
                 continue;
               }
               const ActiveNote activeNote = noteIt->second;
-              daw::EventEntry noteOffEntry;
-              noteOffEntry.sampleTime = eventSample;
-              noteOffEntry.blockId = 0;
-              noteOffEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
-              noteOffEntry.size = sizeof(daw::MidiPayload);
-              daw::MidiPayload offPayload{};
-              offPayload.status = 0x80;
-              offPayload.data1 = activeNote.pitch;
-              offPayload.data2 = 0;
-              offPayload.channel = midiChannel;
-              offPayload.tuningCents = activeNote.tuningCents;
-              offPayload.noteId = activeNote.noteId;
-              std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
+              daw::EventEntry noteOffEntry = daw::engine::makeNoteOffEntry(
+                  eventSample, 0, activeNote.pitch,
+                  midiChannel, activeNote.tuningCents, activeNote.noteId);
               pushScratchpad(noteOffEntry, activeNote.endNanotick);
               if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
                 daw::SamplerEvent se;
@@ -12304,19 +12284,9 @@ int main(int argc, char** argv) {
                                         static_cast<int64_t>(blockSampleStart);
               if (offOffset >= 0 &&
                   offOffset < static_cast<int64_t>(engineConfig.blockSize)) {
-                daw::EventEntry noteOffEntry;
-                noteOffEntry.sampleTime = offSample;
-                noteOffEntry.blockId = 0;
-                noteOffEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
-                noteOffEntry.size = sizeof(daw::MidiPayload);
-                daw::MidiPayload offPayload{};
-                offPayload.status = 0x80;
-                offPayload.data1 = pitch;
-                offPayload.data2 = 0;
-                offPayload.channel = midiChannel;
-                offPayload.tuningCents = noteTuningCents;
-                offPayload.noteId = noteId;
-                std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
+                daw::EventEntry noteOffEntry = daw::engine::makeNoteOffEntry(
+                    offSample, 0, pitch,
+                    midiChannel, noteTuningCents, noteId);
                 pushScratchpad(noteOffEntry, noteEndTick);
               if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
                 daw::SamplerEvent se;
@@ -12397,19 +12367,9 @@ int main(int argc, char** argv) {
                 const int64_t offOffset = static_cast<int64_t>(offSample) - static_cast<int64_t>(blockSampleStart);
 
                 if (offOffset >= 0 && offOffset < static_cast<int64_t>(engineConfig.blockSize)) {
-                  daw::EventEntry noteOffEntry;
-                  noteOffEntry.sampleTime = offSample;
-                  noteOffEntry.blockId = 0;
-                  noteOffEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
-                  noteOffEntry.size = sizeof(daw::MidiPayload);
-                  daw::MidiPayload offPayload{};
-                  offPayload.status = 0x80;
-                  offPayload.data1 = activeNote.pitch;
-                  offPayload.data2 = 0;
-                  offPayload.channel = midiChannel;
-                  offPayload.tuningCents = activeNote.tuningCents;
-                  offPayload.noteId = activeNote.noteId;
-                  std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
+                  daw::EventEntry noteOffEntry = daw::engine::makeNoteOffEntry(
+                      offSample, 0, activeNote.pitch,
+                      midiChannel, activeNote.tuningCents, activeNote.noteId);
                   pushScratchpad(noteOffEntry, activeNote.endNanotick);
               if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
                 daw::SamplerEvent se;
@@ -12813,19 +12773,9 @@ int main(int argc, char** argv) {
           std::vector<uint32_t> clearedNotes;
           clearedNotes.reserve(pendingNotes.size());
           for (const auto& activeNote : pendingNotes) {
-            daw::EventEntry noteOffEntry;
-            noteOffEntry.sampleTime = sampleTime;
-            noteOffEntry.blockId = currentBlockId;
-            noteOffEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
-            noteOffEntry.size = sizeof(daw::MidiPayload);
-            daw::MidiPayload offPayload{};
-            offPayload.status = 0x80;
-            offPayload.data1 = activeNote.pitch;
-            offPayload.data2 = 0;
-            offPayload.channel = midiChannel;
-            offPayload.tuningCents = activeNote.tuningCents;
-            offPayload.noteId = activeNote.noteId;
-            std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
+            daw::EventEntry noteOffEntry = daw::engine::makeNoteOffEntry(
+                sampleTime, currentBlockId, activeNote.pitch,
+                midiChannel, activeNote.tuningCents, activeNote.noteId);
             if (!daw::ringWrite(ringStd, noteOffEntry)) {
               runtime.ringStdOverflowed.store(true, std::memory_order_relaxed);
               return;
@@ -13188,20 +13138,10 @@ int main(int argc, char** argv) {
                     static_cast<int64_t>(blockSampleStart);
                 if (offOffset >= 0 &&
                     offOffset < static_cast<int64_t>(engineConfig.blockSize)) {
-                  daw::EventEntry noteOffEntry;
-                  noteOffEntry.sampleTime = offSample;
-                  noteOffEntry.blockId = 0;
-                  noteOffEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
-                  noteOffEntry.size = sizeof(daw::MidiPayload);
-                  noteOffEntry.flags = kEventFlagMusicalLogic;
-                  daw::MidiPayload offPayload{};
-                  offPayload.status = 0x80;
-                  offPayload.data1 = pitch;
-                  offPayload.data2 = 0;
-                  offPayload.channel = channel;
-                  offPayload.tuningCents = tuningCents;
-                  offPayload.noteId = noteId;
-                  std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
+                  daw::EventEntry noteOffEntry = daw::engine::makeNoteOffEntry(
+                      offSample, 0, pitch,
+                      channel, tuningCents, noteId,
+                      kEventFlagMusicalLogic);
                   appendScratchpad(noteOffEntry, noteEndTick);
                   if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
                     daw::SamplerEvent se;

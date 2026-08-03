@@ -27,6 +27,7 @@
 #include "apps/engine_types.h"
 #include "apps/harmony_timeline.h"
 #include "apps/patcher_graph.h"
+#include "apps/shared_memory.h"
 #include "apps/scale_library.h"
 
 namespace daw::engine {
@@ -92,5 +93,30 @@ std::optional<uint32_t> nodeIndexForId(const daw::PatcherGraph& graph, uint32_t 
 // empty vector behind is not merely untidy: the column then reads as "has active notes" to
 // anything testing presence, and a later cut-all walks a list that should not exist.
 void removeNoteIdFromColumn(TrackRuntime& runtime, uint8_t column, uint32_t noteId);
+
+// ONE NOTE-OFF ENTRY, WHERE THERE WERE SIX COPIES.
+//
+// The construction below was written out six times inside renderTrack — in cutActiveNoteInColumn,
+// cutAllActiveNotes, emitNoteOnWithOff (twice), flushPendingNoteOffs and resolveAndSort. Counting
+// them suggests six identical blocks. Diffing them says otherwise, and the difference is the
+// point:
+//
+//   - three read pitch / noteId / tuningCents from LOCALS rather than from an ActiveNote
+//   - one sets blockId to currentBlockId where the others set 0
+//   - one carries an extra `flags = kEventFlagMusicalLogic` that the other five do not
+//
+// So merging them into one shared body would have silently dropped that flag from one site and
+// forced blockId 0 on another. Every varying field is a PARAMETER instead: each caller keeps
+// exactly the behaviour it had, but now states it in an argument list a reader can see, and a
+// seventh caller is forced to decide about blockId and flags rather than inheriting whichever
+// block happened to get copied.
+//
+// This is the shape that has cost this project the most: copies agreeing on field names and
+// differing in behaviour, where anything comparing structure passes. The chord-silence bug was a
+// second copy of the note-emission path missing its sampler tee. These six are its siblings, and
+// they had already diverged.
+daw::EventEntry makeNoteOffEntry(uint64_t sampleTime, uint32_t blockId, uint8_t pitch,
+                                 uint8_t channel, int16_t tuningCents, uint32_t noteId,
+                                 uint32_t flags = 0);
 
 }  // namespace daw::engine
