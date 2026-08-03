@@ -555,4 +555,27 @@ struct DevOut {
   uint32_t node;
 };
 
+
+// THE TRACK LOOKUP, ONCE.
+//
+// Takes tracksMutex, bounds-checks, returns the pointer — and RELEASES THE LOCK BEFORE RETURNING,
+// which is what every one of the 57 hand-written copies did.
+//
+// THAT IS SAFE ONLY BECAUSE RUNTIME ENTRIES ARE NEVER DESTROYED, and this is the only place that
+// says so. `tracks` is reserved to kUiMaxTracks and only ever push_back'd; nothing erases, clears,
+// pops or resizes it; a removed track is TOMBSTONED with `removed.store(true)` and its slot stays.
+// So a pointer obtained here stays valid after the lock is dropped, and callers may then take
+// runtime->trackMutex without holding tracksMutex — which is the documented lock order.
+//
+// If that ever changes — if a track is genuinely erased — every caller of this function becomes
+// wrong at once, which is a far better failure than fifty-seven copies becoming wrong quietly.
+inline TrackRuntime* trackAt(std::vector<std::unique_ptr<TrackRuntime>>& tracks,
+                             std::mutex& tracksMutex, uint32_t trackId) {
+  std::lock_guard<std::mutex> lock(tracksMutex);
+  if (trackId < tracks.size()) {
+    return tracks[trackId].get();
+  }
+  return nullptr;
+}
+
 }  // namespace daw::engine

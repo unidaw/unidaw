@@ -32,13 +32,7 @@ void handleSetTrackRouting(TrackCommandDeps& deps,
   constexpr uint16_t kRoutingErrTrackMissing = 1;
   constexpr uint16_t kRoutingErrInvalidKind = 2;
   constexpr uint16_t kRoutingErrInvalidTarget = 3;
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (routingPayload.trackId < tracks.size()) {
-      runtime = tracks[routingPayload.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, routingPayload.trackId);
   if (!runtime) {
     emitRoutingError(kRoutingErrTrackMissing, routingPayload.trackId);
     return;
@@ -113,13 +107,7 @@ void handleSetTrackName(TrackCommandDeps& deps,
   std::memcpy(&namePayload, entry.payload, sizeof(namePayload));
   std::string name(namePayload.name,
                    strnlen(namePayload.name, sizeof(namePayload.name)));
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (namePayload.trackId < tracks.size()) {
-      runtime = tracks[namePayload.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, namePayload.trackId);
   if (!runtime) {
     DAW_EVENT("track.rename_rejected")
         .field("track", namePayload.trackId)
@@ -161,13 +149,7 @@ void handleSetDeviceEuclideanConfig(TrackCommandDeps& deps,
       static_cast<uint16_t>(daw::UiCommandType::SetDeviceEuclideanConfig)) {
     return;
   }
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (configPayload.trackId < tracks.size()) {
-      runtime = tracks[configPayload.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, configPayload.trackId);
   if (!runtime) {
     daw::LogLine() << "UI: SetDeviceEuclideanConfig failed - track "
               << configPayload.trackId << " not found" << std::endl;

@@ -57,13 +57,7 @@ void handleRequestDeviceParams(RequestCommandDeps& deps,
   // thread. Bumps region->version after writing so a polling UI sees the swap.
   const uint32_t trackId = payload.trackId;
   const uint32_t deviceId = payload.value0;
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (trackId < tracks.size()) {
-      runtime = tracks[trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
   std::string deviceName;
   uint32_t pluginIndex = 0;
   bool found = false;
@@ -213,13 +207,7 @@ void handleRequestWaveform(RequestCommandDeps& deps,
   uint32_t storeId = req.sourceId;
   if ((req.flags & daw::kWaveformRequestSamplerSource) != 0) {
     storeId = 0;
-    TrackRuntime* rt = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(tracksMutex);
-      if (req.reserved0 < tracks.size()) {
-        rt = tracks[req.reserved0].get();
-      }
-    }
+    TrackRuntime* rt = daw::engine::trackAt(tracks, tracksMutex, req.reserved0);
     if (rt) {
       std::lock_guard<std::mutex> lock(rt->trackMutex);
       for (const auto& d : rt->track.chain.devices) {

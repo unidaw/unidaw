@@ -48,13 +48,7 @@ void handleOpenPluginEditor(DeviceCommandDeps& deps,
   {
   const uint32_t trackId = payload.trackId;
   const uint32_t deviceId = payload.value0;
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (trackId < tracks.size()) {
-      runtime = tracks[trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
   if (!runtime) {
     daw::LogLine() << "UI: OpenPluginEditor failed - track "
               << trackId << " not found" << std::endl;
@@ -120,13 +114,7 @@ void handleSetDeviceParam(DeviceCommandDeps& deps,
   if (entry.size >= sizeof(sp)) {
     std::memcpy(&sp, entry.payload, sizeof(sp));
   }
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (sp.trackId < tracks.size()) {
-      runtime = tracks[sp.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, sp.trackId);
   uint32_t pluginIndex = 0;
   bool found = false;
   if (runtime) {

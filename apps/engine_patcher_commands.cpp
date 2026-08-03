@@ -108,13 +108,7 @@ void handleAddPatcherNode(PatcherCommandDeps& deps,
   if ((probe.flags & daw::kUiPatcherFlagHasDeviceId) != 0) {
     const uint32_t deviceId =
         static_cast<uint32_t>(probe.flags & daw::kUiPatcherDeviceIdMask);
-    TrackRuntime* runtime = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(tracksMutex);
-      if (probe.trackId < tracks.size()) {
-        runtime = tracks[probe.trackId].get();
-      }
-    }
+    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, probe.trackId);
     auto refuse = [&](const char* why) {
       DAW_EVENT("patcher_device_edit.rejected")
           .field("track", probe.trackId)
@@ -379,13 +373,7 @@ void handleSetPatcherNodeConfig(PatcherCommandDeps& deps,
   if ((configPayload.flags & daw::kUiPatcherFlagHasDeviceId) != 0) {
     const uint32_t deviceId =
         static_cast<uint32_t>(configPayload.flags & daw::kUiPatcherDeviceIdMask);
-    TrackRuntime* runtime = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(tracksMutex);
-      if (configPayload.trackId < tracks.size()) {
-        runtime = tracks[configPayload.trackId].get();
-      }
-    }
+    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, configPayload.trackId);
     auto refuseCfg = [&](const char* why) {
       DAW_EVENT("patcher_device_edit.rejected")
           .field("track", configPayload.trackId)

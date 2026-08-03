@@ -29,13 +29,7 @@ void handleSamplerEmitRows(SamplerCommandDeps& deps,
   const auto& applyAddNote = deps.applyAddNote;
   daw::UiSamplerEmitRowsPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (p.trackId < tracks.size()) {
-      runtime = tracks[p.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, p.trackId);
   if (!runtime) {
     reportSamplerReject(daw::UiCommandType::SamplerEmitRows, daw::UiSamplerRejectReason::NoSuchTrack, p.trackId, 0, 0);
     DAW_EVENT("sampler.emit_rejected").field("track", p.trackId).field("reason", "no_such_track");
@@ -177,13 +171,7 @@ void handleSamplerSlice(SamplerCommandDeps& deps,
   const uint32_t deviceId = isSlice ? sp.deviceId : mp.deviceId;
   const uint32_t sourceId = isSlice ? sp.sourceLocalId : mp.sourceLocalId;
 
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (trackId < tracks.size()) {
-      runtime = tracks[trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
   if (!runtime) {
     reportSamplerReject(daw::UiCommandType::SamplerSlice, daw::UiSamplerRejectReason::NoSuchTrack, trackId, 0, 0);
     DAW_EVENT("sampler.slice_rejected").field("track", trackId).field("reason", "no_such_track");
@@ -396,13 +384,7 @@ void handleRequestSamplerEnvelope(SamplerCommandDeps& deps,
   daw::UiSamplerEnvelopeSlot& slot =
       region->slots[p.requestSeq % daw::kUiSamplerEnvelopeSlots];
 
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (p.trackId < tracks.size()) {
-      runtime = tracks[p.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, p.trackId);
 
   // SEQLOCK: odd while writing, as the kit and automation answers do.
   const uint32_t before = slot.seq.load(std::memory_order_relaxed) | 1u;
@@ -523,13 +505,7 @@ void handleRequestSamplerKit(SamplerCommandDeps& deps,
   // than scanning for an answer that looks like a reply to its own question.
   daw::UiSamplerKitSlot& slot = region->slots[p.requestSeq % daw::kUiSamplerKitSlots];
 
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (p.trackId < tracks.size()) {
-      runtime = tracks[p.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, p.trackId);
 
   // SEQLOCK: odd while writing. A reader that sees an odd sequence, or a different one either
   // side of its read, retries — the only way a 2 KB answer publishes without a lock the
@@ -716,13 +692,7 @@ void handleSamplerSetSlot(SamplerCommandDeps& deps,
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerSetSlotPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (p.trackId < tracks.size()) {
-      runtime = tracks[p.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, p.trackId);
   if (!runtime) {
     reportSamplerReject(daw::UiCommandType::SamplerSetSlot, daw::UiSamplerRejectReason::NoSuchTrack, p.trackId, 0, 0);
     DAW_EVENT("sampler.set_slot_rejected")
@@ -911,13 +881,7 @@ void handleSamplerSetDevice(SamplerCommandDeps& deps,
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerSetDevicePayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (p.trackId < tracks.size()) {
-      runtime = tracks[p.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, p.trackId);
   if (!runtime) {
     reportSamplerReject(daw::UiCommandType::SamplerSetDevice,
                         daw::UiSamplerRejectReason::NoSuchTrack, p.trackId, 0, 0);
@@ -1014,13 +978,7 @@ void handleSamplerSetFilter(SamplerCommandDeps& deps,
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerFilterPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (p.trackId < tracks.size()) {
-      runtime = tracks[p.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, p.trackId);
   if (!runtime) {
     reportSamplerReject(daw::UiCommandType::SamplerSetFilter, daw::UiSamplerRejectReason::NoSuchTrack, p.trackId, 0, 0);
     DAW_EVENT("sampler.filter_rejected")
@@ -1111,13 +1069,7 @@ void handleSamplerSetVintage(SamplerCommandDeps& deps,
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerVintagePayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (p.trackId < tracks.size()) {
-      runtime = tracks[p.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, p.trackId);
   if (!runtime) {
     reportSamplerReject(daw::UiCommandType::SamplerSetVintage,
                         daw::UiSamplerRejectReason::NoSuchTrack, p.trackId, 0, 0);
@@ -1208,13 +1160,7 @@ void handleSamplerSetLfo(SamplerCommandDeps& deps,
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerLfoPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (p.trackId < tracks.size()) {
-      runtime = tracks[p.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, p.trackId);
   if (!runtime) {
     reportSamplerReject(daw::UiCommandType::SamplerSetLfo, daw::UiSamplerRejectReason::NoSuchTrack, p.trackId, 0, 0);
     DAW_EVENT("sampler.lfo_rejected")
@@ -1321,13 +1267,7 @@ void handleSamplerSetEnvelope(SamplerCommandDeps& deps,
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerEnvelopePayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (p.trackId < tracks.size()) {
-      runtime = tracks[p.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, p.trackId);
   if (!runtime) {
     reportSamplerReject(daw::UiCommandType::SamplerSetEnvelope, daw::UiSamplerRejectReason::NoSuchTrack, p.trackId, 0, 0);
     DAW_EVENT("sampler.envelope_rejected")
@@ -1449,13 +1389,7 @@ void handleSamplerLoad(SamplerCommandDeps& deps,
   daw::UiSamplerLoadPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   const std::string name(p.name, strnlen(p.name, sizeof(p.name)));
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (p.trackId < tracks.size()) {
-      runtime = tracks[p.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, p.trackId);
   if (!runtime || name.empty()) {
     reportSamplerReject(daw::UiCommandType::SamplerLoad,
                         name.empty() ? daw::UiSamplerRejectReason::BadValue : daw::UiSamplerRejectReason::NoSuchTrack,

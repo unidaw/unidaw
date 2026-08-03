@@ -2793,13 +2793,7 @@ int main(int argc, char** argv) {
     return runtime ? trackNext : globalNext;
   };
   auto bumpTrackClipVersion = [&](uint32_t trackId) -> uint32_t {
-    TrackRuntime* runtime = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(tracksMutex);
-      if (trackId < tracks.size()) {
-        runtime = tracks[trackId].get();
-      }
-    }
+    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     return bumpClipVersionFor(runtime);
   };
   // Every track's version advances: used where a change is NOT scoped to one track (a
@@ -3165,13 +3159,7 @@ int main(int argc, char** argv) {
     // wrong for every device after it — which is exactly the bug that made per-device scoping in
     // the UI show foreign nodes as unowned orphans.
     for (const auto& out : outputs) {
-      TrackRuntime* rt = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (out.trackId < tracks.size()) {
-          rt = tracks[out.trackId].get();
-        }
-      }
+      TrackRuntime* rt = daw::engine::trackAt(tracks, tracksMutex, out.trackId);
       if (!rt) {
         continue;
       }
@@ -3823,13 +3811,7 @@ int main(int argc, char** argv) {
                 << " exceeds max tracks " << daw::kUiMaxTracks << std::endl;
       return nullptr;
     }
-    TrackRuntime* runtime = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(tracksMutex);
-      if (trackId < tracks.size()) {
-        runtime = tracks[trackId].get();
-      }
-    }
+    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (runtime) {
       const std::vector<std::string> desiredPaths{
           pluginPath.empty() ? std::vector<std::string>() : std::vector<std::string>{pluginPath}};
@@ -6002,13 +5984,7 @@ int main(int argc, char** argv) {
   // stack's structural entries call this with `before` (undo) or `after` (redo).
   auto restoreTrackStore = [&](uint32_t trackId,
                                const TrackStoreState& state) -> bool {
-    TrackRuntime* runtime = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(tracksMutex);
-      if (trackId < tracks.size()) {
-        runtime = tracks[trackId].get();
-      }
-    }
+    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
       return false;
     }
@@ -6046,13 +6022,7 @@ int main(int argc, char** argv) {
       }
     }
     for (const auto& [trackId, clips] : state.automation) {
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (trackId < tracks.size()) {
-          runtime = tracks[trackId].get();
-        }
-      }
+      TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
       if (!runtime) {
         continue;
       }
@@ -6977,13 +6947,7 @@ int main(int argc, char** argv) {
             }
             break;
           }
-          TrackRuntime* rt = nullptr;
-          {
-            std::lock_guard<std::mutex> lock(tracksMutex);
-            if (out.trackId < tracks.size()) {
-              rt = tracks[out.trackId].get();
-            }
-          }
+          TrackRuntime* rt = daw::engine::trackAt(tracks, tracksMutex, out.trackId);
           if (!rt) {
             continue;
           }
@@ -7106,13 +7070,7 @@ int main(int argc, char** argv) {
     }
 
     for (const auto& source : document.tracks) {
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (source.trackId < tracks.size()) {
-          runtime = tracks[source.trackId].get();
-        }
-      }
+      TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, source.trackId);
       if (!runtime) {
         continue;
       }
@@ -7485,13 +7443,7 @@ int main(int argc, char** argv) {
     // wrong plugin.
     const std::filesystem::path stateDir = daw::pluginStateDirFor(path);
     for (const auto& source : document.tracks) {
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (source.trackId < tracks.size()) {
-          runtime = tracks[source.trackId].get();
-        }
-      }
+      TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, source.trackId);
       if (!runtime) {
         continue;
       }
@@ -7668,13 +7620,7 @@ int main(int argc, char** argv) {
                           std::optional<daw::EventId> noteIdOverride = std::nullopt,
                           uint16_t sound = 0,
                           uint16_t soundOffset = 0) -> bool {
-    TrackRuntime* runtime = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(tracksMutex);
-      if (trackId < tracks.size()) {
-        runtime = tracks[trackId].get();
-      }
-    }
+    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
       daw::LogLine() << "UI: AddNote failed - track " << trackId << " not found" << std::endl;
       return false;
@@ -7807,13 +7753,7 @@ int main(int argc, char** argv) {
                             const daw::RowOpEdit& edit,
                             bool recordUndo,
                             daw::UiClipRejectReason& rejectReason) -> bool {
-    TrackRuntime* runtime = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(tracksMutex);
-      if (trackId < tracks.size()) {
-        runtime = tracks[trackId].get();
-      }
-    }
+    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
       DAW_EVENT("rowops.rejected")
           .field("track", trackId)
@@ -8016,13 +7956,7 @@ int main(int argc, char** argv) {
     if ((flags & daw::kUiEditScopeLocal) != 0) {
       return true;
     }
-    TrackRuntime* runtime = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(tracksMutex);
-      if (trackId < tracks.size()) {
-        runtime = tracks[trackId].get();
-      }
-    }
+    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
       return false;
     }
@@ -8044,13 +7978,7 @@ int main(int argc, char** argv) {
   auto applyLocalNoteEdit = [&](uint32_t trackId, uint64_t nanotick, uint64_t duration,
                                 uint8_t pitch, uint8_t velocity, uint8_t column,
                                 bool deleting) -> bool {
-    TrackRuntime* runtime = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(tracksMutex);
-      if (trackId < tracks.size()) {
-        runtime = tracks[trackId].get();
-      }
-    }
+    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
       return false;
     }
@@ -8225,13 +8153,7 @@ int main(int argc, char** argv) {
   auto applyPlacementEdit =
       [&](uint32_t trackId,
           const std::function<bool(std::vector<daw::ProjectPlacement>&)>& mutate) -> bool {
-    TrackRuntime* runtime = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(tracksMutex);
-      if (trackId < tracks.size()) {
-        runtime = tracks[trackId].get();
-      }
-    }
+    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
       daw::LogLine() << "UI: placement edit — track " << trackId << " not found" << std::endl;
       return false;
@@ -8272,13 +8194,7 @@ int main(int argc, char** argv) {
                              uint8_t pitch,
                              uint16_t flags,
                              bool recordUndo) -> bool {
-    TrackRuntime* runtime = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(tracksMutex);
-      if (trackId < tracks.size()) {
-        runtime = tracks[trackId].get();
-      }
-    }
+    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
       daw::LogLine() << "UI: RemoveNote failed - track " << trackId << " not found" << std::endl;
       return false;
@@ -8369,13 +8285,7 @@ int main(int argc, char** argv) {
                            uint16_t humanizeVelocity,
                            bool recordUndo,
                            std::optional<uint32_t> chordIdOverride = std::nullopt) -> bool {
-    TrackRuntime* runtime = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(tracksMutex);
-      if (trackId < tracks.size()) {
-        runtime = tracks[trackId].get();
-      }
-    }
+    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
       daw::LogLine() << "UI: AddChord failed - track " << trackId << " not found" << std::endl;
       return false;
@@ -8527,13 +8437,7 @@ int main(int argc, char** argv) {
   auto applyRemoveChord = [&](uint32_t trackId,
                               uint32_t chordId,
                               bool recordUndo) -> bool {
-    TrackRuntime* runtime = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(tracksMutex);
-      if (trackId < tracks.size()) {
-        runtime = tracks[trackId].get();
-      }
-    }
+    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
       daw::LogLine() << "UI: RemoveChord failed - track " << trackId << " not found" << std::endl;
       return false;
@@ -8575,13 +8479,7 @@ int main(int argc, char** argv) {
                                 uint64_t nanotick,
                                 uint8_t column,
                                 bool recordUndo) -> bool {
-    TrackRuntime* runtime = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(tracksMutex);
-      if (trackId < tracks.size()) {
-        runtime = tracks[trackId].get();
-      }
-    }
+    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
       daw::LogLine() << "UI: RemoveChord failed - track " << trackId << " not found" << std::endl;
       return false;
@@ -8715,13 +8613,7 @@ int main(int argc, char** argv) {
             .field("reason", h.pointCount < 2 ? "too_few_points" : "short_payload");
         return;
       }
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (h.trackId < tracks.size()) {
-          runtime = tracks[h.trackId].get();
-        }
-      }
+      TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, h.trackId);
       if (!runtime) {
         reportSamplerReject(daw::UiCommandType::SamplerSetEnvelopePoints, daw::UiSamplerRejectReason::NoSuchTrack,
                             h.trackId, 0, 0);
@@ -8888,13 +8780,7 @@ int main(int argc, char** argv) {
             .field("reason", "embedded_nul");
         return;
       }
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (h.trackId < tracks.size()) {
-          runtime = tracks[h.trackId].get();
-        }
-      }
+      TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, h.trackId);
       if (!runtime) {
         reportSamplerReject(daw::UiCommandType::SamplerSetSlotName,
                             daw::UiSamplerRejectReason::NoSuchTrack, h.trackId, h.deviceId,
@@ -9049,13 +8935,7 @@ int main(int argc, char** argv) {
         }
       }
 
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (h.trackId < tracks.size()) {
-          runtime = tracks[h.trackId].get();
-        }
-      }
+      TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, h.trackId);
       if (!runtime) {
         DAW_EVENT("clip_text.rejected")
             .field("track", h.trackId)
@@ -10108,13 +9988,7 @@ int main(int argc, char** argv) {
       // this codebase has spent most of its debugging time on exactly that shape.
       const auto scratchOp = static_cast<daw::UiCommandType>(payload.commandType);
       const uint32_t placementId = payload.value0;
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (payload.trackId < tracks.size()) {
-          runtime = tracks[payload.trackId].get();
-        }
-      }
+      TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, payload.trackId);
       if (!runtime) {
         DAW_EVENT("scratch.rejected")
             .field("op", daw::uiCommandTypeName(scratchOp))
@@ -10218,13 +10092,7 @@ int main(int argc, char** argv) {
       // section rename off the clip version.
       const uint32_t placementId = payload.value0;
       const bool on = (payload.flags & 1u) != 0;
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (payload.trackId < tracks.size()) {
-          runtime = tracks[payload.trackId].get();
-        }
-      }
+      TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, payload.trackId);
       if (!runtime) {
         DAW_EVENT("placement_scope.rejected")
             .field("track", payload.trackId)
@@ -10285,13 +10153,7 @@ int main(int argc, char** argv) {
         return;
       }
       const uint32_t placementId = payload.value0;
-      TrackRuntime* runtime = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (payload.trackId < tracks.size()) {
-          runtime = tracks[payload.trackId].get();
-        }
-      }
+      TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, payload.trackId);
       if (!runtime) {
         DAW_EVENT("overrides.revert_rejected")
             .field("track", payload.trackId)
@@ -10385,13 +10247,7 @@ int main(int argc, char** argv) {
         daw::LogLine() << "UI: AddTrack refused — at track cap " << daw::kUiMaxTracks
                   << std::endl;
       } else {
-        TrackRuntime* existing = nullptr;
-        {
-          std::lock_guard<std::mutex> lock(tracksMutex);
-          if (slot < tracks.size()) {
-            existing = tracks[slot].get();
-          }
-        }
+        TrackRuntime* existing = daw::engine::trackAt(tracks, tracksMutex, slot);
         bool ok = true;
         if (existing) {
           ok = restartTrackHost(*existing, {});
@@ -10561,6 +10417,9 @@ int main(int argc, char** argv) {
         const uint32_t srcId = payload.trackId;
         const uint32_t dstId = newTrackId;
         TrackRuntime* src = nullptr;
+        // NOT trackAt: this resolves BOTH tracks under ONE lock. Two trackAt calls would take
+        // the mutex twice and lose atomicity across the pair, so a concurrent add between them
+        // could hand back a src and dst from different states of the table.
         TrackRuntime* dst = nullptr;
         {
           std::lock_guard<std::mutex> lock(tracksMutex);

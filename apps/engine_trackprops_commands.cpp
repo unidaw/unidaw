@@ -61,13 +61,7 @@ void handleSetTrackHarmonyQuantize(TrackpropsCommandDeps& deps,
   auto& tracksMutex = deps.tracksMutex;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   {
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (payload.trackId < tracks.size()) {
-      runtime = tracks[payload.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, payload.trackId);
   if (!runtime) {
     daw::LogLine() << "UI: SetTrackHarmonyQuantize failed - track "
               << payload.trackId << " not found" << std::endl;
@@ -94,13 +88,7 @@ void handleSetTrackSoundAddressed(TrackpropsCommandDeps& deps,
   auto& tracksMutex = deps.tracksMutex;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   {
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (payload.trackId < tracks.size()) {
-      runtime = tracks[payload.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, payload.trackId);
   if (!runtime) {
     daw::LogLine() << "UI: SetTrackSoundAddressed failed - track "
                    << payload.trackId << " not found" << std::endl;
@@ -129,13 +117,7 @@ void handleSetTrackCollapsed(TrackpropsCommandDeps& deps,
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
   {
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (payload.trackId < tracks.size()) {
-      runtime = tracks[payload.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, payload.trackId);
   if (!runtime) {
     daw::LogLine() << "UI: SetTrackCollapsed failed - track "
                    << payload.trackId << " not found" << std::endl;
@@ -162,13 +144,7 @@ void handleSetTrackLinesPerBeat(TrackpropsCommandDeps& deps,
   // format, published in uiLinesPerBeat and honoured by the tracker's grid since v10, and
   // nothing could set it: a project could CARRY a 3-rows-per-beat lane and no surface could
   // MAKE one.
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (payload.trackId < tracks.size()) {
-      runtime = tracks[payload.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, payload.trackId);
   if (!runtime) {
     DAW_EVENT("track.lines_per_beat_rejected")
         .field("track", payload.trackId)
@@ -205,13 +181,7 @@ void handleSetTrackAllowNoteOverlap(TrackpropsCommandDeps& deps,
   // THE ONLY SETTING IN THE TRACKER THAT DECIDES WHETHER AN EDIT LOSES DATA. Off, entering a
   // note over a sounding one truncates the sounding note IN THE DOCUMENT. On, it is left
   // alone and both keep the durations they were given.
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (payload.trackId < tracks.size()) {
-      runtime = tracks[payload.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, payload.trackId);
   if (!runtime) {
     DAW_EVENT("track.allow_note_overlap_rejected")
         .field("track", payload.trackId)
@@ -236,13 +206,7 @@ void handleSetLaneQuantize(TrackpropsCommandDeps& deps,
   auto& quantizeVersion = deps.quantizeVersion;
   const auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
   {
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (payload.trackId < tracks.size()) {
-      runtime = tracks[payload.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, payload.trackId);
   if (!runtime) {
     daw::LogLine() << "UI: SetLaneQuantize failed - track " << payload.trackId
               << " not found" << std::endl;

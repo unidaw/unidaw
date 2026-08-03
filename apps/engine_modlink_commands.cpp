@@ -39,13 +39,7 @@ void handleAddModLink(ModlinkCommandDeps& deps,
   constexpr uint16_t kModErrInvalidDevice = 4;
   constexpr uint16_t kModErrOrderViolation = 5;
   constexpr uint16_t kModErrLinkExists = 6;
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (modPayload.trackId < tracks.size()) {
-      runtime = tracks[modPayload.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, modPayload.trackId);
   if (!runtime) {
     emitModError(kModErrTrackMissing, modPayload.trackId, modPayload.linkId);
     return;
@@ -261,13 +255,7 @@ void handleSetModLinkUid16(ModlinkCommandDeps& deps,
   }
   constexpr uint16_t kModErrTrackMissing = 1;
   constexpr uint16_t kModErrLinkMissing = 2;
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (modPayload.trackId < tracks.size()) {
-      runtime = tracks[modPayload.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, modPayload.trackId);
   if (!runtime) {
     emitModError(kModErrTrackMissing, modPayload.trackId, modPayload.linkId);
     return;
@@ -320,13 +308,7 @@ void handleSetModSourceValue(ModlinkCommandDeps& deps,
   constexpr uint16_t kModErrTrackMissing = 1;
   constexpr uint16_t kModErrInvalidKind = 3;
   constexpr uint16_t kModErrInvalidDevice = 4;
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (modPayload.trackId < tracks.size()) {
-      runtime = tracks[modPayload.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, modPayload.trackId);
   if (!runtime) {
     emitModError(kModErrTrackMissing, modPayload.trackId, 0);
     return;

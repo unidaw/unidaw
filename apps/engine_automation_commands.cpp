@@ -29,13 +29,7 @@ void handleSetAutomationTarget(AutomationCommandDeps& deps,
                                   autoPayload.trackId)) {
     return;
   }
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (autoPayload.trackId < tracks.size()) {
-      runtime = tracks[autoPayload.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, autoPayload.trackId);
   if (!runtime) {
     daw::LogLine() << "UI: SetAutomationTarget failed - track "
               << autoPayload.trackId << " not found" << std::endl;
@@ -105,13 +99,7 @@ void handleRequestAutomationLane(AutomationCommandDeps& deps,
   std::memset(slot.paramId, 0, sizeof(slot.paramId));
   const size_t idLen = std::min(paramId.size(), sizeof(slot.paramId) - 1);
   std::memcpy(slot.paramId, paramId.data(), idLen);
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (req.trackId < tracks.size()) {
-      runtime = tracks[req.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, req.trackId);
   // Same source as the lane list: the snapshot the RT scheduler reads. An answer taken from
   // the model would describe the document; what a caller is asking about is the song.
   std::shared_ptr<const TrackStateSnapshot> ts;
@@ -280,13 +268,9 @@ void handleDeleteAutomationPoint(AutomationCommandDeps& deps,
         .field("reason", "empty_param_id");
     return;
   }
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (ap.trackId < tracks.size() && tracks[ap.trackId]) {
-      runtime = tracks[ap.trackId].get();
-    }
-  }
+  // The extra `&& tracks[id]` this used to carry is redundant: .get() on a null unique_ptr is
+  // nullptr, so trackAt answers identically for an empty slot.
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, ap.trackId);
   if (!runtime) {
     DAW_EVENT("automation.delete_rejected")
         .field("track", ap.trackId)

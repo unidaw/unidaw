@@ -53,13 +53,7 @@ void handleSetClipGrid(ClipCommandDeps& deps,
         .field("reason", bad);
     return;
   }
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (p.trackId < tracks.size()) {
-      runtime = tracks[p.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, p.trackId);
   if (!runtime) {
     DAW_EVENT("clip.grid_rejected")
         .field("track", p.trackId)
@@ -170,13 +164,7 @@ void handleSetAudioClipField(ClipCommandDeps& deps,
     clamped = value != before;
   }
 
-  TrackRuntime* runtime = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (p.trackId < tracks.size()) {
-      runtime = tracks[p.trackId].get();
-    }
-  }
+  TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, p.trackId);
   if (!runtime) {
     DAW_EVENT("audio_clip.field_rejected")
         .field("track", p.trackId)
