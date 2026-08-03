@@ -1,0 +1,99 @@
+#pragma once
+// LOADING A PROJECT, lifted out of main() as one verbatim block.
+//
+// 945 lines that turn a parsed ProjectDocument into live engine state: tracks, clips,
+// placements, the tempo and meter maps, the patcher graph, markers, harmony, and the
+// version counters every one of those has to bump on the way out. The body is unchanged
+// from the lambda it was; the 52 values it captured arrive in LoadProjectDeps and are
+// re-bound to their original names, so shadowing and brace scope still mean what they meant.
+//
+// THE CALLBACK MEMBERS ARE HELD BY VALUE, unlike the *CommandDeps structs, which hold
+// `const std::function<...>&`. Those need a named std::function to point at, which is why
+// main() carries three dozen `xFn = x` declarations — a reference bound to a temporary
+// std::function would dangle the moment the full expression ended. All fourteen callbacks
+// here are defined ABOVE this point but wrapped BELOW it, so references would have meant
+// hoisting fourteen declarations across three thousand lines to satisfy a lifetime rule.
+// Project load runs once per open, not per block, so a std::function copy costs nothing
+// measurable and removes the hazard instead of documenting it.
+
+#include <atomic>
+#include <functional>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "engine_types.h"
+#include "markers.h"
+#include "patcher_graph.h"
+#include "plugin_cache.h"
+#include "project_file.h"
+#include "time_base.h"
+#include "time_signature_map.h"
+#include "waveform_store.h"
+
+namespace daw::engine {
+
+struct LoadProjectDeps {
+  std::mutex& arrangeMutex;
+  std::atomic<uint32_t>& arrangeVersion;
+  std::atomic<uint32_t>& automationVersion;
+  std::mutex& auxChildOverlayMutex;
+  std::map<std::pair<uint32_t, uint32_t>, AuxChildOverlay>& auxChildOverlays;
+  std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)> buildTrackSnapshot;
+  std::function<void()> bumpAllTrackClipVersions;
+  std::atomic<bool>& clipDirty;
+  std::atomic<uint32_t>& clipVersion;
+  std::function<void(TrackRuntime&)> emitChainSnapshot;
+  std::function<void(TrackRuntime&)> emitModSnapshot;
+  std::function<void(TrackRuntime&)> emitRoutingSnapshot;
+  std::function<void(const daw::UiDiffPayload&)> emitUiDiff;
+  std::function<void(std::vector<daw::ProjectPlacement>&)> ensurePlacementIds;
+  std::function<TrackRuntime*(uint32_t, const std::string&)> ensureTrack;
+  std::atomic<bool>& harmonyDirty;
+  std::vector<daw::HarmonyEvent>& harmonyEvents;
+  std::mutex& harmonyMutex;
+  std::atomic<uint32_t>& harmonyVersion;
+  std::atomic<uint32_t>& liveTrackCount;
+  std::atomic<bool>& loadInProgress;
+  std::vector<daw::ProjectClip>& loadedClips;
+  std::mutex& loadedClipsMutex;
+  std::string& loadedProjectDir;
+  std::vector<daw::ProjectTempoPoint>& loadedTempoMap;
+  std::atomic<uint64_t>& loopEndNanotick;
+  std::atomic<uint64_t>& loopStartNanotick;
+  std::atomic<bool>& loopUserSet;
+  daw::MarkerList& markerList;
+  std::unique_ptr<TrackRuntime>& masterTrack;
+  std::shared_ptr<const daw::TimeSignatureMap>& meterSnapshot;
+  std::atomic<uint32_t>& nextClipId;
+  std::atomic<bool>& patcherAssembledFromDevices;
+  daw::PatcherGraphState& patcherGraphState;
+  const uint64_t patternTicks;
+  const daw::PluginCache& pluginCache;
+  std::atomic<uint64_t>& projectSeed;
+  std::function<void()> publishAudioClipTable;
+  std::function<std::shared_ptr<const AudioRenderList>(const TrackRuntime&)> rebuildAudioRender;
+  std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&)> rebuildFlatAndPublish;
+  std::function<void(TrackRuntime&)> rebuildHostForChain;
+  std::function<void()> reconcileMasterHost;
+  std::function<void(TrackRuntime&)> refreshSamplerForTrack;
+  std::function<void(TrackRuntime&)> resetTrackContent;
+  std::atomic<uint64_t>& songEndNanotick;
+  daw::TimeSignatureMap& songMeter;
+  std::atomic<uint32_t>& songTimeSigDen;
+  std::atomic<uint32_t>& songTimeSigNum;
+  daw::TempoMapProvider& tempoProvider;
+  std::vector<std::unique_ptr<TrackRuntime>>& tracks;
+  std::mutex& tracksMutex;
+  std::function<void()> updatePatcherGraphSnapshot;
+  daw::WaveformStore& waveformStore;
+};
+
+// Returns false and fills *error if the document will not load. On success the engine is
+// holding the new project and every version counter has been bumped.
+bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path, std::string* error);
+
+}  // namespace daw::engine
