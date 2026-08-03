@@ -652,6 +652,11 @@ add_test(NAME doc_citation
 )
 set_tests_properties(doc_citation PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+add_test(NAME hazard_order
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/hazard_order_check.sh
+)
+set_tests_properties(hazard_order PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 add_test(NAME check_registry
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_registry_check.sh
 )

@@ -506,30 +506,7 @@ public:
       m_playbackBlockId->store(nextBlockToPlay, std::memory_order_release);
     }
 
-    // Lock-free acquire of the current track list under a single hazard pointer.
-    // Publish our candidate as the hazard, then re-read the head; loop until the
-    // head is unchanged *after* the hazard is visible. Only then has the writer's
-    // reclamation — which reads the hazard after swapping the head — no way to
-    // free the version we commit to.
-    //
-    // Both sides must be seq_cst. The protocol is a StoreLoad handoff (we store
-    // hazard then load head; the writer stores head then loads hazard), and
-    // release/acquire do not order StoreLoad — the store and load could reorder
-    // and reopen the window. An earlier version stored the hazard with
-    // release, re-checked once, and on mismatch reloaded+republished with no
-    // final re-check: that left a gap where the writer freed the version between
-    // our reload and our hazard store, and the audio thread then read a freed
-    // TrackInfo whose header was null — SIGSEGV at header->numChannelsOut
-    // (null + 0x1c) a few hundred ms into playback.
-    std::vector<TrackInfo>* tracks = m_tracksPtr.load(std::memory_order_seq_cst);
-    for (;;) {
-      m_tracksHazard.store(tracks, std::memory_order_seq_cst);
-      std::vector<TrackInfo>* head = m_tracksPtr.load(std::memory_order_seq_cst);
-      if (head == tracks) {
-        break;
-      }
-      tracks = head;
-    }
+    std::vector<TrackInfo>* tracks = acquireTracks();
     if (!tracks) {
       return;
     }
@@ -1072,15 +1049,7 @@ public:
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
     for (;;) {
-      std::vector<TrackInfo>* tracks = m_tracksPtr.load(std::memory_order_seq_cst);
-      for (;;) {
-        m_tracksHazard.store(tracks, std::memory_order_seq_cst);
-        std::vector<TrackInfo>* head = m_tracksPtr.load(std::memory_order_seq_cst);
-        if (head == tracks) {
-          break;
-        }
-        tracks = head;
-      }
+      std::vector<TrackInfo>* tracks = acquireTracks();
       // AN ALL-MUTED PROJECT IS A LEGITIMATE RENDER — of silence. Skipping muted tracks
       // outright made it indistinguishable from a project whose hosts never came up: both
       // found no candidate, both timed out after 15s, both reported "no track host connected"
@@ -1143,19 +1112,7 @@ public:
   // fail the render loudly, not hang it forever with no output and no reason.
   bool awaitNextBlock(uint32_t timeoutMs, uint32_t* stalledTrackOut,
                       uint32_t* stalledGapOut) {
-    // Same hazard-pointer acquire the mix uses. The naive read (load, use) is what caused a
-    // SIGSEGV a few hundred ms into playback once already: the writer freed the version
-    // between the load and the publish. Copied deliberately rather than factored out — the
-    // comment on the original explains a subtlety worth reading at both sites.
-    std::vector<TrackInfo>* tracks = m_tracksPtr.load(std::memory_order_seq_cst);
-    for (;;) {
-      m_tracksHazard.store(tracks, std::memory_order_seq_cst);
-      std::vector<TrackInfo>* head = m_tracksPtr.load(std::memory_order_seq_cst);
-      if (head == tracks) {
-        break;
-      }
-      tracks = head;
-    }
+    std::vector<TrackInfo>* tracks = acquireTracks();
     if (!tracks) {
       return true;  // nothing to wait for
     }
@@ -1401,6 +1358,38 @@ private:
   // hazarded, and frees the rest. At most two versions are ever retained.
   std::atomic<std::vector<TrackInfo>*> m_tracksPtr{nullptr};
   std::atomic<std::vector<TrackInfo>*> m_tracksHazard{nullptr};
+
+  // THE HAZARD-POINTER ACQUIRE, ONCE. Three call sites had this verbatim, and the copy written
+  // last carried a comment arguing FOR the duplication — "copied deliberately rather than
+  // factored out ... worth reading at both sites" — while there were three of them. A
+  // justification that has lost count of its own copies is the drift starting, and this is a
+  // lock-free protocol: the way it goes wrong is a use-after-free on the audio thread, not a
+  // number that looks slightly off.
+  //
+  // Publish our candidate as the hazard, then re-read the head; loop until the head is unchanged
+  // *after* the hazard is visible. Only then has the writer's reclamation — which reads the
+  // hazard after swapping the head — no way to free the version we commit to.
+  //
+  // BOTH SIDES MUST BE seq_cst. The protocol is a StoreLoad handoff (we store hazard then load
+  // head; the writer stores head then loads hazard), and release/acquire do not order StoreLoad —
+  // the store and the load could reorder and reopen the window. An earlier version stored the
+  // hazard with release, re-checked once, and on mismatch reloaded and republished with no final
+  // re-check. That left a gap where the writer freed the version between our reload and our
+  // hazard store, and the audio thread read a freed TrackInfo whose header was null: SIGSEGV at
+  // header->numChannelsOut (null + 0x1c), a few hundred milliseconds into playback.
+  //
+  // Returns null when the published list is null; every caller checks.
+  std::vector<TrackInfo>* acquireTracks() {
+    std::vector<TrackInfo>* tracks = m_tracksPtr.load(std::memory_order_seq_cst);
+    for (;;) {
+      m_tracksHazard.store(tracks, std::memory_order_seq_cst);
+      std::vector<TrackInfo>* head = m_tracksPtr.load(std::memory_order_seq_cst);
+      if (head == tracks) {
+        return tracks;
+      }
+      tracks = head;
+    }
+  }
   std::vector<std::shared_ptr<std::vector<TrackInfo>>> m_tracksRetired;
   std::atomic<float> m_trackPeak[daw::kUiMaxTracks]{};
   std::atomic<float> m_masterPeak{0.0f};
