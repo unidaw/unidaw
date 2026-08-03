@@ -36,11 +36,25 @@ Before changing code, read **Design commitments** at the bottom.
 
 Three kinds of process, and one shared-memory contract between each pair.
 
-**`daw_engine`** (`apps/daw_engine_main.cpp`, ~19k lines) owns transport, tempo and time-signature
-maps, harmony timeline, clip/placement store, undo, device chains, patcher runtime, sampler and
-master mix. A `producer` thread schedules events ahead of the playhead; the audio callback mixes
-finished blocks by block id and never blocks — a late worker costs one stale frame, never a
-dropout.
+**`daw_engine`** owns transport, tempo and time-signature maps, harmony timeline, clip/placement
+store, undo, device chains, patcher runtime, sampler and master mix. A `producer` thread schedules
+events ahead of the playhead; the audio callback mixes finished blocks by block id and never
+blocks — a late worker costs one stale frame, never a dropout.
+
+It builds as two static libraries and a `main`:
+
+- **`engine_core`** — the shared translation units: project file, event rings, shared memory,
+  plugin host controller, patcher graph.
+- **`engine_commands`** — 16 `apps/engine_*_commands.cpp` modules, one per UI command family
+  (sampler, automation, clip, patcher, chain, track, marker, undo, …), each behind an explicit
+  dependency struct rather than an implicit capture; plus `engine_pure` (rules that depend on
+  nothing) and `engine_rt_helpers` (the producer thread's arithmetic).
+- **`apps/daw_engine_main.cpp`** (~15.4k lines) — argument parsing, state, thread bodies, and the
+  dispatch that routes a command to its module.
+
+The split is what makes a command testable without booting a process: an edit-build-run cycle on a
+command module is ~4s against ~14s to relink the engine. `apps/engine_types.h` holds the engine's
+own types — `TrackRuntime` and the rest — which were function-local until they had to be shared.
 
 **`juce_host_process`** is the plugin host: one process per track, spawned by the engine, over a
 unix socket plus a per-track shared-memory segment carrying audio block rings and event queues. A

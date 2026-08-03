@@ -551,7 +551,7 @@ is gone must not suddenly play the entire break.
 **2. The six-site migration IS done.** I wrote that threading `sound` and the offset through was
 an unpaid six-site hot-path migration plus a signature change. The cost was right; the tense was
 not. `emitNoteOnWithOff` takes `sound` and `soundOffset`
-(`apps/daw_engine_main.cpp:14292-14295`), the note-off sites are migrated, and the values reach
+(`apps/daw_engine_main.cpp` (`emitNoteOnWithOff`)), the note-off sites are migrated, and the values reach
 the sampler.
 
 **The lesson, which is the same one this document already records one level down:** I grepped

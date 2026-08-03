@@ -10,7 +10,7 @@ Three reasons decided it.
 
 **R1 — The chop is the tempo mechanism, and a split puts it on the wrong side of the fence.** With time-stretch rejected, slicing plus row-retriggering *is* how a 174 BPM break plays at 140. That makes the slicer load-bearing, and the survey is unambiguous that Battery — the flagship kit device — has never had one, while the only fused design (Renoise) has the best one in the field. That is not coincidence: a live chop needs the waveform, the marker set, the slot list and the keymap co-resident in one object. In a two-device world, "slice to kit" means N slices become N independent sampler instances inside a container, and **dragging a marker afterwards is structurally impossible** — each slice is now a different device with its own copy. That is exactly Ableton's failure, and it is the one you would feel daily: at 3am you want to nudge slice 7 while the loop runs, not re-slice and re-write the part.
 
-**R2 — Once a row addresses the sound, the container has no job left but layout, and layout is a view.** This is the survey's own #1 finding, arrived at by Renoise (`0Sxx`), Elektron (SLICE p-lock) and Bitwig (per-note expression) from three directions. Both briefs are right that it is *orthogonal* to device count — and that is the point: settle it first, and the kit container's remaining jobs evaporate. Choke → per-slot voice group + NNA, no container. Per-slot output → the aux output plane, which already ships (`apps/daw_engine_main.cpp:223-226, 1675-1678`). Spatial layout → a view. A container whose last job is layout is a view mode.
+**R2 — Once a row addresses the sound, the container has no job left but layout, and layout is a view.** This is the survey's own #1 finding, arrived at by Renoise (`0Sxx`), Elektron (SLICE p-lock) and Bitwig (per-note expression) from three directions. Both briefs are right that it is *orthogonal* to device count — and that is the point: settle it first, and the kit container's remaining jobs evaporate. Choke → per-slot voice group + NNA, no container. Per-slot output → the aux output plane, which already ships (`apps/shared_memory.h` (`audioOutOffset`, the aux output plane)). Spatial layout → a view. A container whose last job is layout is a view mode.
 
 **R3 — The two-devices brief's genuinely strong argument (a pad is a device-chain host) is answered here by something better than a rack: child tracks, which already ship.** "This kick needs its own compressor" is not `slot.chain.push(compressor)`. It is `--stem 1` on the slot and `extract-stem`, which surfaces the kick as a **real track** — with its own per-lane quantize, its own automation lanes, its own patcher device, its own meter, its own place in the mixer, saved by machinery that is already verified (multi-out phases 1–5b). Live's pad chain has none of that; it is a second-class container that looks like a track and isn't. So I am refusing per-slot insert chains **permanently**, and the refusal costs nothing because the replacement is strictly more capable.
 
@@ -179,7 +179,7 @@ FT2's sustain point and IT's sustain loop are therefore the same mechanism at tw
 - `m<set>.<mod>.d` — depth: how much it moves the target
 - `m<set>.<mod>.r` — rate: the time-scale multiplier, 0.25× to 4×
 
-**The names are short for a reason, and it is a hard limit rather than taste.** `UiAutomationPointPayload.paramId` is `char[16]` (`apps/event_payloads.h:235`) and the engine **refuses** any id of 16 or more characters (`apps/daw_engine_main.cpp:8442-8448`), because the read-back slot nul-terminates inside its own 16 bytes — a 16-byte id would be written in full and read back one byte short, so the write and the answer would name different lanes forever. **The real budget is 15.** The obvious spelling blows it: `modset:1:resonance` is 18 characters and would be rejected on write. So the namespace is a dotted path with one-letter roots, and it fits with three-digit ids to spare:
+**The names are short for a reason, and it is a hard limit rather than taste.** `UiAutomationPointPayload.paramId` is `char[16]` (`apps/event_payloads.h:235`) and the engine **refuses** any id of 16 or more characters (`apps/engine_automation_commands.cpp` (`handleWriteAutomationPoint`, reason `param_id_not_representable`)), because the read-back slot nul-terminates inside its own 16 bytes — a 16-byte id would be written in full and read back one byte short, so the write and the answer would name different lanes forever. **The real budget is 15.** The obvious spelling blows it: `modset:1:resonance` is 18 characters and would be rejected on write. So the namespace is a dotted path with one-letter roots, and it fits with three-digit ids to spare:
 
 | | example | worst case at 3-digit ids |
 |---|---|---|
@@ -273,7 +273,7 @@ Three threads touch sampler state, and only one of them owns it.
 | **producer** | schedule notes, run the patcher, fill host input planes. |
 | **audio callback** | read a published snapshot. Nothing else. |
 
-`SamplerState` is **never read by the audio thread**. What the audio thread reads is a `SamplerRender` snapshot: immutable, flattened, pointer-stable, built on the command thread and published with `std::atomic_store_explicit` exactly as `runtime->trackSnapshot` and `runtime->audioRender` already are (`apps/daw_engine_main.cpp:5700,5739`). The same pattern, not a second one — a codebase with two ways to hand state to the audio thread has two ways to get it wrong.
+`SamplerState` is **never read by the audio thread**. What the audio thread reads is a `SamplerRender` snapshot: immutable, flattened, pointer-stable, built on the command thread and published with `std::atomic_store_explicit` exactly as `runtime->trackSnapshot` and `runtime->audioRender` already are (`apps/daw_engine_main.cpp` (`rebuildFlatAndPublish`, `rebuildAudioRender`)). The same pattern, not a second one — a codebase with two ways to hand state to the audio thread has two ways to get it wrong.
 
 The snapshot **owns the sample audio by `shared_ptr`**, which buys two things at once:
 
@@ -295,6 +295,26 @@ No allocation, no locks, no syscalls, no `std::function`, no file I/O, no loggin
 This is worth stating because the alternative is free and wrong.
 
 **And the same gap exists on the plugin path, but it is not architectural — it is an unconnected wire.** `MidiEvent.sampleOffset` exists (`platform_juce/juce_wrapper.h:13`) and the host *honours* it: `platform_juce/juce_wrapper.cpp:1011` sets `e.sampleOffset = ev.sampleOffset` on the direct VST3 event path. But **the engine never populates it** — grep across `daw_engine_main.cpp` returns nothing. So every note reaching a hosted plugin is quantised to the block boundary (2.7 ms of jitter at 128 frames, 11 ms at 512) for no reason other than a missing assignment.
+
+> **⚠ THIS CLAIM IS CONTRADICTED BY THE CODE AS OF 2026-08-03, AND HAS NOT BEEN MEASURED EITHER WAY.**
+> `apps/juce_host_process_main.cpp` builds every plugin MIDI event on one unconditional path and
+> sets `noteEvent.sampleOffset = event.sampleTime - blockStart`; `platform_juce/juce_wrapper.cpp`
+> then propagates it and feeds it to `midi.addEvent(message, ev.sampleOffset)`, which is
+> sample-accurate. The engine writes an exact `sampleTime` (see `placeInBlock` in
+> `apps/engine_rt_helpers.h`: `blockSampleStart + tickDeltaToSamples(...)`), not a block-aligned
+> one, so that subtraction is a real sub-block offset rather than always zero.
+>
+> The `MidiPayload` wire struct indeed has no `sampleOffset` field — the doc is right about that —
+> but the offset is DERIVED host-side from `sampleTime` rather than carried, so the absent field
+> is not the gap it appears to be.
+>
+> Left in place rather than rewritten because **reading code is not measuring behaviour**, and
+> this section drove a design decision (the sampler tee starting its voice at the exact frame
+> "rather than at the boundary"). Settle it with a render: one note at a non-block-aligned tick
+> through the real host, and look at which sample the audio starts on. A comment in
+> `apps/daw_engine_main.cpp` beside the sampler tee repeats this claim and should be corrected in
+> the same change.
+
 
 That reframes it. It is not a limitation of the out-of-process design to be routed around; it is a cheap fix that improves **every hosted plugin**, and it should be done rather than left as a reason the built-in is better. Filed as its own item, not folded into S1 — the sampler does not depend on it, and a fix that improves all plugins deserves its own check rather than riding in on a device commit.
 
@@ -442,7 +462,7 @@ Rejected as "just a feature list": velocity layers, round-robin, filter types, r
 
 **S1 — the sampler exists and plays. No contract bump.** `DeviceKind::Sampler`, `SamplerState` with one slot, `project.json` round-trip (`save_roundtrip_check.sh` + an *edited* fixture per `edited_roundtrip_check.sh`), channel-preserving decode, one voice class with Hermite, note-on/off through the existing dispatch, `add-device --kind sampler` and `sampler-load`. **This is the useful line**: load a sample, play it from the tracker. Verified with `DAW_CAPTURE_WAV` + `tools/perceptual.py`, not by ear — plus `tools/sampler_determinism_check.sh` (§3.5): one project rendered at 64, 256 and 1024 frames must come out **bit-identical**. That check belongs in S1 and not later, because it is the one that fails loudly the moment a voice starts on a block boundary instead of its own sample, and retrofitting sample-accurate starts after the rest is built is exactly the kind of rework this ordering exists to avoid.
 
-**Where it renders, decided by looking rather than assuming (2026-07-30).** The sampler generates into the **host input plane's main channels**, the way `runtime->patcherAudioChannels` already does (`apps/daw_engine_main.cpp:2172`, written at `:14280`) — *not* straight into the master sum the way placed audio clips do (`:868`). The difference is whether a VST effect can follow the sampler on the same track: audio mixed into master has already passed every plugin, so the easy path would have made "sampler → reverb" structurally impossible and would not have shown up until S3.
+**Where it renders, decided by looking rather than assuming (2026-07-30).** The sampler generates into the **host input plane's main channels**, the way `runtime->patcherAudioChannels` already does (`apps/engine_types.h` (`TrackRuntime::patcherAudioChannels`), written at `:14280`) — *not* straight into the master sum the way placed audio clips do (`:868`). The difference is whether a VST effect can follow the sampler on the same track: audio mixed into master has already passed every plugin, so the easy path would have made "sampler → reverb" structurally impossible and would not have shown up until S3.
 
 This also answers what the sampler lays groundwork for. Built-in **instruments** are nearly free after S1, because that input-plane slot is the whole mechanism. Built-in **effects** are cheaper than they look too: chain segmentation already exists (`:14042-14105`) — a run of VSTs is one segment, a non-VST device breaks it, and between segments the previous output is copied back into the input — and `DeviceKind::PatcherAudio` already uses it. A built-in effect is a kind that breaks a segment the same way, not a new audio path.
 
@@ -509,7 +529,7 @@ It said: "`outputStem` onto the existing aux output plane, `extract-stem` to a c
 
 What is actually there:
 
-- a child track reads *a bus slice of the **parent's** aux output plane* in the parent's SHM (`apps/daw_engine_main.cpp:413-424`), produced by the parent's **host** in lockstep with its `completedBlockId`;
+- a child track reads *a bus slice of the **parent's** aux output plane* in the parent's SHM (`apps/engine_types.h` (`AudioRegionRender`, the aux bus slice)), produced by the parent's **host** in lockstep with its `completedBlockId`;
 - `reconcileChildTracks` (`:4074`) derives children by calling `parent.controller.requestBusLayout()` — it asks the **host** what buses it has, and a sampler has no host plugin to ask;
 - with no plugins the host copies input→output for the main channels and **zeroes the rest**, so the aux channels are cleared;
 - `numChannelsIn` is `numChannelsOut + kSidechainChannels` (`:1729`) — there is no room in the input plane for stems.

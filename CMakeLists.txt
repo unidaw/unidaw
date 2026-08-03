@@ -647,6 +647,11 @@ set_tests_properties(configure PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} 
 # AND DOES EVERY CHECK IN tools/ ACTUALLY RUN. The configure check above proves cmake can read
 # this file; it says nothing about what this file forgot to mention. 43 of 101 check scripts were
 # never registered — 37 of them passing, so they were working checks nobody was running.
+add_test(NAME doc_citation
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/doc_citation_check.sh
+)
+set_tests_properties(doc_citation PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 add_test(NAME check_registry
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_registry_check.sh
 )
