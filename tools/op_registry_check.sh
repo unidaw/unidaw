@@ -162,7 +162,14 @@ else:
 # them. Failing on "listed but not derived" would demand their removal and make the journal worse.
 # So the check can only ever demand ADDITIONS: the debt can shrink and cannot silently grow, the
 # same rule as DECLARED_NO_CLI above.
-engine = (root / "apps/daw_engine_main.cpp").read_text()
+# READ THE DISPATCHER WHEREVER IT LIVES. This used to name apps/daw_engine_main.cpp, and it went
+# red the moment handleUiEntry moved to apps/engine_handle_ui_entry.cpp — not because anything was
+# wrong, but because the derivation had lost sight of its subject. It said so rather than passing
+# on an empty set, which is the only reason the move was noticed at all; a check keyed to a path
+# is a check with an expiry date the refactor sets. Scanning the engine's sources means the next
+# move costs nothing.
+engine = "\n".join(p.read_text() for p in sorted(root.glob("apps/engine_*.cpp"))
+                   ) + (root / "apps/daw_engine_main.cpp").read_text()
 size_dispatched = set()
 for m in re.finditer(r"entry\.size == sizeof\(daw::(Ui\w+)\)", engine):
     window = engine[m.end(): m.end() + 700]
