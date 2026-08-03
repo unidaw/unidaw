@@ -4985,20 +4985,8 @@ int main(int argc, char** argv) {
         if (!pl.at.has_value()) {
           continue;  // a loose session cell has no timeline position
         }
-        uint64_t len = pl.lengthNanoticks;
-        if (len == 0) {
-          for (const auto& c : rt->ownedClips) {
-            if (c.id == pl.clipId) {
-              len = c.lengthNanoticks;
-              break;
-            }
-          }
-        }
-        // Saturating: a placement near the top of the range must not wrap to a tiny
-        // song end, which would silence everything after it.
-        const uint64_t reach =
-            (*pl.at > UINT64_MAX - len) ? UINT64_MAX : *pl.at + len;
-        end = std::max(end, reach);
+        const uint64_t len = daw::engine::placementLength(pl, rt->ownedClips);
+        end = std::max(end, daw::engine::placementReach(*pl.at, len));
       }
     }
     if (end == 0) {
@@ -5156,15 +5144,12 @@ int main(int argc, char** argv) {
       // exactly the placement somebody had just created, which is when they are most likely to
       // type into it. Two answers to "how far does this placement reach": note entry said it
       // covers its content, the published extent said it covers nothing.
-      uint64_t length = pl.lengthNanoticks;
+      // THIS SITE IS WHERE THE THREE-LEVEL FALLBACK CAME FROM — the other four had only two, and
+      // measured a zero-length clip's placement as empty. The loop stays because it also reads
+      // the clip's NAME and KIND, which are not length; only the length rule moved out.
+      const uint64_t length = daw::engine::placementLength(pl, rt.ownedClips);
       for (const auto& c : rt.ownedClips) {
         if (c.id == pl.clipId) {
-          if (length == 0) {
-            length = c.lengthNanoticks;
-          }
-          if (length == 0) {
-            length = clipContentEnd(c.clip);
-          }
           ext.name = c.name;
           ext.isAudio = c.kind == daw::ClipKind::Audio;
           break;
@@ -5481,8 +5466,12 @@ int main(int argc, char** argv) {
             .field("levelMask", py ? py->levelMask : 0u)
             .field("path", resolvedPath);
       }
-      const uint64_t lenTicks =
-          pl.lengthNanoticks > 0 ? pl.lengthNanoticks : clip->lengthNanoticks;
+      // BEHAVIOUR IS UNCHANGED HERE, and that is worth saying rather than leaving to be
+      // rediscovered: this path is already guarded to Audio clips, and an audio clip carries no
+      // MusicalClip, so the third fallback level yields 0 exactly as the old two-level ternary
+      // did. It uses the shared rule anyway — a fifth private copy of a rule with two known
+      // divergences is how the sixth gets written.
+      const uint64_t lenTicks = daw::engine::placementLength(pl, rt.ownedClips);
       AudioRegionRender r;
       r.params.regionStartSample = toSamples(*pl.at);
       r.params.regionLengthSamples = toSamples(lenTicks);
@@ -6666,16 +6655,9 @@ int main(int argc, char** argv) {
         if (!pl.at.has_value()) {
           continue;
         }
-        uint64_t len = pl.lengthNanoticks;
-        if (len == 0) {
-          for (const auto& c : document.clips) {
-            if (c.id == pl.clipId) {
-              len = c.lengthNanoticks;
-              break;
-            }
-          }
-        }
-        arrangementEnd = std::max(arrangementEnd, *pl.at + len);
+        const uint64_t len = daw::engine::placementLength(pl, document.clips);
+        arrangementEnd =
+            std::max(arrangementEnd, daw::engine::placementReach(*pl.at, len));
       }
     }
     if (arrangementEnd == 0) {
@@ -9348,16 +9330,8 @@ int main(int argc, char** argv) {
             if (!pl.at.has_value()) {
               continue;
             }
-            uint64_t len = pl.lengthNanoticks;
-            if (len == 0) {
-              for (const auto& c : rt->ownedClips) {
-                if (c.id == pl.clipId) {
-                  len = c.lengthNanoticks;
-                  break;
-                }
-              }
-            }
-            spans.emplace_back(pl.id, *pl.at, *pl.at + len);
+            const uint64_t len = daw::engine::placementLength(pl, rt->ownedClips);
+            spans.emplace_back(pl.id, *pl.at, daw::engine::placementReach(*pl.at, len));
           }
         }
         // AUTOMATION IS MATERIAL TOO, and the refusal above guarded only placements.

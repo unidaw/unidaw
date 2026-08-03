@@ -168,4 +168,34 @@ uint64_t barEndTick(const daw::TimeSignatureMap* meter, uint64_t tick);
 // clamp had become live.
 uint64_t barStartTick(const daw::TimeSignatureMap* meter, uint64_t tick);
 
+
+// HOW FAR A PLACEMENT REACHES, in one place instead of five.
+//
+// A placement may carry its own length, or leave it zero to mean "as long as the clip". Three
+// fallback levels, in order, because each was added by a different bug:
+//
+//   1. the placement's own lengthNanoticks, when set;
+//   2. the referenced clip's lengthNanoticks;
+//   3. the clip's CONTENT extent, when the clip's own length is also zero.
+//
+// LEVEL 3 EXISTED AT ONE SITE OUT OF FIVE, and its absence elsewhere is not theoretical. A clip
+// can hold notes while its own length is still zero, and every site without this fallback then
+// measured that placement as EMPTY — the web UI's shared-clip warning went silent on exactly the
+// placement somebody had just created, which is when they are most likely to type into it. Note
+// entry said the placement covered its content; the published extent said it covered nothing.
+// One placement, two answers, and nothing comparing the two code paths could see it because they
+// agree on every name.
+//
+// Returns 0 when no clip in `clips` has the placement's id. That is what all five hand-written
+// copies did — a dangling clip reference reaches nowhere rather than defaulting to something
+// plausible, because a plausible length would hide the dangling reference.
+uint64_t placementLength(const daw::ProjectPlacement& placement,
+                         const std::vector<daw::ProjectClip>& clips);
+
+// Where a placement ENDS, saturating. A placement near the top of the tick range must not wrap to
+// a small number: as a song end that would silence everything after it, and in the ripple planner
+// that would wrongly accept or refuse a time edit. Three of the five copies added these two
+// numbers unguarded; only the song-end one said why the guard was there.
+uint64_t placementReach(uint64_t at, uint64_t length);
+
 }  // namespace daw::engine

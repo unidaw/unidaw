@@ -180,4 +180,26 @@ uint64_t barStartTick(const daw::TimeSignatureMap* meter, uint64_t tick) {
   return start <= tick ? start : (tick / kFallbackBar) * kFallbackBar;
 }
 
+
+uint64_t placementLength(const daw::ProjectPlacement& placement,
+                         const std::vector<daw::ProjectClip>& clips) {
+  if (placement.lengthNanoticks > 0) {
+    return placement.lengthNanoticks;
+  }
+  for (const auto& clip : clips) {
+    if (clip.id != placement.clipId) {
+      continue;
+    }
+    if (clip.lengthNanoticks > 0) {
+      return clip.lengthNanoticks;
+    }
+    return clipContentEnd(clip.clip);
+  }
+  return 0;
+}
+
+uint64_t placementReach(uint64_t at, uint64_t length) {
+  return at > UINT64_MAX - length ? UINT64_MAX : at + length;
+}
+
 }  // namespace daw::engine

@@ -477,6 +477,80 @@ void testTheMapNeverPutsABarStartPastItsOwnTick() {
   CHECK(violations == 0);
 }
 
+
+// ------------------------------------------- how far a placement reaches, at all three levels
+namespace {
+daw::ProjectClip clipWith(uint32_t id, uint64_t length) {
+  daw::ProjectClip c;
+  c.id = id;
+  c.lengthNanoticks = length;
+  return c;
+}
+daw::ProjectPlacement placementOf(uint32_t clipId, uint64_t at, uint64_t length) {
+  daw::ProjectPlacement p;
+  p.clipId = clipId;
+  p.at = at;
+  p.lengthNanoticks = length;
+  return p;
+}
+}  // namespace
+
+void testPlacementLength() {
+  const uint64_t Q = daw::kNanoticksPerQuarter;
+  std::vector<daw::ProjectClip> clips = {clipWith(7, 8 * Q)};
+
+  // LEVEL 1: the placement's own length wins, even when the clip says otherwise.
+  CHECK(placementLength(placementOf(7, 0, 3 * Q), clips) == 3 * Q);
+
+  // LEVEL 2: zero means "as long as the clip".
+  CHECK(placementLength(placementOf(7, 0, 0), clips) == 8 * Q);
+
+  // LEVEL 3: THE ONE FOUR SITES OUT OF FIVE DID NOT HAVE. A clip can hold notes while its own
+  // length is still zero — a clip somebody just created and typed into. Without this level the
+  // placement measures as EMPTY, and it did: the shared-clip warning went silent on exactly the
+  // placement most likely to be edited, because note entry said it covered its content while the
+  // published extent said it covered nothing.
+  std::vector<daw::ProjectClip> unsized = {clipWith(7, 0)};
+  daw::MusicalEvent note;
+  note.nanotickOffset = 5 * Q;
+  note.type = daw::MusicalEventType::Note;
+  note.payload.note.pitch = 60;
+  note.payload.note.durationNanoticks = Q;
+  unsized[0].clip.addEvent(note);
+  const uint64_t content = clipContentEnd(unsized[0].clip);
+  CHECK(content > 0);  // otherwise this test proves nothing about level 3
+  CHECK(placementLength(placementOf(7, 0, 0), unsized) == content);
+
+  // A zero-length clip with NO content still reaches nowhere — level 3 is a fallback, not a
+  // minimum, and inventing a length here would hide an empty clip.
+  std::vector<daw::ProjectClip> empty = {clipWith(7, 0)};
+  CHECK(placementLength(placementOf(7, 0, 0), empty) == 0);
+
+  // A DANGLING CLIP REFERENCE REACHES NOWHERE. All five hand-written copies did this; a
+  // plausible default would hide the dangling reference instead of letting it show up as a
+  // placement that covers nothing.
+  CHECK(placementLength(placementOf(999, 0, 0), clips) == 0);
+  // ...but an explicit length still stands on its own, without needing the clip at all.
+  CHECK(placementLength(placementOf(999, 0, 2 * Q), clips) == 2 * Q);
+}
+
+void testPlacementReachSaturates() {
+  CHECK(placementReach(100, 50) == 150);
+  CHECK(placementReach(0, 0) == 0);
+
+  // THE GUARD THREE OF THE FIVE COPIES LACKED. A placement near the top of the range must not
+  // wrap: as a song end it would silence everything after it, and in the ripple planner a wrapped
+  // end wrongly accepts or refuses a time edit. Note that the wrong answer is SMALL, so it reads
+  // as "the song is shorter than I thought" rather than as arithmetic.
+  CHECK(placementReach(UINT64_MAX - 10, 100) == UINT64_MAX);
+  CHECK(placementReach(UINT64_MAX, 1) == UINT64_MAX);
+  CHECK(placementReach(UINT64_MAX, UINT64_MAX) == UINT64_MAX);
+
+  // Exactly at the boundary is not an overflow and must not saturate.
+  CHECK(placementReach(UINT64_MAX - 10, 10) == UINT64_MAX);
+  CHECK(placementReach(UINT64_MAX - 10, 9) == UINT64_MAX - 1);
+}
+
 }  // namespace
 
 int main() {
@@ -495,6 +569,8 @@ int main() {
   testBarTicksWithNoMeterPublished();
   testBarTicksSurviveAZeroLengthBar();
   testTheMapNeverPutsABarStartPastItsOwnTick();
+  testPlacementLength();
+  testPlacementReachSaturates();
 
   if (g_fail == 0) {
     std::printf("engine_pure_tests: PASS\n");
