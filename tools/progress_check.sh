@@ -43,8 +43,10 @@ field() {  # field <name> -> the value, or empty
 AS_OF="$(field as-of-commit)"
 WANT_LINES="$(field main-cpp-lines)"
 WANT_TESTS="$(field ctest-entries)"
+WANT_MAIN="$(field main-function-lines)"
 
-for pair in "as-of-commit:$AS_OF" "main-cpp-lines:$WANT_LINES" "ctest-entries:$WANT_TESTS"; do
+for pair in "as-of-commit:$AS_OF" "main-cpp-lines:$WANT_LINES" "ctest-entries:$WANT_TESTS" \
+            "main-function-lines:$WANT_MAIN"; do
   if [ -z "${pair#*:}" ]; then
     echo "  FAIL: $DOC has no '- ${pair%%:*}: ...' line."
     echo "        The checked-facts block is what makes this file self-verifying; without it"
@@ -94,6 +96,31 @@ if [ "$GIT_OK" = "1" ]; then
     fi
     if [ "$GOT_TESTS" != "$WANT_TESTS" ]; then
       echo "  FAIL: ctest-entries says $WANT_TESTS; at $AS_OF CMakeLists.txt registers $GOT_TESTS."
+      ok=0
+    fi
+
+    # ---- main()'s OWN length, which is the number a maintainability panel actually grades, and
+    # the one the narrative kept restating from memory. The prose said 12,133 while the tree said
+    # 11,666, within hours of being written: the same number in two places, one checked and one
+    # not, and the unchecked copy drifted. It is a checked fact now, and the prose no longer
+    # repeats it.
+    GOT_MAIN="$(git show "${AS_OF}:apps/daw_engine_main.cpp" 2>/dev/null | python3 -c "
+import re, sys
+lines = sys.stdin.read().split(chr(10))
+mi = next((i for i, l in enumerate(lines) if re.match(r'^int main\(', l)), None)
+if mi is None:
+    print(0); raise SystemExit
+d = 0; st = None
+for i in range(mi, len(lines)):
+    d += lines[i].count('{') - lines[i].count('}')
+    if st is None and '{' in lines[i]: st = i
+    if st is not None and d == 0 and i > st:
+        print(i - mi + 1); break
+else:
+    print(0)
+")"
+    if [ "$GOT_MAIN" != "$WANT_MAIN" ]; then
+      echo "  FAIL: main-function-lines says $WANT_MAIN; at $AS_OF main() is $GOT_MAIN lines."
       ok=0
     fi
   fi

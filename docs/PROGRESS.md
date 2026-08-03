@@ -11,8 +11,9 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: 1ba85fd
+- as-of-commit: 1d039a2
 - main-cpp-lines: 13138
+- main-function-lines: 11666
 - ctest-entries: 165
 
 ## Why this file cannot quietly go stale
@@ -47,14 +48,16 @@ suspect the first attempt exists.
 
 ## 2026-08-02/03 — engine refactor and the bugs it surfaced
 
-`apps/daw_engine_main.cpp` went **20,387 → 13,604 lines**, each step gated on a full ctest and a
-byte-identical offline render. The suite went 149 → 163 entries, and 426 unit assertions now exist
-in modules that previously had none.
+`apps/daw_engine_main.cpp` started this work at **20,387 lines** with `main()` at **13,652** and
+the suite at **149** entries. Where all three stand now is in the checked-facts block above and
+nowhere else in this file — those numbers move every few commits, and a second copy in prose is a
+copy that drifts. This one did: it said `main()` was 12,133 while the tree said 11,666, within
+hours of being written. 426 unit assertions now exist in modules that previously had none.
 
-**`main()` itself is the number the panel graded, and it is 13,652 → 12,133.** Most of the file's
-earlier shrinkage came from merging duplicated rules, not from breaking up `main()`; that only
-started moving when `renderTrack` (1,552 lines, plus `emitNotes` nested inside it) left for
-`apps/engine_render_track.cpp`.
+**`main()`'s own length is what the panel graded**, and most of the file's earlier shrinkage did
+not touch it — that came from merging duplicated rules. It only started moving when `renderTrack`
+(1,552 lines, plus `emitNotes` nested inside it) left for `apps/engine_render_track.cpp`, followed
+by `saveProjectToPath`.
 
 **Structure.** 16 command modules extracted from `handleUiEntry` (5,604 → ~1,530 lines);
 `apps/engine_types.h` for 25 types that had been declared *inside* `main()`; `apps/engine_pure.h`
