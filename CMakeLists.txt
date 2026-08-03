@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.18)
 
+# clangd and tools/extraction_cost.sh both read compile_commands.json; generating it here means
+# neither depends on how a particular build directory happened to be configured.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 project(daw VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -87,6 +91,7 @@ set_source_files_properties(apps/engine_render_track.cpp apps/engine_save_projec
                             apps/engine_handle_ui_entry.cpp
                             apps/engine_load_project.cpp
                             apps/engine_bulk_edit.cpp
+                            apps/engine_track_rebuild.cpp
                             PROPERTIES COMPILE_OPTIONS -Werror=unused-variable)
 set_source_files_properties(${_engine_command_sources}
   PROPERTIES COMPILE_OPTIONS "${engine_commands_warnings}")
@@ -134,6 +139,7 @@ add_library(engine_commands STATIC
   apps/engine_handle_ui_entry.cpp
   apps/engine_load_project.cpp
   apps/engine_bulk_edit.cpp
+  apps/engine_track_rebuild.cpp
   apps/engine_save_project.cpp
   apps/engine_sampler_commands.cpp
   apps/engine_automation_commands.cpp
