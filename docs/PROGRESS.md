@@ -11,9 +11,9 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: 7f30424
-- main-cpp-lines: 9660
-- main-function-lines: 8220
+- as-of-commit: a6bafd9
+- main-cpp-lines: 8789
+- main-function-lines: 7351
 - ctest-entries: 166
 
 ## Why this file cannot quietly go stale
@@ -72,6 +72,22 @@ left it, in seven modules — `renderTrack` (1,552), `handleUiEntry` (1,623), `l
 `rebuildAudioRender` (109) together, and `emitChainSnapshot` (143) with `rebuildHostForChain` (121)
 — each moved VERBATIM and each verified as such by comparing the moved body line-for-line against
 the lambda it came from.
+
+**Two more modules followed** — `engine_track_setup` (setupTrackRuntime + reconcileChildTracks) and
+`engine_clip_edit` (locateEditTarget plus the four `apply*` edits) — bringing the total to nine
+functions in seven modules.
+
+**Group by the UNION of captures, not one function at a time.** The five clip-edit functions need
+3+14+10+10+15 = 52 captures separately and only **23 distinct**: one module and one deps struct
+instead of five interfaces onto the same state.
+
+**What actually blocks an extraction is main()'s LINEAR DECLARATION ORDER, not coupling.** A struct
+of references cannot be built before its members exist, and these functions are interleaved with the
+lambdas they depend on — `findPlacementAt` is declared 300 lines after `applyAddNote` and is needed
+by `applyLocalNoteEdit` 50 lines later still. Two remedies keep the move verbatim: split into two
+structs constructed at different points, or pass the late dependency as a PARAMETER under the same
+name so the body never changes. That constraint, rather than tangled logic, is what makes a single
+enormous scope hard to break up: it fixes an order between definitions and uses that nobody chose.
 
 **Order them by CAPTURES, not by size**, and this took four extractions to learn.
 `tools/extraction_cost.sh` measures the real cost of a verbatim move: lines are copied unchanged and
