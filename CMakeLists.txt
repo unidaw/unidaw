@@ -671,6 +671,11 @@ add_test(NAME doc_citation
 )
 set_tests_properties(doc_citation PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+add_test(NAME meter_publish
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/meter_publish_check.sh
+)
+set_tests_properties(meter_publish PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 add_test(NAME pdc_window
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/pdc_window_check.sh
 )
