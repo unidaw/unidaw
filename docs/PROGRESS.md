@@ -11,9 +11,9 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: 2a0b0d7
-- main-cpp-lines: 10622
-- main-function-lines: 9148
+- as-of-commit: 7f30424
+- main-cpp-lines: 9660
+- main-function-lines: 8220
 - ctest-entries: 166
 
 ## Why this file cannot quietly go stale
@@ -66,10 +66,21 @@ unit-test binaries where there were none. A command module rebuilds in 4.2s agai
 relink the engine.
 
 **The grade was C, and the binding constraint was `main()`.** A four-judge panel put it plainly:
-`main()` was ~13,700 lines and the producer lambda held the render path. Four have now left it —
-`renderTrack` (1,552), `handleUiEntry` (1,623), `loadProjectFromPath` (942) and `saveProjectToPath`
-(480) — each moved VERBATIM and each verified as such by comparing the moved body line-for-line
-against the lambda it came from.
+`main()` was ~13,700 lines and the producer lambda held the render path. Eight functions have now
+left it, in seven modules — `renderTrack` (1,552), `handleUiEntry` (1,623), `loadProjectFromPath`
+(942), `handleAssembledBulk` (444), `saveProjectToPath` (480), `rebuildFlatAndPublish` (133) and
+`rebuildAudioRender` (109) together, and `emitChainSnapshot` (143) with `rebuildHostForChain` (121)
+— each moved VERBATIM and each verified as such by comparing the moved body line-for-line against
+the lambda it came from.
+
+**Order them by CAPTURES, not by size**, and this took four extractions to learn.
+`tools/extraction_cost.sh` measures the real cost of a verbatim move: lines are copied unchanged and
+so move for free, while every `[&]` capture becomes a struct member, a call-site argument and a
+re-binding line. Sorting by line count put `handleAssembledBulk` (446 lines, **11** captures) behind
+`loadProjectFromPath` (945 lines, **53**), and `applyAddChord` (118 lines, 15) still outranks the
+whole 268-line chain module (4). Every count it prints is a LOWER BOUND — constants need no capture,
+so a `constexpr` local the body uses appears only when the new translation unit fails to compile,
+which has now happened twice.
 
 **`processTrack` (796) is the one that cannot follow them mechanically**, and the reason is worth
 recording because it is not the capture count. Its 29 captures split into two populations:
@@ -98,7 +109,9 @@ unit fails to compile. Two did.
 
 Three things had to be freed first, and they explain the shape of the problem: `WorkerPool`,
 `dispatchRustKernel` and `getClipEventsInRange` were all declared inside `daw_engine_main.cpp`,
-so nothing else could name them. A helper written beside its only caller is invisible everywhere
+so nothing else could name them. `buildClipSnapshot` was the fourth, found the same way — the
+extraction fails to compile, because a file-scope helper is not a capture and no amount of capture
+analysis will mention it. A helper written beside its only caller is invisible everywhere
 else, so the next caller gets written beside it too — that is how a function reaches 15,000 lines,
 one reasonable-looking dependency at a time.
 
