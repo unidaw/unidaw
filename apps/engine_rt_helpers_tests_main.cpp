@@ -698,6 +698,147 @@ void testPriorityForEvent() {
   CHECK(priorityForEvent(typedEntry(daw::EventType::UiDiff)) == 4);
 }
 
+// ---------------------------------- "0 means unset", with two different defaults
+void testResolvedBaseOctave() {
+  CHECK(resolvedBaseOctave(0, 0) == 4);      // unset hint means octave 4
+  CHECK(resolvedBaseOctave(5, 0) == 5);
+  CHECK(resolvedBaseOctave(5, 2) == 7);
+  CHECK(resolvedBaseOctave(5, -2) == 3);
+
+  // THE CLAMP IS NOT COSMETIC. octaveOffset is SIGNED, so hint + offset can go negative. Without
+  // the clamp that conversion underflows to a huge octave, resolveDegree produces a pitch far out
+  // of range, and clampMidi saturates it — EVERY generated note plays at 127 instead of landing
+  // at a sensible edge of the keyboard. The failure is loud and uniform, which is why it would be
+  // blamed on the patcher rather than on an octave.
+  CHECK(resolvedBaseOctave(1, -5) == 0);
+  CHECK(resolvedBaseOctave(0, -100) == 0);
+  CHECK(resolvedBaseOctave(9, 5) == 10);
+  CHECK(resolvedBaseOctave(0, 100) == 10);
+
+  // The unset default is applied BEFORE the offset, not after: an unset hint with +2 is 6, not 2.
+  CHECK(resolvedBaseOctave(0, 2) == 6);
+}
+
+void testResolvedVelocity() {
+  CHECK(resolvedVelocity(100) == 100);
+  CHECK(resolvedVelocity(1) == 1);
+  CHECK(resolvedVelocity(127) == 127);
+
+  // UNSET IS 100, NOT SILENCE. Velocity 0 on a note-on IS a note-off in MIDI, so treating "unset"
+  // as zero emits a note that stops itself — the same trap rampedVelocity's floor-of-1 guards,
+  // and the second place in this file where a zero velocity would silently mean "no note".
+  CHECK(resolvedVelocity(0) == 100);
+}
+
+
+// ------------------------------------------------------------------ the loop, in three rules
+void testAdvanceTransportTick() {
+  const uint64_t S = 1000, E = 5000;  // a loop of length 4000
+
+  CHECK(advanceTransportTick(1000, S, E) == 1000);
+  CHECK(advanceTransportTick(4999, S, E) == 4999);
+  CHECK(advanceTransportTick(5000, S, E) == 1000);   // reaching the end wraps to the start
+  CHECK(advanceTransportTick(5001, S, E) == 1001);
+  CHECK(advanceTransportTick(9000, S, E) == 1000);   // a whole loop past: exactly the start again
+
+  // A BLOCK LONGER THAN THE LOOP still lands inside it. A 4000-tick loop with a 10000-tick jump
+  // must not walk out the far side, which a subtract-once wrap would do.
+  CHECK(advanceTransportTick(11000, S, E) >= S);
+  CHECK(advanceTransportTick(11000, S, E) < E);
+
+  // NO CLAMP BELOW THE LOOP START, and this is the assertion that distinguishes this rule from
+  // wrapTickIntoLoop. Set a loop at bar 5 with the playhead at bar 1 and the transport plays IN
+  // rather than teleporting: a tick before the loop is left exactly where it is.
+  CHECK(advanceTransportTick(10, S, E) == 10);
+  CHECK(advanceTransportTick(999, S, E) == 999);
+
+  // An empty or inverted loop is no loop: everything passes through.
+  CHECK(advanceTransportTick(7777, 0, 0) == 7777);
+  CHECK(advanceTransportTick(7777, 5000, 5000) == 7777);
+  CHECK(advanceTransportTick(7777, 5000, 1000) == 7777);
+}
+
+void testWrapTickIntoLoop() {
+  const uint64_t S = 1000, E = 5000;
+
+  CHECK(wrapTickIntoLoop(1000, S, E) == 1000);
+  CHECK(wrapTickIntoLoop(4999, S, E) == 4999);
+  CHECK(wrapTickIntoLoop(5000, S, E) == 1000);
+  CHECK(wrapTickIntoLoop(9000, S, E) == 1000);
+  CHECK(wrapTickIntoLoop(11000, S, E) >= S);
+  CHECK(wrapTickIntoLoop(11000, S, E) < E);
+
+  // AND HERE IT CLAMPS, where advanceTransportTick does not. A tick before the loop is not a
+  // position being played through, it is a lookup with no answer inside the loop, and the start
+  // is the nearest honest one.
+  CHECK(wrapTickIntoLoop(10, S, E) == S);
+  CHECK(wrapTickIntoLoop(999, S, E) == S);
+  CHECK(wrapTickIntoLoop(0, S, E) == S);
+
+  // THE TWO RULES DISAGREE, ON PURPOSE. If this ever stops being true, one of them has been
+  // "simplified" into the other and a loop set ahead of the playhead now teleports.
+  CHECK(wrapTickIntoLoop(10, S, E) != advanceTransportTick(10, S, E));
+
+  CHECK(wrapTickIntoLoop(7777, 0, 0) == 7777);
+  CHECK(wrapTickIntoLoop(7777, 5000, 1000) == 7777);
+}
+
+void testSplitWindowAtLoopEnd() {
+  const uint64_t S = 1000, E = 5000;
+
+  // A window that does not reach the loop end comes back whole, with no delta.
+  {
+    const LoopSplit w = splitWindowAtLoopEnd(2000, 3000, S, E);
+    CHECK(w.count == 1);
+    CHECK(w.segments[0].startTick == 2000);
+    CHECK(w.segments[0].endTick == 3000);
+    CHECK(w.segments[0].baseTickDelta == 0);
+  }
+
+  // Ending EXACTLY on the loop end is still one segment. Off by one here and every block that
+  // lands on the boundary emits an empty wrapped segment.
+  {
+    const LoopSplit w = splitWindowAtLoopEnd(4000, E, S, E);
+    CHECK(w.count == 1);
+    CHECK(w.segments[0].endTick == E);
+  }
+
+  // Straddling: cut at the loop end, wrap the rest to the loop start.
+  {
+    const LoopSplit w = splitWindowAtLoopEnd(4500, 5500, S, E);
+    CHECK(w.count == 2);
+    CHECK(w.segments[0].startTick == 4500);
+    CHECK(w.segments[0].endTick == E);
+    CHECK(w.segments[0].baseTickDelta == 0);
+    CHECK(w.segments[1].startTick == S);
+    CHECK(w.segments[1].endTick == S + 500);
+    // THE DELTA IS THE LENGTH OF THE FIRST PIECE, and this is the field trig conditions read to
+    // decide which PASS a note is on. Zero here put wrapped notes on the previous pass and made
+    // c1:2 fire on passes 0, 1 and 3 instead of 0 and 2.
+    CHECK(w.segments[1].baseTickDelta == E - 4500);
+  }
+
+  // NO TIME IS LOST OR DUPLICATED ACROSS THE CUT: the two pieces sum to the original window.
+  {
+    const LoopSplit w = splitWindowAtLoopEnd(4500, 5500, S, E);
+    const uint64_t covered = (w.segments[0].endTick - w.segments[0].startTick) +
+                             (w.segments[1].endTick - w.segments[1].startTick);
+    CHECK(covered == 5500 - 4500);
+    // And the delta lines the second piece up right behind the first.
+    CHECK(w.segments[1].baseTickDelta ==
+          w.segments[0].endTick - w.segments[0].startTick);
+  }
+
+  // No loop: one segment, whatever the window.
+  {
+    const LoopSplit w = splitWindowAtLoopEnd(4500, 5500, 0, 0);
+    CHECK(w.count == 1);
+    CHECK(w.segments[0].startTick == 4500);
+    CHECK(w.segments[0].endTick == 5500);
+    CHECK(w.segments[0].baseTickDelta == 0);
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -720,6 +861,11 @@ int main() {
   testModLinkCanFire();
   testModLinkValue();
   testPriorityForEvent();
+  testResolvedBaseOctave();
+  testResolvedVelocity();
+  testAdvanceTransportTick();
+  testWrapTickIntoLoop();
+  testSplitWindowAtLoopEnd();
   testCutActiveNotes();
   testPushScratchpadOverflow();
 

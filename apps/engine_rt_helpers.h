@@ -335,4 +335,62 @@ uint8_t resolvedBaseOctave(uint8_t hint, int32_t octaveOffset);
 // treating "unset" as 0 would emit a note that stops itself.
 uint8_t resolvedVelocity(uint8_t velocity);
 
+
+// ------------------------------------------------------------------- THE LOOP, IN THREE RULES
+//
+// A loop end that a window crosses is where notes get emitted twice or not at all, and the
+// arithmetic for it was written out by hand in four places. Two of those pairs were identical
+// copies; the third differs DELIBERATELY, and that difference is the reason these are three
+// functions instead of one.
+//
+// A loop is EMPTY when loopEndTick <= loopStartTick. Every rule here treats an empty loop as
+// "no loop" and passes ticks through untouched, which is what a stopped or unset loop needs.
+
+// Advance the transport to `nextTick`, wrapping if it has reached the loop end.
+//
+// DOES NOT CLAMP A TICK THAT IS BEFORE THE LOOP START, and that is musical rather than sloppy.
+// Set a loop at bar 5 while the playhead sits at bar 1 and the transport plays IN — bar 1
+// onwards, then wraps at the loop end and stays inside from there. Clamping would teleport the
+// playhead to bar 5 the instant the loop was set, which is not what setting a loop means.
+uint64_t advanceTransportTick(uint64_t nextTick, uint64_t loopStartTick, uint64_t loopEndTick);
+
+// Put an ARBITRARY tick inside the loop — used for positions that are being looked up rather
+// than played through, where a tick outside the loop has no meaning and the nearest one inside
+// is the honest answer.
+//
+// THIS ONE DOES CLAMP BELOW loopStartTick, which is exactly where it parts company with
+// advanceTransportTick above. Same three lines in the middle, different answers at the edge; they
+// were two hand-written copies that agreed on shape and disagreed on behaviour, which is the
+// duplication that costs the most here because nothing comparing text can see it.
+uint64_t wrapTickIntoLoop(uint64_t tick, uint64_t loopStartTick, uint64_t loopEndTick);
+
+// One piece of a window after the loop end has cut it. `baseTickDelta` is how far into the
+// ORIGINAL window this piece begins — zero for the first, and the length of the first piece for
+// the wrapped second one.
+//
+// That field is not bookkeeping. Trig conditions ask which PASS of the loop a note is on, and the
+// answer comes from the note's absolute tick — so a wrapped segment whose delta was dropped puts
+// its notes on the previous pass and `c1:2` fires on passes 0, 1 and 3 instead of 0 and 2. The
+// gate is correct and the number it reads is wrong, which is the hardest kind of wrong to see.
+struct LoopSegment {
+  uint64_t startTick = 0;
+  uint64_t endTick = 0;
+  uint64_t baseTickDelta = 0;
+};
+
+// Cut a window at the loop end. Always one or two segments, never zero: a window that does not
+// reach the loop end comes back whole.
+struct LoopSplit {
+  LoopSegment segments[2];
+  uint32_t count = 0;
+};
+
+// Split `[windowStart, windowEnd)` at the loop end, wrapping the remainder to the loop start.
+//
+// Written out by hand in both the note dispatch and the automation dispatch — the same rule
+// twice, for two kinds of event that must agree about where a pass begins or automation lands on
+// the wrong side of a wrap from the notes it is shaping.
+LoopSplit splitWindowAtLoopEnd(uint64_t windowStart, uint64_t windowEnd,
+                               uint64_t loopStartTick, uint64_t loopEndTick);
+
 }  // namespace daw::engine

@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <vector>
 #include <string>
 
 using namespace daw;
@@ -339,6 +340,143 @@ void testClampMidi() {
   CHECK(clampMidi(1000000) == 127);
 }
 
+
+// ---------------------------------------------------------- the ruler's rule, in three meters
+constexpr uint64_t kQ = daw::kNanoticksPerQuarter;
+constexpr uint64_t kBar44 = 4 * kQ;
+
+void testBarTicksIn44() {
+  daw::TimeSignatureMap meter;  // default-constructed: one 4/4 point at 0
+
+  CHECK(barStartTick(&meter, 0) == 0);
+  CHECK(barEndTick(&meter, 0) == kBar44);
+  CHECK(barStartTick(&meter, kBar44 - 1) == 0);
+  CHECK(barEndTick(&meter, kBar44 - 1) == kBar44);
+  CHECK(barStartTick(&meter, kBar44) == kBar44);
+  CHECK(barEndTick(&meter, kBar44) == 2 * kBar44);
+  CHECK(barStartTick(&meter, kBar44 + 7) == kBar44);
+
+  // The two are each other's halves: the end of the bar holding a tick is the start of the bar
+  // holding that end. And the invariants each guard exists to keep.
+  const uint64_t ticks[] = {0, 1, kQ, kBar44 - 1, kBar44, 3 * kBar44 + 12345};
+  for (uint64_t t : ticks) {
+    CHECK(barStartTick(&meter, barEndTick(&meter, t)) == barEndTick(&meter, t));
+    CHECK(barEndTick(&meter, t) > t);
+    CHECK(barStartTick(&meter, t) <= t);
+  }
+}
+
+void testBarTicksAcrossASignatureChange() {
+  // 4/4 for two bars, then 7/8. THIS IS THE CASE THE OLD ARITHMETIC GOT WRONG: after the change,
+  // bars are no longer at multiples of anything, so `(tick / barLength) * barLength` lands off
+  // the ruler the user is reading.
+  daw::TimeSignatureMap meter;
+  meter.setMap({{0, daw::TimeSignature{4, 4}}, {2 * kBar44, daw::TimeSignature{7, 8}}});
+
+  const uint64_t bar78 = daw::TimeSignature{7, 8}.barNanoticks();  // 7 eighths = 3.5 quarters
+  CHECK(bar78 == 7 * (kQ / 2));
+  CHECK(bar78 != kBar44);  // otherwise this test proves nothing
+
+  CHECK(barStartTick(&meter, 2 * kBar44) == 2 * kBar44);
+  CHECK(barEndTick(&meter, 2 * kBar44) == 2 * kBar44 + bar78);
+  CHECK(barStartTick(&meter, 2 * kBar44 + bar78 + 3) == 2 * kBar44 + bar78);
+  CHECK(barEndTick(&meter, 2 * kBar44 + bar78 + 3) == 2 * kBar44 + 2 * bar78);
+
+  // AND THE NEGATIVE HALF: the naive 4/4 arithmetic gives a DIFFERENT answer here, which is the
+  // whole reason this function exists. If these ever agree, the meter is being ignored again.
+  const uint64_t tick = 2 * kBar44 + bar78 + 3;
+  CHECK(barStartTick(&meter, tick) != (tick / kBar44) * kBar44);
+  CHECK(barEndTick(&meter, tick) != (tick / kBar44 + 1) * kBar44);
+
+  // Bars BEFORE the change are still 4/4 — a later signature must not retroactively renumber.
+  CHECK(barStartTick(&meter, kBar44 + 5) == kBar44);
+  CHECK(barEndTick(&meter, kBar44 + 5) == 2 * kBar44);
+}
+
+void testBarTicksWithNoMeterPublished() {
+  // Null is "the snapshot has not been swapped in yet", which happens during startup — not
+  // "this project has no meter". A 4/4 bar is what the map itself would have said.
+  CHECK(barStartTick(nullptr, 0) == 0);
+  CHECK(barEndTick(nullptr, 0) == kBar44);
+  CHECK(barStartTick(nullptr, kBar44 + 9) == kBar44);
+  CHECK(barEndTick(nullptr, kBar44 + 9) == 2 * kBar44);
+}
+
+void testBarTicksSurviveAZeroLengthBar() {
+  // A SIGNATURE THAT PASSES valid() AND STILL HAS NO LENGTH. valid() only requires a non-zero
+  // power-of-two denominator, and beatNanoticks() is (4 * kNanoticksPerQuarter) / denominator —
+  // integer division. Past 2^22 that truncates to zero, so the bar is zero nanoticks long, and
+  // then barBeatAt() gives up and answers bar 1 for every tick while tickAtBar() answers 0 for
+  // every bar. The denominator comes out of a project file, so this arrives from data rather
+  // than from a bug, and both numbers reach these functions looking perfectly ordinary.
+  daw::TimeSignature degenerate{4, 1u << 23};
+  CHECK(degenerate.valid());  // the map will NOT drop it
+  CHECK(degenerate.barNanoticks() == 0);
+
+  daw::TimeSignatureMap meter;
+  meter.setMap({{0, degenerate}});
+
+  // The invariants have to hold anyway. Without the guards barEndTick returns 0 for every tick —
+  // a note whose default duration is zero and a song span that never grows, which presents as
+  // "note entry does nothing" rather than as a bad time signature.
+  const uint64_t ticks[] = {0, 1, kQ, kBar44 + 77};
+  for (uint64_t t : ticks) {
+    CHECK(barEndTick(&meter, t) > t);
+    CHECK(barStartTick(&meter, t) <= t);
+  }
+  CHECK(barEndTick(&meter, kQ) == kQ + kBar44);  // advanced by a fallback bar from the tick
+}
+
+
+void testTheMapNeverPutsABarStartPastItsOwnTick() {
+  // THIS TEST EXISTS BECAUSE A NEGATIVE CONTROL PASSED. Deleting barStartTick's
+  // `start <= tick` guard changes no result, in any meter tried — so the guard is unreachable,
+  // and no test of barStartTick could ever catch its removal. Rather than delete a cheap clamp or
+  // leave an unjustifiable line, this pins the PREMISE it rests on: TimeSignatureMap is
+  // self-consistent, so the start of the bar barBeatAt() reports is never past the tick asked
+  // about.
+  //
+  // Which makes the guard defence against a FUTURE change to the map, and makes this the test
+  // that fires if that change ever lands — saying "the guard just became live" instead of
+  // silently letting a new clip anchor after the note that created it.
+  //
+  // The degenerate maps are the interesting third of these. A zero-length bar makes barBeatAt()
+  // give up and answer bar 1, and tickAtBar(1) is 0 by definition, so the premise survives by a
+  // different route than it does for a well-formed meter — worth covering explicitly, because
+  // those two routes could break independently.
+  const uint64_t Q = daw::kNanoticksPerQuarter;
+  const std::vector<std::vector<daw::TimeSignaturePoint>> maps = {
+      {},
+      {{0, {4, 4}}},
+      {{0, {3, 4}}},
+      {{0, {7, 8}}},
+      {{0, {4, 4}}, {8 * Q, {7, 8}}},
+      {{0, {7, 8}}, {7 * Q / 2, {3, 4}}, {40 * Q, {5, 16}}},
+      {{0, {4, 1u << 23}}},                       // a bar of zero length
+      {{0, {4, 4}}, {4 * Q, {4, 1u << 23}}},      // zero-length SECOND segment
+      {{0, {4, 1u << 23}}, {4 * Q, {4, 4}}},      // zero-length FIRST segment
+      {{0, {1, 64}}, {Q / 8, {32, 1}}},
+  };
+  int violations = 0;
+  for (const auto& pts : maps) {
+    daw::TimeSignatureMap m;
+    m.setMap(pts);
+    for (uint64_t t = 0; t < 64 * Q; t += Q / 16) {
+      if (m.tickAtBar(m.barBeatAt(t).bar) > t) {
+        ++violations;
+      }
+      // And the two rules built on it hold for every one of these shapes, degenerate included.
+      if (barEndTick(&m, t) <= t) {
+        ++violations;
+      }
+      if (barStartTick(&m, t) > t) {
+        ++violations;
+      }
+    }
+  }
+  CHECK(violations == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -352,6 +490,11 @@ int main() {
   testFindOrMintEnvelope();
   testEnsureDefaultModSet();
   testClampMidi();
+  testBarTicksIn44();
+  testBarTicksAcrossASignatureChange();
+  testBarTicksWithNoMeterPublished();
+  testBarTicksSurviveAZeroLengthBar();
+  testTheMapNeverPutsABarStartPastItsOwnTick();
 
   if (g_fail == 0) {
     std::printf("engine_pure_tests: PASS\n");

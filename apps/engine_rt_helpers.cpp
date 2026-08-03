@@ -389,4 +389,51 @@ uint8_t resolvedVelocity(uint8_t velocity) {
   return velocity != 0 ? velocity : 100;
 }
 
+
+namespace {
+// A loop whose end is not past its start is no loop at all.
+inline uint64_t loopLengthOf(uint64_t loopStartTick, uint64_t loopEndTick) {
+  return loopEndTick > loopStartTick ? loopEndTick - loopStartTick : 0;
+}
+}  // namespace
+
+uint64_t advanceTransportTick(uint64_t nextTick, uint64_t loopStartTick, uint64_t loopEndTick) {
+  const uint64_t loopLen = loopLengthOf(loopStartTick, loopEndTick);
+  if (loopLen > 0 && nextTick >= loopEndTick) {
+    return loopStartTick + ((nextTick - loopStartTick) % loopLen);
+  }
+  return nextTick;
+}
+
+uint64_t wrapTickIntoLoop(uint64_t tick, uint64_t loopStartTick, uint64_t loopEndTick) {
+  const uint64_t loopLen = loopLengthOf(loopStartTick, loopEndTick);
+  if (loopLen == 0) {
+    return tick;
+  }
+  if (tick < loopStartTick) {
+    return loopStartTick;
+  }
+  if (tick >= loopEndTick) {
+    return loopStartTick + ((tick - loopStartTick) % loopLen);
+  }
+  return tick;
+}
+
+LoopSplit splitWindowAtLoopEnd(uint64_t windowStart, uint64_t windowEnd,
+                               uint64_t loopStartTick, uint64_t loopEndTick) {
+  LoopSplit out;
+  const uint64_t loopLen = loopLengthOf(loopStartTick, loopEndTick);
+  if (loopLen == 0 || windowEnd <= loopEndTick) {
+    out.segments[0] = LoopSegment{windowStart, windowEnd, 0};
+    out.count = 1;
+    return out;
+  }
+  const uint64_t firstLen = loopEndTick - windowStart;
+  out.segments[0] = LoopSegment{windowStart, loopEndTick, 0};
+  out.segments[1] =
+      LoopSegment{loopStartTick, loopStartTick + (windowEnd - loopEndTick), firstLen};
+  out.count = 2;
+  return out;
+}
+
 }  // namespace daw::engine

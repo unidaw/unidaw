@@ -2663,57 +2663,26 @@ int main(int argc, char** argv) {
   // trackSnapshot. Never null after startup.
   std::shared_ptr<const daw::TimeSignatureMap> meterSnapshot =
       std::make_shared<const daw::TimeSignatureMap>();
-  // WHERE THE BAR CONTAINING `tick` ENDS, according to the song's meter.
-  //
-  // Four note-entry sites computed this as (tick / (4 * quarter) + 1) * (4 * quarter): a bar
-  // hardcoded to 4/4, ignoring the meter map entirely. In any project that is not 4/4 — or that
-  // changes meter anywhere — note entry then disagreed with the ruler about where a bar is, so a
-  // new clip was created on the wrong boundary, a note with no duration ran to the wrong place,
-  // and writing past the end grew the song to the wrong tick. time_signature_map.h's own opening
-  // comment warns about exactly this: "the bar a tick falls in is NOT (tick / barLength)".
+  // WHERE A BAR STARTS AND ENDS, according to the song's meter. The rule and the reasons are in
+  // apps/engine_pure.h (`barEndTick`), where they can be tested; these two lambdas exist only to
+  // supply the meter.
   //
   // WHICH METER: the SONG's. #76 put the meter on the song and kept the grid on the clip, and
   // #79 flattened it to markers — so "song or clip meter" is not open, it was answered by those
-  // two rulings after this TODO was written.
+  // two rulings.
   //
   // READ FROM THE SNAPSHOT, NOT songMeter, and that is not merely convenient. songMeter is under
   // arrangeMutex and these callers hold trackMutex; taking the pair nested is the AB/BA deadlock
   // the comment above says was deleted when the section went away. The snapshot is swapped
-  // atomically and needs no lock, which is why it exists.
+  // atomically and needs no lock, which is why it exists — and passing its raw pointer in is what
+  // lets the rule itself be a pure function.
   auto barEndTick = [&](uint64_t tick) -> uint64_t {
-    const auto meter =
-        std::atomic_load_explicit(&meterSnapshot, std::memory_order_acquire);
-    const uint64_t fallback =
-        4 * daw::NanotickConverter::kNanoticksPerQuarter;
-    if (!meter) {
-      return (tick / fallback + 1) * fallback;
-    }
-    const uint64_t bar = meter->barBeatAt(tick).bar;
-    const uint64_t end = meter->tickAtBar(bar + 1);
-    // A map that cannot answer (an empty or degenerate signature) must not return a boundary at
-    // or before the tick — that would give a zero-length default duration and a span that does
-    // not grow, which reads as "the note did nothing" rather than as a bad meter.
-    if (end > tick) {
-      return end;
-    }
-    const uint64_t barLen = meter->signatureAt(tick).barNanoticks();
-    return tick + (barLen > 0 ? barLen : fallback);
+    return daw::engine::barEndTick(
+        std::atomic_load_explicit(&meterSnapshot, std::memory_order_acquire).get(), tick);
   };
-  // WHERE THE BAR CONTAINING A TICK STARTS — barEndTick's other half, and the thing a new clip
-  // is anchored to. Same snapshot, same reason: songMeter is under arrangeMutex and the callers
-  // hold trackMutex.
   auto barStartTick = [&](uint64_t tick) -> uint64_t {
-    const auto meter =
-        std::atomic_load_explicit(&meterSnapshot, std::memory_order_acquire);
-    const uint64_t fallback =
-        4 * daw::NanotickConverter::kNanoticksPerQuarter;
-    if (!meter) {
-      return (tick / fallback) * fallback;
-    }
-    const uint64_t start = meter->tickAtBar(meter->barBeatAt(tick).bar);
-    // A degenerate map must not hand back a start PAST the tick — that would put a new clip's
-    // anchor after the note it was created for and give it a negative offset inside its own clip.
-    return start <= tick ? start : (tick / fallback) * fallback;
+    return daw::engine::barStartTick(
+        std::atomic_load_explicit(&meterSnapshot, std::memory_order_acquire).get(), tick);
   };
   // The song's bar grid, for note entry and for segmenting a flat track into clips. Both used to
   // take a bar LENGTH and compute (tick / length) * length, which is right in one meter and wrong
@@ -10966,9 +10935,7 @@ int main(int argc, char** argv) {
             transportNanotick.load(std::memory_order_acquire);
         const uint64_t blockTicks = blockTicksFor(currentTicks);
         uint64_t nextTicks = currentTicks + blockTicks;
-        if (loopLen > 0 && nextTicks >= loopEndTicks) {
-          nextTicks = loopStartTicks + ((nextTicks - loopStartTicks) % loopLen);
-        }
+        nextTicks = daw::engine::advanceTransportTick(nextTicks, loopStartTicks, loopEndTicks);
         transportNanotick.store(nextTicks, std::memory_order_release);
         transportElapsedNanotick.fetch_add(blockTicks, std::memory_order_acq_rel);
       };
@@ -11186,16 +11153,7 @@ int main(int argc, char** argv) {
       const uint64_t loopLen =
           loopEndTicks > loopStartTicks ? loopEndTicks - loopStartTicks : 0;
       auto wrapTick = [&](uint64_t tick) -> uint64_t {
-        if (loopLen == 0) {
-          return tick;
-        }
-        if (tick < loopStartTicks) {
-          return loopStartTicks;
-        }
-        if (tick >= loopEndTicks) {
-          return loopStartTicks + ((tick - loopStartTicks) % loopLen);
-        }
-        return tick;
+        return daw::engine::wrapTickIntoLoop(tick, loopStartTicks, loopEndTicks);
       };
 
       uint64_t blockStartTicks =
@@ -12421,16 +12379,12 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
         for (const auto& automationClip : trackState.automationClips) {
           const auto uid16 = daw::hashStableId16(automationClip.paramId());
           if (automationClip.discreteOnly()) {
-            if (loopLen == 0 || windowEndTicks <= loopEndTicks) {
-              emitAutomationPoints(automationClip, windowStartTicks, windowEndTicks,
-                                   0, uid16);
-            } else {
-              const uint64_t firstLen = loopEndTicks - windowStartTicks;
-              emitAutomationPoints(automationClip, windowStartTicks, loopEndTicks,
-                                   0, uid16);
-              emitAutomationPoints(automationClip, loopStartTicks,
-                                   loopStartTicks + (windowEndTicks - loopEndTicks),
-                                   firstLen, uid16);
+            const auto split = daw::engine::splitWindowAtLoopEnd(
+                windowStartTicks, windowEndTicks, loopStartTicks, loopEndTicks);
+            for (uint32_t si = 0; si < split.count; ++si) {
+              const auto& seg = split.segments[si];
+              emitAutomationPoints(automationClip, seg.startTick, seg.endTick,
+                                   seg.baseTickDelta, uid16);
             }
           } else {
             float lastValue = 0.0f;
@@ -12484,14 +12438,13 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
           }
         }
 
-        if (loopLen == 0 || windowEndTicks <= loopEndTicks) {
-          emitNotes(windowStartTicks, windowEndTicks, 0);
-        } else {
-          const uint64_t firstLen = loopEndTicks - windowStartTicks;
-          emitNotes(windowStartTicks, loopEndTicks, 0);
-          emitNotes(loopStartTicks,
-                    loopStartTicks + (windowEndTicks - loopEndTicks),
-                    firstLen);
+        {
+          const auto split = daw::engine::splitWindowAtLoopEnd(
+              windowStartTicks, windowEndTicks, loopStartTicks, loopEndTicks);
+          for (uint32_t si = 0; si < split.count; ++si) {
+            const auto& seg = split.segments[si];
+            emitNotes(seg.startTick, seg.endTick, seg.baseTickDelta);
+          }
         }
 
         auto applyModUpdates = [&]() {
@@ -12615,19 +12568,11 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
               continue;
             }
             const uint8_t rootPc = static_cast<uint8_t>(harmony->root % 12);
-            const uint8_t baseOctaveHint =
-                logic.base_octave != 0 ? logic.base_octave : 4;
-            int baseOctaveInt =
-                static_cast<int>(baseOctaveHint) + static_cast<int>(logic.octave_offset);
-            if (baseOctaveInt < 0) {
-              baseOctaveInt = 0;
-            } else if (baseOctaveInt > 10) {
-              baseOctaveInt = 10;
-            }
-            const uint8_t baseOctave = static_cast<uint8_t>(baseOctaveInt);
+            const uint8_t baseOctave = daw::engine::resolvedBaseOctave(
+                logic.base_octave, static_cast<int32_t>(logic.octave_offset));
             const daw::ResolvedPitch resolved =
                 daw::resolveDegree(logic.degree, baseOctave, rootPc, *scale);
-            const uint8_t velocity = logic.velocity != 0 ? logic.velocity : 100;
+            const uint8_t velocity = daw::engine::resolvedVelocity(logic.velocity);
             const uint8_t pitch = clampMidi(resolved.midi);
             const float tuningCents = resolved.cents;
             const uint8_t channel = midiChannel;
@@ -13832,9 +13777,7 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
 
       if (isPlaying) {
         uint64_t nextTicks = blockStartTicks + blockTicks;
-        if (loopLen > 0 && nextTicks >= loopEndTicks) {
-          nextTicks = loopStartTicks + ((nextTicks - loopStartTicks) % loopLen);
-        }
+        nextTicks = daw::engine::advanceTransportTick(nextTicks, loopStartTicks, loopEndTicks);
         transportNanotick.store(nextTicks, std::memory_order_release);
         // The pass counter moves with the position, by the same amount, before the wrap that
         // throws the pass away. This is the only other place the transport advances.

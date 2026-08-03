@@ -28,6 +28,7 @@
 #include "apps/event_payloads.h"
 #include "apps/musical_structures.h"
 #include "apps/project_file.h"
+#include "apps/time_signature_map.h"
 #include "apps/sampler_state.h"
 
 namespace daw::engine {
@@ -123,5 +124,48 @@ uint8_t clampMidi(int pitch);
 // is the ONE place a name is shortened rather than refused, and it is the right place: nobody
 // typed it, so there is no write to reject and nothing to look like it worked.
 std::string sampleDisplayName(const std::string& path);
+
+
+// ---------------------------------------------------------------- WHERE A BAR STARTS AND ENDS
+//
+// THE RULER'S RULE, AND THE ONLY COPY OF IT. Four note-entry sites once computed a bar as
+// `(tick / (4 * quarter) + 1) * (4 * quarter)` — 4/4 hardcoded, the meter map ignored. In any
+// project that is not 4/4, or that changes meter anywhere, note entry then disagreed with the
+// ruler about where a bar is: a new clip anchored to the wrong boundary, a note with no duration
+// ran to the wrong place, and writing past the end grew the song to the wrong tick.
+// time_signature_map.h's own opening comment warns about exactly this — "the bar a tick falls in
+// is NOT (tick / barLength)" — because bars before a signature change are a different length.
+//
+// A null `meter` means the snapshot has not been published yet (startup), NOT "no meter": these
+// then fall back to a 4/4 bar, which is what the map itself defaults to.
+//
+// WHY THESE TAKE A POINTER INSTEAD OF READING THE SNAPSHOT: the callers hold a track's
+// trackMutex, and the map lives under arrangeMutex. Taking that pair nested is an AB/BA deadlock,
+// so the caller loads the atomically-swapped snapshot and passes the result in. Keeping the load
+// at the call site is also what makes these two testable at all.
+//
+// THE DEGENERATE GUARDS BELOW ARE LIVE, not defensive decoration. `TimeSignature::valid()` accepts
+// any power-of-two denominator, so 4/4194304 is "valid" and its beatNanoticks() — computed as
+// (4 * kNanoticksPerQuarter) / denominator — truncates to ZERO. A bar of zero length makes
+// barBeatAt() give up and return bar 1, and then tickAtBar() answers 0 for every bar. Both of
+// those numbers arrive here looking perfectly ordinary. A project file supplies the denominator,
+// so this is reachable from a file rather than from a bug.
+
+// Where the bar containing `tick` ENDS. Strictly greater than `tick`, always: a boundary at or
+// before the tick would give a zero-length default note duration and a span that does not grow,
+// which reads as "the note did nothing" rather than as a bad meter.
+uint64_t barEndTick(const daw::TimeSignatureMap* meter, uint64_t tick);
+
+// Where the bar containing `tick` STARTS — barEndTick's other half, and what a new clip anchors
+// to. Never past `tick`: an anchor after the note it was created for would give that note a
+// negative offset inside its own clip.
+//
+// ITS CLAMP IS CURRENTLY UNREACHABLE, and that is measured rather than assumed. TimeSignatureMap
+// is self-consistent — the start of the bar barBeatAt() names is never past the tick asked about,
+// including in every degenerate meter — so the clamp never fires and removing it changes no
+// result. It is kept as defence against a future change to the map, and the premise it rests on
+// is pinned by testTheMapNeverPutsABarStartPastItsOwnTick, which is what would report that the
+// clamp had become live.
+uint64_t barStartTick(const daw::TimeSignatureMap* meter, uint64_t tick);
 
 }  // namespace daw::engine

@@ -151,4 +151,33 @@ std::string sampleDisplayName(const std::string& path) {
   return stem;
 }
 
+
+namespace {
+// The bar length these fall back to when the meter cannot answer: 4/4.
+constexpr uint64_t kFallbackBar = 4ull * daw::NanotickConverter::kNanoticksPerQuarter;
+}  // namespace
+
+uint64_t barEndTick(const daw::TimeSignatureMap* meter, uint64_t tick) {
+  if (meter == nullptr) {
+    return (tick / kFallbackBar + 1) * kFallbackBar;
+  }
+  const uint64_t bar = meter->barBeatAt(tick).bar;
+  const uint64_t end = meter->tickAtBar(bar + 1);
+  if (end > tick) {
+    return end;
+  }
+  // The map could not answer. Advance by ONE BAR from the tick rather than snapping to a
+  // boundary — there is no trustworthy boundary to snap to, and the caller needs a length.
+  const uint64_t barLen = meter->signatureAt(tick).barNanoticks();
+  return tick + (barLen > 0 ? barLen : kFallbackBar);
+}
+
+uint64_t barStartTick(const daw::TimeSignatureMap* meter, uint64_t tick) {
+  if (meter == nullptr) {
+    return (tick / kFallbackBar) * kFallbackBar;
+  }
+  const uint64_t start = meter->tickAtBar(meter->barBeatAt(tick).bar);
+  return start <= tick ? start : (tick / kFallbackBar) * kFallbackBar;
+}
+
 }  // namespace daw::engine
