@@ -97,4 +97,24 @@ bool setDeviceEuclideanConfig(TrackChain& chain,
                               const PatcherEuclideanConfig& config);
 bool clearDeviceEuclideanConfig(TrackChain& chain, uint32_t deviceId);
 
+// WHAT A DEVICE OF THIS KIND CAN DO, as one switch instead of a switch plus four copies.
+//
+// THIS SWITCH DELIBERATELY HAS NO `default:` LABEL. That is not an oversight to tidy up: it is
+// what makes -Wswitch report a newly added DeviceKind that nobody handled. A `default:` here
+// would turn a compile error into a silent DeviceCapabilityNone — a device that consumes no MIDI
+// and processes no audio, which is inert rather than broken and therefore very hard to notice.
+//
+// It was a lambda inside one command handler while main.cpp wrote the VstInstrument mask out by
+// hand in four more places. Those four were correct, and unprotected: the compiler had nothing to
+// say about them, and the switch is where anyone adding a kind would look.
+uint8_t capabilityMaskForKind(DeviceKind kind);
+
+// A head-of-chain VST instrument, ready to hand to daw::addDevice.
+//
+// Three sites built this identically and differed only in hostSlotIndex — kDeviceIdAuto for the
+// id, VstInstrument for the kind, and the mask above. The mask is the part worth centralising:
+// an instrument that does not declare ConsumesMidi still renders, still shows in the chain, and
+// silently receives no notes.
+Device makeVstInstrumentDevice(uint32_t hostSlotIndex);
+
 }  // namespace daw

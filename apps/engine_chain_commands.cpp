@@ -48,28 +48,6 @@ void handleAddDevice(ChainCommandDeps& deps,
               << chainPayload.trackId << " not found" << std::endl;
     return;
   }
-  auto capabilityMaskForKind = [&](daw::DeviceKind kind) -> uint8_t {
-    switch (kind) {
-      case daw::DeviceKind::PatcherEvent:
-        return daw::DeviceCapabilityProducesMidi;
-      case daw::DeviceKind::PatcherInstrument:
-        return static_cast<uint8_t>(daw::DeviceCapabilityConsumesMidi |
-                                    daw::DeviceCapabilityProcessesAudio);
-      case daw::DeviceKind::PatcherAudio:
-        return daw::DeviceCapabilityProcessesAudio;
-      case daw::DeviceKind::VstInstrument:
-        return static_cast<uint8_t>(daw::DeviceCapabilityConsumesMidi |
-                                    daw::DeviceCapabilityProcessesAudio);
-      case daw::DeviceKind::VstEffect:
-        return daw::DeviceCapabilityProcessesAudio;
-      case daw::DeviceKind::Sampler:
-        // Consumes MIDI and produces audio, exactly like a VST instrument — the difference
-        // is WHERE it renders, not what it is.
-        return static_cast<uint8_t>(daw::DeviceCapabilityConsumesMidi |
-                                    daw::DeviceCapabilityProcessesAudio);
-    }
-    return daw::DeviceCapabilityNone;
-  };
   bool chainChanged = false;
   bool emitError = false;
   uint16_t errorCode = 0;
@@ -114,7 +92,7 @@ void handleAddDevice(ChainCommandDeps& deps,
         device.sampler.nextModSetId = 2;
       }
       device.bypass = chainPayload.bypass != 0;
-      device.capabilityMask = capabilityMaskForKind(device.kind);
+      device.capabilityMask = daw::capabilityMaskForKind(device.kind);
       chainChanged = daw::addDevice(runtime->track.chain,
                                     device,
                                     chainPayload.insertIndex);

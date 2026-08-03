@@ -1068,8 +1068,21 @@ bool deserializeProject(const std::string& json,
           if (device.id == 0 && device.kind == DeviceKind::Sampler) {
             device.id = nextLoadedDeviceId++;
           }
-          device.capabilityMask = static_cast<uint8_t>(
-              deviceTree.get<uint32_t>("capability_mask", 0));
+          // ABSENT IS NOT ZERO HERE. A missing capability_mask used to default to 0, which is
+          // DeviceCapabilityNone — a device that consumes no MIDI and processes no audio, i.e.
+          // one that loads, appears in the chain, and is silently inert. Every project this
+          // engine writes carries the field, so the gap only shows in HAND-AUTHORED projects,
+          // which is most of the fixtures in this repo: each one has to know that an instrument's
+          // magic number is 5 or its notes go nowhere.
+          //
+          // Derived from the KIND when the field is absent, which is the same rule the chain
+          // commands apply when a device is created. A file that states a mask is still believed
+          // — an explicitly bypassed capability is a decision the file gets to make.
+          if (const auto mask = deviceTree.get_optional<uint32_t>("capability_mask")) {
+            device.capabilityMask = static_cast<uint8_t>(*mask);
+          } else {
+            device.capabilityMask = capabilityMaskForKind(device.kind);
+          }
           device.patcherNodeId = deviceTree.get<uint32_t>("patcher_node_id", 0);
           device.hostSlotIndex = deviceTree.get<uint32_t>("host_slot_index", 0);
           device.bypass = deviceTree.get<bool>("bypass", false);
@@ -1245,7 +1258,7 @@ bool deserializeProject(const std::string& json,
           Device patcherDev;
           patcherDev.id = kDeviceIdAuto;  // addDevice assigns a fresh, unique id
           patcherDev.kind = DeviceKind::PatcherEvent;
-          patcherDev.capabilityMask = DeviceCapabilityProducesMidi;
+          patcherDev.capabilityMask = capabilityMaskForKind(DeviceKind::PatcherEvent);
           uint32_t outNode = 0;
           if (patcherGraphOutputNode(legacy, outNode)) {
             patcherDev.patcherNodeId = outNode;

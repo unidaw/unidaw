@@ -147,4 +147,36 @@ bool clearDeviceEuclideanConfig(TrackChain& chain, uint32_t deviceId) {
   return true;
 }
 
+uint8_t capabilityMaskForKind(DeviceKind kind) {
+  switch (kind) {
+    case DeviceKind::PatcherEvent:
+      return DeviceCapabilityProducesMidi;
+    case DeviceKind::PatcherInstrument:
+      return static_cast<uint8_t>(DeviceCapabilityConsumesMidi |
+                                  DeviceCapabilityProcessesAudio);
+    case DeviceKind::PatcherAudio:
+      return DeviceCapabilityProcessesAudio;
+    case DeviceKind::VstInstrument:
+      return static_cast<uint8_t>(DeviceCapabilityConsumesMidi |
+                                  DeviceCapabilityProcessesAudio);
+    case DeviceKind::VstEffect:
+      return DeviceCapabilityProcessesAudio;
+    case DeviceKind::Sampler:
+      // Consumes MIDI and produces audio, exactly like a VST instrument — the difference
+      // is WHERE it renders, not what it is.
+      return static_cast<uint8_t>(DeviceCapabilityConsumesMidi |
+                                  DeviceCapabilityProcessesAudio);
+  }
+  return DeviceCapabilityNone;
+}
+
+Device makeVstInstrumentDevice(uint32_t hostSlotIndex) {
+  Device instrument;
+  instrument.id = kDeviceIdAuto;
+  instrument.kind = DeviceKind::VstInstrument;
+  instrument.capabilityMask = capabilityMaskForKind(DeviceKind::VstInstrument);
+  instrument.hostSlotIndex = hostSlotIndex;
+  return instrument;
+}
+
 }  // namespace daw

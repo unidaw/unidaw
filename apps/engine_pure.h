@@ -198,4 +198,6 @@ uint64_t placementLength(const daw::ProjectPlacement& placement,
 // numbers unguarded; only the song-end one said why the guard was there.
 uint64_t placementReach(uint64_t at, uint64_t length);
 
+
+
 }  // namespace daw::engine

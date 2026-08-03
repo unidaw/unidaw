@@ -133,6 +133,81 @@ int main() {
   if (!require(editChain.devices.size() == 3, "unexpected chain size after remove")) {
     return 1;
   }
+  // ---------------------------------------- what a device of each kind is allowed to do
+  //
+  // EVERY KIND MAPS TO SOMETHING. capabilityMaskForKind's switch has no `default:` label, so
+  // -Wswitch makes the compiler report a NEW DeviceKind nobody handled: that is the compile-time
+  // half. This is the run-time half, and it guards a different failure — a kind that reaches the
+  // trailing `return DeviceCapabilityNone`. A device with no capabilities consumes no MIDI and
+  // processes no audio, so it loads, appears in the chain, and is silently INERT rather than
+  // loudly broken.
+  {
+    const daw::DeviceKind kinds[] = {
+        daw::DeviceKind::PatcherEvent,  daw::DeviceKind::PatcherInstrument,
+        daw::DeviceKind::PatcherAudio,  daw::DeviceKind::VstInstrument,
+        daw::DeviceKind::VstEffect,     daw::DeviceKind::Sampler,
+    };
+    for (daw::DeviceKind k : kinds) {
+      if (!require(daw::capabilityMaskForKind(k) != daw::DeviceCapabilityNone,
+                   "a DeviceKind maps to no capabilities at all, so a device of that kind "
+                   "loads and is silently inert")) {
+        return 1;
+      }
+    }
+    // Anything that TAKES NOTES must say so, or the note dispatch skips it and the track plays
+    // nothing while its chain looks perfectly correct.
+    if (!require((daw::capabilityMaskForKind(daw::DeviceKind::VstInstrument) &
+                  daw::DeviceCapabilityConsumesMidi) != 0 &&
+                 (daw::capabilityMaskForKind(daw::DeviceKind::Sampler) &
+                  daw::DeviceCapabilityConsumesMidi) != 0 &&
+                 (daw::capabilityMaskForKind(daw::DeviceKind::PatcherInstrument) &
+                  daw::DeviceCapabilityConsumesMidi) != 0,
+                 "an instrument kind does not declare ConsumesMidi")) {
+      return 1;
+    }
+    // The sampler is a VST instrument as far as the chain is concerned — the difference is WHERE
+    // it renders, not what it is. If these two diverge, one of them was edited alone.
+    if (!require(daw::capabilityMaskForKind(daw::DeviceKind::Sampler) ==
+                     daw::capabilityMaskForKind(daw::DeviceKind::VstInstrument),
+                 "the sampler and a VST instrument no longer declare the same capabilities")) {
+      return 1;
+    }
+    // An effect must NOT claim MIDI — a chain that thinks an EQ takes notes routes them into it.
+    if (!require((daw::capabilityMaskForKind(daw::DeviceKind::VstEffect) &
+                  daw::DeviceCapabilityConsumesMidi) == 0,
+                 "a VST effect claims to consume MIDI")) {
+      return 1;
+    }
+    // ...and an event source must produce MIDI and not claim to process audio.
+    if (!require((daw::capabilityMaskForKind(daw::DeviceKind::PatcherEvent) &
+                  daw::DeviceCapabilityProcessesAudio) == 0 &&
+                 (daw::capabilityMaskForKind(daw::DeviceKind::PatcherEvent) &
+                  daw::DeviceCapabilityProducesMidi) != 0,
+                 "a patcher event source has the wrong capabilities")) {
+      return 1;
+    }
+  }
+
+  // ---------------------------------------- the shared instrument constructor
+  {
+    const daw::Device made = daw::makeVstInstrumentDevice(7);
+    // THE MASK COMES FROM THE SHARED RULE, not from a fourth hand-written copy. Three call sites
+    // spelled this mask out by hand; an instrument that failed to declare ConsumesMidi would
+    // still render, still appear in the chain, and silently receive no notes.
+    if (!require(made.kind == daw::DeviceKind::VstInstrument && made.hostSlotIndex == 7 &&
+                     made.id == daw::kDeviceIdAuto &&
+                     made.capabilityMask ==
+                         daw::capabilityMaskForKind(daw::DeviceKind::VstInstrument),
+                 "makeVstInstrumentDevice does not match the shared capability rule")) {
+      return 1;
+    }
+    if (!require(daw::makeVstInstrumentDevice(daw::kHostSlotIndexDirect).hostSlotIndex ==
+                     daw::kHostSlotIndexDirect,
+                 "makeVstInstrumentDevice dropped the direct host slot")) {
+      return 1;
+    }
+  }
+
   std::cout << "device_chain_tests_main: ok" << std::endl;
   return 0;
 }

@@ -4,6 +4,7 @@
 #include <string>
 
 #include "apps/plugin_cache.h"
+#include "apps/device_chain.h"
 #include "apps/project_file.h"
 
 namespace {
@@ -1117,10 +1118,61 @@ int main(int argc, char** argv) {
     }
   }
 
+  // ---- A DEVICE WITH NO capability_mask IS NOT A DEVICE WITH NO CAPABILITIES.
+  //
+  // An absent field used to load as 0 — DeviceCapabilityNone — so the device appeared in the
+  // chain, loaded without complaint, and consumed no MIDI and processed no audio. Every project
+  // this engine writes carries the field, so the gap only ever showed in HAND-AUTHORED projects,
+  // which is most of the fixtures in this repo: each one had to know that an instrument's magic
+  // number is 5 or its notes went nowhere. Derived from the KIND instead, which is the same rule
+  // the chain commands apply when a device is created.
+  {
+    const std::string noMask = R"({
+      "schema_version": 4, "meta": {"name": "n"}, "nanoticks_per_quarter": 960000,
+      "tempo_map": [{"nanotick": 0, "bpm": 120.0}], "harmony_timeline": [], "clips": [],
+      "tracks": [{"track_id": 0, "name": "T", "harmony_quantize": false, "lines_per_beat": 4,
+        "mixer": {"gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false},
+        "device_chain": [{"device_id": 1, "kind": "sampler", "patcher_node_id": 0,
+                          "host_slot_index": 0, "bypass": false}],
+        "mod_links": [], "placements": []}]})";
+    daw::ProjectDocument doc;
+    std::string err;
+    if (require(daw::deserializeProject(noMask, doc, &err),
+                "a project omitting capability_mask failed to load") &&
+        require(!doc.tracks.empty() && !doc.tracks[0].chain.devices.empty(),
+                "the device with no capability_mask was dropped entirely")) {
+      const auto& dev = doc.tracks[0].chain.devices[0];
+      require(dev.capabilityMask != daw::DeviceCapabilityNone,
+              "a device with no capability_mask loaded as DeviceCapabilityNone: it is in the "
+              "chain, it looks correct, and it is silently inert");
+      require(dev.capabilityMask == daw::capabilityMaskForKind(daw::DeviceKind::Sampler),
+              "an absent capability_mask was not derived from the device's kind");
+    }
+
+    // AN EXPLICIT MASK IS STILL BELIEVED. Deriving unconditionally would override a file that
+    // deliberately states a restricted capability, which is a decision the file gets to make.
+    const std::string explicitMask = R"({
+      "schema_version": 4, "meta": {"name": "n"}, "nanoticks_per_quarter": 960000,
+      "tempo_map": [{"nanotick": 0, "bpm": 120.0}], "harmony_timeline": [], "clips": [],
+      "tracks": [{"track_id": 0, "name": "T", "harmony_quantize": false, "lines_per_beat": 4,
+        "mixer": {"gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false},
+        "device_chain": [{"device_id": 1, "kind": "sampler", "capability_mask": 4,
+                          "patcher_node_id": 0, "host_slot_index": 0, "bypass": false}],
+        "mod_links": [], "placements": []}]})";
+    daw::ProjectDocument doc2;
+    if (require(daw::deserializeProject(explicitMask, doc2, &err),
+                "a project stating capability_mask failed to load") &&
+        !doc2.tracks.empty() && !doc2.tracks[0].chain.devices.empty()) {
+      require(doc2.tracks[0].chain.devices[0].capabilityMask == 4,
+              "an explicitly stated capability_mask was overwritten by the derived one");
+    }
+  }
+
   if (failures != 0) {
     std::cerr << "project_file_tests_main: " << failures << " failure(s)" << std::endl;
     return 1;
   }
+
   std::cout << "project_file_tests_main: ok" << std::endl;
   return 0;
 }

@@ -2237,22 +2237,12 @@ int main(int argc, char** argv) {
     if (runtime->track.chain.devices.empty() && !trackPluginPath.empty()) {
       const auto pluginIndex = resolvePluginIndex(trackPluginPath);
       if (pluginIndex) {
-        daw::Device instrument;
-        instrument.id = daw::kDeviceIdAuto;
-        instrument.kind = daw::DeviceKind::VstInstrument;
-        instrument.capabilityMask =
-            static_cast<uint8_t>(daw::DeviceCapabilityConsumesMidi |
-                                 daw::DeviceCapabilityProcessesAudio);
-        instrument.hostSlotIndex = *pluginIndex;
+        const daw::Device instrument =
+            daw::makeVstInstrumentDevice(*pluginIndex);
         daw::addDevice(runtime->track.chain, instrument, daw::kDeviceIdAuto);
       } else {
-        daw::Device instrument;
-        instrument.id = daw::kDeviceIdAuto;
-        instrument.kind = daw::DeviceKind::VstInstrument;
-        instrument.capabilityMask =
-            static_cast<uint8_t>(daw::DeviceCapabilityConsumesMidi |
-                                 daw::DeviceCapabilityProcessesAudio);
-        instrument.hostSlotIndex = daw::kHostSlotIndexDirect;
+        const daw::Device instrument =
+            daw::makeVstInstrumentDevice(daw::kHostSlotIndexDirect);
         daw::addDevice(runtime->track.chain, instrument, daw::kDeviceIdAuto);
         daw::LogLine() << "Engine: using direct host slot for default plugin path "
                   << trackPluginPath << std::endl;
@@ -4324,19 +4314,13 @@ int main(int argc, char** argv) {
                                return device.kind == daw::DeviceKind::VstInstrument;
                              });
       if (it == devices.end()) {
-        daw::Device instrument;
-        instrument.id = daw::kDeviceIdAuto;
-        instrument.kind = daw::DeviceKind::VstInstrument;
-        instrument.capabilityMask =
-            static_cast<uint8_t>(daw::DeviceCapabilityConsumesMidi |
-                                 daw::DeviceCapabilityProcessesAudio);
-        instrument.hostSlotIndex = pluginIndex;
+        const daw::Device instrument =
+            daw::makeVstInstrumentDevice(pluginIndex);
         daw::addDevice(runtime.track.chain, instrument, daw::kDeviceIdAuto);
       } else {
         it->hostSlotIndex = pluginIndex;
         it->capabilityMask =
-            static_cast<uint8_t>(daw::DeviceCapabilityConsumesMidi |
-                                 daw::DeviceCapabilityProcessesAudio);
+            daw::capabilityMaskForKind(daw::DeviceKind::VstInstrument);
       }
     }
     rebuildHostForChain(runtime);
