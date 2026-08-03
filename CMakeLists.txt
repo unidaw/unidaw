@@ -671,6 +671,11 @@ add_test(NAME doc_citation
 )
 set_tests_properties(doc_citation PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+add_test(NAME pdc_window
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/pdc_window_check.sh
+)
+set_tests_properties(pdc_window PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+
 add_test(NAME clip_reject
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/clip_reject_check.sh
 )
