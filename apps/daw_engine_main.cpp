@@ -1622,6 +1622,7 @@ int main(int argc, char** argv) {
   int runSeconds = -1;
   std::string renderName;
   uint32_t forcedBlockSize = 0;  // non-empty => offline render (see --render)
+  double forcedSampleRate = 0.0;  // 0 => take the device's (see --sample-rate)
   std::string startupProject;  // non-empty => load it before running (see --project)
   bool testMode = false;
   bool noAudio = false;
@@ -1672,6 +1673,32 @@ int main(int argc, char** argv) {
       // one project rendered at 64, 256 and 1024 frames to be bit-identical, and a property
       // that cannot be exercised through the real engine is a property nobody is defending.
       forcedBlockSize = static_cast<uint32_t>(std::max(1, std::atoi(argv[i + 1])));
+      ++i;
+    } else if (arg == "--sample-rate" && i + 1 < argc) {
+      // RENDER AT A STATED RATE INSTEAD OF WHATEVER IS PLUGGED IN.
+      //
+      // Without this the offline render adopts the DEFAULT OUTPUT DEVICE's rate, so what a bounce
+      // contains depends on the machine's audio settings at that moment. That is wrong twice
+      // over. As a product: delivering at 48k while your interface sits at 44.1k is an ordinary
+      // requirement, and the only way to ask for it was to go and change the system's default
+      // output device. As a test instrument: the byte-deterministic render is what the whole
+      // engine refactor is gated on, and it silently stopped being deterministic whenever
+      // somebody connected headphones — the default went to 48000 and back to 44100 within an
+      // hour, with nothing in the log to say so, and a check that had passed for weeks failed
+      // the engine for being correct.
+      //
+      // REFUSED RATHER THAN CLAMPED if it is outside what an audio path can mean. A silent
+      // fallback to the device rate is precisely how the original problem stayed invisible:
+      // the render would claim to honour a rate it had ignored.
+      const double asked = std::atof(argv[i + 1]);
+      if (asked < 8000.0 || asked > 384000.0) {
+        std::cerr << "--sample-rate " << argv[i + 1]
+                  << " is outside 8000..384000 Hz; refusing rather than falling back to the "
+                     "device rate, which would render at a rate you did not ask for"
+                  << std::endl;
+        return 2;
+      }
+      forcedSampleRate = asked;
       ++i;
     }
   }
@@ -1916,6 +1943,13 @@ int main(int argc, char** argv) {
   if (forcedBlockSize > 0) {
     baseConfig.blockSize = forcedBlockSize;
     daw::LogLine() << "Block size forced to " << baseConfig.blockSize << " samples" << std::endl;
+  }
+  // --sample-rate wins over the device too, and for the same reason: applied AFTER the probe so
+  // an offline render is not silently handed whatever output happens to be selected. This is what
+  // makes a render reproducible on a machine whose default device changes under it.
+  if (forcedSampleRate > 0.0) {
+    baseConfig.sampleRate = forcedSampleRate;
+    daw::LogLine() << "Sample rate forced to " << baseConfig.sampleRate << " Hz" << std::endl;
   }
 
   const std::string pluginCachePath = defaultPluginCachePath();
@@ -14525,8 +14559,15 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
   // there is no device, so the engine's own config stands — the same numbers the producer, the
   // per-track SHM stride and the hosts were already configured with, so every stage still
   // agrees on samples-per-block.
+  // --sample-rate WINS over the device, for the same reason --block-size does below, and this
+  // line had the same two-sources-of-truth defect that comment describes: the rate was read
+  // STRAIGHT off the backend here while baseConfig carried its own, so an override applied to the
+  // config never reached the render pump. Block size had already been fixed; the rate next to it
+  // had not, which is what a duplicated rule looks like after one of its copies is repaired.
   const double effSampleRate =
-      audioBackend ? audioBackend->sampleRate() : engineConfig.sampleRate;
+      forcedSampleRate > 0.0
+          ? forcedSampleRate
+          : (audioBackend ? audioBackend->sampleRate() : engineConfig.sampleRate);
   // --block-size WINS over the device's buffer. Without this the engine's config and the render
   // pump disagreed: the config took the forced size while the pump kept taking the device's, so
   // the callback strode 512 frames through 64-frame buffers and produced audio that was garbage

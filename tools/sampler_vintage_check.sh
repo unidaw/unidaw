@@ -249,8 +249,13 @@ json.dump({"schema_version": 4, "meta": {"name": nm}, "nanoticks_per_quarter": Q
                       "notes": notes}],
            "tracks": [tr]}, open(out, "w"))
 PYP
+  # THE RATE IS PINNED, and that is not cosmetic. Without --sample-rate the offline render adopts
+  # the DEFAULT OUTPUT DEVICE's rate, so this check measured whatever was plugged in. It passed
+  # for weeks on built-in speakers at 44100 and failed the first time a Bluetooth device made the
+  # default 48000 — with no commit involved, and while the engine was correct.
   ( cd "$BUILD" && env DAW_UI_SHM_NAME="/vintchk_${$}_$1" DAW_PROJECT_DIR="$TMP/projects" \
       ./daw_engine --project "$1" --render "$1" --run-seconds 5 --block-size 256 \
+      --sample-rate "${5:-48000}" \
       >"$TMP/projects/$1.log" 2>&1 ) || fail "the '$1' render exited non-zero"
   [ -s "$TMP/projects/$1.wav" ] || fail "the '$1' render wrote no output"
 }
@@ -258,6 +263,11 @@ PYP
 render clean 0 0
 render bits3 3 0
 render rate3k 0 3000
+# THE SAME RATE REDUCTION AT A DIFFERENT ENGINE RATE. Its only job is to prove the verdict below
+# does not depend on the rate — the exact property whose absence let this check fail a correct
+# engine. 44100/3000 is 14 frames where 48000/3000 is 16, so any assertion that has quietly become
+# rate-coupled again will disagree between these two takes.
+render rate3k44 0 3000 1 44100
 # 65535 is above ANY plausible engine rate, which is the point: the guard is `rateHz <
 # sampleRate`, so this must take the no-reduction branch on a 44.1k machine and a 96k one alike.
 # Naming the engine's actual rate here would make the check pass or fail on the audio settings.
@@ -311,6 +321,7 @@ read -r C_D C_T C_P C_R C_REG SRATE <<<"$(stats clean)"
 read -r B_D B_T B_P B_R B_REG _ <<<"$(stats bits3)"
 read -r R_D R_T R_P R_R R_REG _ <<<"$(stats rate3k)"
 read -r M_D M_T M_P M_R M_REG _ <<<"$(stats ratemax)"
+read -r X_D X_T X_P X_R X_REG XRATE <<<"$(stats rate3k44)"
 # What a correct hold is ON THIS TAKE, derived rather than assumed.
 HOLD_WANT=$(( SRATE / 3000 ))
 echo "  rendered at ${SRATE} Hz, so a 3 kHz sample-and-hold must stand still ${HOLD_WANT} frames"
@@ -319,6 +330,7 @@ echo "    vintage off : $C_D / $C_T / $C_P / $C_R / ${C_REG}%"
 echo "    3 bits      : $B_D / $B_T / $B_P / $B_R / ${B_REG}%"
 echo "    3 kHz       : $R_D / $R_T / $R_P / $R_R / ${R_REG}%"
 echo "    rate 65535  : $M_D / $M_T / $M_P / $M_R / ${M_REG}%"
+echo "    3 kHz @${XRATE}: $X_D / $X_T / $X_P / $X_R / ${X_REG}%"
 
 # ---- VACUITY GUARDS. Every comparison below is a ratio against the clean take, so if the clean
 # take is silent or already steppy they all pass for the wrong reason.
@@ -380,6 +392,29 @@ python3 -c "raise SystemExit(0 if $B_REG < 60 else 1)" || \
 python3 -c "raise SystemExit(0 if $R_D > 20 * $B_D else 1)" || \
   fail "the 3 kHz take ($R_D distinct) and the 3-bit take ($B_D distinct) leave the same
         fingerprint, so the two controls are not two different effects"
+
+# ---- THE VERDICT MUST NOT DEPEND ON THE ENGINE'S RATE, and this is the assertion that says so.
+#
+# The same 3 kHz reduction rendered at a different engine rate must reach the same conclusion: a
+# clock-regular hold of that take's own sampleRate/3000 frames. The DISTINCT COUNT deliberately is
+# NOT compared between the two — it legitimately differs (75 at 48000, several hundred at 44100,
+# because a non-integer hold drifts across the waveform), and asserting on it is precisely the
+# mistake that made this check fail a correct engine.
+# A MEASUREMENT THAT CANNOT FAIL IS NOT A MEASUREMENT. If --sample-rate were silently ignored,
+# both takes would come out at the device's rate and this section would compare a render with
+# itself — passing forever while proving nothing. The rates must actually differ.
+[ "$XRATE" != "$SRATE" ] || \
+  fail "both takes rendered at ${SRATE} Hz, so the rate-independence check below is comparing a
+        take with itself. --sample-rate is being ignored, which is exactly the silent fallback
+        that flag was written to refuse"
+XHOLD_WANT=$(( XRATE / 3000 ))
+python3 -c "raise SystemExit(0 if abs($X_R - $XHOLD_WANT) <= 1 else 1)" || \
+  fail "at ${XRATE} Hz the 3 kHz reduction held for $X_R frames and needs $XHOLD_WANT. The hold
+        is not tracking the engine's rate, so it is not sampleRate/rateHz"
+python3 -c "raise SystemExit(0 if $X_REG >= 80 else 1)" || \
+  fail "at ${XRATE} Hz only ${X_REG}% of runs are the modal length, against ${R_REG}% at the
+        pinned rate. The same effect must look the same at both, and a verdict that changes with
+        the engine's rate is the defect this pair of renders exists to catch"
 
 # ---- NOT A REDUCTION. A target rate at or above the engine's own holds for one frame, which is
 # no reduction at all, so this must be indistinguishable from vintage off.
