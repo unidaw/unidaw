@@ -204,6 +204,43 @@ wait_load "$TMP/eng2.log" 1 "$ENG" "the edited project to reload"
 sleep 1.5
 cli do save editedB --force >/dev/null 2>&1 || true
 sleep 1.8
+# ---- NOTHING SHRANK, over the whole document rather than over a named list.
+#
+# The PRESENT assertions below name what these edits created, which means they cover exactly the
+# things somebody thought to add. This is the net underneath them: count every array in the
+# document and require that the reload lost none of them. A field nobody named is covered by the
+# same rule as the ones that were, which is the difference between a check that grows one bug at a
+# time and one that was already watching.
+#
+# COUNTED BY LEAF NAME, not by JSON path, so a schema that MOVES something is not mistaken for a
+# schema that LOSES it — keyed by path, the same rule in save_roundtrip_check reported the maximal
+# fixture's 158 notes as lost when they had simply moved from tracks to clips.
+python3 - "$TMP/editedA.uniproj.json" "$TMP/editedB.uniproj.json" <<'PYS' || fail "the reload lost content"
+import json, sys, collections
+def load(p):
+    d = json.load(open(p))
+    return d.get('document', d)
+def counts(node, name='', acc=None):
+    if acc is None: acc = collections.Counter()
+    if isinstance(node, dict):
+        for k, v in node.items():
+            counts(v, k, acc)
+    elif isinstance(node, list):
+        acc[name] += len(node)
+        for v in node:
+            counts(v, name, acc)
+    return acc
+a, b = counts(load(sys.argv[1])), counts(load(sys.argv[2]))
+ok = True
+for k in sorted(a):
+    if b.get(k, 0) < a[k]:
+        print(f"  FAIL: {k} {a[k]} -> {b.get(k, 0)} — the reload lost {a[k] - b.get(k, 0)}")
+        ok = False
+if ok:
+    print("  nothing shrank across the reload (%d kinds, %d entries)" % (len(a), sum(a.values())))
+raise SystemExit(0 if ok else 1)
+PYS
+
 B="$(summary "$TMP/editedB.uniproj.json")"
 [ "$B" = "$A" ] || fail "reload -> save lost or changed state.
         session: $A
