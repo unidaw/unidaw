@@ -37,19 +37,38 @@
 # shortfall diagnostic says nearly every one of those drops is a SINGLE STALL of a few blocks
 # rather than sustained starvation. Realtime and QoS are indistinguishable here.
 #
-# THAT IS NOT YET AN ANSWER ABOUT REALTIME SCHEDULING, and the difference matters. This engine
-# renders AHEAD on a producer thread and the callback drains a ring, so an underrun means the
-# producer fell behind — not that a callback missed its deadline. Nothing in the engine measures
-# how much of the block period the render actually consumes. Without that number, "no difference"
-# and "nothing was ever near the deadline" are the same table.
+# AND THE REASON IS NOW MEASURED RATHER THAN GUESSED AT. The engine already emits a `producer.load`
+# event carrying mean and peak block cost against the block budget, and this probe reports it. On
+# the workload here it reads 0.5%-1.1% of budget with peaks under 9%. With ~99% headroom no
+# scheduling policy can matter, and a tie between realtime and QoS is the only result this
+# experiment could have produced.
 #
-# A saturation sweep (4/16/48 tracks x 512/128-frame buffers) could not produce sustained overload
-# either: it went 29, 1752, 32 drops as tracks INCREASED, and the shortfall column showed all three
-# were single stalls. A cost curve cannot be non-monotonic; that one was not measuring cost.
+# TWO THINGS HAD TO BE FIXED BEFORE THAT NUMBER WAS EVEN VISIBLE, and both were failures of the
+# harness that printed as data:
 #
-# SO THE BLOCKING ITEM FOR #55 (CoreAudio workgroups) IS RENDER-COST TELEMETRY, not more load.
-# Joining a workgroup is a change to the real-time path, and this harness has now established that
-# the metric we have — underrun counts — cannot tell whether such a change helped.
+#   1. THE TRANSPORT NEVER STARTED. A live engine comes up STOPPED, and the producer only times a
+#      block while playing — so no producer.load event was emitted at all, and the underrun columns
+#      were describing a machine at rest. Four versions of this probe ran that way.
+#   2. `daw-cli do play` WAS SILENTLY REJECTED. The release binary was three days stale and the SHM
+#      equality gate refused it — version 27 against the engine's 37 — while `|| true` swallowed
+#      the message. The version gate did its job perfectly; the harness threw the answer away.
+#
+# Both now surface: a run with no producer.load reports STOPPED rather than 0% load, and daw-cli's
+# own error is printed. Reporting "0% of budget" for an engine that never played would have been a
+# lie in the most convincing available format.
+#
+# I ORIGINALLY WROTE THE OPPOSITE HERE — that nothing in the engine measured render cost and that
+# building it was the blocker for #55. That was wrong. I had grepped for the wrong vocabulary
+# (callback/elapsed/headroom, when the counters are producerBlockUsTotal and DAW_EVENT
+# "producer.load"), and I was one step from building a second copy of a subsystem that already
+# exists, carries a per-block budget, a sampler share and pool-engagement hysteresis, and is better
+# than what I would have written. A grep that finds nothing is evidence about the grep.
+#
+# SO THE BLOCKER FOR #55 IS A WORKLOAD, NOT AN INSTRUMENT. A saturation sweep (4/16/48 tracks x
+# 512/128-frame buffers) could not create one: drops went 29, 1752, 32 as tracks INCREASED, and the
+# shortfall column showed all three were single stalls, not rates. Judging a workgroup change needs
+# a session whose producer load is a large fraction of budget — real plugins, or many sampler
+# tracks, not the fake identity instrument, which costs almost nothing per block by design.
 #
 # THE LOAD GENERATORS SELF-LIMIT, and that is not a detail. A previous harness in this repo spawned
 # eight `while :; do :; done` shells and relied on `trap ... EXIT` to stop them; trap does not run
@@ -141,9 +160,31 @@ run() {  # run <slot> <label> <hogs> [extra env] -> appends "starve/active" to R
   local slot="$1" label="$2" hogs="$3" extra="${4:-}"
   local log="$TMP/${slot}.log"
   [ "$hogs" -gt 0 ] && start_hogs "$hogs" "$((SECS + 6))"
+  # THE TRANSPORT DOES NOT START ITSELF. A live engine comes up STOPPED and waits for a UI, so
+  # the first four versions of this probe measured an engine that was not playing: the producer
+  # timed zero blocks, emitted no producer.load at all, and the underrun columns were reporting
+  # a machine at rest. Nothing in the output said so, which is the whole problem — it looked
+  # like data. The engine is backgrounded now and told to play, exactly as realtime_pool_check
+  # does it.
   ( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_PROJECT_DIR="$TMP" \
       DAW_UI_SHM_NAME="/rtload_${slot}_$$" DAW_ENGINE_LATENCY_REPORT=1 $extra \
-      ./daw_engine --project rtload --run-seconds "$SECS" >"$log" 2>&1 )
+      ./daw_engine --project rtload --run-seconds "$SECS" >"$log" 2>&1 ) &
+  local eng=$!
+  local w=0
+  while [ "$w" -lt 200 ]; do
+    grep -q 'starting threads' "$log" 2>/dev/null && break
+    sleep 0.25
+    w=$((w + 1))
+  done
+  # AND THE PLAY COMMAND'S OWN OUTPUT IS KEPT. `|| true` on a command whose failure invalidates
+  # the entire measurement is how a version mismatch turned into four tables of confident zeroes.
+  if [ -x "$CLI" ]; then
+    ( cd "$BUILD" && env DAW_UI_SHM_NAME="/rtload_${slot}_$$" DAW_PROJECT_DIR="$TMP" \
+        "$CLI" do play >"$TMP/${slot}.play" 2>&1 ) || true
+  else
+    echo "no daw-cli built" > "$TMP/${slot}.play"
+  fi
+  wait "$eng" 2>/dev/null
   stop_hogs
   # ZERO CALLBACKS IS NOT ZERO UNDERRUNS. The engine says so itself; surface it rather than
   # reporting a clean run for a device that never asked for audio.
@@ -165,15 +206,36 @@ run() {  # run <slot> <label> <hogs> [extra env] -> appends "starve/active" to R
   # here produced 1752 drops at 16 tracks and 32 at 48 tracks — nonsense as a cost curve, and
   # instantly legible once the shortfall showed both were single stalls.
   short="$(echo "$line" | sed -n 's/.*worst shortfall \([0-9]*\) blocks.*/\1/p')"
-  echo "${starve}/${active}/${short:-0}"
+  # HOW FULL THE BLOCK BUDGET ACTUALLY WAS. Without this, "realtime made no difference" and
+  # "the producer was idle the whole time" print the same table — and on this workload it is
+  # emphatically the second.
+  local load peak
+  load="$(sed -n 's/.*[,{]"load_milli":\([0-9]*\).*/\1/p' "$log" | head -1)"
+  peak="$(sed -n 's/.*"peak_load_milli":\([0-9]*\).*/\1/p' "$log" | head -1)"
+  # NO producer.load MEANS NO BLOCK WAS EVER TIMED, which means the transport never played.
+  # Reporting that as 0% load would be a lie in the most convincing possible format.
+  if [ -z "$load" ]; then
+    echo "STOPPED"
+    PLAYERR="$(head -1 "$TMP/${slot}.play" 2>/dev/null)"
+    return
+  fi
+  echo "${starve}/${active}/${short:-0}/${load}/${peak:-0}"
 }
+
+# DEBUG FIRST, which is not a style preference. The SHM header carries a version and the engine
+# refuses a mismatch outright, so a daw-cli left over from an older build does not misbehave — it
+# is rejected, and `do play` silently does nothing. That is exactly what happened here: the release
+# binary was three days stale (version 27 against the engine's 37) and every run came back with a
+# stopped transport. realtime_pool_check.sh already prefers debug for the same reason.
+CLI="$ROOT/ui/target/debug/daw-cli"
+[ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
 
 L0="realtime, idle";   E0=""
 L1="realtime, loaded"; E1=""
 L2="QoS only, idle";   E2="DAW_ENGINE_NO_RT=1"
 L3="QoS only, loaded"; E3="DAW_ENGINE_NO_RT=1"
 H0=0; H1="$HOGS"; H2=0; H3="$HOGS"
-R0=""; R1=""; R2=""; R3=""; VRATIO=""
+R0=""; R1=""; R2=""; R3=""; VRATIO=""; PLAYERR=""
 
 echo "  ${SECS}s per condition x ${ROUNDS} rounds, ${HOGS} CPU hogs on ${CORES} logical cores"
 echo "  (conditions INTERLEAVED per round so machine drift cannot masquerade as an effect)"
@@ -205,22 +267,32 @@ for slot in 0 1 2 3; do
   pct="$(python3 -c "
 import sys
 vals = sys.argv[1].split()
-r = [v.split('/') for v in vals if v.count('/') == 2]
+r = [v.split('/') for v in vals if v.count('/') == 4]
 if not r:
     print('no usable runs: ' + ' '.join(vals)); raise SystemExit
-p = sorted(100.0 * int(a) / max(1, int(b)) for a, b, _ in r)
+p = sorted(100.0 * int(a) / max(1, int(b)) for a, b, _, _, _ in r)
 # A run whose worst shortfall matches its drop count is ONE STALL, not a rate. Averaging it in
 # with steady-state runs is how a cost curve comes out non-monotonic.
-stalls = sum(1 for a, _, c in r if int(a) > 2 and int(c) >= int(a) - 1)
-bad = [v for v in vals if v.count('/') != 2]
+stalls = sum(1 for a, _, c, _, _ in r if int(a) > 2 and int(c) >= int(a) - 1)
+loads = [int(d) / 10.0 for _, _, _, d, _ in r]
+peaks = [int(e) / 10.0 for _, _, _, _, e in r]
+bad = [v for v in vals if v.count('/') != 4]
+if not r:
+    print('NO RUN PLAYED — ' + ' '.join(vals)); raise SystemExit
 note = '  [%d single-stall run(s)]' % stalls if stalls else ''
-print('%5.1f%% .. %5.1f%%   (%s)%s%s' % (p[0], p[-1],
-      ' '.join('%s/%s' % (a, b) for a, b, _ in r), note,
+print('%5.1f%% .. %5.1f%%   producer %.1f%%-%.1f%% of budget (peak %.1f%%)%s%s' % (
+      p[0], p[-1], min(loads), max(loads), max(peaks), note,
       '  ' + ' '.join(bad) if bad else ''))
 " "$vals")"
   printf "  %-22s %s\n" "$lbl" "$pct"
 done
 echo
+if [ -n "$PLAYERR" ]; then
+  echo "  A run never played, and daw-cli said why:"
+  echo "    $PLAYERR"
+  echo "  Until that is fixed the rows above describe an engine at rest, not a scheduler."
+  echo
+fi
 # Print the control BEFORE the reading, because if it says 1x there is nothing to read.
 python3 -c "
 import sys
@@ -242,3 +314,7 @@ echo
 echo "  A [single-stall] tag means those drops were one hiccup the producer never recovered from,"
 echo "  not a starvation rate. Rows made mostly of single stalls are not comparable as rates at"
 echo "  all, whichever way they happen to be ordered."
+echo
+echo "  READ THE PRODUCER COLUMN FIRST. If the block budget is only a few percent full, the render"
+echo "  thread was never at risk of missing a deadline and no scheduling policy could have changed"
+echo "  the outcome — the underrun columns are then measuring the machine, not the scheduler."

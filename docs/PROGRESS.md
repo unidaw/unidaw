@@ -11,9 +11,9 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: e4a00b9
-- main-cpp-lines: 11550
-- main-function-lines: 10077
+- as-of-commit: 2a0b0d7
+- main-cpp-lines: 10622
+- main-function-lines: 9148
 - ctest-entries: 166
 
 ## Why this file cannot quietly go stale
@@ -66,11 +66,19 @@ unit-test binaries where there were none. A command module rebuilds in 4.2s agai
 relink the engine.
 
 **The grade was C, and the binding constraint was `main()`.** A four-judge panel put it plainly:
-`main()` was ~13,700 lines and the producer lambda held the render path. Three of the four giants
-have now left it — `renderTrack` (1,552), `saveProjectToPath` (480) and `handleUiEntry` (1,623).
-`loadProjectFromPath` (945) and `processTrack` (796) remain, and they are the two hardest: 52 and
-29 captures with 16 and 9 nested lambdas, so a verbatim move turns them into callback structs
-rather than functions. That is a design decision, not a mechanical one.
+`main()` was ~13,700 lines and the producer lambda held the render path. Four have now left it —
+`renderTrack` (1,552), `handleUiEntry` (1,623), `loadProjectFromPath` (942) and `saveProjectToPath`
+(480) — each moved VERBATIM and each verified as such by comparing the moved body line-for-line
+against the lambda it came from.
+
+**`processTrack` (796) is the one that cannot follow them mechanically**, and the reason is worth
+recording because it is not the capture count. Its 29 captures split into two populations:
+fourteen are stable main-scope state and make an ordinary Deps struct, but the other fourteen are
+declared *inside the producer's per-block loop* — including three lambdas. Those cannot be hoisted,
+and passing them through a per-block context means constructing `std::function` objects per block
+per track, which is heap allocation on the producer path. The likely answer is to move the loop
+body with them rather than to move `processTrack` alone. Unlike the other four, the byte-identical
+render oracle genuinely applies here, so whichever shape is chosen has a strong check available.
 
 What made each move safe was that the body was relocated VERBATIM — the new function binds local
 references carrying the names the lambda captured, so nested lambdas, shadowing and brace scope
@@ -131,13 +139,16 @@ device directly while `baseConfig` carried its own — the same config-versus-pu
   raw mach ports — JUCE 8's `AudioIODevice::getWorkgroup()` / `AudioWorkgroup::join()` hide the
   handle — plus a dedicated RT render thread in the host, split off the control/instantiation
   thread behind an in-order bounded request queue. The load harness now exists
-  (`tools/rt_load_probe.sh`) and it moved the blocker rather than removing it: under 3.2x-3.8x
-  measured contention, realtime and QoS are indistinguishable, and the reason is that **nothing in
-  the engine measures how much of a block period a render consumes**. An underrun here means the
-  producer fell behind, so "realtime did not help" and "nothing was ever near the deadline" print
-  the same table. A saturation sweep confirmed the metric is unusable for this: drops went
-  29 -> 1752 -> 32 as tracks increased, and the engine's own "worst shortfall" column showed all
-  three were single stalls rather than rates. Render-cost telemetry is the prerequisite.
+  (`tools/rt_load_probe.sh`) and it answers the question it was built for: under 3.7x-4.2x measured
+  contention, realtime and QoS are indistinguishable **because the producer uses about one percent
+  of its block budget**. With that much headroom no scheduling policy can matter, so the tie is a
+  fact about the workload rather than about the scheduler. What #55 needs is a session heavy enough
+  to fill the budget — real plugins or many sampler tracks — not more instrumentation.
+
+  I first recorded the opposite here, that the engine could not measure render cost at all. It
+  always could: `producer.load` reports mean and peak block cost against the budget, with a sampler
+  share and pool-engagement hysteresis. I had grepped for the wrong words and was one commit from
+  writing a worse second copy of it.
 
 **Both of the first two are now MEASURED even though neither is fixed**, by inverted checks that
 assert the defect is present and announce their own retirement:
