@@ -561,6 +561,43 @@ void testAudioChannelOffset() {
   CHECK(!audioChannelOffset(base, stride, chans, 3, blocks, 99, shm).has_value());
 }
 
+// ---------------------------------- register and remove are a pair; both touch BOTH maps
+void testRegisterActiveNote() {
+  TrackRuntime rt;
+  registerActiveNote(rt, /*noteId=*/7, /*pitch=*/60, /*column=*/2,
+                     /*startTick=*/100, /*endTick=*/200, /*tuningCents=*/5.0f,
+                     /*hasScheduledEnd=*/true);
+  // BOTH MAPS, or the index disagrees with the table: a note that cannot be cut by its column, or
+  // a column entry pointing at a note that is gone.
+  CHECK(rt.activeNotes.count(7) == 1);
+  CHECK(rt.activeNoteByColumn.count(2) == 1);
+  if (rt.activeNoteByColumn.count(2)) {
+    CHECK(rt.activeNoteByColumn[2].size() == 1);
+    CHECK(rt.activeNoteByColumn[2][0] == 7);
+  }
+  const auto& n = rt.activeNotes[7];
+  CHECK(n.pitch == 60);
+  CHECK(n.column == 2);
+  CHECK(n.startNanotick == 100);
+  CHECK(n.endNanotick == 200);
+  CHECK(n.tuningCents == 5.0f);
+  CHECK(n.hasScheduledEnd == true);
+
+  // hasScheduledEnd FALSE is the tracker case — the note sounds until the next one in its column,
+  // so endNanotick equals the start rather than being a real end. Something else decides when it
+  // stops, and a note wrongly marked as scheduled would be cut at its own start tick.
+  registerActiveNote(rt, 8, 64, 2, 300, 300, 0.0f, false);
+  CHECK(rt.activeNotes[8].hasScheduledEnd == false);
+  CHECK(rt.activeNotes[8].endNanotick == 300);
+  CHECK(rt.activeNoteByColumn[2].size() == 2);   // same column, appended not replaced
+
+  // REGISTER AND REMOVE ARE MIRRORS. Removing the last note in a column drops the column, so a
+  // register followed by a remove leaves the table exactly as it started.
+  removeNoteIdFromColumn(rt, 2, 7);
+  removeNoteIdFromColumn(rt, 2, 8);
+  CHECK(rt.activeNoteByColumn.count(2) == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -579,6 +616,7 @@ int main() {
   testPlaceInBlock();
   testQueuePendingStrikes();
   testAudioChannelOffset();
+  testRegisterActiveNote();
   testCutActiveNotes();
   testPushScratchpadOverflow();
 

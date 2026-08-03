@@ -11962,16 +11962,8 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
 
             if (duration == 0) {
               std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
-              ActiveNote activeNote;
-              activeNote.noteId = noteId;
-              activeNote.pitch = pitch;
-              activeNote.column = noteColumn;
-              activeNote.startNanotick = onTick;
-              activeNote.endNanotick = onTick;
-              activeNote.tuningCents = noteTuningCents;
-              activeNote.hasScheduledEnd = false;
-              runtime.activeNotes[noteId] = activeNote;
-              runtime.activeNoteByColumn[noteColumn].push_back(noteId);
+              daw::engine::registerActiveNote(runtime, noteId, pitch, noteColumn,
+                                              onTick, onTick, noteTuningCents, false);
               return;
             }
             const uint64_t noteEndTick = onTick + duration;
@@ -12016,16 +12008,8 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
               }
             } else {
               std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
-              ActiveNote activeNote;
-              activeNote.noteId = noteId;
-              activeNote.pitch = pitch;
-              activeNote.column = noteColumn;
-              activeNote.startNanotick = onTick;
-              activeNote.endNanotick = noteEndTick;
-              activeNote.tuningCents = noteTuningCents;
-              activeNote.hasScheduledEnd = true;
-              runtime.activeNotes[noteId] = activeNote;
-              runtime.activeNoteByColumn[noteColumn].push_back(noteId);
+              daw::engine::registerActiveNote(runtime, noteId, pitch, noteColumn,
+                                              onTick, noteEndTick, noteTuningCents, true);
             }
           };
 
@@ -12804,29 +12788,13 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
                 }
               } else {
                 std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
-                ActiveNote activeNote;
-                activeNote.noteId = noteId;
-                activeNote.pitch = pitch;
-                activeNote.column = 0;
-                activeNote.startNanotick = eventTick;
-                activeNote.endNanotick = noteEndTick;
-                activeNote.tuningCents = tuningCents;
-                activeNote.hasScheduledEnd = true;
-                runtime.activeNotes[activeNote.noteId] = activeNote;
-                runtime.activeNoteByColumn[activeNote.column].push_back(activeNote.noteId);
+                daw::engine::registerActiveNote(runtime, noteId, pitch, 0,
+                                                eventTick, noteEndTick, tuningCents, true);
               }
             } else {
               std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
-              ActiveNote activeNote;
-              activeNote.noteId = noteId;
-              activeNote.pitch = pitch;
-              activeNote.column = 0;
-              activeNote.startNanotick = eventTick;
-              activeNote.endNanotick = eventTick;
-              activeNote.tuningCents = tuningCents;
-              activeNote.hasScheduledEnd = false;
-              runtime.activeNotes[activeNote.noteId] = activeNote;
-              runtime.activeNoteByColumn[activeNote.column].push_back(activeNote.noteId);
+              daw::engine::registerActiveNote(runtime, noteId, pitch, 0,
+                                              eventTick, eventTick, tuningCents, false);
             }
           }
           scratchpadCount = outCount;

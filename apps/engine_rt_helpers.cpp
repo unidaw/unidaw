@@ -236,4 +236,19 @@ std::optional<uint64_t> audioChannelOffset(uint64_t planeBase, uint64_t strideBy
   return offset;
 }
 
+void registerActiveNote(TrackRuntime& runtime, uint32_t noteId, uint8_t pitch, uint8_t column,
+                        uint64_t startTick, uint64_t endTick, float tuningCents,
+                        bool hasScheduledEnd) {
+  ActiveNote activeNote;
+  activeNote.noteId = noteId;
+  activeNote.pitch = pitch;
+  activeNote.column = column;
+  activeNote.startNanotick = startTick;
+  activeNote.endNanotick = endTick;
+  activeNote.tuningCents = tuningCents;
+  activeNote.hasScheduledEnd = hasScheduledEnd;
+  runtime.activeNotes[noteId] = activeNote;
+  runtime.activeNoteByColumn[column].push_back(noteId);
+}
+
 }  // namespace daw::engine

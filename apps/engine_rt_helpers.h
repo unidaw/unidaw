@@ -245,4 +245,22 @@ std::optional<uint64_t> audioChannelOffset(uint64_t planeBase, uint64_t strideBy
                                            uint32_t numBlocks, uint32_t channel,
                                            uint64_t shmSize);
 
+// REGISTER A SOUNDING NOTE — in BOTH maps, which is the whole point.
+//
+// activeNotes holds the note; activeNoteByColumn indexes it by column so a column cut can find it
+// without scanning. Updating one and not the other leaves the index disagreeing with the table:
+// a note that cannot be cut by its column, or a column entry pointing at a note that is gone.
+// Four sites did this by hand, and each was four lines of assignment followed by two map updates
+// that had to be remembered.
+//
+// This is the exact mirror of removeNoteIdFromColumn above, and they should be read as a pair:
+// one adds to both, the other removes from both and drops the column when it empties.
+//
+// THE CALLER HOLDS runtime.activeNotesMutex. Every existing site already did — this does not take
+// it, because the surrounding code needs the registration to be atomic with the decisions around
+// it, not just with itself.
+void registerActiveNote(TrackRuntime& runtime, uint32_t noteId, uint8_t pitch, uint8_t column,
+                        uint64_t startTick, uint64_t endTick, float tuningCents,
+                        bool hasScheduledEnd);
+
 }  // namespace daw::engine
