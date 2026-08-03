@@ -299,4 +299,40 @@ float modLinkValue(float bias, float depth, float sourceValue);
 bool modLinkCanFire(const daw::ModLink& link, bool srcPresent, bool dstPresent,
                     size_t srcPos, size_t dstPos);
 
+// THE ORDER EVENTS TAKE WITHIN ONE SAMPLE.
+//
+// The producer stable-sorts each block's scratchpad on (sampleTime, priority), so this function
+// decides what happens first when two events land on the same frame. It is a correctness rule,
+// not a preference:
+//
+//   0 Transport   — a start/stop/locate must be seen before anything it governs.
+//   1 Param       — a parameter change lands BEFORE the note that depends on it, so a note is
+//                   never played with the previous block's cutoff.
+//   2 NOTE-OFF    — before note-ons at the same frame. This is what lets a retriggered note
+//                   release before its replacement starts; the other order leaves the new note's
+//                   voice cut by the old note's off, which is a note that never sounds.
+//   3 MusicalLogic and note-ons generated FROM it — after authored parameter changes, before
+//                   authored notes, so a generated note cannot pre-empt one the user wrote.
+//   4 everything else, including plain note-ons.
+//
+// kEventFlagMusicalLogic moves here with it. It was a file-scope constant in daw_engine_main.cpp
+// while being part of the note-off/note-on wire contract — which is why nothing outside that one
+// translation unit could read a flag the wire carries.
+constexpr uint32_t kEventFlagMusicalLogic = 1u << 0;
+
+uint8_t priorityForEvent(const daw::EventEntry& entry);
+
+// A GENERATED NOTE'S OCTAVE AND VELOCITY. Both use "0 means unset" — with DIFFERENT defaults,
+// which is exactly the pair that gets mixed up.
+//
+// The octave clamp is not cosmetic: `octaveOffset` is SIGNED, so hint + offset can go negative,
+// and without the clamp that conversion underflows to a huge octave. resolveDegree then produces
+// a pitch far out of range and clampMidi saturates it — every generated note plays at 127 instead
+// of at a sensible edge of the keyboard.
+uint8_t resolvedBaseOctave(uint8_t hint, int32_t octaveOffset);
+
+// An unset velocity is 100, not silence. Zero velocity on a note-on is a note-OFF in MIDI, so
+// treating "unset" as 0 would emit a note that stops itself.
+uint8_t resolvedVelocity(uint8_t velocity);
+
 }  // namespace daw::engine

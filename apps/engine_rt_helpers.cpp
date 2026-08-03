@@ -346,4 +346,47 @@ void applyBlockRateModulation(BlockModCtx& ctx) {
   }
 }
 
+uint8_t priorityForEvent(const daw::EventEntry& entry) {
+  const auto type = static_cast<daw::EventType>(entry.type);
+  switch (type) {
+    case daw::EventType::Transport:
+      return 0;
+    case daw::EventType::Param:
+      return 1;
+    case daw::EventType::Midi: {
+      daw::MidiPayload payload{};
+      std::memcpy(&payload, entry.payload, sizeof(payload));
+      if (payload.status == 0x80) {
+        return 2;
+      }
+      if (payload.status == 0x90) {
+        if (entry.flags & kEventFlagMusicalLogic) {
+          return 3;
+        }
+        return 4;
+      }
+      return 4;
+    }
+    case daw::EventType::MusicalLogic:
+      return 3;
+    default:
+      return 4;
+  }
+}
+
+uint8_t resolvedBaseOctave(uint8_t hint, int32_t octaveOffset) {
+  const uint8_t base = hint != 0 ? hint : 4;
+  int v = static_cast<int>(base) + static_cast<int>(octaveOffset);
+  if (v < 0) {
+    v = 0;
+  } else if (v > 10) {
+    v = 10;
+  }
+  return static_cast<uint8_t>(v);
+}
+
+uint8_t resolvedVelocity(uint8_t velocity) {
+  return velocity != 0 ? velocity : 100;
+}
+
 }  // namespace daw::engine

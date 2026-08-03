@@ -307,35 +307,8 @@ inline void dispatchRustKernel(daw::PatcherNodeType type, daw::PatcherContext& c
   }
 }
 
-constexpr uint32_t kEventFlagMusicalLogic = 1u << 0;
-
-inline uint8_t priorityForEvent(const daw::EventEntry& entry) {
-  const auto type = static_cast<daw::EventType>(entry.type);
-  switch (type) {
-    case daw::EventType::Transport:
-      return 0;
-    case daw::EventType::Param:
-      return 1;
-    case daw::EventType::Midi: {
-      daw::MidiPayload payload{};
-      std::memcpy(&payload, entry.payload, sizeof(payload));
-      if (payload.status == 0x80) {
-        return 2;
-      }
-      if (payload.status == 0x90) {
-        if (entry.flags & kEventFlagMusicalLogic) {
-          return 3;
-        }
-        return 4;
-      }
-      return 4;
-    }
-    case daw::EventType::MusicalLogic:
-      return 3;
-    default:
-      return 4;
-  }
-}
+// kEventFlagMusicalLogic and priorityForEvent moved to apps/engine_rt_helpers.h — the flag is
+// part of the wire contract and belonged in a header, and the ordering rule now has tests.
 
 // Audio callback for mixing and outputting audio from all tracks
 // Minimal 16-bit PCM RIFF writer. The engine has no audio file IO at all, and

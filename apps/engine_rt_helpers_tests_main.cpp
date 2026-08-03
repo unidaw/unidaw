@@ -650,6 +650,54 @@ void testModLinkValue() {
   CHECK(modLinkValue(1.0f, -0.5f, 0.5f) == 0.75f);
 }
 
+// ------------------------------------------ what happens first when two events share a frame
+daw::EventEntry midiEntry(uint8_t status, uint32_t flags = 0) {
+  daw::EventEntry e{};
+  e.type = static_cast<uint16_t>(daw::EventType::Midi);
+  e.size = sizeof(daw::MidiPayload);
+  e.flags = flags;
+  daw::MidiPayload p{};
+  p.status = status;
+  std::memcpy(e.payload, &p, sizeof(p));
+  return e;
+}
+daw::EventEntry typedEntry(daw::EventType t) {
+  daw::EventEntry e{};
+  e.type = static_cast<uint16_t>(t);
+  return e;
+}
+
+void testPriorityForEvent() {
+  CHECK(priorityForEvent(typedEntry(daw::EventType::Transport)) == 0);
+  CHECK(priorityForEvent(typedEntry(daw::EventType::Param)) == 1);
+
+  // THE ONE THAT MATTERS: a note-OFF sorts before a note-ON at the same frame. The other order
+  // leaves a retriggered note's fresh voice cut by the previous note's off — a note that never
+  // sounds, on exactly the fast repeats where it is hardest to notice which one went missing.
+  CHECK(priorityForEvent(midiEntry(0x80)) < priorityForEvent(midiEntry(0x90)));
+  CHECK(priorityForEvent(midiEntry(0x80)) == 2);
+  CHECK(priorityForEvent(midiEntry(0x90)) == 4);
+
+  // A PARAMETER LANDS BEFORE THE NOTE THAT DEPENDS ON IT, so a note is never played with the
+  // previous block's cutoff.
+  CHECK(priorityForEvent(typedEntry(daw::EventType::Param)) < priorityForEvent(midiEntry(0x90)));
+  // And transport precedes everything it governs.
+  CHECK(priorityForEvent(typedEntry(daw::EventType::Transport))
+        < priorityForEvent(typedEntry(daw::EventType::Param)));
+
+  // A GENERATED note-on (flagged MusicalLogic) sorts before an AUTHORED one, so the patcher
+  // cannot pre-empt a note the user wrote at the same frame.
+  CHECK(priorityForEvent(midiEntry(0x90, kEventFlagMusicalLogic)) == 3);
+  CHECK(priorityForEvent(midiEntry(0x90, kEventFlagMusicalLogic)) < priorityForEvent(midiEntry(0x90)));
+  // But still AFTER a note-off and after params.
+  CHECK(priorityForEvent(midiEntry(0x80)) < priorityForEvent(midiEntry(0x90, kEventFlagMusicalLogic)));
+  CHECK(priorityForEvent(typedEntry(daw::EventType::MusicalLogic)) == 3);
+
+  // Anything unrecognised sorts last rather than jumping the queue.
+  CHECK(priorityForEvent(midiEntry(0xB0)) == 4);
+  CHECK(priorityForEvent(typedEntry(daw::EventType::UiDiff)) == 4);
+}
+
 }  // namespace
 
 int main() {
@@ -671,6 +719,7 @@ int main() {
   testRegisterActiveNote();
   testModLinkCanFire();
   testModLinkValue();
+  testPriorityForEvent();
   testCutActiveNotes();
   testPushScratchpadOverflow();
 
