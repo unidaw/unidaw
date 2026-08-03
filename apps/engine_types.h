@@ -63,6 +63,14 @@
 // out as a net widening of scope. It was a regression introduced by the fix for a different one.
 namespace daw::engine {
 
+// Moved here from daw_engine_main.cpp file scope: engine_track_setup.cpp needs it too, and a
+// second copy of a capacity constant is how two files come to disagree about how wide a
+// plane is.
+// Movement 4 multi-out: channels reserved for the aux OUTPUT plane per track, sized so a
+// generous multi-out instrument (up to 16 stereo stems) fits. A track with no multi-out
+// plugin leaves it silent; the cost is one plane of this width in each host's SHM.
+constexpr uint32_t kMaxAuxOutputChannels = 32;
+
 constexpr uint32_t kPatcherNodeCapacity = 1024;
 
 constexpr uint32_t kPatcherMaxModOutputs = 8;
