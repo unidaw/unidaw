@@ -12546,83 +12546,16 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
 
         applyModUpdates();
 
+        // The three rules inside — source strictly upstream of target, VstParam targets only, and
+        // clamp01(bias + depth * source) — moved to apps/engine_rt_helpers.h with tests. None of
+        // them had one before.
+        const std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)>
+            resolveDevicePluginPathFnRt = resolveDevicePluginPath;
+        daw::engine::BlockModCtx blockModCtx{runtime, trackState, blockSampleStart,
+                                             windowStartTicks, noteCutCtx,
+                                             resolveDevicePluginPathFnRt};
         auto applyBlockRateModulation = [&]() {
-          std::vector<daw::ModSourceState> modSources;
-          {
-            std::lock_guard<std::mutex> lock(runtime.modSourcesMutex);
-            modSources = runtime.modSources;
-          }
-          if (trackState.modLinks.empty() || modSources.empty()) {
-            return;
-          }
-          const auto& chainDevices = trackState.chainDevices;
-          std::unordered_map<uint32_t, size_t> chainPos;
-          chainPos.reserve(chainDevices.size());
-          for (size_t i = 0; i < chainDevices.size(); ++i) {
-            chainPos.emplace(chainDevices[i].id, i);
-          }
-          auto findSourceValue = [&](const daw::ModSourceRef& source) -> std::optional<float> {
-            for (const auto& state : modSources) {
-              if (state.ref.deviceId == source.deviceId &&
-                  state.ref.sourceId == source.sourceId &&
-                  state.ref.kind == source.kind) {
-                return state.value;
-              }
-            }
-            return std::nullopt;
-          };
-          auto resolveHostIndexForDevice = [&](uint32_t deviceId) -> std::optional<uint32_t> {
-            uint32_t hostIndex = 0;
-            for (const auto& device : chainDevices) {
-              if (device.kind != daw::DeviceKind::VstInstrument &&
-                  device.kind != daw::DeviceKind::VstEffect) {
-                continue;
-              }
-              if (!resolveDevicePluginPath(runtime, device.hostSlotIndex)) {
-                continue;
-              }
-              if (device.id == deviceId) {
-                return hostIndex;
-              }
-              ++hostIndex;
-            }
-            return std::nullopt;
-          };
-          for (const auto& link : trackState.modLinks) {
-            if (!link.enabled || link.rate != daw::ModRate::BlockRate) {
-              continue;
-            }
-            const auto srcPos = chainPos.find(link.source.deviceId);
-            const auto dstPos = chainPos.find(link.target.deviceId);
-            if (srcPos == chainPos.end() || dstPos == chainPos.end()) {
-              continue;
-            }
-            if (srcPos->second >= dstPos->second) {
-              continue;
-            }
-            if (link.target.kind != daw::ModTargetKind::VstParam) {
-              continue;
-            }
-            const auto sourceValue = findSourceValue(link.source);
-            if (!sourceValue) {
-              continue;
-            }
-            const auto hostIndex = resolveHostIndexForDevice(link.target.deviceId);
-            if (!hostIndex) {
-              continue;
-            }
-            daw::EventEntry paramEntry;
-            paramEntry.sampleTime = blockSampleStart;
-            paramEntry.blockId = 0;
-            paramEntry.type = static_cast<uint16_t>(daw::EventType::Param);
-            paramEntry.size = sizeof(daw::ParamPayload);
-            daw::ParamPayload payload{};
-            std::memcpy(payload.uid16, link.target.uid16, sizeof(payload.uid16));
-            payload.value = clamp01(link.bias + link.depth * (*sourceValue));
-            payload.targetPluginIndex = *hostIndex;
-            std::memcpy(paramEntry.payload, &payload, sizeof(payload));
-            pushScratchpad(paramEntry, windowStartTicks);
-          }
+          daw::engine::applyBlockRateModulation(blockModCtx);
         };
 
         applyBlockRateModulation();

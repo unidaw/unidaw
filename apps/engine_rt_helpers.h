@@ -27,6 +27,7 @@
 #include "apps/engine_types.h"
 #include "apps/harmony_timeline.h"
 #include "apps/patcher_graph.h"
+#include "apps/modulation.h"
 #include "apps/shared_memory.h"
 #include "apps/sampler_engine.h"
 #include "apps/scale_library.h"
@@ -262,5 +263,40 @@ std::optional<uint64_t> audioChannelOffset(uint64_t planeBase, uint64_t strideBy
 void registerActiveNote(TrackRuntime& runtime, uint32_t noteId, uint8_t pitch, uint8_t column,
                         uint64_t startTick, uint64_t endTick, float tuningCents,
                         bool hasScheduledEnd);
+
+// BLOCK-RATE MODULATION: drive plugin parameters from mod sources, once per block.
+//
+// Three rules live in here and none of them had a test:
+//
+//   1. THE SOURCE MUST COME BEFORE THE TARGET IN THE CHAIN. `srcPos >= dstPos` is skipped, so a
+//      device cannot modulate something upstream of itself. Without it a link reads a value the
+//      chain has not produced yet this block — last block's value, silently, forever.
+//   2. ONLY VstParam TARGETS are driven here; other target kinds belong to other paths.
+//   3. The driven value is `clamp01(bias + depth * source)` — bias and depth are authored and can
+//      push it out of range, so the clamp is what keeps a plugin parameter legal.
+//
+// The context is plain references. `resolveDevicePluginPath` is the one callable, and it is
+// invoked at most once per link per block rather than per sample, so the indirection is not on
+// the hot path in any meaningful sense.
+struct BlockModCtx {
+  TrackRuntime& runtime;
+  const TrackStateSnapshot& trackState;
+  uint64_t blockSampleStart;
+  uint64_t windowStartTicks;
+  NoteCutCtx& scratch;
+  const std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)>&
+      resolveDevicePluginPath;
+};
+
+void applyBlockRateModulation(BlockModCtx& ctx);
+
+// The value a link drives, given its source. Separated because it is the arithmetic and the
+// clamp — the part worth asserting without building a chain.
+float modLinkValue(float bias, float depth, float sourceValue);
+
+// Whether a link may fire: enabled, block-rate, both endpoints present in the chain, source
+// strictly before target, and a VstParam target. Returns false for every reason a link is skipped.
+bool modLinkCanFire(const daw::ModLink& link, bool srcPresent, bool dstPresent,
+                    size_t srcPos, size_t dstPos);
 
 }  // namespace daw::engine

@@ -598,6 +598,58 @@ void testRegisterActiveNote() {
   CHECK(rt.activeNoteByColumn.count(2) == 0);
 }
 
+// ------------------------------------------- the three block-rate modulation rules
+daw::ModLink blockLink(bool enabled = true,
+                       daw::ModTargetKind kind = daw::ModTargetKind::VstParam) {
+  daw::ModLink l;
+  l.enabled = enabled;
+  l.rate = daw::ModRate::BlockRate;
+  l.target.kind = kind;
+  return l;
+}
+
+void testModLinkCanFire() {
+  const auto ok = blockLink();
+  // Source strictly upstream of target: 0 -> 1 fires.
+  CHECK(modLinkCanFire(ok, true, true, 0, 1) == true);
+
+  // A DEVICE CANNOT MODULATE ITSELF OR ANYTHING UPSTREAM. Within one block, reading a device
+  // that has not run yet gives LAST block's value pretending to be this one's — silently, and
+  // forever. Equal positions are the self-modulation case.
+  CHECK(modLinkCanFire(ok, true, true, 1, 1) == false);
+  CHECK(modLinkCanFire(ok, true, true, 2, 1) == false);
+
+  // Both endpoints must still be in the chain — a device removed while a link survives.
+  CHECK(modLinkCanFire(ok, false, true, 0, 1) == false);
+  CHECK(modLinkCanFire(ok, true, false, 0, 1) == false);
+
+  // Disabled, and non-block-rate, are skipped here.
+  CHECK(modLinkCanFire(blockLink(false), true, true, 0, 1) == false);
+  auto audioRate = blockLink();
+  audioRate.rate = daw::ModRate::SampleRate;
+  CHECK(modLinkCanFire(audioRate, true, true, 0, 1) == false);
+
+  // Only VstParam targets are driven on this path.
+  CHECK(modLinkCanFire(blockLink(true, daw::ModTargetKind::PatcherParam), true, true, 0, 1)
+        == false);
+}
+
+void testModLinkValue() {
+  CHECK(modLinkValue(0.0f, 1.0f, 0.5f) == 0.5f);
+  CHECK(modLinkValue(0.25f, 0.5f, 0.5f) == 0.5f);
+  CHECK(modLinkValue(1.0f, 0.0f, 0.9f) == 1.0f);
+
+  // CLAMPED, because bias and depth are AUTHORED and can push the result out of range. A plugin
+  // parameter outside 0..1 is not a loud sound, it is undefined behaviour in the plugin.
+  CHECK(modLinkValue(0.9f, 1.0f, 1.0f) == 1.0f);
+  CHECK(modLinkValue(-1.0f, 0.5f, 0.5f) == 0.0f);
+  CHECK(modLinkValue(0.5f, -2.0f, 1.0f) == 0.0f);
+
+  // A NEGATIVE DEPTH IS LEGAL AND USEFUL — it inverts the source — so it must survive the clamp
+  // when the result is still in range, not be treated as an error.
+  CHECK(modLinkValue(1.0f, -0.5f, 0.5f) == 0.75f);
+}
+
 }  // namespace
 
 int main() {
@@ -617,6 +669,8 @@ int main() {
   testQueuePendingStrikes();
   testAudioChannelOffset();
   testRegisterActiveNote();
+  testModLinkCanFire();
+  testModLinkValue();
   testCutActiveNotes();
   testPushScratchpadOverflow();
 

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <mutex>
+#include <unordered_map>
 #include <vector>
 
 namespace daw::engine {
@@ -249,6 +250,100 @@ void registerActiveNote(TrackRuntime& runtime, uint32_t noteId, uint8_t pitch, u
   activeNote.hasScheduledEnd = hasScheduledEnd;
   runtime.activeNotes[noteId] = activeNote;
   runtime.activeNoteByColumn[column].push_back(noteId);
+}
+
+float modLinkValue(float bias, float depth, float sourceValue) {
+  return clamp01(bias + depth * sourceValue);
+}
+
+bool modLinkCanFire(const daw::ModLink& link, bool srcPresent, bool dstPresent,
+                    size_t srcPos, size_t dstPos) {
+  if (!link.enabled || link.rate != daw::ModRate::BlockRate) {
+    return false;
+  }
+  if (!srcPresent || !dstPresent) {
+    return false;
+  }
+  // The source must be STRICTLY UPSTREAM of the target. Equal positions mean a device
+  // modulating itself; greater means reading downstream, which within one block is last
+  // block's value pretending to be this one's.
+  if (srcPos >= dstPos) {
+    return false;
+  }
+  return link.target.kind == daw::ModTargetKind::VstParam;
+}
+
+void applyBlockRateModulation(BlockModCtx& ctx) {
+  std::vector<daw::ModSourceState> modSources;
+  {
+    std::lock_guard<std::mutex> lock(ctx.runtime.modSourcesMutex);
+    modSources = ctx.runtime.modSources;
+  }
+  if (ctx.trackState.modLinks.empty() || modSources.empty()) {
+    return;
+  }
+  const auto& chainDevices = ctx.trackState.chainDevices;
+  std::unordered_map<uint32_t, size_t> chainPos;
+  chainPos.reserve(chainDevices.size());
+  for (size_t i = 0; i < chainDevices.size(); ++i) {
+    chainPos.emplace(chainDevices[i].id, i);
+  }
+  auto findSourceValue = [&](const daw::ModSourceRef& source) -> std::optional<float> {
+    for (const auto& state : modSources) {
+      if (state.ref.deviceId == source.deviceId && state.ref.sourceId == source.sourceId &&
+          state.ref.kind == source.kind) {
+        return state.value;
+      }
+    }
+    return std::nullopt;
+  };
+  auto resolveHostIndexForDevice = [&](uint32_t deviceId) -> std::optional<uint32_t> {
+    uint32_t hostIndex = 0;
+    for (const auto& device : chainDevices) {
+      if (device.kind != daw::DeviceKind::VstInstrument &&
+          device.kind != daw::DeviceKind::VstEffect) {
+        continue;
+      }
+      if (!ctx.resolveDevicePluginPath(ctx.runtime, device.hostSlotIndex)) {
+        continue;
+      }
+      if (device.id == deviceId) {
+        return hostIndex;
+      }
+      ++hostIndex;
+    }
+    return std::nullopt;
+  };
+  for (const auto& link : ctx.trackState.modLinks) {
+    const auto srcPos = chainPos.find(link.source.deviceId);
+    const auto dstPos = chainPos.find(link.target.deviceId);
+    const bool srcPresent = srcPos != chainPos.end();
+    const bool dstPresent = dstPos != chainPos.end();
+    if (!modLinkCanFire(link, srcPresent, dstPresent,
+                        srcPresent ? srcPos->second : 0,
+                        dstPresent ? dstPos->second : 0)) {
+      continue;
+    }
+    const auto sourceValue = findSourceValue(link.source);
+    if (!sourceValue) {
+      continue;
+    }
+    const auto hostIndex = resolveHostIndexForDevice(link.target.deviceId);
+    if (!hostIndex) {
+      continue;
+    }
+    daw::EventEntry paramEntry;
+    paramEntry.sampleTime = ctx.blockSampleStart;
+    paramEntry.blockId = 0;
+    paramEntry.type = static_cast<uint16_t>(daw::EventType::Param);
+    paramEntry.size = sizeof(daw::ParamPayload);
+    daw::ParamPayload payload{};
+    std::memcpy(payload.uid16, link.target.uid16, sizeof(payload.uid16));
+    payload.value = modLinkValue(link.bias, link.depth, *sourceValue);
+    payload.targetPluginIndex = *hostIndex;
+    std::memcpy(paramEntry.payload, &payload, sizeof(payload));
+    pushScratchpad(ctx.scratch, paramEntry, ctx.windowStartTicks);
+  }
 }
 
 }  // namespace daw::engine
