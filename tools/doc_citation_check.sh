@@ -52,14 +52,24 @@ for d in docs:
     elif n < allowed:
         print("  note: %s is down to %d line citations from %d — lower the baseline." % (d.name, n, allowed))
 
-# ---- rule 2: `path/file.ext` (`symbol`) must resolve.
+# ---- rule 2: a file/symbol citation must resolve, IN EITHER ORDER.
+#
+# BOTH ORDERINGS, because docs use both and checking one is checking most of them. row-ops.md
+# wrote `(`renderTrack`, `apps/daw_engine_main.cpp`)` — symbol first — and that citation went
+# stale the moment renderTrack moved to its own file, with this check passing the whole time. A
+# rule that only recognises the spelling its author happened to use is not a rule about citations,
+# it is a rule about that spelling. The same lesson as rule 3b below, which missed a bare filename
+# for exactly the same reason and was caught by its own negative control.
 pair = re.compile(r'`(apps/[\w/]+\.(?:cpp|h))`\s*\(`([A-Za-z_][\w:]*)')
+pair_rev = re.compile(r'\(`([A-Za-z_][\w:]*)`,\s*`(apps/[\w/]+\.(?:cpp|h))`\)')
 checked = 0
 for d in docs:
     if not d.exists():
         continue
-    for m in pair.finditer(d.read_text(errors='ignore')):
-        rel, sym = m.group(1), m.group(2)
+    text = d.read_text(errors='ignore')
+    cites = [(m.group(1), m.group(2)) for m in pair.finditer(text)]
+    cites += [(m.group(2), m.group(1)) for m in pair_rev.finditer(text)]
+    for rel, sym in cites:
         f = root / rel
         if not f.exists():
             print("  FAIL: %s cites %s, which does not exist." % (d.name, rel))

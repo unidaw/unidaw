@@ -157,12 +157,18 @@ roughly sixty commands across transport, notes, placements, markers, mixer, rout
 modulation, patcher and sampler. `daw-cli help` prints all of them. `--force` is accepted and
 ignored.
 
-**Offline render.** No audio device, no wall clock: the engine pumps blocks as fast as the hosts
-finish them, faster than real time, and cannot drop out.
+**Offline render.** No wall clock: the engine pumps blocks as fast as the hosts finish them,
+faster than real time, and cannot drop out.
+
+**It does not need a working audio device to RUN, but it takes its sample rate from the default
+output device unless you say otherwise.** Connect Bluetooth headphones and a bounce that was
+44.1 kHz becomes 48 kHz, with nothing in the command to say so — which once failed a check that
+had passed for weeks, on an engine that was entirely correct. Pass `--sample-rate` for a render
+that means the same thing on any machine.
 
 ```sh
 cd build && DAW_PROJECT_DIR=/tmp/proj \
-  ./daw_engine --project mysong --render take1 --run-seconds 8
+  ./daw_engine --project mysong --render take1 --run-seconds 8 --sample-rate 48000
 # writes /tmp/proj/take1.wav
 ```
 

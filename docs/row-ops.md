@@ -34,7 +34,7 @@ silent no-op — a red cell, not a dropped op, is the tracker rule.
   `probability`, `delay`, only when non-default. Round-trips under
   `project_file_round_trip`.
 - **Playback** — the engine applies ops in the note-dispatch loop
-  (`renderTrack`, `apps/daw_engine_main.cpp`).
+  (`renderTrack`, `apps/engine_render_track.cpp`).
 
 ## Playback status
 
