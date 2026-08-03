@@ -395,6 +395,62 @@ void testPushScratchpadOverflow() {
   CHECK(f.scratchpadCount == 2);
 }
 
+// ------------------------------------------- the note-ON half, paired with the note-OFF half
+void testMakeNoteOnEntry() {
+  const auto on = makeNoteOnEntry(500, 3, 64, 100, 5, 12.5f, 42);
+  CHECK(on.sampleTime == 500);
+  CHECK(on.blockId == 3);
+  CHECK(on.type == static_cast<uint16_t>(daw::EventType::Midi));
+  CHECK(on.size == sizeof(daw::MidiPayload));
+  CHECK(on.flags == 0);
+
+  daw::MidiPayload p{};
+  std::memcpy(&p, on.payload, sizeof(p));
+  // 0x90 IS NOTE-ON and 0x80 IS NOTE-OFF. Getting these the wrong way round is the difference
+  // between a note that never sounds and one that never stops, and both halves are now built by
+  // functions that sit next to each other precisely so they cannot drift apart.
+  CHECK(p.status == 0x90);
+  CHECK(p.data1 == 64);
+  CHECK(p.data2 == 100);
+  CHECK(p.channel == 5);
+  CHECK(p.tuningCents == 12.5f);
+  CHECK(p.noteId == 42);
+
+  // The pair must disagree on exactly one thing: the status byte.
+  const auto off = makeNoteOffEntry(500, 3, 64, 5, 0, 42);
+  daw::MidiPayload q{};
+  std::memcpy(&q, off.payload, sizeof(q));
+  CHECK(q.status == 0x80);
+  CHECK(p.data1 == q.data1);
+  CHECK(p.channel == q.channel);
+  CHECK(p.noteId == q.noteId);
+  // Release velocity is zero on the off; the on carries the played velocity.
+  CHECK(q.data2 == 0);
+  CHECK(p.data2 == 100);
+
+  // The flags parameter exists for the one caller that rewrites a MusicalLogic entry in place.
+  CHECK(makeNoteOnEntry(0, 0, 1, 1, 0, 0.0f, 1, 1u).flags == 1u);
+}
+
+void testSamplerNoteOnFor() {
+  const auto se = samplerNoteOnFor(/*offsetInBlock=*/64, /*pitch=*/60, /*velocity=*/90,
+                                   /*column=*/2, /*sound=*/7, /*offsetFrac=*/33,
+                                   /*soundAddressedOnly=*/true, /*noteId=*/9);
+  CHECK(se.kind == daw::SamplerEventKind::NoteOn);
+  CHECK(se.offsetInBlock == 64);
+  CHECK(se.pitch == 60);
+  CHECK(se.velocity == 90);
+  CHECK(se.column == 2);
+  CHECK(se.noteId == 9);
+  // THE SOUND ADDRESS AND ITS TRACK RULE both travel. sound 0 means "let the keymap pick from
+  // pitch"; soundAddressedOnly says pitch must NOT pick. A tee that dropped either would fall
+  // back to chromatic selection on a track explicitly switched out of it.
+  CHECK(se.sound == 7);
+  CHECK(se.offsetFrac == 33);
+  CHECK(se.soundAddressedOnly == true);
+  CHECK(samplerNoteOnFor(0, 0, 0, 0, 0, 0, false, 0).soundAddressedOnly == false);
+}
+
 }  // namespace
 
 int main() {
@@ -408,6 +464,8 @@ int main() {
   testRemoveNoteIdFromColumn();
   testMakeNoteOffEntry();
   testSamplerNoteOffFor();
+  testMakeNoteOnEntry();
+  testSamplerNoteOnFor();
   testCutActiveNotes();
   testPushScratchpadOverflow();
 

@@ -11946,40 +11946,17 @@ int main(int argc, char** argv) {
             }
             const uint32_t noteId =
                 nextNoteId.fetch_add(1, std::memory_order_acq_rel);
-            daw::EventEntry midiEntry;
-            midiEntry.sampleTime = eventSample;
-            midiEntry.blockId = 0;
-            midiEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
-            midiEntry.size = sizeof(daw::MidiPayload);
-            daw::MidiPayload midiPayload{};
-            midiPayload.status = 0x90;
-            midiPayload.data1 = pitch;
-            midiPayload.data2 = velocity;
-            midiPayload.channel = midiChannel;
-            midiPayload.tuningCents = noteTuningCents;
-            midiPayload.noteId = noteId;
-            std::memcpy(midiEntry.payload, &midiPayload, sizeof(midiPayload));
+            const daw::EventEntry midiEntry = daw::engine::makeNoteOnEntry(
+                eventSample, 0, pitch, velocity, midiChannel, noteTuningCents, noteId);
             pushScratchpad(midiEntry, onTick);
             // TEE TO THE BUILT-IN SAMPLER, with the sample offset that the hosted-plugin path
             // computes and then throws away (MidiEvent.sampleOffset is never populated — see
             // docs/SAMPLER_DESIGN.md §3.5). `offset` above is already the exact frame within
             // this block, so the sampler starts the voice THERE rather than at the boundary.
             if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
-              daw::SamplerEvent se;
-              se.offsetInBlock = static_cast<uint32_t>(offset);
-              se.kind = daw::SamplerEventKind::NoteOn;
-              se.pitch = pitch;
-              se.velocity = velocity;
-              se.column = noteColumn;
-              // R2's per-note sound address, straight through. 0 means the keymap picks the slot
-              // from pitch, which is the common case and costs nothing — unless the track is
-              // sound-addressed-only, where pitch never selects and a blank sound plays the
-              // lowest slot chromatically instead (section 8 Q2).
-              se.sound = sound;
-              se.soundAddressedOnly = trackState.soundAddressedOnly;
-              se.offsetFrac = soundOffset;
-              se.noteId = noteId;
-              runtime.samplerEvents.push_back(se);
+runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
+                  static_cast<uint32_t>(offset), pitch, velocity, noteColumn, sound,
+                  soundOffset, trackState.soundAddressedOnly, noteId));
             }
             if (traceNotes) {
               DAW_EVENT("note.emit")
@@ -12811,17 +12788,11 @@ int main(int argc, char** argv) {
             const uint32_t noteId =
                 nextNoteId.fetch_add(1, std::memory_order_acq_rel);
 
-            daw::MidiPayload onPayload{};
-            onPayload.status = 0x90;
-            onPayload.data1 = pitch;
-            onPayload.data2 = velocity;
-            onPayload.channel = channel;
-            onPayload.tuningCents = tuningCents;
-            onPayload.noteId = noteId;
-            entry.type = static_cast<uint16_t>(daw::EventType::Midi);
-            entry.size = sizeof(daw::MidiPayload);
-            entry.flags = kEventFlagMusicalLogic;
-            std::memcpy(entry.payload, &onPayload, sizeof(onPayload));
+            // Rewrites the MusicalLogic entry in place: its sampleTime and blockId are already
+            // correct and must survive, so they are fed back in rather than re-derived.
+            entry = daw::engine::makeNoteOnEntry(entry.sampleTime, entry.blockId, pitch, velocity,
+                                                 channel, tuningCents, noteId,
+                                                 kEventFlagMusicalLogic);
             scratchpad[outCount++] = entry;
             // TEE TO THE BUILT-IN SAMPLER. Without this a patcher could not play the sampler at
             // all: every one of the six existing tees is on the CLIP path, so a Euclidean or
@@ -12835,26 +12806,19 @@ int main(int argc, char** argv) {
             // kit already relies on. A node that chooses a slice (docs/SAMPLER_DESIGN.md's
             // SliceSelect) is what would fill that field, and it needs this path to exist first.
             if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
-              daw::SamplerEvent se;
-              se.offsetInBlock = static_cast<uint32_t>(offsetSamples);
-              se.kind = daw::SamplerEventKind::NoteOn;
-              se.pitch = pitch;
-              se.velocity = velocity;
-              se.column = 0;
               // THE SOUND ADDRESS THE GRAPH CHOSE, if it chose one. This was hardcoded 0 —
               // "no address, let the keymap pick from the pitch" — because nothing upstream
               // could supply one. SliceSelect now can, which is the whole point of the node:
               // a generated note that names its slice rather than inheriting whatever the
               // resolved pitch happens to map to. Still 0 for every other graph, which is
               // still the right default and what every drum kit relies on.
-              se.sound = logic.sound;
-              // A GENERATED note obeys the track's rule too. A graph that names no slice on a
-              // sound-addressed-only track should not silently fall back to pitch selection,
+              //
+              // A GENERATED note obeys the track's rule too: a graph that names no slice on a
+              // sound-addressed-only track must not silently fall back to pitch selection,
               // which is the behaviour the track was explicitly switched out of.
-              se.soundAddressedOnly = trackState.soundAddressedOnly;
-              se.offsetFrac = 0;
-              se.noteId = noteId;
-              runtime.samplerEvents.push_back(se);
+              runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
+                  static_cast<uint32_t>(offsetSamples), pitch, velocity, /*column=*/0,
+                  logic.sound, /*offsetFrac=*/0, trackState.soundAddressedOnly, noteId));
             }
 
             if (logic.duration_ticks > 0) {

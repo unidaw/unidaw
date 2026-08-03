@@ -176,4 +176,24 @@ bool pushScratchpad(NoteCutCtx& ctx, const daw::EventEntry& entry, uint64_t over
 // Cut active notes at `eventSample`: every one, or only those in `column`.
 void cutActiveNotes(NoteCutCtx& ctx, uint64_t eventSample, std::optional<uint8_t> column);
 
+// THE NOTE-ON ENTRY, paired with makeNoteOffEntry above.
+//
+// There are only two sites, so this is not the six-way merge the note-off was. It exists because
+// having a shared note-OFF constructor and a hand-written note-ON one is an asymmetry that invites
+// exactly the divergence this file keeps removing: the next person adds a field to one and not the
+// other, and the two halves of a note stop agreeing.
+//
+// blockId and flags are parameters because the two callers genuinely differ — one builds a fresh
+// entry for the scratchpad, the other REWRITES a MusicalLogic entry in place, keeping the
+// sampleTime and blockId it already carries and stamping kEventFlagMusicalLogic.
+daw::EventEntry makeNoteOnEntry(uint64_t sampleTime, uint32_t blockId, uint8_t pitch,
+                                uint8_t velocity, uint8_t channel, float tuningCents,
+                                uint32_t noteId, uint32_t flags = 0);
+
+// The sampler tee for a note-ON. Unlike the note-off tee this cannot derive its offset from the
+// entry, because the two callers compute it from different bases; it is passed explicitly.
+daw::SamplerEvent samplerNoteOnFor(uint32_t offsetInBlock, uint8_t pitch, uint8_t velocity,
+                                   uint8_t column, uint16_t sound, uint16_t offsetFrac,
+                                   bool soundAddressedOnly, uint32_t noteId);
+
 }  // namespace daw::engine

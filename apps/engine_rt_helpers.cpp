@@ -153,4 +153,40 @@ void cutActiveNotes(NoteCutCtx& ctx, uint64_t eventSample, std::optional<uint8_t
   }
 }
 
+daw::EventEntry makeNoteOnEntry(uint64_t sampleTime, uint32_t blockId, uint8_t pitch,
+                                uint8_t velocity, uint8_t channel, float tuningCents,
+                                uint32_t noteId, uint32_t flags) {
+  daw::EventEntry entry;
+  entry.sampleTime = sampleTime;
+  entry.blockId = blockId;
+  entry.type = static_cast<uint16_t>(daw::EventType::Midi);
+  entry.size = sizeof(daw::MidiPayload);
+  entry.flags = flags;
+  daw::MidiPayload on{};
+  on.status = 0x90;
+  on.data1 = pitch;
+  on.data2 = velocity;
+  on.channel = channel;
+  on.tuningCents = tuningCents;
+  on.noteId = noteId;
+  std::memcpy(entry.payload, &on, sizeof(on));
+  return entry;
+}
+
+daw::SamplerEvent samplerNoteOnFor(uint32_t offsetInBlock, uint8_t pitch, uint8_t velocity,
+                                   uint8_t column, uint16_t sound, uint16_t offsetFrac,
+                                   bool soundAddressedOnly, uint32_t noteId) {
+  daw::SamplerEvent se;
+  se.offsetInBlock = offsetInBlock;
+  se.kind = daw::SamplerEventKind::NoteOn;
+  se.pitch = pitch;
+  se.velocity = velocity;
+  se.column = column;
+  se.sound = sound;
+  se.soundAddressedOnly = soundAddressedOnly;
+  se.offsetFrac = offsetFrac;
+  se.noteId = noteId;
+  return se;
+}
+
 }  // namespace daw::engine
