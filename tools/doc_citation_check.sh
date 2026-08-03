@@ -82,9 +82,62 @@ for d in docs:
             ok = False
         checked += 1
 
+# ---- rule 3: a file path named in a COMMENT must exist, in tools/*.sh and apps/*.h too.
+#
+# Rules 1 and 2 only look at docs/. But the densest cross-references in this repo are not in the
+# docs at all — they are in the banner comments on the ratchets and the headers, which routinely
+# say "the assertions live in X" and "the rule underneath is Y". There are 353 such paths and
+# nothing checked any of them.
+#
+# ADDED AT ZERO, on purpose. All 353 resolved the moment this was measured, so the baseline is
+# 0 and there is no cleanup debt to carry — which is exactly why it is worth adding NOW. A check
+# that has to start at "47 known-bad" gets read as noise; one that starts clean stays clean.
+#
+# The one that prompted it: a comment written minutes earlier cited a plausible-but-invented name
+# for clip_anchor_meter_check.sh, and a reader would have concluded the check did not exist. The
+# wrong name is deliberately NOT spelled out here, because rule 3b below would then flag this very
+# comment for containing it — the same trap rule 2 strips comments to avoid.
+#
+# TWO SHAPES, because the first draft caught only one and its negative control said so. Ratchets
+# are cited both WITH the tools/ prefix and by BARE filename, and a rule that demanded the prefix
+# PASSED the sabotage that prompted it — the wrong name was bare. A check that cannot catch its
+# own founding example is worth nothing, and only running the control could say so.
+#
+# Note that no example filename is written anywhere in this comment, real or invented. Rule 3b
+# reads every comment line in this file too, so an illustrative placeholder is indistinguishable
+# from a citation of something that does not exist. That is not a wart: a rule which must dodge
+# its own text is telling you it cannot separate mention from use, and the honest response is to
+# stop mentioning rather than to add an exemption for this file.
+comment_line = re.compile(r'^\s*(?:#|//|\*)')
+cite = re.compile(r'\b((?:apps|tools|ui|docs)/[\w./-]+\.(?:sh|cpp|h|md|mjs|rs))\b')
+bare_check = re.compile(r'(?<![\w/])(\w+_check\.sh)\b')
+paths = 0
+for f in sorted(root.glob('tools/*.sh')) + sorted(root.glob('apps/*.h')):
+    for i, line in enumerate(f.read_text(errors='ignore').splitlines(), 1):
+        if not comment_line.match(line):
+            continue
+        for rel in cite.findall(line):
+            paths += 1
+            if not (root / rel).exists():
+                print("  FAIL: %s:%d names %s, which does not exist."
+                      % (f.relative_to(root), i, rel))
+                print("        A comment that points at a missing file reads as though the thing")
+                print("        it describes was never built.")
+                ok = False
+        # ---- rule 3b: a BARE ratchet name resolves against tools/.
+        for name in bare_check.findall(line):
+            paths += 1
+            if not (root / 'tools' / name).exists():
+                print("  FAIL: %s:%d names %s, and there is no such check in tools/."
+                      % (f.relative_to(root), i, name))
+                print("        Ratchets are cited by bare name throughout this repo, so a wrong")
+                print("        one reads as a check that exists and covers the case. It does not.")
+                ok = False
+
 if ok:
     print("  %d symbol citation(s) across %d docs all resolve; no line-number citations"
           % (checked, len([d for d in docs if d.exists()])))
+    print("  %d file path(s) named in tool and header comments all exist" % paths)
 raise SystemExit(0 if ok else 1)
 PY
 rc=$?

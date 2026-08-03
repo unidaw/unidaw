@@ -36,11 +36,17 @@
 # proves only that the fixture can enter a note and read its length back. The 3/4 case is the one
 # assertion that can tell "reads the meter" from "assumes 4/4".
 #
-# THE ANCHOR IS NOT FIXED and is deliberately not tested here: where a NEW CLIP lands still uses a
-# 4/4 bar, because resolveNoteEntry computes it as (tick / barLength) * barLength — the naive form
-# again, and one that cannot be corrected by passing a different length, since under a meter change
-# the bar containing a tick is not at a multiple of anything. That needs the map inside a pure
-# function or a callback, and it MOVES WHERE CLIPS LAND in existing projects. Task #43.
+# THE ANCHOR IS FIXED NOW, and this comment used to say the opposite. Where a NEW CLIP lands was
+# still (tick / barLength) * barLength when this check was written — the naive form again, and one
+# that cannot be corrected by passing a different length, since under a meter change the bar
+# containing a tick is not at a multiple of anything. It took the callback route: resolveNoteEntry
+# takes a BarGrid, and both engine call sites pass songBarGrid(), which asks the meter.
+#
+# Left as a note rather than deleted, because the two halves fell to DIFFERENT fixes months apart
+# and someone reading only this file would otherwise assume one commit did both. The anchor's own
+# assertions live in clip_anchor_meter_check.sh; the rule underneath both is engine_pure.h's
+# barStartTick / barEndTick, which have unit tests including the degenerate meters neither
+# end-to-end check can reach.
 #
 #   tools/meter_bar_check.sh
 #
