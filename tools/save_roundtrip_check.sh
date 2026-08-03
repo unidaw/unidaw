@@ -71,12 +71,26 @@ def modlinks(d):
     return sum(len(t.get('mod_links', []) or []) for t in d.get('tracks', []))
 def devices(d):
     return sum(len(t.get('device_chain', []) or []) for t in d.get('tracks', []))
+# THE SONG-LEVEL LISTS, which nothing checked until a sabotage walked straight through.
+#
+# Making the engine write a constant seed, or the wrong time signature, was invisible here: this
+# comparison only ever looked at mod_links and devices. Anything else the load path drops is
+# emitted as an empty array by the first save and deleted from disk — which is the exact failure
+# the mod_links comparison above was written for, left unguarded for its neighbours.
+#
+# tempo_map and harmony_timeline are in the fixture (2 and 4 entries), so a drop is measurable
+# rather than hypothetical.
+def tempo(d):
+    return len(d.get('tempo_map', []) or [])
+def harmony(d):
+    return len(d.get('harmony_timeline', []) or [])
 ok = True
-for name, fn in (("mod_links", modlinks), ("devices", devices)):
+for name, fn in (("mod_links", modlinks), ("devices", devices),
+                 ("tempo_map", tempo), ("harmony_timeline", harmony)):
     before, after = fn(a), fn(b)
     # The master track is appended on save, so devices may legitimately GROW; they must
     # never shrink. Mod links must be preserved exactly.
-    if name == "mod_links" and after != before:
+    if name in ("mod_links", "tempo_map", "harmony_timeline") and after != before:
         print(f"  FAIL: {name} {before} -> {after} (the load path is dropping them)")
         ok = False
     elif name == "devices" and after < before:

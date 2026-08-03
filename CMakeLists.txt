@@ -119,6 +119,7 @@ add_library(engine_commands STATIC
   apps/engine_pure.cpp
   apps/engine_rt_helpers.cpp
   apps/engine_render_track.cpp
+  apps/engine_save_project.cpp
   apps/engine_sampler_commands.cpp
   apps/engine_automation_commands.cpp
   apps/engine_clip_commands.cpp

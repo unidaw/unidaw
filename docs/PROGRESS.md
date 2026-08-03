@@ -11,9 +11,9 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: 7607bc1
-- main-cpp-lines: 15261
-- ctest-entries: 161
+- as-of-commit: 8d51077
+- main-cpp-lines: 13604
+- ctest-entries: 163
 
 ## Why this file cannot quietly go stale
 
@@ -47,9 +47,14 @@ suspect the first attempt exists.
 
 ## 2026-08-02/03 — engine refactor and the bugs it surfaced
 
-`apps/daw_engine_main.cpp` went **20,387 → 15,261 lines** across 50 commits, each gated on a full
-ctest and a byte-identical offline render. The suite went 149 → 161 entries, and 426 unit
-assertions now exist in modules that previously had none.
+`apps/daw_engine_main.cpp` went **20,387 → 13,604 lines**, each step gated on a full ctest and a
+byte-identical offline render. The suite went 149 → 163 entries, and 426 unit assertions now exist
+in modules that previously had none.
+
+**`main()` itself is the number the panel graded, and it is 13,652 → 12,133.** Most of the file's
+earlier shrinkage came from merging duplicated rules, not from breaking up `main()`; that only
+started moving when `renderTrack` (1,552 lines, plus `emitNotes` nested inside it) left for
+`apps/engine_render_track.cpp`.
 
 **Structure.** 16 command modules extracted from `handleUiEntry` (5,604 → ~1,530 lines);
 `apps/engine_types.h` for 25 types that had been declared *inside* `main()`; `apps/engine_pure.h`
@@ -57,11 +62,21 @@ and `apps/engine_rt_helpers.h` for rules that can now be tested without booting 
 unit-test binaries where there were none. A command module rebuilds in 4.2s against 13.5s to
 relink the engine.
 
-**The grade is still C, and the binding constraint is not the part that was moved.** A four-judge
-panel put it plainly: `main()` is ~13,700 lines, and the producer lambda still holds `renderTrack`,
-`processTrack` and `emitNotes`. The command extraction took the half that was already a flat
-sequence of independent arms; the entangled half is being mined for testable rules rather than
-moved wholesale.
+**The grade was C, and the binding constraint was `main()`.** A four-judge panel put it plainly:
+`main()` was ~13,700 lines and the producer lambda held the render path. `renderTrack` is now out;
+`processTrack` (796), `handleUiEntry` (1,625), `loadProjectFromPath` (945) and `saveProjectToPath`
+(480) remain.
+
+What made the move safe was that the body was relocated VERBATIM — the new function binds local
+references carrying the names the lambda captured, so nested lambdas, shadowing and brace scope
+still mean what they meant. The only claim the change makes is "the same code, somewhere else",
+and a byte-identical render checks exactly that claim.
+
+Three things had to be freed first, and they explain the shape of the problem: `WorkerPool`,
+`dispatchRustKernel` and `getClipEventsInRange` were all declared inside `daw_engine_main.cpp`,
+so nothing else could name them. A helper written beside its only caller is invisible everywhere
+else, so the next caller gets written beside it too — that is how a function reaches 15,000 lines,
+one reasonable-looking dependency at a time.
 
 **A 6-line duplicate-block scan over `main.cpp` has yet to find a duplication that was actually
 identical**, which is why it keeps producing bugs rather than tidying:
