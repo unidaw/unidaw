@@ -267,9 +267,9 @@ render ratemax 0 65535
 # render is note, silence, note, silence — and a window spanning the silences would count long
 # runs of zero as "the signal stood still", which is exactly the statistic rate reduction is
 # being judged on. Measuring one note avoids crediting silence to the sample-and-hold.
-stats() {  # stats <name>  -> "<distinct> <transitions> <peak>"
+stats() {  # stats <name> -> "<distinct> <transitions> <peak> <modalRun> <sampleRate>"
   python3 - "$TMP/projects/$1.wav" <<'PY'
-import sys, wave, struct
+import sys, wave, struct, collections
 w = wave.open(sys.argv[1], 'rb')
 ch, nf, sr = w.getnchannels(), w.getnframes(), w.getframerate()
 s = struct.unpack('<' + 'h' * (nf * ch), w.readframes(nf)); w.close()
@@ -278,19 +278,47 @@ x = [s[i * ch] for i in range(lo, min(hi, nf))]
 distinct = len(set(x))
 trans = sum(1 for i in range(1, len(x)) if x[i] != x[i - 1])
 peak = max((abs(v) for v in x), default=0)
-print(f"{distinct} {trans} {peak}")
+# THE MODAL RUN LENGTH: how many frames the signal typically STANDS STILL for. This is the direct
+# fingerprint of a sample-and-hold, which latches and then holds for sampleRate/rateHz frames, so
+# the commonest run length IS the hold period. A quantiser has no run structure at all — it snaps
+# values onto a coarse grid and the signal keeps moving every frame — so its modal run is 1.
+runs = collections.Counter()
+n = 1
+for i in range(1, len(x)):
+    if x[i] == x[i - 1]:
+        n += 1
+    else:
+        runs[n] += 1
+        n = 1
+runs[n] += 1
+modal = runs.most_common(1)[0][0] if runs else 0
+# REGULARITY: the share of runs that are the modal length, in percent.
+#
+# This is what separates the two effects, and the presence of runs is NOT. A sample-and-hold
+# latches on a CLOCK, so every run is the same length and this lands near 100. Bit depth is
+# driven by the WAVEFORM — short runs where the sine is steep, long ones at the peaks — so its
+# run lengths scatter and this stays low. Both numbers are dimensionless ratios, so no audio
+# setting can flip either of them.
+total_runs = sum(runs.values())
+regular = (100 * runs[modal] // total_runs) if total_runs else 0
+# The sample rate is REPORTED, not assumed: it comes from the take itself, so every assertion
+# built on it survives a machine whose audio device runs at a different rate.
+print(f"{distinct} {trans} {peak} {modal} {regular} {sr}")
 PY
 }
 
-read -r C_D C_T C_P <<<"$(stats clean)"
-read -r B_D B_T B_P <<<"$(stats bits3)"
-read -r R_D R_T R_P <<<"$(stats rate3k)"
-read -r M_D M_T M_P <<<"$(stats ratemax)"
-echo "  distinct/transitions/peak inside the first note:"
-echo "    vintage off : $C_D / $C_T / $C_P"
-echo "    3 bits      : $B_D / $B_T / $B_P"
-echo "    3 kHz       : $R_D / $R_T / $R_P"
-echo "    rate 65535  : $M_D / $M_T / $M_P"
+read -r C_D C_T C_P C_R C_REG SRATE <<<"$(stats clean)"
+read -r B_D B_T B_P B_R B_REG _ <<<"$(stats bits3)"
+read -r R_D R_T R_P R_R R_REG _ <<<"$(stats rate3k)"
+read -r M_D M_T M_P M_R M_REG _ <<<"$(stats ratemax)"
+# What a correct hold is ON THIS TAKE, derived rather than assumed.
+HOLD_WANT=$(( SRATE / 3000 ))
+echo "  rendered at ${SRATE} Hz, so a 3 kHz sample-and-hold must stand still ${HOLD_WANT} frames"
+echo "  distinct/transitions/peak/modal-run/run-regularity inside the first note:"
+echo "    vintage off : $C_D / $C_T / $C_P / $C_R / ${C_REG}%"
+echo "    3 bits      : $B_D / $B_T / $B_P / $B_R / ${B_REG}%"
+echo "    3 kHz       : $R_D / $R_T / $R_P / $R_R / ${R_REG}%"
+echo "    rate 65535  : $M_D / $M_T / $M_P / $M_R / ${M_REG}%"
 
 # ---- VACUITY GUARDS. Every comparison below is a ratio against the clean take, so if the clean
 # take is silent or already steppy they all pass for the wrong reason.
@@ -314,11 +342,41 @@ python3 -c "raise SystemExit(0 if $R_T * 4 < $C_T else 1)" || \
   fail "rate reduction to 3 kHz made $R_T transitions against $C_T clean — not the collapse a
         sample-and-hold produces. holdFrames is derived at the mod-set boundary as
         sampleRate/rateHz; a holdFrames of 0 or 1 means the per-sample path never held anything"
-[ "${R_D:-0}" -gt 200 ] || \
-  fail "rate reduction left only $R_D distinct values, which is the fingerprint of a QUANTISER,
-        not of a sample-and-hold. Every latched value is a different point on the sine, so the
-        distinct count must stay high while the transitions fall. Bit depth is being applied
-        where rate was asked for"
+# THE HOLD ITSELF, measured rather than inferred from a value count.
+#
+# This assertion used to read "distinct values must stay above 200", on the reasoning that every
+# latched value is a different point on the sine. That is only true when the hold period is not a
+# whole number of frames. The sine is 220 Hz: at 44100 the hold is 14.7 frames and the latch drifts
+# across the waveform, visiting hundreds of values; at 48000 it is exactly 16, the latch phase
+# advances by exactly 11/150 of a cycle, and sine symmetry leaves just 75 distinct values. A
+# CORRECT sample-and-hold scores 75 there, and the check failed the engine for being right.
+#
+# It failed the day the machine's audio device came back to life at 48 kHz, because the offline
+# render adopts the device's rate. Nothing in the engine had changed. The check's author had
+# already spotted this hazard and guarded the ratemax case against naming a rate; this assertion
+# was the one that got away.
+#
+# So measure the MECHANISM. A sample-and-hold stands still for sampleRate/rateHz frames at a time;
+# a quantiser snaps values to a grid and keeps moving every frame. The modal run length separates
+# those two directly, and is derived from the take's own rate, so no audio setting can flip it.
+[ "${C_R:-0}" -le 2 ] || fail "the vintage-off take already stands still for $C_R frames at a
+        time, so a hold is not distinguishable from the baseline and the assertion below is
+        vacuous. A sine was chosen precisely to keep this at 1"
+python3 -c "raise SystemExit(0 if abs($R_R - $HOLD_WANT) <= 1 else 1)" || \
+  fail "rate reduction to 3 kHz held for $R_R frames at a time, and a ${SRATE} Hz take needs
+        $HOLD_WANT. That is the sample-and-hold either not holding or holding for the wrong
+        span — holdFrames is derived at the mod-set boundary as sampleRate/rateHz"
+python3 -c "raise SystemExit(0 if $R_REG >= 80 else 1)" || \
+  fail "only ${R_REG}% of the 3 kHz take's runs are the modal ${R_R} frames. A sample-and-hold
+        latches on a CLOCK, so every run is the same length and this should be near 100%. Runs
+        of scattered lengths mean the hold is following the WAVEFORM, which is what bit depth
+        does — so bit depth is being applied where rate was asked for"
+python3 -c "raise SystemExit(0 if $B_REG < 60 else 1)" || \
+  fail "${B_REG}% of the 3-BIT take's runs are the same length, which is a CLOCK's signature,
+        not a quantiser's. Bit depth is driven by the waveform — short runs where the sine is
+        steep, long ones at its peaks — so its run lengths must scatter. This regularity means
+        rate reduction is being applied where bit depth was asked for, the same confusion in
+        the other direction"
 python3 -c "raise SystemExit(0 if $R_D > 20 * $B_D else 1)" || \
   fail "the 3 kHz take ($R_D distinct) and the 3-bit take ($B_D distinct) leave the same
         fingerprint, so the two controls are not two different effects"
