@@ -37,12 +37,7 @@ void handleAddDevice(ChainCommandDeps& deps,
     // The master is addressed by its stable id, not a slot; it lives outside the
     // tracks vector. Its chain accepts the same device edits as any track.
     runtime = masterTrack.get();
-  } else {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (chainPayload.trackId < tracks.size()) {
-      runtime = tracks[chainPayload.trackId].get();
-    }
-  }
+  } else runtime = daw::engine::trackAt(tracks, tracksMutex, chainPayload.trackId);
   if (!runtime) {
     daw::LogLine() << "UI: Chain command failed - track "
               << chainPayload.trackId << " not found" << std::endl;

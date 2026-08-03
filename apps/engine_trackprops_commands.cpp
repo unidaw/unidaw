@@ -25,12 +25,7 @@ void handleSetTrackMixer(TrackpropsCommandDeps& deps,
     // The master fader (gain/mute) is a real mixer target; the audio callback
     // reads these atomics each block to attenuate the summed output.
     runtime = masterTrack.get();
-  } else {
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    if (payload.trackId < tracks.size()) {
-      runtime = tracks[payload.trackId].get();
-    }
-  }
+  } else runtime = daw::engine::trackAt(tracks, tracksMutex, payload.trackId);
   if (!runtime) {
     return;
   }

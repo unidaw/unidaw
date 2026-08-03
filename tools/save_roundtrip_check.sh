@@ -40,10 +40,39 @@ DAW_UI_SHM_NAME="$SHM" "$CLI" do load src --force >/dev/null 2>&1 || true; sleep
 DAW_UI_SHM_NAME="$SHM" "$CLI" do save v4a --force >/dev/null 2>&1 || true; sleep 0.8
 DAW_UI_SHM_NAME="$SHM" "$CLI" do load v4a --force >/dev/null 2>&1 || true; sleep 0.8
 DAW_UI_SHM_NAME="$SHM" "$CLI" do save v4b --force >/dev/null 2>&1 || true; sleep 0.8
+
+# ---- THE SONG-LEVEL SCALARS, which nothing checked until two sabotages walked past the whole
+# suite: the saved time signature forced to 7/4 whatever the song, and the saved generation seed
+# forced to a constant. Both reach the file through this path and neither was observed by anything.
+#
+# THE SEED IS THE ONE THAT MATTERS. Every patcher generator folds it into its hash, so a project
+# whose seed does not survive a save regenerates DIFFERENT MATERIAL next session — silently, and
+# only for generated parts, which is the hardest kind of difference to notice.
+#
+# It needs its own source because the preset above is schema_version 1 and carries neither field,
+# so a source-vs-saved comparison could not reach them however carefully it was written. This one
+# is generated rather than added to presets/: a fixture that exists to be round-tripped does not
+# need to be a project anyone opens, and the values are deliberately unusual (a seed nobody would
+# arrive at by accident, a 7/8 that is not the 4/4 default) so a field that is being defaulted
+# rather than carried is visible as itself.
+python3 - "$TMP/seeded.uniproj.json" <<'PYS'
+import json, sys
+Q = 960000
+json.dump({"schema_version": 4, "meta": {"name": "seeded"},
+           "seed": 424242,
+           "timebase": {"nanoticks_per_quarter": Q,
+                        "time_sig_numerator": 7, "time_sig_denominator": 8},
+           "tempo_map": [{"nanotick": 0, "bpm": 120.0}],
+           "harmony_timeline": [], "clips": [], "tracks": []}, open(sys.argv[1], "w"))
+PYS
+DAW_UI_SHM_NAME="$SHM" "$CLI" do load seeded --force >/dev/null 2>&1 || true; sleep 0.8
+DAW_UI_SHM_NAME="$SHM" "$CLI" do save v4c --force >/dev/null 2>&1 || true; sleep 0.8
 wait "$ENG" 2>/dev/null || true
 
 [ -f "$TMP/v4a.uniproj.json" ] && [ -f "$TMP/v4b.uniproj.json" ] || {
   echo "save_roundtrip_check: FAIL — engine did not write both saves"; rm -rf "$TMP"; exit 1; }
+[ -f "$TMP/v4c.uniproj.json" ] || {
+  echo "save_roundtrip_check: FAIL — engine did not write the seeded save"; rm -rf "$TMP"; exit 1; }
 
 # Normalize the project name (it legitimately follows the save filename) before diffing.
 norm() { sed 's/"name": "v4[ab]"/"name": "v4"/'; }
@@ -100,6 +129,33 @@ for name, fn in (("mod_links", modlinks), ("devices", devices),
         print(f"  {name} preserved: {before} -> {after}")
 raise SystemExit(0 if ok else 1)
 PY
+
+# The scalars, compared against the values the source stated rather than against the other save.
+python3 - "$TMP/seeded.uniproj.json" "$TMP/v4c.uniproj.json" <<'PYS' || ok=0
+import json, sys
+def load(p):
+    d = json.load(open(p))
+    return d.get('document', d)
+a, b = load(sys.argv[1]), load(sys.argv[2])
+ok = True
+checks = [
+    ("seed", a.get("seed"), b.get("seed"),
+     "every patcher generator folds the seed into its hash, so a seed that does not survive a "
+     "save regenerates different material next session"),
+    ("time_sig_numerator", a["timebase"]["time_sig_numerator"],
+     b.get("timebase", {}).get("time_sig_numerator"),
+     "the ruler, note entry and every bar boundary read this"),
+    ("time_sig_denominator", a["timebase"]["time_sig_denominator"],
+     b.get("timebase", {}).get("time_sig_denominator"), "same"),
+]
+for name, before, after, why in checks:
+    if before != after:
+        print(f"  FAIL: {name} {before} -> {after} on save — {why}")
+        ok = False
+    else:
+        print(f"  {name} survives the engine: {before}")
+raise SystemExit(0 if ok else 1)
+PYS
 
 # A patcher/instrument/audio patcher device must never carry a plugin vst_ref.
 bad="$(python3 -c "
