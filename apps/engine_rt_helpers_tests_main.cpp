@@ -489,6 +489,37 @@ void testPlaceInBlock() {
   if (p) CHECK(p->sampleTime - 4321 == p->offsetInBlock);
 }
 
+// ------------------------------------------ strikes that wait for the block that contains them
+void testQueuePendingStrikes() {
+  TrackRuntime rt;
+  PendingStrike a; a.onTick = 100; a.pitch = 60; a.column = 0;
+  PendingStrike b; b.onTick = 100; b.pitch = 64; b.column = 0;   // same tick, different pitch
+  PendingStrike c; c.onTick = 200; c.pitch = 60; c.column = 0;
+
+  queuePendingStrikes(rt, {a, b, c});
+  CHECK(rt.pendingStrikes.size() == 3);
+
+  // A CHORD IS SEVERAL STRIKES AT ONE TICK. Deduping on onTick alone would collapse it to one
+  // note — which is the plausible wrong key, and would turn every chord into a single pitch.
+  CHECK(rt.pendingStrikes[0].pitch == 60);
+  CHECK(rt.pendingStrikes[1].pitch == 64);
+
+  // RE-QUEUING THE SAME STRIKE IS A NO-OP. The producer re-reads the window each block, so a
+  // strike is re-derived on every pass while it waits; without the check it queues again each
+  // time and the note sounds repeatedly. The chord.scheduled telemetry showed exactly that.
+  queuePendingStrikes(rt, {a, b, c});
+  CHECK(rt.pendingStrikes.size() == 3);
+
+  // The key is the TRIPLE. Same tick and pitch but a different column is a different strike.
+  PendingStrike d; d.onTick = 100; d.pitch = 60; d.column = 1;
+  queuePendingStrikes(rt, {d});
+  CHECK(rt.pendingStrikes.size() == 4);
+
+  // Empty in, nothing out — and no lock taken for nothing.
+  queuePendingStrikes(rt, {});
+  CHECK(rt.pendingStrikes.size() == 4);
+}
+
 }  // namespace
 
 int main() {
@@ -505,6 +536,7 @@ int main() {
   testMakeNoteOnEntry();
   testSamplerNoteOnFor();
   testPlaceInBlock();
+  testQueuePendingStrikes();
   testCutActiveNotes();
   testPushScratchpadOverflow();
 

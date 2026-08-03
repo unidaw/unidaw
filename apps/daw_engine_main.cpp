@@ -12255,26 +12255,7 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
                                                       chordPitches[i].cents, 0, 0});
                 }
               }
-              if (!chordQueued.empty()) {
-                std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
-                for (const auto& q : chordQueued) {
-                  // DEDUPED, because a chord re-enters the dispatch window once per loop pass
-                  // and would otherwise queue the same strike again on every pass — the
-                  // chord.scheduled telemetry shows exactly that, one event per loop. The
-                  // retrigger path needs this for the same reason and says so.
-                  bool exists = false;
-                  for (const auto& ps : runtime.pendingStrikes) {
-                    if (ps.onTick == q.onTick && ps.pitch == q.pitch &&
-                        ps.column == q.column) {
-                      exists = true;
-                      break;
-                    }
-                  }
-                  if (!exists) {
-                    runtime.pendingStrikes.push_back(q);
-                  }
-                }
-              }
+              daw::engine::queuePendingStrikes(runtime, chordQueued);
               continue;
             }
             const uint64_t tickDelta =
@@ -12412,25 +12393,7 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
                                                  event->payload.note.soundOffset});
                 }
               }
-              if (!queued.empty()) {
-                std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
-                for (const auto& q : queued) {
-                  // The note re-enters the dispatch window once per loop and
-                  // would otherwise re-queue strikes that are still pending;
-                  // dedup so a strike is scheduled at most once per loop pass.
-                  bool exists = false;
-                  for (const auto& ps : runtime.pendingStrikes) {
-                    if (ps.onTick == q.onTick && ps.pitch == q.pitch &&
-                        ps.column == q.column) {
-                      exists = true;
-                      break;
-                    }
-                  }
-                  if (!exists) {
-                    runtime.pendingStrikes.push_back(q);
-                  }
-                }
-              }
+              daw::engine::queuePendingStrikes(runtime, queued);
             } else {
               emitNoteOnWithOff(event->nanotickOffset, noteDuration,
                                 scheduledPitch, velocity, column, tuningCents,
