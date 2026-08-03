@@ -31,7 +31,17 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 python3 - "$ROOT" <<'PY'
 import re, sys, pathlib
 root = pathlib.Path(sys.argv[1])
-src = (root / 'apps' / 'daw_engine_main.cpp').read_text(errors='ignore')
+# READ THE ENGINE'S SOURCES, NOT ONE NAMED FILE. This said 'apps/daw_engine_main.cpp' and went
+# red the moment EngineAudioCallback — which owns the hazard pointer — moved to its own header.
+# Nothing was wrong; the check had simply lost sight of its subject, and it said so rather than
+# passing on an empty search, which is the only reason the move was noticed. A check keyed to a
+# path has an expiry date that the next refactor sets. Second one this session (op_registry was
+# the first), so the pattern is the lesson rather than the individual fix.
+src = '\n'.join(
+    p.read_text(errors='ignore')
+    for p in sorted((root / 'apps').glob('engine_*.h')) +
+             sorted((root / 'apps').glob('engine_*.cpp')) +
+             [root / 'apps' / 'daw_engine_main.cpp'])
 ok = True
 
 # Comments are stripped first. Every one of these rules is ALSO stated in prose right beside the
