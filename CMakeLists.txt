@@ -72,10 +72,19 @@ target_link_libraries(juce_host_process PRIVATE platform_juce)
 # re-grading panel pointed out that the lists were therefore minimal only because someone checked
 # by hand, and hands stop checking.
 #
-# The discards are gone and these sources compile with -Wunused-variable. An alias nobody uses is
+# The discards are gone and these sources compile with -Werror=unused-variable. An alias nobody uses is
 # now a warning naming the member that can leave the struct.
-set(engine_commands_warnings -Wunused-variable)
+# AN ERROR, NOT A WARNING, and that is the whole point of it. As a warning this printed into a
+# build log nobody reads: extracting renderTrack turned the warning on for code that had never
+# had it and found SIX dead declarations, two of them entire lambdas — chainConsumesMidi (20
+# lines) and cutAllActiveNotes — that were defined and never once called, verified against the
+# pre-extraction file so they were dead before the move rather than broken by it. main.cpp had
+# three more. A warning that does not fail is a comment, and this repo has spent the night
+# finding out what comments are worth.
+set(engine_commands_warnings -Werror=unused-variable)
 file(GLOB _engine_command_sources ${CMAKE_CURRENT_SOURCE_DIR}/apps/engine_*_commands.cpp)
+set_source_files_properties(apps/engine_render_track.cpp apps/engine_save_project.cpp
+                            PROPERTIES COMPILE_OPTIONS -Werror=unused-variable)
 set_source_files_properties(${_engine_command_sources}
   PROPERTIES COMPILE_OPTIONS "${engine_commands_warnings}")
 
@@ -142,6 +151,7 @@ target_link_libraries(engine_commands PUBLIC engine_core)
 add_executable(daw_engine
   apps/daw_engine_main.cpp
 )
+target_compile_options(daw_engine PRIVATE -Werror=unused-variable)
 
 target_include_directories(daw_engine PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}

@@ -138,26 +138,6 @@ bool renderTrack(RenderTrackDeps& deps,
                 ? static_cast<uint8_t>(
                       runtime.auxBusIndex.load(std::memory_order_relaxed) & 0x0Fu)
                 : 0u;
-        auto chainConsumesMidi = [&]() -> bool {
-          // A child has no chain of its own; its notes feed the parent's instrument, so
-          // it always "consumes MIDI" for scheduling purposes.
-          if (runtime.isAuxChild.load(std::memory_order_relaxed)) {
-            return true;
-          }
-          for (const auto& device : trackState.chainDevices) {
-            if (device.kind != daw::DeviceKind::VstInstrument &&
-                device.kind != daw::DeviceKind::VstEffect) {
-              continue;
-            }
-            if (device.bypass) {
-              continue;
-            }
-            if (device.capabilityMask & daw::DeviceCapabilityConsumesMidi) {
-              return true;
-            }
-          }
-          return false;
-        };
         const long double bpm = tempoProvider.bpmAtNanotick(windowStartTicks);
         const long double safeBpm = bpm > 0.0 ? bpm : 120.0;
         const long double ticksPerQuarter =
@@ -769,7 +749,6 @@ bool renderTrack(RenderTrackDeps& deps,
               continue;
             }
             const uint64_t eventSample = placed->sampleTime;
-            const int64_t offset = static_cast<int64_t>(placed->offsetInBlock);
             daw::EventEntry paramEntry;
             paramEntry.sampleTime = eventSample;
             paramEntry.blockId = 0;
@@ -797,11 +776,6 @@ bool renderTrack(RenderTrackDeps& deps,
             daw::engine::cutActiveNotes(noteCutCtx, eventSample, column);
           };
 
-          auto cutAllActiveNotes = [&](uint64_t eventSample,
-                                       uint32_t currentBlockId) {
-            (void)currentBlockId;
-            daw::engine::cutActiveNotes(noteCutCtx, eventSample, std::nullopt);
-          };
 
           // Emit a note-on at onTick (assumed within this window) and schedule
           // its note-off — in-block if it lands here, else via activeNotes for a
@@ -992,7 +966,6 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
                 continue;
               }
               const uint64_t eventSample = placed->sampleTime;
-              const int64_t offset = static_cast<int64_t>(placed->offsetInBlock);
               daw::EventEntry paramEntry;
               paramEntry.sampleTime = eventSample;
               paramEntry.blockId = 0;
@@ -1131,8 +1104,6 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
             if (!placed) {
               continue;
             }
-            const uint64_t eventSample = placed->sampleTime;
-            const int64_t offset = static_cast<int64_t>(placed->offsetInBlock);
 
             const uint8_t column = event->payload.note.column;
             // Length is stored, so playback infers nothing: no OFF sentinels

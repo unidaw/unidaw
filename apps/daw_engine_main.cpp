@@ -2727,12 +2727,6 @@ int main(int argc, char** argv) {
   // at load — relaxed atomics, since a meter one block stale is invisible.
   std::atomic<uint32_t> songTimeSigNum{4};
   std::atomic<uint32_t> songTimeSigDen{4};
-  auto songDefaultSig = [&]() -> daw::TimeSignature {
-    daw::TimeSignature sig;
-    sig.numerator = songTimeSigNum.load(std::memory_order_relaxed);
-    sig.denominator = songTimeSigDen.load(std::memory_order_relaxed);
-    return sig.valid() ? sig : daw::TimeSignature{4, 4};
-  };
 
   // Directory of the currently-loaded project file, so a clip's relative sourcePath
   // resolves against the project (portable) rather than the engine's CWD. Set by
@@ -3505,10 +3499,6 @@ int main(int argc, char** argv) {
     daw::buildUiHarmonySnapshot(harmonyEvents, *snapshot);
   };
 
-  auto findHarmonyIndex = [&](uint64_t nanotick) -> std::optional<size_t> {
-    std::lock_guard<std::mutex> lock(harmonyMutex);
-    return daw::findHarmonyIndex(harmonyEvents, nanotick);
-  };
 
   // The LOCK stays here and the RULE moved to apps/engine_rt_helpers.h. Splitting them is what
   // made the rule testable: a function that takes a mutex cannot be asked about its behaviour
@@ -10310,8 +10300,6 @@ int main(int argc, char** argv) {
             loopEndNanotick.load(std::memory_order_acquire), patternTicks);
         const uint64_t loopStartTicks = loop.startTick;
         const uint64_t loopEndTicks = loop.endTick;
-        const uint64_t loopLen =
-            loopEndTicks > loopStartTicks ? loopEndTicks - loopStartTicks : 0;
         const uint64_t currentTicks =
             transportNanotick.load(std::memory_order_acquire);
         const uint64_t blockTicks = blockTicksFor(currentTicks);
