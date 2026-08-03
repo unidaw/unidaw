@@ -86,6 +86,7 @@ file(GLOB _engine_command_sources ${CMAKE_CURRENT_SOURCE_DIR}/apps/engine_*_comm
 set_source_files_properties(apps/engine_render_track.cpp apps/engine_save_project.cpp
                             apps/engine_handle_ui_entry.cpp
                             apps/engine_load_project.cpp
+                            apps/engine_bulk_edit.cpp
                             PROPERTIES COMPILE_OPTIONS -Werror=unused-variable)
 set_source_files_properties(${_engine_command_sources}
   PROPERTIES COMPILE_OPTIONS "${engine_commands_warnings}")
@@ -132,6 +133,7 @@ add_library(engine_commands STATIC
   apps/engine_render_track.cpp
   apps/engine_handle_ui_entry.cpp
   apps/engine_load_project.cpp
+  apps/engine_bulk_edit.cpp
   apps/engine_save_project.cpp
   apps/engine_sampler_commands.cpp
   apps/engine_automation_commands.cpp
