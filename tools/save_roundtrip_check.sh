@@ -130,6 +130,56 @@ for name, fn in (("mod_links", modlinks), ("devices", devices),
 raise SystemExit(0 if ok else 1)
 PY
 
+# ---- NO LIST MAY SHRINK, and this is the rule that stops the previous three from being a list
+# somebody extends whenever a drop is noticed.
+#
+# mod_links, devices, tempo_map and harmony_timeline were each added after a gap was found the
+# hard way. Meanwhile the fixture's 158 NOTES, its chords, and its patcher nodes and edges were
+# never compared at all — and a load path that dropped them would sail through, because both saves
+# lose them identically and the save-vs-save diff stays clean. That is the exact blindness the
+# mod_links comparison was written for, left open for everything nobody had happened to lose yet.
+#
+# So: count every array in the document by its JSON path and require that none of them shrinks.
+# A field nobody has thought about is covered by the same rule as the ones that were.
+#
+# COUNTED BY LEAF NAME, NOT BY PATH, and that distinction is the whole correctness of it. The
+# source is schema_version 1, which stores notes and chords ON THE TRACK; a schema-4 save stores
+# them in CLIPS, because clips-plus-placements is the note store. Keyed by full path this rule
+# reported "/tracks[]/notes 158 -> 0" and called it a loss of 158 notes — they had moved to
+# /clips[]/notes, all 158 of them. A rule that cannot tell relocation from deletion is worse than
+# no rule: it manufactures an alarming and false finding, which is exactly the kind that gets a
+# check disabled.
+#
+# GROWTH IS ALLOWED, because the master track is appended on save and legitimately adds a track
+# and its devices. Shrinkage never is: nothing in a faithful round trip should come back with
+# fewer of anything, wherever the schema chooses to keep it.
+python3 - "$TMP/src.uniproj.json" "$TMP/v4a.uniproj.json" <<'PYS' || ok=0
+import json, sys, collections
+def load(p):
+    d = json.load(open(p))
+    return d.get('document', d)
+def counts(node, name='', acc=None):
+    if acc is None: acc = collections.Counter()
+    if isinstance(node, dict):
+        for k, v in node.items():
+            counts(v, k, acc)
+    elif isinstance(node, list):
+        acc[name] += len(node)
+        for v in node:
+            counts(v, name, acc)
+    return acc
+a, b = counts(load(sys.argv[1])), counts(load(sys.argv[2]))
+ok = True
+shrunk = [(k, a[k], b.get(k, 0)) for k in sorted(a) if b.get(k, 0) < a[k]]
+for k, before, after in shrunk:
+    print(f"  FAIL: {k} {before} -> {after} — the round trip lost {before - after}")
+    ok = False
+if ok:
+    print("  no list shrank across the round trip (%d kinds, %d entries)"
+          % (len(a), sum(a.values())))
+raise SystemExit(0 if ok else 1)
+PYS
+
 # The scalars, compared against the values the source stated rather than against the other save.
 python3 - "$TMP/seeded.uniproj.json" "$TMP/v4c.uniproj.json" <<'PYS' || ok=0
 import json, sys
