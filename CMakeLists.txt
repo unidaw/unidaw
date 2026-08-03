@@ -92,6 +92,7 @@ set_source_files_properties(apps/engine_render_track.cpp apps/engine_save_projec
                             apps/engine_load_project.cpp
                             apps/engine_bulk_edit.cpp
                             apps/engine_track_rebuild.cpp
+                            apps/engine_chain_host.cpp
                             PROPERTIES COMPILE_OPTIONS -Werror=unused-variable)
 set_source_files_properties(${_engine_command_sources}
   PROPERTIES COMPILE_OPTIONS "${engine_commands_warnings}")
@@ -140,6 +141,7 @@ add_library(engine_commands STATIC
   apps/engine_load_project.cpp
   apps/engine_bulk_edit.cpp
   apps/engine_track_rebuild.cpp
+  apps/engine_chain_host.cpp
   apps/engine_save_project.cpp
   apps/engine_sampler_commands.cpp
   apps/engine_automation_commands.cpp
