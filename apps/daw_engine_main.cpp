@@ -5924,6 +5924,34 @@ int main(int argc, char** argv) {
     pushUndo(std::move(e));
   };
 
+  // EVERY STRUCTURAL EDIT DOES THESE THREE THINGS, and it was written out five times.
+  //
+  // Mark the arrangement dirty, republish the flat clip, record the undo entry. Missing any one
+  // fails silently and differently: no pushStructuralUndo and undo skips the edit; no
+  // arrangementDirty and the UI keeps drawing the old arrangement; no rebuildFlatAndPublish and
+  // the audio thread plays a snapshot that no longer matches the store. Five copies meant a sixth
+  // structural edit could get two of the three right and look entirely correct.
+  //
+  // THIS IS NOT EVERY CALLER OF THOSE THREE. The file has 13 arrangementDirty stores, 22
+  // rebuildFlatAndPublish calls and 10 pushStructuralUndo calls: plenty of edits legitimately do a
+  // subset — a non-structural change needs the republish and the dirty flag but records no undo
+  // entry of its own. Only the five that do all three in this order are collapsed here; the rest
+  // are different operations, not sloppy copies of this one.
+  //
+  // Stays a lambda rather than moving to a module: it needs rebuildFlatAndPublish,
+  // pushStructuralUndo and snapshotTrackStore, all still main's lambdas. Extracting it would mean
+  // a struct of three std::function members to carry three calls — the dispatch-shell shape, which
+  // moves lines without moving behaviour.
+  auto commitStructuralEdit = [&](TrackRuntime& rt, uint32_t tid, TrackStoreState&& before,
+                                  bool recordUndo) -> std::shared_ptr<const ClipSnapshot> {
+    rt.arrangementDirty.store(true, std::memory_order_relaxed);
+    auto snap = rebuildFlatAndPublish(rt);
+    if (recordUndo) {
+      pushStructuralUndo(tid, std::move(before), snapshotTrackStore(rt));
+    }
+    return snap;
+  };
+
   // Tell an incremental UI to pull a fresh clip window after a whole-store change
   // it cannot diff note-by-note (an undo/redo store swap).
   auto emitClipResync = [&](uint32_t trackId, uint32_t clipVersionValue) {
@@ -7665,12 +7693,7 @@ int main(int argc, char** argv) {
           }
           growLengthsForContent(*runtime, target);
           shiftDiffTick(result->diff, target.placementAt);
-          runtime->arrangementDirty.store(true, std::memory_order_relaxed);
-          snapshot = rebuildFlatAndPublish(*runtime);
-          if (recordUndo) {
-            pushStructuralUndo(trackId, std::move(before),
-                               snapshotTrackStore(*runtime));
-          }
+          snapshot = commitStructuralEdit(*runtime, trackId, std::move(before), recordUndo);
         }
       }
     }
@@ -8201,12 +8224,7 @@ int main(int argc, char** argv) {
           }
           growLengthsForContent(*runtime, target);
           shiftDiffTick(result->diff, target.placementAt);
-          runtime->arrangementDirty.store(true, std::memory_order_relaxed);
-          snapshot = rebuildFlatAndPublish(*runtime);
-          if (recordUndo) {
-            pushStructuralUndo(trackId, std::move(before),
-                               snapshotTrackStore(*runtime));
-          }
+          snapshot = commitStructuralEdit(*runtime, trackId, std::move(before), recordUndo);
         }
       }
     }
@@ -8318,12 +8336,7 @@ int main(int argc, char** argv) {
       clip.addEvent(std::move(event));
       forkOwnedClip(*runtime, target.ownedIndex);
       growLengthsForContent(*runtime, target);
-      runtime->arrangementDirty.store(true, std::memory_order_relaxed);
-      snapshot = rebuildFlatAndPublish(*runtime);
-      if (recordUndo) {
-        pushStructuralUndo(trackId, std::move(before),
-                           snapshotTrackStore(*runtime));
-      }
+      snapshot = commitStructuralEdit(*runtime, trackId, std::move(before), recordUndo);
     }
 
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
@@ -8410,12 +8423,7 @@ int main(int argc, char** argv) {
           absTick = firstPlacementAtForClip(*runtime, runtime->ownedClips[oi].id) +
                     removed->nanotick;
           forkOwnedClip(*runtime, oi);
-          runtime->arrangementDirty.store(true, std::memory_order_relaxed);
-          snapshot = rebuildFlatAndPublish(*runtime);
-          if (recordUndo) {
-            pushStructuralUndo(trackId, std::move(before),
-                               snapshotTrackStore(*runtime));
-          }
+          snapshot = commitStructuralEdit(*runtime, trackId, std::move(before), recordUndo);
           break;
         }
       }
@@ -8452,12 +8460,7 @@ int main(int argc, char** argv) {
         if (removed) {
           absTick = target.placementAt + removed->nanotick;
           forkOwnedClip(*runtime, target.ownedIndex);
-          runtime->arrangementDirty.store(true, std::memory_order_relaxed);
-          snapshot = rebuildFlatAndPublish(*runtime);
-          if (recordUndo) {
-            pushStructuralUndo(trackId, std::move(before),
-                               snapshotTrackStore(*runtime));
-          }
+          snapshot = commitStructuralEdit(*runtime, trackId, std::move(before), recordUndo);
         }
       }
     }
