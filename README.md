@@ -25,7 +25,7 @@ open http://127.0.0.1:8173/index.html
 To check it works:
 
 ```sh
-ctest --test-dir build --output-on-failure       # 93 tests
+ctest --test-dir build --output-on-failure       # it prints the count
 ```
 
 Before changing code, read **Design commitments** at the bottom.
@@ -192,7 +192,7 @@ block-size invariance is checked end to end.
 ## Test
 
 ```sh
-ctest --test-dir build --output-on-failure     # 93 tests
+ctest --test-dir build --output-on-failure     # it prints the count
 ```
 
 `contract_freshness` is registered first; run and read it first. A stale binary makes every
@@ -246,7 +246,9 @@ Key files:
 - `apps/event_payloads.h` — every UI→engine command. `UiCommandType` runs to **90**, next free 91.
 - `apps/project_file.cpp` — the project format, schema version 4.
 - `apps/placement_flatten.h` — the one definition that derives the flat clip.
-- `tools/lib/engine_wait.sh` — the boot/load wait library 36 checks share, with its own self-test.
+- `tools/lib/engine_wait.sh` — the boot/load wait library most of the shell checks share, with
+  its own self-test. (It said "36 checks" here until that count had quietly doubled; a number
+  nothing recomputes is a number that drifts.)
 
 ---
 
@@ -347,8 +349,9 @@ Sample headers: `tools/sampler_filter_check.sh`, `tools/lint_check.sh`,
 ## Documents
 
 `AGENTS.md` is the working agreement for agents in this repo. Parts of its lower half predate the
-web UI and are stale (it still cites `kShmVersion` 15 and 31 tests); the environment section at
-the top is maintained.
+web UI; the environment section at the top is maintained. This paragraph used to name two stale
+claims in it, and one of them had since been fixed — so the warning about staleness had itself
+gone stale. It no longer enumerates them.
 
 | Document | What it is |
 |---|---|

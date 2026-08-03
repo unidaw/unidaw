@@ -32,7 +32,7 @@ repo include root — the actual `cmake --build` is authoritative, ignore the LS
 noise.
 
 **Tests.**
-- C++: `ctest --test-dir build` (31 tests). Pure-logic suites live in
+- C++: `ctest --test-dir build` — it reports its own total. Pure-logic suites live in
   `phase3_tests` (`--test <name>`: `note_entry`, `placement_schedule`,
   `audio_region`, ...); patcher in `patcher_graph_tests`.
 - Rust e2e: `cd ui/daw-agent && cargo test`. `tests/engine_e2e.rs` spawns
