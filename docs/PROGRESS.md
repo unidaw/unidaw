@@ -114,3 +114,16 @@ device directly while `baseConfig` carried its own — the same config-versus-pu
   forced rebuild on both sides — so it needs coordination, not just code.
 - **PDC clamps every event in the first `latencySamples_` to sample 0**, collapsing their relative
   timing. Three candidate fixes, and choosing among them is an owner's call.
+- **CoreAudio workgroups for the host render thread.** Cross-process `os_workgroup` sharing needs
+  raw mach ports — JUCE 8's `AudioIODevice::getWorkgroup()` / `AudioWorkgroup::join()` hide the
+  handle — plus a dedicated RT render thread in the host, split off the control/instantiation
+  thread behind an in-order bounded request queue. Large, and its benefit is only visible under
+  contention: realtime scheduling and QoS measured as a TIE on an idle machine, so "did it help"
+  cannot be answered without a load harness that does not exist yet.
+
+**Both of the first two are now MEASURED even though neither is fixed**, by inverted checks that
+assert the defect is present and announce their own retirement:
+`tools/pdc_window_check.sh` and `tools/meter_publish_check.sh`. Each was verified by simulating
+its fix and confirming the check reports "this has been fixed, delete this block" rather than
+reading as a regression. So neither defect can drift while the decision is outstanding, and
+whoever lands a fix gets told what to do with the check that was holding the line.
