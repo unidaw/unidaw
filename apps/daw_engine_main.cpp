@@ -4401,16 +4401,28 @@ int main(int argc, char** argv) {
     }
   };
 
-  auto emitUiDiff = [&](const daw::UiDiffPayload& diffPayload) {
-    auto ringUiOut = getRingUiOut();
-    if (ringUiOut.mask == 0) {
-      return;
-    }
+  // EVERY DIFF SEND IS COUNTED, AND A DROP IS LOGGED — once, instead of in three emitters.
+  //
+  // emitUiDiff, emitHarmonyDiff and emitChordDiff are siblings for three EventTypes, and each
+  // carried its own twelve-line copy of the send. They are not copy-paste laziness: each was
+  // written deliberately for its own payload. What nobody wrote down is that they have to stay in
+  // step, and a fourth emitter that forgot the counters would not look like a bug — it would look
+  // like a quieter engine, because uiDiffSent/uiDiffDropped is exactly what the drop telemetry
+  // reports.
+  //
+  // A generic lambda rather than a template function: it needs ringUiOut, both counters and
+  // logUiDiffDrop, all of which are main's locals. The size comes from the payload's own type, so
+  // the declared size and the copied bytes cannot disagree.
+  // The ring is a PARAMETER because each emitter obtains its own view with getRingUiOut() and
+  // returns early if the mask is zero. Capturing a ring here would have meant one of them using a
+  // view the caller had already decided not to write to.
+  auto sendUiDiff = [&](daw::EventRingView& ringUiOut, daw::EventType type,
+                        const auto& diffPayload) {
     daw::EventEntry diffEntry;
     diffEntry.sampleTime = 0;
     diffEntry.blockId = 0;
-    diffEntry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
-    diffEntry.size = sizeof(daw::UiDiffPayload);
+    diffEntry.type = static_cast<uint16_t>(type);
+    diffEntry.size = sizeof(diffPayload);
     std::memcpy(diffEntry.payload, &diffPayload, sizeof(diffPayload));
     if (daw::ringWrite(ringUiOut, diffEntry)) {
       uiDiffSent.fetch_add(1, std::memory_order_relaxed);
@@ -4418,6 +4430,14 @@ int main(int argc, char** argv) {
       uiDiffDropped.fetch_add(1, std::memory_order_relaxed);
       logUiDiffDrop();
     }
+  };
+
+  auto emitUiDiff = [&](const daw::UiDiffPayload& diffPayload) {
+    auto ringUiOut = getRingUiOut();
+    if (ringUiOut.mask == 0) {
+      return;
+    }
+    sendUiDiff(ringUiOut, daw::EventType::UiDiff, diffPayload);
   };
 
   // EVERY SAMPLER REFUSAL REACHES THE CALLER, not just the engine's log.
@@ -4879,18 +4899,7 @@ int main(int argc, char** argv) {
     if (ringUiOut.mask == 0) {
       return;
     }
-    daw::EventEntry diffEntry;
-    diffEntry.sampleTime = 0;
-    diffEntry.blockId = 0;
-    diffEntry.type = static_cast<uint16_t>(daw::EventType::UiHarmonyDiff);
-    diffEntry.size = sizeof(daw::UiHarmonyDiffPayload);
-    std::memcpy(diffEntry.payload, &diffPayload, sizeof(diffPayload));
-    if (daw::ringWrite(ringUiOut, diffEntry)) {
-      uiDiffSent.fetch_add(1, std::memory_order_relaxed);
-    } else {
-      uiDiffDropped.fetch_add(1, std::memory_order_relaxed);
-      logUiDiffDrop();
-    }
+    sendUiDiff(ringUiOut, daw::EventType::UiHarmonyDiff, diffPayload);
   };
 
   auto emitChordDiff = [&](const daw::UiChordDiffPayload& diffPayload) {
@@ -4898,18 +4907,7 @@ int main(int argc, char** argv) {
     if (ringUiOut.mask == 0) {
       return;
     }
-    daw::EventEntry diffEntry;
-    diffEntry.sampleTime = 0;
-    diffEntry.blockId = 0;
-    diffEntry.type = static_cast<uint16_t>(daw::EventType::UiChordDiff);
-    diffEntry.size = sizeof(daw::UiChordDiffPayload);
-    std::memcpy(diffEntry.payload, &diffPayload, sizeof(diffPayload));
-    if (daw::ringWrite(ringUiOut, diffEntry)) {
-      uiDiffSent.fetch_add(1, std::memory_order_relaxed);
-    } else {
-      uiDiffDropped.fetch_add(1, std::memory_order_relaxed);
-      logUiDiffDrop();
-    }
+    sendUiDiff(ringUiOut, daw::EventType::UiChordDiff, diffPayload);
   };
 
   auto pushUndo = [&](EngineUndoEntry entry) {
