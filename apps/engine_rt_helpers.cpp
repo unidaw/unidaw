@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <mutex>
+#include <vector>
 
 namespace daw::engine {
 
@@ -107,6 +109,48 @@ daw::SamplerEvent samplerNoteOffFor(const daw::EventEntry& noteOff, uint64_t blo
   se.kind = daw::SamplerEventKind::NoteOff;
   se.noteId = noteId;
   return se;
+}
+
+bool pushScratchpad(NoteCutCtx& ctx, const daw::EventEntry& entry, uint64_t overflowTick) {
+  auto& scratchpad = ctx.runtime.patcherScratchpad;
+  if (ctx.scratchpadCount < scratchpad.size()) {
+    scratchpad[ctx.scratchpadCount++] = entry;
+    return true;
+  }
+  daw::atomic_store_u64(reinterpret_cast<uint64_t*>(&ctx.lastOverflowTick), overflowTick);
+  return false;
+}
+
+void cutActiveNotes(NoteCutCtx& ctx, uint64_t eventSample, std::optional<uint8_t> column) {
+  auto& runtime = ctx.runtime;
+  std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
+  if (runtime.activeNotes.empty()) {
+    return;
+  }
+  std::vector<uint32_t> noteIds;
+  noteIds.reserve(runtime.activeNotes.size());
+  for (const auto& [noteId, activeNote] : runtime.activeNotes) {
+    if (!column || activeNote.column == *column) {
+      noteIds.push_back(noteId);
+    }
+  }
+  for (uint32_t noteId : noteIds) {
+    auto noteIt = runtime.activeNotes.find(noteId);
+    if (noteIt == runtime.activeNotes.end()) {
+      continue;
+    }
+    const ActiveNote activeNote = noteIt->second;
+    const daw::EventEntry noteOffEntry =
+        makeNoteOffEntry(eventSample, 0, activeNote.pitch, ctx.midiChannel,
+                         activeNote.tuningCents, activeNote.noteId);
+    pushScratchpad(ctx, noteOffEntry, activeNote.endNanotick);
+    if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
+      runtime.samplerEvents.push_back(samplerNoteOffFor(
+          noteOffEntry, ctx.blockSampleStart, ctx.blockSize, activeNote.noteId));
+    }
+    runtime.activeNotes.erase(noteIt);
+    removeNoteIdFromColumn(runtime, activeNote.column, noteId);
+  }
 }
 
 }  // namespace daw::engine

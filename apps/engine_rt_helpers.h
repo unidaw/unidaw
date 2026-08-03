@@ -144,4 +144,36 @@ daw::EventEntry makeNoteOffEntry(uint64_t sampleTime, uint32_t blockId, uint8_t 
 daw::SamplerEvent samplerNoteOffFor(const daw::EventEntry& noteOff, uint64_t blockSampleStart,
                                     uint32_t blockSize, uint32_t noteId);
 
+// CUTTING ACTIVE NOTES — ONE RULE, WHERE THERE WERE TWO COPIES.
+//
+// cutActiveNoteInColumn and cutAllActiveNotes sat side by side in renderTrack differing only in
+// their selection: one filtered on a column, the other took every active note. Everything after
+// the selection — build the note-off, tee it to the sampler, erase the note, drop it from its
+// column — was written out twice. Diffing them showed the one apparent behavioural difference was
+// not one: the filtered copy passed `column` to removeNoteIdFromColumn while the other passed
+// `activeNote.column`, and inside the filter those are the same value by construction.
+//
+// So the column becomes an OPTIONAL FILTER and the rule is stated once. A future edit to how a
+// note is cut — the tee, the erase order, the column bookkeeping — now lands in one place instead
+// of needing to be noticed in two.
+//
+// The caller holds runtime.activeNotesMutex? No: this takes it, because the whole selection and
+// erase must be atomic with respect to the command thread adding notes. That is why it is here
+// rather than in a lock-free helper.
+struct NoteCutCtx {
+  TrackRuntime& runtime;
+  uint32_t& scratchpadCount;
+  std::atomic<uint64_t>& lastOverflowTick;
+  uint8_t midiChannel;
+  uint64_t blockSampleStart;
+  uint32_t blockSize;
+};
+
+// Append to the per-track patcher scratchpad, or record the overflow tick when it is full.
+// Returns false when the event did not fit — the caller decides what that means.
+bool pushScratchpad(NoteCutCtx& ctx, const daw::EventEntry& entry, uint64_t overflowTick);
+
+// Cut active notes at `eventSample`: every one, or only those in `column`.
+void cutActiveNotes(NoteCutCtx& ctx, uint64_t eventSample, std::optional<uint8_t> column);
+
 }  // namespace daw::engine

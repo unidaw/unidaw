@@ -16,6 +16,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <optional>
 #include <vector>
 
 using namespace daw;
@@ -288,6 +289,112 @@ void testSamplerNoteOffFor() {
   CHECK(samplerNoteOffFor(edge, 1000, 512, 1).offsetInBlock == 511);   // first sample past the end
 }
 
+// ------------------------------------------- cutting active notes: one rule, both selections
+struct CutFixture {
+  TrackRuntime runtime;
+  uint32_t scratchpadCount = 0;
+  std::atomic<uint64_t> lastOverflowTick{0};
+
+  CutFixture() { runtime.patcherScratchpad.resize(64); }
+
+  NoteCutCtx ctx() {
+    return NoteCutCtx{runtime, scratchpadCount, lastOverflowTick,
+                      /*midiChannel=*/2, /*blockSampleStart=*/1000, /*blockSize=*/512};
+  }
+  void addNote(uint32_t noteId, uint8_t pitch, uint8_t column) {
+    ActiveNote n;
+    n.noteId = noteId;
+    n.pitch = pitch;
+    n.column = column;
+    n.tuningCents = 0;
+    n.endNanotick = 0;
+    runtime.activeNotes[noteId] = n;
+    runtime.activeNoteByColumn[column].push_back(noteId);
+  }
+  daw::MidiPayload payloadAt(size_t i) const {
+    daw::MidiPayload p{};
+    std::memcpy(&p, runtime.patcherScratchpad[i].payload, sizeof(p));
+    return p;
+  }
+};
+
+void testCutActiveNotes() {
+  // ALL: no column filter cuts everything.
+  {
+    CutFixture f;
+    f.addNote(1, 60, 0);
+    f.addNote(2, 64, 1);
+    auto c = f.ctx();
+    cutActiveNotes(c, /*eventSample=*/1200, std::nullopt);
+    CHECK(f.runtime.activeNotes.empty());
+    CHECK(f.runtime.activeNoteByColumn.empty());
+    CHECK(f.scratchpadCount == 2);
+    CHECK(f.payloadAt(0).status == 0x80);
+    CHECK(f.payloadAt(0).channel == 2);
+  }
+  // COLUMN: the filter cuts only its own column and leaves the rest sounding. With one note this
+  // is indistinguishable from cutting everything, which is why the fixture has two.
+  {
+    CutFixture f;
+    f.addNote(1, 60, 0);
+    f.addNote(2, 64, 1);
+    f.addNote(3, 67, 1);
+    auto c = f.ctx();
+    cutActiveNotes(c, 1200, std::optional<uint8_t>(1));
+    CHECK(f.runtime.activeNotes.size() == 1);
+    CHECK(f.runtime.activeNotes.count(1) == 1);       // column 0 untouched
+    CHECK(f.runtime.activeNoteByColumn.count(1) == 0);  // column 1 gone entirely
+    CHECK(f.runtime.activeNoteByColumn.count(0) == 1);
+    CHECK(f.scratchpadCount == 2);
+  }
+  // A column with nothing in it is a no-op, not an error and not a cut-all.
+  {
+    CutFixture f;
+    f.addNote(1, 60, 0);
+    auto c = f.ctx();
+    cutActiveNotes(c, 1200, std::optional<uint8_t>(9));
+    CHECK(f.runtime.activeNotes.size() == 1);
+    CHECK(f.scratchpadCount == 0);
+  }
+  // THE TEE FOLLOWS THE NOTE-OFF only when a sampler is present, and lands at the same offset.
+  {
+    CutFixture f;
+    f.runtime.samplerDeviceId.store(3, std::memory_order_release);
+    f.addNote(1, 60, 0);
+    auto c = f.ctx();
+    cutActiveNotes(c, /*eventSample=*/1200, std::nullopt);
+    CHECK(f.runtime.samplerEvents.size() == 1);
+    if (!f.runtime.samplerEvents.empty()) {
+      CHECK(f.runtime.samplerEvents[0].kind == daw::SamplerEventKind::NoteOff);
+      CHECK(f.runtime.samplerEvents[0].noteId == 1);
+      CHECK(f.runtime.samplerEvents[0].offsetInBlock == 200);   // 1200 - 1000
+    }
+  }
+  // No sampler on the track: the MIDI note-off still happens, the tee does not.
+  {
+    CutFixture f;
+    f.addNote(1, 60, 0);
+    auto c = f.ctx();
+    cutActiveNotes(c, 1200, std::nullopt);
+    CHECK(f.scratchpadCount == 1);
+    CHECK(f.runtime.samplerEvents.empty());
+  }
+}
+
+void testPushScratchpadOverflow() {
+  CutFixture f;
+  f.runtime.patcherScratchpad.resize(2);
+  auto c = f.ctx();
+  const auto e = makeNoteOffEntry(0, 0, 60, 0, 0, 1);
+  CHECK(pushScratchpad(c, e, 111) == true);
+  CHECK(pushScratchpad(c, e, 222) == true);
+  // FULL: it reports false and records WHEN it overflowed, rather than dropping silently. The
+  // overflow tick is what the mirror-replay path uses to know what it missed.
+  CHECK(pushScratchpad(c, e, 333) == false);
+  CHECK(f.lastOverflowTick.load() == 333);
+  CHECK(f.scratchpadCount == 2);
+}
+
 }  // namespace
 
 int main() {
@@ -301,6 +408,8 @@ int main() {
   testRemoveNoteIdFromColumn();
   testMakeNoteOffEntry();
   testSamplerNoteOffFor();
+  testCutActiveNotes();
+  testPushScratchpadOverflow();
 
   if (g_fail == 0) {
     std::printf("engine_rt_helpers_tests: PASS\n");

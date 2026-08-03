@@ -11481,15 +11481,14 @@ int main(int argc, char** argv) {
           scratchpad.resize(kPatcherScratchpadCapacity);
         }
         uint32_t scratchpadCount = 0;
+        // The state the note-cutting rule needs, named once. Plain references: this is producer-
+        // thread code, so no std::function and no indirection per block.
+        daw::engine::NoteCutCtx noteCutCtx{runtime, scratchpadCount, lastOverflowTick,
+                                           midiChannel, blockSampleStart,
+                                           engineConfig.blockSize};
         auto pushScratchpad = [&](const daw::EventEntry& entry,
                                   uint64_t overflowTick) -> bool {
-          if (scratchpadCount < scratchpad.size()) {
-            scratchpad[scratchpadCount++] = entry;
-            return true;
-          }
-          daw::atomic_store_u64(
-              reinterpret_cast<uint64_t*>(&lastOverflowTick), overflowTick);
-          return false;
+          return daw::engine::pushScratchpad(noteCutCtx, entry, overflowTick);
         };
         const uint64_t blockSampleEnd =
             blockSampleStart + static_cast<uint64_t>(engineConfig.blockSize);
@@ -12100,73 +12099,14 @@ int main(int argc, char** argv) {
           auto cutActiveNoteInColumn = [&](uint8_t column,
                                            uint64_t eventSample,
                                            uint32_t currentBlockId) {
-            std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
-            if (runtime.activeNotes.empty()) {
-              return;
-            }
-            std::vector<uint32_t> noteIds;
-            noteIds.reserve(runtime.activeNotes.size());
-            for (const auto& [noteId, activeNote] : runtime.activeNotes) {
-              if (activeNote.column == column) {
-                noteIds.push_back(noteId);
-              }
-            }
-            if (noteIds.empty()) {
-              return;
-            }
-            for (uint32_t noteId : noteIds) {
-              auto noteIt = runtime.activeNotes.find(noteId);
-              if (noteIt == runtime.activeNotes.end()) {
-                continue;
-              }
-              const ActiveNote activeNote = noteIt->second;
-              daw::EventEntry noteOffEntry = daw::engine::makeNoteOffEntry(
-                  eventSample, 0, activeNote.pitch,
-                  midiChannel, activeNote.tuningCents, activeNote.noteId);
-              pushScratchpad(noteOffEntry, activeNote.endNanotick);
-              if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
-                // The tee is DERIVED from the note-off entry above, so the two cannot disagree about
-                // when the release happens. That rule used to live in a comment and had already been
-                // broken once; see samplerNoteOffFor in apps/engine_rt_helpers.h.
-                runtime.samplerEvents.push_back(daw::engine::samplerNoteOffFor(
-                    noteOffEntry, blockSampleStart, engineConfig.blockSize, activeNote.noteId));
-              }
-              runtime.activeNotes.erase(noteIt);
-              removeNoteIdFromColumn(column, noteId);
-            }
+            (void)currentBlockId;
+            daw::engine::cutActiveNotes(noteCutCtx, eventSample, column);
           };
 
           auto cutAllActiveNotes = [&](uint64_t eventSample,
                                        uint32_t currentBlockId) {
-            std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
-            if (runtime.activeNotes.empty()) {
-              return;
-            }
-            std::vector<uint32_t> noteIds;
-            noteIds.reserve(runtime.activeNotes.size());
-            for (const auto& [noteId, _] : runtime.activeNotes) {
-              noteIds.push_back(noteId);
-            }
-            for (uint32_t noteId : noteIds) {
-              auto noteIt = runtime.activeNotes.find(noteId);
-              if (noteIt == runtime.activeNotes.end()) {
-                continue;
-              }
-              const ActiveNote activeNote = noteIt->second;
-              daw::EventEntry noteOffEntry = daw::engine::makeNoteOffEntry(
-                  eventSample, 0, activeNote.pitch,
-                  midiChannel, activeNote.tuningCents, activeNote.noteId);
-              pushScratchpad(noteOffEntry, activeNote.endNanotick);
-              if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
-                // The tee is DERIVED from the note-off entry above, so the two cannot disagree about
-                // when the release happens. That rule used to live in a comment and had already been
-                // broken once; see samplerNoteOffFor in apps/engine_rt_helpers.h.
-                runtime.samplerEvents.push_back(daw::engine::samplerNoteOffFor(
-                    noteOffEntry, blockSampleStart, engineConfig.blockSize, activeNote.noteId));
-              }
-              runtime.activeNotes.erase(noteIt);
-              removeNoteIdFromColumn(activeNote.column, noteId);
-            }
+            (void)currentBlockId;
+            daw::engine::cutActiveNotes(noteCutCtx, eventSample, std::nullopt);
           };
 
           // Emit a note-on at onTick (assumed within this window) and schedule
