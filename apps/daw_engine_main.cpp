@@ -721,18 +721,17 @@ public:
           break;
         }
 
-        const uint64_t stride = track.header->channelStrideBytes;
-        const uint64_t blockBytes = static_cast<uint64_t>(planeStrideCh) * stride;
-        const uint64_t block = track.header->numBlocks > 0
-            ? static_cast<uint64_t>(blockToRead % track.header->numBlocks)
-            : 0;
-        const uint64_t offset = planeBase + block * blockBytes +
-                                static_cast<uint64_t>(ch) * stride;
-        if (offset + stride > track.shmSize) {
+        // Same bounds rule as the in/out pointers, different inputs: an aux PLANE base and
+        // channel count rather than the header's, read through shmBase, and a `continue` where
+        // they return null. The arithmetic is shared; the failure action stays here.
+        const auto planeOffset = daw::engine::audioChannelOffset(
+            planeBase, track.header->channelStrideBytes, planeStrideCh, blockToRead,
+            track.header->numBlocks, ch, track.shmSize);
+        if (!planeOffset) {
           continue;
         }
         float* trackChannel = reinterpret_cast<float*>(
-            reinterpret_cast<uint8_t*>(track.shmBase) + offset);
+            reinterpret_cast<uint8_t*>(track.shmBase) + *planeOffset);
 
         if (!trackChannel) {
           continue;
@@ -13572,44 +13571,30 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
         const auto* header = runtime->controller.shmHeader();
         const size_t shmSize = runtime->controller.shmSize();
         auto safeAudioInPtr = [&](uint32_t blockIndex, uint32_t channel) -> float* {
-          if (!header || header->numChannelsIn == 0 || header->numBlocks == 0 ||
-              header->channelStrideBytes == 0) {
+          if (!header) {
             return nullptr;
           }
-          const uint64_t stride = header->channelStrideBytes;
-          const uint64_t blockBytes =
-              static_cast<uint64_t>(header->numChannelsIn) * stride;
-          const uint64_t block =
-              static_cast<uint64_t>(blockIndex % header->numBlocks);
-          const uint64_t offset = header->audioInOffset + block * blockBytes +
-                                  static_cast<uint64_t>(channel) * stride;
-          if (offset + stride > shmSize) {
+          const auto offset = daw::engine::audioChannelOffset(
+              header->audioInOffset, header->channelStrideBytes, header->numChannelsIn, blockIndex,
+              header->numBlocks, channel, shmSize);
+          if (!offset) {
             return nullptr;
           }
           return reinterpret_cast<float*>(
-              reinterpret_cast<uint8_t*>(
-                  const_cast<daw::ShmHeader*>(header)) +
-              offset);
+              reinterpret_cast<uint8_t*>(const_cast<daw::ShmHeader*>(header)) + *offset);
         };
         auto safeAudioOutPtr = [&](uint32_t blockIndex, uint32_t channel) -> float* {
-          if (!header || header->numChannelsOut == 0 || header->numBlocks == 0 ||
-              header->channelStrideBytes == 0) {
+          if (!header) {
             return nullptr;
           }
-          const uint64_t stride = header->channelStrideBytes;
-          const uint64_t blockBytes =
-              static_cast<uint64_t>(header->numChannelsOut) * stride;
-          const uint64_t block =
-              static_cast<uint64_t>(blockIndex % header->numBlocks);
-          const uint64_t offset = header->audioOutOffset + block * blockBytes +
-                                  static_cast<uint64_t>(channel) * stride;
-          if (offset + stride > shmSize) {
+          const auto offset = daw::engine::audioChannelOffset(
+              header->audioOutOffset, header->channelStrideBytes, header->numChannelsOut, blockIndex,
+              header->numBlocks, channel, shmSize);
+          if (!offset) {
             return nullptr;
           }
           return reinterpret_cast<float*>(
-              reinterpret_cast<uint8_t*>(
-                  const_cast<daw::ShmHeader*>(header)) +
-              offset);
+              reinterpret_cast<uint8_t*>(const_cast<daw::ShmHeader*>(header)) + *offset);
         };
 
         // Movement 4 sidechain: pull the key signal from the source track's output into

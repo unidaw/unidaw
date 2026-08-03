@@ -219,4 +219,21 @@ void queuePendingStrikes(TrackRuntime& runtime, const std::vector<PendingStrike>
   }
 }
 
+std::optional<uint64_t> audioChannelOffset(uint64_t planeBase, uint64_t strideBytes,
+                                           uint32_t planeChannels, uint32_t blockIndex,
+                                           uint32_t numBlocks, uint32_t channel,
+                                           uint64_t shmSize) {
+  if (strideBytes == 0 || planeChannels == 0 || numBlocks == 0 || shmSize == 0) {
+    return std::nullopt;
+  }
+  const uint64_t blockBytes = static_cast<uint64_t>(planeChannels) * strideBytes;
+  const uint64_t block = static_cast<uint64_t>(blockIndex % numBlocks);
+  const uint64_t offset =
+      planeBase + block * blockBytes + static_cast<uint64_t>(channel) * strideBytes;
+  if (offset + strideBytes > shmSize) {
+    return std::nullopt;
+  }
+  return offset;
+}
+
 }  // namespace daw::engine

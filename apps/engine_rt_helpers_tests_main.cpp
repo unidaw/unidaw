@@ -520,6 +520,47 @@ void testQueuePendingStrikes() {
   CHECK(rt.pendingStrikes.size() == 4);
 }
 
+// -------------------------------------- the one rule here whose divergence is memory unsafety
+void testAudioChannelOffset() {
+  // base 1000, 4 channels of 512 bytes = 2048 per block, mapping of 16384.
+  const uint64_t base = 1000, stride = 512, shm = 16384;
+  const uint32_t chans = 4, blocks = 4;
+
+  const auto a = audioChannelOffset(base, stride, chans, /*blockIndex=*/0, blocks, /*ch=*/0, shm);
+  CHECK(a.has_value());
+  if (a) CHECK(*a == 1000);
+
+  const auto b = audioChannelOffset(base, stride, chans, 0, blocks, 3, shm);
+  CHECK(b.has_value());
+  if (b) CHECK(*b == 1000 + 3 * 512);
+
+  const auto c = audioChannelOffset(base, stride, chans, 2, blocks, 1, shm);
+  CHECK(c.has_value());
+  if (c) CHECK(*c == 1000 + 2 * 2048 + 512);
+
+  // BLOCK INDEX WRAPS on numBlocks — the ring is circular, and block 4 of 4 is block 0.
+  const auto w = audioChannelOffset(base, stride, chans, blocks, blocks, 0, shm);
+  CHECK(w.has_value());
+  if (w) CHECK(*w == 1000);
+
+  // THE CHECK IS offset + stride > shmSize, NOT offset > shmSize. This case is the whole point:
+  // a span that STARTS inside the mapping and runs off the end. Checking only the start returns a
+  // pointer that looks valid, reads its first samples fine, and then walks into whatever follows.
+  const uint64_t tight = 1000 + 3 * 2048 + 3 * 512 + 256;   // last channel starts 256 short
+  CHECK(!audioChannelOffset(base, stride, chans, 3, blocks, 3, tight).has_value());
+  // One byte more and it fits exactly.
+  CHECK(audioChannelOffset(base, stride, chans, 3, blocks, 3, tight + 256).has_value());
+
+  // Degenerate headers answer "no" rather than dividing by zero or trusting a zero stride.
+  CHECK(!audioChannelOffset(base, 0, chans, 0, blocks, 0, shm).has_value());
+  CHECK(!audioChannelOffset(base, stride, 0, 0, blocks, 0, shm).has_value());
+  CHECK(!audioChannelOffset(base, stride, chans, 0, 0, 0, shm).has_value());
+  CHECK(!audioChannelOffset(base, stride, chans, 0, blocks, 0, 0).has_value());
+
+  // A channel past the plane's width runs past the end and is refused.
+  CHECK(!audioChannelOffset(base, stride, chans, 3, blocks, 99, shm).has_value());
+}
+
 }  // namespace
 
 int main() {
@@ -537,6 +578,7 @@ int main() {
   testSamplerNoteOnFor();
   testPlaceInBlock();
   testQueuePendingStrikes();
+  testAudioChannelOffset();
   testCutActiveNotes();
   testPushScratchpadOverflow();
 

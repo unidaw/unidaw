@@ -227,4 +227,22 @@ std::optional<BlockPlacement> placeInBlock(uint64_t tickDelta, uint64_t blockSam
 // Takes runtime.activeNotesMutex, which is why it is here rather than in a lock-free helper.
 void queuePendingStrikes(TrackRuntime& runtime, const std::vector<PendingStrike>& strikes);
 
+// THE BYTE OFFSET OF ONE CHANNEL IN A SHARED-MEMORY AUDIO PLANE, or nothing if that span would
+// run past the end of the mapping.
+//
+// Three sites computed this: the input pointer, the output pointer, and the mixer reading another
+// track's plane. The first two are identical apart from which channel count and region offset they
+// use; the third is a real variant — an aux plane base and stride, reading through shmBase rather
+// than the header, and CONTINUING rather than returning null. So the arithmetic and the bounds
+// check move; the failure action stays with each caller, because it genuinely differs.
+//
+// THE CHECK IS `offset + stride > shmSize`, NOT `offset > shmSize`. A span that starts inside the
+// mapping and runs off the end is the whole hazard: the pointer looks valid, the first samples read
+// fine, and the block walks into whatever follows. This is the one rule here whose divergence is a
+// memory-safety bug rather than a wrong note, which is why it is worth a function and a test.
+std::optional<uint64_t> audioChannelOffset(uint64_t planeBase, uint64_t strideBytes,
+                                           uint32_t planeChannels, uint32_t blockIndex,
+                                           uint32_t numBlocks, uint32_t channel,
+                                           uint64_t shmSize);
+
 }  // namespace daw::engine
