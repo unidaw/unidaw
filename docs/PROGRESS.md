@@ -11,10 +11,10 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: 1d039a2
-- main-cpp-lines: 13138
-- main-function-lines: 11666
-- ctest-entries: 165
+- as-of-commit: e4a00b9
+- main-cpp-lines: 11550
+- main-function-lines: 10077
+- ctest-entries: 166
 
 ## Why this file cannot quietly go stale
 
@@ -66,14 +66,27 @@ unit-test binaries where there were none. A command module rebuilds in 4.2s agai
 relink the engine.
 
 **The grade was C, and the binding constraint was `main()`.** A four-judge panel put it plainly:
-`main()` was ~13,700 lines and the producer lambda held the render path. `renderTrack` is now out;
-`processTrack` (796), `handleUiEntry` (1,625), `loadProjectFromPath` (945) and `saveProjectToPath`
-(480) remain.
+`main()` was ~13,700 lines and the producer lambda held the render path. Three of the four giants
+have now left it — `renderTrack` (1,552), `saveProjectToPath` (480) and `handleUiEntry` (1,623).
+`loadProjectFromPath` (945) and `processTrack` (796) remain, and they are the two hardest: 52 and
+29 captures with 16 and 9 nested lambdas, so a verbatim move turns them into callback structs
+rather than functions. That is a design decision, not a mechanical one.
 
-What made the move safe was that the body was relocated VERBATIM — the new function binds local
+What made each move safe was that the body was relocated VERBATIM — the new function binds local
 references carrying the names the lambda captured, so nested lambdas, shadowing and brace scope
 still mean what they meant. The only claim the change makes is "the same code, somewhere else",
-and a byte-identical render checks exactly that claim.
+and for `handleUiEntry` that claim is checked literally: a line-by-line comparison of the moved
+body against the pre-move lambda reported 1,623 of 1,623 identical.
+
+**A byte-identical render is weaker evidence than it looks**, and it is worth saying so where the
+next person will read it. It is the right oracle for `renderTrack`, which is the render path. For
+`handleUiEntry` the render never enters the code that moved, so an identical hash there only says
+the audio path was left alone. The suite is what actually exercises a UI dispatcher.
+
+**The capture enumeration has a blind spot.** Emptying the `[&]` and compiling with
+`-ferror-limit=0` lists what must be passed — but constants are exempt from capture, so a
+`constexpr` local used by the body is not on the list and shows up only when the new translation
+unit fails to compile. Two did.
 
 Three things had to be freed first, and they explain the shape of the problem: `WorkerPool`,
 `dispatchRustKernel` and `getClipEventsInRange` were all declared inside `daw_engine_main.cpp`,
@@ -117,9 +130,14 @@ device directly while `baseConfig` carried its own — the same config-versus-pu
 - **CoreAudio workgroups for the host render thread.** Cross-process `os_workgroup` sharing needs
   raw mach ports — JUCE 8's `AudioIODevice::getWorkgroup()` / `AudioWorkgroup::join()` hide the
   handle — plus a dedicated RT render thread in the host, split off the control/instantiation
-  thread behind an in-order bounded request queue. Large, and its benefit is only visible under
-  contention: realtime scheduling and QoS measured as a TIE on an idle machine, so "did it help"
-  cannot be answered without a load harness that does not exist yet.
+  thread behind an in-order bounded request queue. The load harness now exists
+  (`tools/rt_load_probe.sh`) and it moved the blocker rather than removing it: under 3.2x-3.8x
+  measured contention, realtime and QoS are indistinguishable, and the reason is that **nothing in
+  the engine measures how much of a block period a render consumes**. An underrun here means the
+  producer fell behind, so "realtime did not help" and "nothing was ever near the deadline" print
+  the same table. A saturation sweep confirmed the metric is unusable for this: drops went
+  29 -> 1752 -> 32 as tracks increased, and the engine's own "worst shortfall" column showed all
+  three were single stalls rather than rates. Render-cost telemetry is the prerequisite.
 
 **Both of the first two are now MEASURED even though neither is fixed**, by inverted checks that
 assert the defect is present and announce their own retirement:
