@@ -296,7 +296,7 @@ This is worth stating because the alternative is free and wrong.
 
 **And the same gap exists on the plugin path, but it is not architectural — it is an unconnected wire.** `MidiEvent.sampleOffset` exists (`platform_juce/juce_wrapper.h:13`) and the host *honours* it: `platform_juce/juce_wrapper.cpp:1011` sets `e.sampleOffset = ev.sampleOffset` on the direct VST3 event path. But **the engine never populates it** — grep across `daw_engine_main.cpp` returns nothing. So every note reaching a hosted plugin is quantised to the block boundary (2.7 ms of jitter at 128 frames, 11 ms at 512) for no reason other than a missing assignment.
 
-> **⚠ THIS CLAIM IS CONTRADICTED BY THE CODE AS OF 2026-08-03, AND HAS NOT BEEN MEASURED EITHER WAY.**
+> **⚠ MEASURED 2026-08-03 AND FOUND FALSE. Hosted notes ARE sample-accurate.**
 > `apps/juce_host_process_main.cpp` builds every plugin MIDI event on one unconditional path and
 > sets `noteEvent.sampleOffset = event.sampleTime - blockStart`; `platform_juce/juce_wrapper.cpp`
 > then propagates it and feeds it to `midi.addEvent(message, ev.sampleOffset)`, which is
@@ -308,12 +308,31 @@ This is worth stating because the alternative is free and wrong.
 > but the offset is DERIVED host-side from `sampleTime` rather than carried, so the absent field
 > is not the gap it appears to be.
 >
-> Left in place rather than rewritten because **reading code is not measuring behaviour**, and
-> this section drove a design decision (the sampler tee starting its voice at the exact frame
-> "rather than at the boundary"). Settle it with a render: one note at a non-block-aligned tick
-> through the real host, and look at which sample the audio starts on. A comment in
-> `apps/daw_engine_main.cpp` beside the sampler tee repeats this claim and should be corrected in
-> the same change.
+> **THE RENDER THAT SETTLED IT.** One note per render through the real host path
+> (`DAW_USE_FAKE_IDENTITY` runs the fake instrument INSIDE juce_host_process, downstream of the
+> offset assignment, and it writes its 10-sample pulse at `event.sampleOffset`). At 120 bpm /
+> 44100 Hz a quarter is 22050 samples, so the expected sample is exact:
+>
+> | note tick | expected sample | first pass | loop repeat (+88200) |
+> |---|---|---|---|
+> | 3750    | 86.1   | **0** | 88286 = +86  |
+> | 15000   | 344.5  | **0** | 88545 = +345 |
+> | 240000  | 5512.5 | 5513  | 5513         |
+>
+> 5513, 88286 and 88545 are exact sub-block positions and none is block-aligned (5513/128 =
+> 43.07), so the offset survives the whole path. **The claim above is wrong and the fix it implies
+> is not needed.**
+>
+> **BUT THE MEASUREMENT FOUND A REAL BUG THE CLAIM WAS MASKING.** A note whose sample falls inside
+> the FIRST BLOCK loses its offset on the FIRST PASS and fires at sample 0 — then plays correctly
+> on every loop repeat thereafter. Both 86 and 345 are under one block; 5513 is not, and is
+> correct from the start. Musically: the opening notes of a song rush by up to ~11 ms at 512
+> frames, once, and never again — which is exactly the shape that gets dismissed as imagination.
+> Not fixed here; it needs an owner's call on whether the first block should be scheduled
+> differently or the catch-up path should carry offsets.
+>
+> A comment in `apps/daw_engine_main.cpp` beside the sampler tee repeats the disproved claim and
+> should be corrected with it.
 
 
 That reframes it. It is not a limitation of the out-of-process design to be routed around; it is a cheap fix that improves **every hosted plugin**, and it should be done rather than left as a reason the built-in is better. Filed as its own item, not folded into S1 — the sampler does not depend on it, and a fix that improves all plugins deserves its own check rather than riding in on a device commit.

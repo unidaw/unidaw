@@ -11943,10 +11943,13 @@ int main(int argc, char** argv) {
             const daw::EventEntry midiEntry = daw::engine::makeNoteOnEntry(
                 eventSample, 0, pitch, velocity, midiChannel, noteTuningCents, noteId);
             pushScratchpad(midiEntry, onTick);
-            // TEE TO THE BUILT-IN SAMPLER, with the sample offset that the hosted-plugin path
-            // computes and then throws away (MidiEvent.sampleOffset is never populated — see
-            // docs/SAMPLER_DESIGN.md §3.5). `offset` above is already the exact frame within
-            // this block, so the sampler starts the voice THERE rather than at the boundary.
+            // TEE TO THE BUILT-IN SAMPLER at the exact frame within this block.
+            //
+            // This comment used to say the hosted-plugin path computes the offset "and then
+            // throws away". Measured 2026-08-03: it does not. juce_host_process derives
+            // sampleOffset from sampleTime - blockStart and JUCE honours it, so a note at
+            // 5512.5 samples lands on 5513, not on a block boundary. Both paths are
+            // sample-accurate; see docs/SAMPLER_DESIGN.md §3.5 for the render that settled it.
             if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
 runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
                   static_cast<uint32_t>(offset), pitch, velocity, noteColumn, sound,
