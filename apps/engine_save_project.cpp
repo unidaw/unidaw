@@ -15,8 +15,8 @@ bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path,
   auto& arrangeMutex = deps.arrange.arrangeMutex;
   auto& harmonyEvents = deps.harmonyTimeline.harmonyEvents;
   auto& liveTrackCount = deps.liveTrackCount;
-  auto& loadedClips = deps.loadedClips;
-  auto& loadedClipsMutex = deps.loadedClipsMutex;
+  auto& loadedClips = deps.loadedProject.loadedClips;
+  auto& loadedClipsMutex = deps.loadedProject.loadedClipsMutex;
   auto& loadedTempoMap = deps.songTiming.loadedTempoMap;
   auto& markerList = deps.arrange.markerList;
   auto& masterTrack = deps.masterTrack;

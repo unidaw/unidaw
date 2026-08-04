@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_loaded_project.h"
 #include "engine_track_table.h"
 #include "engine_publish_gates.h"
 #include "engine_types.h"
@@ -36,8 +37,8 @@ struct ClipExtentsDeps {
 };
 
 struct AudioClipTableDeps {
-  std::vector<daw::ProjectClip>& loadedClips;
-  std::mutex& loadedClipsMutex;
+  // What a load left behind: see apps/engine_loaded_project.h.
+  LoadedProject& loadedProject;
   std::function<std::string(const std::string&)> resolveSourcePath;
   daw::TempoMapProvider& tempoProvider;
   TrackTable& trackTable;

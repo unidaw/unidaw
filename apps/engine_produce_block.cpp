@@ -63,9 +63,9 @@ void produceBlock(ProducerBlockDeps& deps,
   auto& patcherPool = deps.patcherPool;
   auto& pendingPreviewNotes = deps.previewQueue.pendingPreviewNotes;
   auto& playing = deps.transport.playing;
-  auto& poolAlwaysOn = deps.poolAlwaysOn;
-  auto& poolEngaged = deps.poolEngaged;
-  auto& poolWorkEwmaUs = deps.poolWorkEwmaUs;
+  auto& poolAlwaysOn = deps.renderPoolOwner.poolAlwaysOn;
+  auto& poolEngaged = deps.renderPoolOwner.poolEngaged;
+  auto& poolWorkEwmaUs = deps.renderPoolOwner.poolWorkEwmaUs;
   auto& previewMutex = deps.previewQueue.previewMutex;
   auto& producerBlockBudgetUs = deps.producerBlockBudgetUs;
   auto& producerBlockUsMax = deps.producerTelemetry.producerBlockUsMax;
@@ -77,7 +77,7 @@ void produceBlock(ProducerBlockDeps& deps,
   auto& projectSeed = deps.projectSeed;
   auto& publishedCallback = deps.publishedCallback;
   auto& quantizePitch = deps.quantizePitch;
-  auto& renderPool = deps.renderPool;
+  auto& renderPool = deps.renderPoolOwner.renderPool;
   auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
   auto& songTimeSigDen = deps.songTiming.songTimeSigDen;
   auto& songTimeSigNum = deps.songTiming.songTimeSigNum;

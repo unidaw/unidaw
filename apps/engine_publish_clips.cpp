@@ -110,8 +110,8 @@ void writeUiClipExtents(ClipExtentsDeps& deps, bool force) {
 }
 
 void publishAudioClipTable(AudioClipTableDeps& deps) {
-  auto& loadedClips = deps.loadedClips;
-  auto& loadedClipsMutex = deps.loadedClipsMutex;
+  auto& loadedClips = deps.loadedProject.loadedClips;
+  auto& loadedClipsMutex = deps.loadedProject.loadedClipsMutex;
   auto& resolveSourcePath = deps.resolveSourcePath;
   auto& tempoProvider = deps.tempoProvider;
   auto& tracks = deps.trackTable.tracks;

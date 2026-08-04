@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_loaded_project.h"
 #include "engine_track_table.h"
 #include "engine_arrange_markers.h"
 #include "engine_patcher_graph_owner.h"
@@ -38,11 +39,11 @@
 namespace daw::engine {
 
 struct SaveProjectDeps {
+  // What a load left behind: see apps/engine_loaded_project.h.
+  LoadedProject& loadedProject;
   ArrangeMarkers& arrange;
   HarmonyTimeline& harmonyTimeline;
   std::atomic<uint32_t>& liveTrackCount;
-  std::vector<daw::ProjectClip>& loadedClips;
-  std::mutex& loadedClipsMutex;
   SongTiming& songTiming;
   std::unique_ptr<TrackRuntime>& masterTrack;
   PatcherGraphOwner& patcherGraph;

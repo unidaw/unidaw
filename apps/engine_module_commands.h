@@ -18,6 +18,8 @@
 #include <functional>
 #include <mutex>
 #include <string>
+
+#include "engine_loaded_project.h"
 #include <vector>
 
 #include "apps/engine_pure.h"
@@ -28,7 +30,8 @@
 namespace daw::engine {
 
 struct ModuleCommandDeps {
-  const std::string& loadedProjectDir;
+  // What a load left behind: see apps/engine_loaded_project.h.
+  LoadedProject& loadedProject;
   const std::function<bool(const std::string&, std::string*)>& saveProjectToPath;
   const std::function<bool(const std::string&, std::string*)>& loadProjectFromPath;
 };

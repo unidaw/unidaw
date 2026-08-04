@@ -43,6 +43,8 @@
 #include "apps/engine_preview_queue.h"
 #include "apps/engine_produce_block.h"
 #include "apps/engine_publish_gates.h"
+#include "apps/engine_loaded_project.h"
+#include "apps/engine_render_pool_owner.h"
 #include "apps/engine_producer_telemetry.h"
 #include "apps/engine_startup.h"
 #include "apps/engine_producer_thread.h"
@@ -493,7 +495,8 @@ int main(int argc, char** argv) {
   // finishes a block fractionally sooner by starving the thread that PLAYS it has made things
   // worse. DAW_ENGINE_RENDER_THREADS overrides; 0 or 1 keeps everything on the producer thread,
   // which is also the reference the parallel path is checked for bit-identical output against.
-  daw::RenderPool renderPool;
+  // The pool and its three decision variables in one object: apps/engine_render_pool_owner.h.
+  daw::engine::RenderPoolOwner renderPoolOwner;
   // WHETHER TO USE IT THIS BLOCK, and it is not "always". Measured on a real device: at 8 sampler
   // tracks one thread spends 0.18x of the block budget and has room to spare, and waking seven
   // workers every block to help costs MORE than it saves — across four runs the pool dropped
@@ -504,9 +507,6 @@ int main(int argc, char** argv) {
   // block, which is the serial-equivalent cost and therefore means the same thing whichever mode
   // is currently running — a wall-clock signal would read low BECAUSE the pool was on and
   // oscillate the moment it turned off.
-  bool poolAlwaysOn = false;
-  bool poolEngaged = false;
-  double poolWorkEwmaUs = 0.0;
   {
     const unsigned hw = std::thread::hardware_concurrency();
     unsigned want = hw > 3 ? hw - 2 : 1;
@@ -515,14 +515,15 @@ int main(int argc, char** argv) {
       want = n > 0 ? static_cast<unsigned>(n) : 1;
     }
     if (want > 1) {
-      renderPool.start(want - 1);  // the producer thread is the other worker
+      renderPoolOwner.renderPool.start(want - 1);  // the producer thread is the other
     }
     // AN EXPLICIT COUNT MEANS "I KNOW WHAT I WANT" and turns the adaptive rule off, which is
     // also how a test forces the pool on regardless of how little work its fixture makes.
-    poolAlwaysOn = std::getenv("DAW_ENGINE_RENDER_THREADS") != nullptr && want > 1;
-    std::cout << "Render pool: " << (renderPool.workerCount() + 1)
+    renderPoolOwner.poolAlwaysOn = std::getenv("DAW_ENGINE_RENDER_THREADS") && want > 1;
+    std::cout << "Render pool: " << (renderPoolOwner.renderPool.workerCount() + 1)
               << " thread(s) for per-track production"
-              << (poolAlwaysOn ? " (forced)" : " (engaged when the work needs it)") << std::endl;
+              << (renderPoolOwner.poolAlwaysOn ? " (forced)" : " (engaged when needed)")
+              << std::endl;
   }
 
   std::unique_ptr<EngineAudioCallback> audioCallback;
@@ -808,8 +809,8 @@ int main(int argc, char** argv) {
   // on TrackRuntime::sourcePlacements) reference these by id. Save re-emits the
   // ones still referenced by a clean track so the arrangement's structure
   // survives a load->save round-trip. Guarded by loadedClipsMutex.
-  std::mutex loadedClipsMutex;
-  std::vector<daw::ProjectClip> loadedClips;
+  // What a load left behind, in one object: see apps/engine_loaded_project.h.
+  daw::engine::LoadedProject loadedProject;
 
   // Project tempo map retained from load so a save re-emits the FULL map (any tempo
   // changes included), rather than collapsing it to the current single tempo. Only
@@ -823,7 +824,6 @@ int main(int argc, char** argv) {
   // Directory of the currently-loaded project file, so a clip's relative sourcePath
   // resolves against the project (portable) rather than the engine's CWD. Set by
   // loadProjectFromPath before the track loop; read by rebuildAudioRender.
-  std::string loadedProjectDir;
   // history.jsonl (roadmap 19): an append-only journal of the commands this engine acted
   // on — {seq, ts_ms, author, scope, base_version, op, outcome, params}. Deliberately NOT
   // the DAW_EVENT telemetry stream: that is engine behaviour, this is "what was asked of
@@ -835,7 +835,7 @@ int main(int argc, char** argv) {
   // The mutex, the sequence number, the path and the writer became one object: see
   // apps/engine_history_journal.h. The lock guards the file AND the counter, so they were never
   // separable; they were three main() locals and a lambda purely because that is where they landed.
-  daw::engine::HistoryJournal historyJournal{loadedProjectDir};
+  daw::engine::HistoryJournal historyJournal{loadedProject.loadedProjectDir};
   // historyPath has no forwarder: its only caller was historyAppend, which moved with it.
   auto historyAppend = [&](const char* op, const char* outcome, uint32_t scopeTrack,
                            uint32_t baseVersion, const std::string& params) {
@@ -1432,7 +1432,7 @@ int main(int argc, char** argv) {
   // Both moved into engine_sampler_commands as free functions. main() keeps forwarders because
   // it still calls them; the module itself reaches them directly, without a std::function.
   auto resolveSourcePath = [&](const std::string& sourcePath) {
-    return daw::engine::resolveSourcePath(loadedProjectDir, sourcePath);
+    return daw::engine::resolveSourcePath(loadedProject.loadedProjectDir, sourcePath);
   };
 
   auto rebuildSamplerRender =
@@ -1564,7 +1564,7 @@ int main(int argc, char** argv) {
   // LOCK ORDER is tracksMutex -> trackMutex, taken as a pointer snapshot under tracksMutex and
   // then released, matching every other command-thread walk over all tracks.
   daw::engine::AudioClipTableDeps audioClipTableDeps{
-      loadedClips, loadedClipsMutex, resolveSourcePath, tempoProvider, trackTable, uiShm,
+      loadedProject, resolveSourcePath, tempoProvider, trackTable, uiShm,
       waveformStore};
 
   auto publishAudioClipTable = [&]() {
@@ -1663,7 +1663,7 @@ int main(int argc, char** argv) {
   // track is copied under its own mutex so the document is consistent per
   // track without stalling audio behind one global lock.
   daw::engine::SaveProjectDeps saveProjectDeps{
-      arrange, harmonyTimeline, liveTrackCount, loadedClips, loadedClipsMutex, songTiming,
+      loadedProject, arrange, harmonyTimeline, liveTrackCount, songTiming,
       masterTrack, patcherGraph, pluginCache, projectSeed, trackTable, songBarGrid,
       trackIsPersisted
   };
@@ -1700,11 +1700,11 @@ int main(int argc, char** argv) {
   // here — that needs host restarts and the vst_state blobs described in
   // PROJECT_PERSISTENCE.md, which this version does not yet write.
   daw::engine::LoadProjectDeps loadProjectDeps{
-      arrange, automationVersion, auxChildOverlayMutex, auxChildOverlays,
+      loadedProject, arrange, automationVersion, auxChildOverlayMutex, auxChildOverlays,
       buildTrackSnapshot, bumpAllTrackClipVersions, clipDirty, clipVersion,
       emitChainSnapshot, emitModSnapshot, emitRoutingSnapshot, emitUiDiff,
       ensurePlacementIds, ensureTrack, harmonyTimeline, liveTrackCount, loadInProgress,
-      loadedClips, loadedClipsMutex, loadedProjectDir, songTiming, transport, masterTrack,
+      songTiming, transport, masterTrack,
       nextClipId, patcherGraph, patternTicks, pluginCache, projectSeed,
       publishAudioClipTable, rebuildAudioRender, rebuildFlatAndPublish, rebuildHostForChain,
       reconcileMasterHost, refreshSamplerForTrack, resetTrackContent, tempoProvider, trackTable, updatePatcherGraphSnapshot, waveformStore
@@ -1982,7 +1982,7 @@ int main(int argc, char** argv) {
   const std::function<bool(const std::string&, std::string*)> loadProjectFromPathFn =
       loadProjectFromPath;
   daw::engine::ModuleCommandDeps moduleCommandDeps{
-      loadedProjectDir, saveProjectToPathFn, loadProjectFromPathFn};
+      loadedProject, saveProjectToPathFn, loadProjectFromPathFn};
 
   const std::function<void(uint16_t, uint32_t)> emitRoutingErrorFn = emitRoutingError;
   const std::function<void(TrackRuntime&)> emitRoutingSnapshotFn = emitRoutingSnapshot;
@@ -2136,13 +2136,13 @@ int main(int argc, char** argv) {
   daw::LogLine() << "UI: command thread launched" << std::endl;
 
   daw::engine::ProducerThreadDeps producerThreadDeps{
-      producerTelemetry, previewQueue, audioPlaybackBlockId, engineConfig, getHarmonyAt,
+      renderPoolOwner, producerTelemetry, previewQueue, audioPlaybackBlockId, engineConfig,
+      getHarmonyAt,
       getRingCtrl, getRingStd,
       getScaleForHarmony, harmonyTimeline, lastOverflowTick, latencyMgr, nextBlockId,
       nextNoteId, offlineProducerArmed, offlineRender, panicPending, patcherGraph,
-      patcherParallel, patcherPool, patternTicks, poolAlwaysOn,
-      poolEngaged, poolWorkEwmaUs,
-      projectSeed, publishedCallback, quantizePitch, renderPool, resetTimeline,
+      patcherParallel, patcherPool, patternTicks,
+      projectSeed, publishedCallback, quantizePitch, resetTimeline,
       resolveDevicePluginPath, running, snapshotTracks, songTiming, tempoProvider,
       testThrottleMs, tickConverter, traceNotes, transport, warnedEventOutsideBlock,
       writeMirrorParams};

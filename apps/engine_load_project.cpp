@@ -38,9 +38,9 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   auto& harmonyVersion = deps.harmonyTimeline.harmonyVersion;
   auto& liveTrackCount = deps.liveTrackCount;
   auto& loadInProgress = deps.loadInProgress;
-  auto& loadedClips = deps.loadedClips;
-  auto& loadedClipsMutex = deps.loadedClipsMutex;
-  auto& loadedProjectDir = deps.loadedProjectDir;
+  auto& loadedClips = deps.loadedProject.loadedClips;
+  auto& loadedClipsMutex = deps.loadedProject.loadedClipsMutex;
+  auto& loadedProjectDir = deps.loadedProject.loadedProjectDir;
   auto& loadedTempoMap = deps.songTiming.loadedTempoMap;
   auto& loopEndNanotick = deps.transport.loopEndNanotick;
   auto& loopStartNanotick = deps.transport.loopStartNanotick;

@@ -38,11 +38,15 @@
 #include "engine_produce_block.h"
 #include "engine_preview_queue.h"
 #include "engine_producer_telemetry.h"
+#include "engine_render_pool_owner.h"
 #include "engine_types.h"
 
 namespace daw::engine {
 
 struct ProducerThreadDeps {
+  // The pool and the three variables that decide whether to use it: see
+  // apps/engine_render_pool_owner.h.
+  RenderPoolOwner& renderPoolOwner;
   // Six counters in one: see apps/engine_producer_telemetry.h.
   ProducerTelemetry& producerTelemetry;
   // Three members and a std::function became one: see apps/engine_preview_queue.h.
@@ -65,13 +69,9 @@ struct ProducerThreadDeps {
   bool& patcherParallel;
   std::unique_ptr<daw::engine::WorkerPool>& patcherPool;
   const uint64_t patternTicks;
-  bool& poolAlwaysOn;
-  bool& poolEngaged;
-  double& poolWorkEwmaUs;
   std::atomic<uint64_t>& projectSeed;
   std::function<EngineAudioCallback*()> publishedCallback;
   std::function<daw::ResolvedPitch(uint8_t, const daw::HarmonyEvent&)> quantizePitch;
-  daw::RenderPool& renderPool;
   std::atomic<bool>& resetTimeline;
   std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)> resolveDevicePluginPath;
   std::atomic<bool>& running;

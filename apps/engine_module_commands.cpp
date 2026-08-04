@@ -18,7 +18,7 @@ void handleSaveModule(ModuleCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& loadedProjectDir = deps.loadedProjectDir;
+  auto& loadedProjectDir = deps.loadedProject.loadedProjectDir;
   const auto& saveProjectToPath = deps.saveProjectToPath;
   const auto& loadProjectFromPath = deps.loadProjectFromPath;
   {

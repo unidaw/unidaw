@@ -9,6 +9,7 @@
 namespace daw::engine {
 
 void runProducerThread(ProducerThreadDeps& deps) {
+  auto& renderPoolOwner = deps.renderPoolOwner;
   auto& producerTelemetry = deps.producerTelemetry;
   auto& previewQueue = deps.previewQueue;
   auto& audioPlaybackBlockId = deps.audioPlaybackBlockId;
@@ -29,13 +30,9 @@ void runProducerThread(ProducerThreadDeps& deps) {
   auto& patcherParallel = deps.patcherParallel;
   auto& patcherPool = deps.patcherPool;
   auto& patternTicks = deps.patternTicks;
-  auto& poolAlwaysOn = deps.poolAlwaysOn;
-  auto& poolEngaged = deps.poolEngaged;
-  auto& poolWorkEwmaUs = deps.poolWorkEwmaUs;
   auto& projectSeed = deps.projectSeed;
   auto& publishedCallback = deps.publishedCallback;
   auto& quantizePitch = deps.quantizePitch;
-  auto& renderPool = deps.renderPool;
   auto& resetTimeline = deps.resetTimeline;
   auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
   auto& running = deps.running;
@@ -124,12 +121,12 @@ void runProducerThread(ProducerThreadDeps& deps) {
       // Built once per producer thread, immediately before the loop: every member is a
       // reference to something that outlives it, so the per-block call adds no work.
       daw::engine::ProducerBlockDeps producerBlockDeps{
-      producerTelemetry, previewQueue, blockDuration, blockTicksFor, debugStall, engineConfig,
-      getHarmonyAt, getRingCtrl, getRingStd, getScaleForHarmony, harmonyTimeline,
+      renderPoolOwner, producerTelemetry, previewQueue, blockDuration, blockTicksFor, debugStall,
+      engineConfig, getHarmonyAt, getRingCtrl, getRingStd, getScaleForHarmony, harmonyTimeline,
       lastOverflowTick, latencyMgr, transport, songTiming, nextBlockId, nextNoteId,
       offlineRender, panicPending, patcherGraph, patcherParallel, patcherPool,
-      poolAlwaysOn, poolEngaged, poolWorkEwmaUs, producerBlockBudgetUs, projectSeed,
-      publishedCallback, quantizePitch, renderPool, resolveDevicePluginPath, tempoProvider,
+      producerBlockBudgetUs, projectSeed,
+      publishedCallback, quantizePitch, resolveDevicePluginPath, tempoProvider,
       tickConverter, traceNotes, patternTicks, warnedEventOutsideBlock, writeMirrorParams
   };
 
