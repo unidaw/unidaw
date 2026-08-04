@@ -41,7 +41,21 @@ SHM="/imchk_$$"
 # engine was orphaned and ctest then blocked on it — ~1000s per timeout, measured across 18 runs.
 # stop_engine escalates to SIGKILL after 10s and says so.
 cleanup() { [ -n "${ENG:-}" ] && stop_engine "$ENG"; rm -rf "$TMP"; }
-trap cleanup EXIT
+# KEEP THE EVIDENCE WHEN IT FAILS, then clean up exactly as before. The failure messages in these
+# checks point at logs inside $TMP, and cleanup() removes $TMP — so the one run whose log you need
+# is the one run that deletes it. This wraps the existing cleanup rather than editing it: cleanup
+# still runs, still stops engines, still removes the directory.
+keep_evidence_then() {
+  local rc=$?
+  if [ "$rc" -ne 0 ] && [ -n "${TMP:-}" ] && [ -d "$TMP" ]; then
+    local dest="${DAW_CHECK_EVIDENCE:-/tmp/daw-check-evidence}/$(basename "$0" .sh).$$"
+    mkdir -p "$dest" && cp -R "$TMP"/. "$dest"/ 2>/dev/null
+    echo "  evidence kept in $dest"
+  fi
+  "$@"
+  exit $rc
+}
+trap 'keep_evidence_then cleanup' EXIT
 
 cat > "$TMP/im.uniproj.json" <<EOF
 { "schema_version": 4, "meta": { "name": "im" }, "nanoticks_per_quarter": $Q,
