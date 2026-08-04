@@ -42,6 +42,8 @@
 #include "apps/engine_history_journal.h"
 #include "apps/engine_preview_queue.h"
 #include "apps/engine_produce_block.h"
+#include "apps/engine_publish_gates.h"
+#include "apps/engine_producer_telemetry.h"
 #include "apps/engine_startup.h"
 #include "apps/engine_producer_thread.h"
 #include "apps/engine_bulk_edit.h"
@@ -481,12 +483,10 @@ int main(int argc, char** argv) {
   // Counted, not sampled — a sampler that blows the budget on the one block where 64 voices
   // start together is exactly the case a periodic sample misses. Written only by the producer
   // thread, read by the reporter and the shutdown summary, so relaxed is enough.
-  std::atomic<uint64_t> producerBlocksTimed{0};
-  std::atomic<uint64_t> producerBlockUsTotal{0};
-  std::atomic<uint64_t> producerBlockUsMax{0};
-  std::atomic<uint64_t> producerSamplerUsTotal{0};
-  std::atomic<uint64_t> producerSamplerUsMax{0};
-  std::atomic<uint64_t> producerBlocksOverBudget{0};
+  // Six counters in one object: see apps/engine_producer_telemetry.h. They were passed
+  // individually into ProducerBlockDeps, ProducerThreadDeps and ShutdownDeps — eighteen member
+  // slots for one measurement, and nothing has ever read one of them without the others.
+  daw::engine::ProducerTelemetry producerTelemetry;
 
   // The pool the per-track work runs on. Sized to leave the audio callback, the master render
   // thread and the OS room to breathe rather than claiming every core — a producer that
@@ -759,7 +759,10 @@ int main(int argc, char** argv) {
   // owns. Should be impossible; see the clamp that sets it.
   std::atomic<bool> warnedEventOutsideBlock{false};
   // One-shot: a device id too wide for the published half-word in UiPatcherNode.
-  std::atomic<bool> warnedPatcherOwnerTooWide{false};
+  // Nine publish gates and a warning latch in one object: see apps/engine_publish_gates.h. They
+  // are touched only by the consumer thread and were nine loose locals here, threaded through
+  // ConsumerDeps and PublishClipsDeps by hand.
+  daw::engine::PublishGates publishGates;
   std::atomic<uint32_t> chainVersion{0};
   std::atomic<uint32_t> routingVersion{0};
   std::atomic<uint32_t> modVersion{0};
@@ -995,8 +998,6 @@ int main(int argc, char** argv) {
   // notes without the request ring. Rebuilt only when clipVersion moves — the
   // per-frame cost is otherwise a needless multi-megabyte memset. `force` seeds
   // the first publish and reruns after a load.
-  uint32_t lastClipAllVersion = 0xFFFF'FFFFu;
-  uint32_t lastClipAllQuantizeVersion = 0xFFFF'FFFFu;
 
   // v28: publish WHICH PARAMS ARE AUTOMATED — the standing lane list. Gated on
   // automationVersion, so a note edit does not rewrite it and a client can cache on the number.
@@ -1012,8 +1013,6 @@ int main(int argc, char** argv) {
   // body mid-rewrite, and samples again before the stamp sees v0 == v1 and accepts garbage. That
   // is the arrange summary's history verbatim, twenty lines below where this was first written;
   // the 0 sentinel is what actually makes the write visible while it is happening.
-  uint32_t lastAutomationVersion = 0xFFFF'FFFFu;
-  uint32_t automationGeneration = 0;
 
   // M3.25: publish the ARRANGEMENT SUMMARY — the section spine RESOLVED against the
   // meter, the meter points themselves, and the song end. Gated on sectionVersion so a
@@ -1027,7 +1026,10 @@ int main(int argc, char** argv) {
   // So a client that drew the song end from here kept the value from the last section edit, and
   // no reader could tell: the version it caches on had not moved either. Gating on both inputs
   // and publishing a generation means the number moves whenever anything in the region did.
-  // A note edit still moves nothing, which is the property arrange_summary_check pins:
+  // A note edit still moves nothing. That property was pinned by arrange_summary_check, WHICH NO
+  // LONGER EXISTS — arrangement_check replaced it and does not assert this rule, so the song-end
+  // half of the gate is currently uncovered (task #28). Saying so is better than citing a guard
+  // that is gone; a comment naming a check nobody runs reads as coverage.
   // recomputeSongEnd runs only on a placement edit, a section ripple, or a load.
   //
   // Second, the torn read. The comments here used to claim that "reading version-body-version
@@ -1036,15 +1038,11 @@ int main(int argc, char** argv) {
   // body mid-rewrite, then sampled again BEFORE the writer stamped, saw v0 == v1 and accepted
   // torn data. A seqlock needs the write to be visible while it is happening, which is what the
   // 0 sentinel below provides — the same odd/even trick the main ui_version already uses.
-  uint32_t lastArrangeVersion = 0xFFFF'FFFFu;
-  uint64_t lastArrangeSongEnd = 0xFFFF'FFFF'FFFF'FFFFull;
-  uint32_t arrangeGeneration = 0;
 
   // M3.4: publish the placed-clip extents (rails). Rebuilt only when clipVersion
   // moves; loose placements are already excluded (they carry no runtime extent).
-  uint32_t lastClipExtentVersion = 0xFFFF'FFFFu;
   daw::engine::ClipExtentsDeps clipExtentsDeps{
-      clipVersion, lastClipExtentVersion, snapshotTracks, uiShm};
+      publishGates, clipVersion, snapshotTracks, uiShm};
 
   auto writeUiClipExtents = [&](bool force) {
     daw::engine::writeUiClipExtents(clipExtentsDeps, force);
@@ -1052,7 +1050,6 @@ int main(int argc, char** argv) {
 
   // v14: publish the patcher graph the engine runs, so the UI can draw it. Reads
   // the lock-free graph snapshot; only rewrites when the patcher version moves.
-  uint32_t lastPatcherVersion = 0xFFFF'FFFFu;
 
 
 
@@ -2139,12 +2136,12 @@ int main(int argc, char** argv) {
   daw::LogLine() << "UI: command thread launched" << std::endl;
 
   daw::engine::ProducerThreadDeps producerThreadDeps{
-      previewQueue, audioPlaybackBlockId, engineConfig, getHarmonyAt, getRingCtrl, getRingStd,
+      producerTelemetry, previewQueue, audioPlaybackBlockId, engineConfig, getHarmonyAt,
+      getRingCtrl, getRingStd,
       getScaleForHarmony, harmonyTimeline, lastOverflowTick, latencyMgr, nextBlockId,
       nextNoteId, offlineProducerArmed, offlineRender, panicPending, patcherGraph,
       patcherParallel, patcherPool, patternTicks, poolAlwaysOn,
-      poolEngaged, poolWorkEwmaUs, producerBlocksOverBudget, producerBlocksTimed,
-      producerBlockUsMax, producerBlockUsTotal, producerSamplerUsMax, producerSamplerUsTotal,
+      poolEngaged, poolWorkEwmaUs,
       projectSeed, publishedCallback, quantizePitch, renderPool, resetTimeline,
       resolveDevicePluginPath, running, snapshotTracks, songTiming, tempoProvider,
       testThrottleMs, tickConverter, traceNotes, transport, warnedEventOutsideBlock,
@@ -2152,12 +2149,9 @@ int main(int argc, char** argv) {
   std::thread producer([&] { daw::engine::runProducerThread(producerThreadDeps); });
 
   daw::engine::UiWriterDeps uiWriterDeps{
-      arrangeGeneration, arrange, automationGeneration, automationVersion, clipVersion,
-      clipWindowMutex, clipWindowPending, harmonyTimeline, laneQuantizeOf,
-      lastArrangeSongEnd, lastArrangeVersion, lastAutomationVersion,
-      lastClipAllQuantizeVersion, lastClipAllVersion, lastPatcherVersion, patcherGraph,
-      quantizeVersion, snapshotTracks, songTiming, trackIsPersisted, uiShm,
-      warnedPatcherOwnerTooWide
+      publishGates, arrange, automationVersion, clipVersion,
+      clipWindowMutex, clipWindowPending, harmonyTimeline, laneQuantizeOf, patcherGraph,
+      quantizeVersion, snapshotTracks, songTiming, trackIsPersisted, uiShm
   };
 
   daw::engine::ConsumerDeps consumerDeps{
@@ -2270,10 +2264,8 @@ int main(int argc, char** argv) {
   }
   restartCv.notify_all();
   daw::engine::ShutdownDeps shutdownDeps{
-      audioBackend, audioCallback, consumer, engineConfig, masterFxActive,
-      masterRenderThread, observedPipelineBlocks, producer, producerBlockUsMax,
-      producerBlockUsTotal, producerBlocksOverBudget, producerBlocksTimed,
-      producerSamplerUsMax, producerSamplerUsTotal, restartWorker, trackTable,
+      producerTelemetry, audioBackend, audioCallback, consumer, engineConfig, masterFxActive,
+      masterRenderThread, observedPipelineBlocks, producer, restartWorker, trackTable,
       uiThread, uiShm, xrunReporter};
   daw::engine::shutdownEngine(shutdownDeps);
 

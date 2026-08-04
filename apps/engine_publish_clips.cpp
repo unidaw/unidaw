@@ -10,7 +10,7 @@ namespace daw::engine {
 
 void writeUiClipExtents(ClipExtentsDeps& deps, bool force) {
   auto& clipVersion = deps.clipVersion;
-  auto& lastClipExtentVersion = deps.lastClipExtentVersion;
+  auto& lastClipExtentVersion = deps.publishGates.lastClipExtentVersion;
   auto& snapshotTracks = deps.snapshotTracks;
   auto& uiShm = deps.uiShm;
 

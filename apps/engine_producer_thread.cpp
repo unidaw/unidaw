@@ -9,6 +9,7 @@
 namespace daw::engine {
 
 void runProducerThread(ProducerThreadDeps& deps) {
+  auto& producerTelemetry = deps.producerTelemetry;
   auto& previewQueue = deps.previewQueue;
   auto& audioPlaybackBlockId = deps.audioPlaybackBlockId;
   auto& engineConfig = deps.engineConfig;
@@ -31,12 +32,6 @@ void runProducerThread(ProducerThreadDeps& deps) {
   auto& poolAlwaysOn = deps.poolAlwaysOn;
   auto& poolEngaged = deps.poolEngaged;
   auto& poolWorkEwmaUs = deps.poolWorkEwmaUs;
-  auto& producerBlocksOverBudget = deps.producerBlocksOverBudget;
-  auto& producerBlocksTimed = deps.producerBlocksTimed;
-  auto& producerBlockUsMax = deps.producerBlockUsMax;
-  auto& producerBlockUsTotal = deps.producerBlockUsTotal;
-  auto& producerSamplerUsMax = deps.producerSamplerUsMax;
-  auto& producerSamplerUsTotal = deps.producerSamplerUsTotal;
   auto& projectSeed = deps.projectSeed;
   auto& publishedCallback = deps.publishedCallback;
   auto& quantizePitch = deps.quantizePitch;
@@ -129,13 +124,11 @@ void runProducerThread(ProducerThreadDeps& deps) {
       // Built once per producer thread, immediately before the loop: every member is a
       // reference to something that outlives it, so the per-block call adds no work.
       daw::engine::ProducerBlockDeps producerBlockDeps{
-      previewQueue, blockDuration, blockTicksFor, debugStall, engineConfig, getHarmonyAt,
-      getRingCtrl, getRingStd, getScaleForHarmony, harmonyTimeline, lastOverflowTick,
-      latencyMgr, transport, songTiming, nextBlockId, nextNoteId, offlineRender,
-      panicPending, patcherGraph, patcherParallel, patcherPool,
-      poolAlwaysOn, poolEngaged, poolWorkEwmaUs, producerBlockBudgetUs,
-      producerBlockUsMax, producerBlockUsTotal, producerBlocksOverBudget,
-      producerBlocksTimed, producerSamplerUsMax, producerSamplerUsTotal, projectSeed,
+      producerTelemetry, previewQueue, blockDuration, blockTicksFor, debugStall, engineConfig,
+      getHarmonyAt, getRingCtrl, getRingStd, getScaleForHarmony, harmonyTimeline,
+      lastOverflowTick, latencyMgr, transport, songTiming, nextBlockId, nextNoteId,
+      offlineRender, panicPending, patcherGraph, patcherParallel, patcherPool,
+      poolAlwaysOn, poolEngaged, poolWorkEwmaUs, producerBlockBudgetUs, projectSeed,
       publishedCallback, quantizePitch, renderPool, resolveDevicePluginPath, tempoProvider,
       tickConverter, traceNotes, patternTicks, warnedEventOutsideBlock, writeMirrorParams
   };

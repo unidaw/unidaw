@@ -37,6 +37,7 @@
 #include "engine_transport_state.h"
 #include "engine_harmony_timeline.h"
 #include "engine_preview_queue.h"
+#include "engine_producer_telemetry.h"
 #include "engine_types.h"
 #include "event_ring.h"
 #include "harmony_timeline.h"
@@ -55,6 +56,8 @@ namespace daw::engine {
 class EngineAudioCallback;
 
 struct ProducerBlockDeps {
+  // Six counters in one: see apps/engine_producer_telemetry.h.
+  ProducerTelemetry& producerTelemetry;
   // Three members and a std::function became one: see apps/engine_preview_queue.h.
   PreviewQueue& previewQueue;
   const std::chrono::duration<double>& blockDuration;
@@ -81,12 +84,6 @@ struct ProducerBlockDeps {
   bool& poolEngaged;
   double& poolWorkEwmaUs;
   const uint64_t producerBlockBudgetUs;
-  std::atomic<uint64_t>& producerBlockUsMax;
-  std::atomic<uint64_t>& producerBlockUsTotal;
-  std::atomic<uint64_t>& producerBlocksOverBudget;
-  std::atomic<uint64_t>& producerBlocksTimed;
-  std::atomic<uint64_t>& producerSamplerUsMax;
-  std::atomic<uint64_t>& producerSamplerUsTotal;
   std::atomic<uint64_t>& projectSeed;
   std::function<EngineAudioCallback*()> publishedCallback;
   std::function<daw::ResolvedPitch(uint8_t, const daw::HarmonyEvent&)> quantizePitch;

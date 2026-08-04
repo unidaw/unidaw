@@ -37,11 +37,14 @@
 
 #include "engine_produce_block.h"
 #include "engine_preview_queue.h"
+#include "engine_producer_telemetry.h"
 #include "engine_types.h"
 
 namespace daw::engine {
 
 struct ProducerThreadDeps {
+  // Six counters in one: see apps/engine_producer_telemetry.h.
+  ProducerTelemetry& producerTelemetry;
   // Three members and a std::function became one: see apps/engine_preview_queue.h.
   PreviewQueue& previewQueue;
   std::atomic<uint32_t>& audioPlaybackBlockId;
@@ -65,12 +68,6 @@ struct ProducerThreadDeps {
   bool& poolAlwaysOn;
   bool& poolEngaged;
   double& poolWorkEwmaUs;
-  std::atomic<uint64_t>& producerBlocksOverBudget;
-  std::atomic<uint64_t>& producerBlocksTimed;
-  std::atomic<uint64_t>& producerBlockUsMax;
-  std::atomic<uint64_t>& producerBlockUsTotal;
-  std::atomic<uint64_t>& producerSamplerUsMax;
-  std::atomic<uint64_t>& producerSamplerUsTotal;
   std::atomic<uint64_t>& projectSeed;
   std::function<EngineAudioCallback*()> publishedCallback;
   std::function<daw::ResolvedPitch(uint8_t, const daw::HarmonyEvent&)> quantizePitch;

@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "engine_track_table.h"
+#include "engine_publish_gates.h"
 #include "engine_types.h"
 #include "project_file.h"
 #include "time_base.h"
@@ -27,8 +28,9 @@
 namespace daw::engine {
 
 struct ClipExtentsDeps {
+  // Nine publish gates in one: see apps/engine_publish_gates.h.
+  PublishGates& publishGates;
   std::atomic<uint32_t>& clipVersion;
-  uint32_t& lastClipExtentVersion;
   std::function<std::vector<TrackRuntime*>()> snapshotTracks;
   UiShmState& uiShm;
 };

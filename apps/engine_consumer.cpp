@@ -75,8 +75,8 @@ void writeUiClipWindowSnapshotTo(UiWriterDeps& deps, const std::vector<TrackRunt
 void writeUiClipAllSnapshotTo(UiWriterDeps& deps, bool force) {
   auto& clipVersion = deps.clipVersion;
   auto& laneQuantizeOf = deps.laneQuantizeOf;
-  auto& lastClipAllQuantizeVersion = deps.lastClipAllQuantizeVersion;
-  auto& lastClipAllVersion = deps.lastClipAllVersion;
+  auto& lastClipAllQuantizeVersion = deps.publishGates.lastClipAllQuantizeVersion;
+  auto& lastClipAllVersion = deps.publishGates.lastClipAllVersion;
   auto& quantizeVersion = deps.quantizeVersion;
   auto& snapshotTracks = deps.snapshotTracks;
   auto& uiShm = deps.uiShm;
@@ -141,9 +141,9 @@ void writeUiClipAllSnapshotTo(UiWriterDeps& deps, bool force) {
 }
 
 void writeUiAutomationLanesTo(UiWriterDeps& deps, bool force) {
-  auto& automationGeneration = deps.automationGeneration;
+  auto& automationGeneration = deps.publishGates.automationGeneration;
   auto& automationVersion = deps.automationVersion;
-  auto& lastAutomationVersion = deps.lastAutomationVersion;
+  auto& lastAutomationVersion = deps.publishGates.lastAutomationVersion;
   auto& snapshotTracks = deps.snapshotTracks;
   auto& trackIsPersisted = deps.trackIsPersisted;
   auto& uiShm = deps.uiShm;
@@ -211,11 +211,11 @@ void writeUiAutomationLanesTo(UiWriterDeps& deps, bool force) {
 }
 
 void writeUiArrangeSummaryTo(UiWriterDeps& deps, bool force) {
-  auto& arrangeGeneration = deps.arrangeGeneration;
+  auto& arrangeGeneration = deps.publishGates.arrangeGeneration;
   auto& arrangeMutex = deps.arrange.arrangeMutex;
   auto& arrangeVersion = deps.arrange.arrangeVersion;
-  auto& lastArrangeSongEnd = deps.lastArrangeSongEnd;
-  auto& lastArrangeVersion = deps.lastArrangeVersion;
+  auto& lastArrangeSongEnd = deps.publishGates.lastArrangeSongEnd;
+  auto& lastArrangeVersion = deps.publishGates.lastArrangeVersion;
   auto& markerList = deps.arrange.markerList;
   auto& songEndNanotick = deps.songTiming.songEndNanotick;
   auto& songMeter = deps.songTiming.songMeter;
@@ -310,11 +310,11 @@ void writeUiArrangeSummaryTo(UiWriterDeps& deps, bool force) {
 }
 
 void writeUiPatcherTo(UiWriterDeps& deps, bool force) {
-  auto& lastPatcherVersion = deps.lastPatcherVersion;
+  auto& lastPatcherVersion = deps.publishGates.lastPatcherVersion;
   auto& patcherGraphSnapshot = deps.patcherGraph.patcherGraphSnapshot;
   auto& patcherGraphState = deps.patcherGraph.patcherGraphState;
   auto& uiShm = deps.uiShm;
-  auto& warnedPatcherOwnerTooWide = deps.warnedPatcherOwnerTooWide;
+  auto& warnedPatcherOwnerTooWide = deps.publishGates.warnedPatcherOwnerTooWide;
 
     if (!uiShm.header || uiShm.header->uiPatcherOffset == 0) {
       return;

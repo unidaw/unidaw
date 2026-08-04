@@ -31,6 +31,7 @@
 #include "engine_song_timing.h"
 #include "engine_transport_state.h"
 #include "engine_harmony_timeline.h"
+#include "engine_publish_gates.h"
 #include "engine_types.h"
 #include "latency_manager.h"
 #include "project_file.h"
@@ -49,28 +50,21 @@ class EngineAudioCallback;
 // The six `last*Version` latches are in here because they are the writers' private state, and
 // they stay OWNED BY main() so the move changes no lifetime and no initialisation order.
 struct UiWriterDeps {
-  uint32_t& arrangeGeneration;
+  // Nine publish gates in one: see apps/engine_publish_gates.h.
+  PublishGates& publishGates;
   ArrangeMarkers& arrange;
-  uint32_t& automationGeneration;
   std::atomic<uint32_t>& automationVersion;
   std::atomic<uint32_t>& clipVersion;
   std::mutex& clipWindowMutex;
   std::optional<ClipWindowPending>& clipWindowPending;
   HarmonyTimeline& harmonyTimeline;
   std::function<daw::LaneQuantize(const TrackRuntime&)> laneQuantizeOf;
-  uint64_t& lastArrangeSongEnd;
-  uint32_t& lastArrangeVersion;
-  uint32_t& lastAutomationVersion;
-  uint32_t& lastClipAllQuantizeVersion;
-  uint32_t& lastClipAllVersion;
-  uint32_t& lastPatcherVersion;
   PatcherGraphOwner& patcherGraph;
   std::atomic<uint32_t>& quantizeVersion;
   std::function<std::vector<TrackRuntime*>()> snapshotTracks;
   SongTiming& songTiming;
   std::function<bool(const TrackRuntime&)> trackIsPersisted;
   UiShmState& uiShm;
-  std::atomic<bool>& warnedPatcherOwnerTooWide;
 };
 struct ConsumerDeps {
   std::atomic<uint32_t>& audioPlaybackBlockId;

@@ -18,12 +18,15 @@
 
 #include "engine_audio_callback.h"
 #include "engine_track_table.h"
+#include "engine_producer_telemetry.h"
 #include "engine_types.h"
 #include "platform_juce/juce_wrapper.h"
 
 namespace daw::engine {
 
 struct ShutdownDeps {
+  // Six counters in one: see apps/engine_producer_telemetry.h.
+  ProducerTelemetry& producerTelemetry;
   std::unique_ptr<daw::IAudioBackend>& audioBackend;
   std::unique_ptr<EngineAudioCallback>& audioCallback;
   std::thread& consumer;
@@ -34,12 +37,6 @@ struct ShutdownDeps {
   std::thread& producer;
   // THE LOAD SUMMARY'S SIX COUNTERS. They are written only by the producer thread and read here
   // after it has been joined, which is why plain relaxed reads are enough at this point.
-  std::atomic<uint64_t>& producerBlockUsMax;
-  std::atomic<uint64_t>& producerBlockUsTotal;
-  std::atomic<uint64_t>& producerBlocksOverBudget;
-  std::atomic<uint64_t>& producerBlocksTimed;
-  std::atomic<uint64_t>& producerSamplerUsMax;
-  std::atomic<uint64_t>& producerSamplerUsTotal;
   std::thread& restartWorker;
   TrackTable& trackTable;
   std::thread& uiThread;
