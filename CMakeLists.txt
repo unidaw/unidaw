@@ -1250,6 +1250,13 @@ add_test(NAME track_readback
 )
 set_tests_properties(track_readback PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# The C++ -> JS bit constants were the one contract boundary with no mechanical check, and one had
+# diverged: FLAG_ALLOW_OVERLAP held bit 3 (sound-addressed) while claiming bit 4. Rust was right.
+add_test(NAME js_flag_mirror
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/js_flag_mirror_check.sh
+)
+set_tests_properties(js_flag_mirror PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120)
+
 # The patcher pool is GLOBAL and ownership is a render-time filter, so a track that owns no node
 # must run none. It ran all of them: a two-track project played track 0's generated notes out of
 # track 1's sampler, which held no patcher, no clip and no note.

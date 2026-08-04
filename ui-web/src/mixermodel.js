@@ -25,7 +25,7 @@ export const FLAG_SOLO = 2;
  * output is the master bus, with no arrangement rail, no clips and no tracker lane. The
  * two flag bytes are easy to confuse and the mistake is quiet, so the name says which.
  */
-export const FLAG_TRACK_MASTER = 8;
+export const FLAG_TRACK_MASTER = 8;  // mirrors kUiTrackFlagMaster
 /**
  * Bit 2: does this track quantize its notes to the harmony timeline?
  *
@@ -35,7 +35,7 @@ export const FLAG_TRACK_MASTER = 8;
  * be a control that appears to work and changes nothing, which is the exact shape this app
  * keeps finding; `dockApi.harmonyQuantize` is the way to set it.
  */
-export const FLAG_HARMONY_QUANTIZE = 4;
+export const FLAG_HARMONY_QUANTIZE = 4;  // mirrors kUiMixFlagHarmonyQuantize
 /**
  * Bit 4: does note entry LEAVE the sounding note alone, or truncate it?
  *
@@ -43,8 +43,15 @@ export const FLAG_HARMONY_QUANTIZE = 4;
  * that decides whether an edit loses data: `addNoteToClip` shortens the sounding note in the
  * same column IN THE DOCUMENT, so the duration you typed is gone at entry and no later view can
  * get it back. Read from here, written by SetTrackAllowNoteOverlap, same as the bit above.
+ *
+ * IT WAS 8, WHICH IS BIT 3 — the comment above said "Bit 4" the whole time and the value did not
+ * agree with it. Bit 3 of the mixer byte is kUiMixFlagSoundAddressed, so this read a completely
+ * different setting: the overlap indicator showed whether the track was sound-addressed, and the
+ * toggle computed from it at `s.allowOverlap` below was wrong for every track. Rust had it right
+ * (MIX_FLAG_ALLOW_NOTE_OVERLAP), so the divergence was JS-only, on the one contract boundary in
+ * this repo with no mechanical check — which tools/js_flag_mirror_check.sh now closes.
  */
-export const FLAG_ALLOW_OVERLAP = 8;
+export const FLAG_ALLOW_OVERLAP = 16;  // mirrors kUiMixFlagAllowNoteOverlap
 
 /**
  * Optimistic local edits, one entry per track. `pendingUntil` is the mixer
