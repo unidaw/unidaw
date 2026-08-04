@@ -14,26 +14,21 @@ namespace daw::engine {
 // local of main(), which is why the capture enumeration never mentioned it: a constant
 // expression needs no capture. main() has no other use for it, so it moved here whole
 // rather than being duplicated.
-constexpr uint64_t kPlacementUnchanged = 0xFFFFFFFFFFFFFFFFull;
 
 void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
   // Re-bind every dependency to the name the body already uses. This is what lets the
   // 1,623 lines below be the untouched original.
   auto& applyPlacementEdit = deps.applyPlacementEdit;
   auto& automationCommandDeps = deps.automationCommandDeps;
-  auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   auto& bulkStreams = deps.bulkStreams;
   auto& bulkTick = deps.bulkTick;
-  auto& bumpClipVersionFor = deps.bumpClipVersionFor;
   auto& chainCommandDeps = deps.chainCommandDeps;
   auto& clipCommandDeps = deps.clipCommandDeps;
-  auto& clipVersion = deps.clipVersion;
   auto& deviceCommandDeps = deps.deviceCommandDeps;
   auto& enqueuePreview = deps.enqueuePreview;
   auto& handleAssembledBulk = deps.handleAssembledBulk;
   auto& heldPreview = deps.heldPreview;
   auto& historyAppend = deps.historyAppend;
-  auto& liveTrackCount = deps.liveTrackCount;
   auto& loadedTempoMap = deps.loadedTempoMap;
   auto& loopEndNanotick = deps.loopEndNanotick;
   auto& loopStartNanotick = deps.loopStartNanotick;
@@ -42,7 +37,6 @@ void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
   auto& masterTrack = deps.masterTrack;
   auto& modlinkCommandDeps = deps.modlinkCommandDeps;
   auto& moduleCommandDeps = deps.moduleCommandDeps;
-  auto& nextPlacementId = deps.nextPlacementId;
   auto& noteCommandDeps = deps.noteCommandDeps;
   auto& panicPending = deps.panicPending;
   auto& patcherCommandDeps = deps.patcherCommandDeps;
@@ -52,17 +46,12 @@ void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
   auto& previewMutex = deps.previewMutex;
   auto& placementCommandDeps = deps.placementCommandDeps;
   auto& projectCommandDeps = deps.projectCommandDeps;
-  auto& rebuildAudioRender = deps.rebuildAudioRender;
-  auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
   auto& requestCommandDeps = deps.requestCommandDeps;
   auto& resetTimeline = deps.resetTimeline;
-  auto& resetTrackContent = deps.resetTrackContent;
   auto& restartCv = deps.restartCv;
-  auto& restartTrackHost = deps.restartTrackHost;
   auto& rowopsCommandDeps = deps.rowopsCommandDeps;
   auto& running = deps.running;
   auto& samplerCommandDeps = deps.samplerCommandDeps;
-  auto& setupTrackRuntime = deps.setupTrackRuntime;
   auto& tempoProvider = deps.tempoProvider;
   auto& trackCommandDeps = deps.trackCommandDeps;
   auto& arrangeTimeCommandDeps = deps.arrangeTimeCommandDeps;
@@ -513,177 +502,10 @@ void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
       enqueuePreview(payload.trackId, pitch, velocity, on);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::AddTrack)) {
-      // Add an empty top-level track. Refill the LOWEST tombstone first (RemoveTrack leaves
-      // middle holes) so repeated middle remove+add can't leak slots toward the cap; only
-      // when there is no tombstone do we append at the extent. Its id == slot index and is
-      // stable. A reused slot gets a bare host + blank state; a fresh extent slot is created.
-      uint32_t slot = liveTrackCount.load(std::memory_order_acquire);
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        for (uint32_t i = 0; i < slot && i < tracks.size(); ++i) {
-          if (tracks[i] && tracks[i]->removed.load(std::memory_order_acquire)) {
-            slot = i;  // lowest tombstone — refill it instead of appending
-            break;
-          }
-        }
-      }
-      if (slot >= daw::kUiMaxTracks) {
-        daw::LogLine() << "UI: AddTrack refused — at track cap " << daw::kUiMaxTracks
-                  << std::endl;
-      } else {
-        TrackRuntime* existing = daw::engine::trackAt(tracks, tracksMutex, slot);
-        bool ok = true;
-        if (existing) {
-          ok = restartTrackHost(*existing, {});
-          if (ok) {
-            {
-              std::lock_guard<std::mutex> tlock(existing->trackMutex);
-              resetTrackContent(*existing);
-              existing->trackName = "Track " + std::to_string(slot + 1);
-              existing->trackSnapshot = buildTrackSnapshot(existing->track);
-            }
-            existing->isAuxChild.store(false, std::memory_order_release);
-            existing->parentId.store(0, std::memory_order_relaxed);
-            existing->collapsed.store(false, std::memory_order_relaxed);
-            existing->childrenReconciled.store(false, std::memory_order_relaxed);
-            existing->removed.store(false, std::memory_order_release);
-            auto snapshot = rebuildFlatAndPublish(*existing);
-            if (snapshot) {
-              std::atomic_store_explicit(&existing->clipSnapshot, snapshot,
-                                         std::memory_order_release);
-            }
-          }
-        } else {
-          auto rt = setupTrackRuntime(slot, "", false, true);
-          if (!rt) {
-            ok = false;
-          } else {
-            std::lock_guard<std::mutex> lock(tracksMutex);
-            tracks.push_back(std::move(rt));
-          }
-        }
-        if (ok) {
-          uint32_t seen = liveTrackCount.load(std::memory_order_relaxed);
-          while (slot + 1 > seen &&
-                 !liveTrackCount.compare_exchange_weak(seen, slot + 1,
-                                                       std::memory_order_relaxed)) {
-          }
-          {
-            // A fresh track's clips are empty, but the RuntimeTrack in this slot may be
-            // a reused tombstone whose counter still carries the removed track's value.
-            // Bump so nobody's pre-existing base is accepted against a brand-new track,
-            // and so the version-gated regions rebuild and show the new lane.
-            std::lock_guard<std::mutex> lock(tracksMutex);
-            if (slot < tracks.size() && tracks[slot]) {
-              tracks[slot]->trackClipVersion.fetch_add(1, std::memory_order_acq_rel);
-            }
-          }
-          clipVersion.fetch_add(1, std::memory_order_acq_rel);
-          std::cout << "UI: AddTrack -> track " << slot << std::endl;
-        } else {
-          daw::LogLine() << "UI: AddTrack failed to bring up track " << slot << std::endl;
-        }
-      }
+      daw::engine::handleAddTrack(trackCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RemoveTrack)) {
-      // Tombstone the target track (stable id == slot) + its aux children. The slot is
-      // kept (kUiTrackFlagAbsent) so neighbours keep their ids; trailing tombstones are
-      // trimmed so removing from the end shrinks the extent. Rejects a child id.
-      const uint32_t targetId = payload.trackId;
-      std::vector<TrackRuntime*> toRemove;
-      bool rejected = false;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        for (auto& rt : tracks) {
-          if (!rt) {
-            continue;
-          }
-          const bool isChild = rt->isAuxChild.load(std::memory_order_acquire);
-          if (rt->trackId == targetId) {
-            if (isChild) {
-              rejected = true;
-              break;
-            }
-            toRemove.push_back(rt.get());
-          } else if (isChild &&
-                     rt->auxParentTrackId.load(std::memory_order_relaxed) == targetId) {
-            toRemove.push_back(rt.get());
-          }
-        }
-      }
-      if (rejected) {
-        daw::LogLine() << "UI: RemoveTrack rejected — track " << targetId
-                  << " is an aux child (managed via its parent's buses)" << std::endl;
-      } else if (toRemove.empty()) {
-        daw::LogLine() << "UI: RemoveTrack — no track with id " << targetId << std::endl;
-      } else {
-        for (TrackRuntime* rt : toRemove) {
-          // Tear the host down and blank the track, mirroring the load-clear sequence, then
-          // mark it a tombstone. Runs on the command thread with no tracksMutex held, so
-          // taking controllerMutex is safe.
-          {
-            std::lock_guard<std::mutex> clock(rt->controllerMutex);
-            rt->needsRestart.store(false, std::memory_order_release);
-            rt->hostReady.store(false, std::memory_order_release);
-            rt->active.store(false, std::memory_order_release);
-            rt->hostGaveUp.store(false, std::memory_order_release);
-            rt->watchdog.reset();
-            rt->controller.disconnect();
-            rt->config.pluginPaths.clear();
-            rt->config.pluginNames.clear();
-            rt->lastAuxOutMask.store(0, std::memory_order_relaxed);
-            rt->lastSidechainMask.store(0, std::memory_order_relaxed);
-          }
-          std::shared_ptr<const ClipSnapshot> snapshot;
-          {
-            std::lock_guard<std::mutex> tlock(rt->trackMutex);
-            rt->track.chain = daw::TrackChain{};
-            rt->sourcePlacements.clear();
-            rt->ownedClips.clear();
-            rt->editableClipIds.clear();
-            rt->arrangementDirty.store(false, std::memory_order_relaxed);
-            // Republish the (now empty) flat clip + audio render, exactly like the
-            // load-clear does. Without this the removed track's notes linger in the
-            // published flat clip until reload — the schedule already drops them (its host
-            // is gone and its clips are cleared), but the UI aggregate keeps showing them.
-            snapshot = rebuildFlatAndPublish(*rt);
-            std::atomic_store_explicit(&rt->audioRender, rebuildAudioRender(*rt),
-                                       std::memory_order_release);
-          }
-          if (snapshot) {
-            std::atomic_store_explicit(&rt->clipSnapshot, snapshot,
-                                       std::memory_order_release);
-          }
-          rt->isAuxChild.store(false, std::memory_order_release);
-          rt->parentId.store(0, std::memory_order_relaxed);
-          rt->childrenReconciled.store(false, std::memory_order_relaxed);
-          rt->removed.store(true, std::memory_order_release);
-          // This wiped every clip on the track, which is as big a clip change as there
-          // is — so both counters have to move. Without the GLOBAL bump the
-          // version-gated regions are never rebuilt and the removed track's notes stay
-          // published; without the PER-TRACK bump, a base read before the removal is
-          // still accepted against the now-empty track, and because AddTrack reuses this
-          // same TrackRuntime, that stale base carries over to the NEW track in this slot.
-          bumpClipVersionFor(rt);
-        }
-        // Trim trailing tombstones so a remove-from-the-end shrinks the extent (and the
-        // freed slot is reused by the next AddTrack).
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        uint32_t extent = liveTrackCount.load(std::memory_order_relaxed);
-        while (extent > 0) {
-          const uint32_t last = extent - 1;
-          if (last < tracks.size() && tracks[last] &&
-              tracks[last]->removed.load(std::memory_order_acquire)) {
-            extent = last;
-          } else {
-            break;
-          }
-        }
-        liveTrackCount.store(extent, std::memory_order_release);
-        std::cout << "UI: RemoveTrack " << targetId << " (+"
-                  << (toRemove.size() - 1) << " children), extent now " << extent
-                  << std::endl;
-      }
+      daw::engine::handleRemoveTrack(trackCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::MovePlacement)) {
       daw::engine::handleMovePlacement(placementCommandDeps, entry, payload);
@@ -704,66 +526,10 @@ void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
                 << std::endl;
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::ResizePlacement)) {
-      // Both start (`at`) and length in one op; 0xFFFF... = leave that field unchanged, so
-      // a left-edge trim sends both and a right-edge drag sends length + at=sentinel.
-      const uint32_t placementId = payload.value0;
-      const uint64_t newAt = (static_cast<uint64_t>(payload.noteNanotickHi) << 32) |
-                             payload.noteNanotickLo;
-      const uint64_t newLen = (static_cast<uint64_t>(payload.noteDurationHi) << 32) |
-                              payload.noteDurationLo;
-      const bool ok = applyPlacementEdit(
-          payload.trackId, [&](std::vector<daw::ProjectPlacement>& pls) {
-            for (auto& p : pls) {
-              if (p.id == placementId) {
-                if (newAt != kPlacementUnchanged) {
-                  p.at = newAt;
-                }
-                if (newLen != kPlacementUnchanged) {
-                  p.lengthNanoticks = newLen;
-                }
-                return true;
-              }
-            }
-            return false;
-          });
-      std::cout << "UI: ResizePlacement " << placementId << (ok ? "" : " (not found)")
-                << std::endl;
+      daw::engine::handleResizePlacement(placementCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::AddPlacement)) {
-      // Place an existing clip (value0 = clipId) at `at` for `length`. The clip must be
-      // owned by the track for its content to resolve; an unknown id yields an empty box.
-      const uint32_t clipId = payload.value0;
-      const uint64_t at = (static_cast<uint64_t>(payload.noteNanotickHi) << 32) |
-                          payload.noteNanotickLo;
-      const uint64_t len = (static_cast<uint64_t>(payload.noteDurationHi) << 32) |
-                           payload.noteDurationLo;
-      // kPlacementUnchanged is Resize's "leave this field alone" sentinel. It is
-      // meaningless for an ADD, and accepting it created a placement at tick 2^64-1 —
-      // an invisible box at the end of time that then poisoned any song-end computation
-      // that added a length to it. Refuse it, and say so.
-      if (at == kPlacementUnchanged || len == kPlacementUnchanged) {
-        daw::LogLine() << "UI: AddPlacement rejected — `at` and `length` are required "
-                     "(0xFFFF..FF is Resize's leave-unchanged sentinel, not a position)"
-                  << std::endl;
-        DAW_EVENT("placement.add_rejected")
-            .field("track", payload.trackId)
-            .field("clip", clipId)
-            .field("reason", "sentinel_position");
-        return;
-      }
-      const uint32_t newId = nextPlacementId.fetch_add(1, std::memory_order_relaxed);
-      applyPlacementEdit(payload.trackId,
-                         [&](std::vector<daw::ProjectPlacement>& pls) {
-                           daw::ProjectPlacement p;
-                           p.clipId = clipId;
-                           p.id = newId;
-                           p.at = at;
-                           p.lengthNanoticks = len;
-                           pls.push_back(std::move(p));
-                           return true;
-                         });
-      std::cout << "UI: AddPlacement clip " << clipId << " -> placement " << newId
-                << " at " << at << std::endl;
+      daw::engine::handleAddPlacement(placementCommandDeps, entry, payload);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::TogglePlay)) {
       const bool next = !playing.load(std::memory_order_acquire);

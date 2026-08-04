@@ -6,6 +6,13 @@
 
 namespace daw::engine {
 
+// Resize's "leave this field alone" sentinel. It lived at file scope in
+// engine_handle_ui_entry.cpp and came here with its only remaining users — a constant is
+// never reported as a missing capture, so this one surfaced only when the new translation
+// unit failed to compile, which is the documented way constants show up in these moves.
+constexpr uint64_t kPlacementUnchanged = 0xFFFFFFFFFFFFFFFFull;
+
+
 void handleForkSwapPlacementClip(PlacementCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
@@ -402,6 +409,79 @@ void handleMovePlacement(PlacementCommandDeps& deps,
         std::cout << "UI: MovePlacement " << placementId << " -> at " << newAt
                   << (ok ? "" : " (not found)") << std::endl;
       }
+}
+
+void handleAddPlacement(PlacementCommandDeps& deps,
+            const daw::EventEntry& entry,
+            const daw::UiCommandPayload& payload) {
+  auto& applyPlacementEdit = deps.applyPlacementEdit;
+  auto& nextPlacementId = deps.nextPlacementId;
+
+      // Place an existing clip (value0 = clipId) at `at` for `length`. The clip must be
+      // owned by the track for its content to resolve; an unknown id yields an empty box.
+      const uint32_t clipId = payload.value0;
+      const uint64_t at = (static_cast<uint64_t>(payload.noteNanotickHi) << 32) |
+                          payload.noteNanotickLo;
+      const uint64_t len = (static_cast<uint64_t>(payload.noteDurationHi) << 32) |
+                           payload.noteDurationLo;
+      // kPlacementUnchanged is Resize's "leave this field alone" sentinel. It is
+      // meaningless for an ADD, and accepting it created a placement at tick 2^64-1 —
+      // an invisible box at the end of time that then poisoned any song-end computation
+      // that added a length to it. Refuse it, and say so.
+      if (at == kPlacementUnchanged || len == kPlacementUnchanged) {
+        daw::LogLine() << "UI: AddPlacement rejected — `at` and `length` are required "
+                     "(0xFFFF..FF is Resize's leave-unchanged sentinel, not a position)"
+                  << std::endl;
+        DAW_EVENT("placement.add_rejected")
+            .field("track", payload.trackId)
+            .field("clip", clipId)
+            .field("reason", "sentinel_position");
+        return;
+      }
+      const uint32_t newId = nextPlacementId.fetch_add(1, std::memory_order_relaxed);
+      applyPlacementEdit(payload.trackId,
+                         [&](std::vector<daw::ProjectPlacement>& pls) {
+                           daw::ProjectPlacement p;
+                           p.clipId = clipId;
+                           p.id = newId;
+                           p.at = at;
+                           p.lengthNanoticks = len;
+                           pls.push_back(std::move(p));
+                           return true;
+                         });
+      std::cout << "UI: AddPlacement clip " << clipId << " -> placement " << newId
+                << " at " << at << std::endl;
+}
+
+void handleResizePlacement(PlacementCommandDeps& deps,
+            const daw::EventEntry& entry,
+            const daw::UiCommandPayload& payload) {
+  auto& applyPlacementEdit = deps.applyPlacementEdit;
+
+      // Both start (`at`) and length in one op; 0xFFFF... = leave that field unchanged, so
+      // a left-edge trim sends both and a right-edge drag sends length + at=sentinel.
+      const uint32_t placementId = payload.value0;
+      const uint64_t newAt = (static_cast<uint64_t>(payload.noteNanotickHi) << 32) |
+                             payload.noteNanotickLo;
+      const uint64_t newLen = (static_cast<uint64_t>(payload.noteDurationHi) << 32) |
+                              payload.noteDurationLo;
+      const bool ok = applyPlacementEdit(
+          payload.trackId, [&](std::vector<daw::ProjectPlacement>& pls) {
+            for (auto& p : pls) {
+              if (p.id == placementId) {
+                if (newAt != kPlacementUnchanged) {
+                  p.at = newAt;
+                }
+                if (newLen != kPlacementUnchanged) {
+                  p.lengthNanoticks = newLen;
+                }
+                return true;
+              }
+            }
+            return false;
+          });
+      std::cout << "UI: ResizePlacement " << placementId << (ok ? "" : " (not found)")
+                << std::endl;
 }
 
 }  // namespace daw::engine

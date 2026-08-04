@@ -37,6 +37,7 @@ struct PlacementCommandDeps {
   std::atomic<bool>& clipDirty;
   const std::function<void(const char*, const char*, uint32_t, uint32_t, const std::string&)>& historyAppend;
   std::atomic<uint32_t>& nextClipId;
+  std::atomic<uint32_t>& nextPlacementId;
   const std::function<void(uint32_t, TrackStoreState, TrackStoreState)>& pushStructuralUndo;
   const std::function<void(EngineUndoEntry)>& pushUndo;
   const std::function<std::shared_ptr<const AudioRenderList>(const TrackRuntime&)>& rebuildAudioRender;
@@ -58,6 +59,12 @@ void handleRevertPlacementOverrides(PlacementCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload);
 void handleMovePlacement(PlacementCommandDeps& deps,
+            const daw::EventEntry& entry,
+            const daw::UiCommandPayload& payload);
+void handleAddPlacement(PlacementCommandDeps& deps,
+            const daw::EventEntry& entry,
+            const daw::UiCommandPayload& payload);
+void handleResizePlacement(PlacementCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload);
 

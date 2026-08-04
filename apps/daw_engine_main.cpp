@@ -3867,7 +3867,9 @@ int main(int argc, char** argv) {
   const std::function<void(uint16_t, uint32_t)> emitRoutingErrorFn = emitRoutingError;
   const std::function<void(TrackRuntime&)> emitRoutingSnapshotFn = emitRoutingSnapshot;
   daw::engine::TrackCommandDeps trackCommandDeps{
-      tracks, tracksMutex, buildTrackSnapshotFn, emitRoutingErrorFn, emitRoutingSnapshotFn};
+      buildTrackSnapshotFn, bumpClipVersionForFn, clipVersion, emitRoutingErrorFn,
+      emitRoutingSnapshotFn, liveTrackCount, rebuildAudioRenderFn, rebuildFlatAndPublishFn,
+      resetTrackContentFn, restartTrackHostFn, setupTrackRuntimeFn, tracks, tracksMutex};
 
   daw::engine::MarkerCommandDeps markerCommandDeps{
       markerList, arrangeMutex, arrangeVersion, historyAppendFn};
@@ -3969,22 +3971,19 @@ int main(int argc, char** argv) {
 
   daw::engine::PlacementCommandDeps placementCommandDeps{
       applyPlacementEditFn, bumpClipVersionForFn, clipDirty, historyAppendFn, nextClipId,
-      pushStructuralUndoFn, pushUndoFn, rebuildAudioRenderFn, rebuildFlatAndPublishFn,
-      recomputeSongEndFn, requireMatchingClipVersionFn, snapshotTrackStoreFn, tracks,
-      tracksMutex};
+      nextPlacementId, pushStructuralUndoFn, pushUndoFn, rebuildAudioRenderFn,
+      rebuildFlatAndPublishFn, recomputeSongEndFn, requireMatchingClipVersionFn,
+      snapshotTrackStoreFn, tracks, tracksMutex};
 
   daw::engine::HandleUiEntryDeps handleUiEntryDeps{
-      applyPlacementEditFn, arrangeTimeCommandDeps, automationCommandDeps,
-      buildTrackSnapshotFn, bulkStreams, bulkTick, bumpClipVersionForFn, chainCommandDeps,
-      clipCommandDeps, clipVersion, deviceCommandDeps, enqueuePreviewFn,
-      handleAssembledBulkFn, heldPreview, historyAppendFn, liveTrackCount, loadedTempoMap,
-      loopEndNanotick, loopStartNanotick, loopUserSet, markerCommandDeps, masterTrack,
-      modlinkCommandDeps, moduleCommandDeps, nextPlacementId, noteCommandDeps, panicPending,
-      patcherCommandDeps, patternTicks, pendingPreviewNotes, playing, previewMutex,
-      placementCommandDeps, projectCommandDeps, rebuildAudioRenderFn,
-      rebuildFlatAndPublishFn, requestCommandDeps, resetTimeline, resetTrackContentFn,
-      restartCv, restartTrackHostFn, rowopsCommandDeps, running, samplerCommandDeps,
-      setupTrackRuntimeFn, tempoProvider, trackCommandDeps, trackpropsCommandDeps, tracks,
+      applyPlacementEditFn, arrangeTimeCommandDeps, automationCommandDeps, bulkStreams,
+      bulkTick, chainCommandDeps, clipCommandDeps, deviceCommandDeps, enqueuePreviewFn,
+      handleAssembledBulkFn, heldPreview, historyAppendFn, loadedTempoMap, loopEndNanotick,
+      loopStartNanotick, loopUserSet, markerCommandDeps, masterTrack, modlinkCommandDeps,
+      moduleCommandDeps, noteCommandDeps, panicPending, patcherCommandDeps, patternTicks,
+      pendingPreviewNotes, playing, previewMutex, placementCommandDeps, projectCommandDeps,
+      requestCommandDeps, resetTimeline, restartCv, rowopsCommandDeps, running,
+      samplerCommandDeps, tempoProvider, trackCommandDeps, trackpropsCommandDeps, tracks,
       tracksMutex, transportElapsedNanotick, transportNanotick, undoCommandDeps
   };
 

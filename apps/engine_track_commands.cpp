@@ -188,4 +188,200 @@ void handleSetDeviceEuclideanConfig(TrackCommandDeps& deps,
   }
 }
 
+void handleAddTrack(TrackCommandDeps& deps,
+            const daw::EventEntry& entry,
+            const daw::UiCommandPayload& payload) {
+  auto& buildTrackSnapshot = deps.buildTrackSnapshot;
+  auto& clipVersion = deps.clipVersion;
+  auto& liveTrackCount = deps.liveTrackCount;
+  auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
+  auto& resetTrackContent = deps.resetTrackContent;
+  auto& restartTrackHost = deps.restartTrackHost;
+  auto& setupTrackRuntime = deps.setupTrackRuntime;
+  auto& tracks = deps.tracks;
+  auto& tracksMutex = deps.tracksMutex;
+
+      // Add an empty top-level track. Refill the LOWEST tombstone first (RemoveTrack leaves
+      // middle holes) so repeated middle remove+add can't leak slots toward the cap; only
+      // when there is no tombstone do we append at the extent. Its id == slot index and is
+      // stable. A reused slot gets a bare host + blank state; a fresh extent slot is created.
+      uint32_t slot = liveTrackCount.load(std::memory_order_acquire);
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        for (uint32_t i = 0; i < slot && i < tracks.size(); ++i) {
+          if (tracks[i] && tracks[i]->removed.load(std::memory_order_acquire)) {
+            slot = i;  // lowest tombstone — refill it instead of appending
+            break;
+          }
+        }
+      }
+      if (slot >= daw::kUiMaxTracks) {
+        daw::LogLine() << "UI: AddTrack refused — at track cap " << daw::kUiMaxTracks
+                  << std::endl;
+      } else {
+        TrackRuntime* existing = daw::engine::trackAt(tracks, tracksMutex, slot);
+        bool ok = true;
+        if (existing) {
+          ok = restartTrackHost(*existing, {});
+          if (ok) {
+            {
+              std::lock_guard<std::mutex> tlock(existing->trackMutex);
+              resetTrackContent(*existing);
+              existing->trackName = "Track " + std::to_string(slot + 1);
+              existing->trackSnapshot = buildTrackSnapshot(existing->track);
+            }
+            existing->isAuxChild.store(false, std::memory_order_release);
+            existing->parentId.store(0, std::memory_order_relaxed);
+            existing->collapsed.store(false, std::memory_order_relaxed);
+            existing->childrenReconciled.store(false, std::memory_order_relaxed);
+            existing->removed.store(false, std::memory_order_release);
+            auto snapshot = rebuildFlatAndPublish(*existing);
+            if (snapshot) {
+              std::atomic_store_explicit(&existing->clipSnapshot, snapshot,
+                                         std::memory_order_release);
+            }
+          }
+        } else {
+          auto rt = setupTrackRuntime(slot, "", false, true);
+          if (!rt) {
+            ok = false;
+          } else {
+            std::lock_guard<std::mutex> lock(tracksMutex);
+            tracks.push_back(std::move(rt));
+          }
+        }
+        if (ok) {
+          uint32_t seen = liveTrackCount.load(std::memory_order_relaxed);
+          while (slot + 1 > seen &&
+                 !liveTrackCount.compare_exchange_weak(seen, slot + 1,
+                                                       std::memory_order_relaxed)) {
+          }
+          {
+            // A fresh track's clips are empty, but the RuntimeTrack in this slot may be
+            // a reused tombstone whose counter still carries the removed track's value.
+            // Bump so nobody's pre-existing base is accepted against a brand-new track,
+            // and so the version-gated regions rebuild and show the new lane.
+            std::lock_guard<std::mutex> lock(tracksMutex);
+            if (slot < tracks.size() && tracks[slot]) {
+              tracks[slot]->trackClipVersion.fetch_add(1, std::memory_order_acq_rel);
+            }
+          }
+          clipVersion.fetch_add(1, std::memory_order_acq_rel);
+          std::cout << "UI: AddTrack -> track " << slot << std::endl;
+        } else {
+          daw::LogLine() << "UI: AddTrack failed to bring up track " << slot << std::endl;
+        }
+      }
+}
+
+void handleRemoveTrack(TrackCommandDeps& deps,
+            const daw::EventEntry& entry,
+            const daw::UiCommandPayload& payload) {
+  auto& bumpClipVersionFor = deps.bumpClipVersionFor;
+  auto& liveTrackCount = deps.liveTrackCount;
+  auto& rebuildAudioRender = deps.rebuildAudioRender;
+  auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
+  auto& tracks = deps.tracks;
+  auto& tracksMutex = deps.tracksMutex;
+
+      // Tombstone the target track (stable id == slot) + its aux children. The slot is
+      // kept (kUiTrackFlagAbsent) so neighbours keep their ids; trailing tombstones are
+      // trimmed so removing from the end shrinks the extent. Rejects a child id.
+      const uint32_t targetId = payload.trackId;
+      std::vector<TrackRuntime*> toRemove;
+      bool rejected = false;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        for (auto& rt : tracks) {
+          if (!rt) {
+            continue;
+          }
+          const bool isChild = rt->isAuxChild.load(std::memory_order_acquire);
+          if (rt->trackId == targetId) {
+            if (isChild) {
+              rejected = true;
+              break;
+            }
+            toRemove.push_back(rt.get());
+          } else if (isChild &&
+                     rt->auxParentTrackId.load(std::memory_order_relaxed) == targetId) {
+            toRemove.push_back(rt.get());
+          }
+        }
+      }
+      if (rejected) {
+        daw::LogLine() << "UI: RemoveTrack rejected — track " << targetId
+                  << " is an aux child (managed via its parent's buses)" << std::endl;
+      } else if (toRemove.empty()) {
+        daw::LogLine() << "UI: RemoveTrack — no track with id " << targetId << std::endl;
+      } else {
+        for (TrackRuntime* rt : toRemove) {
+          // Tear the host down and blank the track, mirroring the load-clear sequence, then
+          // mark it a tombstone. Runs on the command thread with no tracksMutex held, so
+          // taking controllerMutex is safe.
+          {
+            std::lock_guard<std::mutex> clock(rt->controllerMutex);
+            rt->needsRestart.store(false, std::memory_order_release);
+            rt->hostReady.store(false, std::memory_order_release);
+            rt->active.store(false, std::memory_order_release);
+            rt->hostGaveUp.store(false, std::memory_order_release);
+            rt->watchdog.reset();
+            rt->controller.disconnect();
+            rt->config.pluginPaths.clear();
+            rt->config.pluginNames.clear();
+            rt->lastAuxOutMask.store(0, std::memory_order_relaxed);
+            rt->lastSidechainMask.store(0, std::memory_order_relaxed);
+          }
+          std::shared_ptr<const ClipSnapshot> snapshot;
+          {
+            std::lock_guard<std::mutex> tlock(rt->trackMutex);
+            rt->track.chain = daw::TrackChain{};
+            rt->sourcePlacements.clear();
+            rt->ownedClips.clear();
+            rt->editableClipIds.clear();
+            rt->arrangementDirty.store(false, std::memory_order_relaxed);
+            // Republish the (now empty) flat clip + audio render, exactly like the
+            // load-clear does. Without this the removed track's notes linger in the
+            // published flat clip until reload — the schedule already drops them (its host
+            // is gone and its clips are cleared), but the UI aggregate keeps showing them.
+            snapshot = rebuildFlatAndPublish(*rt);
+            std::atomic_store_explicit(&rt->audioRender, rebuildAudioRender(*rt),
+                                       std::memory_order_release);
+          }
+          if (snapshot) {
+            std::atomic_store_explicit(&rt->clipSnapshot, snapshot,
+                                       std::memory_order_release);
+          }
+          rt->isAuxChild.store(false, std::memory_order_release);
+          rt->parentId.store(0, std::memory_order_relaxed);
+          rt->childrenReconciled.store(false, std::memory_order_relaxed);
+          rt->removed.store(true, std::memory_order_release);
+          // This wiped every clip on the track, which is as big a clip change as there
+          // is — so both counters have to move. Without the GLOBAL bump the
+          // version-gated regions are never rebuilt and the removed track's notes stay
+          // published; without the PER-TRACK bump, a base read before the removal is
+          // still accepted against the now-empty track, and because AddTrack reuses this
+          // same TrackRuntime, that stale base carries over to the NEW track in this slot.
+          bumpClipVersionFor(rt);
+        }
+        // Trim trailing tombstones so a remove-from-the-end shrinks the extent (and the
+        // freed slot is reused by the next AddTrack).
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        uint32_t extent = liveTrackCount.load(std::memory_order_relaxed);
+        while (extent > 0) {
+          const uint32_t last = extent - 1;
+          if (last < tracks.size() && tracks[last] &&
+              tracks[last]->removed.load(std::memory_order_acquire)) {
+            extent = last;
+          } else {
+            break;
+          }
+        }
+        liveTrackCount.store(extent, std::memory_order_release);
+        std::cout << "UI: RemoveTrack " << targetId << " (+"
+                  << (toRemove.size() - 1) << " children), extent now " << extent
+                  << std::endl;
+      }
+}
+
 }  // namespace daw::engine
