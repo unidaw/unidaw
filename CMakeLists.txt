@@ -97,6 +97,8 @@ set_source_files_properties(apps/engine_render_track.cpp apps/engine_save_projec
                             apps/engine_clip_edit.cpp
                             apps/engine_publish_clips.cpp
                             apps/engine_produce_block.cpp
+                            apps/engine_producer_thread.cpp
+                            apps/engine_startup.cpp
                             apps/engine_consumer.cpp
                             PROPERTIES COMPILE_OPTIONS -Werror=unused-variable)
 set_source_files_properties(${_engine_command_sources}
@@ -162,6 +164,8 @@ add_library(engine_commands STATIC
   apps/engine_clip_edit.cpp
   apps/engine_publish_clips.cpp
   apps/engine_produce_block.cpp
+  apps/engine_producer_thread.cpp
+  apps/engine_startup.cpp
   apps/engine_consumer.cpp
   apps/engine_save_project.cpp
   apps/engine_sampler_commands.cpp
@@ -595,6 +599,19 @@ target_include_directories(engine_modlink_commands_tests PRIVATE
   ${Boost_INCLUDE_DIRS}
 )
 target_link_libraries(engine_modlink_commands_tests PRIVATE engine_commands)
+
+# The command line and the environment: 150 lines that could not be tested before they were a
+# function, because reaching them meant starting an engine. Two of the assertions are past bugs —
+# a valueless flag in LAST position, and an out-of-range --sample-rate that must be refused rather
+# than quietly replaced by the device's.
+add_executable(engine_startup_tests
+  apps/engine_startup_tests_main.cpp
+)
+target_include_directories(engine_startup_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(engine_startup_tests PRIVATE engine_commands)
 
 add_executable(engine_sampler_commands_tests
   apps/engine_sampler_commands_tests_main.cpp
@@ -1535,6 +1552,12 @@ add_test(NAME engine_modlink_commands
   COMMAND engine_modlink_commands_tests
 )
 set_tests_properties(engine_modlink_commands PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME engine_startup
+  COMMAND engine_startup_tests
+)
+set_tests_properties(engine_startup PROPERTIES
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME engine_sampler_commands

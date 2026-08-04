@@ -35,6 +35,8 @@
 #include "apps/engine_producer_helpers.h"
 #include "apps/engine_audio_callback.h"
 #include "apps/engine_produce_block.h"
+#include "apps/engine_startup.h"
+#include "apps/engine_producer_thread.h"
 #include "apps/engine_bulk_edit.h"
 #include "apps/engine_consumer.h"
 #include "apps/engine_publish_clips.h"
@@ -242,152 +244,26 @@ int main(int argc, char** argv) {
   // dead and scheduling a restart.
   std::signal(SIGPIPE, SIG_IGN);
 
-  std::string socketPath = trackSocketPath(0);
-  std::string pluginPath;
-  bool spawnHost = true;
-  int runSeconds = -1;
-  std::string renderName;
-  uint32_t forcedBlockSize = 0;  // non-empty => offline render (see --render)
-  double forcedSampleRate = 0.0;  // 0 => take the device's (see --sample-rate)
-  std::string startupProject;  // non-empty => load it before running (see --project)
-  bool testMode = false;
-  bool noAudio = false;
-  // `i < argc`, not `i + 1 < argc`: the old bound meant a flag with NO value was
-  // invisible when it came last, so `daw_engine --no-spawn` silently spawned.
-  // Flags that take a value check for one themselves.
-  for (int i = 1; i < argc; ++i) {
-    const std::string arg = argv[i];
-    const bool hasValue = (i + 1) < argc;
-    if (arg == "--socket" && hasValue) {
-      socketPath = argv[i + 1];
-      ++i;
-    } else if (arg == "--plugin" && hasValue) {
-      pluginPath = std::filesystem::absolute(argv[i + 1]).string();
-      ++i;
-    } else if (arg == "--no-spawn") {
-      spawnHost = false;
-    } else if (arg == "--no-audio") {
-      // Run the whole engine with no audio DEVICE: the transport still advances,
-      // the UI still publishes, plugins still load — there is simply no output.
-      // Added because every measurement of the transport used to require putting
-      // sound through somebody's speakers, which makes a test suite something you
-      // cannot run while a person is in the room.
-      noAudio = true;
-    } else if (arg == "--run-seconds" && hasValue) {
-      runSeconds = std::max(0, std::atoi(argv[i + 1]));
-      ++i;
-    } else if (arg == "--project" && i + 1 < argc) {
-      // Load this project at startup. Required for --render, because the pump begins as soon
-      // as the threads are up — there is no window in which a CLI could send a load, and the
-      // first render I ran produced a perfectly-sized file of pure silence for exactly that
-      // reason.
-      startupProject = argv[i + 1];
-      ++i;
-    } else if (arg == "--render" && i + 1 < argc) {
-      // OFFLINE RENDER (§7 Q4). Runs the whole mix with no audio device and no wall clock:
-      // the pump waits for every host to finish each block, then mixes it, so the render is
-      // glitch-free by construction rather than by luck. The producer already paces to the
-      // block the CONSUMER has played rather than to a device clock — a consequence of
-      // fixing the "everything 4x too fast" bug — so being the consumer is all that is
-      // needed to run at host speed.
-      renderName = argv[i + 1];
-      ++i;
-    } else if (arg == "--block-size" && i + 1 < argc) {
-      // Forces the engine's block size, which the offline render otherwise takes from its
-      // default (there is no audio device to ask). It exists so BLOCK-SIZE INVARIANCE is
-      // checkable end to end and not only in a unit test: docs/SAMPLER_DESIGN.md §3.5 requires
-      // one project rendered at 64, 256 and 1024 frames to be bit-identical, and a property
-      // that cannot be exercised through the real engine is a property nobody is defending.
-      forcedBlockSize = static_cast<uint32_t>(std::max(1, std::atoi(argv[i + 1])));
-      ++i;
-    } else if (arg == "--sample-rate" && i + 1 < argc) {
-      // RENDER AT A STATED RATE INSTEAD OF WHATEVER IS PLUGGED IN.
-      //
-      // Without this the offline render adopts the DEFAULT OUTPUT DEVICE's rate, so what a bounce
-      // contains depends on the machine's audio settings at that moment. That is wrong twice
-      // over. As a product: delivering at 48k while your interface sits at 44.1k is an ordinary
-      // requirement, and the only way to ask for it was to go and change the system's default
-      // output device. As a test instrument: the byte-deterministic render is what the whole
-      // engine refactor is gated on, and it silently stopped being deterministic whenever
-      // somebody connected headphones — the default went to 48000 and back to 44100 within an
-      // hour, with nothing in the log to say so, and a check that had passed for weeks failed
-      // the engine for being correct.
-      //
-      // REFUSED RATHER THAN CLAMPED if it is outside what an audio path can mean. A silent
-      // fallback to the device rate is precisely how the original problem stayed invisible:
-      // the render would claim to honour a rate it had ignored.
-      const double asked = std::atof(argv[i + 1]);
-      if (asked < 8000.0 || asked > 384000.0) {
-        std::cerr << "--sample-rate " << argv[i + 1]
-                  << " is outside 8000..384000 Hz; refusing rather than falling back to the "
-                     "device rate, which would render at a rate you did not ask for"
-                  << std::endl;
-        return 2;
-      }
-      forcedSampleRate = asked;
-      ++i;
-    }
+  // WHAT argv DECIDES lives in one struct and is parsed by one function; see
+  // apps/engine_startup.h for the two flag rules that are there because they were wrong.
+  daw::engine::EngineArgs engineArgs;
+  engineArgs.socketPath = trackSocketPath(0);
+  if (const int rc = daw::engine::parseEngineArgs(argc, argv, engineArgs); rc != 0) {
+    return rc;
   }
+  auto& socketPath = engineArgs.socketPath;
+  auto& pluginPath = engineArgs.pluginPath;
+  auto& spawnHost = engineArgs.spawnHost;
+  auto& runSeconds = engineArgs.runSeconds;
+  auto& renderName = engineArgs.renderName;
+  auto& forcedBlockSize = engineArgs.forcedBlockSize;
+  auto& forcedSampleRate = engineArgs.forcedSampleRate;
+  auto& startupProject = engineArgs.startupProject;
+  auto& testMode = engineArgs.testMode;
+  auto& noAudio = engineArgs.noAudio;
 
-  // A STALE HOST BINARY IS DETECTED HERE, BEFORE ANY HOST IS SPAWNED.
-  //
-  // This started out just before the threads launch, which is TOO LATE: the tracks are set up
-  // first and that is where hosts are connected, so the engine still died with 'waitForSocket
-  // timed out' and the diagnostic never printed. A check that fires after the thing it explains
-  // has already failed is not a check.
-  //
-  // juce_host_process is a SEPARATE CMake TARGET, so `cmake --build . --target daw_engine` after
-  // a contract change leaves a host compiled against the old layout. What that looked like before
-  // this check: the host fails to appear, the log fills with "connect(...) failed: No such file
-  // or directory", and every symptom points somewhere else — the sockets, the plugin scan, the
-  // read-back you just added. Two of us lost an hour to it on the same day, independently.
-  //
-  // The check is EXACT rather than a heuristic on file times: the host reports the versions it
-  // was compiled against and exits. One fork at startup, and it turns an hour into a line.
-  {
-    const std::string hostExe = [] {
-      if (const char* env = std::getenv("DAW_HOST_BINARY")) {
-        if (env[0] != '\0') {
-          return std::string(env);
-        }
-      }
-      return std::string("./juce_host_process");
-    }();
-    std::string probe;
-    if (FILE* pipe = ::popen((hostExe + " --version 2>/dev/null").c_str(), "r")) {
-      char buf[128];
-      while (std::fgets(buf, sizeof(buf), pipe) != nullptr) {
-        probe += buf;
-      }
-      ::pclose(pipe);
-    }
-    unsigned hostShm = 0, hostControl = 0;
-    const bool parsed =
-        std::sscanf(probe.c_str(), "shm=%u control=%u", &hostShm, &hostControl) == 2;
-    if (!parsed) {
-      // An OLDER host predates --version entirely, which is itself the answer. Not fatal — it
-      // may be a deliberately pinned binary — but it is said out loud rather than discovered.
-      daw::LogLine() << "Engine: WARNING could not read the host binary's contract version ("
-                << hostExe << "). If it fails to start, rebuild ALL targets, not just "
-                   "daw_engine." << std::endl;
-      DAW_EVENT("host.version_unknown").field("binary", hostExe);
-    } else if (hostShm != daw::kShmVersion || hostControl != daw::kControlVersion) {
-      daw::LogLine() << "Engine: REFUSING TO START — the host binary is stale.\n"
-                << "  " << hostExe << " was built against shm=" << hostShm
-                << " control=" << hostControl << "\n"
-                << "  this engine expects              shm=" << daw::kShmVersion
-                << " control=" << daw::kControlVersion << "\n"
-                << "  juce_host_process is a SEPARATE TARGET: build everything, not just "
-                   "daw_engine.\n"
-                << "      cmake --build build -j8" << std::endl;
-      DAW_EVENT("host.version_mismatch")
-          .field("binary", hostExe)
-          .field("host_shm", hostShm)
-          .field("host_control", hostControl)
-          .field("engine_shm", static_cast<uint64_t>(daw::kShmVersion))
-          .field("engine_control", static_cast<uint64_t>(daw::kControlVersion));
-      return 1;
-    }
+  if (const int rc = daw::engine::checkHostBinaryVersion(); rc != 0) {
+    return rc;
   }
 
   // OFFLINE RENDER state, declared here so the producer thread below can capture it.
@@ -403,34 +279,14 @@ int main(int argc, char** argv) {
   // is always tick 0 and block N is always N blocks in.
   std::atomic<bool> offlineProducerArmed{false};
 
-  if (const char* env = std::getenv("DAW_ENGINE_TEST_MODE")) {
-    testMode = std::string(env) == "1";
-  }
-  int testThrottleMs = 0;
-  if (const char* env = std::getenv("DAW_ENGINE_TEST_THROTTLE_MS")) {
-    char* end = nullptr;
-    const long value = std::strtol(env, &end, 10);
-    if (end != env && value > 0) {
-      testThrottleMs = static_cast<int>(value);
-    }
-  }
-  bool patcherParallel = false;
-  if (const char* env = std::getenv("DAW_PATCHER_PARALLEL")) {
-    patcherParallel = std::string(env) == "1";
-  }
-  // Movement 4 PDC kill-switch. Off = compensation active (the default). Set to "1"
-  // to force zero compensation across all tracks — an A/B escape hatch (some engineers
-  // want plugin latency left uncompensated for tracking) and the lever the PDC audio
-  // test toggles to show alignment appears only when compensation runs.
-  const bool pdcDisabled = [] {
-    const char* env = std::getenv("DAW_DISABLE_PDC");
-    return env != nullptr && std::string(env) == "1";
-  }();
-  // Trace every scheduled note-on (tick + pitch) to the event log. Off by
-  // default; a verification aid — counts and times the notes the scheduler
-  // actually emits, independent of any synth's audio. Runs on the producer
-  // thread (same one that already locks and does I/O), never the audio callback.
-  const bool traceNotes = std::getenv("DAW_TRACE_NOTES") != nullptr;
+  // The environment says the rest. Same struct, same function: a knob is a startup option
+  // whether it arrived as a flag or as an export, and splitting them across two places is how
+  // `testMode` ended up settable from one and documented in neither.
+  daw::engine::readStartupEnvironment(engineArgs);
+  auto& testThrottleMs = engineArgs.testThrottleMs;
+  auto& patcherParallel = engineArgs.patcherParallel;
+  auto& pdcDisabled = engineArgs.pdcDisabled;
+  auto& traceNotes = engineArgs.traceNotes;
   std::unique_ptr<daw::engine::WorkerPool> patcherPool;
   if (patcherParallel) {
     size_t threadCount = std::max<size_t>(1, std::thread::hardware_concurrency());
@@ -3021,314 +2877,18 @@ int main(int argc, char** argv) {
   std::thread uiThread([&] { daw::engine::runUiThread(uiThreadDeps); });
   daw::LogLine() << "UI: command thread launched" << std::endl;
 
-  std::thread producer([&] {
-    // The producer renders/dispatches each block ahead of the device and paces to it;
-    // any preemption here directly starves the ring. Raise it above background/UI work.
-    daw::elevateToAudioPriority();
-    // DENORMALS FLUSH TO ZERO on the producer, which is where the sampler renders. Set once per
-    // thread rather than per block: it is a control-register write, and doing it in the render
-    // loop would cost more than the denormals it prevents.
-    daw::enableFlushToZero();
-    const auto blockDuration =
-        std::chrono::duration<double>(
-            static_cast<double>(engineConfig.blockSize) / engineConfig.sampleRate);
-    // How long a block LASTS. Producing one must cost less than this or the producer can never
-    // catch up. This is the budget the load counters are measured against.
-    const uint64_t producerBlockBudgetUs =
-        engineConfig.sampleRate > 0.0
-            ? static_cast<uint64_t>(static_cast<double>(engineConfig.blockSize) /
-                                    engineConfig.sampleRate * 1e6)
-            : 0;
-    const bool debugStall = std::getenv("DAW_ENGINE_DEBUG_STALL") != nullptr;
-    const auto stallStart = std::chrono::steady_clock::now();
-    uint64_t stallLogMs = 0;
-    uint32_t lastPlaybackBlock = 0;
-    auto lastPlaybackAdvance = std::chrono::steady_clock::now();
-    const auto playbackStallLimit = std::chrono::milliseconds(100);
-    auto stallNowMs = [&]() -> uint64_t {
-      return static_cast<uint64_t>(
-          std::chrono::duration_cast<std::chrono::milliseconds>(
-              std::chrono::steady_clock::now() - stallStart)
-              .count());
-    };
-    auto logStall = [&](const char* reason,
-                        uint32_t nextId,
-                        uint32_t minCompleted,
-                        uint32_t currentPlayback,
-                        uint32_t extra) {
-      if (!debugStall) {
-        return;
-      }
-      const uint64_t nowMs = stallNowMs();
-      if (nowMs - stallLogMs < 500) {
-        return;
-      }
-      stallLogMs = nowMs;
-      daw::LogLine() << "Engine: producer stall (" << reason
-                << ") next=" << nextId
-                << " minCompleted=" << minCompleted
-                << " playback=" << currentPlayback
-                << " extra=" << extra << std::endl;
-    };
-    // THE TRANSPORT ADVANCES BY A CARRIED FRACTION, not by a rounded tick.
-    //
-    // This used to round to a whole nanotick per block. A block is not a whole number of ticks —
-    // at 120 bpm / 44.1 kHz a 256-frame block is 11145.898 and a 64-frame block is 2786.48 — so
-    // rounding once per block accumulated error, at a rate that DEPENDED ON THE BLOCK SIZE. The
-    // tick position slid against the sample counter by about 1.3 samples per 7000 frames at 64
-    // frames, and a note's frame is blockSampleStart + an offset measured from the tick. That is
-    // why the same project rendered at 64 and at 256 frames diverged (task #84), and why
-    // rewriting the note OFFSET could never fix it: both formulations measured from a drifting
-    // base.
-    //
-    // Carrying the remainder bounds the error below one nanotick forever instead of letting it
-    // grow. blockTicksFor is called EXACTLY ONCE per block — advanceTransport runs only on the
-    // no-host path, which then continues — so the carry advances once per block, which is the
-    // whole reason this can be stateful at all.
-    long double tickCarry = 0.0L;
-    auto blockTicksFor = [&](uint64_t atNanotick) -> uint64_t {
-      tickCarry += tickConverter.samplesToNanoticksExact(
-          static_cast<int64_t>(engineConfig.blockSize), atNanotick);
-      const long double whole = std::floor(tickCarry);
-      tickCarry -= whole;
-      return static_cast<uint64_t>(whole);
-    };
-      // Built once per producer thread, immediately before the loop: every member is a
-      // reference to something that outlives it, so the per-block call adds no work.
-      daw::engine::ProducerBlockDeps producerBlockDeps{
-      blockDuration, blockTicksFor, debugStall, engineConfig, enqueuePreview, getHarmonyAt,
-      getRingCtrl, getRingStd, getScaleForHarmony, harmonyTimeline, lastOverflowTick,
-      latencyMgr, transport, songTiming, nextBlockId, nextNoteId, offlineRender,
-      panicPending, patcherGraph, patcherParallel, patcherPool, pendingPreviewNotes,
-      poolAlwaysOn, poolEngaged, poolWorkEwmaUs, previewMutex, producerBlockBudgetUs,
-      producerBlockUsMax, producerBlockUsTotal, producerBlocksOverBudget,
-      producerBlocksTimed, producerSamplerUsMax, producerSamplerUsTotal, projectSeed,
-      publishedCallback, quantizePitch, renderPool, resolveDevicePluginPath, tempoProvider,
-      tickConverter, traceNotes, patternTicks, warnedEventOutsideBlock, writeMirrorParams
-  };
-
-    while (running.load()) {
-      // Offline: produce nothing until the pump says the transport is at a known start. See
-      // offlineProducerArmed.
-      if (offlineRender && !offlineProducerArmed.load(std::memory_order_acquire)) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        continue;
-      }
-      if (testThrottleMs > 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(testThrottleMs));
-      }
-      auto trackSnapshot = snapshotTracks();
-
-      if (trackSnapshot.empty()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        continue;
-      }
-      const bool isPlaying = transport.playing.load(std::memory_order_acquire);
-      auto advanceTransport = [&]() {
-        const auto loop = daw::engine::effectiveLoop(
-            transport.loopStartNanotick.load(std::memory_order_acquire),
-            transport.loopEndNanotick.load(std::memory_order_acquire), patternTicks);
-        const uint64_t loopStartTicks = loop.startTick;
-        const uint64_t loopEndTicks = loop.endTick;
-        const uint64_t currentTicks =
-            transport.transportNanotick.load(std::memory_order_acquire);
-        const uint64_t blockTicks = blockTicksFor(currentTicks);
-        uint64_t nextTicks = currentTicks + blockTicks;
-        nextTicks = daw::engine::advanceTransportTick(nextTicks, loopStartTicks, loopEndTicks);
-        transport.transportNanotick.store(nextTicks, std::memory_order_release);
-        transport.transportElapsedNanotick.fetch_add(blockTicks, std::memory_order_acq_rel);
-      };
-      bool anyReady = false;
-      for (auto* runtime : trackSnapshot) {
-        if (runtime->hostReady.load(std::memory_order_acquire)) {
-          anyReady = true;
-          break;
-        }
-      }
-      if (!anyReady) {
-        if (isPlaying) {
-          advanceTransport();
-        }
-        std::this_thread::sleep_for(blockDuration);
-        continue;
-      }
-      if (resetTimeline.exchange(false)) {
-        // The fractional tick goes back to zero with the position. Without this a second render
-        // would start with whatever fraction the first one happened to end on, and two bounces
-        // of the same project would differ — which is the property this whole file protects.
-        tickCarry = 0.0L;
-        // And the pass count, for the same reason: a render begins at the loop start, so it must
-        // begin at pass 0 every time or two bounces of one project would differ.
-        transport.transportElapsedNanotick.store(0, std::memory_order_release);
-        // Rewind to the loop start (Stop), resetting the audio playback position
-        // with it so the next Play begins there rather than mid-block.
-        transport.transportNanotick.store(transport.loopStartNanotick.load(std::memory_order_acquire),
-                                std::memory_order_release);
-        audioPlaybackBlockId.store(0, std::memory_order_release);
-      }
-
-      for (auto* runtime : trackSnapshot) {
-        if (!runtime->hostReady.load(std::memory_order_acquire)) {
-          continue;
-        }
-        if (runtime->mirrorPending.load(std::memory_order_acquire) &&
-            runtime->mirrorPrimed.load(std::memory_order_acquire)) {
-          const uint64_t gateTime =
-              runtime->mirrorGateSampleTime.load(std::memory_order_acquire);
-          uint64_t ack = 0;
-          {
-            std::lock_guard<std::mutex> lock(runtime->controllerMutex);
-            const auto* mailbox = runtime->controller.mailbox();
-            if (!mailbox) {
-              continue;
-            }
-            ack = mailbox->replayAckSampleTime.load(std::memory_order_acquire);
-          }
-          std::cout << "Mirror check: track " << runtime->trackId
-                    << ", gateTime=" << gateTime
-                    << ", ack=" << ack << std::endl;
-          if (ack >= gateTime) {
-            runtime->mirrorPending.store(false, std::memory_order_release);
-            std::cout << "Mirror completed for track " << runtime->trackId << std::endl;
-          }
-        }
-      }
-
-      uint32_t minCompleted = std::numeric_limits<uint32_t>::max();
-      bool anyActive = false;
-      for (auto* runtime : trackSnapshot) {
-        if (!runtime->hostReady.load(std::memory_order_acquire)) {
-          continue;
-        }
-        uint32_t completed = 0;
-        {
-          std::unique_lock<std::mutex> lock(runtime->controllerMutex, std::try_to_lock);
-          if (!lock.owns_lock()) {
-            continue;
-          }
-          const auto* mailbox = runtime->controller.mailbox();
-          if (!mailbox) {
-            continue;
-          }
-          completed = mailbox->completedBlockId.load(std::memory_order_acquire);
-        }
-        if (completed > 0) {
-          runtime->active.store(true, std::memory_order_release);
-        }
-        if (!runtime->active.load(std::memory_order_acquire)) {
-          continue;
-        }
-        anyActive = true;
-        minCompleted = std::min(minCompleted, completed);
-      }
-      const bool throttleInactive = !anyActive;
-      if (!anyActive) {
-        const uint32_t fallback =
-            nextBlockId.load(std::memory_order_relaxed) > 0
-                ? nextBlockId.load(std::memory_order_relaxed) - 1
-                : 0;
-        minCompleted = fallback;
-      }
-      if (minCompleted == std::numeric_limits<uint32_t>::max()) {
-        if (isPlaying) {
-          logStall("minCompleted", nextBlockId.load(std::memory_order_relaxed), 0, 0, 0);
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        continue;
-      }
-
-      const uint32_t inFlight = nextBlockId.load() - minCompleted;
-      if (inFlight >= engineConfig.numBlocks) {
-        if (isPlaying) {
-          logStall("inFlight", nextBlockId.load(std::memory_order_relaxed), minCompleted, 0, inFlight);
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        continue;
-      }
-
-      // Also check that we're not getting too far ahead of audio playback
-      // Allow producer to be ahead by at most 10 blocks for buffering
-      uint32_t currentPlayback = audioPlaybackBlockId.load(std::memory_order_acquire);
-      const auto playbackNow = std::chrono::steady_clock::now();
-      if (currentPlayback != lastPlaybackBlock) {
-        lastPlaybackBlock = currentPlayback;
-        lastPlaybackAdvance = playbackNow;
-      } else if (isPlaying && currentPlayback > 0 &&
-                 playbackNow - lastPlaybackAdvance > playbackStallLimit) {
-        const uint32_t fallback =
-            minCompleted == std::numeric_limits<uint32_t>::max()
-                ? (nextBlockId.load(std::memory_order_relaxed) > 0
-                       ? nextBlockId.load(std::memory_order_relaxed) - 1
-                       : 0)
-                : minCompleted;
-        audioPlaybackBlockId.store(fallback, std::memory_order_release);
-        currentPlayback = fallback;
-        lastPlaybackBlock = fallback;
-        lastPlaybackAdvance = playbackNow;
-      }
-      bool throttlePlayback = false;
-      if (currentPlayback > 0) {  // Only pace once device playback has started
-        const uint32_t nextId = nextBlockId.load(std::memory_order_relaxed);
-        // Pace production to the AUDIO DEVICE, not to how fast the hosts can
-        // render. The transport advances once per produced block (transportNanotick
-        // at :8369), so if production outruns playback the whole song speeds up —
-        // it ran ~4.5x too fast. The block ring is numBlocks deep, so the producer
-        // must not get numBlocks ahead of the block the device is actually playing
-        // or it overwrites a slot the callback still needs. HARD gate: wait until
-        // the device drains one. (The old code allowed being 10 ahead — impossible
-        // to honour with a 4-deep ring — only under a 100ms latch, and the audio
-        // callback's catch-up kept currentPlayback glued to nextId so it never even
-        // reached 10. That is why the brake never engaged.)
-        if (currentPlayback <= nextId &&
-            nextId - currentPlayback >= engineConfig.numBlocks) {
-          if (isPlaying) {
-            logStall("ahead", nextId, minCompleted, currentPlayback,
-                     nextId - currentPlayback);
-          }
-          std::this_thread::sleep_for(std::chrono::milliseconds(1));
-          continue;
-        }
-      } else {
-        throttlePlayback = true;
-        // THE RING IS STILL FINITE BEFORE THE PUMP HAS TAKEN ANYTHING.
-        //
-        // The gate above only engages once currentPlayback > 0. Until then production is
-        // completely unthrottled — and the ring is numBlocks deep whether or not anyone has
-        // read from it yet. With the default numBlocks of 3 the producer can reach block 3
-        // before the pump takes block 0, and 3 % 3 == 0, so block 3's audio lands in block 0's
-        // slot. The pump then writes block 3's audio to the file as the first block.
-        //
-        // MEASURED, not deduced. tools/slice_select_check.sh compares the same project rendered
-        // at 64, 256 and 1024 frames; under a parallel ctest the 64-frame render differed from
-        // the other two in exactly frames 0..63 and nowhere else, twice, in evidence kept by
-        // the check's failure trap. Those 64 frames are byte-for-byte the correct signal's
-        // frames 192..255 — block 3 of 64. Not a corruption, not a phase error: a whole block,
-        // displaced by exactly the ring depth.
-        //
-        // It is load-dependent because whether the producer gets three blocks ahead before the
-        // pump's first wake-up is a scheduler question, which is why the same bounce differed
-        // run to run on a busy machine and never on an idle one.
-        //
-        // OFFLINE ONLY. Live, the device consumes at a fixed rate and a block lost before the
-        // first callback is inaudible; the consumer's catch-up corrections handle it and are
-        // deliberately disabled offline, because there a skipped block is a hole in the file.
-        // Offline the requirement is absolute — every produced block must reach the file — and
-        // there is no deadline, so the honest response to a full ring is to stop producing.
-        //
-        // Deadlock is not reachable: the pump publishes its cursor after consuming, so a pump
-        // that is running always leaves the producer room, and a pump that never starts has
-        // nothing to be starved of.
-        if (offlineRender && nextBlockId.load(std::memory_order_relaxed) >=
-                                 engineConfig.numBlocks) {
-          std::this_thread::sleep_for(std::chrono::microseconds(200));
-          continue;
-        }
-      }
-
-        daw::engine::produceBlock(producerBlockDeps, trackSnapshot, isPlaying,
-                                  throttleInactive, throttlePlayback);
-    }
-  });
+  daw::engine::ProducerThreadDeps producerThreadDeps{
+     audioPlaybackBlockId, engineConfig, enqueuePreview, getHarmonyAt, getRingCtrl, getRingStd,
+      getScaleForHarmony, harmonyTimeline, lastOverflowTick, latencyMgr, nextBlockId,
+      nextNoteId, offlineProducerArmed, offlineRender, panicPending, patcherGraph,
+      patcherParallel, patcherPool, patternTicks, pendingPreviewNotes, poolAlwaysOn,
+      poolEngaged, poolWorkEwmaUs, previewMutex, producerBlocksOverBudget, producerBlocksTimed,
+      producerBlockUsMax, producerBlockUsTotal, producerSamplerUsMax, producerSamplerUsTotal,
+      projectSeed, publishedCallback, quantizePitch, renderPool, resetTimeline,
+      resolveDevicePluginPath, running, snapshotTracks, songTiming, tempoProvider,
+      testThrottleMs, tickConverter, traceNotes, transport, warnedEventOutsideBlock,
+      writeMirrorParams};
+  std::thread producer([&] { daw::engine::runProducerThread(producerThreadDeps); });
 
   daw::engine::UiWriterDeps uiWriterDeps{
       arrangeGeneration, arrange, automationGeneration, automationVersion, clipVersion,
