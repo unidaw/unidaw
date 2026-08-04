@@ -12,13 +12,13 @@ namespace daw::engine {
 
 bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path,
                        std::string* error) {
-  auto& arrangeMutex = deps.arrangeMutex;
+  auto& arrangeMutex = deps.arrange.arrangeMutex;
   auto& harmonyEvents = deps.harmonyTimeline.harmonyEvents;
   auto& liveTrackCount = deps.liveTrackCount;
   auto& loadedClips = deps.loadedClips;
   auto& loadedClipsMutex = deps.loadedClipsMutex;
   auto& loadedTempoMap = deps.songTiming.loadedTempoMap;
-  auto& markerList = deps.markerList;
+  auto& markerList = deps.arrange.markerList;
   auto& masterTrack = deps.masterTrack;
   auto& patcherAssembledFromDevices = deps.patcherGraph.patcherAssembledFromDevices;
   auto& patcherGraphState = deps.patcherGraph.patcherGraphState;

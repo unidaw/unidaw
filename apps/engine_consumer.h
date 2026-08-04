@@ -26,6 +26,7 @@
 #include <utility>
 #include <vector>
 
+#include "engine_arrange_markers.h"
 #include "engine_patcher_graph_owner.h"
 #include "engine_song_timing.h"
 #include "engine_transport_state.h"
@@ -49,8 +50,7 @@ class EngineAudioCallback;
 // they stay OWNED BY main() so the move changes no lifetime and no initialisation order.
 struct UiWriterDeps {
   uint32_t& arrangeGeneration;
-  std::mutex& arrangeMutex;
-  std::atomic<uint32_t>& arrangeVersion;
+  ArrangeMarkers& arrange;
   uint32_t& automationGeneration;
   std::atomic<uint32_t>& automationVersion;
   std::atomic<uint32_t>& clipVersion;
@@ -64,7 +64,6 @@ struct UiWriterDeps {
   uint32_t& lastClipAllQuantizeVersion;
   uint32_t& lastClipAllVersion;
   uint32_t& lastPatcherVersion;
-  daw::MarkerList& markerList;
   PatcherGraphOwner& patcherGraph;
   std::atomic<uint32_t>& quantizeVersion;
   std::function<std::vector<TrackRuntime*>()> snapshotTracks;

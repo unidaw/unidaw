@@ -17,9 +17,9 @@ void handleAddMarker(MarkerCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& markerList = deps.markerList;
-  auto& arrangeMutex = deps.arrangeMutex;
-  auto& arrangeVersion = deps.arrangeVersion;
+  auto& markerList = deps.arrange.markerList;
+  auto& arrangeMutex = deps.arrange.arrangeMutex;
+  auto& arrangeVersion = deps.arrange.arrangeVersion;
   const auto& historyAppend = deps.historyAppend;
   {
   daw::UiMarkerCommandPayload mp{};

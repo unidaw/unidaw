@@ -10,8 +10,8 @@ namespace daw::engine {
 void handleArrangeTime(ArrangeTimeCommandDeps& deps,
             const daw::EventEntry& entry,
             daw::UiCommandType commandType) {
-  auto& arrangeMutex = deps.arrangeMutex;
-  auto& arrangeVersion = deps.arrangeVersion;
+  auto& arrangeMutex = deps.arrange.arrangeMutex;
+  auto& arrangeVersion = deps.arrange.arrangeVersion;
   auto& automationVersion = deps.automationVersion;
   auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   auto& bumpClipVersionFor = deps.bumpClipVersionFor;
@@ -22,7 +22,7 @@ void handleArrangeTime(ArrangeTimeCommandDeps& deps,
   auto& harmonyVersion = deps.harmonyTimeline.harmonyVersion;
   auto& historyAppend = deps.historyAppend;
   auto& loadedTempoMap = deps.songTiming.loadedTempoMap;
-  auto& markerList = deps.markerList;
+  auto& markerList = deps.arrange.markerList;
   auto& meterSnapshot = deps.songTiming.meterSnapshot;
   auto& pushUndo = deps.pushUndo;
   auto& rebuildAudioRender = deps.rebuildAudioRender;

@@ -17,8 +17,8 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
                          std::string* error) {
   // Re-bind every dependency to the name the body already uses, so the 943 lines below are
   // the untouched original.
-  auto& arrangeMutex = deps.arrangeMutex;
-  auto& arrangeVersion = deps.arrangeVersion;
+  auto& arrangeMutex = deps.arrange.arrangeMutex;
+  auto& arrangeVersion = deps.arrange.arrangeVersion;
   auto& automationVersion = deps.automationVersion;
   auto& auxChildOverlayMutex = deps.auxChildOverlayMutex;
   auto& auxChildOverlays = deps.auxChildOverlays;
@@ -45,7 +45,7 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   auto& loopEndNanotick = deps.transport.loopEndNanotick;
   auto& loopStartNanotick = deps.transport.loopStartNanotick;
   auto& loopUserSet = deps.transport.loopUserSet;
-  auto& markerList = deps.markerList;
+  auto& markerList = deps.arrange.markerList;
   auto& masterTrack = deps.masterTrack;
   auto& meterSnapshot = deps.songTiming.meterSnapshot;
   auto& nextClipId = deps.nextClipId;

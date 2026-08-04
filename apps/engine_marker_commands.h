@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_arrange_markers.h"
 #include "apps/engine_pure.h"
 #include "apps/engine_types.h"
 #include "apps/event_payloads.h"
@@ -24,9 +25,7 @@
 namespace daw::engine {
 
 struct MarkerCommandDeps {
-  daw::MarkerList& markerList;
-  std::mutex& arrangeMutex;
-  std::atomic<uint32_t>& arrangeVersion;
+  ArrangeMarkers& arrange;
   const std::function<void(const char*, const char*, uint32_t, uint32_t,
                            const std::string&)>& historyAppend;
 };

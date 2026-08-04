@@ -40,6 +40,7 @@
 #include "apps/engine_publish_clips.h"
 #include "apps/engine_clip_edit.h"
 #include "apps/engine_track_setup.h"
+#include "apps/engine_arrange_markers.h"
 #include "apps/engine_patcher_graph_owner.h"
 #include "apps/engine_song_timing.h"
 #include "apps/engine_transport_state.h"
@@ -1177,9 +1178,7 @@ int main(int argc, char** argv) {
   // and would have wedged the engine mid-edit with no diagnostic. Moving the meter onto the
   // section deleted one of the two; deleting the section deletes the derivation itself, so a
   // marker's bar is a lookup in the map and there is no pair left to invert.
-  daw::MarkerList markerList;
-  std::mutex arrangeMutex;
-  std::atomic<uint32_t> arrangeVersion{0};
+  daw::engine::ArrangeMarkers arrange;
   // AN RT-SAFE COPY OF THE METER, for the audio/host thread. The play head has to report the
   // signature at the PLAYHEAD, not the song default — that is the whole point of an authoritative
   // meter map, and reporting the default is the bug this replaces. The RT cannot take arrangeMutex,
@@ -2868,8 +2867,8 @@ int main(int argc, char** argv) {
       s.automation.emplace_back(rt->trackId, rt->track.automationClips);
     }
     {
-      std::lock_guard<std::mutex> alock(arrangeMutex);
-      s.markers = markerList.markers();
+      std::lock_guard<std::mutex> alock(arrange.arrangeMutex);
+      s.markers = arrange.markerList.markers();
       s.meterPoints = songTiming.songMeter.points();
     }
     s.tempoMap = songTiming.loadedTempoMap;
@@ -2989,8 +2988,8 @@ int main(int argc, char** argv) {
       any = true;
     }
     {
-      std::lock_guard<std::mutex> alock(arrangeMutex);
-      markerList.setMarkers(state.markers);
+      std::lock_guard<std::mutex> alock(arrange.arrangeMutex);
+      arrange.markerList.setMarkers(state.markers);
       songTiming.songMeter.setMap(state.meterPoints);
       // The RT reads the meter from a snapshot, so a restored map that is not republished is a
       // map the play head never sees — the same rule the automation republish above follows.
@@ -3019,7 +3018,7 @@ int main(int argc, char** argv) {
     harmonyDirty.store(true, std::memory_order_release);
     harmonyVersion.fetch_add(1, std::memory_order_acq_rel);
     automationVersion.fetch_add(1, std::memory_order_acq_rel);
-    arrangeVersion.fetch_add(1, std::memory_order_acq_rel);
+    arrange.arrangeVersion.fetch_add(1, std::memory_order_acq_rel);
     recomputeSongEnd();
     return any;
   };
@@ -3028,9 +3027,9 @@ int main(int argc, char** argv) {
   // track is copied under its own mutex so the document is consistent per
   // track without stalling audio behind one global lock.
   daw::engine::SaveProjectDeps saveProjectDeps{
-      arrangeMutex, harmonyTimeline, liveTrackCount, loadedClips, loadedClipsMutex,
-      songTiming, markerList, masterTrack, patcherGraph, pluginCache, projectSeed, tracks,
-      tracksMutex, songBarGrid, trackIsPersisted
+      arrange, harmonyTimeline, liveTrackCount, loadedClips, loadedClipsMutex, songTiming,
+      masterTrack, patcherGraph, pluginCache, projectSeed, tracks, tracksMutex, songBarGrid,
+      trackIsPersisted
   };
   auto saveProjectToPath = [&](const std::string& path,
                                  std::string* error) -> bool {
@@ -3042,12 +3041,12 @@ int main(int argc, char** argv) {
   // here — that needs host restarts and the vst_state blobs described in
   // PROJECT_PERSISTENCE.md, which this version does not yet write.
   daw::engine::LoadProjectDeps loadProjectDeps{
-      arrangeMutex, arrangeVersion, automationVersion, auxChildOverlayMutex,
-      auxChildOverlays, buildTrackSnapshot, bumpAllTrackClipVersions, clipDirty,
-      clipVersion, emitChainSnapshot, emitModSnapshot, emitRoutingSnapshot, emitUiDiff,
+      arrange, automationVersion, auxChildOverlayMutex, auxChildOverlays,
+      buildTrackSnapshot, bumpAllTrackClipVersions, clipDirty, clipVersion,
+      emitChainSnapshot, emitModSnapshot, emitRoutingSnapshot, emitUiDiff,
       ensurePlacementIds, ensureTrack, harmonyTimeline, liveTrackCount, loadInProgress,
-      loadedClips, loadedClipsMutex, loadedProjectDir, songTiming, transport, markerList,
-      masterTrack, nextClipId, patcherGraph, patternTicks, pluginCache, projectSeed,
+      loadedClips, loadedClipsMutex, loadedProjectDir, songTiming, transport, masterTrack,
+      nextClipId, patcherGraph, patternTicks, pluginCache, projectSeed,
       publishAudioClipTable, rebuildAudioRender, rebuildFlatAndPublish, rebuildHostForChain,
       reconcileMasterHost, refreshSamplerForTrack, resetTrackContent, tempoProvider, tracks,
       tracksMutex, updatePatcherGraphSnapshot, waveformStore
@@ -3490,7 +3489,8 @@ int main(int argc, char** argv) {
   const std::function<void(TrackRuntime&)> emitRoutingSnapshotFn = emitRoutingSnapshot;
 
   daw::engine::MarkerCommandDeps markerCommandDeps{
-      markerList, arrangeMutex, arrangeVersion, historyAppendFn};
+      arrange, historyAppendFn
+  };
 
   daw::engine::ProjectCommandDeps projectCommandDeps{
       projectLoadOk, projectLoadSeq, saveProjectToPathFn, loadProjectFromPathFn};
@@ -3524,10 +3524,10 @@ int main(int argc, char** argv) {
   const std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&)>
       rebuildFlatAndPublishFn = rebuildFlatAndPublish;
   daw::engine::ArrangeTimeCommandDeps arrangeTimeCommandDeps{
-      arrangeMutex, arrangeVersion, automationVersion, buildTrackSnapshot,
-      bumpClipVersionFor, clipDirty, harmonyTimeline, historyAppend, songTiming, markerList,
-      pushUndo, rebuildAudioRender, rebuildFlatAndPublish, recomputeSongEnd,
-      snapshotSongStore, snapshotTracks, tempoProvider
+      arrange, automationVersion, buildTrackSnapshot, bumpClipVersionFor, clipDirty,
+      harmonyTimeline, historyAppend, songTiming, pushUndo, rebuildAudioRender,
+      rebuildFlatAndPublish, recomputeSongEnd, snapshotSongStore, snapshotTracks,
+      tempoProvider
   };
   daw::engine::TrackpropsCommandDeps trackpropsCommandDeps{
       tracks, tracksMutex, masterTrack, quantizeVersion,
@@ -3950,11 +3950,11 @@ int main(int argc, char** argv) {
   });
 
   daw::engine::UiWriterDeps uiWriterDeps{
-      arrangeGeneration, arrangeMutex, arrangeVersion, automationGeneration,
-      automationVersion, clipVersion, clipWindowMutex, clipWindowPending, harmonyTimeline,
-      laneQuantizeOf, lastArrangeSongEnd, lastArrangeVersion, lastAutomationVersion,
-      lastClipAllQuantizeVersion, lastClipAllVersion, lastPatcherVersion, markerList,
-      patcherGraph, quantizeVersion, snapshotTracks, songTiming, trackIsPersisted, uiShm,
+      arrangeGeneration, arrange, automationGeneration, automationVersion, clipVersion,
+      clipWindowMutex, clipWindowPending, harmonyTimeline, laneQuantizeOf,
+      lastArrangeSongEnd, lastArrangeVersion, lastAutomationVersion,
+      lastClipAllQuantizeVersion, lastClipAllVersion, lastPatcherVersion, patcherGraph,
+      quantizeVersion, snapshotTracks, songTiming, trackIsPersisted, uiShm,
       warnedPatcherOwnerTooWide
   };
 

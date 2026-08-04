@@ -212,11 +212,11 @@ void writeUiAutomationLanesTo(UiWriterDeps& deps, bool force) {
 
 void writeUiArrangeSummaryTo(UiWriterDeps& deps, bool force) {
   auto& arrangeGeneration = deps.arrangeGeneration;
-  auto& arrangeMutex = deps.arrangeMutex;
-  auto& arrangeVersion = deps.arrangeVersion;
+  auto& arrangeMutex = deps.arrange.arrangeMutex;
+  auto& arrangeVersion = deps.arrange.arrangeVersion;
   auto& lastArrangeSongEnd = deps.lastArrangeSongEnd;
   auto& lastArrangeVersion = deps.lastArrangeVersion;
-  auto& markerList = deps.markerList;
+  auto& markerList = deps.arrange.markerList;
   auto& songEndNanotick = deps.songTiming.songEndNanotick;
   auto& songMeter = deps.songTiming.songMeter;
   auto& uiShm = deps.uiShm;

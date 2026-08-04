@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "engine_arrange_markers.h"
 #include "engine_patcher_graph_owner.h"
 #include "engine_song_timing.h"
 #include "engine_transport_state.h"
@@ -41,8 +42,7 @@
 namespace daw::engine {
 
 struct LoadProjectDeps {
-  std::mutex& arrangeMutex;
-  std::atomic<uint32_t>& arrangeVersion;
+  ArrangeMarkers& arrange;
   std::atomic<uint32_t>& automationVersion;
   std::mutex& auxChildOverlayMutex;
   std::map<std::pair<uint32_t, uint32_t>, AuxChildOverlay>& auxChildOverlays;
@@ -64,7 +64,6 @@ struct LoadProjectDeps {
   std::string& loadedProjectDir;
   SongTiming& songTiming;
   TransportState& transport;
-  daw::MarkerList& markerList;
   std::unique_ptr<TrackRuntime>& masterTrack;
   std::atomic<uint32_t>& nextClipId;
   PatcherGraphOwner& patcherGraph;

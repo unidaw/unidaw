@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_arrange_markers.h"
 #include "engine_patcher_graph_owner.h"
 #include "engine_song_timing.h"
 #include "engine_harmony_timeline.h"
@@ -36,13 +37,12 @@
 namespace daw::engine {
 
 struct SaveProjectDeps {
-  std::mutex& arrangeMutex;
+  ArrangeMarkers& arrange;
   HarmonyTimeline& harmonyTimeline;
   std::atomic<uint32_t>& liveTrackCount;
   std::vector<daw::ProjectClip>& loadedClips;
   std::mutex& loadedClipsMutex;
   SongTiming& songTiming;
-  daw::MarkerList& markerList;
   std::unique_ptr<TrackRuntime>& masterTrack;
   PatcherGraphOwner& patcherGraph;
   const daw::PluginCache& pluginCache;

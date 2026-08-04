@@ -26,6 +26,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_arrange_markers.h"
 #include "engine_song_timing.h"
 #include "engine_harmony_timeline.h"
 #include "apps/engine_pure.h"
@@ -38,8 +39,7 @@
 namespace daw::engine {
 
 struct ArrangeTimeCommandDeps {
-  std::mutex& arrangeMutex;
-  std::atomic<uint32_t>& arrangeVersion;
+  ArrangeMarkers& arrange;
   std::atomic<uint32_t>& automationVersion;
   const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>& buildTrackSnapshot;
   const std::function<uint32_t(TrackRuntime*)>& bumpClipVersionFor;
@@ -47,7 +47,6 @@ struct ArrangeTimeCommandDeps {
   HarmonyTimeline& harmonyTimeline;
   const std::function<void(const char*, const char*, uint32_t, uint32_t, const std::string&)>& historyAppend;
   SongTiming& songTiming;
-  daw::MarkerList& markerList;
   const std::function<void(EngineUndoEntry)>& pushUndo;
   const std::function<std::shared_ptr<const AudioRenderList>(const TrackRuntime&)>& rebuildAudioRender;
   const std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&)>& rebuildFlatAndPublish;
