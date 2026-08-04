@@ -40,7 +40,22 @@ BAR=$((Q * 4))
 [ -x "$BUILD/daw_engine" ] || { echo "build daw_engine first"; exit 2; }
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+# KEEP THE EVIDENCE WHEN IT FAILS. This used to be `trap 'rm -rf "$TMP"' EXIT`, while the failure
+# messages above tell you to read a log inside $TMP — so the one run whose log you need is the one
+# run that deletes it. That is not hypothetical: audio_loop failed once under a full-suite run,
+# passed 9 times in isolation, and the reason is gone. Same convention as elektron_ops_check.
+KEEPDIR="${DAW_CHECK_EVIDENCE:-/tmp/daw-check-evidence}"
+keep_evidence() {
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    local dest="$KEEPDIR/$(basename "$0" .sh).$$"
+    mkdir -p "$dest" && cp -R "$TMP"/. "$dest"/ 2>/dev/null
+    echo "  evidence kept in $dest"
+  fi
+  rm -rf "$TMP"
+  exit $rc
+}
+trap keep_evidence EXIT
 fail() { echo "  FAIL: $*"; exit 1; }
 
 # A stereo file: 0.5s of tone LEFT only, then 0.5s of tone RIGHT only. Hard-panned so a downmix is
