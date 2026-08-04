@@ -614,6 +614,19 @@ target_link_libraries(engine_modlink_commands_tests PRIVATE engine_commands)
 # function, because reaching them meant starting an engine. Two of the assertions are past bugs —
 # a valueless flag in LAST position, and an out-of-range --sample-rate that must be refused rather
 # than quietly replaced by the device's.
+# The small clip helpers — version bumps, placement ids, copy-on-write, edit scope. They were
+# lambdas inside main() until they moved to engine_clip_edit, so nothing could reach them without
+# starting an engine, and the ORDER of the two version bumps is a contract no end-to-end check can
+# see.
+add_executable(engine_clip_helpers_tests
+  apps/engine_clip_helpers_tests_main.cpp
+)
+target_include_directories(engine_clip_helpers_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(engine_clip_helpers_tests PRIVATE engine_commands)
+
 add_executable(engine_startup_tests
   apps/engine_startup_tests_main.cpp
 )
@@ -1562,6 +1575,12 @@ add_test(NAME engine_modlink_commands
   COMMAND engine_modlink_commands_tests
 )
 set_tests_properties(engine_modlink_commands PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME engine_clip_helpers
+  COMMAND engine_clip_helpers_tests
+)
+set_tests_properties(engine_clip_helpers PROPERTIES
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME engine_startup
