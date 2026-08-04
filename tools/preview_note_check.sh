@@ -37,7 +37,11 @@ PY
 ( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
     DAW_CAPTURE_WAV="$TMP/m.wav" DAW_CAPTURE_SECONDS=8 ./daw_engine --run-seconds 10 >"$TMP/eng.log" 2>&1 ) &
 ENG=$!
-sleep 2
+# Wait for the engine to be READY rather than sleeping a guessed amount. The pattern is
+# "UI: command thread started" because this engine boots with no project, so wait_for_boot's
+# default (a project.load) would never appear; that thread reads the command ring, so it is
+# the marker that means "ready to be told something".
+wait_for_boot "$TMP/eng.log" "$ENG" 80 "UI: command thread started"
 DAW_UI_SHM_NAME="$SHM" "$CLI" do load e --force >/dev/null 2>&1 || true
 sleep 1
 

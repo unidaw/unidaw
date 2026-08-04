@@ -75,7 +75,11 @@ EOF
     DAW_FAKE_TONE_HZ=440 \
     ./daw_engine --run-seconds 16 >"$TMP/engine.log" 2>&1 ) &
 ENG=$!
-sleep 2.5
+# Wait for the engine to be READY rather than sleeping a guessed amount. The pattern is
+# "UI: command thread started" because this engine boots with no project, so wait_for_boot's
+# default (a project.load) would never appear; that thread reads the command ring, so it is
+# the marker that means "ready to be told something".
+wait_for_boot "$TMP/engine.log" "$ENG" 80 "UI: command thread started"
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load im >/dev/null 2>&1 || true
 sleep 2

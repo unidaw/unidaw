@@ -111,7 +111,11 @@ SHM="/mop1_$$"
 ( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 20 >"$TMP/eng1.log" 2>&1 ) &
 ENG=$!
-sleep 2
+# Wait for the engine to be READY rather than sleeping a guessed amount. The pattern is
+# "UI: command thread started" because this engine boots with no project, so wait_for_boot's
+# default (a project.load) would never appear; that thread reads the command ring, so it is
+# the marker that means "ready to be told something".
+wait_for_boot "$TMP/eng1.log" "$ENG" 80 "UI: command thread started"
 DAW_UI_SHM_NAME="$SHM" "$CLI" do load mo --force >/dev/null 2>&1 || true
 sleep 2   # the children are derived from the bus layout after the load settles
 
@@ -167,7 +171,11 @@ SHM2="/mop2_$$"
 ( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 20 >"$TMP/eng2.log" 2>&1 ) &
 ENG=$!
-sleep 2
+# Wait for the engine to be READY rather than sleeping a guessed amount. The pattern is
+# "UI: command thread started" because this engine boots with no project, so wait_for_boot's
+# default (a project.load) would never appear; that thread reads the command ring, so it is
+# the marker that means "ready to be told something".
+wait_for_boot "$TMP/eng2.log" "$ENG" 80 "UI: command thread started"
 DAW_UI_SHM_NAME="$SHM2" "$CLI" do load moout --force >/dev/null 2>&1 || true
 sleep 2
 
@@ -248,7 +256,11 @@ SHM3="/mop3_$$"
 ( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM3" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 20 >"$TMP/eng3.log" 2>&1 ) &
 ENG=$!
-sleep 2
+# Wait for the engine to be READY rather than sleeping a guessed amount. The pattern is
+# "UI: command thread started" because this engine boots with no project, so wait_for_boot's
+# default (a project.load) would never appear; that thread reads the command ring, so it is
+# the marker that means "ready to be told something".
+wait_for_boot "$TMP/eng3.log" "$ENG" 80 "UI: command thread started"
 DAW_UI_SHM_NAME="$SHM3" "$CLI" do load shifted --force >/dev/null 2>&1 || true
 sleep 2.5
 

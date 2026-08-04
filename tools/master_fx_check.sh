@@ -19,6 +19,7 @@
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tools/lib/engine_wait.sh"
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
@@ -138,7 +139,11 @@ shm_s="/master_fx_sur_$$"
     DAW_PROJECT_DIR="$TMP" DAW_CAPTURE_WAV="$TMP/sur.wav" DAW_CAPTURE_SECONDS=6 \
     ./daw_engine --run-seconds 12 >"$TMP/sur.log" 2>&1 ) &
 eng_s=$!
-sleep 2.5
+# Wait for the engine to be READY rather than sleeping a guessed amount. The pattern is
+# "UI: command thread started" because this engine boots with no project, so wait_for_boot's
+# default (a project.load) would never appear; that thread reads the command ring, so it is
+# the marker that means "ready to be told something".
+wait_for_boot "$TMP/sur.log" "$eng_s" 80 "UI: command thread started"
 DAW_UI_SHM_NAME="$shm_s" "$CLI" do load withfx --force >/dev/null 2>&1 || true
 sleep 1.5
 DAW_UI_SHM_NAME="$shm_s" "$CLI" do play --force >/dev/null 2>&1 || true
