@@ -269,4 +269,145 @@ void emitChainError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId, u
                   trackId, 0, "");
 }
 
+uint64_t uiDiffNowMs(UiPublishDeps& deps) {
+  auto& uiDiffStart = deps.uiDiffStart;
+
+
+
+    const auto now = std::chrono::steady_clock::now();
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - uiDiffStart)
+            .count());
+}
+
+void logUiDiffDrop(UiPublishDeps& deps) {
+  auto& uiDiffSent = deps.uiDiffSent;
+  auto& uiDiffDropped = deps.uiDiffDropped;
+  auto& uiDiffDropLogMs = deps.uiDiffDropLogMs;
+  auto uiDiffNowMs = [&](auto&&... a) { return daw::engine::uiDiffNowMs(deps, decltype(a)(a)...); };
+
+
+    const uint64_t nowMs = uiDiffNowMs();
+    uint64_t last = uiDiffDropLogMs.load(std::memory_order_relaxed);
+    if (nowMs - last >= 1000 &&
+        uiDiffDropLogMs.compare_exchange_strong(
+            last, nowMs, std::memory_order_relaxed)) {
+      daw::LogLine() << "Engine: UI diff ring saturated (sent "
+                << uiDiffSent.load(std::memory_order_relaxed)
+                << ", dropped " << uiDiffDropped.load(std::memory_order_relaxed)
+                << ")" << std::endl;
+    }
+}
+
+void emitUiDiff(UiPublishDeps& deps, const daw::UiDiffPayload& diffPayload) {
+  auto& getRingUiOut = deps.getRingUiOut;
+  auto sendUiDiff = [&](auto&&... a) { return daw::engine::sendUiDiff(deps, decltype(a)(a)...); };
+
+
+    auto ringUiOut = getRingUiOut();
+    if (ringUiOut.mask == 0) {
+      return;
+    }
+    sendUiDiff(ringUiOut, daw::EventType::UiDiff, diffPayload);
+}
+
+void emitModError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId,
+                  uint32_t linkId) {
+  auto& getRingUiOut = deps.getRingUiOut;
+  auto& historyAppend = deps.historyAppend;
+
+
+    auto ringUiOut = getRingUiOut();
+    if (ringUiOut.mask == 0) {
+      return;
+    }
+    daw::UiModErrorPayload payload{};
+    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::ModError);
+    payload.errorCode = errorCode;
+    payload.trackId = trackId;
+    payload.linkId = linkId;
+    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
+    daw::ringWrite(ringUiOut, entry);
+    DAW_EVENT("modlink.rejected")
+        .field("track", trackId)
+        // A refusal that arrives BEFORE the auto-assign reports the sentinel, because there is no
+        // id yet. Flag it rather than let 4294967295 read as a link that exists.
+        .field("link", linkId)
+        .field("auto", linkId == daw::kModLinkIdAuto)
+        .field("reason", errorScopeName("mod", errorCode));
+    historyAppend("mod_link", ("rejected:" + errorScopeName("mod", errorCode)).c_str(),
+                  trackId, 0, "");
+}
+
+void emitRoutingError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId) {
+  auto& getRingUiOut = deps.getRingUiOut;
+  auto& historyAppend = deps.historyAppend;
+
+
+    auto ringUiOut = getRingUiOut();
+    if (ringUiOut.mask == 0) {
+      return;
+    }
+    daw::UiRoutingErrorPayload payload{};
+    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::RoutingError);
+    payload.errorCode = errorCode;
+    payload.trackId = trackId;
+    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
+    daw::ringWrite(ringUiOut, entry);
+    DAW_EVENT("routing.rejected")
+        .field("track", trackId)
+        .field("reason", errorScopeName("routing", errorCode));
+    historyAppend("set_track_routing",
+                  ("rejected:" + errorScopeName("routing", errorCode)).c_str(), trackId,
+                  0, "");
+}
+
+void emitClipReject(UiPublishDeps& deps, daw::UiClipRejectReason reason, uint32_t trackId,
+                    uint32_t sentBase, uint32_t currentBase, daw::UiCommandType commandType) {
+  auto& getRingUiOut = deps.getRingUiOut;
+  auto& uiDiffSent = deps.uiDiffSent;
+  auto& uiDiffDropped = deps.uiDiffDropped;
+  auto logUiDiffDrop = [&](auto&&... a) { return daw::engine::logUiDiffDrop(deps, decltype(a)(a)...); };
+
+
+    auto ringUiOut = getRingUiOut();
+    if (ringUiOut.mask == 0) {
+      return;
+    }
+    daw::UiClipRejectPayload payload{};
+    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::ClipRejected);
+    payload.reason = static_cast<uint16_t>(reason);
+    payload.trackId = trackId;
+    payload.sentBase = sentBase;
+    payload.currentBase = currentBase;
+    payload.commandType = static_cast<uint16_t>(commandType);
+    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
+    if (daw::ringWrite(ringUiOut, entry)) {
+      uiDiffSent.fetch_add(1, std::memory_order_relaxed);
+    } else {
+      uiDiffDropped.fetch_add(1, std::memory_order_relaxed);
+      logUiDiffDrop();
+    }
+}
+
+void reportSamplerReject(UiPublishDeps& deps, daw::UiCommandType command,
+                         daw::UiSamplerRejectReason reason, uint32_t trackId,
+                         uint32_t deviceId, uint16_t targetId) {
+  auto emitUiDiff = [&](auto&&... a) { return daw::engine::emitUiDiff(deps, decltype(a)(a)...); };
+
+
+    daw::UiSamplerRejectPayload rejected{};
+    rejected.diffType = static_cast<uint16_t>(daw::UiDiffType::SamplerRejected);
+    rejected.reason = static_cast<uint16_t>(reason);
+    rejected.commandType = static_cast<uint16_t>(command);
+    rejected.targetId = targetId;
+    rejected.trackId = trackId;
+    rejected.deviceId = deviceId;
+    daw::UiDiffPayload asDiff{};
+    static_assert(sizeof(rejected) <= sizeof(asDiff),
+                  "the sampler rejection must fit the diff slot it rides");
+    std::memcpy(&asDiff, &rejected, sizeof(rejected));
+    emitUiDiff(asDiff);
+}
+
 }  // namespace daw::engine

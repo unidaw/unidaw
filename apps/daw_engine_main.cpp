@@ -747,44 +747,9 @@ int main(int argc, char** argv) {
   // then trackMutex — taking them the other way round is the classic inversion), so
   // those sites pass the TrackRuntime* they already hold. TrackRuntime objects are never
   // destroyed, so the pointer form needs no lock at all.
-  auto bumpClipVersionFor = [&](TrackRuntime* runtime) -> uint32_t {
-    // ORDER MATTERS, and it is the reverse of the obvious one. The publisher GATES on
-    // the global ("has anything changed?") and PUBLISHES the per-track value. If the
-    // global moved first, a publish landing between the two increments would latch the
-    // new gate value while writing the OLD per-track version — and then return early
-    // forever after, because the gate already matches. That track's published base
-    // would be permanently one behind, so every client reading it would present a stale
-    // base and have every edit rejected. Bump the value first, the gate second.
-    const uint32_t trackNext =
-        runtime ? runtime->trackClipVersion.fetch_add(1, std::memory_order_acq_rel) + 1
-                : 0;
-    const uint32_t globalNext = clipVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
-    return runtime ? trackNext : globalNext;
-  };
-  auto bumpTrackClipVersion = [&](uint32_t trackId) -> uint32_t {
-    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
-    return bumpClipVersionFor(runtime);
-  };
   // Every track's version advances: used where a change is NOT scoped to one track (a
   // project load replaces every clip; a waveform arrival invalidates every mirror), so
   // no caller is left holding a base that silently still matches.
-  auto bumpAllTrackClipVersions = [&]() {
-    // Per-track values first, the global gate last — see bumpClipVersionFor. The window
-    // is at its widest here: the global bump used to come before a tracksMutex
-    // acquisition that the publisher takes on every iteration, so an entire all-tracks
-    // rebuild could complete inside it and every track's published base would be stuck
-    // one behind immediately after a project load.
-    {
-      std::lock_guard<std::mutex> lock(tracksMutex);
-      for (auto& rt : tracks) {
-        if (rt) {
-          rt->trackClipVersion.fetch_add(1, std::memory_order_acq_rel);
-        }
-      }
-    }
-    clipVersion.fetch_add(1, std::memory_order_acq_rel);
-  };
-
   // Bumped whenever any track's sampler state changes, so a UI can poll one number instead of
   // re-requesting a kit to find out whether the one it drew is still current.
   std::atomic<uint32_t> samplerKitVersion{0};
@@ -805,21 +770,6 @@ int main(int argc, char** argv) {
   // Seed the counter above any id already present in `placements`, then give every
   // unassigned (id == 0) placement a fresh stable id. Called wherever placements enter the
   // store (load, restore, single-note creation).
-  auto ensurePlacementIds = [&](std::vector<daw::ProjectPlacement>& placements) {
-    for (const auto& pl : placements) {
-      uint32_t seen = nextPlacementId.load(std::memory_order_relaxed);
-      while (pl.id >= seen &&
-             !nextPlacementId.compare_exchange_weak(seen, pl.id + 1,
-                                                    std::memory_order_relaxed)) {
-      }
-    }
-    for (auto& pl : placements) {
-      if (pl.id == 0) {
-        pl.id = nextPlacementId.fetch_add(1, std::memory_order_relaxed);
-      }
-    }
-  };
-
   std::mutex previewMutex;
   std::vector<PreviewNoteReq> pendingPreviewNotes;
   std::unordered_map<uint32_t, std::vector<uint8_t>> heldPreview;  // trackId -> held pitches
@@ -957,8 +907,43 @@ int main(int argc, char** argv) {
   };
   const std::function<void(const char*, const char*, uint32_t, uint32_t,
                           const std::string&)> historyAppendFn = historyAppend;
-  daw::engine::UiPublishDeps uiPublishDeps{modVersion, getRingStd, getRingUiOut, routingVersion,
-                                           patcherGraphVersion, historyAppendFn};
+  // MOVED UP TO HERE from beside the diff emitters, because UiPublishDeps now holds them and a
+  // struct of references cannot be built before its members exist. They are four independent
+  // declarations with nothing above them, so moving them is a move and not a reordering of work.
+  std::atomic<uint64_t> uiDiffSent{0};
+  std::atomic<uint64_t> uiDiffDropped{0};
+  std::atomic<uint64_t> uiDiffDropLogMs{0};
+  const auto uiDiffStart = std::chrono::steady_clock::now();
+  daw::engine::UiPublishDeps uiPublishDeps{modVersion,          getRingStd,   getRingUiOut,
+                                           routingVersion,      patcherGraphVersion,
+                                           historyAppendFn,     uiDiffSent,   uiDiffDropped,
+                                           uiDiffDropLogMs,     uiDiffStart};
+  // The eight diff/error emitters are functions in engine_ui_publish now. main() keeps forwarders
+  // because callers all through the file still use them by name.
+  auto uiDiffNowMs = [&] { return daw::engine::uiDiffNowMs(uiPublishDeps); };
+  // logUiDiffDrop has no forwarder: its only caller was sendUiDiff, which moved with it.
+  auto sendUiDiff = [&](daw::EventRingView& ringUiOut, daw::EventType type,
+                        const auto& diffPayload) {
+    daw::engine::sendUiDiff(uiPublishDeps, ringUiOut, type, diffPayload);
+  };
+  auto emitUiDiff = [&](const daw::UiDiffPayload& diffPayload) {
+    daw::engine::emitUiDiff(uiPublishDeps, diffPayload);
+  };
+  auto emitModError = [&](uint16_t errorCode, uint32_t trackId, uint32_t linkId) {
+    daw::engine::emitModError(uiPublishDeps, errorCode, trackId, linkId);
+  };
+  auto emitRoutingError = [&](uint16_t errorCode, uint32_t trackId) {
+    daw::engine::emitRoutingError(uiPublishDeps, errorCode, trackId);
+  };
+  auto emitClipReject = [&](daw::UiClipRejectReason reason, uint32_t trackId, uint32_t sentBase,
+                            uint32_t currentBase, daw::UiCommandType commandType) {
+    daw::engine::emitClipReject(uiPublishDeps, reason, trackId, sentBase, currentBase,
+                                commandType);
+  };
+  auto reportSamplerReject = [&](daw::UiCommandType command, daw::UiSamplerRejectReason reason,
+                                 uint32_t trackId, uint32_t deviceId, uint16_t targetId) {
+    daw::engine::reportSamplerReject(uiPublishDeps, command, reason, trackId, deviceId, targetId);
+  };
   auto emitModSnapshot = [&](TrackRuntime& runtime) {
     daw::engine::emitModSnapshot(uiPublishDeps, runtime);
   };
@@ -1304,29 +1289,6 @@ int main(int argc, char** argv) {
     rebuildHostForChain(runtime);
   };
 
-  std::atomic<uint64_t> uiDiffSent{0};
-  std::atomic<uint64_t> uiDiffDropped{0};
-  std::atomic<uint64_t> uiDiffDropLogMs{0};
-  const auto uiDiffStart = std::chrono::steady_clock::now();
-  auto uiDiffNowMs = [&]() -> uint64_t {
-    const auto now = std::chrono::steady_clock::now();
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(now - uiDiffStart)
-            .count());
-  };
-  auto logUiDiffDrop = [&]() {
-    const uint64_t nowMs = uiDiffNowMs();
-    uint64_t last = uiDiffDropLogMs.load(std::memory_order_relaxed);
-    if (nowMs - last >= 1000 &&
-        uiDiffDropLogMs.compare_exchange_strong(
-            last, nowMs, std::memory_order_relaxed)) {
-      daw::LogLine() << "Engine: UI diff ring saturated (sent "
-                << uiDiffSent.load(std::memory_order_relaxed)
-                << ", dropped " << uiDiffDropped.load(std::memory_order_relaxed)
-                << ")" << std::endl;
-    }
-  };
-
   // EVERY DIFF SEND IS COUNTED, AND A DROP IS LOGGED — once, instead of in three emitters.
   //
   // emitUiDiff, emitHarmonyDiff and emitChordDiff are siblings for three EventTypes, and each
@@ -1342,30 +1304,6 @@ int main(int argc, char** argv) {
   // The ring is a PARAMETER because each emitter obtains its own view with getRingUiOut() and
   // returns early if the mask is zero. Capturing a ring here would have meant one of them using a
   // view the caller had already decided not to write to.
-  auto sendUiDiff = [&](daw::EventRingView& ringUiOut, daw::EventType type,
-                        const auto& diffPayload) {
-    daw::EventEntry diffEntry;
-    diffEntry.sampleTime = 0;
-    diffEntry.blockId = 0;
-    diffEntry.type = static_cast<uint16_t>(type);
-    diffEntry.size = sizeof(diffPayload);
-    std::memcpy(diffEntry.payload, &diffPayload, sizeof(diffPayload));
-    if (daw::ringWrite(ringUiOut, diffEntry)) {
-      uiDiffSent.fetch_add(1, std::memory_order_relaxed);
-    } else {
-      uiDiffDropped.fetch_add(1, std::memory_order_relaxed);
-      logUiDiffDrop();
-    }
-  };
-
-  auto emitUiDiff = [&](const daw::UiDiffPayload& diffPayload) {
-    auto ringUiOut = getRingUiOut();
-    if (ringUiOut.mask == 0) {
-      return;
-    }
-    sendUiDiff(ringUiOut, daw::EventType::UiDiff, diffPayload);
-  };
-
   // EVERY SAMPLER REFUSAL REACHES THE CALLER, not just the engine's log.
   //
   // Twenty sites across seven sampler commands reported refusal with DAW_EVENT and nothing else.
@@ -1378,51 +1316,9 @@ int main(int argc, char** argv) {
   //
   // The DAW_EVENT lines stay. They are how a human and daw-cli read it, and the two carry the
   // same facts because this is called beside them rather than instead of them.
-  auto reportSamplerReject = [&](daw::UiCommandType command,
-                                 daw::UiSamplerRejectReason reason,
-                                 uint32_t trackId,
-                                 uint32_t deviceId,
-                                 uint16_t targetId) {
-    daw::UiSamplerRejectPayload rejected{};
-    rejected.diffType = static_cast<uint16_t>(daw::UiDiffType::SamplerRejected);
-    rejected.reason = static_cast<uint16_t>(reason);
-    rejected.commandType = static_cast<uint16_t>(command);
-    rejected.targetId = targetId;
-    rejected.trackId = trackId;
-    rejected.deviceId = deviceId;
-    daw::UiDiffPayload asDiff{};
-    static_assert(sizeof(rejected) <= sizeof(asDiff),
-                  "the sampler rejection must fit the diff slot it rides");
-    std::memcpy(&asDiff, &rejected, sizeof(rejected));
-    emitUiDiff(asDiff);
-  };
-
-
   // A refusal, on the outbound ring, with the numbers that settle it. Everything the
   // caller needs to recover is here: which track the version was compared against, what
   // it sent, and what to retry with.
-  auto emitClipReject = [&](daw::UiClipRejectReason reason, uint32_t trackId,
-                            uint32_t sentBase, uint32_t currentBase,
-                            daw::UiCommandType commandType) {
-    auto ringUiOut = getRingUiOut();
-    if (ringUiOut.mask == 0) {
-      return;
-    }
-    daw::UiClipRejectPayload payload{};
-    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::ClipRejected);
-    payload.reason = static_cast<uint16_t>(reason);
-    payload.trackId = trackId;
-    payload.sentBase = sentBase;
-    payload.currentBase = currentBase;
-    payload.commandType = static_cast<uint16_t>(commandType);
-    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
-    if (daw::ringWrite(ringUiOut, entry)) {
-      uiDiffSent.fetch_add(1, std::memory_order_relaxed);
-    } else {
-      uiDiffDropped.fetch_add(1, std::memory_order_relaxed);
-      logUiDiffDrop();
-    }
-  };
   const std::function<void(daw::UiClipRejectReason, uint32_t, uint32_t, uint32_t,
                            daw::UiCommandType)> emitClipRejectFn = emitClipReject;
 
@@ -1440,48 +1336,6 @@ int main(int argc, char** argv) {
   // afternoon on stale clip versions, and it applies to every CLI path added for these
   // ops. So: the diff still goes on the ring for the UI, and the same refusal is now
   // also an event and a journal line.
-
-  auto emitRoutingError = [&](uint16_t errorCode, uint32_t trackId) {
-    auto ringUiOut = getRingUiOut();
-    if (ringUiOut.mask == 0) {
-      return;
-    }
-    daw::UiRoutingErrorPayload payload{};
-    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::RoutingError);
-    payload.errorCode = errorCode;
-    payload.trackId = trackId;
-    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
-    daw::ringWrite(ringUiOut, entry);
-    DAW_EVENT("routing.rejected")
-        .field("track", trackId)
-        .field("reason", errorScopeName("routing", errorCode));
-    historyAppend("set_track_routing",
-                  ("rejected:" + errorScopeName("routing", errorCode)).c_str(), trackId,
-                  0, "");
-  };
-
-  auto emitModError = [&](uint16_t errorCode, uint32_t trackId, uint32_t linkId) {
-    auto ringUiOut = getRingUiOut();
-    if (ringUiOut.mask == 0) {
-      return;
-    }
-    daw::UiModErrorPayload payload{};
-    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::ModError);
-    payload.errorCode = errorCode;
-    payload.trackId = trackId;
-    payload.linkId = linkId;
-    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
-    daw::ringWrite(ringUiOut, entry);
-    DAW_EVENT("modlink.rejected")
-        .field("track", trackId)
-        // A refusal that arrives BEFORE the auto-assign reports the sentinel, because there is no
-        // id yet. Flag it rather than let 4294967295 read as a link that exists.
-        .field("link", linkId)
-        .field("auto", linkId == daw::kModLinkIdAuto)
-        .field("reason", errorScopeName("mod", errorCode));
-    historyAppend("mod_link", ("rejected:" + errorScopeName("mod", errorCode)).c_str(),
-                  trackId, 0, "");
-  };
 
   auto emitHarmonyDiff = [&](const daw::UiHarmonyDiffPayload& diffPayload) {
     auto ringUiOut = getRingUiOut();
@@ -1521,12 +1375,11 @@ int main(int argc, char** argv) {
   // what keep this commit a move rather than a rewrite. The *Deps structs that carry them
   // individually (17 members across six structs) can collapse to one HarmonyTimeline& each next.
   daw::engine::HarmonyTimeline harmonyTimeline{scaleRegistry, emitHarmonyDiff, pushHarmonyUndo};
-  // harmonyDirty, harmonyMutex and harmonyEvents no longer need a binding here: their last
-  // readers in main() were the four song-store functions, and those moved to
-  // apps/engine_song_store.cpp where they read HarmonyTimeline's members directly. This is the
-  // engine-object payoff working in the direction it was meant to — main() sheds locals as the
-  // code that used them leaves, rather than accumulating aliases forever.
-  auto& harmonyVersion = harmonyTimeline.harmonyVersion;
+  // NO ALIASES INTO HarmonyTimeline REMAIN. harmonyDirty, harmonyMutex, harmonyEvents and
+  // harmonyVersion each had a binding here purely so older code could keep spelling them. Their
+  // last readers in main() were the song-store functions and the version guard, and both moved to
+  // where the state lives. This is the engine-object payoff running in the intended direction:
+  // main() sheds locals as the code that used them leaves, instead of accumulating aliases.
   const std::function<std::optional<daw::HarmonyEvent>(uint64_t)> getHarmonyAt =
       [&](uint64_t nanotick) { return harmonyTimeline.getHarmonyAt(nanotick); };
   const std::function<const daw::Scale*(const daw::HarmonyEvent&)> getScaleForHarmony =
@@ -1769,57 +1622,13 @@ int main(int argc, char** argv) {
     return daw::engine::locateEditTarget(locateTargetDeps, rt, absTick, createIfMissing);
   };
 
-  auto isEditableClip = [&](const TrackRuntime& rt, uint32_t id) -> bool {
-    for (uint32_t e : rt.editableClipIds) {
-      if (e == id) {
-        return true;
-      }
-    }
-    return false;
-  };
-
   // Copy-on-write: after an edit that changed a pristine (still-shared) loaded
   // clip, give it a fresh id and repoint this track's placements, so save never
   // emits two divergent clips under one id. No-op once the clip is track-owned.
-  auto forkOwnedClip = [&](TrackRuntime& rt, size_t ownedIndex) {
-    if (ownedIndex >= rt.ownedClips.size()) {
-      return;
-    }
-    const uint32_t oldId = rt.ownedClips[ownedIndex].id;
-    if (isEditableClip(rt, oldId)) {
-      return;
-    }
-    const uint32_t newId = nextClipId.fetch_add(1, std::memory_order_acq_rel);
-    rt.ownedClips[ownedIndex].id = newId;
-    for (auto& p : rt.sourcePlacements) {
-      if (p.clipId == oldId) {
-        p.clipId = newId;
-      }
-    }
-    rt.editableClipIds.push_back(newId);
-  };
-
   // Grow the target clip's loop length (and any explicit placement length) to
   // contain its content after an edit, so the flatten's "beyond clip length" guard
   // never drops a just-stretched note. A linear length-0 clip stays 0 (it plays
   // once, no loop, so nothing is dropped and nothing needs growing).
-  auto growLengthsForContent = [&](TrackRuntime& rt, const EditTarget& t) {
-    if (t.ownedIndex >= rt.ownedClips.size()) {
-      return;
-    }
-    const uint64_t contentEnd = clipContentEnd(rt.ownedClips[t.ownedIndex].clip);
-    auto& clip = rt.ownedClips[t.ownedIndex];
-    if (clip.lengthNanoticks > 0) {
-      clip.lengthNanoticks = std::max(clip.lengthNanoticks, contentEnd);
-    }
-    if (t.placementIndex < rt.sourcePlacements.size()) {
-      auto& pl = rt.sourcePlacements[t.placementIndex];
-      if (pl.lengthNanoticks > 0) {
-        pl.lengthNanoticks = std::max(pl.lengthNanoticks, contentEnd);
-      }
-    }
-  };
-
   auto snapshotTrackStore = [&](const TrackRuntime& rt) -> TrackStoreState {
     TrackStoreState s;
     s.placements = rt.sourcePlacements;
@@ -1898,6 +1707,29 @@ int main(int argc, char** argv) {
     return daw::engine::saveProjectToPath(saveProjectDeps, path, error);
   };
 
+  daw::engine::ClipEditDeps clipEditDeps{
+      barEndTick, clipDirty, clipVersion, nextPlacementId, commitStructuralEdit,
+      emitChordDiff, emitUiDiff,
+      locateEditTarget, transport, nextChordId,
+      nextClipId, patternTicks, pushStructuralUndo, rebuildFlatAndPublish,
+      snapshotTrackStore, trackTable, emitClipRejectFn, historyAppendFn
+  };
+  // Six helpers that used to be lambdas here are functions in engine_clip_edit now — three of
+  // them were MEMBERS of the struct above, so it lost three std::functions and gained one
+  // reference. main() keeps forwarders because callers further down still use them by name.
+  auto bumpClipVersionFor = [&](TrackRuntime* runtime) {
+    return daw::engine::bumpClipVersionFor(clipEditDeps, runtime);
+  };
+  auto bumpAllTrackClipVersions = [&] {
+    daw::engine::bumpAllTrackClipVersions(clipEditDeps);
+  };
+  auto ensurePlacementIds = [&](std::vector<daw::ProjectPlacement>& placements) {
+    daw::engine::ensurePlacementIds(clipEditDeps, placements);
+  };
+  auto editIsLocalScope = [&](uint32_t trackId, uint64_t nanotick, uint16_t flags) {
+    return daw::engine::editIsLocalScope(clipEditDeps, trackId, nanotick, flags);
+  };
+
   // Restores the musical document: clips, harmony and per-track harmony
   // quantize. Device chains and plugin state are intentionally not reapplied
   // here — that needs host restarts and the vst_state blobs described in
@@ -1922,41 +1754,17 @@ int main(int argc, char** argv) {
   // to be a no-op. Otherwise the UI stays permanently one ahead and every
   // later edit is rejected — inside a batch that discards the whole remainder
   // and emits a resync request per op.
-  auto consumeClipVersionForNoOp = [&](TrackRuntime* runtime) {
-    bumpClipVersionFor(runtime);
-  };
-
   // M2.17: acceptance is PER TRACK. The caller presents the version of the track it is
   // editing (published in uiTrackClipVersion), so an edit to track 4 is no longer refused
   // because someone typed on track 1 — the collision that made `daw-cli do` need --force
   // and made two authors impossible. Falls back to the global counter when the track is
   // unknown, which keeps non-track-scoped edits behaving exactly as before.
   auto requireMatchingHarmonyVersion = [&](uint32_t baseVersion,
-                                           daw::UiCommandType commandType) -> bool {
-    const uint32_t current = harmonyVersion.load(std::memory_order_acquire);
-    if (baseVersion == current) {
-      return true;
-    }
-    daw::UiHarmonyDiffPayload diffPayload{};
-    diffPayload.diffType = static_cast<uint16_t>(daw::UiHarmonyDiffType::ResyncNeeded);
-    diffPayload.harmonyVersion = current;
-    emitHarmonyDiff(diffPayload);
-    DAW_EVENT("harmony.version_mismatch")
-        .field("base", baseVersion)
-        .field("current", current)
-        .field("command", static_cast<uint32_t>(commandType))
-        .field("action", "resync_requested");
-    return false;
+                                          daw::UiCommandType commandType) {
+    return harmonyTimeline.requireMatchingHarmonyVersion(baseVersion, commandType);
   };
 
 
-  daw::engine::ClipEditDeps clipEditDeps{
-      barEndTick, bumpClipVersionFor, bumpTrackClipVersion, clipDirty, clipVersion,
-      commitStructuralEdit, consumeClipVersionForNoOp, emitChordDiff, emitUiDiff,
-      forkOwnedClip, growLengthsForContent, locateEditTarget, transport, nextChordId,
-      nextClipId, patternTicks, pushStructuralUndo, rebuildFlatAndPublish,
-      snapshotTrackStore, trackTable, emitClipRejectFn, historyAppendFn
-  };
   auto requireMatchingClipVersion = [&](uint32_t baseVersion, daw::UiCommandType commandType, uint32_t trackId) {
     return daw::engine::requireMatchingClipVersion(clipEditDeps, baseVersion, commandType, trackId);
   };
@@ -2034,29 +1842,6 @@ int main(int argc, char** argv) {
   // tie the later one in the list. "Topmost wins" is the convention every arranger uses for
   // stacked material, and stating it is the point: an arbitrary rule that happens to be stable
   // is still unpredictable to the person using it.
-  auto editIsLocalScope = [&](uint32_t trackId, uint64_t nanotick, uint16_t flags) -> bool {
-    if ((flags & daw::kUiEditScopeLocal) != 0) {
-      return true;
-    }
-    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
-    if (!runtime) {
-      return false;
-    }
-    std::lock_guard<std::mutex> lock(runtime->trackMutex);
-    // THE CHOSEN placement's flag, not "any placement here has it set" — so the scope decision
-    // and the target decision are the same decision about the same appearance.
-    const PlacementHit hit = findPlacementAt(*runtime, nanotick);
-    if (hit.candidates > 1) {
-      DAW_EVENT("local_edit.ambiguous_tick")
-          .field("track", trackId)
-          .field("nanotick", nanotick)
-          .field("candidates", hit.candidates)
-          .field("chose", hit.placement ? hit.placement->id : 0u)
-          .field("rule", "latest_start");
-    }
-    return hit.placement != nullptr && hit.placement->localEdits;
-  };
-
   auto applyLocalNoteEdit = [&](uint32_t trackId, uint64_t nanotick, uint64_t duration,
                                 uint8_t pitch, uint8_t velocity, uint8_t column,
                                 bool deleting) -> bool {

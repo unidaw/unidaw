@@ -62,6 +62,13 @@ class HarmonyTimeline {
   bool addOrUpdateHarmony(uint64_t nanotick, uint32_t root, uint32_t scaleId, bool recordUndo);
   bool removeHarmony(uint64_t nanotick, bool recordUndo);
 
+  // THE OPTIMISTIC-CONCURRENCY GUARD for harmony, and a METHOD rather than a free function because
+  // it reads exactly two things and this class owns both: harmonyVersion and emitHarmonyDiff. An
+  // edit composed against a stale version is REFUSED and the caller told to resync, rather than
+  // applied to a timeline it has not seen. Zero new interface for sixteen lines is what an engine
+  // object is supposed to buy.
+  bool requireMatchingHarmonyVersion(uint32_t baseVersion, daw::UiCommandType commandType);
+
  private:
   const daw::ScaleRegistry& scaleRegistry;
   std::function<void(const daw::UiHarmonyDiffPayload&)> emitHarmonyDiff;

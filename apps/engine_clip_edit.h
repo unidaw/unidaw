@@ -39,16 +39,16 @@ struct LocateTargetDeps {
 
 struct ClipEditDeps {
   std::function<uint64_t(uint64_t)> barEndTick;
-  std::function<uint32_t(TrackRuntime*)> bumpClipVersionFor;
-  const std::function<uint32_t(uint32_t)>& bumpTrackClipVersion;
   std::atomic<bool>& clipDirty;
   std::atomic<uint32_t>& clipVersion;
+  // ADDED WITH ensurePlacementIds, which hands out placement ids, and with forkOwnedClip, which
+  // needs a fresh one when it copies. bumpClipVersionFor, forkOwnedClip and growLengthsForContent
+  // were MEMBERS until this commit; they are functions in this file now, so three std::functions
+  // and their indirection went away in exchange.
+  std::atomic<uint32_t>& nextPlacementId;
   std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&, uint32_t, TrackStoreState&&, bool)> commitStructuralEdit;
-  std::function<void(TrackRuntime*)> consumeClipVersionForNoOp;
   std::function<void(const daw::UiChordDiffPayload&)> emitChordDiff;
   std::function<void(const daw::UiDiffPayload&)> emitUiDiff;
-  std::function<void(TrackRuntime&, size_t)> forkOwnedClip;
-  std::function<void(TrackRuntime&, const EditTarget&)> growLengthsForContent;
   std::function<EditTarget(TrackRuntime&, uint64_t, bool)> locateEditTarget;
   TransportState& transport;
   std::atomic<uint32_t>& nextChordId;
@@ -103,5 +103,36 @@ bool requireMatchingClipVersion(ClipEditDeps& deps, uint32_t baseVersion, daw::U
 // Which placement covers this tick on this track, if any. The one answer to a question that used
 // to be asked five different ways.
 PlacementHit findPlacementAt(ClipEditDeps& deps, TrackRuntime& rt, uint64_t nanotick);
+
+// COPY-ON-WRITE FOR A SHARED CLIP: editing one instance must not edit the others.
+void forkOwnedClip(ClipEditDeps& deps, TrackRuntime& rt, size_t ownedIndex);
+
+// A clip grows to fit what was put in it, rather than truncating the note that overran.
+void growLengthsForContent(ClipEditDeps& deps, TrackRuntime& rt, const EditTarget& t);
+
+// Per-track value first, the global gate last — the ORDER is the publisher's contract.
+uint32_t bumpClipVersionFor(ClipEditDeps& deps, TrackRuntime* runtime);
+
+// Every track at once, in the same order and for the same reason.
+void bumpAllTrackClipVersions(ClipEditDeps& deps);
+
+// Every placement gets an id, and nextPlacementId ends above every id in use.
+void ensurePlacementIds(ClipEditDeps& deps, std::vector<daw::ProjectPlacement>& placements);
+
+// Whether this edit touches one instance or every instance of a shared clip.
+bool editIsLocalScope(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, uint16_t flags);
+
+// Whether this track may edit that clip in place, or must fork it first.
+bool isEditableClip(ClipEditDeps& deps, const TrackRuntime& rt, uint32_t id);
+
+// Same bump by track id rather than by pointer. TWO ENTRY POINTS BECAUSE OF LOCK ORDER: code
+// already holding a track's trackMutex must not reach for tracksMutex, so those sites pass the
+// TrackRuntime* they already hold.
+uint32_t bumpTrackClipVersion(ClipEditDeps& deps, uint32_t trackId);
+
+// The UI reserves one clip version per edit it queues, so an edit whose base version matched must
+// advance the counter even when the edit turns out to be a no-op — otherwise the UI stays one
+// ahead forever and every later edit is refused.
+void consumeClipVersionForNoOp(ClipEditDeps& deps, TrackRuntime* runtime);
 
 }  // namespace daw::engine

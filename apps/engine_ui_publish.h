@@ -31,6 +31,7 @@
 //
 // Bodies moved VERBATIM and diffed against the lambdas they came from.
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -54,6 +55,17 @@ struct UiPublishDeps {
   // the same event, and a caller that gets one without the other has to guess which half happened.
   const std::function<void(const char*, const char*, uint32_t, uint32_t,
                            const std::string&)>& historyAppend;
+
+  // THE DIFF PATH'S OWN THREE COUNTERS, added with sendUiDiff. A diff that does not fit the ring
+  // is DROPPED, not blocked — the writer is on the command thread and must never wait on a UI that
+  // is not draining — so the drop has to be countable and the log rate-limited, which is what
+  // uiDiffDropLogMs is for. A silent drop and a delivered diff would otherwise look the same.
+  std::atomic<uint64_t>& uiDiffSent;
+  std::atomic<uint64_t>& uiDiffDropped;
+  std::atomic<uint64_t>& uiDiffDropLogMs;
+  // The monotonic origin the drop log measures from. A steady_clock point, not a wall clock: the
+  // rate limit must survive the system clock being adjusted under it.
+  const std::chrono::steady_clock::time_point& uiDiffStart;
 };
 
 void emitModSnapshot(UiPublishDeps& deps, TrackRuntime& runtime);
@@ -67,5 +79,59 @@ void emitPatcherGraphDelta(UiPublishDeps& deps, uint32_t trackId, uint16_t flags
                            uint32_t srcPortId, uint32_t dstPortId, uint32_t edgeKind);
 void emitPatcherGraphError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId, uint32_t nodeId, uint32_t srcNodeId, uint32_t dstNodeId, uint32_t srcPortId, uint32_t dstPortId, uint32_t edgeKind);
 void emitChainError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId, uint32_t deviceId, uint32_t deviceKind, uint32_t insertIndex);
+
+// Milliseconds since the epoch, for the drop log's rate limit.
+uint64_t uiDiffNowMs(UiPublishDeps& deps);
+
+// Says a diff was dropped, at most once a second.
+void logUiDiffDrop(UiPublishDeps& deps);
+
+// Pushes one diff into the ring the UI drains, or counts a drop. Never blocks — the writer is on
+// the command thread and must never wait on a UI that is not draining.
+//
+// A TEMPLATE because it always was one: main() declared it with `const auto& diffPayload` and every
+// caller passes a different payload struct. Writing out an overload per payload, or erasing to
+// (void*, size), would both be a change in behaviour rather than a move — sizeof(diffPayload) is
+// taken from the ACTUAL type at each call site.
+template <typename Payload>
+inline void sendUiDiff(UiPublishDeps& deps, daw::EventRingView& ringUiOut, daw::EventType type,
+                       const Payload& diffPayload) {
+  auto& uiDiffSent = deps.uiDiffSent;
+  auto& uiDiffDropped = deps.uiDiffDropped;
+  auto logUiDiffDrop = [&] { daw::engine::logUiDiffDrop(deps); };
+
+
+    daw::EventEntry diffEntry;
+    diffEntry.sampleTime = 0;
+    diffEntry.blockId = 0;
+    diffEntry.type = static_cast<uint16_t>(type);
+    diffEntry.size = sizeof(diffPayload);
+    std::memcpy(diffEntry.payload, &diffPayload, sizeof(diffPayload));
+    if (daw::ringWrite(ringUiOut, diffEntry)) {
+      uiDiffSent.fetch_add(1, std::memory_order_relaxed);
+    } else {
+      uiDiffDropped.fetch_add(1, std::memory_order_relaxed);
+      logUiDiffDrop();
+    }
+}
+
+// The clip/arrangement diff.
+void emitUiDiff(UiPublishDeps& deps, const daw::UiDiffPayload& diffPayload);
+
+// A modulation command was refused: the UI is told and the journal records it.
+void emitModError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId,
+                  uint32_t linkId);
+
+// A routing command was refused.
+void emitRoutingError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId);
+
+// A clip edit was refused, with the versions that disagreed.
+void emitClipReject(UiPublishDeps& deps, daw::UiClipRejectReason reason, uint32_t trackId,
+                    uint32_t sentBase, uint32_t currentBase, daw::UiCommandType commandType);
+
+// A sampler command was refused.
+void reportSamplerReject(UiPublishDeps& deps, daw::UiCommandType command,
+                         daw::UiSamplerRejectReason reason, uint32_t trackId,
+                         uint32_t deviceId, uint16_t targetId);
 
 }  // namespace daw::engine

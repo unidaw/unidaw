@@ -108,4 +108,23 @@ bool HarmonyTimeline::removeHarmony(uint64_t nanotick, bool recordUndo) {
     return true;
 }
 
+bool HarmonyTimeline::requireMatchingHarmonyVersion(uint32_t baseVersion,
+                                                    daw::UiCommandType commandType) {
+
+    const uint32_t current = harmonyVersion.load(std::memory_order_acquire);
+    if (baseVersion == current) {
+      return true;
+    }
+    daw::UiHarmonyDiffPayload diffPayload{};
+    diffPayload.diffType = static_cast<uint16_t>(daw::UiHarmonyDiffType::ResyncNeeded);
+    diffPayload.harmonyVersion = current;
+    emitHarmonyDiff(diffPayload);
+    DAW_EVENT("harmony.version_mismatch")
+        .field("base", baseVersion)
+        .field("current", current)
+        .field("command", static_cast<uint32_t>(commandType))
+        .field("action", "resync_requested");
+    return false;
+}
+
 }  // namespace daw::engine
