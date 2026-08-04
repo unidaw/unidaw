@@ -231,17 +231,27 @@ than shipped — a check-auditing tool that produces confident false accusations
 - **CoreAudio workgroups for the host render thread.** Cross-process `os_workgroup` sharing needs
   raw mach ports — JUCE 8's `AudioIODevice::getWorkgroup()` / `AudioWorkgroup::join()` hide the
   handle — plus a dedicated RT render thread in the host, split off the control/instantiation
-  thread behind an in-order bounded request queue. The load harness now exists
-  (`tools/rt_load_probe.sh`) and it answers the question it was built for: under 3.7x-4.2x measured
-  contention, realtime and QoS are indistinguishable **because the producer uses about one percent
-  of its block budget**. With that much headroom no scheduling policy can matter, so the tie is a
-  fact about the workload rather than about the scheduler. What #55 needs is a session heavy enough
-  to fill the budget — real plugins or many sampler tracks — not more instrumentation.
+  thread behind an in-order bounded request queue.
 
-  I first recorded the opposite here, that the engine could not measure render cost at all. It
-  always could: `producer.load` reports mean and peak block cost against the budget, with a sampler
-  share and pool-engagement hysteresis. I had grepped for the wrong words and was one commit from
-  writing a worse second copy of it.
+  **The measurement question is settled, which was the actual blocker.** `tools/rt_load_probe.sh`
+  now runs the heavy sampler fixture (24 tracks, dense 16ths, 64 voices, the expensive
+  interpolator) instead of the fake identity instrument, which moves the producer from ~1% of its
+  block budget to about a third. Four interleaved rounds under 3.5x-3.8x measured contention:
+
+      realtime, loaded    producer 31.5% .. 33.1% of budget
+      QoS only,  loaded   producer 38.4% .. 41.4% of budget
+
+  Non-overlapping. Without the mach time-constraint promotion the producer is descheduled
+  mid-block and the wall-clock cost of a block rises about a fifth — so realtime scheduling is
+  earning its keep, and a workgroup change should be judged the same way.
+
+  **Underruns do NOT separate** (0.1%-1.0% against 0.0%-1.9%, overlapping): at a third of budget
+  there is headroom to absorb the difference, so the cost moved and the dropouts did not. Judging
+  this work on dropout counts would read noise; judging it on a tie would have missed the effect.
+
+  I first recorded here that the engine could not measure render cost at all. It always could:
+  `producer.load` reports mean and peak block cost against the budget. I had grepped for the wrong
+  words and was one commit from writing a worse second copy of it.
 
 **Both of the first two are now MEASURED even though neither is fixed**, by inverted checks that
 assert the defect is present and announce their own retirement:

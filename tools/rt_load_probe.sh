@@ -64,11 +64,33 @@
 # exists, carries a per-block budget, a sampler share and pool-engagement hysteresis, and is better
 # than what I would have written. A grep that finds nothing is evidence about the grep.
 #
-# SO THE BLOCKER FOR #55 IS A WORKLOAD, NOT AN INSTRUMENT. A saturation sweep (4/16/48 tracks x
-# 512/128-frame buffers) could not create one: drops went 29, 1752, 32 as tracks INCREASED, and the
-# shortfall column showed all three were single stalls, not rates. Judging a workgroup change needs
-# a session whose producer load is a large fraction of budget — real plugins, or many sampler
-# tracks, not the fake identity instrument, which costs almost nothing per block by design.
+# THE WORKLOAD WAS THE BLOCKER, AND WITH IT THE QUESTION HAS AN ANSWER.
+#
+# The default workload is now 24 sampler tracks — the fixture producer_load_check owns — which puts
+# the producer at a third of its block budget instead of one percent. Four interleaved rounds under
+# 3.5x-3.8x measured contention:
+#
+#     realtime, loaded    producer 31.5% .. 33.1% of budget
+#     QoS only,  loaded   producer 38.4% .. 41.4% of budget
+#
+# NON-OVERLAPPING across four rounds, in the direction realtime scheduling predicts: without the
+# mach time-constraint promotion the producer thread is descheduled mid-block, so the wall-clock
+# cost of producing one block rises by about a fifth. That is the quantity a deadline is missed
+# against, so it is the right one to read.
+#
+# UNDERRUNS DO NOT SEPARATE, and saying so matters: 0.1%-1.0% against 0.0%-1.9%, thoroughly
+# overlapping. At a third of budget there is still enough headroom that neither condition misses
+# many deadlines — the COST moved, the dropouts did not. Reporting the underrun columns as the
+# result would have been reading noise; reporting a tie would have missed the effect entirely.
+#
+# WHAT THAT MEANS FOR #55: a CoreAudio workgroup should be judged on PRODUCER LOAD under
+# contention, not on underrun counts, and this harness can measure it either way now. It also means
+# realtime scheduling is earning its complexity — the escape hatch's own A-B has finally been run.
+#
+# The saturation sweep that failed earlier is left on the record because its failure was
+# instructive: 4/16/48 tracks x 512/128-frame buffers gave 29, 1752, 32 drops as tracks INCREASED,
+# and the shortfall column showed all three were single stalls rather than rates. A cost curve
+# cannot be non-monotonic; that one was not measuring cost.
 #
 # THE LOAD GENERATORS SELF-LIMIT, and that is not a detail. A previous harness in this repo spawned
 # eight `while :; do :; done` shells and relied on `trap ... EXIT` to stop them; trap does not run
@@ -80,7 +102,13 @@
 # this. If the device never starts, the run says so rather than reporting zero underruns, because
 # "no callbacks" and "no underruns" print the same number and mean opposite things.
 #
-#   tools/rt_load_probe.sh [seconds] [hogs] [rounds]
+#   tools/rt_load_probe.sh [seconds] [hogs] [rounds] [sampler-tracks]
+#
+# SAMPLER-TRACKS is the whole point now. The fake identity instrument costs almost nothing per
+# block, so the first version of this probe measured a producer at ~1% of its budget and could only
+# ever report a tie. Pass a track count (default 24) and it builds the heavy sampler fixture
+# instead - dense 16ths, 64-voice cap, the expensive interpolator - which is the heaviest thing
+# this engine is asked to do. Pass 0 for the old fake-identity workload.
 #
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -91,6 +119,9 @@ SECS="${1:-6}"
 CORES="$( (sysctl -n hw.logicalcpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8) )"
 HOGS="${2:-$((CORES * 3))}"
 ROUNDS="${3:-3}"
+# THE WORKLOAD, and it is the variable that decides whether this experiment can answer
+# anything at all.
+SAMPLER_TRACKS="${4:-24}"
 Q=960000
 
 [ -x "$BUILD/daw_engine" ] || { echo "build daw_engine first"; exit 2; }
@@ -129,6 +160,25 @@ start_hogs() {  # start_hogs <n> <max-seconds>
   done
 }
 
+if [ "$SAMPLER_TRACKS" -gt 0 ]; then
+  # REUSED, NOT REWRITTEN. producer_load_check owns this fixture and realtime_pool_check already
+  # borrows it exactly this way; a second copy of "the heaviest thing the producer does" would
+  # drift from the one those two checks measure against.
+  python3 - "$TMP" <<'WAV'
+import sys, wave, struct, math, os
+sr = 48000
+w = wave.open(os.path.join(sys.argv[1], "s.wav"), "wb")
+w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+w.writeframes(b"".join(struct.pack("<h", int(12000 * math.sin(2 * math.pi * 220.0 * i / sr)))
+                       for i in range(sr * 2)))
+w.close()
+WAV
+  awk '/^import json, sys, os$/{f=1} f&&!/^PY$/{print} /^PY$/&&f{exit}' \
+    "$ROOT/tools/producer_load_check.sh" > "$TMP/gen.py"
+  [ -s "$TMP/gen.py" ] || { echo "  could not lift the fixture generator out of"
+                                 " producer_load_check.sh - it has been restructured"; exit 2; }
+  python3 "$TMP/gen.py" "$TMP/rtload.uniproj.json" "$TMP" "$SAMPLER_TRACKS"
+else
 python3 - "$TMP/rtload.uniproj.json" <<'PY'
 import json, sys
 Q = 960000; DIRECT = 4294967294
@@ -155,6 +205,7 @@ json.dump({"schema_version": 4, "meta": {"name": "rtload"}, "nanoticks_per_quart
            "seed": 7, "tempo_map": [{"nanotick": 0, "bpm": 140.0}], "harmony_timeline": [],
            "clips": clips, "tracks": tracks}, open(sys.argv[1], "w"))
 PY
+fi
 
 run() {  # run <slot> <label> <hogs> [extra env] -> appends "starve/active" to RESULT_<slot>
   local slot="$1" label="$2" hogs="$3" extra="${4:-}"
@@ -238,6 +289,11 @@ H0=0; H1="$HOGS"; H2=0; H3="$HOGS"
 R0=""; R1=""; R2=""; R3=""; VRATIO=""; PLAYERR=""
 
 echo "  ${SECS}s per condition x ${ROUNDS} rounds, ${HOGS} CPU hogs on ${CORES} logical cores"
+if [ "$SAMPLER_TRACKS" -gt 0 ]; then
+  echo "  workload: ${SAMPLER_TRACKS} sampler tracks, dense 16ths, 64 voices, expensive interp"
+else
+  echo "  workload: 4 fake-identity tracks - ~1% of budget, which cannot separate the conditions"
+fi
 echo "  (conditions INTERLEAVED per round so machine drift cannot masquerade as an effect)"
 echo
 
