@@ -11,10 +11,10 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: bee50f4
+- as-of-commit: 4874fa6
 - main-cpp-lines: 6194
 - main-function-lines: 5964
-- ctest-entries: 168
+- ctest-entries: 169
 
 ## Why this file cannot quietly go stale
 
@@ -184,9 +184,20 @@ previously only be reached through an engine, a shared-memory ring and a typed n
 - **`locateEditTarget`'s two rules** — a remove landing outside every placement mints nothing, and
   a new clip inherits the predecessor's grid instead of snapping back to 4/4.
 
-Both were verified by sabotage rather than by passing. The pattern worth keeping: pick the rule
-whose failure is QUIET. A crash gets found; a delete that silently creates a clip, or a section
-whose rows are subdivided differently than the one before it, gets blamed on the user.
+A third covers **`handleAssembledBulk`'s size checks** — an envelope declaring more points than it
+carries is refused rather than applied short, because half an envelope is a *valid* envelope and
+delivering it produces a wrong sound instead of an error.
+
+All three were verified by sabotage rather than by passing. The pattern worth keeping: pick the rule
+whose failure is QUIET. A crash gets found; a delete that silently creates a clip, a section whose
+rows are subdivided differently than the one before it, or an instrument that sounds slightly wrong,
+gets blamed on the user.
+
+**And two of the three first drafts tested nothing.** The bulk one asserted a COUNT — "four envelope
+points are held after applying four" — which passed while the engine was logging
+`sampler.envelope_rejected` on the same line, because applying an envelope mints a default ADSR that
+also has four points, and my fixture had built a command the engine correctly refused. The tell was
+in the run's own output rather than in the assertion. Assert the VALUES.
 
 ## One thing that did NOT work, recorded so it is not tried again
 
