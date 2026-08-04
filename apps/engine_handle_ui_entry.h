@@ -29,6 +29,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "engine_arrangetime_commands.h"
 #include "engine_automation_commands.h"
 #include "engine_chain_commands.h"
 #include "engine_clip_commands.h"
@@ -55,10 +56,8 @@ namespace daw::engine {
 
 struct HandleUiEntryDeps {
   const std::function<bool(uint32_t, const std::function<bool(std::vector<daw::ProjectPlacement>&)>&)>& applyPlacementEdit;
-  std::mutex& arrangeMutex;
-  std::atomic<uint32_t>& arrangeVersion;
+  ArrangeTimeCommandDeps& arrangeTimeCommandDeps;
   AutomationCommandDeps& automationCommandDeps;
-  std::atomic<uint32_t>& automationVersion;
   const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>& buildTrackSnapshot;
   std::vector<BulkStream>& bulkStreams;
   uint64_t& bulkTick;
@@ -70,10 +69,6 @@ struct HandleUiEntryDeps {
   DeviceCommandDeps& deviceCommandDeps;
   const std::function<void(uint32_t, uint8_t, uint8_t, bool)>& enqueuePreview;
   const std::function<void(const std::vector<uint8_t>&)>& handleAssembledBulk;
-  std::atomic<bool>& harmonyDirty;
-  std::vector<daw::HarmonyEvent>& harmonyEvents;
-  std::mutex& harmonyMutex;
-  std::atomic<uint32_t>& harmonyVersion;
   std::unordered_map<uint32_t, std::vector<uint8_t>>& heldPreview;
   const std::function<void(const char*, const char*, uint32_t, uint32_t, const std::string&)>& historyAppend;
   std::atomic<uint32_t>& liveTrackCount;
@@ -82,9 +77,7 @@ struct HandleUiEntryDeps {
   std::atomic<uint64_t>& loopStartNanotick;
   std::atomic<bool>& loopUserSet;
   MarkerCommandDeps& markerCommandDeps;
-  daw::MarkerList& markerList;
   std::unique_ptr<TrackRuntime>& masterTrack;
-  std::shared_ptr<const daw::TimeSignatureMap>& meterSnapshot;
   ModlinkCommandDeps& modlinkCommandDeps;
   ModuleCommandDeps& moduleCommandDeps;
   std::atomic<uint32_t>& nextClipId;
@@ -112,12 +105,7 @@ struct HandleUiEntryDeps {
   std::atomic<bool>& running;
   SamplerCommandDeps& samplerCommandDeps;
   const std::function<std::unique_ptr<TrackRuntime>(uint32_t, const std::string&, bool, bool)>& setupTrackRuntime;
-  const std::function<SongStoreState()>& snapshotSongStore;
   const std::function<TrackStoreState(const TrackRuntime&)>& snapshotTrackStore;
-  const std::function<std::vector<TrackRuntime*>()>& snapshotTracks;
-  daw::TimeSignatureMap& songMeter;
-  std::atomic<uint32_t>& songTimeSigDen;
-  std::atomic<uint32_t>& songTimeSigNum;
   daw::TempoMapProvider& tempoProvider;
   TrackCommandDeps& trackCommandDeps;
   TrackpropsCommandDeps& trackpropsCommandDeps;

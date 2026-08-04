@@ -11,10 +11,10 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: 7a6e634
-- main-cpp-lines: 5140
-- main-function-lines: 4909
-- ctest-entries: 170
+- as-of-commit: 9c49677
+- main-cpp-lines: 5141
+- main-function-lines: 4910
+- ctest-entries: 174
 
 ## Why this file cannot quietly go stale
 
@@ -186,6 +186,63 @@ get their own `UiWriterDeps` (27 members) nested inside `ConsumerDeps` rather th
 59, which is what the dispatcher already does with its sixteen `*CommandDeps`.
 
 **`main()` is 4,909 lines against 13,652 when this started, and `main.cpp` 5,140 against 20,387.**
+
+## 2026-08-04 — the re-score, and what a panel found that the suite did not
+
+The refactor above was done against a **C** from a four-judge panel. It was never re-scored, so
+"the objections are addressed" was a claim about my own work, resting on the items that panel named
+rather than on anything measured. Four judges read the tree again — read-only, and told explicitly
+to verify numbers themselves rather than trust this file, because this file is written by the same
+party whose work is being graded.
+
+**C (structure) / C (change cost) / B− (tests) / D (correctness).** Not the B that was asked for.
+
+**The structure verdict is the one that matters, and it is correct.** A 1,625-line lambda became a
+1,700-line function. Relocation is not decomposition. Seven modules now exist whose largest function
+is bigger than most codebases' largest *file*, and no further amount of verbatim moving changes
+that — the next increment has to cut bodies, not carry them. Measured: 1,308 of `handleUiEntry`'s
+1,746 lines sat in dispatch arms that call no handler at all.
+
+**Two live product bugs, neither of which any check could see.**
+
+- *A patcher played the wrong track's instrument.* The pool is global — every track's subgraph
+  concatenated — and ownership is enforced only at render time, by asking whether **this track** has
+  a patcher device. A track with none did not get a smaller set; it disabled the ownership guard
+  entirely and ran every node in the project, merging their events into its own instrument. Measured
+  on two tracks: track 1, holding no patcher and no note, sounded track 0's generated notes at its
+  own sample's pitch while track 0 stayed silent. The engine already knew the right answer
+  (`patcherAssembledFromDevices`); `RenderTrackDeps` simply did not carry it, so the render path
+  guessed from the only thing it could see.
+- *The web UI's overlap indicator read the sound-addressed bit.* `FLAG_ALLOW_OVERLAP` was 8 with a
+  comment saying "Bit 4"; the engine's bit 4 is 16 and its bit 3 is `kUiMixFlagSoundAddressed`. Rust
+  had it right. One of three mirrors diverged, and it was the one mirror with no check on it.
+
+**Both existing checks that looked like they covered the patcher case were single-track fixtures.**
+A one-track project cannot express "the other track". That is the same shape recorded elsewhere in
+this file for the kit read-back: a fixture that cannot represent the defect is not coverage.
+
+**The test judge's finding was not "too few tests".** It was that the mechanism deciding *which*
+tests run was broken. `check_registry_check.sh` asked whether a check's filename appeared as a
+substring of CMakeLists — and `readback_check.sh` is a suffix of four registered
+`*_readback_check.sh` entries. So the one check in the tree that had never executed was reported by
+the ratchet as registered, while three separate commits improved it. Its header already described
+this failure twice, in other directions, and fixed each by tightening the match. The rule is now a
+function with a self-test that runs every invocation, and the tree's verdict is suppressed when the
+rule fails its own cases.
+
+**`audio_stability_check` was passing on two idle runs.** Every assertion it made compared the deep
+pipeline against the shallow one, and all of them are satisfied by the shallow run reporting zero —
+which is the load not biting, not the lever working. It never asserted the load bit. At its own
+calibration the result alternates between real and vacuous run to run, reporting both identically.
+It now exits 77 and ctest prints SKIP, the first entry in the suite able to say "I could not
+answer".
+
+**What this round says about ratchets generally.** Four of them fired on each other's work during
+it: `doc_citation_check` caught the new self-test's placeholder names, then caught the comment
+explaining that fix; `progress_check` caught this file; `-Werror=unused-variable` named the fourteen
+dependencies that an extraction had orphaned. Ratchets disagreeing with each other's text, and
+being right, is the system working — and the fourteen orphaned deps are the difference between
+decomposition and relocation, since silencing them would have left the hub struct at 73 members.
 
 ## Testability, which is the axis the extraction was supposed to buy
 

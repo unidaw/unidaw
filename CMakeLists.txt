@@ -139,6 +139,7 @@ target_include_directories(engine_core PUBLIC
 target_link_libraries(engine_core PUBLIC platform_juce)
 
 add_library(engine_commands STATIC
+  apps/engine_arrangetime_commands.cpp
   apps/engine_pure.cpp
   apps/engine_rt_helpers.cpp
   apps/engine_render_track.cpp
