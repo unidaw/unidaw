@@ -16,7 +16,11 @@
 //   to the device rate is how the original defect stayed invisible for weeks: the render would
 //   claim to honour a rate it had discarded.
 #include <cstdint>
+#include <memory>
 #include <string>
+
+#include "host_controller.h"
+#include "platform_juce/juce_wrapper.h"
 
 namespace daw::engine {
 
@@ -49,6 +53,24 @@ int parseEngineArgs(int argc, char** argv, EngineArgs& out);
 
 // The environment half. Separate from parseEngineArgs only so a test can drive either one alone.
 void readStartupEnvironment(EngineArgs& out);
+
+// WHAT THE DEVICE AND THE FLAGS TOGETHER DECIDE. Sample rate and block size come from the audio
+// device unless a flag overrides them, and the override is applied AFTER the probe on purpose: an
+// offline render must not be silently handed whatever output happens to be selected, which is the
+// bug --sample-rate exists to fix. Everything else in the config is fixed policy — the input
+// plane's width, the aux planes, the pipeline depth — and each carries its reason at the line.
+struct EngineDevice {
+  daw::HostConfig baseConfig;
+  // JUCE FIRST, DEVICE SECOND, and the order is load-bearing: the runtime brings up the
+  // MessageManager, and when it was constructed AFTER the CoreAudio device was opened, the device
+  // reported its name, rate and block size, answered isPlaying() with true, and never ran a single
+  // IO callback. Two people wrote that up as a dead audio device.
+  std::unique_ptr<daw::IRuntime> audioRuntime;
+  std::unique_ptr<daw::IAudioBackend> audioBackend;  // null with --no-audio or no device
+};
+
+// May clear or fill args.pluginPath: test mode wants none, and an empty one is probed for.
+EngineDevice openAudioDevice(EngineArgs& args);
 
 // A STALE HOST BINARY IS DETECTED BEFORE ANY HOST IS SPAWNED, which is the whole point of calling
 // this early: it started out just before the threads launch, and that is too late — tracks are set

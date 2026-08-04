@@ -103,6 +103,7 @@ set_source_files_properties(apps/engine_render_track.cpp apps/engine_save_projec
                             apps/engine_audio_start.cpp
                             apps/engine_shutdown.cpp
                             apps/engine_ui_shm.cpp
+                            apps/engine_song_store.cpp
                             apps/engine_consumer.cpp
                             PROPERTIES COMPILE_OPTIONS -Werror=unused-variable)
 set_source_files_properties(${_engine_command_sources}
@@ -174,6 +175,7 @@ add_library(engine_commands STATIC
   apps/engine_audio_start.cpp
   apps/engine_shutdown.cpp
   apps/engine_ui_shm.cpp
+  apps/engine_song_store.cpp
   apps/engine_consumer.cpp
   apps/engine_save_project.cpp
   apps/engine_sampler_commands.cpp

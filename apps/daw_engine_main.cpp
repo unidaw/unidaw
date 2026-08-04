@@ -37,6 +37,7 @@
 #include "apps/engine_audio_start.h"
 #include "apps/engine_offline_render.h"
 #include "apps/engine_shutdown.h"
+#include "apps/engine_song_store.h"
 #include "apps/engine_ui_shm.h"
 #include "apps/engine_produce_block.h"
 #include "apps/engine_startup.h"
@@ -209,7 +210,6 @@ int main(int argc, char** argv) {
   if (const int rc = daw::engine::parseEngineArgs(argc, argv, engineArgs); rc != 0) {
     return rc;
   }
-  auto& socketPath = engineArgs.socketPath;
   auto& pluginPath = engineArgs.pluginPath;
   auto& spawnHost = engineArgs.spawnHost;
   auto& runSeconds = engineArgs.runSeconds;
@@ -218,7 +218,6 @@ int main(int argc, char** argv) {
   auto& forcedSampleRate = engineArgs.forcedSampleRate;
   auto& startupProject = engineArgs.startupProject;
   auto& testMode = engineArgs.testMode;
-  auto& noAudio = engineArgs.noAudio;
 
   if (const int rc = daw::engine::checkHostBinaryVersion(); rc != 0) {
     return rc;
@@ -258,139 +257,13 @@ int main(int argc, char** argv) {
     patcherPool = std::make_unique<daw::engine::WorkerPool>(threadCount);
   }
 
-  if (testMode) {
-    pluginPath.clear();
-  } else if (pluginPath.empty()) {
-    // JUCE writes plugin artefacts to <target>_artefacts/<CONFIG>/VST3. Only
-    // the unsuffixed layout was probed here, which no build produces any more —
-    // so this found the plugin solely in build directories old enough to still
-    // hold a leftover identity_plugin_artefacts/VST3 from a much earlier build,
-    // and found nothing in a freshly created one. That is why two checkouts of
-    // the same source behaved differently: one engine came up with Identity
-    // loaded, the other silently came up with no plugin at all. Probe both.
-    const std::filesystem::path roots[] = {"identity_plugin_artefacts",
-                                           "build/identity_plugin_artefacts",
-                                           "../build/identity_plugin_artefacts"};
-    const std::string configs[] = {"", "RelWithDebInfo", "Release", "Debug",
-                                   "MinSizeRel"};
-    for (const auto& root : roots) {
-      for (const auto& config : configs) {
-        std::filesystem::path candidate = config.empty() ? root : root / config;
-        candidate /= "VST3/Identity.vst3";
-        if (std::filesystem::exists(candidate)) {
-          pluginPath = std::filesystem::absolute(candidate).string();
-          std::cout << "No plugin specified; using " << pluginPath << std::endl;
-          break;
-        }
-      }
-      if (!pluginPath.empty()) {
-        break;
-      }
-    }
-  }
-
-  daw::HostConfig baseConfig;
-  baseConfig.socketPath = socketPath;
-  if (!pluginPath.empty()) {
-    baseConfig.pluginPaths = {pluginPath};
-    baseConfig.pluginNames = {""};  // name-agnostic; rebuildHostForChain fills it
-  }
-  baseConfig.sampleRate = 48000.0;  // fallback only; overridden by the device
-  // The per-track input plane carries the main input in channels [0, numChannelsOut)
-  // and a stereo sidechain (key) input in the channels after it (Movement 4). Widening
-  // it unconditionally keeps the SHM layout uniform; a track with no sidechain route
-  // just leaves those channels silent, and a plugin without a sidechain bus ignores
-  // them. This is what lets the engine key a compressor off another track's output.
-  // ...AND an aux INPUT plane of the same width as the aux output plane, so an IN-ENGINE
-  // instrument's stems can reach the child tracks.
-  //
-  // The aux OUTPUT plane exists for a multi-out PLUGIN: the plugin writes its stems there and
-  // reconcileChildTracks derives a child per bus. The built-in sampler is not a plugin — it
-  // renders in the engine — so it had no way to reach that plane at all, and S6 in
-  // SAMPLER_DESIGN assumed otherwise. This is the fix: the sampler writes its stems into the
-  // LAST numAuxChannelsOut channels of the INPUT plane, and the host copies aux-in to aux-out
-  // before its plugins run. The sampler's audio then travels the same route as everything else
-  // — through the chain — rather than needing a private path around it.
-  //
-  // The offset is DERIVED on both sides as (numChannelsIn - numAuxChannelsOut) rather than sent
-  // as a third field, so the two cannot disagree about where the plane starts.
-  baseConfig.numChannelsIn =
-      baseConfig.numChannelsOut + kSidechainChannels + kMaxAuxOutputChannels;
-  // Movement 4 multi-out: reserve the aux OUTPUT plane so a multi-out instrument's stems
-  // reach the engine for its child tracks. Sized once here for every host; a track
-  // without a multi-out plugin just never writes it.
-  baseConfig.numAuxChannelsOut = kMaxAuxOutputChannels;
-  // Pipeline depth: how many blocks the producer may run ahead of the audio device.
-  // It is the entire headroom for absorbing jitter in async out-of-process host
-  // rendering AND the dominant transport-to-ear latency (each block is
-  // blockSize/sampleRate seconds), so it is the direct knob for the glitch<->latency
-  // trade. Default 3 (~23 ms transport-to-ear at 512/44.1k, + the device buffer): with
-  // the render thread realtime-scheduled a 2-block-deep pipeline holds without starving,
-  // measured. A heavier real-plugin session that the underrun reporter flags can raise it
-  // via DAW_ENGINE_NUM_BLOCKS. Clamped to [2, 32] — below 2 the ring can't double-buffer.
-  baseConfig.numBlocks = 3;
-  if (const char* nbEnv = std::getenv("DAW_ENGINE_NUM_BLOCKS")) {
-    const int want = std::atoi(nbEnv);
-    if (want >= 2) {
-      baseConfig.numBlocks = static_cast<uint32_t>(std::min(want, 32));
-    }
-  }
-  baseConfig.ringUiCapacity = 1024;
+  // The device and the flags together decide the config; see apps/engine_startup.h for why
+  // the flag overrides are applied AFTER the probe rather than before it.
+  daw::engine::EngineDevice engineDevice = daw::engine::openAudioDevice(engineArgs);
+  auto& baseConfig = engineDevice.baseConfig;
+  auto& audioRuntime = engineDevice.audioRuntime;
+  auto& audioBackend = engineDevice.audioBackend;
   const uint32_t uiDiffRingCapacity = 1024;
-
-  // Adopt the audio device's ACTUAL sample rate before anything (hosts, the
-  // SHM header, the scheduler threads) captures the config. Hardcoding 48 kHz
-  // plays everything off-speed on any other device — 48k content on a 96k
-  // device runs 2x fast, on 192k 4x fast. Opened here to read the rate; started
-  // later. If there is no device, the 48 kHz fallback stands for offline timing.
-  // JUCE FIRST, DEVICE SECOND. `ScopedJuceInitialiser_GUI` (inside the runtime) brings up the
-  // MessageManager, and this used to be constructed seventeen thousand lines further down —
-  // AFTER the CoreAudio device was opened to read its sample rate. On this machine the device
-  // then opened, reported its name, rate and block size, answered isPlaying() with true, and
-  // never ran a single IO callback: the app made no sound at all, every capture came back empty,
-  // and both agents wrote it up as a dead audio device.
-  std::unique_ptr<daw::IRuntime> audioRuntime;
-  if (!noAudio) {
-    audioRuntime = daw::createJuceRuntime();
-  }
-  std::unique_ptr<daw::IAudioBackend> audioBackend =
-      noAudio ? nullptr : daw::createAudioBackend();
-  if (noAudio) {
-    std::cout << "--no-audio: no output device; " << baseConfig.sampleRate
-              << " Hz assumed for timing" << std::endl;
-  }
-  if (audioBackend && audioBackend->openDefaultDevice(2)) {
-    baseConfig.sampleRate = audioBackend->sampleRate();
-    // Adopt the device's ACTUAL buffer size too (not just its sample rate). The whole
-    // pipeline — per-track SHM block stride, the producer, and the audio callback — must
-    // agree on samples-per-block; the callback is built from the device size, so if the
-    // device's buffer is anything but the 512 default (a smaller/larger native size, or
-    // a DAW_ENGINE_BUFFER_SIZE override) the host would render mis-sized blocks and the
-    // callback would read past them. Adopting it here keeps every stage consistent.
-    if (audioBackend->blockSize() > 0) {
-      baseConfig.blockSize = static_cast<uint32_t>(audioBackend->blockSize());
-    }
-    std::cout << "Audio device sample rate: " << baseConfig.sampleRate << " Hz"
-              << ", buffer: " << baseConfig.blockSize << " samples" << std::endl;
-  } else {
-    daw::LogLine() << "No audio device; using " << baseConfig.sampleRate
-              << " Hz for offline timing" << std::endl;
-    audioBackend.reset();
-  }
-  // --block-size wins over both, and it is applied AFTER the device probe so an offline render
-  // is not silently given the device's buffer instead of the one it asked for. It exists so
-  // block-size invariance is checkable through the real engine (§3.5).
-  if (forcedBlockSize > 0) {
-    baseConfig.blockSize = forcedBlockSize;
-    daw::LogLine() << "Block size forced to " << baseConfig.blockSize << " samples" << std::endl;
-  }
-  // --sample-rate wins over the device too, and for the same reason: applied AFTER the probe so
-  // an offline render is not silently handed whatever output happens to be selected. This is what
-  // makes a render reproducible on a machine whose default device changes under it.
-  if (forcedSampleRate > 0.0) {
-    baseConfig.sampleRate = forcedSampleRate;
-    daw::LogLine() << "Sample rate forced to " << baseConfig.sampleRate << " Hz" << std::endl;
-  }
 
   const std::string pluginCachePath = defaultPluginCachePath();
   const auto pluginCache = daw::readPluginCache(pluginCachePath);
@@ -1648,10 +1521,12 @@ int main(int argc, char** argv) {
   // what keep this commit a move rather than a rewrite. The *Deps structs that carry them
   // individually (17 members across six structs) can collapse to one HarmonyTimeline& each next.
   daw::engine::HarmonyTimeline harmonyTimeline{scaleRegistry, emitHarmonyDiff, pushHarmonyUndo};
-  auto& harmonyDirty = harmonyTimeline.harmonyDirty;
+  // harmonyDirty, harmonyMutex and harmonyEvents no longer need a binding here: their last
+  // readers in main() were the four song-store functions, and those moved to
+  // apps/engine_song_store.cpp where they read HarmonyTimeline's members directly. This is the
+  // engine-object payoff working in the direction it was meant to — main() sheds locals as the
+  // code that used them leaves, rather than accumulating aliases forever.
   auto& harmonyVersion = harmonyTimeline.harmonyVersion;
-  auto& harmonyMutex = harmonyTimeline.harmonyMutex;
-  auto& harmonyEvents = harmonyTimeline.harmonyEvents;
   const std::function<std::optional<daw::HarmonyEvent>(uint64_t)> getHarmonyAt =
       [&](uint64_t nanotick) { return harmonyTimeline.getHarmonyAt(nanotick); };
   const std::function<const daw::Scale*(const daw::HarmonyEvent&)> getScaleForHarmony =
@@ -1956,30 +1831,6 @@ int main(int argc, char** argv) {
   // The whole song's structural state, for a section ripple's before/after. Takes each track's
   // mutex in turn rather than all at once — this runs on the control thread with no other lock
   // held, and holding every trackMutex simultaneously is how a lock-order inversion gets written.
-  auto snapshotSongStore = [&]() -> SongStoreState {
-    SongStoreState s;
-    for (auto* rt : snapshotTracks()) {
-      if (!rt || rt->removed.load(std::memory_order_acquire)) {
-        continue;
-      }
-      std::lock_guard<std::mutex> lock(rt->trackMutex);
-      s.tracks.emplace_back(rt->trackId, snapshotTrackStore(*rt));
-      s.automation.emplace_back(rt->trackId, rt->track.automationClips);
-    }
-    {
-      std::lock_guard<std::mutex> alock(arrange.arrangeMutex);
-      s.markers = arrange.markerList.markers();
-      s.meterPoints = songTiming.songMeter.points();
-    }
-    s.tempoMap = songTiming.loadedTempoMap;
-    {
-      std::lock_guard<std::mutex> hlock(harmonyMutex);
-      s.harmony = harmonyEvents;
-    }
-    return s;
-  };
-
-
   auto pushStructuralUndo = [&](uint32_t trackId, TrackStoreState before,
                                 TrackStoreState after) {
     EngineUndoEntry e;
@@ -2031,98 +1882,9 @@ int main(int argc, char** argv) {
   // Restore a track's structural store (placements + owned clips + editable ids)
   // to a captured state and re-derive/publish the flat clip. The engine-local undo
   // stack's structural entries call this with `before` (undo) or `after` (redo).
-  auto restoreTrackStore = [&](uint32_t trackId,
-                               const TrackStoreState& state) -> bool {
-    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
-    if (!runtime) {
-      return false;
-    }
-    std::shared_ptr<const ClipSnapshot> snapshot;
-    {
-      std::lock_guard<std::mutex> lock(runtime->trackMutex);
-      runtime->sourcePlacements = state.placements;
-      ensurePlacementIds(runtime->sourcePlacements);
-      runtime->ownedClips = state.clips;
-      runtime->editableClipIds = state.editable;
-      runtime->arrangementDirty.store(true, std::memory_order_relaxed);
-      snapshot = rebuildFlatAndPublish(*runtime);
-      // Also re-derive the AUDIO render: rebuildFlatAndPublish only rebuilds the flat clip
-      // (host/MIDI), while sample playback reads runtime->audioRender. Without this, an
-      // undo/redo that moved an audio-clip placement leaves the sample sounding on the old
-      // track until some later edit happens to rebuild it.
-      std::atomic_store_explicit(&runtime->audioRender, rebuildAudioRender(*runtime),
-                                 std::memory_order_release);
-    }
-    std::atomic_store_explicit(&runtime->clipSnapshot, snapshot,
-                               std::memory_order_release);
-    clipDirty.store(true, std::memory_order_release);
-    emitClipResync(trackId, bumpClipVersionFor(runtime));
-    return true;
-  };
-
   // Put the whole song back. Everything the ripple touched, or the restore is partial — and a
   // partial restore of a ripple is worse than none: the placements would be back where they were
   // while the tempo change and the filter sweep stayed at their new positions.
-  auto restoreSongStore = [&](const SongStoreState& state) -> bool {
-    bool any = false;
-    for (const auto& [trackId, store] : state.tracks) {
-      if (restoreTrackStore(trackId, store)) {
-        any = true;
-      }
-    }
-    for (const auto& [trackId, clips] : state.automation) {
-      TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
-      if (!runtime) {
-        continue;
-      }
-      std::shared_ptr<const TrackStateSnapshot> snap;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        runtime->track.automationClips = clips;
-        // The RT scheduler reads automation from the SNAPSHOT, so a restored point that is not
-        // republished is a point that does not play — the same rule as every other write here.
-        snap = buildTrackSnapshot(runtime->track);
-      }
-      std::atomic_store_explicit(&runtime->trackSnapshot, snap,
-                                 std::memory_order_release);
-      any = true;
-    }
-    {
-      std::lock_guard<std::mutex> alock(arrange.arrangeMutex);
-      arrange.markerList.setMarkers(state.markers);
-      songTiming.songMeter.setMap(state.meterPoints);
-      // The RT reads the meter from a snapshot, so a restored map that is not republished is a
-      // map the play head never sees — the same rule the automation republish above follows.
-      std::atomic_store_explicit(
-          &songTiming.meterSnapshot,
-          std::static_pointer_cast<const daw::TimeSignatureMap>(
-              std::make_shared<daw::TimeSignatureMap>(songTiming.songMeter)),
-          std::memory_order_release);
-    }
-    songTiming.loadedTempoMap = state.tempoMap;
-    {
-      // The PROVIDER is what the transport reads, so a restored map that the provider did not see
-      // would play at the wrong tempo positions and save at the right ones — the divergence the
-      // ripple itself had to fix.
-      std::vector<daw::TempoPoint> pts;
-      pts.reserve(songTiming.loadedTempoMap.size());
-      for (const auto& pt : songTiming.loadedTempoMap) {
-        pts.push_back({pt.nanotick, pt.bpm});
-      }
-      tempoProvider.setMap(std::move(pts));
-    }
-    {
-      std::lock_guard<std::mutex> hlock(harmonyMutex);
-      harmonyEvents = state.harmony;
-    }
-    harmonyDirty.store(true, std::memory_order_release);
-    harmonyVersion.fetch_add(1, std::memory_order_acq_rel);
-    automationVersion.fetch_add(1, std::memory_order_acq_rel);
-    arrange.arrangeVersion.fetch_add(1, std::memory_order_acq_rel);
-    recomputeSongEnd();
-    return any;
-  };
-
   // Snapshots the live session into a ProjectDocument and writes it. Each
   // track is copied under its own mutex so the document is consistent per
   // track without stalling audio behind one global lock.
@@ -2352,59 +2114,27 @@ int main(int argc, char** argv) {
                                       chordIdOverride);
   };
 
-  // The absolute anchor of the first placement referencing an owned clip id
-  // (0 if none) — used to shift a clip-relative remove result onto the timeline.
-  auto applyUndoEntry = [&](const daw::UndoEntry& entry,
-                            bool recordUndo) -> bool {
-    switch (entry.type) {
-      case daw::UndoType::AddNote:
-        return applyAddNote(entry.trackId,
-                            entry.nanotick,
-                            entry.duration,
-                            entry.pitch,
-                            entry.velocity,
-                            entry.flags,
-                            recordUndo,
-                            entry.noteId);
-      case daw::UndoType::RemoveNote:
-        return daw::engine::applyRemoveNote(clipEditDeps, entry.trackId,
-                               entry.nanotick,
-                               entry.pitch,
-                               entry.flags,
-                               recordUndo);
-      case daw::UndoType::AddHarmony:
-        return addOrUpdateHarmony(entry.nanotick,
-                                  entry.harmonyRoot,
-                                  entry.harmonyScaleId,
-                                  recordUndo);
-      case daw::UndoType::RemoveHarmony:
-        return removeHarmony(entry.nanotick, recordUndo);
-      case daw::UndoType::UpdateHarmony:
-        return addOrUpdateHarmony(entry.nanotick,
-                                  entry.harmonyRoot,
-                                  entry.harmonyScaleId,
-                                  recordUndo);
-      case daw::UndoType::AddChord:
-        return applyAddChord(entry.trackId,
-                             entry.nanotick,
-                             entry.duration,
-                             entry.chordDegree,
-                             entry.chordQuality,
-                             entry.chordInversion,
-                             entry.chordBaseOctave,
-                             entry.chordColumn,
-                             entry.chordSpreadNanoticks,
-                             entry.chordHumanizeTiming,
-                             entry.chordHumanizeVelocity,
-                             recordUndo,
-                             entry.chordId);
-      case daw::UndoType::RemoveChord:
-        return daw::engine::applyRemoveChord(clipEditDeps, entry.trackId, entry.chordId, recordUndo);
-    }
-    return false;
+  // Snapshot / restore / undo: one idea in four functions, and they moved together. See
+  // apps/engine_song_store.h for why the interface is 17 members rather than the 24 captures the
+  // measurement reports — HarmonyTimeline absorbs six of them and TrackTable two.
+  daw::engine::SongStoreDeps songStoreDeps{
+      arrange, automationVersion, clipEditDeps, clipDirty, harmonyTimeline, songTiming,
+      tempoProvider, trackTable, buildTrackSnapshot, bumpClipVersionFor, ensurePlacementIds,
+      rebuildAudioRender, rebuildFlatAndPublish, recomputeSongEnd, snapshotTracks,
+      emitClipResync};
+  auto snapshotSongStore = [&]() { return daw::engine::snapshotSongStore(songStoreDeps); };
+  auto restoreSongStore = [&](const SongStoreState& state) {
+    return daw::engine::restoreSongStore(songStoreDeps, state);
+  };
+  auto restoreTrackStore = [&](uint32_t trackId, const TrackStoreState& state) {
+    return daw::engine::restoreTrackStore(songStoreDeps, trackId, state);
+  };
+  auto applyUndoEntry = [&](const daw::UndoEntry& entry, bool recordUndo) {
+    return daw::engine::applyUndoEntry(songStoreDeps, entry, recordUndo);
   };
 
-
+  // The absolute anchor of the first placement referencing an owned clip id
+  // (0 if none) — used to shift a clip-relative remove result onto the timeline.
   // ---- THE INWARD BULK CARRIER (opcode 83).
   //
   // Reassembly state for messages too long for one 40-byte ring payload. Lives here, in the UI

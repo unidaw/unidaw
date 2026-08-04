@@ -140,6 +140,152 @@ void readStartupEnvironment(EngineArgs& out) {
   traceNotes = std::getenv("DAW_TRACE_NOTES") != nullptr;
 }
 
+EngineDevice openAudioDevice(EngineArgs& args) {
+  // Named bindings so the sequence below is the one main() carried, unchanged.
+  auto& testMode = args.testMode;
+  auto& pluginPath = args.pluginPath;
+  auto& socketPath = args.socketPath;
+  auto& noAudio = args.noAudio;
+  auto& forcedBlockSize = args.forcedBlockSize;
+  auto& forcedSampleRate = args.forcedSampleRate;
+  EngineDevice out;
+  auto& baseConfig = out.baseConfig;
+  auto& audioRuntime = out.audioRuntime;
+  auto& audioBackend = out.audioBackend;
+
+  if (testMode) {
+    pluginPath.clear();
+  } else if (pluginPath.empty()) {
+    // JUCE writes plugin artefacts to <target>_artefacts/<CONFIG>/VST3. Only
+    // the unsuffixed layout was probed here, which no build produces any more —
+    // so this found the plugin solely in build directories old enough to still
+    // hold a leftover identity_plugin_artefacts/VST3 from a much earlier build,
+    // and found nothing in a freshly created one. That is why two checkouts of
+    // the same source behaved differently: one engine came up with Identity
+    // loaded, the other silently came up with no plugin at all. Probe both.
+    const std::filesystem::path roots[] = {"identity_plugin_artefacts",
+                                           "build/identity_plugin_artefacts",
+                                           "../build/identity_plugin_artefacts"};
+    const std::string configs[] = {"", "RelWithDebInfo", "Release", "Debug",
+                                   "MinSizeRel"};
+    for (const auto& root : roots) {
+      for (const auto& config : configs) {
+        std::filesystem::path candidate = config.empty() ? root : root / config;
+        candidate /= "VST3/Identity.vst3";
+        if (std::filesystem::exists(candidate)) {
+          pluginPath = std::filesystem::absolute(candidate).string();
+          std::cout << "No plugin specified; using " << pluginPath << std::endl;
+          break;
+        }
+      }
+      if (!pluginPath.empty()) {
+        break;
+      }
+    }
+  }
+
+  baseConfig.socketPath = socketPath;
+  if (!pluginPath.empty()) {
+    baseConfig.pluginPaths = {pluginPath};
+    baseConfig.pluginNames = {""};  // name-agnostic; rebuildHostForChain fills it
+  }
+  baseConfig.sampleRate = 48000.0;  // fallback only; overridden by the device
+  // The per-track input plane carries the main input in channels [0, numChannelsOut)
+  // and a stereo sidechain (key) input in the channels after it (Movement 4). Widening
+  // it unconditionally keeps the SHM layout uniform; a track with no sidechain route
+  // just leaves those channels silent, and a plugin without a sidechain bus ignores
+  // them. This is what lets the engine key a compressor off another track's output.
+  // ...AND an aux INPUT plane of the same width as the aux output plane, so an IN-ENGINE
+  // instrument's stems can reach the child tracks.
+  //
+  // The aux OUTPUT plane exists for a multi-out PLUGIN: the plugin writes its stems there and
+  // reconcileChildTracks derives a child per bus. The built-in sampler is not a plugin — it
+  // renders in the engine — so it had no way to reach that plane at all, and S6 in
+  // SAMPLER_DESIGN assumed otherwise. This is the fix: the sampler writes its stems into the
+  // LAST numAuxChannelsOut channels of the INPUT plane, and the host copies aux-in to aux-out
+  // before its plugins run. The sampler's audio then travels the same route as everything else
+  // — through the chain — rather than needing a private path around it.
+  //
+  // The offset is DERIVED on both sides as (numChannelsIn - numAuxChannelsOut) rather than sent
+  // as a third field, so the two cannot disagree about where the plane starts.
+  baseConfig.numChannelsIn =
+      baseConfig.numChannelsOut + kSidechainChannels + kMaxAuxOutputChannels;
+  // Movement 4 multi-out: reserve the aux OUTPUT plane so a multi-out instrument's stems
+  // reach the engine for its child tracks. Sized once here for every host; a track
+  // without a multi-out plugin just never writes it.
+  baseConfig.numAuxChannelsOut = kMaxAuxOutputChannels;
+  // Pipeline depth: how many blocks the producer may run ahead of the audio device.
+  // It is the entire headroom for absorbing jitter in async out-of-process host
+  // rendering AND the dominant transport-to-ear latency (each block is
+  // blockSize/sampleRate seconds), so it is the direct knob for the glitch<->latency
+  // trade. Default 3 (~23 ms transport-to-ear at 512/44.1k, + the device buffer): with
+  // the render thread realtime-scheduled a 2-block-deep pipeline holds without starving,
+  // measured. A heavier real-plugin session that the underrun reporter flags can raise it
+  // via DAW_ENGINE_NUM_BLOCKS. Clamped to [2, 32] — below 2 the ring can't double-buffer.
+  baseConfig.numBlocks = 3;
+  if (const char* nbEnv = std::getenv("DAW_ENGINE_NUM_BLOCKS")) {
+    const int want = std::atoi(nbEnv);
+    if (want >= 2) {
+      baseConfig.numBlocks = static_cast<uint32_t>(std::min(want, 32));
+    }
+  }
+  baseConfig.ringUiCapacity = 1024;
+
+  // Adopt the audio device's ACTUAL sample rate before anything (hosts, the
+  // SHM header, the scheduler threads) captures the config. Hardcoding 48 kHz
+  // plays everything off-speed on any other device — 48k content on a 96k
+  // device runs 2x fast, on 192k 4x fast. Opened here to read the rate; started
+  // later. If there is no device, the 48 kHz fallback stands for offline timing.
+  // JUCE FIRST, DEVICE SECOND. `ScopedJuceInitialiser_GUI` (inside the runtime) brings up the
+  // MessageManager, and this used to be constructed seventeen thousand lines further down —
+  // AFTER the CoreAudio device was opened to read its sample rate. On this machine the device
+  // then opened, reported its name, rate and block size, answered isPlaying() with true, and
+  // never ran a single IO callback: the app made no sound at all, every capture came back empty,
+  // and both agents wrote it up as a dead audio device.
+  if (!noAudio) {
+    audioRuntime = daw::createJuceRuntime();
+  }
+  audioBackend = noAudio ? nullptr : daw::createAudioBackend();
+  if (noAudio) {
+    std::cout << "--no-audio: no output device; " << baseConfig.sampleRate
+              << " Hz assumed for timing" << std::endl;
+  }
+  if (audioBackend && audioBackend->openDefaultDevice(2)) {
+    baseConfig.sampleRate = audioBackend->sampleRate();
+    // Adopt the device's ACTUAL buffer size too (not just its sample rate). The whole
+    // pipeline — per-track SHM block stride, the producer, and the audio callback — must
+    // agree on samples-per-block; the callback is built from the device size, so if the
+    // device's buffer is anything but the 512 default (a smaller/larger native size, or
+    // a DAW_ENGINE_BUFFER_SIZE override) the host would render mis-sized blocks and the
+    // callback would read past them. Adopting it here keeps every stage consistent.
+    if (audioBackend->blockSize() > 0) {
+      baseConfig.blockSize = static_cast<uint32_t>(audioBackend->blockSize());
+    }
+    std::cout << "Audio device sample rate: " << baseConfig.sampleRate << " Hz"
+              << ", buffer: " << baseConfig.blockSize << " samples" << std::endl;
+  } else {
+    daw::LogLine() << "No audio device; using " << baseConfig.sampleRate
+              << " Hz for offline timing" << std::endl;
+    audioBackend.reset();
+  }
+  // --block-size wins over both, and it is applied AFTER the device probe so an offline render
+  // is not silently given the device's buffer instead of the one it asked for. It exists so
+  // block-size invariance is checkable through the real engine (§3.5).
+  if (forcedBlockSize > 0) {
+    baseConfig.blockSize = forcedBlockSize;
+    daw::LogLine() << "Block size forced to " << baseConfig.blockSize << " samples" << std::endl;
+  }
+  // --sample-rate wins over the device too, and for the same reason: applied AFTER the probe so
+  // an offline render is not silently handed whatever output happens to be selected. This is what
+  // makes a render reproducible on a machine whose default device changes under it.
+  if (forcedSampleRate > 0.0) {
+    baseConfig.sampleRate = forcedSampleRate;
+    daw::LogLine() << "Sample rate forced to " << baseConfig.sampleRate << " Hz" << std::endl;
+  }
+
+  return out;
+}
+
 int checkHostBinaryVersion() {
   // A STALE HOST BINARY IS DETECTED HERE, BEFORE ANY HOST IS SPAWNED.
   //
