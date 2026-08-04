@@ -188,6 +188,26 @@ Both were verified by sabotage rather than by passing. The pattern worth keeping
 whose failure is QUIET. A crash gets found; a delete that silently creates a clip, or a section
 whose rows are subdivided differently than the one before it, gets blamed on the user.
 
+## One thing that did NOT work, recorded so it is not tried again
+
+Two checks broke during the extraction — `op_registry_check` and `hazard_order_check` — each because
+it derived a fact from `apps/daw_engine_main.cpp` **by name** and the code had moved. Both failed
+loudly only because someone had written an explicit "the derivation found NOTHING" guard into them.
+That is a twice-observed pattern, so I tried to automate it: an audit that stubs the engine's source
+and reports any check that still passes.
+
+**It does not generalise, and four attempts each failed differently.** Stubbing only `main.cpp` flags
+every check that correctly reads the new modules. Stubbing the module `.cpp` files flags every check
+that correctly reads a header — `hazard_order_check` reads `engine_audio_callback.h`. Stubbing all
+176 files in `apps/` finally has no *source*-level false positives, and then flags four checks that
+run the built ENGINE and never read source at all. Every accusation the tool made was wrong.
+
+The reason is that "the subject of a check" is check-specific: source, header, another tree, or a
+running binary. A generic stub cannot tell "reads nothing" from "reads somewhere else". So the guard
+has to be written per check, which is exactly what caught both moves. The tool was deleted rather
+than shipped — a check-auditing tool that produces confident false accusations would send someone to
+"fix" four healthy checks, which is worse than not having it.
+
 ## Open, and needing a decision rather than work
 
 - **Published meter points carry the requested tick, not the effective one.** `setMap` snaps a
