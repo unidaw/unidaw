@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "engine_harmony_timeline.h"
 #include "engine_types.h"
 #include "markers.h"
 #include "patcher_graph.h"
@@ -52,10 +53,7 @@ struct LoadProjectDeps {
   std::function<void(const daw::UiDiffPayload&)> emitUiDiff;
   std::function<void(std::vector<daw::ProjectPlacement>&)> ensurePlacementIds;
   std::function<TrackRuntime*(uint32_t, const std::string&)> ensureTrack;
-  std::atomic<bool>& harmonyDirty;
-  std::vector<daw::HarmonyEvent>& harmonyEvents;
-  std::mutex& harmonyMutex;
-  std::atomic<uint32_t>& harmonyVersion;
+  HarmonyTimeline& harmonyTimeline;
   std::atomic<uint32_t>& liveTrackCount;
   std::atomic<bool>& loadInProgress;
   std::vector<daw::ProjectClip>& loadedClips;

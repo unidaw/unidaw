@@ -26,6 +26,7 @@
 #include <utility>
 #include <vector>
 
+#include "engine_harmony_timeline.h"
 #include "engine_types.h"
 #include "latency_manager.h"
 #include "project_file.h"
@@ -52,8 +53,7 @@ struct UiWriterDeps {
   std::atomic<uint32_t>& clipVersion;
   std::mutex& clipWindowMutex;
   std::optional<ClipWindowPending>& clipWindowPending;
-  std::vector<daw::HarmonyEvent>& harmonyEvents;
-  std::mutex& harmonyMutex;
+  HarmonyTimeline& harmonyTimeline;
   std::function<daw::LaneQuantize(const TrackRuntime&)> laneQuantizeOf;
   uint64_t& lastArrangeSongEnd;
   uint32_t& lastArrangeVersion;
@@ -80,8 +80,7 @@ struct ConsumerDeps {
   std::atomic<uint32_t>& clipVersion;
   const daw::HostConfig& engineConfig;
   std::function<void(std::vector<daw::ProjectPlacement>&)> ensurePlacementIds;
-  std::atomic<bool>& harmonyDirty;
-  std::atomic<uint32_t>& harmonyVersion;
+  HarmonyTimeline& harmonyTimeline;
   std::atomic<uint64_t>& lastOverflowTick;
   daw::LatencyManager& latencyMgr;
   std::atomic<uint32_t>& liveTrackCount;

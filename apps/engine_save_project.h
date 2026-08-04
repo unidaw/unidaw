@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_harmony_timeline.h"
 #include "apps/engine_types.h"
 #include "apps/musical_structures.h"
 #include "apps/note_entry.h"
@@ -34,7 +35,7 @@ namespace daw::engine {
 
 struct SaveProjectDeps {
   std::mutex& arrangeMutex;
-  std::vector<daw::HarmonyEvent>& harmonyEvents;
+  HarmonyTimeline& harmonyTimeline;
   std::atomic<uint32_t>& liveTrackCount;
   std::vector<daw::ProjectClip>& loadedClips;
   std::mutex& loadedClipsMutex;

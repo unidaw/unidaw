@@ -32,6 +32,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_harmony_timeline.h"
 #include "engine_types.h"
 #include "event_ring.h"
 #include "harmony_timeline.h"
@@ -59,8 +60,7 @@ struct ProducerBlockDeps {
   std::function<daw::EventRingView(TrackRuntime&)> getRingCtrl;
   std::function<daw::EventRingView(TrackRuntime&)> getRingStd;
   std::function<const daw::Scale*(const daw::HarmonyEvent&)> getScaleForHarmony;
-  std::vector<daw::HarmonyEvent>& harmonyEvents;
-  std::mutex& harmonyMutex;
+  HarmonyTimeline& harmonyTimeline;
   std::atomic<uint64_t>& lastOverflowTick;
   daw::LatencyManager& latencyMgr;
   std::atomic<uint64_t>& loopEndNanotick;

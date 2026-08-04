@@ -32,6 +32,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_harmony_timeline.h"
 #include "apps/engine_types.h"
 #include "apps/latency_manager.h"
 #include "apps/musical_structures.h"
@@ -45,8 +46,7 @@ namespace daw::engine {
 
 struct RenderTrackDeps {
   const daw::HostConfig& engineConfig;
-  std::vector<daw::HarmonyEvent>& harmonyEvents;
-  std::mutex& harmonyMutex;
+  HarmonyTimeline& harmonyTimeline;
   std::atomic<uint64_t>& lastOverflowTick;
   daw::LatencyManager& latencyMgr;
   std::atomic<uint32_t>& nextNoteId;

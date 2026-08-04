@@ -26,6 +26,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_harmony_timeline.h"
 #include "apps/engine_pure.h"
 #include "apps/engine_types.h"
 #include "apps/event_payloads.h"
@@ -42,10 +43,7 @@ struct ArrangeTimeCommandDeps {
   const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>& buildTrackSnapshot;
   const std::function<uint32_t(TrackRuntime*)>& bumpClipVersionFor;
   std::atomic<bool>& clipDirty;
-  std::atomic<bool>& harmonyDirty;
-  std::vector<daw::HarmonyEvent>& harmonyEvents;
-  std::mutex& harmonyMutex;
-  std::atomic<uint32_t>& harmonyVersion;
+  HarmonyTimeline& harmonyTimeline;
   const std::function<void(const char*, const char*, uint32_t, uint32_t, const std::string&)>& historyAppend;
   std::vector<daw::ProjectTempoPoint>& loadedTempoMap;
   daw::MarkerList& markerList;

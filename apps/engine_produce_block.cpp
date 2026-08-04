@@ -47,8 +47,6 @@ void produceBlock(ProducerBlockDeps& deps,
   auto& getRingCtrl = deps.getRingCtrl;
   auto& getRingStd = deps.getRingStd;
   auto& getScaleForHarmony = deps.getScaleForHarmony;
-  auto& harmonyEvents = deps.harmonyEvents;
-  auto& harmonyMutex = deps.harmonyMutex;
   auto& lastOverflowTick = deps.lastOverflowTick;
   auto& latencyMgr = deps.latencyMgr;
   auto& loopEndNanotick = deps.loopEndNanotick;
@@ -143,8 +141,7 @@ void produceBlock(ProducerBlockDeps& deps,
 
       daw::engine::RenderTrackDeps renderTrackDeps{
           engineConfig,
-          harmonyEvents,
-          harmonyMutex,
+          deps.harmonyTimeline,
           lastOverflowTick,
           latencyMgr,
           nextNoteId,

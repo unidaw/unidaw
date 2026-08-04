@@ -143,6 +143,7 @@ add_library(engine_commands STATIC
   apps/engine_placement_commands.cpp
   apps/engine_transport_commands.cpp
   apps/engine_restart_worker.cpp
+  apps/engine_harmony_timeline.cpp
   apps/engine_master_render.cpp
   apps/engine_ui_thread.cpp
   apps/engine_xrun_reporter.cpp
@@ -571,6 +572,18 @@ target_link_libraries(engine_pure_tests PRIVATE engine_commands)
 # 362 lines with no unit coverage: six distinct refusal reasons, all of them silent on this wire.
 # The centrepiece is the forward-flow rule — a device modulating ITSELF is legal and used to be
 # refused, so a preset could load a link no command could recreate.
+# 521 lines, six refusal codes, no unit coverage. The cycle refusal is the one that matters: a
+# patcher graph runs in topological order, so an edge closing a loop has no order to run in, and it
+# is the refusal least likely to be reached by hand.
+add_executable(engine_patcher_commands_tests
+  apps/engine_patcher_commands_tests_main.cpp
+)
+target_include_directories(engine_patcher_commands_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(engine_patcher_commands_tests PRIVATE engine_commands)
+
 add_executable(engine_modlink_commands_tests
   apps/engine_modlink_commands_tests_main.cpp
 )
@@ -1508,6 +1521,12 @@ add_test(NAME engine_pure
   COMMAND engine_pure_tests
 )
 set_tests_properties(engine_pure PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME engine_patcher_commands
+  COMMAND engine_patcher_commands_tests
+)
+set_tests_properties(engine_patcher_commands PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME engine_modlink_commands
   COMMAND engine_modlink_commands_tests

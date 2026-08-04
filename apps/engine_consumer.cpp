@@ -405,8 +405,8 @@ void writeUiPatcherTo(UiWriterDeps& deps, bool force) {
 }
 
 void writeUiHarmonySnapshotTo(UiWriterDeps& deps) {
-  auto& harmonyEvents = deps.harmonyEvents;
-  auto& harmonyMutex = deps.harmonyMutex;
+  auto& harmonyEvents = deps.harmonyTimeline.harmonyEvents;
+  auto& harmonyMutex = deps.harmonyTimeline.harmonyMutex;
   auto& uiShm = deps.uiShm;
 
     if (!uiShm.header || uiShm.header->uiHarmonyOffset == 0) {
@@ -428,8 +428,8 @@ void runConsumerThread(ConsumerDeps& deps) {
   auto& clipVersion = deps.clipVersion;
   auto& engineConfig = deps.engineConfig;
   auto& ensurePlacementIds = deps.ensurePlacementIds;
-  auto& harmonyDirty = deps.harmonyDirty;
-  auto& harmonyVersion = deps.harmonyVersion;
+  auto& harmonyDirty = deps.harmonyTimeline.harmonyDirty;
+  auto& harmonyVersion = deps.harmonyTimeline.harmonyVersion;
   auto& lastOverflowTick = deps.lastOverflowTick;
   auto& latencyMgr = deps.latencyMgr;
   auto& liveTrackCount = deps.liveTrackCount;

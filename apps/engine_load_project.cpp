@@ -32,10 +32,10 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   auto& emitUiDiff = deps.emitUiDiff;
   auto& ensurePlacementIds = deps.ensurePlacementIds;
   auto& ensureTrack = deps.ensureTrack;
-  auto& harmonyDirty = deps.harmonyDirty;
-  auto& harmonyEvents = deps.harmonyEvents;
-  auto& harmonyMutex = deps.harmonyMutex;
-  auto& harmonyVersion = deps.harmonyVersion;
+  auto& harmonyDirty = deps.harmonyTimeline.harmonyDirty;
+  auto& harmonyEvents = deps.harmonyTimeline.harmonyEvents;
+  auto& harmonyMutex = deps.harmonyTimeline.harmonyMutex;
+  auto& harmonyVersion = deps.harmonyTimeline.harmonyVersion;
   auto& liveTrackCount = deps.liveTrackCount;
   auto& loadInProgress = deps.loadInProgress;
   auto& loadedClips = deps.loadedClips;

@@ -13,7 +13,7 @@ namespace daw::engine {
 bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path,
                        std::string* error) {
   auto& arrangeMutex = deps.arrangeMutex;
-  auto& harmonyEvents = deps.harmonyEvents;
+  auto& harmonyEvents = deps.harmonyTimeline.harmonyEvents;
   auto& liveTrackCount = deps.liveTrackCount;
   auto& loadedClips = deps.loadedClips;
   auto& loadedClipsMutex = deps.loadedClipsMutex;

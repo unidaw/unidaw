@@ -16,10 +16,10 @@ void handleArrangeTime(ArrangeTimeCommandDeps& deps,
   auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   auto& bumpClipVersionFor = deps.bumpClipVersionFor;
   auto& clipDirty = deps.clipDirty;
-  auto& harmonyDirty = deps.harmonyDirty;
-  auto& harmonyEvents = deps.harmonyEvents;
-  auto& harmonyMutex = deps.harmonyMutex;
-  auto& harmonyVersion = deps.harmonyVersion;
+  auto& harmonyDirty = deps.harmonyTimeline.harmonyDirty;
+  auto& harmonyEvents = deps.harmonyTimeline.harmonyEvents;
+  auto& harmonyMutex = deps.harmonyTimeline.harmonyMutex;
+  auto& harmonyVersion = deps.harmonyTimeline.harmonyVersion;
   auto& historyAppend = deps.historyAppend;
   auto& loadedTempoMap = deps.loadedTempoMap;
   auto& markerList = deps.markerList;

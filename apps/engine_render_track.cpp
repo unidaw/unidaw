@@ -27,8 +27,8 @@ bool renderTrack(RenderTrackDeps& deps,
                  uint64_t loopEndTicks,
                  uint64_t loopLen) {
   auto& engineConfig = deps.engineConfig;
-  auto& harmonyEvents = deps.harmonyEvents;
-  auto& harmonyMutex = deps.harmonyMutex;
+  auto& harmonyEvents = deps.harmonyTimeline.harmonyEvents;
+  auto& harmonyMutex = deps.harmonyTimeline.harmonyMutex;
   auto& lastOverflowTick = deps.lastOverflowTick;
   auto& latencyMgr = deps.latencyMgr;
   auto& nextNoteId = deps.nextNoteId;

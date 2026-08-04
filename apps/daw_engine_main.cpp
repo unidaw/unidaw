@@ -47,6 +47,7 @@
 #include "apps/engine_ui_thread.h"
 #include "apps/engine_xrun_reporter.h"
 #include "apps/engine_handle_ui_entry.h"
+#include "apps/engine_harmony_timeline.h"
 #include "apps/engine_load_project.h"
 #include "apps/engine_render_track.h"
 #include "apps/engine_save_project.h"
@@ -1344,8 +1345,6 @@ int main(int argc, char** argv) {
   // CC123 on every channel to every ready host, then drops that track's note state. Same
   // single-writer discipline as PreviewNote above.
   std::atomic<bool> panicPending{false};
-  std::atomic<bool> harmonyDirty{true};
-  std::atomic<uint32_t> harmonyVersion{0};
   std::atomic<uint32_t> patcherGraphVersion{0};
   // Published so the UI can tell a failed LoadProject from a silent no-op:
   // projectLoadSeq bumps once per load attempt, projectLoadOk holds its result.
@@ -1358,8 +1357,6 @@ int main(int argc, char** argv) {
   std::mutex undoMutex;
   std::vector<EngineUndoEntry> undoStack;
   std::vector<EngineUndoEntry> redoStack;
-  std::mutex harmonyMutex;
-  std::vector<daw::HarmonyEvent> harmonyEvents;
 
   // Project-level clip definitions retained from load. Placements (per-track,
   // on TrackRuntime::sourcePlacements) reference these by id. Save re-emits the
@@ -1713,16 +1710,7 @@ int main(int argc, char** argv) {
   // The LOCK stays here and the RULE moved to apps/engine_rt_helpers.h. Splitting them is what
   // made the rule testable: a function that takes a mutex cannot be asked about its behaviour
   // without also arranging its concurrency.
-  auto getHarmonyAt = [&](uint64_t nanotick) -> std::optional<daw::HarmonyEvent> {
-    std::lock_guard<std::mutex> lock(harmonyMutex);
-    return daw::engine::harmonyAtOrDefault(harmonyEvents, nanotick);
-  };
-
   const auto& scaleRegistry = daw::ScaleRegistry::instance();
-
-  auto getScaleForHarmony = [&](const daw::HarmonyEvent& harmony) -> const daw::Scale* {
-    return scaleRegistry.find(harmony.scaleId);
-  };
 
   // Binds the registry; the rule itself is in apps/engine_rt_helpers.h and has a unit test for
   // the unknown-scale fallback, which no fixture in tools/ exercises.
@@ -2451,98 +2439,25 @@ int main(int argc, char** argv) {
   };
 
 
-  auto addOrUpdateHarmony = [&](uint64_t nanotick,
-                                uint32_t root,
-                                uint32_t scaleId,
-                                bool recordUndo) -> bool {
-    bool updated = false;
-    daw::HarmonyEvent previous{};
-    {
-      std::lock_guard<std::mutex> lock(harmonyMutex);
-      auto it = std::lower_bound(
-          harmonyEvents.begin(), harmonyEvents.end(), nanotick,
-          [](const daw::HarmonyEvent& lhs, uint64_t tick) {
-            return lhs.nanotick < tick;
-          });
-      if (it != harmonyEvents.end() && it->nanotick == nanotick) {
-        previous = *it;
-        it->root = root;
-        it->scaleId = scaleId;
-        updated = true;
-      } else {
-        harmonyEvents.insert(it, daw::HarmonyEvent{nanotick, root, scaleId, 0});
-      }
-    }
-    if (recordUndo) {
-      daw::UndoEntry undo{};
-      undo.nanotick = nanotick;
-      if (updated) {
-        undo.type = daw::UndoType::UpdateHarmony;
-        undo.harmonyRoot = previous.root;
-        undo.harmonyScaleId = previous.scaleId;
-        undo.harmonyRoot2 = root;
-        undo.harmonyScaleId2 = scaleId;
-      } else {
-        undo.type = daw::UndoType::RemoveHarmony;
-        undo.harmonyRoot = root;
-        undo.harmonyScaleId = scaleId;
-      }
-      pushHarmonyUndo(undo);
-    }
-    harmonyDirty.store(true, std::memory_order_release);
-    const uint32_t nextVersion =
-        harmonyVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
-    daw::UiHarmonyDiffPayload diffPayload{};
-    diffPayload.diffType = static_cast<uint16_t>(
-        updated ? daw::UiHarmonyDiffType::UpdateEvent
-                : daw::UiHarmonyDiffType::AddEvent);
-    diffPayload.harmonyVersion = nextVersion;
-    diffPayload.nanotickLo = static_cast<uint32_t>(nanotick & 0xffffffffu);
-    diffPayload.nanotickHi = static_cast<uint32_t>((nanotick >> 32) & 0xffffffffu);
-    diffPayload.root = root;
-    diffPayload.scaleId = scaleId;
-    emitHarmonyDiff(diffPayload);
-    return true;
-  };
-
-  auto removeHarmony = [&](uint64_t nanotick, bool recordUndo) -> bool {
-    bool removed = false;
-    daw::HarmonyEvent removedEvent{};
-    {
-      std::lock_guard<std::mutex> lock(harmonyMutex);
-      auto it = std::lower_bound(
-          harmonyEvents.begin(), harmonyEvents.end(), nanotick,
-          [](const daw::HarmonyEvent& lhs, uint64_t tick) {
-            return lhs.nanotick < tick;
-          });
-      if (it != harmonyEvents.end() && it->nanotick == nanotick) {
-        removedEvent = *it;
-        harmonyEvents.erase(it);
-        removed = true;
-      }
-    }
-    if (!removed) {
-      return false;
-    }
-    if (recordUndo) {
-      daw::UndoEntry undo{};
-      undo.type = daw::UndoType::AddHarmony;
-      undo.nanotick = nanotick;
-      undo.harmonyRoot = removedEvent.root;
-      undo.harmonyScaleId = removedEvent.scaleId;
-      pushHarmonyUndo(undo);
-    }
-    harmonyDirty.store(true, std::memory_order_release);
-    const uint32_t nextVersion =
-        harmonyVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
-    daw::UiHarmonyDiffPayload diffPayload{};
-    diffPayload.diffType = static_cast<uint16_t>(daw::UiHarmonyDiffType::RemoveEvent);
-    diffPayload.harmonyVersion = nextVersion;
-    diffPayload.nanotickLo = static_cast<uint32_t>(nanotick & 0xffffffffu);
-    diffPayload.nanotickHi = static_cast<uint32_t>((nanotick >> 32) & 0xffffffffu);
-    emitHarmonyDiff(diffPayload);
-    return true;
-  };
+  // THE HARMONY TIMELINE OWNS ITS OWN STATE NOW. These four used to be four separate locals of
+  // main() and are still spelled the same, so every reader below is unchanged — the bindings are
+  // what keep this commit a move rather than a rewrite. The *Deps structs that carry them
+  // individually (17 members across six structs) can collapse to one HarmonyTimeline& each next.
+  daw::engine::HarmonyTimeline harmonyTimeline{scaleRegistry, emitHarmonyDiff, pushHarmonyUndo};
+  auto& harmonyDirty = harmonyTimeline.harmonyDirty;
+  auto& harmonyVersion = harmonyTimeline.harmonyVersion;
+  auto& harmonyMutex = harmonyTimeline.harmonyMutex;
+  auto& harmonyEvents = harmonyTimeline.harmonyEvents;
+  const std::function<std::optional<daw::HarmonyEvent>(uint64_t)> getHarmonyAt =
+      [&](uint64_t nanotick) { return harmonyTimeline.getHarmonyAt(nanotick); };
+  const std::function<const daw::Scale*(const daw::HarmonyEvent&)> getScaleForHarmony =
+      [&](const daw::HarmonyEvent& h) { return harmonyTimeline.getScaleForHarmony(h); };
+  const std::function<bool(uint64_t, uint32_t, uint32_t, bool)> addOrUpdateHarmony =
+      [&](uint64_t t, uint32_t r, uint32_t sc, bool u) {
+        return harmonyTimeline.addOrUpdateHarmony(t, r, sc, u);
+      };
+  const std::function<bool(uint64_t, bool)> removeHarmony =
+      [&](uint64_t t, bool u) { return harmonyTimeline.removeHarmony(t, u); };
 
   // Plugin state sits in a sibling directory rather than inside the JSON:
   // blobs are opaque and often large, and keeping them out keeps the document
@@ -3123,26 +3038,11 @@ int main(int argc, char** argv) {
   // track is copied under its own mutex so the document is consistent per
   // track without stalling audio behind one global lock.
   daw::engine::SaveProjectDeps saveProjectDeps{
-      arrangeMutex,
-      harmonyEvents,
-      liveTrackCount,
-      loadedClips,
-      loadedClipsMutex,
-      loadedTempoMap,
-      markerList,
-      masterTrack,
-      patcherAssembledFromDevices,
-      patcherGraphState,
-      patcherPoolEdited,
-      pluginCache,
-      projectSeed,
-      songMeter,
-      songTimeSigDen,
-      songTimeSigNum,
-      tracks,
-      tracksMutex,
-      songBarGrid,
-      trackIsPersisted};
+      arrangeMutex, harmonyTimeline, liveTrackCount, loadedClips, loadedClipsMutex,
+      loadedTempoMap, markerList, masterTrack, patcherAssembledFromDevices,
+      patcherGraphState, patcherPoolEdited, pluginCache, projectSeed, songMeter,
+      songTimeSigDen, songTimeSigNum, tracks, tracksMutex, songBarGrid, trackIsPersisted
+  };
   auto saveProjectToPath = [&](const std::string& path,
                                  std::string* error) -> bool {
     return daw::engine::saveProjectToPath(saveProjectDeps, path, error);
@@ -3153,17 +3053,18 @@ int main(int argc, char** argv) {
   // here — that needs host restarts and the vst_state blobs described in
   // PROJECT_PERSISTENCE.md, which this version does not yet write.
   daw::engine::LoadProjectDeps loadProjectDeps{
-      arrangeMutex, arrangeVersion, automationVersion, auxChildOverlayMutex, auxChildOverlays,
-      buildTrackSnapshot, bumpAllTrackClipVersions, clipDirty, clipVersion, emitChainSnapshot,
-      emitModSnapshot, emitRoutingSnapshot, emitUiDiff, ensurePlacementIds, ensureTrack,
-      harmonyDirty, harmonyEvents, harmonyMutex, harmonyVersion, liveTrackCount, loadInProgress,
+      arrangeMutex, arrangeVersion, automationVersion, auxChildOverlayMutex,
+      auxChildOverlays, buildTrackSnapshot, bumpAllTrackClipVersions, clipDirty,
+      clipVersion, emitChainSnapshot, emitModSnapshot, emitRoutingSnapshot, emitUiDiff,
+      ensurePlacementIds, ensureTrack, harmonyTimeline, liveTrackCount, loadInProgress,
       loadedClips, loadedClipsMutex, loadedProjectDir, loadedTempoMap, loopEndNanotick,
       loopStartNanotick, loopUserSet, markerList, masterTrack, meterSnapshot, nextClipId,
-      patcherAssembledFromDevices, patcherGraphState, patternTicks, pluginCache, projectSeed,
-      publishAudioClipTable, rebuildAudioRender, rebuildFlatAndPublish, rebuildHostForChain,
-      reconcileMasterHost, refreshSamplerForTrack, resetTrackContent, songEndNanotick, songMeter,
-      songTimeSigDen, songTimeSigNum, tempoProvider, tracks, tracksMutex,
-      updatePatcherGraphSnapshot, waveformStore};
+      patcherAssembledFromDevices, patcherGraphState, patternTicks, pluginCache,
+      projectSeed, publishAudioClipTable, rebuildAudioRender, rebuildFlatAndPublish,
+      rebuildHostForChain, reconcileMasterHost, refreshSamplerForTrack, resetTrackContent,
+      songEndNanotick, songMeter, songTimeSigDen, songTimeSigNum, tempoProvider, tracks,
+      tracksMutex, updatePatcherGraphSnapshot, waveformStore
+  };
 
   auto loadProjectFromPath = [&](const std::string& path, std::string* error) -> bool {
     return daw::engine::loadProjectFromPath(loadProjectDeps, path, error);
@@ -3635,10 +3536,11 @@ int main(int argc, char** argv) {
       rebuildFlatAndPublishFn = rebuildFlatAndPublish;
   daw::engine::ArrangeTimeCommandDeps arrangeTimeCommandDeps{
       arrangeMutex, arrangeVersion, automationVersion, buildTrackSnapshot,
-      bumpClipVersionFor, clipDirty, harmonyDirty, harmonyEvents, harmonyMutex,
-      harmonyVersion, historyAppend, loadedTempoMap, markerList, meterSnapshot, pushUndo,
-      rebuildAudioRender, rebuildFlatAndPublish, recomputeSongEnd, snapshotSongStore,
-      snapshotTracks, songMeter, songTimeSigDen, songTimeSigNum, tempoProvider};
+      bumpClipVersionFor, clipDirty, harmonyTimeline, historyAppend, loadedTempoMap,
+      markerList, meterSnapshot, pushUndo, rebuildAudioRender, rebuildFlatAndPublish,
+      recomputeSongEnd, snapshotSongStore, snapshotTracks, songMeter, songTimeSigDen,
+      songTimeSigNum, tempoProvider
+  };
   daw::engine::TrackpropsCommandDeps trackpropsCommandDeps{
       tracks, tracksMutex, masterTrack, quantizeVersion,
       buildTrackSnapshotFn, rebuildFlatAndPublishFn};
@@ -3824,18 +3726,18 @@ int main(int argc, char** argv) {
       // Built once per producer thread, immediately before the loop: every member is a
       // reference to something that outlives it, so the per-block call adds no work.
       daw::engine::ProducerBlockDeps producerBlockDeps{
-          blockDuration, blockTicksFor, debugStall, engineConfig, enqueuePreview, getHarmonyAt,
-          getRingCtrl, getRingStd, getScaleForHarmony, harmonyEvents, harmonyMutex,
-          lastOverflowTick, latencyMgr, loopEndNanotick, loopStartNanotick, meterSnapshot,
-          nextBlockId, nextNoteId, offlineRender, panicPending, patcherAssembledFromDevices,
-          patcherGraphSnapshot,
-          patcherParallel, patcherPool, pendingPreviewNotes, playing, poolAlwaysOn, poolEngaged,
-          poolWorkEwmaUs, previewMutex, producerBlockBudgetUs, producerBlockUsMax,
-          producerBlockUsTotal, producerBlocksOverBudget, producerBlocksTimed,
-          producerSamplerUsMax, producerSamplerUsTotal, projectSeed, publishedCallback,
-          quantizePitch, renderPool, resolveDevicePluginPath, songTimeSigDen, songTimeSigNum,
-          tempoProvider, tickConverter, traceNotes, transportElapsedNanotick, transportNanotick,
-          patternTicks, warnedEventOutsideBlock, writeMirrorParams};
+      blockDuration, blockTicksFor, debugStall, engineConfig, enqueuePreview, getHarmonyAt,
+      getRingCtrl, getRingStd, getScaleForHarmony, harmonyTimeline, lastOverflowTick,
+      latencyMgr, loopEndNanotick, loopStartNanotick, meterSnapshot, nextBlockId,
+      nextNoteId, offlineRender, panicPending, patcherAssembledFromDevices,
+      patcherGraphSnapshot, patcherParallel, patcherPool, pendingPreviewNotes, playing,
+      poolAlwaysOn, poolEngaged, poolWorkEwmaUs, previewMutex, producerBlockBudgetUs,
+      producerBlockUsMax, producerBlockUsTotal, producerBlocksOverBudget,
+      producerBlocksTimed, producerSamplerUsMax, producerSamplerUsTotal, projectSeed,
+      publishedCallback, quantizePitch, renderPool, resolveDevicePluginPath, songTimeSigDen,
+      songTimeSigNum, tempoProvider, tickConverter, traceNotes, transportElapsedNanotick,
+      transportNanotick, patternTicks, warnedEventOutsideBlock, writeMirrorParams
+  };
 
     while (running.load()) {
       // Offline: produce nothing until the pump says the transport is at a known start. See
@@ -4061,22 +3963,24 @@ int main(int argc, char** argv) {
   });
 
   daw::engine::UiWriterDeps uiWriterDeps{
-      arrangeGeneration, arrangeMutex, arrangeVersion, automationGeneration, automationVersion,
-      clipVersion, clipWindowMutex, clipWindowPending, harmonyEvents, harmonyMutex,
+      arrangeGeneration, arrangeMutex, arrangeVersion, automationGeneration,
+      automationVersion, clipVersion, clipWindowMutex, clipWindowPending, harmonyTimeline,
       laneQuantizeOf, lastArrangeSongEnd, lastArrangeVersion, lastAutomationVersion,
       lastClipAllQuantizeVersion, lastClipAllVersion, lastPatcherVersion, markerList,
-      patcherGraphSnapshot, patcherGraphState, quantizeVersion, snapshotTracks, songEndNanotick,
-      songMeter, trackIsPersisted, uiShm, warnedPatcherOwnerTooWide};
+      patcherGraphSnapshot, patcherGraphState, quantizeVersion, snapshotTracks,
+      songEndNanotick, songMeter, trackIsPersisted, uiShm, warnedPatcherOwnerTooWide
+  };
 
   daw::engine::ConsumerDeps consumerDeps{
       audioPlaybackBlockId, auxChildOverlayMutex, auxChildOverlays, buildTrackSnapshot,
-      clipVersion, engineConfig, ensurePlacementIds, harmonyDirty, harmonyVersion,
-      lastOverflowTick, latencyMgr, liveTrackCount, loadInProgress, loopEndNanotick,
-      loopStartNanotick, masterTrack, maxUiTracks, pdcDisabled, playing, projectLoadOk,
-      projectLoadSeq, publishedCallback, quantizeVersion, rebuildAudioRender,
-      rebuildFlatAndPublish, reconcileChildTracks, running, samplerKitVersion,
-      scheduleHostRestart, snapshotTracks, songEndNanotick, songTimeSigDen, songTimeSigNum,
-      tempoProvider, transportNanotick, uiShm, uiWriterDeps, writeUiClipExtents};
+      clipVersion, engineConfig, ensurePlacementIds, harmonyTimeline, lastOverflowTick,
+      latencyMgr, liveTrackCount, loadInProgress, loopEndNanotick, loopStartNanotick,
+      masterTrack, maxUiTracks, pdcDisabled, playing, projectLoadOk, projectLoadSeq,
+      publishedCallback, quantizeVersion, rebuildAudioRender, rebuildFlatAndPublish,
+      reconcileChildTracks, running, samplerKitVersion, scheduleHostRestart, snapshotTracks,
+      songEndNanotick, songTimeSigDen, songTimeSigNum, tempoProvider, transportNanotick,
+      uiShm, uiWriterDeps, writeUiClipExtents
+  };
 
   std::thread consumer([&] { daw::engine::runConsumerThread(consumerDeps); });
   // The audio parameters the mix is built at. With a device they are the DEVICE's (adopted
