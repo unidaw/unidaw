@@ -11,9 +11,9 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: 4874fa6
-- main-cpp-lines: 6194
-- main-function-lines: 5964
+- as-of-commit: 666510a
+- main-cpp-lines: 5487
+- main-function-lines: 5256
 - ctest-entries: 169
 
 ## Why this file cannot quietly go stale
@@ -168,6 +168,17 @@ whole number of frames, and connecting Bluetooth headphones moved the default ou
 was plugged in), which in turn exposed a second copy of the sample rate: `effSampleRate` read the
 device directly while `baseConfig` carried its own — the same config-versus-pump divergence
 `--block-size` had already been repaired for, one field away.
+
+**The consumer thread followed**, which is everything the engine publishes outward — track state,
+clip extents, arrangement summary, automation lanes, patcher graph, harmony, plus the aux-child
+reconcile and host-restart scheduling decided from the same snapshot. 719 lines, 43 dependencies.
+`main()` is now 5,256 lines against 13,652 when this started.
+
+**Where the render oracle stops applying.** It gated most of this sweep and it is the right check
+for `renderTrack` and the per-block body. It says almost nothing about the dispatcher, project load,
+or this consumer: none of them touch audio, so a byte-identical render only reports that the render
+path was left alone. What covers those is the line-for-line body diff plus the suite's UI checks,
+which read the very shared-memory blocks the consumer writes.
 
 ## Testability, which is the axis the extraction was supposed to buy
 
