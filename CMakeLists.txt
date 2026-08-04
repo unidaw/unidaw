@@ -1094,7 +1094,12 @@ set_tests_properties(audio_loop PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 add_test(NAME audio_stability
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/audio_stability_check.sh
 )
-set_tests_properties(audio_stability PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+# SKIP_RETURN_CODE 77: this check compares a loaded run against a deeper-pipelined one, and every
+# assertion it makes is satisfied by the load never biting. When depth 4 reports zero starves it
+# now exits 77 and ctest prints SKIP — because "measured nothing" and "the lever works" must not
+# both print PASS. It is the first entry here with a skip code; the rest still cannot say it.
+set_tests_properties(audio_stability PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600
+                     SKIP_RETURN_CODE 77)
 add_test(NAME automation
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/automation_check.sh
 )
