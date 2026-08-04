@@ -23,6 +23,7 @@
 #include <optional>
 #include <vector>
 
+#include "engine_track_table.h"
 #include "engine_transport_state.h"
 #include "engine_types.h"
 #include "event_payloads.h"
@@ -56,8 +57,7 @@ struct ClipEditDeps {
   std::function<void(uint32_t, TrackStoreState, TrackStoreState)> pushStructuralUndo;
   std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&)> rebuildFlatAndPublish;
   std::function<TrackStoreState(const TrackRuntime&)> snapshotTrackStore;
-  std::vector<std::unique_ptr<TrackRuntime>>& tracks;
-  std::mutex& tracksMutex;
+  TrackTable& trackTable;
 };
 
 EditTarget locateEditTarget(LocateTargetDeps& deps, TrackRuntime& rt, uint64_t absTick,

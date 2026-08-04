@@ -114,8 +114,8 @@ void publishAudioClipTable(AudioClipTableDeps& deps) {
   auto& loadedClipsMutex = deps.loadedClipsMutex;
   auto& resolveSourcePath = deps.resolveSourcePath;
   auto& tempoProvider = deps.tempoProvider;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   auto& uiShm = deps.uiShm;
   auto& waveformStore = deps.waveformStore;
 

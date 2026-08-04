@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_track_table.h"
 #include "engine_patcher_graph_owner.h"
 #include "apps/engine_pure.h"
 #include "apps/engine_types.h"
@@ -26,8 +27,7 @@
 namespace daw::engine {
 
 struct PatcherCommandDeps {
-  std::vector<std::unique_ptr<TrackRuntime>>& tracks;
-  std::mutex& tracksMutex;
+  TrackTable& trackTable;
   PatcherGraphOwner& patcherGraph;
   const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>& buildTrackSnapshot;
   const std::function<void(uint32_t, uint16_t, uint32_t, uint32_t, uint32_t,

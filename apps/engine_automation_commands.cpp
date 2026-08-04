@@ -14,8 +14,8 @@ void handleSetAutomationTarget(AutomationCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   const auto& requireMatchingClipVersion = deps.requireMatchingClipVersion;
   daw::UiAutomationCommandPayload autoPayload{};
@@ -68,8 +68,8 @@ void handleRequestAutomationLane(AutomationCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   auto& uiShm = deps.uiShm;
   daw::UiAutomationLaneRequestPayload req{};
   std::memcpy(&req, entry.payload, sizeof(req));
@@ -145,8 +145,8 @@ void handleWriteAutomationPoint(AutomationCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   auto& automationVersion = deps.automationVersion;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   const auto& historyAppend = deps.historyAppend;
@@ -251,8 +251,8 @@ void handleDeleteAutomationPoint(AutomationCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   auto& automationVersion = deps.automationVersion;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   const auto& historyAppend = deps.historyAppend;

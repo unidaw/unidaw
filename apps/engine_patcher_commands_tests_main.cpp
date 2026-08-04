@@ -61,8 +61,9 @@ struct Recorded {
 };
 
 struct Fixture {
-  std::vector<std::unique_ptr<TrackRuntime>> tracks;
-  std::mutex tracksMutex;
+  // ONE OBJECT NOW. trackTable.tracks and trackTable.tracksMutex were never apart in any interface, so they are a
+  // TrackTable; the handler takes it whole and the fixture builds it whole.
+  TrackTable trackTable;
   // ONE OBJECT NOW, not four separate locals. PatcherGraphOwner holds the pool, the RT snapshot
   // and the two flags; the handler takes it whole, so the fixture builds it whole.
   PatcherGraphOwner patcherGraph;
@@ -85,7 +86,7 @@ struct Fixture {
   std::function<void()> updateSnapshotFn = [this]() { rec.snapshots++; };
 
   PatcherCommandDeps deps() {
-    return PatcherCommandDeps{tracks,          tracksMutex, patcherGraph, buildSnapshotFn,
+    return PatcherCommandDeps{trackTable, patcherGraph, buildSnapshotFn,
                               emitDeltaFn,     emitErrorFn, emitUiDiffFn, reassembleFn,
                               updateSnapshotFn};
   }

@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_track_table.h"
 #include "engine_types.h"
 #include "project_file.h"
 #include "time_base.h"
@@ -37,8 +38,7 @@ struct AudioClipTableDeps {
   std::mutex& loadedClipsMutex;
   std::function<std::string(const std::string&)> resolveSourcePath;
   daw::TempoMapProvider& tempoProvider;
-  std::vector<std::unique_ptr<TrackRuntime>>& tracks;
-  std::mutex& tracksMutex;
+  TrackTable& trackTable;
   UiShmState& uiShm;
   daw::WaveformStore& waveformStore;
 };

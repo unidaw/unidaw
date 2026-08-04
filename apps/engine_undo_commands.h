@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_track_table.h"
 #include "apps/engine_pure.h"
 #include "apps/engine_types.h"
 #include "apps/event_payloads.h"
@@ -24,8 +25,7 @@
 namespace daw::engine {
 
 struct UndoCommandDeps {
-  std::vector<std::unique_ptr<TrackRuntime>>& tracks;
-  std::mutex& tracksMutex;
+  TrackTable& trackTable;
   std::mutex& undoMutex;
   std::vector<EngineUndoEntry>& undoStack;
   std::vector<EngineUndoEntry>& redoStack;

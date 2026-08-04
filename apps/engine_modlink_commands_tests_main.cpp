@@ -71,8 +71,9 @@ struct Recorded {
 
 // One object because ModlinkCommandDeps holds REFERENCES: every member must outlive it.
 struct Fixture {
-  std::vector<std::unique_ptr<TrackRuntime>> tracks;
-  std::mutex tracksMutex;
+  // ONE OBJECT NOW. trackTable.tracks and trackTable.tracksMutex were never apart in any interface, so they are a
+  // TrackTable; the handler takes it whole and the fixture builds it whole.
+  TrackTable trackTable;
   Recorded rec;
 
   std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)> buildSnapshotFn =
@@ -89,7 +90,7 @@ struct Fixture {
                                const std::string&) { rec.history.push_back(op ? op : ""); };
 
   ModlinkCommandDeps deps() {
-    return ModlinkCommandDeps{tracks,          tracksMutex,       buildSnapshotFn,
+    return ModlinkCommandDeps{trackTable,       buildSnapshotFn,
                               emitModErrorFn,  emitModSnapshotFn, historyAppendFn};
   }
 
@@ -105,11 +106,11 @@ struct Fixture {
       d.hasSampler = true;
       rt->track.chain.devices.push_back(d);
     }
-    tracks.push_back(std::move(rt));
+    trackTable.tracks.push_back(std::move(rt));
   }
 
   size_t linkCount(uint32_t trackId) const {
-    for (const auto& rt : tracks) {
+    for (const auto& rt : trackTable.tracks) {
       if (rt->trackId == trackId) {
         return rt->track.modRegistry.links.size();
       }

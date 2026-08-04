@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_track_table.h"
 #include "engine_transport_state.h"
 #include "apps/engine_pure.h"
 #include "apps/engine_types.h"
@@ -26,8 +27,7 @@
 namespace daw::engine {
 
 struct ChainCommandDeps {
-  std::vector<std::unique_ptr<TrackRuntime>>& tracks;
-  std::mutex& tracksMutex;
+  TrackTable& trackTable;
   std::unique_ptr<TrackRuntime>& masterTrack;
   TransportState& transport;
   const daw::PluginCache& pluginCache;

@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_track_table.h"
 #include "engine_types.h"
 
 namespace daw::engine {
@@ -35,8 +36,7 @@ struct ChildTrackDeps {
   std::atomic<uint32_t>& liveTrackCount;
   std::function<void(TrackRuntime&)> resetTrackContent;
   std::function<std::unique_ptr<TrackRuntime>(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, const std::string&)> setupAuxChildRuntime;
-  std::vector<std::unique_ptr<TrackRuntime>>& tracks;
-  std::mutex& tracksMutex;
+  TrackTable& trackTable;
 };
 
 // Builds one TrackRuntime. Returns null if the host could not be prepared.

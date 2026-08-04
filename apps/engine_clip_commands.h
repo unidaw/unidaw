@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_track_table.h"
 #include "apps/engine_pure.h"
 #include "apps/engine_types.h"
 #include "apps/event_payloads.h"
@@ -25,8 +26,7 @@
 namespace daw::engine {
 
 struct ClipCommandDeps {
-  std::vector<std::unique_ptr<TrackRuntime>>& tracks;
-  std::mutex& tracksMutex;
+  TrackTable& trackTable;
   std::atomic<uint32_t>& clipVersion;
   UiShmState& uiShm;
   const std::function<uint32_t(TrackRuntime*)>& bumpClipVersionFor;

@@ -17,8 +17,8 @@ void handleAddModLink(ModlinkCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   const auto& emitModError = deps.emitModError;
   const auto& emitModSnapshot = deps.emitModSnapshot;
@@ -241,8 +241,8 @@ void handleSetModLinkUid16(ModlinkCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   const auto& emitModError = deps.emitModError;
   const auto& emitModSnapshot = deps.emitModSnapshot;
@@ -295,8 +295,8 @@ void handleSetModSourceValue(ModlinkCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& emitModError = deps.emitModError;
   {
   daw::UiModSourceValuePayload modPayload{};

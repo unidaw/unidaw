@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_track_table.h"
 #include "engine_song_timing.h"
 #include "engine_transport_state.h"
 #include "engine_pure.h"
@@ -44,8 +45,7 @@ struct TransportCommandDeps {
   std::condition_variable& restartCv;
   std::atomic<bool>& running;
   daw::TempoMapProvider& tempoProvider;
-  std::vector<std::unique_ptr<TrackRuntime>>& tracks;
-  std::mutex& tracksMutex;
+  TrackTable& trackTable;
 };
 
 void handleSetLoopRange(TransportCommandDeps& deps,

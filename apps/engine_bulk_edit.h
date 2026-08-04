@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_track_table.h"
 #include "engine_types.h"
 #include "event_payloads.h"
 
@@ -33,8 +34,7 @@ struct AssembledBulkDeps {
   std::function<void(daw::UiCommandType, daw::UiSamplerRejectReason, uint32_t, uint32_t, uint16_t)> reportSamplerReject;
   std::function<bool(uint32_t, daw::UiCommandType, uint32_t)> requireMatchingClipVersion;
   std::function<std::string(const std::string&)> resolveSourcePath;
-  std::vector<std::unique_ptr<TrackRuntime>>& tracks;
-  std::mutex& tracksMutex;
+  TrackTable& trackTable;
 };
 
 // Applies one reassembled bulk envelope. Malformed buffers are dropped silently, which is the

@@ -22,6 +22,7 @@
 #include <optional>
 #include <vector>
 
+#include "engine_track_table.h"
 #include "apps/engine_pure.h"
 #include "apps/engine_types.h"
 #include "apps/event_payloads.h"
@@ -45,8 +46,7 @@ struct SamplerCommandDeps {
   // as `struct UiShmState { ... } uiShm;`, one statement declaring a type AND defining an object,
   // so no pattern looking for a variable declaration could see it. The compiler found it.
   UiShmState& uiShm;
-  std::vector<std::unique_ptr<TrackRuntime>>& tracks;
-  std::mutex& tracksMutex;
+  TrackTable& trackTable;
   daw::TempoMapProvider& tempoProvider;
 
   const std::function<void(daw::UiCommandType, daw::UiSamplerRejectReason,

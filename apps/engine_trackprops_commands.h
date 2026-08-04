@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_track_table.h"
 #include "apps/engine_pure.h"
 #include "apps/engine_types.h"
 #include "apps/event_payloads.h"
@@ -26,8 +27,7 @@
 namespace daw::engine {
 
 struct TrackpropsCommandDeps {
-  std::vector<std::unique_ptr<TrackRuntime>>& tracks;
-  std::mutex& tracksMutex;
+  TrackTable& trackTable;
   std::unique_ptr<TrackRuntime>& masterTrack;
   std::atomic<uint32_t>& quantizeVersion;
   const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>& buildTrackSnapshot;

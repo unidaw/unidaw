@@ -16,8 +16,8 @@ namespace daw::engine {
 void handleRequestChainSnapshot(RequestCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& emitChainSnapshot = deps.emitChainSnapshot;
   {
   // A UI that attached after the engine started has never seen a chain
@@ -47,8 +47,8 @@ void handleRequestDeviceParams(RequestCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
   auto& uiShm = deps.uiShm;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
   {
   // Publish one device's parameters into UiDeviceParamsRegion so the rack can
@@ -177,8 +177,8 @@ void handleRequestWaveform(RequestCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
   auto& uiShm = deps.uiShm;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   auto& waveformStore = deps.waveformStore;
   const auto& resolveSourcePath = deps.resolveSourcePath;
   {

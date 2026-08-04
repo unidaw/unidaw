@@ -1,11 +1,11 @@
-// Tests for reconcileChildTracks in apps/engine_track_setup.h — which aux CHILD tracks a
+// Tests for reconcileChildTracks in apps/engine_track_setup.h — which aux CHILD trackTable.tracks a
 // multi-out parent should have.
 //
-// A multi-out instrument's extra outputs appear in the tracker as child tracks, one per bus. This
+// A multi-out instrument's extra outputs appear in the tracker as child trackTable.tracks, one per bus. This
 // function decides how many exist and creates or retires them to match, and the consumer thread
 // calls it on EVERY tick — which is what makes its idempotence load-bearing rather than tidy. If
 // the "does this child already exist" test ever stopped matching, every tick would append another
-// child: no error, no crash, a project that grows tracks while you watch it and hits the 64-track
+// child: no error, no crash, a project that grows trackTable.tracks while you watch it and hits the 64-track
 // budget on its own.
 //
 // THE SAMPLER PATH IS THE ONE WITH HISTORY. `requestBusLayout` asks the HOST what buses it has,
@@ -39,8 +39,9 @@ struct Fixture {
   daw::HostConfig baseConfig;
   std::atomic<uint32_t> clipVersion{0};
   std::atomic<uint32_t> liveTrackCount{1};   // just the parent, at slot 0
-  std::vector<std::unique_ptr<TrackRuntime>> tracks;
-  std::mutex tracksMutex;
+  // ONE OBJECT NOW. trackTable.tracks and trackTable.tracksMutex were never apart in any interface, so they are a
+  // TrackTable; the handler takes it whole and the fixture builds it whole.
+  TrackTable trackTable;
   int childrenMade = 0;
   std::vector<std::pair<uint32_t, uint32_t>> madeBuses;  // (busIndex, channelOffset)
 
@@ -49,10 +50,10 @@ struct Fixture {
     auto p = std::make_unique<TrackRuntime>();
     p->trackId = 0;
     p->hostReady.store(true, std::memory_order_release);
-    tracks.push_back(std::move(p));
+    trackTable.tracks.push_back(std::move(p));
   }
 
-  TrackRuntime& parent() { return *tracks[0]; }
+  TrackRuntime& parent() { return *trackTable.tracks[0]; }
 
   // Give the parent N sampler stems. This is the multi-out source that has no host to ask.
   void withStems(uint8_t n) {
@@ -80,8 +81,7 @@ struct Fixture {
           rt->auxBusIndex.store(busIndex, std::memory_order_release);
           return rt;
         },
-        tracks,
-        tracksMutex};
+        trackTable};
   }
 
   // Stand in for what the caller does with the returned runtime: install it and count it live.

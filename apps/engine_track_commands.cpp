@@ -17,8 +17,8 @@ void handleSetTrackRouting(TrackCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   const auto& emitRoutingError = deps.emitRoutingError;
   const auto& emitRoutingSnapshot = deps.emitRoutingSnapshot;
@@ -100,8 +100,8 @@ void handleSetTrackName(TrackCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   {
   daw::UiPatcherPresetCommandPayload namePayload{};
   std::memcpy(&namePayload, entry.payload, sizeof(namePayload));
@@ -139,8 +139,8 @@ void handleSetDeviceEuclideanConfig(TrackCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   {
   daw::UiDeviceEuclideanConfigPayload configPayload{};
@@ -198,8 +198,8 @@ void handleAddTrack(TrackCommandDeps& deps,
   auto& resetTrackContent = deps.resetTrackContent;
   auto& restartTrackHost = deps.restartTrackHost;
   auto& setupTrackRuntime = deps.setupTrackRuntime;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
 
       // Add an empty top-level track. Refill the LOWEST tombstone first (RemoveTrack leaves
       // middle holes) so repeated middle remove+add can't leak slots toward the cap; only
@@ -281,8 +281,8 @@ void handleRemoveTrack(TrackCommandDeps& deps,
   auto& liveTrackCount = deps.liveTrackCount;
   auto& rebuildAudioRender = deps.rebuildAudioRender;
   auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
 
       // Tombstone the target track (stable id == slot) + its aux children. The slot is
       // kept (kUiTrackFlagAbsent) so neighbours keep their ids; trailing tombstones are

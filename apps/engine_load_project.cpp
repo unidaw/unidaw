@@ -66,8 +66,8 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   auto& songTimeSigDen = deps.songTiming.songTimeSigDen;
   auto& songTimeSigNum = deps.songTiming.songTimeSigNum;
   auto& tempoProvider = deps.tempoProvider;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   auto& updatePatcherGraphSnapshot = deps.updatePatcherGraphSnapshot;
   auto& waveformStore = deps.waveformStore;
 

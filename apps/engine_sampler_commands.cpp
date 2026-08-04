@@ -22,8 +22,8 @@ void handleSamplerEmitRows(SamplerCommandDeps& deps,
   // every name they used from main's scope resolves here to the same object, by reference. Not a
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   auto& tempoProvider = deps.tempoProvider;
   const auto& reportSamplerReject = deps.reportSamplerReject;
   const auto& applyAddNote = deps.applyAddNote;
@@ -154,8 +154,8 @@ void handleSamplerSlice(SamplerCommandDeps& deps,
   // every name they used from main's scope resolves here to the same object, by reference. Not a
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   auto& tempoProvider = deps.tempoProvider;
   const auto& reportSamplerReject = deps.reportSamplerReject;
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
@@ -372,8 +372,8 @@ void handleRequestSamplerEnvelope(SamplerCommandDeps& deps,
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
   auto& uiShm = deps.uiShm;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   daw::UiSamplerEnvelopeRequestPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   if (!uiShm.header || uiShm.header->uiSamplerEnvelopeOffset == 0) {
@@ -492,8 +492,8 @@ void handleRequestSamplerKit(SamplerCommandDeps& deps,
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
   auto& uiShm = deps.uiShm;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   daw::UiSamplerKitRequestPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   if (!uiShm.header || uiShm.header->uiSamplerKitOffset == 0) {
@@ -686,8 +686,8 @@ void handleSamplerSetSlot(SamplerCommandDeps& deps,
   // every name they used from main's scope resolves here to the same object, by reference. Not a
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& reportSamplerReject = deps.reportSamplerReject;
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerSetSlotPayload p{};
@@ -875,8 +875,8 @@ void handleSamplerSetDevice(SamplerCommandDeps& deps,
   // every name they used from main's scope resolves here to the same object, by reference. Not a
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& reportSamplerReject = deps.reportSamplerReject;
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerSetDevicePayload p{};
@@ -972,8 +972,8 @@ void handleSamplerSetFilter(SamplerCommandDeps& deps,
   // every name they used from main's scope resolves here to the same object, by reference. Not a
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& reportSamplerReject = deps.reportSamplerReject;
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerFilterPayload p{};
@@ -1063,8 +1063,8 @@ void handleSamplerSetVintage(SamplerCommandDeps& deps,
   // every name they used from main's scope resolves here to the same object, by reference. Not a
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& reportSamplerReject = deps.reportSamplerReject;
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerVintagePayload p{};
@@ -1154,8 +1154,8 @@ void handleSamplerSetLfo(SamplerCommandDeps& deps,
   // every name they used from main's scope resolves here to the same object, by reference. Not a
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& reportSamplerReject = deps.reportSamplerReject;
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerLfoPayload p{};
@@ -1261,8 +1261,8 @@ void handleSamplerSetEnvelope(SamplerCommandDeps& deps,
   // every name they used from main's scope resolves here to the same object, by reference. Not a
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& reportSamplerReject = deps.reportSamplerReject;
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerEnvelopePayload p{};
@@ -1382,8 +1382,8 @@ void handleSamplerLoad(SamplerCommandDeps& deps,
   // every name they used from main's scope resolves here to the same object, by reference. Not a
   // copy, and not a rename — a rename across 1,400 moved lines is exactly the kind of edit whose
   // mistakes survive review.
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& reportSamplerReject = deps.reportSamplerReject;
   const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerLoadPayload p{};

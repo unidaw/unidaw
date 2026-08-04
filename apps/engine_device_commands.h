@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_track_table.h"
 #include "engine_transport_state.h"
 #include "apps/engine_pure.h"
 #include "apps/engine_types.h"
@@ -25,8 +26,7 @@
 namespace daw::engine {
 
 struct DeviceCommandDeps {
-  std::vector<std::unique_ptr<TrackRuntime>>& tracks;
-  std::mutex& tracksMutex;
+  TrackTable& trackTable;
   TransportState& transport;
   std::atomic<uint32_t>& audioPlaybackBlockId;
   const std::string& pluginPath;

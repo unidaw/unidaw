@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_track_table.h"
 #include "apps/engine_pure.h"
 #include "apps/engine_types.h"
 #include "apps/event_payloads.h"
@@ -33,8 +34,7 @@ struct RequestCommandDeps {
   // missed it — uiShm is declared as `struct UiShmState { ... } uiShm;`, one statement declaring
   // a type AND defining an object, which no search for a variable declaration can see.
   UiShmState& uiShm;
-  std::vector<std::unique_ptr<TrackRuntime>>& tracks;
-  std::mutex& tracksMutex;
+  TrackTable& trackTable;
   daw::WaveformStore& waveformStore;
   std::mutex& clipWindowMutex;
   std::optional<ClipWindowPending>& clipWindowPending;

@@ -34,8 +34,9 @@ static int g_fail = 0;
 namespace {
 
 struct Fixture {
-  std::vector<std::unique_ptr<TrackRuntime>> tracks;
-  std::mutex tracksMutex;
+  // ONE OBJECT NOW. trackTable.tracks and trackTable.tracksMutex were never apart in any interface, so they are a
+  // TrackTable; the handler takes it whole and the fixture builds it whole.
+  TrackTable trackTable;
   std::atomic<bool> clipDirty{false};
 
   Fixture() {
@@ -45,7 +46,7 @@ struct Fixture {
     d.id = 1;
     d.kind = daw::DeviceKind::Sampler;
     rt->track.chain.devices.push_back(std::move(d));
-    tracks.push_back(std::move(rt));
+    trackTable.tracks.push_back(std::move(rt));
   }
 
   // Every callback is a no-op: what is under test is whether the ENVELOPE lands in the device,
@@ -62,14 +63,13 @@ struct Fixture {
         [](daw::UiCommandType, daw::UiSamplerRejectReason, uint32_t, uint32_t, uint16_t) {},
         [](uint32_t, daw::UiCommandType, uint32_t) { return true; },
         [](const std::string& p) { return p; },                            // resolveSourcePath
-        tracks,
-        tracksMutex};
+        trackTable};
   }
 
   // How many envelope points the sampler device is currently holding, across every modulator.
   size_t envPointsHeld() const {
     size_t n = 0;
-    for (const auto& d : tracks[0]->track.chain.devices) {
+    for (const auto& d : trackTable.tracks[0]->track.chain.devices) {
       for (const auto& ms : d.sampler.modSets) {
         for (const auto& m : ms.modulators) {
           n += m.env.points.size();
@@ -85,7 +85,7 @@ struct Fixture {
   // whether or not a single byte of the payload had been read. So the assertions below look for
   // the VALUES that were sent: 1000, 900, 800, 700 at times 0, 100, 200, 300.
   bool holdsSentEnvelope() const {
-    for (const auto& d : tracks[0]->track.chain.devices) {
+    for (const auto& d : trackTable.tracks[0]->track.chain.devices) {
       for (const auto& ms : d.sampler.modSets) {
         for (const auto& m : ms.modulators) {
           if (m.env.points.size() != 4) {

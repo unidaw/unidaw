@@ -28,8 +28,8 @@ bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path,
   auto& songMeter = deps.songTiming.songMeter;
   auto& songTimeSigDen = deps.songTiming.songTimeSigDen;
   auto& songTimeSigNum = deps.songTiming.songTimeSigNum;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& songBarGrid = deps.songBarGrid;
   const auto& trackIsPersisted = deps.trackIsPersisted;
   {

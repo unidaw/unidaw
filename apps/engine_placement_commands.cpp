@@ -23,8 +23,8 @@ void handleForkSwapPlacementClip(PlacementCommandDeps& deps,
   auto& rebuildAudioRender = deps.rebuildAudioRender;
   auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
   auto& recomputeSongEnd = deps.recomputeSongEnd;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
       // M2.57 SCRATCH CLIPS. value0 = placementId.
       //
       // The problem: an agent that writes into your clip leaves you undoing its work, with its
@@ -143,8 +143,8 @@ void handleSetPlacementEditScope(PlacementCommandDeps& deps,
   auto& bumpClipVersionFor = deps.bumpClipVersionFor;
   auto& clipDirty = deps.clipDirty;
   auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
       // value0 = placementId, flags bit0 = on. Deliberately NOT version-gated: this changes no
       // note, so it cannot invalidate anyone's in-flight edit — the same reasoning that keeps a
       // section rename off the clip version.
@@ -211,8 +211,8 @@ void handleRevertPlacementOverrides(PlacementCommandDeps& deps,
   auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
   auto& requireMatchingClipVersion = deps.requireMatchingClipVersion;
   auto& snapshotTrackStore = deps.snapshotTrackStore;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
       // M3.24: the one-click revert. Clears BOTH override vectors on one placement, which
       // is only this simple because the overrides are additive-only — there are no
       // inverses to replay, just two lists to drop.
@@ -297,8 +297,8 @@ void handleMovePlacement(PlacementCommandDeps& deps,
   auto& rebuildAudioRender = deps.rebuildAudioRender;
   auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
   auto& snapshotTrackStore = deps.snapshotTrackStore;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
       // Move a placement to a new `at` (arrangement drag). value0 = stable placementId,
       // noteNanotick = new at, notePitch = new trackId (0xFFFFFFFF = same track). Cross-
       // track lane drags are a v2 (the clip would have to move ownership); same-track now.

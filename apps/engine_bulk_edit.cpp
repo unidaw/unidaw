@@ -21,8 +21,8 @@ void handleAssembledBulk(AssembledBulkDeps& deps, const std::vector<uint8_t>& bu
   auto& reportSamplerReject = deps.reportSamplerReject;
   auto& requireMatchingClipVersion = deps.requireMatchingClipVersion;
   auto& resolveSourcePath = deps.resolveSourcePath;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
 
     if (buf.size() < sizeof(uint16_t)) {
       return;

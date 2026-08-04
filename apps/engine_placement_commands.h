@@ -24,6 +24,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_track_table.h"
 #include "engine_pure.h"
 #include "engine_types.h"
 #include "event_payloads.h"
@@ -45,8 +46,7 @@ struct PlacementCommandDeps {
   const std::function<void()>& recomputeSongEnd;
   const std::function<bool(uint32_t, daw::UiCommandType, uint32_t)>& requireMatchingClipVersion;
   const std::function<TrackStoreState(const TrackRuntime&)>& snapshotTrackStore;
-  std::vector<std::unique_ptr<TrackRuntime>>& tracks;
-  std::mutex& tracksMutex;
+  TrackTable& trackTable;
 };
 
 void handleForkSwapPlacementClip(PlacementCommandDeps& deps,

@@ -93,8 +93,8 @@ void handleAddPatcherNode(PatcherCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   auto& patcherGraphState = deps.patcherGraph.patcherGraphState;
   auto& patcherPoolEdited = deps.patcherGraph.patcherPoolEdited;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
@@ -345,8 +345,8 @@ void handleSetPatcherNodeConfig(PatcherCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   auto& patcherGraphState = deps.patcherGraph.patcherGraphState;
   auto& patcherPoolEdited = deps.patcherGraph.patcherPoolEdited;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;

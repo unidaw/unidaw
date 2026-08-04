@@ -131,8 +131,8 @@ void reconcileChildTracks(ChildTrackDeps& deps, TrackRuntime& parent) {
   auto& liveTrackCount = deps.liveTrackCount;
   auto& resetTrackContent = deps.resetTrackContent;
   auto& setupAuxChildRuntime = deps.setupAuxChildRuntime;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
 
     if (parent.isAuxChild.load(std::memory_order_acquire)) {
       return;

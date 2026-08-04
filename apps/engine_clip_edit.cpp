@@ -189,8 +189,8 @@ bool applyAddNote(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, uint6
   auto& loopStartNanotick = deps.transport.loopStartNanotick;
   auto& patternTicks = deps.patternTicks;
   auto& snapshotTrackStore = deps.snapshotTrackStore;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
 
     TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
@@ -311,8 +311,8 @@ bool applySetRowOps(ClipEditDeps& deps, uint32_t trackId, uint32_t clipId, daw::
   auto& pushStructuralUndo = deps.pushStructuralUndo;
   auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
   auto& snapshotTrackStore = deps.snapshotTrackStore;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
 
     TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
@@ -457,8 +457,8 @@ bool applyLocalNoteEdit(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick,
   auto& pushStructuralUndo = deps.pushStructuralUndo;
   auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
   auto& snapshotTrackStore = deps.snapshotTrackStore;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
 
     TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
@@ -651,8 +651,8 @@ bool applyAddChord(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, uint
   auto& nextChordId = deps.nextChordId;
   auto& patternTicks = deps.patternTicks;
   auto& snapshotTrackStore = deps.snapshotTrackStore;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
 
     TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
@@ -770,8 +770,8 @@ bool applyRemoveNote(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, ui
   auto& growLengthsForContent = deps.growLengthsForContent;
   auto& locateEditTarget = deps.locateEditTarget;
   auto& snapshotTrackStore = deps.snapshotTrackStore;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
 
     TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
@@ -851,8 +851,8 @@ bool applyRemoveChord(ClipEditDeps& deps, uint32_t trackId, uint32_t chordId, bo
   auto& consumeClipVersionForNoOp = deps.consumeClipVersionForNoOp;
   auto& forkOwnedClip = deps.forkOwnedClip;
   auto& snapshotTrackStore = deps.snapshotTrackStore;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
 
     TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
@@ -893,8 +893,8 @@ bool applyRemoveChordAt(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick,
   auto& forkOwnedClip = deps.forkOwnedClip;
   auto& locateEditTarget = deps.locateEditTarget;
   auto& snapshotTrackStore = deps.snapshotTrackStore;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
 
     TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {

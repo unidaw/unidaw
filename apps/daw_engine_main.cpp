@@ -41,6 +41,7 @@
 #include "apps/engine_clip_edit.h"
 #include "apps/engine_track_setup.h"
 #include "apps/engine_arrange_markers.h"
+#include "apps/engine_track_table.h"
 #include "apps/engine_patcher_graph_owner.h"
 #include "apps/engine_song_timing.h"
 #include "apps/engine_transport_state.h"
@@ -819,9 +820,10 @@ int main(int argc, char** argv) {
                                           allowConnect, startHost);
   };
 
-  std::vector<std::unique_ptr<TrackRuntime>> tracks;
+  daw::engine::TrackTable trackTable;
+  auto& tracks = trackTable.tracks;
   tracks.reserve(daw::kUiMaxTracks);
-  std::mutex tracksMutex;
+  auto& tracksMutex = trackTable.tracksMutex;
 
   // Movement 4: how many tracks the UI should see. The `tracks` vector only ever grows
   // (a runtime is reused, never removed), so publishing tracks.size() leaves phantom
@@ -1916,7 +1918,7 @@ int main(int argc, char** argv) {
   // read silence once the parent stops writing that bus.
   daw::engine::ChildTrackDeps childTrackDeps{
       baseConfig, buildTrackSnapshot, clipVersion, liveTrackCount, resetTrackContent,
-      setupAuxChildRuntime, tracks, tracksMutex};
+      setupAuxChildRuntime, trackTable};
 
   auto reconcileChildTracks = [&](TrackRuntime& parent) {
     daw::engine::reconcileChildTracks(childTrackDeps, parent);
@@ -2771,7 +2773,7 @@ int main(int argc, char** argv) {
   // LOCK ORDER is tracksMutex -> trackMutex, taken as a pointer snapshot under tracksMutex and
   // then released, matching every other command-thread walk over all tracks.
   daw::engine::AudioClipTableDeps audioClipTableDeps{
-      loadedClips, loadedClipsMutex, resolveSourcePath, tempoProvider, tracks, tracksMutex, uiShm,
+      loadedClips, loadedClipsMutex, resolveSourcePath, tempoProvider, trackTable, uiShm,
       waveformStore};
 
   auto publishAudioClipTable = [&]() {
@@ -3028,7 +3030,7 @@ int main(int argc, char** argv) {
   // track without stalling audio behind one global lock.
   daw::engine::SaveProjectDeps saveProjectDeps{
       arrange, harmonyTimeline, liveTrackCount, loadedClips, loadedClipsMutex, songTiming,
-      masterTrack, patcherGraph, pluginCache, projectSeed, tracks, tracksMutex, songBarGrid,
+      masterTrack, patcherGraph, pluginCache, projectSeed, trackTable, songBarGrid,
       trackIsPersisted
   };
   auto saveProjectToPath = [&](const std::string& path,
@@ -3048,8 +3050,7 @@ int main(int argc, char** argv) {
       loadedClips, loadedClipsMutex, loadedProjectDir, songTiming, transport, masterTrack,
       nextClipId, patcherGraph, patternTicks, pluginCache, projectSeed,
       publishAudioClipTable, rebuildAudioRender, rebuildFlatAndPublish, rebuildHostForChain,
-      reconcileMasterHost, refreshSamplerForTrack, resetTrackContent, tempoProvider, tracks,
-      tracksMutex, updatePatcherGraphSnapshot, waveformStore
+      reconcileMasterHost, refreshSamplerForTrack, resetTrackContent, tempoProvider, trackTable, updatePatcherGraphSnapshot, waveformStore
   };
 
   auto loadProjectFromPath = [&](const std::string& path, std::string* error) -> bool {
@@ -3156,7 +3157,7 @@ int main(int argc, char** argv) {
       commitStructuralEdit, consumeClipVersionForNoOp, emitChordDiff, emitUiDiff,
       forkOwnedClip, growLengthsForContent, locateEditTarget, transport, nextChordId,
       nextClipId, patternTicks, pushStructuralUndo, rebuildFlatAndPublish,
-      snapshotTrackStore, tracks, tracksMutex
+      snapshotTrackStore, trackTable
   };
 
   auto applyAddNote = [&](uint32_t trackId, uint64_t nanotick, uint64_t duration,
@@ -3404,7 +3405,7 @@ int main(int argc, char** argv) {
   daw::engine::AssembledBulkDeps assembledBulkDeps{
       bumpClipVersionFor, clipDirty, publishAudioClipTable, rebuildAudioRender,
       rebuildFlatAndPublish, refreshSamplerForTrack, reportSamplerReject,
-      requireMatchingClipVersion, resolveSourcePath, tracks, tracksMutex};
+      requireMatchingClipVersion, resolveSourcePath, trackTable};
 
   auto handleAssembledBulk = [&](const std::vector<uint8_t>& buf) {
     daw::engine::handleAssembledBulk(assembledBulkDeps, buf);
@@ -3434,7 +3435,7 @@ int main(int argc, char** argv) {
         return applyAddNote(t, n, d, p, v, f, u, id, snd, so);
       };
   daw::engine::SamplerCommandDeps samplerCommandDeps{
-      uiShm, tracks, tracksMutex, tempoProvider,
+      uiShm, trackTable, tempoProvider,
       reportSamplerRejectFn, refreshSamplerForTrackFn, rebuildSamplerRenderFn, applyAddNoteFn};
 
   // The automation and clip-field commands moved out too; same shape as the sampler family.
@@ -3446,7 +3447,7 @@ int main(int argc, char** argv) {
   const std::function<bool(uint32_t, daw::UiCommandType, uint32_t)>
       requireMatchingClipVersionFn = requireMatchingClipVersion;
   daw::engine::AutomationCommandDeps automationCommandDeps{
-      tracks, tracksMutex, automationVersion, uiShm,
+      trackTable, automationVersion, uiShm,
       buildTrackSnapshotFn, historyAppendFn, trackIsPersistedFn,
       requireMatchingClipVersionFn};
 
@@ -3456,13 +3457,13 @@ int main(int argc, char** argv) {
       rebuildAudioRenderFn = rebuildAudioRender;
   const std::function<void(bool)> writeUiClipExtentsFn = writeUiClipExtents;
   daw::engine::ClipCommandDeps clipCommandDeps{
-      tracks, tracksMutex, clipVersion, uiShm,
+      trackTable, clipVersion, uiShm,
       bumpClipVersionForFn, publishAudioClipTableFn, rebuildAudioRenderFn, writeUiClipExtentsFn};
 
   const std::function<void(uint16_t, uint32_t, uint32_t)> emitModErrorFn = emitModError;
   const std::function<void(TrackRuntime&)> emitModSnapshotFn = emitModSnapshot;
   daw::engine::ModlinkCommandDeps modlinkCommandDeps{
-      tracks, tracksMutex, buildTrackSnapshotFn, emitModErrorFn, emitModSnapshotFn,
+      trackTable, buildTrackSnapshotFn, emitModErrorFn, emitModSnapshotFn,
       historyAppendFn};
 
   const std::function<void(uint32_t, uint16_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
@@ -3473,7 +3474,7 @@ int main(int argc, char** argv) {
   const std::function<bool()> reassemblePatcherFromDevicesFn = reassemblePatcherFromDevices;
   const std::function<void()> updatePatcherGraphSnapshotFn = updatePatcherGraphSnapshot;
   daw::engine::PatcherCommandDeps patcherCommandDeps{
-      tracks, tracksMutex, patcherGraph, buildTrackSnapshotFn, emitPatcherGraphDeltaFn,
+      trackTable, patcherGraph, buildTrackSnapshotFn, emitPatcherGraphDeltaFn,
       emitPatcherGraphErrorFn, emitUiDiffFn, reassemblePatcherFromDevicesFn,
       updatePatcherGraphSnapshotFn
   };
@@ -3502,7 +3503,7 @@ int main(int argc, char** argv) {
   const std::function<void()> reconcileMasterHostFn = reconcileMasterHost;
   const std::function<void(TrackRuntime&)> refreshSamplerForTrackFn2 = refreshSamplerForTrack;
   daw::engine::ChainCommandDeps chainCommandDeps{
-      tracks, tracksMutex, masterTrack, transport, pluginCache, buildTrackSnapshotFn,
+      trackTable, masterTrack, transport, pluginCache, buildTrackSnapshotFn,
       emitChainErrorFn, emitChainSnapshotFn, rebuildHostForChainFn, reconcileMasterHostFn,
       refreshSamplerForTrackFn2
   };
@@ -3517,7 +3518,7 @@ int main(int argc, char** argv) {
   const std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)>
       resolveDevicePluginPathFn = resolveDevicePluginPath;
   daw::engine::RequestCommandDeps requestCommandDeps{
-      uiShm, tracks, tracksMutex, waveformStore, clipWindowMutex, clipWindowPending,
+      uiShm, trackTable, waveformStore, clipWindowMutex, clipWindowPending,
       resolveSourcePathFn, resolveDevicePluginPathFn, rebuildHostForChainFn,
       emitChainSnapshotFn};
 
@@ -3530,7 +3531,7 @@ int main(int argc, char** argv) {
       tempoProvider
   };
   daw::engine::TrackpropsCommandDeps trackpropsCommandDeps{
-      tracks, tracksMutex, masterTrack, quantizeVersion,
+      trackTable, masterTrack, quantizeVersion,
       buildTrackSnapshotFn, rebuildFlatAndPublishFn};
 
   const std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint8_t, bool)>
@@ -3568,7 +3569,7 @@ int main(int argc, char** argv) {
   const std::function<bool(uint32_t, const TrackStoreState&)> restoreTrackStoreFn =
       restoreTrackStore;
   daw::engine::UndoCommandDeps undoCommandDeps{
-      tracks, tracksMutex, undoMutex, undoStack, redoStack,
+      trackTable, undoMutex, undoStack, redoStack,
       applyUndoEntryFn, restoreSongStoreFn, restoreTrackStoreFn, requireMatchingClipVersionFn};
 
   const std::function<TrackRuntime*(uint32_t, const std::string&)> ensureTrackFn = ensureTrack;
@@ -3577,7 +3578,7 @@ int main(int argc, char** argv) {
   const std::function<void(TrackRuntime&, uint32_t)> updateTrackChainForInstrumentFn =
       updateTrackChainForInstrument;
   daw::engine::DeviceCommandDeps deviceCommandDeps{
-      tracks, tracksMutex, transport, audioPlaybackBlockId, pluginPath,
+      trackTable, transport, audioPlaybackBlockId, pluginPath,
       resolveDevicePluginPathFn, rebuildHostForChainFn, emitChainSnapshotFn, ensureTrackFn,
       resolvePluginPathFn, updateTrackChainForInstrumentFn
   };
@@ -3601,17 +3602,17 @@ int main(int argc, char** argv) {
   daw::engine::TrackCommandDeps trackCommandDeps{
       buildTrackSnapshotFn, bumpClipVersionForFn, clipVersion, emitRoutingErrorFn,
       emitRoutingSnapshotFn, liveTrackCount, rebuildAudioRenderFn, rebuildFlatAndPublishFn,
-      resetTrackContentFn, restartTrackHostFn, setupTrackRuntimeFn, tracks, tracksMutex};
+      resetTrackContentFn, restartTrackHostFn, setupTrackRuntimeFn, trackTable};
   daw::engine::PlacementCommandDeps placementCommandDeps{
       applyPlacementEditFn, bumpClipVersionForFn, clipDirty, historyAppendFn, nextClipId,
       nextPlacementId, pushStructuralUndoFn, pushUndoFn, rebuildAudioRenderFn,
       rebuildFlatAndPublishFn, recomputeSongEndFn, requireMatchingClipVersionFn,
-      snapshotTrackStoreFn, tracks, tracksMutex};
+      snapshotTrackStoreFn, trackTable};
 
   daw::engine::TransportCommandDeps transportCommandDeps{
       heldPreview, songTiming, transport, masterTrack, panicPending, patternTicks,
       pendingPreviewNotes, previewMutex, resetTimeline, restartCv, running, tempoProvider,
-      tracks, tracksMutex
+      trackTable
   };
 
   daw::engine::HandleUiEntryDeps handleUiEntryDeps{

@@ -57,8 +57,9 @@ struct Recorded {
 // confusing way to find that out.
 struct Fixture {
   UiShmState shm;
-  std::vector<std::unique_ptr<TrackRuntime>> tracks;
-  std::mutex tracksMutex;
+  // ONE OBJECT NOW. trackTable.tracks and trackTable.tracksMutex were never apart in any interface, so they are a
+  // TrackTable; the handler takes it whole and the fixture builds it whole.
+  TrackTable trackTable;
   // TempoMapProvider has no default constructor — 120 bpm is the fixture tempo, and none of the
   // filter assertions depend on it (SamplerEmitRows and SamplerMarker are the two that read it).
   daw::TempoMapProvider tempo{120.0};
@@ -81,7 +82,7 @@ struct Fixture {
                      std::optional<daw::EventId>, uint16_t, uint16_t) { return true; };
 
   SamplerCommandDeps deps() {
-    return SamplerCommandDeps{shm,      tracks,     tracksMutex, tempo,
+    return SamplerCommandDeps{shm,      trackTable, tempo,
                               rejectFn, refreshFn,  rebuildFn,   addNoteFn};
   }
 
@@ -98,11 +99,11 @@ struct Fixture {
       d.sampler.modSets.push_back(daw::defaultModSet(1));
       rt->track.chain.devices.push_back(d);
     }
-    tracks.push_back(std::move(rt));
+    trackTable.tracks.push_back(std::move(rt));
   }
 
   uint8_t filterTypeOf(uint32_t trackId, uint32_t deviceId) const {
-    for (const auto& d : tracks[trackId]->track.chain.devices) {
+    for (const auto& d : trackTable.tracks[trackId]->track.chain.devices) {
       if (d.id == deviceId && !d.sampler.modSets.empty()) {
         return d.sampler.modSets[0].filterType;
       }
@@ -140,7 +141,7 @@ void callFilter(Fixture& f, const daw::UiSamplerFilterPayload& p) {
 
 // ------------------------------------------------------------------ a track that is not there
 void testNoSuchTrack() {
-  Fixture f;                                  // no tracks at all
+  Fixture f;                                  // no trackTable.tracks at all
   callFilter(f, filterPayload(0, 2));
   CHECK(f.rec.rejects.size() == 1);
   if (f.rec.rejects.size() == 1) {

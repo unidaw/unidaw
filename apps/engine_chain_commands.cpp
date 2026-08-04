@@ -17,8 +17,8 @@ void handleAddDevice(ChainCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   auto& masterTrack = deps.masterTrack;
   auto& pluginCache = deps.pluginCache;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;

@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_track_table.h"
 #include "apps/engine_pure.h"
 #include "apps/engine_types.h"
 #include "apps/event_payloads.h"
@@ -35,8 +36,7 @@ struct TrackCommandDeps {
   const std::function<void(TrackRuntime&)>& resetTrackContent;
   const std::function<bool(TrackRuntime&, const std::vector<std::string>&)>& restartTrackHost;
   const std::function<std::unique_ptr<TrackRuntime>(uint32_t, const std::string&, bool, bool)>& setupTrackRuntime;
-  std::vector<std::unique_ptr<TrackRuntime>>& tracks;
-  std::mutex& tracksMutex;
+  TrackTable& trackTable;
 };
 
 void handleSetTrackRouting(TrackCommandDeps& deps,

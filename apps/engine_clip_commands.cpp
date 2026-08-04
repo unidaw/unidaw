@@ -14,8 +14,8 @@ void handleSetClipGrid(ClipCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& bumpClipVersionFor = deps.bumpClipVersionFor;
   daw::UiSetClipGridPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
@@ -115,8 +115,8 @@ void handleSetAudioClipField(ClipCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& publishAudioClipTable = deps.publishAudioClipTable;
   const auto& rebuildAudioRender = deps.rebuildAudioRender;
   daw::UiAudioClipFieldPayload p{};

@@ -8,7 +8,7 @@
 //   param_id_not_representable — a 16-byte param id fills the field with no terminator. The
 //       read-back slot nul-terminates inside its own 16 bytes, so the write and the answer would
 //       name different lanes forever and nothing would report it.
-//   track_not_persisted — `trackId < tracks.size()` was once the only test, and it is true for a
+//   track_not_persisted — `trackId < trackTable.tracks.size()` was once the only test, and it is true for a
 //       tombstone, a leftover slot past the live count, and an aux child. Writing automation to
 //       any of them was ACCEPTED and reported created_clip:true, and the points were gone after
 //       the next save/reload with nothing having said no.
@@ -72,8 +72,9 @@ struct EventTail {
 };
 
 struct Fixture {
-  std::vector<std::unique_ptr<TrackRuntime>> tracks;
-  std::mutex tracksMutex;
+  // ONE OBJECT NOW. trackTable.tracks and trackTable.tracksMutex were never apart in any interface, so they are a
+  // TrackTable; the handler takes it whole and the fixture builds it whole.
+  TrackTable trackTable;
   std::atomic<uint32_t> automationVersion{0};
   UiShmState shm;
   bool persisted = true;                       // what trackIsPersisted answers
@@ -89,18 +90,18 @@ struct Fixture {
       [](uint32_t, daw::UiCommandType, uint32_t) { return true; };
 
   AutomationCommandDeps deps() {
-    return AutomationCommandDeps{tracks,      tracksMutex, automationVersion, shm,
+    return AutomationCommandDeps{trackTable, automationVersion, shm,
                                  buildSnapFn, historyFn,   persistedFn,       versionFn};
   }
 
   void addTrack() {
     auto rt = std::make_unique<TrackRuntime>();
-    rt->trackId = static_cast<uint32_t>(tracks.size());
-    tracks.push_back(std::move(rt));
+    rt->trackId = static_cast<uint32_t>(trackTable.tracks.size());
+    trackTable.tracks.push_back(std::move(rt));
   }
 
   size_t laneCount(uint32_t trackId) const {
-    return tracks[trackId]->track.automationClips.size();
+    return trackTable.tracks[trackId]->track.automationClips.size();
   }
 };
 
@@ -158,7 +159,7 @@ void testParamIdNotRepresentable() {
 }
 
 void testNoSuchTrack() {
-  Fixture f;                                   // no tracks
+  Fixture f;                                   // no trackTable.tracks
   const std::string ev = callWrite(f, pointPayload(0, "cutoff"));
   CHECK(ev.find("no_such_track") != std::string::npos);
 
@@ -190,13 +191,13 @@ void testWritesAndAccumulates() {
   f.addTrack();
   callWrite(f, pointPayload(0, "cutoff", 0, 0.25f));
   CHECK(f.laneCount(0) == 1);
-  CHECK(f.tracks[0]->track.automationClips[0].points().size() == 1);
+  CHECK(f.trackTable.tracks[0]->track.automationClips[0].points().size() == 1);
 
   // A second point on the SAME param must extend that lane, not mint a second one carrying the
   // same id — two lanes with one paramId is a state no reader can disambiguate.
   callWrite(f, pointPayload(0, "cutoff", 480000, 0.75f));
   CHECK(f.laneCount(0) == 1);
-  CHECK(f.tracks[0]->track.automationClips[0].points().size() == 2);
+  CHECK(f.trackTable.tracks[0]->track.automationClips[0].points().size() == 2);
 
   // A different param is a different lane.
   callWrite(f, pointPayload(0, "reso", 0, 0.1f));
@@ -211,7 +212,7 @@ void testTickCarriesAcrossTheSplit() {
   const uint64_t big = (uint64_t{3} << 32) | 12345u;
   callWrite(f, pointPayload(0, "cutoff", big, 0.5f));
   CHECK(f.laneCount(0) == 1);
-  const auto& pts = f.tracks[0]->track.automationClips[0].points();
+  const auto& pts = f.trackTable.tracks[0]->track.automationClips[0].points();
   CHECK(pts.size() == 1);
   if (pts.size() == 1) CHECK(pts[0].nanotick == big);
 }

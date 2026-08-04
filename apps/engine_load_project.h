@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "engine_track_table.h"
 #include "engine_arrange_markers.h"
 #include "engine_patcher_graph_owner.h"
 #include "engine_song_timing.h"
@@ -78,8 +79,7 @@ struct LoadProjectDeps {
   std::function<void(TrackRuntime&)> refreshSamplerForTrack;
   std::function<void(TrackRuntime&)> resetTrackContent;
   daw::TempoMapProvider& tempoProvider;
-  std::vector<std::unique_ptr<TrackRuntime>>& tracks;
-  std::mutex& tracksMutex;
+  TrackTable& trackTable;
   std::function<void()> updatePatcherGraphSnapshot;
   daw::WaveformStore& waveformStore;
 };

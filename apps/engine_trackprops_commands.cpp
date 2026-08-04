@@ -16,8 +16,8 @@ namespace daw::engine {
 void handleSetTrackMixer(TrackpropsCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   auto& masterTrack = deps.masterTrack;
   {
   TrackRuntime* runtime = nullptr;
@@ -52,8 +52,8 @@ void handleSetTrackMixer(TrackpropsCommandDeps& deps,
 void handleSetTrackHarmonyQuantize(TrackpropsCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   {
   TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, payload.trackId);
@@ -79,8 +79,8 @@ void handleSetTrackHarmonyQuantize(TrackpropsCommandDeps& deps,
 void handleSetTrackSoundAddressed(TrackpropsCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   {
   TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, payload.trackId);
@@ -109,8 +109,8 @@ void handleSetTrackSoundAddressed(TrackpropsCommandDeps& deps,
 void handleSetTrackCollapsed(TrackpropsCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   {
   TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, payload.trackId);
   if (!runtime) {
@@ -132,8 +132,8 @@ void handleSetTrackCollapsed(TrackpropsCommandDeps& deps,
 void handleSetTrackLinesPerBeat(TrackpropsCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   {
   // THE LAST PIECE OF PER-LANE GRIDS. lines_per_beat has been per track in the project
   // format, published in uiLinesPerBeat and honoured by the tracker's grid since v10, and
@@ -170,8 +170,8 @@ void handleSetTrackLinesPerBeat(TrackpropsCommandDeps& deps,
 void handleSetTrackAllowNoteOverlap(TrackpropsCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   {
   // THE ONLY SETTING IN THE TRACKER THAT DECIDES WHETHER AN EDIT LOSES DATA. Off, entering a
   // note over a sounding one truncates the sounding note IN THE DOCUMENT. On, it is left
@@ -196,8 +196,8 @@ void handleSetTrackAllowNoteOverlap(TrackpropsCommandDeps& deps,
 void handleSetLaneQuantize(TrackpropsCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
   auto& quantizeVersion = deps.quantizeVersion;
   const auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
   {

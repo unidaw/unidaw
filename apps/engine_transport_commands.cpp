@@ -50,8 +50,8 @@ void handlePanic(TransportCommandDeps& deps,
   auto& pendingPreviewNotes = deps.pendingPreviewNotes;
   auto& playing = deps.transport.playing;
   auto& previewMutex = deps.previewMutex;
-  auto& tracks = deps.tracks;
-  auto& tracksMutex = deps.tracksMutex;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
 
       // PANIC: cut everything. Stop halts and flushes held KEYJAZZ notes, which is right
       // but is not a panic — it cannot reach a plugin's own ringing voices, a sequencer

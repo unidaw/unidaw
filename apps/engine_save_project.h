@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_track_table.h"
 #include "engine_arrange_markers.h"
 #include "engine_patcher_graph_owner.h"
 #include "engine_song_timing.h"
@@ -47,8 +48,7 @@ struct SaveProjectDeps {
   PatcherGraphOwner& patcherGraph;
   const daw::PluginCache& pluginCache;
   std::atomic<uint64_t>& projectSeed;
-  std::vector<std::unique_ptr<TrackRuntime>>& tracks;
-  std::mutex& tracksMutex;
+  TrackTable& trackTable;
   std::function<daw::BarGrid()> songBarGrid;
   std::function<bool(const TrackRuntime&)> trackIsPersisted;
 };
