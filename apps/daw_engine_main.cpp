@@ -50,6 +50,7 @@
 #include "apps/engine_restart_worker.h"
 #include "apps/engine_master_render.h"
 #include "apps/engine_mod_publish.h"
+#include "apps/engine_patcher_assemble.h"
 #include "apps/engine_ui_thread.h"
 #include "apps/engine_xrun_reporter.h"
 #include "apps/engine_handle_ui_entry.h"
@@ -1069,16 +1070,6 @@ int main(int argc, char** argv) {
   // True when the running pool was assembled from per-device graphs (>= 2 devices
   // each carrying one) at load. Save then preserves each device's own graph rather
   // than parking the live single graph on one device (the legacy path).
-  auto updatePatcherGraphSnapshot = [&]() {
-    auto snapshot = std::make_shared<daw::PatcherGraph>();
-    {
-      std::lock_guard<std::mutex> lock(patcherGraph.patcherGraphState.mutex);
-      *snapshot = patcherGraph.patcherGraphState.graph;
-    }
-    std::atomic_store_explicit(&patcherGraph.patcherGraphSnapshot,
-                               std::move(snapshot),
-                               std::memory_order_release);
-  };
   {
     std::lock_guard<std::mutex> lock(patcherGraph.patcherGraphState.mutex);
     daw::PatcherNode euclid;
@@ -1123,6 +1114,12 @@ int main(int argc, char** argv) {
     patcherGraph.patcherGraphState.graph.maxDepth = 0;
     patcherGraph.patcherGraphState.nextNodeId = 0;
   }
+  // Declared here rather than beside the reassembly forwarder below, because a deps struct at
+  // line ~2830 takes it as a std::function and the track list it would otherwise need does not
+  // exist yet. Publishing the snapshot needs only the graph, so it can be available this early.
+  auto updatePatcherGraphSnapshot = [&] {
+    daw::engine::updatePatcherGraphSnapshot(patcherGraph);
+  };
   updatePatcherGraphSnapshot();
 
   daw::engine::TransportState transport;
@@ -1498,83 +1495,6 @@ int main(int argc, char** argv) {
   // Returns false when there is nothing to assemble or the pool will not build. A pool that will
   // not build is REPORTED and the previous one is left running — a bad edge in one device must not
   // silently take down every other device's graph.
-  auto reassemblePatcherFromDevices = [&]() -> bool {
-    daw::PatcherGraph pool;
-    std::vector<DevOut> outputs;
-    uint32_t base = 0;
-    for (auto* rt : snapshotTracks()) {
-      if (!rt || rt->removed.load(std::memory_order_acquire)) {
-        continue;
-      }
-      std::vector<daw::Device> devices;
-      {
-        std::lock_guard<std::mutex> lock(rt->trackMutex);
-        devices = rt->track.chain.devices;
-      }
-      daw::AssembledPatcher sub = daw::assemblePatcherPool(devices);
-      if (!sub.anyPerDevice) {
-        continue;
-      }
-      for (auto node : sub.pool.nodes) {
-        node.id += base;
-        pool.nodes.push_back(node);
-      }
-      for (auto edge : sub.pool.edges) {
-        edge.src.nodeId += base;
-        edge.dst.nodeId += base;
-        pool.edges.push_back(edge);
-      }
-      for (const auto& out : sub.deviceOutputs) {
-        outputs.push_back({rt->trackId, out.first, out.second + base});
-      }
-      base += static_cast<uint32_t>(sub.pool.nodes.size());
-    }
-    if (pool.nodes.empty()) {
-      return false;
-    }
-    if (!daw::buildPatcherGraph(pool)) {
-      DAW_EVENT("patcher.reassembly_failed")
-          .field("nodes", static_cast<uint64_t>(pool.nodes.size()))
-          .field("edges", static_cast<uint64_t>(pool.edges.size()))
-          .field("action", "previous_pool_left_running");
-      daw::LogLine() << "Engine: patcher re-assembly FAILED (" << pool.nodes.size()
-                << " nodes) — one device's graph is invalid. The edit is kept, the PREVIOUS "
-                   "pool is still executing; run tools/daw_lint to find the bad edge."
-                << std::endl;
-      return false;
-    }
-    {
-      std::lock_guard<std::mutex> lock(patcherGraph.patcherGraphState.mutex);
-      patcherGraph.patcherGraphState.graph = std::move(pool);
-      patcherGraph.patcherGraphState.nextNodeId = base;
-    }
-    patcherGraph.patcherGraphState.version.fetch_add(1, std::memory_order_acq_rel);
-    updatePatcherGraphSnapshot();
-    // Repoint each device at its output node in the new pool, so the RT DFS seeds from the right
-    // node and the published patcherNodeId names a real pool node. Skipping this is invisible for
-    // the FIRST contributing device (its block starts at offset 0, so authored == pooled) and
-    // wrong for every device after it — which is exactly the bug that made per-device scoping in
-    // the UI show foreign nodes as unowned orphans.
-    for (const auto& out : outputs) {
-      TrackRuntime* rt = daw::engine::trackAt(tracks, tracksMutex, out.trackId);
-      if (!rt) {
-        continue;
-      }
-      std::lock_guard<std::mutex> lock(rt->trackMutex);
-      for (auto& d : rt->track.chain.devices) {
-        if (d.id == out.deviceId) {
-          d.patcherNodeId = out.node;
-          break;
-        }
-      }
-    }
-    patcherGraph.patcherAssembledFromDevices.store(true, std::memory_order_release);
-    DAW_EVENT("patcher.reassembled")
-        .field("devices", static_cast<uint64_t>(outputs.size()))
-        .field("nodes", static_cast<uint64_t>(base));
-    return true;
-  };
-
   std::mutex clipWindowMutex;
   std::optional<ClipWindowPending> clipWindowPending;
 
@@ -3334,6 +3254,16 @@ int main(int argc, char** argv) {
   const std::function<void(uint16_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
                            uint32_t)> emitPatcherGraphErrorFn = emitPatcherGraphError;
   const std::function<void(const daw::UiDiffPayload&)> emitUiDiffFn = emitUiDiff;
+  // snapshotTracksFn MOVED UP TO HERE from further down, rather than a second wrapper being made
+  // beside it. PatcherCommandDeps below takes the reassembly as a std::function, so its deps must
+  // exist by then; snapshotTracks itself has existed since line ~1466 and only its wrapper was
+  // late. A second wrapper would also have needed a second NAME, and deps_order_check reads the
+  // name — it rejected snapshotTracksPaFn against member snapshotTracks, correctly.
+  const std::function<std::vector<TrackRuntime*>()> snapshotTracksFn = snapshotTracks;
+  daw::engine::PatcherAssembleDeps patcherAssembleDeps{patcherGraph, trackTable, snapshotTracksFn};
+  auto reassemblePatcherFromDevices = [&] {
+    return daw::engine::reassemblePatcherFromDevices(patcherAssembleDeps);
+  };
   const std::function<bool()> reassemblePatcherFromDevicesFn = reassemblePatcherFromDevices;
   const std::function<void()> updatePatcherGraphSnapshotFn = updatePatcherGraphSnapshot;
   daw::engine::PatcherCommandDeps patcherCommandDeps{
@@ -3460,7 +3390,6 @@ int main(int argc, char** argv) {
   const std::function<std::unique_ptr<TrackRuntime>(uint32_t, const std::string&, bool, bool)> setupTrackRuntimeFn = setupTrackRuntime;
   const std::function<SongStoreState()> snapshotSongStoreFn = snapshotSongStore;
   const std::function<TrackStoreState(const TrackRuntime&)> snapshotTrackStoreFn = snapshotTrackStore;
-  const std::function<std::vector<TrackRuntime*>()> snapshotTracksFn = snapshotTracks;
 
   daw::engine::TrackCommandDeps trackCommandDeps{
       buildTrackSnapshotFn, bumpClipVersionForFn, clipVersion, emitRoutingErrorFn,
