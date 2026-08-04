@@ -121,9 +121,16 @@ for d in docs:
 comment_line = re.compile(r'^\s*(?:#|//|\*)')
 cite = re.compile(r'\b((?:apps|tools|ui|docs)/[\w./-]+\.(?:sh|cpp|h|md|mjs|rs))\b')
 bare_check = re.compile(r'(?<![\w/])(\w+_check\.sh)\b')
+bare_check_nosuffix = re.compile(r'(?<![\w/])(\w+_check)(?!\.sh)(?![\w.])')
 paths = 0
-for f in sorted(root.glob('tools/*.sh')) + sorted(root.glob('apps/*.h')):
-    for i, line in enumerate(f.read_text(errors='ignore').splitlines(), 1):
+# apps/*.cpp IS IN SCOPE TOO. It was not, and that is where a dead citation actually survived:
+# main.cpp claimed "the property arrange_summary_check pins" long after that check was replaced.
+# The rules below cost nothing extra on .cpp files — zero new failures when the glob was widened —
+# and the one place a stale name had been sitting was in one.
+for f in (sorted(root.glob('tools/*.sh')) + sorted(root.glob('apps/*.h'))
+          + sorted(root.glob('apps/*.cpp'))):
+    lines = f.read_text(errors='ignore').splitlines()
+    for i, line in enumerate(lines, 1):
         if not comment_line.match(line):
             continue
         for rel in cite.findall(line):
@@ -134,6 +141,30 @@ for f in sorted(root.glob('tools/*.sh')) + sorted(root.glob('apps/*.h')):
                 print("        A comment that points at a missing file reads as though the thing")
                 print("        it describes was never built.")
                 ok = False
+        # ---- rule 3c: a ratchet named WITHOUT the .sh suffix must exist too.
+        #
+        # Ratchets are referred to both ways in this repo, and only one of the two was checked. The
+        # suffixless form is the more common one in prose — "the property arrange_summary_check
+        # pins" — and it is the form that survived after that check was deleted. A comment naming a
+        # check nobody runs reads as coverage, which is worse than no comment.
+        #
+        # THE ESCAPE IS NARROW AND DELIBERATE: naming a dead check is legitimate when the text says
+        # it is dead, which is how history gets recorded rather than quietly dropped. One of the
+        # words below must appear within two lines of the mention.
+        for name in bare_check_nosuffix.findall(line):
+            if (root / 'tools' / (name + '.sh')).exists():
+                paths += 1
+                continue
+            window = ' '.join(lines[max(0, i - 3):i + 2]).lower()
+            if any(w in window for w in ('no longer', 'removed', 'replaced', 'deleted', 'gone')):
+                continue
+            print("  FAIL: %s:%d names %s, and tools/%s.sh does not exist."
+                  % (f.relative_to(root), i, name, name))
+            print("        A comment naming a check nobody runs reads as coverage. If the check is")
+            print("        gone, say so on the same lines — 'no longer', 'removed', 'replaced',")
+            print("        'deleted' or 'gone' within two lines makes it a record instead.")
+            ok = False
+
         # ---- rule 3b: a BARE ratchet name resolves against tools/.
         for name in bare_check.findall(line):
             paths += 1

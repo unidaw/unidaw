@@ -30,8 +30,8 @@
 # the script BEFORE it prints anything at all. The check does fail, but with an empty log, which
 # is indistinguishable from a crash and tells you nothing about which assertion was involved.
 # Wrap the pipeline: `X="$({ cmd | grep ...; } || true)"`, then assert on the empty value with a
-# message. multiout_check, sidechain_check, section_ops_check and add_remove_track_check all died
-# this way; three of them looked like engine bugs first.
+# message. multiout_check, sidechain_check, add_remove_track_check and section_ops_check (since
+# replaced by arrangement_check) all died this way; three of them looked like engine bugs first.
 #
 # Checks exit 2 for "a prerequisite is missing" (unbuilt target, absent plugin), which is
 # reported as SKIP and does not fail the run — but the count is printed, because a suite
