@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "engine_patcher_graph_owner.h"
 #include "engine_song_timing.h"
 #include "engine_transport_state.h"
 #include "engine_harmony_timeline.h"
@@ -66,8 +67,7 @@ struct LoadProjectDeps {
   daw::MarkerList& markerList;
   std::unique_ptr<TrackRuntime>& masterTrack;
   std::atomic<uint32_t>& nextClipId;
-  std::atomic<bool>& patcherAssembledFromDevices;
-  daw::PatcherGraphState& patcherGraphState;
+  PatcherGraphOwner& patcherGraph;
   const uint64_t patternTicks;
   const daw::PluginCache& pluginCache;
   std::atomic<uint64_t>& projectSeed;

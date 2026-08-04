@@ -49,8 +49,8 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   auto& masterTrack = deps.masterTrack;
   auto& meterSnapshot = deps.songTiming.meterSnapshot;
   auto& nextClipId = deps.nextClipId;
-  auto& patcherAssembledFromDevices = deps.patcherAssembledFromDevices;
-  auto& patcherGraphState = deps.patcherGraphState;
+  auto& patcherAssembledFromDevices = deps.patcherGraph.patcherAssembledFromDevices;
+  auto& patcherGraphState = deps.patcherGraph.patcherGraphState;
   auto& patternTicks = deps.patternTicks;
   auto& pluginCache = deps.pluginCache;
   auto& projectSeed = deps.projectSeed;

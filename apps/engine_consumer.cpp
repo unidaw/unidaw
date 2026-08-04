@@ -311,8 +311,8 @@ void writeUiArrangeSummaryTo(UiWriterDeps& deps, bool force) {
 
 void writeUiPatcherTo(UiWriterDeps& deps, bool force) {
   auto& lastPatcherVersion = deps.lastPatcherVersion;
-  auto& patcherGraphSnapshot = deps.patcherGraphSnapshot;
-  auto& patcherGraphState = deps.patcherGraphState;
+  auto& patcherGraphSnapshot = deps.patcherGraph.patcherGraphSnapshot;
+  auto& patcherGraphState = deps.patcherGraph.patcherGraphState;
   auto& uiShm = deps.uiShm;
   auto& warnedPatcherOwnerTooWide = deps.warnedPatcherOwnerTooWide;
 

@@ -32,6 +32,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_patcher_graph_owner.h"
 #include "engine_transport_state.h"
 #include "engine_harmony_timeline.h"
 #include "apps/engine_types.h"
@@ -55,8 +56,7 @@ struct RenderTrackDeps {
   // one device on exactly one track. Without this the render path cannot tell that pool apart from
   // a legacy whole-project graph, and it has to guess — which it did, by asking only whether THIS
   // track carries a patcher device. A track that carried none then ran every OTHER track's nodes.
-  std::atomic<bool>& patcherAssembledFromDevices;
-  std::shared_ptr<daw::PatcherGraph>& patcherGraphSnapshot;
+  PatcherGraphOwner& patcherGraph;
   bool& patcherParallel;
   std::unique_ptr<WorkerPool>& patcherPool;
   std::atomic<uint64_t>& projectSeed;

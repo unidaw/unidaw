@@ -56,8 +56,7 @@ void produceBlock(ProducerBlockDeps& deps,
   auto& nextNoteId = deps.nextNoteId;
   auto& offlineRender = deps.offlineRender;
   auto& panicPending = deps.panicPending;
-  auto& patcherAssembledFromDevices = deps.patcherAssembledFromDevices;
-  auto& patcherGraphSnapshot = deps.patcherGraphSnapshot;
+  auto& patcherGraphSnapshot = deps.patcherGraph.patcherGraphSnapshot;
   auto& patcherParallel = deps.patcherParallel;
   auto& patcherPool = deps.patcherPool;
   auto& pendingPreviewNotes = deps.pendingPreviewNotes;
@@ -145,8 +144,7 @@ void produceBlock(ProducerBlockDeps& deps,
           lastOverflowTick,
           latencyMgr,
           nextNoteId,
-          patcherAssembledFromDevices,
-          patcherGraphSnapshot,
+          deps.patcherGraph,
           patcherParallel,
           patcherPool,
           projectSeed,

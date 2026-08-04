@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_patcher_graph_owner.h"
 #include "engine_song_timing.h"
 #include "engine_harmony_timeline.h"
 #include "apps/engine_types.h"
@@ -43,9 +44,7 @@ struct SaveProjectDeps {
   SongTiming& songTiming;
   daw::MarkerList& markerList;
   std::unique_ptr<TrackRuntime>& masterTrack;
-  std::atomic<bool>& patcherAssembledFromDevices;
-  daw::PatcherGraphState& patcherGraphState;
-  std::atomic<bool>& patcherPoolEdited;
+  PatcherGraphOwner& patcherGraph;
   const daw::PluginCache& pluginCache;
   std::atomic<uint64_t>& projectSeed;
   std::vector<std::unique_ptr<TrackRuntime>>& tracks;

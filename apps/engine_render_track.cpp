@@ -32,8 +32,8 @@ bool renderTrack(RenderTrackDeps& deps,
   auto& lastOverflowTick = deps.lastOverflowTick;
   auto& latencyMgr = deps.latencyMgr;
   auto& nextNoteId = deps.nextNoteId;
-  auto& patcherAssembledFromDevices = deps.patcherAssembledFromDevices;
-  auto& patcherGraphSnapshot = deps.patcherGraphSnapshot;
+  auto& patcherAssembledFromDevices = deps.patcherGraph.patcherAssembledFromDevices;
+  auto& patcherGraphSnapshot = deps.patcherGraph.patcherGraphSnapshot;
   auto& patcherParallel = deps.patcherParallel;
   auto& patcherPool = deps.patcherPool;
   auto& projectSeed = deps.projectSeed;

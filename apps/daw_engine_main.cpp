@@ -40,6 +40,7 @@
 #include "apps/engine_publish_clips.h"
 #include "apps/engine_clip_edit.h"
 #include "apps/engine_track_setup.h"
+#include "apps/engine_patcher_graph_owner.h"
 #include "apps/engine_song_timing.h"
 #include "apps/engine_transport_state.h"
 #include "apps/engine_chain_host.h"
@@ -1043,7 +1044,7 @@ int main(int argc, char** argv) {
   // No test notes - wait for user input from the tracker
   std::cout << "Engine: Ready for tracker input" << std::endl;
 
-  daw::PatcherGraphState patcherGraphState;
+  daw::engine::PatcherGraphOwner patcherGraph;
   // Has anyone actually EDITED the shared pool this session?
   //
   // The save's legacy branch parks the pool on the first instrument so the one global graph
@@ -1061,24 +1062,21 @@ int main(int argc, char** argv) {
   // default is just litter. Once the patcher's edit commands are per-device (they still
   // address the pool — the largest remaining gap in "patcher is a device") this never becomes
   // true and the branch can go.
-  std::atomic<bool> patcherPoolEdited{false};
   // True when the running pool was assembled from per-device graphs (>= 2 devices
   // each carrying one) at load. Save then preserves each device's own graph rather
   // than parking the live single graph on one device (the legacy path).
-  std::atomic<bool> patcherAssembledFromDevices{false};
-  std::shared_ptr<daw::PatcherGraph> patcherGraphSnapshot;
   auto updatePatcherGraphSnapshot = [&]() {
     auto snapshot = std::make_shared<daw::PatcherGraph>();
     {
-      std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
-      *snapshot = patcherGraphState.graph;
+      std::lock_guard<std::mutex> lock(patcherGraph.patcherGraphState.mutex);
+      *snapshot = patcherGraph.patcherGraphState.graph;
     }
-    std::atomic_store_explicit(&patcherGraphSnapshot,
+    std::atomic_store_explicit(&patcherGraph.patcherGraphSnapshot,
                                std::move(snapshot),
                                std::memory_order_release);
   };
   {
-    std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
+    std::lock_guard<std::mutex> lock(patcherGraph.patcherGraphState.mutex);
     daw::PatcherNode euclid;
     euclid.id = 0;
     euclid.type = daw::PatcherNodeType::Euclidean;
@@ -1091,35 +1089,35 @@ int main(int argc, char** argv) {
     euclid.euclideanConfig.octave_offset = 0;
     euclid.euclideanConfig.velocity = 100;
     euclid.euclideanConfig.base_octave = 4;
-    patcherGraphState.graph.nodes.push_back(euclid);
+    patcherGraph.patcherGraphState.graph.nodes.push_back(euclid);
 
     daw::PatcherNode passthrough;
     passthrough.id = 1;
     passthrough.type = daw::PatcherNodeType::Passthrough;
-    patcherGraphState.graph.nodes.push_back(passthrough);
+    patcherGraph.patcherGraphState.graph.nodes.push_back(passthrough);
 
     daw::PatcherNode audioNode;
     audioNode.id = 2;
     audioNode.type = daw::PatcherNodeType::AudioPassthrough;
-    patcherGraphState.graph.nodes.push_back(audioNode);
+    patcherGraph.patcherGraphState.graph.nodes.push_back(audioNode);
 
     daw::PatcherEdge edge{};
     edge.src = {0, daw::kPatcherEventOutputPort};
     edge.dst = {1, daw::kPatcherEventInputPort};
     edge.kind = daw::PatcherPortKind::Event;
-    patcherGraphState.graph.edges.push_back(edge);
+    patcherGraph.patcherGraphState.graph.edges.push_back(edge);
   }
-  if (!daw::buildPatcherGraph(patcherGraphState.graph)) {
+  if (!daw::buildPatcherGraph(patcherGraph.patcherGraphState.graph)) {
     daw::LogLine() << "Patcher graph invalid; disabling patcher kernels." << std::endl;
-    std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
-    patcherGraphState.graph.nodes.clear();
-    patcherGraphState.graph.edges.clear();
-    patcherGraphState.graph.topoOrder.clear();
-    patcherGraphState.graph.depths.clear();
-    patcherGraphState.graph.resolvedInputs.clear();
-    patcherGraphState.graph.idToIndex.clear();
-    patcherGraphState.graph.maxDepth = 0;
-    patcherGraphState.nextNodeId = 0;
+    std::lock_guard<std::mutex> lock(patcherGraph.patcherGraphState.mutex);
+    patcherGraph.patcherGraphState.graph.nodes.clear();
+    patcherGraph.patcherGraphState.graph.edges.clear();
+    patcherGraph.patcherGraphState.graph.topoOrder.clear();
+    patcherGraph.patcherGraphState.graph.depths.clear();
+    patcherGraph.patcherGraphState.graph.resolvedInputs.clear();
+    patcherGraph.patcherGraphState.graph.idToIndex.clear();
+    patcherGraph.patcherGraphState.graph.maxDepth = 0;
+    patcherGraph.patcherGraphState.nextNodeId = 0;
   }
   updatePatcherGraphSnapshot();
 
@@ -1598,11 +1596,11 @@ int main(int argc, char** argv) {
       return false;
     }
     {
-      std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
-      patcherGraphState.graph = std::move(pool);
-      patcherGraphState.nextNodeId = base;
+      std::lock_guard<std::mutex> lock(patcherGraph.patcherGraphState.mutex);
+      patcherGraph.patcherGraphState.graph = std::move(pool);
+      patcherGraph.patcherGraphState.nextNodeId = base;
     }
-    patcherGraphState.version.fetch_add(1, std::memory_order_acq_rel);
+    patcherGraph.patcherGraphState.version.fetch_add(1, std::memory_order_acq_rel);
     updatePatcherGraphSnapshot();
     // Repoint each device at its output node in the new pool, so the RT DFS seeds from the right
     // node and the published patcherNodeId names a real pool node. Skipping this is invisible for
@@ -1622,7 +1620,7 @@ int main(int argc, char** argv) {
         }
       }
     }
-    patcherAssembledFromDevices.store(true, std::memory_order_release);
+    patcherGraph.patcherAssembledFromDevices.store(true, std::memory_order_release);
     DAW_EVENT("patcher.reassembled")
         .field("devices", static_cast<uint64_t>(outputs.size()))
         .field("nodes", static_cast<uint64_t>(base));
@@ -3031,9 +3029,8 @@ int main(int argc, char** argv) {
   // track without stalling audio behind one global lock.
   daw::engine::SaveProjectDeps saveProjectDeps{
       arrangeMutex, harmonyTimeline, liveTrackCount, loadedClips, loadedClipsMutex,
-      songTiming, markerList, masterTrack, patcherAssembledFromDevices, patcherGraphState,
-      patcherPoolEdited, pluginCache, projectSeed, tracks, tracksMutex, songBarGrid,
-      trackIsPersisted
+      songTiming, markerList, masterTrack, patcherGraph, pluginCache, projectSeed, tracks,
+      tracksMutex, songBarGrid, trackIsPersisted
   };
   auto saveProjectToPath = [&](const std::string& path,
                                  std::string* error) -> bool {
@@ -3050,11 +3047,10 @@ int main(int argc, char** argv) {
       clipVersion, emitChainSnapshot, emitModSnapshot, emitRoutingSnapshot, emitUiDiff,
       ensurePlacementIds, ensureTrack, harmonyTimeline, liveTrackCount, loadInProgress,
       loadedClips, loadedClipsMutex, loadedProjectDir, songTiming, transport, markerList,
-      masterTrack, nextClipId, patcherAssembledFromDevices, patcherGraphState, patternTicks,
-      pluginCache, projectSeed, publishAudioClipTable, rebuildAudioRender,
-      rebuildFlatAndPublish, rebuildHostForChain, reconcileMasterHost,
-      refreshSamplerForTrack, resetTrackContent, tempoProvider, tracks, tracksMutex,
-      updatePatcherGraphSnapshot, waveformStore
+      masterTrack, nextClipId, patcherGraph, patternTicks, pluginCache, projectSeed,
+      publishAudioClipTable, rebuildAudioRender, rebuildFlatAndPublish, rebuildHostForChain,
+      reconcileMasterHost, refreshSamplerForTrack, resetTrackContent, tempoProvider, tracks,
+      tracksMutex, updatePatcherGraphSnapshot, waveformStore
   };
 
   auto loadProjectFromPath = [&](const std::string& path, std::string* error) -> bool {
@@ -3478,9 +3474,10 @@ int main(int argc, char** argv) {
   const std::function<bool()> reassemblePatcherFromDevicesFn = reassemblePatcherFromDevices;
   const std::function<void()> updatePatcherGraphSnapshotFn = updatePatcherGraphSnapshot;
   daw::engine::PatcherCommandDeps patcherCommandDeps{
-      tracks, tracksMutex, patcherGraphState, patcherPoolEdited,
-      buildTrackSnapshotFn, emitPatcherGraphDeltaFn, emitPatcherGraphErrorFn, emitUiDiffFn,
-      reassemblePatcherFromDevicesFn, updatePatcherGraphSnapshotFn};
+      tracks, tracksMutex, patcherGraph, buildTrackSnapshotFn, emitPatcherGraphDeltaFn,
+      emitPatcherGraphErrorFn, emitUiDiffFn, reassemblePatcherFromDevicesFn,
+      updatePatcherGraphSnapshotFn
+  };
 
   const std::function<bool(const std::string&, std::string*)> saveProjectToPathFn =
       saveProjectToPath;
@@ -3721,13 +3718,12 @@ int main(int argc, char** argv) {
       blockDuration, blockTicksFor, debugStall, engineConfig, enqueuePreview, getHarmonyAt,
       getRingCtrl, getRingStd, getScaleForHarmony, harmonyTimeline, lastOverflowTick,
       latencyMgr, transport, songTiming, nextBlockId, nextNoteId, offlineRender,
-      panicPending, patcherAssembledFromDevices, patcherGraphSnapshot, patcherParallel,
-      patcherPool, pendingPreviewNotes, poolAlwaysOn, poolEngaged, poolWorkEwmaUs,
-      previewMutex, producerBlockBudgetUs, producerBlockUsMax, producerBlockUsTotal,
-      producerBlocksOverBudget, producerBlocksTimed, producerSamplerUsMax,
-      producerSamplerUsTotal, projectSeed, publishedCallback, quantizePitch, renderPool,
-      resolveDevicePluginPath, tempoProvider, tickConverter, traceNotes, patternTicks,
-      warnedEventOutsideBlock, writeMirrorParams
+      panicPending, patcherGraph, patcherParallel, patcherPool, pendingPreviewNotes,
+      poolAlwaysOn, poolEngaged, poolWorkEwmaUs, previewMutex, producerBlockBudgetUs,
+      producerBlockUsMax, producerBlockUsTotal, producerBlocksOverBudget,
+      producerBlocksTimed, producerSamplerUsMax, producerSamplerUsTotal, projectSeed,
+      publishedCallback, quantizePitch, renderPool, resolveDevicePluginPath, tempoProvider,
+      tickConverter, traceNotes, patternTicks, warnedEventOutsideBlock, writeMirrorParams
   };
 
     while (running.load()) {
@@ -3958,8 +3954,8 @@ int main(int argc, char** argv) {
       automationVersion, clipVersion, clipWindowMutex, clipWindowPending, harmonyTimeline,
       laneQuantizeOf, lastArrangeSongEnd, lastArrangeVersion, lastAutomationVersion,
       lastClipAllQuantizeVersion, lastClipAllVersion, lastPatcherVersion, markerList,
-      patcherGraphSnapshot, patcherGraphState, quantizeVersion, snapshotTracks, songTiming,
-      trackIsPersisted, uiShm, warnedPatcherOwnerTooWide
+      patcherGraph, quantizeVersion, snapshotTracks, songTiming, trackIsPersisted, uiShm,
+      warnedPatcherOwnerTooWide
   };
 
   daw::engine::ConsumerDeps consumerDeps{

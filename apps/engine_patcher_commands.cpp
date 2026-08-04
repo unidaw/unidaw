@@ -95,8 +95,8 @@ void handleAddPatcherNode(PatcherCommandDeps& deps,
             daw::UiCommandType commandType) {
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& patcherGraphState = deps.patcherGraphState;
-  auto& patcherPoolEdited = deps.patcherPoolEdited;
+  auto& patcherGraphState = deps.patcherGraph.patcherGraphState;
+  auto& patcherPoolEdited = deps.patcherGraph.patcherPoolEdited;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   const auto& emitPatcherGraphDelta = deps.emitPatcherGraphDelta;
   const auto& emitPatcherGraphError = deps.emitPatcherGraphError;
@@ -347,8 +347,8 @@ void handleSetPatcherNodeConfig(PatcherCommandDeps& deps,
             daw::UiCommandType commandType) {
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& patcherGraphState = deps.patcherGraphState;
-  auto& patcherPoolEdited = deps.patcherPoolEdited;
+  auto& patcherGraphState = deps.patcherGraph.patcherGraphState;
+  auto& patcherPoolEdited = deps.patcherGraph.patcherPoolEdited;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   const auto& emitPatcherGraphDelta = deps.emitPatcherGraphDelta;
   const auto& emitPatcherGraphError = deps.emitPatcherGraphError;
@@ -462,7 +462,7 @@ void handleSavePatcherPreset(PatcherCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& patcherGraphState = deps.patcherGraphState;
+  auto& patcherGraphState = deps.patcherGraph.patcherGraphState;
   const auto& emitUiDiff = deps.emitUiDiff;
   {
   daw::UiPatcherPresetCommandPayload presetPayload{};

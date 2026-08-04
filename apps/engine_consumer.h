@@ -26,6 +26,7 @@
 #include <utility>
 #include <vector>
 
+#include "engine_patcher_graph_owner.h"
 #include "engine_song_timing.h"
 #include "engine_transport_state.h"
 #include "engine_harmony_timeline.h"
@@ -64,8 +65,7 @@ struct UiWriterDeps {
   uint32_t& lastClipAllVersion;
   uint32_t& lastPatcherVersion;
   daw::MarkerList& markerList;
-  std::shared_ptr<daw::PatcherGraph>& patcherGraphSnapshot;
-  daw::PatcherGraphState& patcherGraphState;
+  PatcherGraphOwner& patcherGraph;
   std::atomic<uint32_t>& quantizeVersion;
   std::function<std::vector<TrackRuntime*>()> snapshotTracks;
   SongTiming& songTiming;

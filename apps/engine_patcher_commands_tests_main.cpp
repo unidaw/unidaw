@@ -16,8 +16,8 @@
 // them would leave "the handler refuses something" indistinguishable from "the handler refuses the
 // right thing for the right reason".
 //
-// Each test builds the deps directly — a graph state and stubs that RECORD. No engine, no shared
-// memory, no ring, no device, no track needed for the pool path.
+// Each test builds the deps directly — a PatcherGraphOwner and stubs that RECORD. No engine, no
+// shared memory, no ring, no device, no track needed for the pool path.
 #include "apps/engine_patcher_commands.h"
 
 #include <cstdio>
@@ -63,8 +63,9 @@ struct Recorded {
 struct Fixture {
   std::vector<std::unique_ptr<TrackRuntime>> tracks;
   std::mutex tracksMutex;
-  daw::PatcherGraphState graphState;
-  std::atomic<bool> patcherPoolEdited{false};
+  // ONE OBJECT NOW, not four separate locals. PatcherGraphOwner holds the pool, the RT snapshot
+  // and the two flags; the handler takes it whole, so the fixture builds it whole.
+  PatcherGraphOwner patcherGraph;
   Recorded rec;
 
   std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)> buildSnapshotFn =
@@ -84,18 +85,18 @@ struct Fixture {
   std::function<void()> updateSnapshotFn = [this]() { rec.snapshots++; };
 
   PatcherCommandDeps deps() {
-    return PatcherCommandDeps{tracks,         tracksMutex,  graphState,   patcherPoolEdited,
-                              buildSnapshotFn, emitDeltaFn, emitErrorFn,  emitUiDiffFn,
-                              reassembleFn,    updateSnapshotFn};
+    return PatcherCommandDeps{tracks,          tracksMutex, patcherGraph, buildSnapshotFn,
+                              emitDeltaFn,     emitErrorFn, emitUiDiffFn, reassembleFn,
+                              updateSnapshotFn};
   }
 
   size_t nodeCount() {
-    std::lock_guard<std::mutex> lock(graphState.mutex);
-    return graphState.graph.nodes.size();
+    std::lock_guard<std::mutex> lock(patcherGraph.patcherGraphState.mutex);
+    return patcherGraph.patcherGraphState.graph.nodes.size();
   }
   size_t edgeCount() {
-    std::lock_guard<std::mutex> lock(graphState.mutex);
-    return graphState.graph.edges.size();
+    std::lock_guard<std::mutex> lock(patcherGraph.patcherGraphState.mutex);
+    return patcherGraph.patcherGraphState.graph.edges.size();
   }
 };
 
@@ -137,8 +138,9 @@ daw::UiPatcherGraphCommandPayload connect(uint32_t src, uint32_t dst, uint32_t e
 std::pair<uint32_t, uint32_t> twoNodes(Fixture& f) {
   run(f, addNode(static_cast<uint32_t>(daw::PatcherNodeType::Passthrough)));
   run(f, addNode(static_cast<uint32_t>(daw::PatcherNodeType::Passthrough)));
-  std::lock_guard<std::mutex> lock(f.graphState.mutex);
-  return {f.graphState.graph.nodes[0].id, f.graphState.graph.nodes[1].id};
+  std::lock_guard<std::mutex> lock(f.patcherGraph.patcherGraphState.mutex);
+  const auto& nodes = f.patcherGraph.patcherGraphState.graph.nodes;
+  return {nodes[0].id, nodes[1].id};
 }
 
 // ---- A CYCLE IS REFUSED. A -> B is fine; B -> A closes the loop and has no topological order.
@@ -180,7 +182,7 @@ void testForwardConnectionAccepted() {
   CHECK(f.rec.errors.empty());
   CHECK(f.edgeCount() == 1);
   CHECK(f.rec.deltas > 0);
-  CHECK(f.patcherPoolEdited.load());
+  CHECK(f.patcherGraph.patcherPoolEdited.load());
 }
 
 // ---- AN UNKNOWN NODE TYPE IS REFUSED rather than cast into an enum nobody defined.
