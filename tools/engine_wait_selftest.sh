@@ -33,6 +33,12 @@ fail() { echo "  FAIL: $*"; exit 1; }
 LIB="$ROOT/tools/lib/engine_wait.sh"
 [ -f "$LIB" ] || fail "tools/lib/engine_wait.sh is missing — thirty-five checks source it"
 
+# A BACKGROUND PROCESS IN A CASE BODY MUST REDIRECT ITS OUTPUT. run_case captures the body with
+# command substitution, and `$( )` does not return until every descendant has closed the pipe — so
+# a `sleep 30 &` standing in for a live engine held the substitution open for thirty seconds after
+# the case was over. Twice, for sixty of this file's seventy-one seconds, while the header below
+# claimed it cost about a second. The budget passed to wait_for_boot was always short; the wait was
+# never the library's.
 # Runs one case in a SUBSHELL, because the library exits on failure by design. Captures its
 # output and its elapsed whole seconds.
 run_case() {  # run_case <script-body-file>  -> prints "<exit> <seconds>" then the output
@@ -105,7 +111,7 @@ esac
 cat >"$TMP/stuck.sh" <<EOF
 . "$LIB"
 fail() { echo "  FAIL: \$*"; exit 1; }
-sleep 30 &
+sleep 30 >/dev/null 2>&1 &
 LIVE=\$!
 wait_for_boot "$TMP/stuck.log" "\$LIVE" 4
 echo "RETURNED-OK"
@@ -127,7 +133,7 @@ printf '%s\n' '{"ts_ms":1,"event":"project.load","name":"x"}' >"$TMP/count.log"
 cat >"$TMP/count.sh" <<EOF
 . "$LIB"
 fail() { echo "  FAIL: \$*"; exit 1; }
-sleep 30 &
+sleep 30 >/dev/null 2>&1 &
 LIVE=\$!
 wait_for_loads "$TMP/count.log" "\$LIVE" 2 4 "the second reload"
 echo "RETURNED-OK"
