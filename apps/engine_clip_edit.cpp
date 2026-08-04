@@ -8,6 +8,54 @@
 
 namespace daw::engine {
 
+// TWO HELPERS THAT CAME WITH THEIR ONLY CALLERS. Both were lambdas in main() used by nothing except
+// the three remove-edits below, so they are file-scope here rather than entries in ClipEditDeps: a
+// dependency that exists to serve one module is that module's business. firstPlacementAtForClip
+// captures nothing at all.
+namespace {
+
+uint64_t firstPlacementAtForClip(const TrackRuntime& rt, uint32_t clipId) {
+
+    for (const auto& pl : rt.sourcePlacements) {
+      if (pl.clipId == clipId && pl.at.has_value()) {
+        return *pl.at;
+      }
+    }
+    return 0;
+}
+
+}  // namespace
+
+static bool emitRemoveChordDiff(ClipEditDeps& deps, uint32_t trackId, const daw::MusicalClip::RemovedChord& removed, uint64_t absTick) {
+  auto& bumpTrackClipVersion = deps.bumpTrackClipVersion;
+  auto& clipDirty = deps.clipDirty;
+  auto& emitChordDiff = deps.emitChordDiff;
+
+    clipDirty.store(true, std::memory_order_release);
+    const uint32_t nextClipVersion = bumpTrackClipVersion(trackId);
+    daw::UiChordDiffPayload diffPayload{};
+    diffPayload.diffType = static_cast<uint16_t>(daw::UiChordDiffType::RemoveChord);
+    diffPayload.trackId = trackId;
+    diffPayload.clipVersion = nextClipVersion;
+    diffPayload.nanotickLo = static_cast<uint32_t>(absTick & 0xffffffffu);
+    diffPayload.nanotickHi = static_cast<uint32_t>((absTick >> 32) & 0xffffffffu);
+    diffPayload.durationLo = static_cast<uint32_t>(removed.duration & 0xffffffffu);
+    diffPayload.durationHi = static_cast<uint32_t>((removed.duration >> 32) & 0xffffffffu);
+    diffPayload.chordId = removed.chordId;
+    diffPayload.spreadNanoticks =
+        (static_cast<uint32_t>(removed.column) << 24) |
+        (removed.spreadNanoticks & 0x00ffffffu);
+    diffPayload.packed = static_cast<uint32_t>(removed.degree) |
+                         (static_cast<uint32_t>(removed.quality) << 8) |
+                         (static_cast<uint32_t>(removed.inversion) << 16) |
+                         (static_cast<uint32_t>(removed.baseOctave) << 24);
+    diffPayload.flags = static_cast<uint16_t>(removed.humanizeTiming & 0xffu) |
+                        static_cast<uint16_t>((removed.humanizeVelocity & 0xffu) << 8);
+    emitChordDiff(diffPayload);
+    return true;
+}
+
+
 EditTarget locateEditTarget(LocateTargetDeps& deps, TrackRuntime& rt, uint64_t absTick,
                             bool createIfMissing) {
   auto& nextClipId = deps.nextClipId;
@@ -710,6 +758,175 @@ bool applyAddChord(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, uint
                         static_cast<uint16_t>((humanizeVelocity & 0xffu) << 8);
     emitChordDiff(diffPayload);
     return true;
+}
+
+bool applyRemoveNote(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, uint8_t pitch, uint16_t flags, bool recordUndo) {
+  auto& clipDirty = deps.clipDirty;
+  auto& clipVersion = deps.clipVersion;
+  auto& commitStructuralEdit = deps.commitStructuralEdit;
+  auto& consumeClipVersionForNoOp = deps.consumeClipVersionForNoOp;
+  auto& emitUiDiff = deps.emitUiDiff;
+  auto& forkOwnedClip = deps.forkOwnedClip;
+  auto& growLengthsForContent = deps.growLengthsForContent;
+  auto& locateEditTarget = deps.locateEditTarget;
+  auto& snapshotTrackStore = deps.snapshotTrackStore;
+  auto& tracks = deps.tracks;
+  auto& tracksMutex = deps.tracksMutex;
+
+    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
+    if (!runtime) {
+      daw::LogLine() << "UI: RemoveNote failed - track " << trackId << " not found" << std::endl;
+      return false;
+    }
+
+    std::optional<daw::ClipEditResult> result;
+    std::shared_ptr<const ClipSnapshot> snapshot;
+    {
+      std::lock_guard<std::mutex> lock(runtime->trackMutex);
+      TrackStoreState before = snapshotTrackStore(*runtime);
+      // A remove never creates a clip: a tick outside every clip is a no-op.
+      EditTarget target = locateEditTarget(*runtime, nanotick, /*create=*/false);
+      if (target.valid) {
+        daw::MusicalClip& clip = runtime->ownedClips[target.ownedIndex].clip;
+        result = daw::removeNoteFromClip(clip, trackId, target.relTick, pitch,
+                                         flags, runtime->trackClipVersion,
+                                         recordUndo);
+        if (result) {
+          // HOW MANY APPEARANCES THIS EDIT REACHED. A clip is CONTENT and a placement is an
+          // APPEARANCE, so an edit to a clip placed four times changes all four — that is the
+          // Movement 3 promise ("fix the bass in chorus 1 and all three choruses change") and it
+          // is also the most surprising thing in the program if nothing says it out loud. Two
+          // placements of one clip draw as two identical rails; a note typed into one silently
+          // rewrites the other, and there is no moment where the model announces itself.
+          //
+          // Counted HERE, where the answer is exact, rather than left to a client to infer by
+          // grouping extents by clip id. On the event stream and in history.jsonl, so "this
+          // changed 4 placements" is available to a console, to the linter, and to whoever reads
+          // the journal a week later asking what happened.
+          //
+          // Counted AFTER forkOwnedClip: a copy-on-write fork repoints this track's placements,
+          // so a count taken before it would be the pre-fork clip's.
+          forkOwnedClip(*runtime, target.ownedIndex);
+          if (target.ownedIndex < runtime->ownedClips.size()) {
+            const uint32_t editedClipId = runtime->ownedClips[target.ownedIndex].id;
+            uint32_t appearances = 0;
+            for (const auto& pl : runtime->sourcePlacements) {
+              if (pl.clipId == editedClipId) {
+                ++appearances;
+              }
+            }
+            if (appearances > 1) {
+              DAW_EVENT("clip.shared_edit")
+                  .field("track", trackId)
+                  .field("clip", editedClipId)
+                  .field("nanotick", nanotick)
+                  .field("placements_affected", appearances);
+            }
+          }
+          growLengthsForContent(*runtime, target);
+          shiftDiffTick(result->diff, target.placementAt);
+          snapshot = commitStructuralEdit(*runtime, trackId, std::move(before), recordUndo);
+        }
+      }
+    }
+    if (!result) {
+      DAW_EVENT("clip.remove_note_missing")
+          .field("track", trackId)
+          .field("nanotick", nanotick)
+          .field("pitch", static_cast<uint32_t>(pitch))
+          .field("action", "version_consumed");
+      consumeClipVersionForNoOp(runtime);
+      return false;
+    }
+
+    std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
+    clipVersion.fetch_add(1, std::memory_order_acq_rel);  // see applyAddNote
+    clipDirty.store(true, std::memory_order_release);
+    emitUiDiff(result->diff);
+    return true;
+}
+
+bool applyRemoveChord(ClipEditDeps& deps, uint32_t trackId, uint32_t chordId, bool recordUndo) {
+  auto& commitStructuralEdit = deps.commitStructuralEdit;
+  auto& consumeClipVersionForNoOp = deps.consumeClipVersionForNoOp;
+  auto& forkOwnedClip = deps.forkOwnedClip;
+  auto& snapshotTrackStore = deps.snapshotTrackStore;
+  auto& tracks = deps.tracks;
+  auto& tracksMutex = deps.tracksMutex;
+
+    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
+    if (!runtime) {
+      daw::LogLine() << "UI: RemoveChord failed - track " << trackId << " not found" << std::endl;
+      return false;
+    }
+    std::optional<daw::MusicalClip::RemovedChord> removed;
+    std::shared_ptr<const ClipSnapshot> snapshot;
+    uint64_t absTick = 0;
+    {
+      std::lock_guard<std::mutex> lock(runtime->trackMutex);
+      TrackStoreState before = snapshotTrackStore(*runtime);
+      // A chord id lives in exactly one owned clip; find and remove it there.
+      for (size_t oi = 0; oi < runtime->ownedClips.size(); ++oi) {
+        removed = runtime->ownedClips[oi].clip.removeChordById(chordId);
+        if (removed) {
+          absTick = firstPlacementAtForClip(*runtime, runtime->ownedClips[oi].id) +
+                    removed->nanotick;
+          forkOwnedClip(*runtime, oi);
+          snapshot = commitStructuralEdit(*runtime, trackId, std::move(before), recordUndo);
+          break;
+        }
+      }
+    }
+    if (!removed) {
+      daw::LogLine() << "UI: RemoveChord - chord not found (track "
+                << trackId << ", id " << chordId << ")" << std::endl;
+      consumeClipVersionForNoOp(runtime);
+      return false;
+    }
+    std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
+    return emitRemoveChordDiff(deps, trackId, *removed, absTick);
+}
+
+bool applyRemoveChordAt(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, uint8_t column, bool recordUndo) {
+  auto& commitStructuralEdit = deps.commitStructuralEdit;
+  auto& consumeClipVersionForNoOp = deps.consumeClipVersionForNoOp;
+  auto& forkOwnedClip = deps.forkOwnedClip;
+  auto& locateEditTarget = deps.locateEditTarget;
+  auto& snapshotTrackStore = deps.snapshotTrackStore;
+  auto& tracks = deps.tracks;
+  auto& tracksMutex = deps.tracksMutex;
+
+    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
+    if (!runtime) {
+      daw::LogLine() << "UI: RemoveChord failed - track " << trackId << " not found" << std::endl;
+      return false;
+    }
+    std::optional<daw::MusicalClip::RemovedChord> removed;
+    std::shared_ptr<const ClipSnapshot> snapshot;
+    uint64_t absTick = nanotick;
+    {
+      std::lock_guard<std::mutex> lock(runtime->trackMutex);
+      TrackStoreState before = snapshotTrackStore(*runtime);
+      EditTarget target = locateEditTarget(*runtime, nanotick, /*create=*/false);
+      if (target.valid) {
+        removed = runtime->ownedClips[target.ownedIndex].clip.removeChordAt(
+            target.relTick, column);
+        if (removed) {
+          absTick = target.placementAt + removed->nanotick;
+          forkOwnedClip(*runtime, target.ownedIndex);
+          snapshot = commitStructuralEdit(*runtime, trackId, std::move(before), recordUndo);
+        }
+      }
+    }
+    if (!removed) {
+      daw::LogLine() << "UI: RemoveChord - chord not found (track "
+                << trackId << ", tick " << nanotick
+                << ", col " << static_cast<int>(column) << ")" << std::endl;
+      consumeClipVersionForNoOp(runtime);
+      return false;
+    }
+    std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
+    return emitRemoveChordDiff(deps, trackId, *removed, absTick);
 }
 
 }  // namespace daw::engine

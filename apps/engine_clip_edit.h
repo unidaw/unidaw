@@ -38,6 +38,7 @@ struct LocateTargetDeps {
 struct ClipEditDeps {
   std::function<uint64_t(uint64_t)> barEndTick;
   std::function<uint32_t(TrackRuntime*)> bumpClipVersionFor;
+  const std::function<uint32_t(uint32_t)>& bumpTrackClipVersion;
   std::atomic<bool>& clipDirty;
   std::atomic<uint32_t>& clipVersion;
   std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&, uint32_t, TrackStoreState&&, bool)> commitStructuralEdit;
@@ -82,5 +83,8 @@ bool applyAddChord(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, uint
                    uint8_t column, uint32_t spreadNanoticks, uint16_t humanizeTiming,
                    uint16_t humanizeVelocity, bool recordUndo,
                    std::optional<uint32_t> chordIdOverride);
+bool applyRemoveNote(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, uint8_t pitch, uint16_t flags, bool recordUndo);
+bool applyRemoveChord(ClipEditDeps& deps, uint32_t trackId, uint32_t chordId, bool recordUndo);
+bool applyRemoveChordAt(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, uint8_t column, bool recordUndo);
 
 }  // namespace daw::engine
