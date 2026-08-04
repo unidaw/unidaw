@@ -44,8 +44,14 @@ import re, glob, os, sys
 
 # A check that quietly stops finding anything passes forever. These floors are the ratchet: they
 # are below today's counts, so ordinary edits never trip them, but deleting the parse does.
-MIN_STRUCTS = 12
-MIN_ARGS = 100
+#
+# RAISED 2026-08-04 from 12/100, which had gone stale in the direction that matters. The tree grew
+# to 34 structs and 468 compared arguments while the floors stayed where they were set, so the
+# parse could have silently stopped seeing SIXTY-FIVE PERCENT of the structs and still reported
+# PASS. A floor that trails the tree that far is the "test that verifies nothing" shape the floor
+# was added to prevent, one level up. Keep these within sight of the real counts.
+MIN_STRUCTS = 30
+MIN_ARGS = 400
 
 def struct_members(text, name):
     m = re.search(r'^struct %s \{' % re.escape(name), text, re.M)

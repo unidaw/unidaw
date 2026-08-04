@@ -77,8 +77,72 @@ if not checks:
 # new entries says "DECLARED in tools/check_registry_check.sh". A ratchet whose own registration
 # is satisfied by prose about it is measuring nothing: comments are exactly where stale claims
 # accumulate, which is the reason this ratchet exists.
-code = "\n".join(l for l in cmake.splitlines() if not l.lstrip().startswith("#"))
-registered = {c for c in checks if c in code}
+#
+# AND A THIRD TIME, WHICH IS WHY THE RULE IS NOW A FUNCTION WITH A SELF-TEST BELOW. Both notes
+# above describe a name being matched too LOOSELY, and both were fixed by tightening what counts.
+# The rule that survived was `c in code` — a bare substring test — and it has the same disease in
+# the one direction neither note considered: a check whose whole filename sits INSIDE a longer
+# filename. `readback_check.sh` is a suffix of `note_readback_check.sh`, `track_readback_check.sh`,
+# `automation_readback_check.sh` and `sampler_envelope_readback_check.sh`, all four registered.
+#
+# So tools/readback_check.sh — 182 lines, PASSING, covering the published readback of opcodes 10
+# and 29 — was named in CMakeLists exactly ZERO times, ran in ctest never, and was reported by
+# this ratchet as registered. It kept being maintained as though it ran: it was given the boot-wait
+# treatment in 2ff0282, `exec` in 3b87fad and keep-evidence in 969750f. Three commits of care spent
+# on a check that produced no result.
+#
+# That is this ratchet failing at precisely its own subject, so the fix is not only a better regex.
+# The rule is a named function and it is exercised against synthetic inputs on EVERY run, including
+# the case that broke it. A ratchet without a negative control is the thing it exists to prevent,
+# and this file has now been that thing three times.
+def strip_cmake_comments(text):
+    return "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+
+def is_registered(name, code):
+    # Anchored on the `tools/` path separator that every real registration carries
+    # (`COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/<name>`), so a longer sibling filename
+    # cannot contain it: "tools/note_readback_check.sh" does not contain "tools/readback_check.sh".
+    # The trailing guard keeps an editor backup or a rename-in-progress — same filename with a
+    # suffix glued on — from counting as a registration of the original.
+    return re.search(r"tools/" + re.escape(name) + r"(?![\w.])", code) is not None
+
+# THE NEGATIVE CONTROL, run every time rather than trusted once.
+#
+# EVERY NAME BELOW IS A CHECK THAT REALLY EXISTS, and that is a requirement rather than a
+# convenience: doc_citation_check reads a bare `*_check.sh` anywhere in tools/ as a CITATION and
+# fails when it names nothing, which is exactly what it should do. It caught the first version of
+# this table, which used invented placeholder names — and then caught the comment that explained
+# the fix, because that comment quoted the placeholders it was retiring. Real names cost nothing
+# here: what is under test is the MATCHING RULE, not the names it is fed.
+SELFTEST = [
+    ("readback_check.sh", "COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/readback_check.sh", True,
+     "a plain registration must count"),
+    ("readback_check.sh", "COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/note_readback_check.sh",
+     False, "a check whose name is a SUFFIX of a registered sibling must NOT count — the bug that "
+            "hid tools/readback_check.sh"),
+    ("readback_check.sh", "COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/readback_check.sh.bak",
+     False, "a longer filename that merely starts with the name must NOT count"),
+    ("lane_quantize_check.sh", "add_test(NAME lane_quantize COMMAND lane_quantize_tests)", False,
+     "a unit binary sharing the stem must NOT count"),
+]
+selftest_failed = False
+for name, code_frag, want, why in SELFTEST:
+    if is_registered(name, code_frag) != want:
+        print("  FAIL (self-test): is_registered(%r) returned %s, expected %s — %s"
+              % (name, not want, want, why))
+        selftest_failed = True
+# The comment strip needs its own case for the same reason: it is a rule, so it can rot.
+if strip_cmake_comments("# tools/ghost_check.sh\nadd_test(NAME x)").find("ghost_check") != -1:
+    print("  FAIL (self-test): a check named only in a CMake COMMENT was not stripped")
+    selftest_failed = True
+if selftest_failed:
+    print("        The rule this ratchet applies is broken, so its verdict on the real tree means")
+    print("        nothing. That verdict is NOT reported below — a rule that fails its own cases")
+    print("        passing the tree is the exact shape this check exists to catch.")
+    raise SystemExit(1)
+
+code = strip_cmake_comments(cmake)
+registered = {c for c in checks if is_registered(c, code)}
 
 ok = True
 unregistered = [c for c in checks if c not in registered]
