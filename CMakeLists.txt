@@ -495,6 +495,20 @@ target_include_directories(lane_quantize_tests PRIVATE
 # no name any other translation unit could say. Not one had a test; reaching `clampMidi` meant
 # booting an engine and driving a chord through a command ring. Extracting them to
 # apps/engine_pure.h is what made the tests possible, and the tests are the reason to extract them.
+# THE FIRST UNIT TEST OF A TRACK REBUILD. rebuildFlatAndPublish was a lambda inside main() until
+# it moved to apps/engine_track_rebuild.cpp; asking it a question meant booting an engine, mapping
+# shared memory and driving a command ring. The mute-prune guard it checks — prune dead mutes, but
+# only when the clip is actually installed — is the kind of condition that looks like an oversight
+# and whose removal passes every process-level test.
+add_executable(engine_track_rebuild_tests
+  apps/engine_track_rebuild_tests_main.cpp
+)
+target_include_directories(engine_track_rebuild_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(engine_track_rebuild_tests PRIVATE engine_commands)
+
 add_executable(engine_pure_tests
   apps/engine_pure_tests_main.cpp
 )
@@ -1374,6 +1388,10 @@ add_test(NAME lane_quantize
   COMMAND lane_quantize_tests
 )
 set_tests_properties(lane_quantize PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME engine_track_rebuild
+  COMMAND engine_track_rebuild_tests
+)
 
 add_test(NAME engine_pure
   COMMAND engine_pure_tests
