@@ -42,6 +42,7 @@
 #include "apps/engine_track_setup.h"
 #include "apps/engine_chain_host.h"
 #include "apps/engine_track_rebuild.h"
+#include "apps/engine_xrun_reporter.h"
 #include "apps/engine_handle_ui_entry.h"
 #include "apps/engine_load_project.h"
 #include "apps/engine_render_track.h"
@@ -4582,6 +4583,9 @@ int main(int argc, char** argv) {
   // glitching is reported as a concrete count rather than a vague feeling. It never
   // touches the audio thread beyond reading relaxed atomics.
   std::thread xrunReporter;
+  // Declared out here, not inside the `if`: see XrunReporterDeps for why the scope matters.
+  daw::engine::XrunReporterDeps xrunReporterDeps{
+      running, audioCallback, playing, nextBlockId, audioPlaybackBlockId, observedPipelineBlocks};
   if (!testMode && audioCallback) {
     const double blockMs = engineConfig.sampleRate > 0.0
         ? static_cast<double>(engineConfig.blockSize) /
@@ -4589,37 +4593,7 @@ int main(int argc, char** argv) {
         : 0.0;
     const bool latencyReport = std::getenv("DAW_ENGINE_LATENCY_REPORT") != nullptr;
     xrunReporter = std::thread([&, blockMs, latencyReport] {
-      uint64_t lastStarve = 0;
-      while (running.load()) {
-        for (int i = 0; i < 20 && running.load(); ++i) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-        const uint64_t starve = audioCallback->starveCallbacks();
-        if (starve > lastStarve) {
-          daw::LogLine() << "Engine: audio underrun — " << (starve - lastStarve)
-                    << " dropout callback(s) in the last ~2s (" << starve
-                    << " total, worst shortfall " << audioCallback->worstStarveGap()
-                    << " blocks). Raise DAW_ENGINE_NUM_BLOCKS (deeper pipeline) or "
-                    << "DAW_ENGINE_BUFFER_SIZE (bigger device buffer) if audible."
-                    << std::endl;
-          lastStarve = starve;
-        }
-        // Pipeline depth = how many blocks the producer is ahead of the block the device
-        // is playing. This IS the transport-to-ear latency (plus the device's own output
-        // buffer), so it is the number the low-latency work has to drive down.
-        if (playing.load(std::memory_order_acquire)) {
-          const uint32_t produced = nextBlockId.load(std::memory_order_relaxed);
-          const uint32_t playingId =
-              audioPlaybackBlockId.load(std::memory_order_acquire);
-          const uint32_t depth = produced > playingId ? produced - playingId : 0;
-          observedPipelineBlocks.store(depth, std::memory_order_relaxed);
-          if (latencyReport) {
-            daw::LogLine() << "Engine: pipeline depth " << depth << " blocks (~"
-                      << (depth * blockMs) << " ms transport-to-ear, + device buffer)"
-                      << std::endl;
-          }
-        }
-      }
+      daw::engine::runXrunReporter(xrunReporterDeps, blockMs, latencyReport);
     });
   }
 

@@ -11,10 +11,17 @@
 // which main.cpp already imports wholesale, so every existing unqualified use still resolves.
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
+// std::this_thread::sleep_for, used by the hazard-pointer retire path below. This header used it
+// without including <thread> and compiled anyway for as long as every translation unit that
+// included it happened to pull <thread> in first — which was every one of them until a new module
+// included this header on its own. A header that only compiles inside somebody else's include
+// order is a header that works by luck.
+#include <thread>
 #include <vector>
 
 #include "engine_rt_helpers.h"
