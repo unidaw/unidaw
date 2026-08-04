@@ -68,7 +68,11 @@ EOF
 ( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 26 >"$TMP/engine.log" 2>&1 ) &
 ENG=$!
-sleep 2.5
+# These engines start with NO project — the check loads one by command afterwards — so
+# wait_for_boot's default pattern (a project.load) would never appear. Wait for the UI
+# command thread instead: that is the thread that reads the ring these commands go into,
+# so it is the marker that actually means "ready to be told something".
+wait_for_boot "$TMP/engine.log" "$ENG" 80 "UI: command thread started"
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 fail() { echo "  FAIL: $*"; kill "$ENG" 2>/dev/null || true; wait "$ENG" 2>/dev/null || true; exit 1; }
 points_of() {  # points_of <file> -> "tick:value tick:value ..."
@@ -84,7 +88,7 @@ PYA
 }
 
 cli do load auto >/dev/null 2>&1 || true
-sleep 1.6
+wait_for_event "$TMP/engine.log" '"event":"project.load"' 80 "the project to load" "$ENG"
 
 # AUTHOR: three points inside the intro, and one AFTER it so the ripple has something to
 # carry that the earlier ones do not share.
@@ -92,7 +96,8 @@ cli do automation --track 0 --param index:0 --nanotick 0 --value 0.0 >/dev/null 
 cli do automation --track 0 --param index:0 --nanotick $Q --value 0.5 >/dev/null 2>&1 || true
 cli do automation --track 0 --param index:0 --nanotick $((2 * Q)) --value 1.0 >/dev/null 2>&1 || true
 cli do automation --track 0 --param index:0 --nanotick $((5 * BAR)) --value 0.25 >/dev/null 2>&1 || true
-sleep 1
+wait_for_event_count "$TMP/engine.log" '"event":"automation.point"' 4 80 \
+                     "four automation writes" "$ENG"
 
 grep -q '"created_clip":true' "$TMP/engine.log" || \
   fail "no automation clip was created — the write path did not reach the engine"
@@ -106,7 +111,10 @@ echo "  author: 4 points written into one clip"
 # file grew by a point on every attempt. Rewriting the point at 1 quarter (0.5 above) must
 # leave the count at 4, not take it to 5.
 cli do automation --track 0 --param index:0 --nanotick $Q --value 0.125 >/dev/null 2>&1 || true
-sleep 1
+# THE FIFTH EVENT, not '"points":4' — that string is already in the log from the four
+# writes above, so waiting on it would match instantly and wait for nothing.
+wait_for_event_count "$TMP/engine.log" '"event":"automation.point"' 5 80 \
+                     "the corrected point" "$ENG"
 LAST="$(grep '"event":"automation.point"' "$TMP/engine.log" | tail -1)"
 echo "$LAST" | grep -q '"points":4' || \
   fail "rewriting the point at one quarter should still leave 4 points, so a value can be
@@ -116,7 +124,9 @@ echo "  correct: rewriting a point at an existing tick replaces it (still 4)"
 # PERSIST: ticks AND values. A save that kept the ticks and lost the values would look
 # right in a tick-only assertion and play silence.
 cli do save autoout >/dev/null 2>&1 || true
-sleep 1.4
+# Wait for the document to PARSE rather than for a duration: a half-written file is the
+# race the fixed sleep was covering, and points_of would throw on it.
+wait_until 20 python3 -c "import json;json.load(open('$TMP/autoout.uniproj.json'))"
 SAVED="$(points_of "$TMP/autoout.uniproj.json")"
 WANT="0:0 ${Q}:0.125 $((2 * Q)):1 $((5 * BAR)):0.25"
 [ "$SAVED" = "$WANT" ] || fail "saved automation is
@@ -139,12 +149,12 @@ SHM2="/autochk2_$$"
 ( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 22 >"$TMP/engine2.log" 2>&1 ) &
 ENG=$!
-sleep 2.5
+wait_for_boot "$TMP/engine2.log" "$ENG" 80 "UI: command thread started"
 cli() { DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load autoout >/dev/null 2>&1 || true
-sleep 1.8
+wait_for_event "$TMP/engine2.log" '"event":"project.load"' 80 "the project to load" "$ENG"
 cli do save autoagain >/dev/null 2>&1 || true
-sleep 1.4
+wait_until 20 python3 -c "import json;json.load(open('$TMP/autoagain.uniproj.json'))"
 AGAIN="$(points_of "$TMP/autoagain.uniproj.json")"
 [ "$AGAIN" = "$WANT" ] || \
   fail "in a FRESH engine, load -> save lost the automation: got [$AGAIN]. Parsed at load
@@ -157,9 +167,9 @@ echo "  reload (fresh engine): load -> save is faithful, so the load installed i
 # v29: the ripple is its own command now. "grow the intro from 4 bars to 6" is
 # "insert 2 bars at bar 5" — the same edit, named for what it does.
 cli do time insert --nanotick 15360000 --bars 2 >/dev/null 2>&1 || true
-sleep 1.3
+wait_for_event "$TMP/engine2.log" '"event":"time.edited"' 80 "the ripple" "$ENG"
 cli do save autorip >/dev/null 2>&1 || true
-sleep 1.4
+wait_until 20 python3 -c "import json;json.load(open('$TMP/autorip.uniproj.json'))"
 RIPPLED="$(points_of "$TMP/autorip.uniproj.json")"
 WANT_RIP="0:0 ${Q}:0.125 $((2 * Q)):1 $((5 * BAR + 2 * BAR)):0.25"
 [ "$RIPPLED" = "$WANT_RIP" ] || \
@@ -191,17 +201,24 @@ SHM3="/autochk3_$$"
 ( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM3" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 14 >"$TMP/engine3.log" 2>&1 ) &
 ENG=$!
-sleep 2.5
+wait_for_boot "$TMP/engine3.log" "$ENG" 80 "UI: command thread started"
 cli() { DAW_UI_SHM_NAME="$SHM3" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load autoout >/dev/null 2>&1 || true
-sleep 1.6
+wait_for_event "$TMP/engine3.log" '"event":"project.load"' 80 "the project to load" "$ENG"
 cli do add-track --force >/dev/null 2>&1 || true      # -> track 1
+# STILL A SLEEP, and labelled rather than hidden: add-track and remove-track emit no
+# event this check can wait on. Inventing one to make a test faster would be the test
+# dictating the product's log.
 sleep 0.6
 cli do remove-track --track 1 --force >/dev/null 2>&1 || true
+# STILL A SLEEP, and labelled rather than hidden: add-track and remove-track emit no
+# event this check can wait on. Inventing one to make a test faster would be the test
+# dictating the product's log.
 sleep 0.8
 cli do automation --force --track 1 --param index:0 --nanotick 0 --value 0.9 \
   >/dev/null 2>&1 || true
-sleep 1
+wait_for_event "$TMP/engine3.log" '"event":"automation.rejected"' 80 \
+               "the refusal the assertion below greps for" "$ENG"
 kill "$ENG" 2>/dev/null || true
 wait "$ENG" 2>/dev/null || true
 
@@ -231,25 +248,35 @@ SHM4="/autochk4_$$"
 ( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM4" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 18 >"$TMP/engine4.log" 2>&1 ) &
 ENG=$!
-sleep 2.5
+wait_for_boot "$TMP/engine4.log" "$ENG" 80 "UI: command thread started"
 cli() { DAW_UI_SHM_NAME="$SHM4" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load auto >/dev/null 2>&1 || true
-sleep 1.6
+wait_for_event "$TMP/engine4.log" '"event":"project.load"' 80 "the project to load" "$ENG"
 cli do add-track --force >/dev/null 2>&1 || true          # -> track 1
+# STILL A SLEEP, and labelled rather than hidden: add-track and remove-track emit no
+# event this check can wait on. Inventing one to make a test faster would be the test
+# dictating the product's log.
 sleep 0.7
 cli do automation --force --track 1 --param index:0 --nanotick 0 --value 0.75 \
   >/dev/null 2>&1 || true
-sleep 0.8
+wait_for_event "$TMP/engine4.log" '"event":"automation.point"' 80 \
+               "the write to the added track" "$ENG"
 # It must have LANDED, or this proves nothing about clearing it afterwards.
 grep '"event":"automation.point"' "$TMP/engine4.log" | grep -q '"track":1' || \
   fail "the setup failed: automation was never written to the added track, so the reuse
         assertion below would pass for the wrong reason"
 cli do remove-track --track 1 --force >/dev/null 2>&1 || true
+# STILL A SLEEP, and labelled rather than hidden: add-track and remove-track emit no
+# event this check can wait on. Inventing one to make a test faster would be the test
+# dictating the product's log.
 sleep 0.7
 cli do add-track --force >/dev/null 2>&1 || true          # refills slot 1
+# STILL A SLEEP, and labelled rather than hidden: add-track and remove-track emit no
+# event this check can wait on. Inventing one to make a test faster would be the test
+# dictating the product's log.
 sleep 0.9
 cli do save autoreuse >/dev/null 2>&1 || true
-sleep 1.4
+wait_until 20 python3 -c "import json;json.load(open('$TMP/autoreuse.uniproj.json'))"
 kill "$ENG" 2>/dev/null || true
 wait "$ENG" 2>/dev/null || true
 
