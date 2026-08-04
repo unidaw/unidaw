@@ -1,7 +1,14 @@
 #pragma once
 
-// PUBLISHING MODULATION STATE — the per-track mod snapshot, and the mirror parameters the UI reads
-// to draw a knob that a modulator is moving.
+// TELLING THE UI SOMETHING CHANGED — everything that writes a structured update into the outgoing
+// UI ring.
+//
+// Four operations, and they are one concern: the mod snapshot, the mirror parameters behind a knob
+// a modulator is turning, the routing snapshot, and the patcher graph delta. Each takes a version
+// counter, formats a payload, and pushes it into the ring the UI drains. The module arrived as
+// engine_mod_publish with the first two and was renamed one commit later when the other two
+// measured at 54 lines for two new members — a name that describes half its contents is worse than
+// the churn of fixing it while it is still one commit old.
 //
 // 141 lines out of main() for THREE dependencies, and that ratio is the point of this commit.
 //
@@ -32,18 +39,26 @@
 
 namespace daw::engine {
 
-struct ModPublishDeps {
+struct UiPublishDeps {
   // Bumped whenever the mod graph changes, so a reader can tell a stale snapshot from a current
   // one without diffing it.
   std::atomic<uint32_t>& modVersion;
   const std::function<daw::EventRingView(TrackRuntime&)>& getRingStd;
   const std::function<daw::EventRingView()>& getRingUiOut;
+  // One version counter per kind of update, all read the same way: bump, then publish, so a reader
+  // that sees a new number knows the payload behind it is already there.
+  std::atomic<uint32_t>& routingVersion;
+  std::atomic<uint32_t>& patcherGraphVersion;
 };
 
-void emitModSnapshot(ModPublishDeps& deps, TrackRuntime& runtime);
-void writeMirrorParams(ModPublishDeps& deps,
+void emitModSnapshot(UiPublishDeps& deps, TrackRuntime& runtime);
+void writeMirrorParams(UiPublishDeps& deps,
                        TrackRuntime& runtime,
                        const TrackStateSnapshot& trackState,
                        uint64_t sampleTime);
+void emitRoutingSnapshot(UiPublishDeps& deps, TrackRuntime& runtime);
+void emitPatcherGraphDelta(UiPublishDeps& deps, uint32_t trackId, uint16_t flags, uint32_t nodeId,
+                           uint32_t nodeType, uint32_t srcNodeId, uint32_t dstNodeId,
+                           uint32_t srcPortId, uint32_t dstPortId, uint32_t edgeKind);
 
 }  // namespace daw::engine

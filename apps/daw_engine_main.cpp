@@ -49,7 +49,7 @@
 #include "apps/engine_track_rebuild.h"
 #include "apps/engine_restart_worker.h"
 #include "apps/engine_master_render.h"
-#include "apps/engine_mod_publish.h"
+#include "apps/engine_ui_publish.h"
 #include "apps/engine_patcher_assemble.h"
 #include "apps/engine_ui_thread.h"
 #include "apps/engine_xrun_reporter.h"
@@ -1447,13 +1447,23 @@ int main(int argc, char** argv) {
       }
       return daw::makeEventRing(uiShm.base, uiShm.header->ringUiOutOffset);
   };
-  daw::engine::ModPublishDeps modPublishDeps{modVersion, getRingStd, getRingUiOut};
+  daw::engine::UiPublishDeps uiPublishDeps{modVersion, getRingStd, getRingUiOut, routingVersion,
+                                           patcherGraphVersion};
   auto emitModSnapshot = [&](TrackRuntime& runtime) {
-    daw::engine::emitModSnapshot(modPublishDeps, runtime);
+    daw::engine::emitModSnapshot(uiPublishDeps, runtime);
   };
   auto writeMirrorParams = [&](TrackRuntime& runtime, const TrackStateSnapshot& trackState,
                                uint64_t sampleTime) {
-    daw::engine::writeMirrorParams(modPublishDeps, runtime, trackState, sampleTime);
+    daw::engine::writeMirrorParams(uiPublishDeps, runtime, trackState, sampleTime);
+  };
+  auto emitRoutingSnapshot = [&](TrackRuntime& runtime) {
+    daw::engine::emitRoutingSnapshot(uiPublishDeps, runtime);
+  };
+  auto emitPatcherGraphDelta = [&](uint32_t trackId, uint16_t flags, uint32_t nodeId,
+                                   uint32_t nodeType, uint32_t srcNodeId, uint32_t dstNodeId,
+                                   uint32_t srcPortId, uint32_t dstPortId, uint32_t edgeKind) {
+    daw::engine::emitPatcherGraphDelta(uiPublishDeps, trackId, flags, nodeId, nodeType, srcNodeId,
+                                       dstNodeId, srcPortId, dstPortId, edgeKind);
   };
   auto getRingUiEdit = [&]() {
       if (!uiShm.header) {
@@ -1926,39 +1936,6 @@ int main(int argc, char** argv) {
                   trackId, 0, "");
   };
 
-  auto emitRoutingSnapshot = [&](TrackRuntime& runtime) {
-    auto ringUiOut = getRingUiOut();
-    if (ringUiOut.mask == 0) {
-      return;
-    }
-    daw::TrackRouting routing;
-    {
-      std::lock_guard<std::mutex> lock(runtime.trackMutex);
-      routing = runtime.track.routing;
-    }
-    const uint32_t version =
-        routingVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
-    daw::UiTrackRoutingDiffPayload payload{};
-    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::RoutingSnapshot);
-    payload.trackId = runtime.trackId;
-    payload.routingVersion = version;
-    payload.midiInKind = static_cast<uint8_t>(routing.midiIn.kind);
-    payload.midiOutKind = static_cast<uint8_t>(routing.midiOut.kind);
-    payload.audioInKind = static_cast<uint8_t>(routing.audioIn.kind);
-    payload.audioOutKind = static_cast<uint8_t>(routing.audioOut.kind);
-    payload.midiInTrackId = routing.midiIn.trackId;
-    payload.midiOutTrackId = routing.midiOut.trackId;
-    payload.audioInTrackId = routing.audioIn.trackId;
-    payload.audioOutTrackId = routing.audioOut.trackId;
-    payload.midiInInputId = routing.midiIn.inputId;
-    payload.audioInInputId = routing.audioIn.inputId;
-    if (routing.preFaderSend) {
-      payload.flags |= 0x1u;
-    }
-    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
-    daw::ringWrite(ringUiOut, entry);
-  };
-
   auto emitRoutingError = [&](uint16_t errorCode, uint32_t trackId) {
     auto ringUiOut = getRingUiOut();
     if (ringUiOut.mask == 0) {
@@ -1999,37 +1976,6 @@ int main(int argc, char** argv) {
         .field("reason", errorScopeName("mod", errorCode));
     historyAppend("mod_link", ("rejected:" + errorScopeName("mod", errorCode)).c_str(),
                   trackId, 0, "");
-  };
-
-  auto emitPatcherGraphDelta = [&](uint32_t trackId,
-                                   uint16_t flags,
-                                   uint32_t nodeId,
-                                   uint32_t nodeType,
-                                   uint32_t srcNodeId,
-                                   uint32_t dstNodeId,
-                                   uint32_t srcPortId,
-                                   uint32_t dstPortId,
-                                   uint32_t edgeKind) {
-    auto ringUiOut = getRingUiOut();
-    if (ringUiOut.mask == 0) {
-      return;
-    }
-    const uint32_t version =
-        patcherGraphVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
-    daw::UiPatcherGraphDiffPayload payload{};
-    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::PatcherGraphDelta);
-    payload.flags = flags;
-    payload.trackId = trackId;
-    payload.graphVersion = version;
-    payload.nodeId = nodeId;
-    payload.nodeType = nodeType;
-    payload.srcNodeId = srcNodeId;
-    payload.dstNodeId = dstNodeId;
-    payload.srcPortId = srcPortId;
-    payload.dstPortId = dstPortId;
-    payload.edgeKind = edgeKind;
-    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
-    daw::ringWrite(ringUiOut, entry);
   };
 
   auto emitPatcherGraphError = [&](uint16_t errorCode,

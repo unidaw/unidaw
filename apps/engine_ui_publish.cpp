@@ -1,10 +1,10 @@
-#include "engine_mod_publish.h"
+#include "engine_ui_publish.h"
 
 #include "event_log.h"
 
 namespace daw::engine {
 
-void emitModSnapshot(ModPublishDeps& deps, TrackRuntime& runtime) {
+void emitModSnapshot(UiPublishDeps& deps, TrackRuntime& runtime) {
   auto& modVersion = deps.modVersion;
   auto& getRingUiOut = deps.getRingUiOut;
 
@@ -92,7 +92,7 @@ void emitModSnapshot(ModPublishDeps& deps, TrackRuntime& runtime) {
         .field("empty_sentinel", false);
 }
 
-void writeMirrorParams(ModPublishDeps& deps,
+void writeMirrorParams(UiPublishDeps& deps,
                        TrackRuntime& runtime,
                        const TrackStateSnapshot& trackState,
                        uint64_t sampleTime) {
@@ -155,6 +155,71 @@ void writeMirrorParams(ModPublishDeps& deps,
 
     std::cout << "WriteMirrorParams: sent ReplayComplete with gate time "
               << gateSampleTime << std::endl;
+}
+
+void emitRoutingSnapshot(UiPublishDeps& deps, TrackRuntime& runtime) {
+  auto& routingVersion = deps.routingVersion;
+  auto& getRingUiOut = deps.getRingUiOut;
+
+    auto ringUiOut = getRingUiOut();
+    if (ringUiOut.mask == 0) {
+      return;
+    }
+    daw::TrackRouting routing;
+    {
+      std::lock_guard<std::mutex> lock(runtime.trackMutex);
+      routing = runtime.track.routing;
+    }
+    const uint32_t version =
+        routingVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
+    daw::UiTrackRoutingDiffPayload payload{};
+    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::RoutingSnapshot);
+    payload.trackId = runtime.trackId;
+    payload.routingVersion = version;
+    payload.midiInKind = static_cast<uint8_t>(routing.midiIn.kind);
+    payload.midiOutKind = static_cast<uint8_t>(routing.midiOut.kind);
+    payload.audioInKind = static_cast<uint8_t>(routing.audioIn.kind);
+    payload.audioOutKind = static_cast<uint8_t>(routing.audioOut.kind);
+    payload.midiInTrackId = routing.midiIn.trackId;
+    payload.midiOutTrackId = routing.midiOut.trackId;
+    payload.audioInTrackId = routing.audioIn.trackId;
+    payload.audioOutTrackId = routing.audioOut.trackId;
+    payload.midiInInputId = routing.midiIn.inputId;
+    payload.audioInInputId = routing.audioIn.inputId;
+    if (routing.preFaderSend) {
+      payload.flags |= 0x1u;
+    }
+    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
+    daw::ringWrite(ringUiOut, entry);
+}
+
+void emitPatcherGraphDelta(UiPublishDeps& deps, uint32_t trackId, uint16_t flags,
+                           uint32_t nodeId, uint32_t nodeType, uint32_t srcNodeId,
+                           uint32_t dstNodeId, uint32_t srcPortId, uint32_t dstPortId,
+                           uint32_t edgeKind) {
+  auto& patcherGraphVersion = deps.patcherGraphVersion;
+  auto& getRingUiOut = deps.getRingUiOut;
+
+    auto ringUiOut = getRingUiOut();
+    if (ringUiOut.mask == 0) {
+      return;
+    }
+    const uint32_t version =
+        patcherGraphVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
+    daw::UiPatcherGraphDiffPayload payload{};
+    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::PatcherGraphDelta);
+    payload.flags = flags;
+    payload.trackId = trackId;
+    payload.graphVersion = version;
+    payload.nodeId = nodeId;
+    payload.nodeType = nodeType;
+    payload.srcNodeId = srcNodeId;
+    payload.dstNodeId = dstNodeId;
+    payload.srcPortId = srcPortId;
+    payload.dstPortId = dstPortId;
+    payload.edgeKind = edgeKind;
+    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
+    daw::ringWrite(ringUiOut, entry);
 }
 
 }  // namespace daw::engine
