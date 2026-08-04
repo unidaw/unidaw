@@ -1613,115 +1613,6 @@ int main(int argc, char** argv) {
     return resolvePluginPath(hostSlotIndex);
   };
 
-  auto restartTrackHost = [&](TrackRuntime& runtime,
-                              const std::vector<std::string>& pluginPaths) -> bool {
-    // Mark as inactive immediately to stop audio callback from reading
-    runtime.active.store(false, std::memory_order_release);
-    runtime.hostReady.store(false, std::memory_order_release);
-    // Arming a host means this slot is a live track again — clear any v22 tombstone so a
-    // slot reused by load/ensureTrack/AddTrack isn't published absent.
-    runtime.removed.store(false, std::memory_order_release);
-
-    std::lock_guard<std::mutex> lock(runtime.controllerMutex);
-    runtime.controller.disconnect();
-
-    // Clear param mirror when switching plugins
-    {
-      std::lock_guard<std::mutex> lockMirror(runtime.paramMirrorMutex);
-      runtime.paramMirror.clear();
-    }
-
-    runtime.config.pluginPaths = pluginPaths;
-    // Names unknown at this bare-path restart; keep parallel + name-agnostic so the
-    // launch never pairs a stale name with a new path. rebuildHostForChain fills it.
-    runtime.config.pluginNames.assign(pluginPaths.size(), std::string());
-    const bool connected = runtime.controller.launch(runtime.config);
-    if (!connected) {
-      return false;
-    }
-    if (!runtime.controller.shmHeader()) {
-      return false;
-    }
-    runtime.watchdog = std::make_unique<daw::Watchdog>(
-        runtime.controller.mailbox(), 500, [ptr = &runtime]() {
-          ptr->hostReady.store(false, std::memory_order_release);
-          ptr->active.store(false, std::memory_order_release);
-          ptr->needsRestart.store(true, std::memory_order_release);
-        });
-    runtime.hostReady.store(true, std::memory_order_release);
-
-    // Only enqueue mirror replay if we have parameters to restore
-    {
-      std::lock_guard<std::mutex> lockMirror(runtime.paramMirrorMutex);
-      if (!runtime.paramMirror.empty()) {
-        enqueueMirrorReplay(runtime);
-        std::cout << "Enqueueing mirror replay for track " << runtime.trackId
-                  << " with " << runtime.paramMirror.size() << " params" << std::endl;
-      } else {
-        std::cout << "Skipping mirror replay for track " << runtime.trackId
-                  << " (no params to restore)" << std::endl;
-      }
-    }
-
-    return true;
-  };
-
-  auto ensureTrack = [&](uint32_t trackId,
-                         const std::string& pluginPath) -> TrackRuntime* {
-    if (trackId >= daw::kUiMaxTracks) {
-      daw::LogLine() << "UI: track " << trackId
-                << " exceeds max tracks " << daw::kUiMaxTracks << std::endl;
-      return nullptr;
-    }
-    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
-    if (runtime) {
-      const std::vector<std::string> desiredPaths{
-          pluginPath.empty() ? std::vector<std::string>() : std::vector<std::string>{pluginPath}};
-      if (runtime->config.pluginPaths != desiredPaths) {
-        if (!restartTrackHost(*runtime, desiredPaths)) {
-          return nullptr;
-        }
-      }
-      return runtime;
-    }
-
-    while (true) {
-      size_t currentSize = 0;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        currentSize = tracks.size();
-      }
-      if (currentSize > trackId) {
-        break;
-      }
-      auto newRuntime =
-          setupTrackRuntime(static_cast<uint32_t>(currentSize), pluginPath, true, true);
-      if (!newRuntime) {
-        return nullptr;
-      }
-      uint32_t newSize = 0;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        tracks.push_back(std::move(newRuntime));
-        newSize = static_cast<uint32_t>(tracks.size());
-      }
-      // A track added here (e.g. loading a plugin onto a fresh lane) must count toward
-      // the published track set, or the honest-count publish (uiTrackCount clamped to
-      // liveTrackCount) would create it, play it, yet hide it from the UI.
-      uint32_t seen = liveTrackCount.load(std::memory_order_relaxed);
-      while (newSize > seen && !liveTrackCount.compare_exchange_weak(
-                                   seen, newSize, std::memory_order_relaxed)) {
-      }
-    }
-    {
-      std::lock_guard<std::mutex> lock(tracksMutex);
-      if (trackId < tracks.size()) {
-        return tracks[trackId].get();
-      }
-    }
-    return nullptr;
-  };
-
   auto applyHostBypassStates = [&](TrackRuntime& runtime) {
     if (!runtime.hostReady.load(std::memory_order_acquire)) {
       return;
@@ -1816,12 +1707,28 @@ int main(int argc, char** argv) {
   };
 
 
+
+  // BUILT HERE, not beside trackSetupDeps at the top: rebuildHostForChain and scheduleHostRestart
+  // are declared just above, and a struct of references cannot be built before its members exist.
+  // See TrackLifecycleDeps for why that forces two structs rather than one.
+  const std::function<void(TrackRuntime&)> rebuildHostForChainFn = rebuildHostForChain;
+  const std::function<void(TrackRuntime&)> scheduleHostRestartFn = scheduleHostRestart;
+  daw::engine::TrackLifecycleDeps trackLifecycleDeps{
+      trackSetupDeps, trackTable, masterTrack, liveTrackCount, masterFxActive,
+      rebuildHostForChainFn, scheduleHostRestartFn};
+  auto ensureTrack = [&](uint32_t trackId, const std::string& pluginPath) {
+    return daw::engine::ensureTrack(trackLifecycleDeps, trackId, pluginPath);
+  };
+  auto restartTrackHost = [&](TrackRuntime& runtime,
+                              const std::vector<std::string>& pluginPaths) {
+    return daw::engine::restartTrackHost(trackLifecycleDeps, runtime, pluginPaths);
+  };
+  auto reconcileMasterHost = [&] { daw::engine::reconcileMasterHost(trackLifecycleDeps); };
   // AT main() SCOPE, NOT BESIDE THE std::thread. masterRenderThread is started inside a nested
   // block and joined at the end of main(), so both this struct and the std::function it holds a
   // reference to must live at least that long. The first version of this extraction declared them
   // in the inner block and ALSO shadowed the outer std::thread with a local one — the thread never
   // started, and what did start read a destroyed struct. 100 checks failed.
-  const std::function<void(TrackRuntime&)> scheduleHostRestartFn = scheduleHostRestart;
   daw::engine::MasterRenderDeps masterRenderDeps{
       running, transport, masterFxActive, masterTrack, audioCallback, scheduleHostRestartFn
   };
@@ -1832,35 +1739,6 @@ int main(int argc, char** argv) {
   // (which operates on any runtime, not just tracks) then launches it. A master with only
   // patcher/mod devices resolves to no plugins, so no host is launched. The master render
   // thread (below) drives its blocks once it is ready.
-  auto reconcileMasterHost = [&]() {
-    if (!masterTrack) {
-      return;
-    }
-    rebuildHostForChain(*masterTrack);
-    if (masterTrack->needsRestart.load(std::memory_order_acquire)) {
-      scheduleHostRestart(*masterTrack);
-    }
-    // Engage the sum-processing path only when there is an enabled VST effect on the
-    // master. The callback ANDs this with hostReady, so this flip alone can only turn the
-    // FX path on/off between "today's sum" and "processed"; it never tears.
-    bool hasFx = false;
-    {
-      std::lock_guard<std::mutex> lock(masterTrack->trackMutex);
-      for (const auto& d : masterTrack->track.chain.devices) {
-        // Count a BYPASSED effect too. Gating on "unbypassed" made toggling bypass on the
-        // master's only insert engage/disengage the whole sum-processing path, which
-        // changes master latency by a full block — an audible discontinuity, and a worse
-        // A/B than the loudness jump level matching is meant to remove. A bypassed insert
-        // is still IN the chain; the host passes audio through it.
-        if (d.kind == daw::DeviceKind::VstEffect) {
-          hasFx = true;
-          break;
-        }
-      }
-    }
-    masterFxActive.store(hasFx, std::memory_order_release);
-  };
-
   daw::engine::RestartWorkerDeps restartWorkerDeps{
       running, restartMutex, restartCv, restartQueue, applyHostBypassStates};
   std::thread restartWorker([&] { daw::engine::runRestartWorker(restartWorkerDeps); });
@@ -3292,7 +3170,6 @@ int main(int argc, char** argv) {
   const std::function<void(uint16_t, uint32_t, uint32_t, uint32_t, uint32_t)> emitChainErrorFn =
       emitChainError;
   const std::function<void(TrackRuntime&)> emitChainSnapshotFn = emitChainSnapshot;
-  const std::function<void(TrackRuntime&)> rebuildHostForChainFn = rebuildHostForChain;
   const std::function<void()> reconcileMasterHostFn = reconcileMasterHost;
   const std::function<void(TrackRuntime&)> refreshSamplerForTrackFn2 = refreshSamplerForTrack;
   daw::engine::ChainCommandDeps chainCommandDeps{

@@ -44,6 +44,46 @@ std::unique_ptr<TrackRuntime> setupTrackRuntime(TrackSetupDeps& deps, uint32_t t
                                                 const std::string& trackPluginPath,
                                                 bool allowConnect, bool startHost);
 
+// A SECOND STRUCT, AND THE REASON IS DECLARATION ORDER RATHER THAN TASTE.
+//
+// setupTrackRuntime is called from main() at roughly line 897, so TrackSetupDeps must be built
+// before that. The three lifecycle operations below need rebuildHostForChain and
+// scheduleHostRestart, which main() does not declare until ~1640 and ~1685 — a struct of
+// references cannot be built before its members exist, so one struct covering both would have to
+// be constructed after 1685 and setupTrackRuntime would have nothing to use at 897.
+//
+// That constraint is the documented shape of this codebase: what blocks an extraction here is
+// main()'s LINEAR ORDER, not tangled logic. The recorded remedies are to split into two structs
+// built at different points, or to pass the late dependency as a parameter. This is the first.
+//
+// It holds a TrackSetupDeps& because ensureTrack CALLS setupTrackRuntime — directly, as a function
+// in this same file, rather than through a std::function main() supplies.
+struct TrackLifecycleDeps {
+  TrackSetupDeps& trackSetupDeps;
+  TrackTable& trackTable;
+  std::unique_ptr<TrackRuntime>& masterTrack;
+  std::atomic<uint32_t>& liveTrackCount;
+  std::atomic<bool>& masterFxActive;
+  const std::function<void(TrackRuntime&)>& rebuildHostForChain;
+  const std::function<void(TrackRuntime&)>& scheduleHostRestart;
+};
+
+// FINDS OR CREATES a track by id, returning nullptr if the table is full. The engine's single
+// answer to "give me track N" — every command that addresses a track that may not exist yet goes
+// through here rather than reaching into the table itself.
+TrackRuntime* ensureTrack(TrackLifecycleDeps& deps, uint32_t trackId,
+                          const std::string& pluginPath);
+
+// Tears a track's plugin host down and builds it again for a new chain. Long and blocking, which
+// is why the restart WORKER thread exists and why this must not be called from the command thread
+// or the producer.
+bool restartTrackHost(TrackLifecycleDeps& deps, TrackRuntime& runtime,
+                      const std::vector<std::string>& pluginPaths);
+
+// Brings the master's own host into line with whether any master FX are active. The master is not
+// an entry in the track table, so nothing that walks the table does this for it.
+void reconcileMasterHost(TrackLifecycleDeps& deps);
+
 // Creates or retires the aux child tracks a parent should have. A no-op on a child.
 void reconcileChildTracks(ChildTrackDeps& deps, TrackRuntime& parent);
 

@@ -1,5 +1,11 @@
 #include "engine_track_setup.h"
 
+#include "engine_rt_helpers.h"
+#include <vector>
+#include <string>
+#include <memory>
+#include <atomic>
+
 // What the two bodies reach for beyond the module header. The file arrived carrying main.cpp's
 // 97 includes, which described where it used to live rather than what it uses.
 #include "engine_instance.h"
@@ -293,6 +299,154 @@ void reconcileChildTracks(ChildTrackDeps& deps, TrackRuntime& parent) {
         }
       }
     }
+}
+
+TrackRuntime* ensureTrack(TrackLifecycleDeps& deps, uint32_t trackId,
+                          const std::string& pluginPath) {  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& liveTrackCount = deps.liveTrackCount;
+
+
+    if (trackId >= daw::kUiMaxTracks) {
+      daw::LogLine() << "UI: track " << trackId
+                << " exceeds max tracks " << daw::kUiMaxTracks << std::endl;
+      return nullptr;
+    }
+    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
+    if (runtime) {
+      const std::vector<std::string> desiredPaths{
+          pluginPath.empty() ? std::vector<std::string>() : std::vector<std::string>{pluginPath}};
+      if (runtime->config.pluginPaths != desiredPaths) {
+        if (!restartTrackHost(deps, *runtime, desiredPaths)) {
+          return nullptr;
+        }
+      }
+      return runtime;
+    }
+
+    while (true) {
+      size_t currentSize = 0;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        currentSize = tracks.size();
+      }
+      if (currentSize > trackId) {
+        break;
+      }
+      auto newRuntime =
+          setupTrackRuntime(deps.trackSetupDeps, static_cast<uint32_t>(currentSize), pluginPath, true, true);
+      if (!newRuntime) {
+        return nullptr;
+      }
+      uint32_t newSize = 0;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        tracks.push_back(std::move(newRuntime));
+        newSize = static_cast<uint32_t>(tracks.size());
+      }
+      // A track added here (e.g. loading a plugin onto a fresh lane) must count toward
+      // the published track set, or the honest-count publish (uiTrackCount clamped to
+      // liveTrackCount) would create it, play it, yet hide it from the UI.
+      uint32_t seen = liveTrackCount.load(std::memory_order_relaxed);
+      while (newSize > seen && !liveTrackCount.compare_exchange_weak(
+                                   seen, newSize, std::memory_order_relaxed)) {
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lock(tracksMutex);
+      if (trackId < tracks.size()) {
+        return tracks[trackId].get();
+      }
+    }
+    return nullptr;
+}
+
+bool restartTrackHost(TrackLifecycleDeps& deps, TrackRuntime& runtime,
+                      const std::vector<std::string>& pluginPaths) {
+
+    // Mark as inactive immediately to stop audio callback from reading
+    runtime.active.store(false, std::memory_order_release);
+    runtime.hostReady.store(false, std::memory_order_release);
+    // Arming a host means this slot is a live track again — clear any v22 tombstone so a
+    // slot reused by load/ensureTrack/AddTrack isn't published absent.
+    runtime.removed.store(false, std::memory_order_release);
+
+    std::lock_guard<std::mutex> lock(runtime.controllerMutex);
+    runtime.controller.disconnect();
+
+    // Clear param mirror when switching plugins
+    {
+      std::lock_guard<std::mutex> lockMirror(runtime.paramMirrorMutex);
+      runtime.paramMirror.clear();
+    }
+
+    runtime.config.pluginPaths = pluginPaths;
+    // Names unknown at this bare-path restart; keep parallel + name-agnostic so the
+    // launch never pairs a stale name with a new path. rebuildHostForChain fills it.
+    runtime.config.pluginNames.assign(pluginPaths.size(), std::string());
+    const bool connected = runtime.controller.launch(runtime.config);
+    if (!connected) {
+      return false;
+    }
+    if (!runtime.controller.shmHeader()) {
+      return false;
+    }
+    runtime.watchdog = std::make_unique<daw::Watchdog>(
+        runtime.controller.mailbox(), 500, [ptr = &runtime]() {
+          ptr->hostReady.store(false, std::memory_order_release);
+          ptr->active.store(false, std::memory_order_release);
+          ptr->needsRestart.store(true, std::memory_order_release);
+        });
+    runtime.hostReady.store(true, std::memory_order_release);
+
+    // Only enqueue mirror replay if we have parameters to restore
+    {
+      std::lock_guard<std::mutex> lockMirror(runtime.paramMirrorMutex);
+      if (!runtime.paramMirror.empty()) {
+        enqueueMirrorReplay(runtime);
+        std::cout << "Enqueueing mirror replay for track " << runtime.trackId
+                  << " with " << runtime.paramMirror.size() << " params" << std::endl;
+      } else {
+        std::cout << "Skipping mirror replay for track " << runtime.trackId
+                  << " (no params to restore)" << std::endl;
+      }
+    }
+
+    return true;
+}
+
+void reconcileMasterHost(TrackLifecycleDeps& deps) {  auto& masterTrack = deps.masterTrack;
+  auto& scheduleHostRestart = deps.scheduleHostRestart;
+  auto& rebuildHostForChain = deps.rebuildHostForChain;
+  auto& masterFxActive = deps.masterFxActive;
+
+
+    if (!masterTrack) {
+      return;
+    }
+    rebuildHostForChain(*masterTrack);
+    if (masterTrack->needsRestart.load(std::memory_order_acquire)) {
+      scheduleHostRestart(*masterTrack);
+    }
+    // Engage the sum-processing path only when there is an enabled VST effect on the
+    // master. The callback ANDs this with hostReady, so this flip alone can only turn the
+    // FX path on/off between "today's sum" and "processed"; it never tears.
+    bool hasFx = false;
+    {
+      std::lock_guard<std::mutex> lock(masterTrack->trackMutex);
+      for (const auto& d : masterTrack->track.chain.devices) {
+        // Count a BYPASSED effect too. Gating on "unbypassed" made toggling bypass on the
+        // master's only insert engage/disengage the whole sum-processing path, which
+        // changes master latency by a full block — an audible discontinuity, and a worse
+        // A/B than the loudness jump level matching is meant to remove. A bypassed insert
+        // is still IN the chain; the host passes audio through it.
+        if (d.kind == daw::DeviceKind::VstEffect) {
+          hasFx = true;
+          break;
+        }
+      }
+    }
+    masterFxActive.store(hasFx, std::memory_order_release);
 }
 
 }  // namespace daw::engine
