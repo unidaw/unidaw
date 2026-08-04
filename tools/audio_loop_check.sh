@@ -160,16 +160,57 @@ if len(notes) < 4:
     print("        always looped, so this is a broken fixture rather than a finding")
     ok = False
 
-if ok:
-    # Pair each audio onset with the nearest note onset and watch the SEPARATION. Both
-    # sources sit at tick 0 of the loop, so in a correctly aligned engine the separation
-    # is a small constant; if audio is positioned by anything other than the block it is
-    # actually in, it is a large constant that MOVES with the pipeline depth.
+# A MISSING HEAD ONSET IS NOT A MEASURED SKEW, and this reported it as one.
+#
+# The pairing below is POSITIONAL. On the intermittent failure, the note side had nothing at
+# t=0, so audio[0]=0.000 paired with notes[0]=3.998 and every separation came out at exactly one
+# loop length. The check announced "the first pass is -4000.0 ms out", which reads as a transport
+# bug and sends the reader looking for one. Nothing was 4 seconds out; the streams had different
+# lengths and were compared as if they did not.
+#
+# COUNTING IS NOT THE TEST. A healthy render of N loops has N audio onsets and N+1 note onsets
+# (the note at the far edge sounds, the audio pass containing it does not finish), and the
+# failing render had SIX of each — equal counts, offset sets. What separates the two is whether
+# the FIRST audio onset has a note beside it, which is the alignment this check is about.
+#
+# AND THE DIAGNOSIS STOPS THERE, deliberately. A dropped head note and a note stream one loop
+# late are INDISTINGUISHABLE in a fixed-length render: the shift loses its last onset to the
+# render edge exactly as the drop loses its first, so both leave the same six timestamps. The
+# check reports the observation and names both readings rather than picking the one that sounds
+# more like a finding.
+if ok and audio and notes:
+    first_gap = min(abs(audio[0] - t) for t in notes)
+    if first_gap > loop_seconds * 0.25:
+        ok = False
+        print("  FAIL: nothing sounded on the note side at the head of the render. The audio at"
+              )
+        print("        %.3f s has no note within %.3f s; the nearest is %.3f s away."
+              % (audio[0], loop_seconds * 0.25, first_gap))
+        print("        TWO READINGS FIT AND THIS DATA CANNOT SEPARATE THEM: the head note may have")
+        print("        been dropped, or the whole note stream may be one loop late. Over a render")
+        print("        of N loops both produce the SAME onset set, because a shifted stream loses")
+        print("        its last onset to truncation exactly as a dropped stream loses its first.")
+        print("        To tell them apart, render LONGER than the loop count and count the notes:")
+        print("        a shift keeps N, a drop gives N-1.")
+        print("        What is certain either way: the separations printed below are an artefact of")
+        print("        pairing two streams by index, not a measurement of skew.")
+
+# Pair each audio onset with the nearest note onset and watch the SEPARATION. Both
+# sources sit at tick 0 of the loop, so in a correctly aligned engine the separation
+# is a small constant; if audio is positioned by anything other than the block it is
+# actually in, it is a large constant that MOVES with the pipeline depth.
+#
+# Printed whenever there is anything to print, INCLUDING after a failure above — the head-onset
+# message tells the reader these numbers are an artefact, and a message that refers to output
+# the failure path suppressed would be worse than no message.
+seps = []
+if audio and notes:
     pairs = min(len(audio), len(notes))
     seps = [audio[k] - notes[k] for k in range(pairs)]
     print("  audio-note separation per pass: %s"
           % ", ".join("%+.4f" % x for x in seps))
 
+if ok and seps:
     # PASS 1 IS NOW ASSERTED, and that is a consequence of rendering offline rather than
     # capturing. It used to be reported and excused: in realtime, audio can begin before the
     # MIDI side has primed its pipeline (no host is "active" yet, so the priming gate does not
