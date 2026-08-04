@@ -503,6 +503,18 @@ target_include_directories(lane_quantize_tests PRIVATE
 add_executable(engine_track_rebuild_tests
   apps/engine_track_rebuild_tests_main.cpp
 )
+
+# locateEditTarget decides what EVERY note, chord and row edit acts on. The rule under test is the
+# one that costs the user data when it goes: a remove landing outside every placement must not mint
+# a clip to hold the nothing it removed.
+add_executable(engine_clip_edit_tests
+  apps/engine_clip_edit_tests_main.cpp
+)
+target_include_directories(engine_clip_edit_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(engine_clip_edit_tests PRIVATE engine_commands)
 target_include_directories(engine_track_rebuild_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${Boost_INCLUDE_DIRS}
@@ -1391,6 +1403,10 @@ set_tests_properties(lane_quantize PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_D
 
 add_test(NAME engine_track_rebuild
   COMMAND engine_track_rebuild_tests
+)
+
+add_test(NAME engine_clip_edit
+  COMMAND engine_clip_edit_tests
 )
 
 add_test(NAME engine_pure
