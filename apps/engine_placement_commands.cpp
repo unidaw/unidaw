@@ -484,4 +484,24 @@ void handleResizePlacement(PlacementCommandDeps& deps,
                 << std::endl;
 }
 
+void handleRemovePlacement(PlacementCommandDeps& deps,
+            const daw::EventEntry& entry,
+            const daw::UiCommandPayload& payload) {
+  auto& applyPlacementEdit = deps.applyPlacementEdit;
+
+      const uint32_t placementId = payload.value0;
+      const bool ok = applyPlacementEdit(
+          payload.trackId, [&](std::vector<daw::ProjectPlacement>& pls) {
+            for (auto it = pls.begin(); it != pls.end(); ++it) {
+              if (it->id == placementId) {
+                pls.erase(it);
+                return true;
+              }
+            }
+            return false;
+          });
+      std::cout << "UI: RemovePlacement " << placementId << (ok ? "" : " (not found)")
+                << std::endl;
+}
+
 }  // namespace daw::engine

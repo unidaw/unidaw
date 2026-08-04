@@ -46,6 +46,7 @@
 #include "engine_sampler_commands.h"
 #include "engine_trackprops_commands.h"
 #include "engine_track_commands.h"
+#include "engine_transport_commands.h"
 #include "engine_types.h"
 #include "engine_undo_commands.h"
 #include "event_log.h"
@@ -56,7 +57,6 @@
 namespace daw::engine {
 
 struct HandleUiEntryDeps {
-  const std::function<bool(uint32_t, const std::function<bool(std::vector<daw::ProjectPlacement>&)>&)>& applyPlacementEdit;
   ArrangeTimeCommandDeps& arrangeTimeCommandDeps;
   AutomationCommandDeps& automationCommandDeps;
   std::vector<BulkStream>& bulkStreams;
@@ -66,38 +66,20 @@ struct HandleUiEntryDeps {
   DeviceCommandDeps& deviceCommandDeps;
   const std::function<void(uint32_t, uint8_t, uint8_t, bool)>& enqueuePreview;
   const std::function<void(const std::vector<uint8_t>&)>& handleAssembledBulk;
-  std::unordered_map<uint32_t, std::vector<uint8_t>>& heldPreview;
   const std::function<void(const char*, const char*, uint32_t, uint32_t, const std::string&)>& historyAppend;
-  std::vector<daw::ProjectTempoPoint>& loadedTempoMap;
-  std::atomic<uint64_t>& loopEndNanotick;
-  std::atomic<uint64_t>& loopStartNanotick;
-  std::atomic<bool>& loopUserSet;
   MarkerCommandDeps& markerCommandDeps;
-  std::unique_ptr<TrackRuntime>& masterTrack;
   ModlinkCommandDeps& modlinkCommandDeps;
   ModuleCommandDeps& moduleCommandDeps;
   NoteCommandDeps& noteCommandDeps;
-  std::atomic<bool>& panicPending;
   PatcherCommandDeps& patcherCommandDeps;
-  const uint64_t patternTicks;
-  std::vector<PreviewNoteReq>& pendingPreviewNotes;
-  std::atomic<bool>& playing;
-  std::mutex& previewMutex;
   PlacementCommandDeps& placementCommandDeps;
   ProjectCommandDeps& projectCommandDeps;
   RequestCommandDeps& requestCommandDeps;
-  std::atomic<bool>& resetTimeline;
-  std::condition_variable& restartCv;
   RowopsCommandDeps& rowopsCommandDeps;
-  std::atomic<bool>& running;
   SamplerCommandDeps& samplerCommandDeps;
-  daw::TempoMapProvider& tempoProvider;
   TrackCommandDeps& trackCommandDeps;
   TrackpropsCommandDeps& trackpropsCommandDeps;
-  std::vector<std::unique_ptr<TrackRuntime>>& tracks;
-  std::mutex& tracksMutex;
-  std::atomic<uint64_t>& transportElapsedNanotick;
-  std::atomic<uint64_t>& transportNanotick;
+  TransportCommandDeps& transportCommandDeps;
   UndoCommandDeps& undoCommandDeps;
 };
 

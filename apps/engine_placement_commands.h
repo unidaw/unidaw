@@ -67,5 +67,8 @@ void handleAddPlacement(PlacementCommandDeps& deps,
 void handleResizePlacement(PlacementCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload);
+void handleRemovePlacement(PlacementCommandDeps& deps,
+            const daw::EventEntry& entry,
+            const daw::UiCommandPayload& payload);
 
 }  // namespace daw::engine
