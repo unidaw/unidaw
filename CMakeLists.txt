@@ -510,6 +510,18 @@ add_executable(engine_track_rebuild_tests
 add_executable(engine_clip_edit_tests
   apps/engine_clip_edit_tests_main.cpp
 )
+
+# The bulk carrier's size checks. A reassembled envelope that declares more points than it carries
+# must be REFUSED rather than applied short: half an envelope is a valid envelope, so delivering it
+# produces a wrong sound instead of an error.
+add_executable(engine_bulk_edit_tests
+  apps/engine_bulk_edit_tests_main.cpp
+)
+target_include_directories(engine_bulk_edit_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(engine_bulk_edit_tests PRIVATE engine_commands)
 target_include_directories(engine_clip_edit_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${Boost_INCLUDE_DIRS}
@@ -1407,6 +1419,10 @@ add_test(NAME engine_track_rebuild
 
 add_test(NAME engine_clip_edit
   COMMAND engine_clip_edit_tests
+)
+
+add_test(NAME engine_bulk_edit
+  COMMAND engine_bulk_edit_tests
 )
 
 add_test(NAME engine_pure
