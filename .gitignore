@@ -43,3 +43,8 @@ build-configure-probe/
 # tree, not the two that happened to exist when it was written.
 build-asan/
 build-*/
+
+# clangd's index, which only started appearing when CMakeLists began generating
+# compile_commands.json. Same lesson as build-asan below: an ignore list has to name what
+# the build ACTUALLY produces, not what it produced when the list was written.
+.cache/
