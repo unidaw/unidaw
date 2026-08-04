@@ -12,6 +12,414 @@
 
 namespace daw::engine {
 
+namespace {
+
+// The six writers, moved verbatim out of main(). Each keeps the name it had, with `To`
+// appended so the forwarding lambda inside runConsumerThread can carry the original name
+// and leave the 719-line thread body untouched.
+
+void writeUiClipWindowSnapshotTo(UiWriterDeps& deps, const std::vector<TrackRuntime*>& trackSnapshot) {
+  auto& clipVersion = deps.clipVersion;
+  auto& clipWindowMutex = deps.clipWindowMutex;
+  auto& clipWindowPending = deps.clipWindowPending;
+  auto& laneQuantizeOf = deps.laneQuantizeOf;
+  auto& uiShm = deps.uiShm;
+
+    if (!uiShm.header || uiShm.header->uiClipOffset == 0) {
+      return;
+    }
+    std::optional<ClipWindowPending> pending;
+    {
+      std::lock_guard<std::mutex> lock(clipWindowMutex);
+      if (clipWindowPending) {
+        pending = clipWindowPending;
+        clipWindowPending.reset();
+      }
+    }
+    if (!pending) {
+      return;
+    }
+    auto* snapshot = reinterpret_cast<daw::UiClipWindowSnapshot*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiClipOffset);
+    TrackRuntime* runtime = nullptr;
+    for (auto* candidate : trackSnapshot) {
+      if (candidate && candidate->trackId == pending->request.trackId) {
+        runtime = candidate;
+        break;
+      }
+    }
+    if (!runtime) {
+      std::memset(snapshot, 0, sizeof(daw::UiClipWindowSnapshot));
+      snapshot->trackId = pending->request.trackId;
+      snapshot->requestId = pending->request.requestId;
+      snapshot->windowStartNanotick = pending->request.windowStartNanotick;
+      snapshot->windowEndNanotick = pending->request.windowEndNanotick;
+      snapshot->clipVersion = clipVersion.load(std::memory_order_acquire);
+      snapshot->flags = daw::kUiClipWindowFlagResync;
+      return;
+    }
+    // M2.17: a track's snapshot carries THAT TRACK's version, which is what the
+    // caller must present back as its base. Publishing the global here is what made
+    // every author collide: typing on track 1 moved the number track 4's editor was
+    // holding, and track 4's next edit was refused as stale.
+    const uint32_t clipVersionValue =
+        runtime->trackClipVersion.load(std::memory_order_acquire);
+    std::lock_guard<std::mutex> lock(runtime->trackMutex);
+    daw::buildUiClipWindowSnapshot(runtime->track.clip,
+                                   pending->request,
+                                   clipVersionValue,
+                                   *snapshot,
+                                   laneQuantizeOf(*runtime));
+}
+
+void writeUiClipAllSnapshotTo(UiWriterDeps& deps, bool force) {
+  auto& clipVersion = deps.clipVersion;
+  auto& laneQuantizeOf = deps.laneQuantizeOf;
+  auto& lastClipAllQuantizeVersion = deps.lastClipAllQuantizeVersion;
+  auto& lastClipAllVersion = deps.lastClipAllVersion;
+  auto& quantizeVersion = deps.quantizeVersion;
+  auto& snapshotTracks = deps.snapshotTracks;
+  auto& uiShm = deps.uiShm;
+
+    if (!uiShm.header || uiShm.header->uiClipAllOffset == 0) {
+      return;
+    }
+    const uint32_t clipVersionValue = clipVersion.load(std::memory_order_acquire);
+    // The region carries each note's quantize DEVIATION, which moves when the LANE's
+    // quantize changes and not when a note does — and SetLaneQuantize deliberately does
+    // not bump the clip version, because it invalidates nobody's edit. So the rebuild
+    // gate is BOTH counters. Gating on the clip version alone left every published
+    // deviation at its old value until some unrelated note edit happened to rebuild:
+    // the bars would have been right only by accident, and stale the rest of the time.
+    const uint32_t quantizeVersionValue =
+        quantizeVersion.load(std::memory_order_acquire);
+    if (!force && clipVersionValue == lastClipAllVersion &&
+        quantizeVersionValue == lastClipAllQuantizeVersion) {
+      return;  // notes unchanged AND quantize unchanged; the region is still valid.
+    }
+    lastClipAllVersion = clipVersionValue;
+    lastClipAllQuantizeVersion = quantizeVersionValue;
+    // Take a fresh track snapshot at rebuild time. The rebuild runs at most once
+    // per clipVersion change, so it must not use a snapshot captured earlier in
+    // the publish iteration — during a load that snapshot can predate the tracks
+    // the load just created, leaving late tracks permanently empty here.
+    const auto freshTracks = snapshotTracks();
+    auto* all = reinterpret_cast<daw::UiClipWindowSnapshot*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiClipAllOffset);
+    for (uint32_t trackId = 0; trackId < daw::kUiMaxTracks; ++trackId) {
+      daw::UiClipWindowSnapshot& snap = all[trackId];
+      TrackRuntime* runtime = nullptr;
+      for (auto* candidate : freshTracks) {
+        if (candidate && candidate->trackId == trackId) {
+          runtime = candidate;
+          break;
+        }
+      }
+      if (!runtime) {
+        std::memset(&snap, 0, sizeof(daw::UiClipWindowSnapshot));
+        snap.trackId = trackId;
+        // No such track: publish the GLOBAL, because that is exactly what the
+        // engine's acceptance guard falls back to for an unknown track. Publishing
+        // 0 here would advertise a base the guard would then reject.
+        snap.clipVersion = clipVersionValue;
+        continue;
+      }
+      daw::ClipWindowRequest request{};
+      request.trackId = trackId;
+      request.requestId = 0;  // unsolicited: this is a published window.
+      request.windowStartNanotick = 0;
+      request.windowEndNanotick = UINT64_MAX;  // whole clip, capped by note array.
+      request.cursorEventIndex = 0;
+      std::lock_guard<std::mutex> lock(runtime->trackMutex);
+      // Per-track version (see the requested-window path). The REBUILD gate above is
+      // still the global counter — any track's change makes this whole region stale.
+      daw::buildUiClipWindowSnapshot(
+          runtime->track.clip, request,
+          runtime->trackClipVersion.load(std::memory_order_acquire), snap,
+          laneQuantizeOf(*runtime));
+    }
+}
+
+void writeUiAutomationLanesTo(UiWriterDeps& deps, bool force) {
+  auto& automationGeneration = deps.automationGeneration;
+  auto& automationVersion = deps.automationVersion;
+  auto& lastAutomationVersion = deps.lastAutomationVersion;
+  auto& snapshotTracks = deps.snapshotTracks;
+  auto& trackIsPersisted = deps.trackIsPersisted;
+  auto& uiShm = deps.uiShm;
+
+    if (!uiShm.header || uiShm.header->uiAutomationOffset == 0) {
+      return;
+    }
+    const uint32_t version = automationVersion.load(std::memory_order_acquire);
+    if (!force && version == lastAutomationVersion) {
+      return;
+    }
+    lastAutomationVersion = version;
+    ++automationGeneration;
+    auto* region = reinterpret_cast<daw::UiAutomationLaneRegion*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiAutomationOffset);
+    // In flight from here until the stamp at the end.
+    region->version = 0;
+    std::atomic_thread_fence(std::memory_order_release);
+    // Clear first: a shorter list than last time must not leave the old tail readable, and
+    // `laneCount` alone would not stop a reader that scanned the array.
+    for (uint32_t i = 0; i < daw::kUiMaxAutomationLanes; ++i) {
+      region->lanes[i] = daw::UiAutomationLane{};
+    }
+    uint32_t count = 0;
+    uint32_t dropped = 0;
+    for (auto* rt : snapshotTracks()) {
+      if (!rt || !trackIsPersisted(*rt)) {
+        continue;  // a tombstone or a derived stem holds no authored automation
+      }
+      // FROM THE RT SNAPSHOT, NOT THE MODEL. This is the whole point of the region. The bug it
+      // exists to expose was a ripple that moved the points in rt->track and in the saved file
+      // while the snapshot the scheduler reads stayed put — right on disk, wrong in your ears.
+      // Publishing rt->track would have made this read-back agree with the file and disagree
+      // with the sound, which is a read-back that certifies the bug instead of catching it.
+      auto ts = std::atomic_load_explicit(&rt->trackSnapshot, std::memory_order_acquire);
+      if (!ts) {
+        continue;
+      }
+      for (const auto& clip : ts->automationClips) {
+        if (count >= daw::kUiMaxAutomationLanes) {
+          ++dropped;
+          continue;  // count the real total, not "at least one"
+        }
+        daw::UiAutomationLane& lane = region->lanes[count];
+        lane.trackId = rt->trackId;
+        lane.targetPluginIndex = clip.targetPluginIndex();
+        lane.pointCount = static_cast<uint32_t>(clip.points().size());
+        lane.flags = clip.discreteOnly() ? daw::kUiAutomationFlagDiscrete : 0u;
+        const std::string& id = clip.paramId();
+        const size_t n = std::min(id.size(), sizeof(lane.paramId) - 1);
+        std::memcpy(lane.paramId, id.data(), n);
+        ++count;
+      }
+    }
+    region->laneCount = count;
+    region->lanesTruncated = dropped;
+    if (dropped > 0) {
+      DAW_EVENT("automation_lanes.truncated")
+          .field("published", count)
+          .field("dropped", dropped)
+          .field("cap", static_cast<uint64_t>(daw::kUiMaxAutomationLanes));
+    }
+    std::atomic_thread_fence(std::memory_order_release);
+    region->version = automationGeneration;  // >= 1; 0 is the in-flight sentinel
+}
+
+void writeUiArrangeSummaryTo(UiWriterDeps& deps, bool force) {
+  auto& arrangeGeneration = deps.arrangeGeneration;
+  auto& arrangeMutex = deps.arrangeMutex;
+  auto& arrangeVersion = deps.arrangeVersion;
+  auto& lastArrangeSongEnd = deps.lastArrangeSongEnd;
+  auto& lastArrangeVersion = deps.lastArrangeVersion;
+  auto& markerList = deps.markerList;
+  auto& songEndNanotick = deps.songEndNanotick;
+  auto& songMeter = deps.songMeter;
+  auto& uiShm = deps.uiShm;
+
+    if (!uiShm.header || uiShm.header->uiArrangeOffset == 0) {
+      return;
+    }
+    const uint32_t version = arrangeVersion.load(std::memory_order_acquire);
+    const uint64_t songEnd = songEndNanotick.load(std::memory_order_acquire);
+    if (!force && version == lastArrangeVersion && songEnd == lastArrangeSongEnd) {
+      return;
+    }
+    lastArrangeVersion = version;
+    lastArrangeSongEnd = songEnd;
+    ++arrangeGeneration;
+    auto* region = reinterpret_cast<daw::UiArrangeSummaryRegion*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiArrangeOffset);
+    // In flight from here until the stamp at the end: a reader that samples 0 retries instead of
+    // reading a half-rewritten list. Reading version-body-version and requiring the two to match
+    // is NOT torn-safe on its own — the number only moves after the body is written.
+    region->version = 0;
+    std::atomic_thread_fence(std::memory_order_release);
+    std::vector<daw::Marker> markers;
+    std::vector<daw::TimeSignaturePoint> points;
+    std::vector<daw::BarBeat> where;
+    {
+      // ONE lock, where the spine needed two held nested. A marker's bar is a LOOKUP in the
+      // meter map, not a derivation that needs the spine and the meter simultaneously, so the
+      // AB/BA pair this used to carry does not exist to invert.
+      std::lock_guard<std::mutex> alock(arrangeMutex);
+      markers = markerList.markers();
+      points = songMeter.points();
+      where.reserve(markers.size());
+      for (const auto& m : markers) {
+        where.push_back(songMeter.barBeatAt(m.nanotick));
+      }
+    }
+    // Clear first: a shorter list than last time must not leave the old tail readable, and
+    // `count` alone would not stop a reader that scanned the array.
+    for (uint32_t i = 0; i < daw::kUiMaxMarkers; ++i) {
+      region->markers[i] = daw::UiMarker{};
+    }
+    for (uint32_t i = 0; i < daw::kUiMaxTimeSigPoints; ++i) {
+      region->timeSigPoints[i] = daw::UiTimeSigPoint{};
+    }
+    const uint32_t markerFit =
+        std::min<uint32_t>(static_cast<uint32_t>(markers.size()), daw::kUiMaxMarkers);
+    for (uint32_t i = 0; i < markerFit; ++i) {
+      auto& out = region->markers[i];
+      out.id = markers[i].id;
+      out.colorRgb = markers[i].colorRgb;
+      out.nanotick = markers[i].nanotick;
+      // THE BAR IS RESOLVED HERE, and that is the reason this region exists rather than the
+      // client reading the marker list: a bar number is a prefix sum across every meter change
+      // before it, NOT tick / barLength. A client deriving it would be reimplementing
+      // TimeSignatureMap::barBeatAt, and the first disagreement draws a marker at the wrong bar
+      // with nothing reporting it.
+      out.bar = static_cast<uint32_t>(where[i].bar);
+      out.beat = where[i].beat;
+      const size_t n = std::min(markers[i].name.size(), sizeof(out.name) - 1);
+      std::memcpy(out.name, markers[i].name.data(), n);
+      out.name[n] = '\0';
+    }
+    const uint32_t pointFit =
+        std::min<uint32_t>(static_cast<uint32_t>(points.size()), daw::kUiMaxTimeSigPoints);
+    for (uint32_t i = 0; i < pointFit; ++i) {
+      region->timeSigPoints[i].nanotick = points[i].nanotick;
+      region->timeSigPoints[i].numerator = points[i].sig.numerator;
+      region->timeSigPoints[i].denominator = points[i].sig.denominator;
+    }
+    region->markerCount = markerFit;
+    region->timeSigCount = pointFit;
+    region->markersTruncated = static_cast<uint32_t>(markers.size()) - markerFit;
+    region->timeSigTruncated = static_cast<uint32_t>(points.size()) - pointFit;
+    // The same value the gate compared, not a fresh load: re-reading here could publish a song
+    // end this rebuild was not triggered by and will not be triggered by again. It is ALSO in
+    // the header (uiSongEndTick) because a client reads it every frame for the unnamed tail and
+    // one integer is not worth a second region read — the header is written from the same
+    // atomic, so they cannot disagree.
+    region->songEndTick = songEnd;
+    if (region->markersTruncated > 0 || region->timeSigTruncated > 0) {
+      // Said out loud, not just in the region: a truncated list nobody notices reads as a
+      // complete one, which is how "the arrangement view is missing markers" becomes a bug
+      // report about the view.
+      DAW_EVENT("arrange.truncated")
+          .field("markers_dropped", region->markersTruncated)
+          .field("timesig_dropped", region->timeSigTruncated);
+    }
+    std::atomic_thread_fence(std::memory_order_release);
+    region->version = arrangeGeneration;
+}
+
+void writeUiPatcherTo(UiWriterDeps& deps, bool force) {
+  auto& lastPatcherVersion = deps.lastPatcherVersion;
+  auto& patcherGraphSnapshot = deps.patcherGraphSnapshot;
+  auto& patcherGraphState = deps.patcherGraphState;
+  auto& uiShm = deps.uiShm;
+  auto& warnedPatcherOwnerTooWide = deps.warnedPatcherOwnerTooWide;
+
+    if (!uiShm.header || uiShm.header->uiPatcherOffset == 0) {
+      return;
+    }
+    const uint32_t version =
+        patcherGraphState.version.load(std::memory_order_acquire);
+    if (!force && version == lastPatcherVersion) {
+      return;
+    }
+    lastPatcherVersion = version;
+    auto graph = std::atomic_load_explicit(&patcherGraphSnapshot,
+                                           std::memory_order_acquire);
+    auto* region = reinterpret_cast<daw::UiPatcherRegion*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiPatcherOffset);
+    region->version = version;
+    if (!graph) {
+      region->nodeCount = 0;
+      region->edgeCount = 0;
+      return;
+    }
+    uint32_t nodeCount = 0;
+    for (const auto& n : graph->nodes) {
+      if (nodeCount >= daw::kUiMaxPatcherNodes) {
+        break;
+      }
+      daw::UiPatcherNode& out = region->nodes[nodeCount++];
+      // The node's owning device, so a UI can name the graph an edit should reach. Reported
+      // rather than truncated if it ever exceeds the published half-word — see UiPatcherNode.
+      if (n.ownerDeviceId > 0xFFFFu) {
+        if (!warnedPatcherOwnerTooWide.exchange(true, std::memory_order_relaxed)) {
+          DAW_EVENT("patcher.owner_device_id_too_wide")
+              .field("device", n.ownerDeviceId)
+              .field("published_max", 0xFFFFu);
+        }
+        out.ownerDeviceId = 0;
+      } else {
+        out.ownerDeviceId = static_cast<uint16_t>(n.ownerDeviceId);
+      }
+      out.id = n.id;
+      out.type = static_cast<uint8_t>(n.type);
+      out.hasConfig = 0;
+      std::memset(out.config, 0, sizeof(out.config));
+      if (n.hasEuclideanConfig) {
+        out.hasConfig = 1;
+        const auto& e = n.euclideanConfig;
+        out.config[0] = static_cast<int32_t>(e.steps);
+        out.config[1] = static_cast<int32_t>(e.hits);
+        out.config[2] = static_cast<int32_t>(e.offset);
+        out.config[3] = static_cast<int32_t>(e.degree);
+        out.config[4] = static_cast<int32_t>(e.octave_offset);
+        out.config[5] = static_cast<int32_t>(e.velocity);
+        out.config[6] = static_cast<int32_t>(e.base_octave);
+        out.config[7] = static_cast<int32_t>(e.duration_ticks & 0xffffffffu);
+      } else if (n.hasRandomDegreeConfig) {
+        out.hasConfig = 1;
+        const auto& r = n.randomDegreeConfig;
+        out.config[0] = static_cast<int32_t>(r.degree);
+        out.config[1] = static_cast<int32_t>(r.velocity);
+        out.config[2] = static_cast<int32_t>(r.duration_ticks & 0xffffffffu);
+      } else if (n.hasSliceSelectConfig) {
+        out.hasConfig = 1;
+        const auto& sel = n.sliceSelectConfig;
+        out.config[0] = static_cast<int32_t>(sel.base);
+        out.config[1] = static_cast<int32_t>(sel.count);
+      } else if (n.hasLfoConfig) {
+        out.hasConfig = 1;
+        const auto& l = n.lfoConfig;
+        out.config[0] = static_cast<int32_t>(std::lround(l.frequency_hz * 1000.0));
+        out.config[1] = static_cast<int32_t>(std::lround(l.depth * 1000.0));
+        out.config[2] = static_cast<int32_t>(std::lround(l.bias * 1000.0));
+        out.config[3] = static_cast<int32_t>(std::lround(l.phase_offset * 1000.0));
+      }
+    }
+    uint32_t edgeCount = 0;
+    for (const auto& e : graph->edges) {
+      if (edgeCount >= daw::kUiMaxPatcherEdges) {
+        break;
+      }
+      daw::UiPatcherEdge& out = region->edges[edgeCount++];
+      out.srcNode = e.src.nodeId;
+      out.srcPort = e.src.portId;
+      out.dstNode = e.dst.nodeId;
+      out.dstPort = e.dst.portId;
+      out.kind = static_cast<uint8_t>(e.kind);
+    }
+    region->nodeCount = nodeCount;
+    region->edgeCount = edgeCount;
+}
+
+void writeUiHarmonySnapshotTo(UiWriterDeps& deps) {
+  auto& harmonyEvents = deps.harmonyEvents;
+  auto& harmonyMutex = deps.harmonyMutex;
+  auto& uiShm = deps.uiShm;
+
+    if (!uiShm.header || uiShm.header->uiHarmonyOffset == 0) {
+      return;
+    }
+    auto* snapshot = reinterpret_cast<daw::UiHarmonySnapshot*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiHarmonyOffset);
+    std::lock_guard<std::mutex> lock(harmonyMutex);
+    daw::buildUiHarmonySnapshot(harmonyEvents, *snapshot);
+}
+
+}  // namespace
+
 void runConsumerThread(ConsumerDeps& deps) {
   auto& audioPlaybackBlockId = deps.audioPlaybackBlockId;
   auto& auxChildOverlayMutex = deps.auxChildOverlayMutex;
@@ -49,13 +457,26 @@ void runConsumerThread(ConsumerDeps& deps) {
   auto& tempoProvider = deps.tempoProvider;
   auto& transportNanotick = deps.transportNanotick;
   auto& uiShm = deps.uiShm;
-  auto& writeUiArrangeSummary = deps.writeUiArrangeSummary;
-  auto& writeUiAutomationLanes = deps.writeUiAutomationLanes;
-  auto& writeUiClipAllSnapshot = deps.writeUiClipAllSnapshot;
+
+  auto writeUiClipWindowSnapshot = [&](const std::vector<TrackRuntime*>& trackSnapshot) {
+    writeUiClipWindowSnapshotTo(deps.uiWriterDeps, trackSnapshot);
+  };
+  auto writeUiClipAllSnapshot = [&](bool force) {
+    writeUiClipAllSnapshotTo(deps.uiWriterDeps, force);
+  };
+  auto writeUiAutomationLanes = [&](bool force) {
+    writeUiAutomationLanesTo(deps.uiWriterDeps, force);
+  };
+  auto writeUiArrangeSummary = [&](bool force) {
+    writeUiArrangeSummaryTo(deps.uiWriterDeps, force);
+  };
+  auto writeUiPatcher = [&](bool force) {
+    writeUiPatcherTo(deps.uiWriterDeps, force);
+  };
+  auto writeUiHarmonySnapshot = [&]() {
+    writeUiHarmonySnapshotTo(deps.uiWriterDeps);
+  };
   auto& writeUiClipExtents = deps.writeUiClipExtents;
-  auto& writeUiClipWindowSnapshot = deps.writeUiClipWindowSnapshot;
-  auto& writeUiHarmonySnapshot = deps.writeUiHarmonySnapshot;
-  auto& writeUiPatcher = deps.writeUiPatcher;
 
     uint32_t currentBlockId = 1;
     uint64_t lastOverflowLogged = 0;

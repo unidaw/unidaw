@@ -21,6 +21,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -35,6 +36,42 @@ namespace daw::engine {
 // Only the pointer is needed here; engine_audio_callback.h is 1,216 lines.
 class EngineAudioCallback;
 
+// WHAT THE SIX UI WRITERS NEED. They live in this module because the consumer thread is their
+// ONLY caller — six single-caller lambdas left behind in main() after their caller moved out is
+// not a shape worth keeping. They get their own struct rather than swelling ConsumerDeps from
+// 43 members to 59; the 16 command modules already nest deps structs this way.
+//
+// The six `last*Version` latches are in here because they are the writers' private state, and
+// they stay OWNED BY main() so the move changes no lifetime and no initialisation order.
+struct UiWriterDeps {
+  uint32_t& arrangeGeneration;
+  std::mutex& arrangeMutex;
+  std::atomic<uint32_t>& arrangeVersion;
+  uint32_t& automationGeneration;
+  std::atomic<uint32_t>& automationVersion;
+  std::atomic<uint32_t>& clipVersion;
+  std::mutex& clipWindowMutex;
+  std::optional<ClipWindowPending>& clipWindowPending;
+  std::vector<daw::HarmonyEvent>& harmonyEvents;
+  std::mutex& harmonyMutex;
+  std::function<daw::LaneQuantize(const TrackRuntime&)> laneQuantizeOf;
+  uint64_t& lastArrangeSongEnd;
+  uint32_t& lastArrangeVersion;
+  uint32_t& lastAutomationVersion;
+  uint32_t& lastClipAllQuantizeVersion;
+  uint32_t& lastClipAllVersion;
+  uint32_t& lastPatcherVersion;
+  daw::MarkerList& markerList;
+  std::shared_ptr<daw::PatcherGraph>& patcherGraphSnapshot;
+  daw::PatcherGraphState& patcherGraphState;
+  std::atomic<uint32_t>& quantizeVersion;
+  std::function<std::vector<TrackRuntime*>()> snapshotTracks;
+  std::atomic<uint64_t>& songEndNanotick;
+  daw::TimeSignatureMap& songMeter;
+  std::function<bool(const TrackRuntime&)> trackIsPersisted;
+  UiShmState& uiShm;
+  std::atomic<bool>& warnedPatcherOwnerTooWide;
+};
 struct ConsumerDeps {
   std::atomic<uint32_t>& audioPlaybackBlockId;
   std::mutex& auxChildOverlayMutex;
@@ -72,13 +109,8 @@ struct ConsumerDeps {
   daw::TempoMapProvider& tempoProvider;
   std::atomic<uint64_t>& transportNanotick;
   UiShmState& uiShm;
-  std::function<void(bool)> writeUiArrangeSummary;
-  std::function<void(bool)> writeUiAutomationLanes;
-  std::function<void(bool)> writeUiClipAllSnapshot;
+  UiWriterDeps& uiWriterDeps;
   std::function<void(bool)> writeUiClipExtents;
-  std::function<void(const std::vector<TrackRuntime*>&)> writeUiClipWindowSnapshot;
-  std::function<void()> writeUiHarmonySnapshot;
-  std::function<void(bool)> writeUiPatcher;
 };
 
 // Runs until `running` goes false. This IS the thread body.
