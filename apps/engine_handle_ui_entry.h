@@ -39,6 +39,7 @@
 #include "engine_module_commands.h"
 #include "engine_note_commands.h"
 #include "engine_patcher_commands.h"
+#include "engine_placement_commands.h"
 #include "engine_project_commands.h"
 #include "engine_request_commands.h"
 #include "engine_rowops_commands.h"
@@ -64,7 +65,6 @@ struct HandleUiEntryDeps {
   const std::function<uint32_t(TrackRuntime*)>& bumpClipVersionFor;
   ChainCommandDeps& chainCommandDeps;
   ClipCommandDeps& clipCommandDeps;
-  std::atomic<bool>& clipDirty;
   std::atomic<uint32_t>& clipVersion;
   DeviceCommandDeps& deviceCommandDeps;
   const std::function<void(uint32_t, uint8_t, uint8_t, bool)>& enqueuePreview;
@@ -80,7 +80,6 @@ struct HandleUiEntryDeps {
   std::unique_ptr<TrackRuntime>& masterTrack;
   ModlinkCommandDeps& modlinkCommandDeps;
   ModuleCommandDeps& moduleCommandDeps;
-  std::atomic<uint32_t>& nextClipId;
   std::atomic<uint32_t>& nextPlacementId;
   NoteCommandDeps& noteCommandDeps;
   std::atomic<bool>& panicPending;
@@ -89,14 +88,11 @@ struct HandleUiEntryDeps {
   std::vector<PreviewNoteReq>& pendingPreviewNotes;
   std::atomic<bool>& playing;
   std::mutex& previewMutex;
+  PlacementCommandDeps& placementCommandDeps;
   ProjectCommandDeps& projectCommandDeps;
-  const std::function<void(uint32_t, TrackStoreState, TrackStoreState)>& pushStructuralUndo;
-  const std::function<void(EngineUndoEntry)>& pushUndo;
   const std::function<std::shared_ptr<const AudioRenderList>(const TrackRuntime&)>& rebuildAudioRender;
   const std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&)>& rebuildFlatAndPublish;
-  const std::function<void()>& recomputeSongEnd;
   RequestCommandDeps& requestCommandDeps;
-  const std::function<bool(uint32_t, daw::UiCommandType, uint32_t)>& requireMatchingClipVersion;
   std::atomic<bool>& resetTimeline;
   const std::function<void(TrackRuntime&)>& resetTrackContent;
   std::condition_variable& restartCv;
@@ -105,7 +101,6 @@ struct HandleUiEntryDeps {
   std::atomic<bool>& running;
   SamplerCommandDeps& samplerCommandDeps;
   const std::function<std::unique_ptr<TrackRuntime>(uint32_t, const std::string&, bool, bool)>& setupTrackRuntime;
-  const std::function<TrackStoreState(const TrackRuntime&)>& snapshotTrackStore;
   daw::TempoMapProvider& tempoProvider;
   TrackCommandDeps& trackCommandDeps;
   TrackpropsCommandDeps& trackpropsCommandDeps;

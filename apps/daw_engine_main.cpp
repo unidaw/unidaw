@@ -3967,21 +3967,25 @@ int main(int argc, char** argv) {
   const std::function<TrackStoreState(const TrackRuntime&)> snapshotTrackStoreFn = snapshotTrackStore;
   const std::function<std::vector<TrackRuntime*>()> snapshotTracksFn = snapshotTracks;
 
+  daw::engine::PlacementCommandDeps placementCommandDeps{
+      applyPlacementEditFn, bumpClipVersionForFn, clipDirty, historyAppendFn, nextClipId,
+      pushStructuralUndoFn, pushUndoFn, rebuildAudioRenderFn, rebuildFlatAndPublishFn,
+      recomputeSongEndFn, requireMatchingClipVersionFn, snapshotTrackStoreFn, tracks,
+      tracksMutex};
+
   daw::engine::HandleUiEntryDeps handleUiEntryDeps{
       applyPlacementEditFn, arrangeTimeCommandDeps, automationCommandDeps,
       buildTrackSnapshotFn, bulkStreams, bulkTick, bumpClipVersionForFn, chainCommandDeps,
-      clipCommandDeps, clipDirty, clipVersion, deviceCommandDeps, enqueuePreviewFn,
+      clipCommandDeps, clipVersion, deviceCommandDeps, enqueuePreviewFn,
       handleAssembledBulkFn, heldPreview, historyAppendFn, liveTrackCount, loadedTempoMap,
       loopEndNanotick, loopStartNanotick, loopUserSet, markerCommandDeps, masterTrack,
-      modlinkCommandDeps, moduleCommandDeps, nextClipId, nextPlacementId, noteCommandDeps,
-      panicPending, patcherCommandDeps, patternTicks, pendingPreviewNotes, playing,
-      previewMutex, projectCommandDeps, pushStructuralUndoFn, pushUndoFn,
-      rebuildAudioRenderFn, rebuildFlatAndPublishFn, recomputeSongEndFn, requestCommandDeps,
-      requireMatchingClipVersionFn, resetTimeline, resetTrackContentFn, restartCv,
-      restartTrackHostFn, rowopsCommandDeps, running, samplerCommandDeps,
-      setupTrackRuntimeFn, snapshotTrackStoreFn, tempoProvider, trackCommandDeps,
-      trackpropsCommandDeps, tracks, tracksMutex, transportElapsedNanotick,
-      transportNanotick, undoCommandDeps
+      modlinkCommandDeps, moduleCommandDeps, nextPlacementId, noteCommandDeps, panicPending,
+      patcherCommandDeps, patternTicks, pendingPreviewNotes, playing, previewMutex,
+      placementCommandDeps, projectCommandDeps, rebuildAudioRenderFn,
+      rebuildFlatAndPublishFn, requestCommandDeps, resetTimeline, resetTrackContentFn,
+      restartCv, restartTrackHostFn, rowopsCommandDeps, running, samplerCommandDeps,
+      setupTrackRuntimeFn, tempoProvider, trackCommandDeps, trackpropsCommandDeps, tracks,
+      tracksMutex, transportElapsedNanotick, transportNanotick, undoCommandDeps
   };
 
   auto handleUiEntry = [&](const daw::EventEntry& entry) {
