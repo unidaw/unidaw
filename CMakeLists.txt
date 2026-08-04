@@ -519,6 +519,19 @@ add_executable(engine_clip_edit_tests
 add_executable(engine_bulk_edit_tests
   apps/engine_bulk_edit_tests_main.cpp
 )
+
+# reconcileChildTracks runs on EVERY consumer tick, so its idempotence is load-bearing: a broken
+# "does this child exist" test would append another child per tick until the 64-track budget broke.
+# Also pins the sampler-stem bus synthesis, which is the gap S6 left — a sampler has no host to ask
+# for a bus layout, so a sampler-only multi-out track used to get no children at all.
+add_executable(engine_track_setup_tests
+  apps/engine_track_setup_tests_main.cpp
+)
+target_include_directories(engine_track_setup_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(engine_track_setup_tests PRIVATE engine_commands)
 target_include_directories(engine_bulk_edit_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${Boost_INCLUDE_DIRS}
@@ -1425,6 +1438,10 @@ add_test(NAME engine_clip_edit
 
 add_test(NAME engine_bulk_edit
   COMMAND engine_bulk_edit_tests
+)
+
+add_test(NAME engine_track_setup
+  COMMAND engine_track_setup_tests
 )
 
 add_test(NAME engine_pure
