@@ -206,15 +206,17 @@ cli() { DAW_UI_SHM_NAME="$SHM3" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load autoout >/dev/null 2>&1 || true
 wait_for_event "$TMP/engine3.log" '"event":"project.load"' 80 "the project to load" "$ENG"
 cli do add-track --force >/dev/null 2>&1 || true      # -> track 1
-# STILL A SLEEP, and labelled rather than hidden: add-track and remove-track emit no
-# event this check can wait on. Inventing one to make a test faster would be the test
-# dictating the product's log.
-sleep 0.6
+# The engine journals one line per command it acted on, and what follows here is another
+# COMMAND rather than a read of published state — so the journal is the right signal.
+# (For a published read it would not be: the consumer publishes on its own tick, which is
+# how a wait_for_history in override_check let 16 of 17 assertions pass by luck.)
+wait_for_history "$TMP" 13
 cli do remove-track --track 1 --force >/dev/null 2>&1 || true
-# STILL A SLEEP, and labelled rather than hidden: add-track and remove-track emit no
-# event this check can wait on. Inventing one to make a test faster would be the test
-# dictating the product's log.
-sleep 0.8
+# The engine journals one line per command it acted on, and what follows here is another
+# COMMAND rather than a read of published state — so the journal is the right signal.
+# (For a published read it would not be: the consumer publishes on its own tick, which is
+# how a wait_for_history in override_check let 16 of 17 assertions pass by luck.)
+wait_for_history "$TMP" 14
 cli do automation --force --track 1 --param index:0 --nanotick 0 --value 0.9 \
   >/dev/null 2>&1 || true
 wait_for_event "$TMP/engine3.log" '"event":"automation.rejected"' 80 \
@@ -253,10 +255,11 @@ cli() { DAW_UI_SHM_NAME="$SHM4" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load auto >/dev/null 2>&1 || true
 wait_for_event "$TMP/engine4.log" '"event":"project.load"' 80 "the project to load" "$ENG"
 cli do add-track --force >/dev/null 2>&1 || true          # -> track 1
-# STILL A SLEEP, and labelled rather than hidden: add-track and remove-track emit no
-# event this check can wait on. Inventing one to make a test faster would be the test
-# dictating the product's log.
-sleep 0.7
+# The engine journals one line per command it acted on, and what follows here is another
+# COMMAND rather than a read of published state — so the journal is the right signal.
+# (For a published read it would not be: the consumer publishes on its own tick, which is
+# how a wait_for_history in override_check let 16 of 17 assertions pass by luck.)
+wait_for_history "$TMP" 17
 cli do automation --force --track 1 --param index:0 --nanotick 0 --value 0.75 \
   >/dev/null 2>&1 || true
 wait_for_event "$TMP/engine4.log" '"event":"automation.point"' 80 \
@@ -266,15 +269,17 @@ grep '"event":"automation.point"' "$TMP/engine4.log" | grep -q '"track":1' || \
   fail "the setup failed: automation was never written to the added track, so the reuse
         assertion below would pass for the wrong reason"
 cli do remove-track --track 1 --force >/dev/null 2>&1 || true
-# STILL A SLEEP, and labelled rather than hidden: add-track and remove-track emit no
-# event this check can wait on. Inventing one to make a test faster would be the test
-# dictating the product's log.
-sleep 0.7
+# The engine journals one line per command it acted on, and what follows here is another
+# COMMAND rather than a read of published state — so the journal is the right signal.
+# (For a published read it would not be: the consumer publishes on its own tick, which is
+# how a wait_for_history in override_check let 16 of 17 assertions pass by luck.)
+wait_for_history "$TMP" 19
 cli do add-track --force >/dev/null 2>&1 || true          # refills slot 1
-# STILL A SLEEP, and labelled rather than hidden: add-track and remove-track emit no
-# event this check can wait on. Inventing one to make a test faster would be the test
-# dictating the product's log.
-sleep 0.9
+# The engine journals one line per command it acted on, and what follows here is another
+# COMMAND rather than a read of published state — so the journal is the right signal.
+# (For a published read it would not be: the consumer publishes on its own tick, which is
+# how a wait_for_history in override_check let 16 of 17 assertions pass by luck.)
+wait_for_history "$TMP" 20
 cli do save autoreuse >/dev/null 2>&1 || true
 wait_until 20 python3 -c "import json;json.load(open('$TMP/autoreuse.uniproj.json'))"
 kill "$ENG" 2>/dev/null || true

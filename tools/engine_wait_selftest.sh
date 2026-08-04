@@ -312,9 +312,27 @@ case "$(printf '%s' "$HAS" | tail -n +2)" in
 esac
 echo "  require_capture: refuses a missing capture WITH the diagnosis, and passes a present one"
 
+# ---- HISTORY. Counts ACCEPTED commands, and does not settle for fewer.
+#
+# No engine needed: the journal is a text file with one line per command, which is exactly what
+# the helper counts. A file is a perfectly good journal, the same way a sleep is a good corpse.
+mkdir -p "$TMP/proj"
+printf '%s\n' '{"seq":1,"op":"load_project"}' '{"seq":2,"op":"write_note"}' \
+  >"$TMP/proj/history.jsonl"
+wait_for_history "$TMP/proj" 2 5 || fail "wait_for_history did not see two lines that were there"
+wait_for_history "$TMP/proj" 3 1 && \
+  fail "wait_for_history was satisfied by TWO commands while waiting for three. A check that
+        issues three edits would then assert against the state after two, which passes for the
+        wrong reason exactly like the sleeps this replaces"
+# A journal that never appears is a timeout, not a crash — DAW_NO_HISTORY produces this.
+wait_for_history "$TMP/nowhere" 1 1 && \
+  fail "wait_for_history returned success for a project directory with no journal at all"
+echo "  history: counts accepted commands, refuses to settle for fewer, times out on no journal"
+
 echo "engine_wait_selftest: PASS — a corpse is diagnosed at once, a load-then-exit is not"
 echo "                      mistaken for a death, a hang reads differently from a death, and"
 echo "                      wait_for_loads counts,
                       start_engine's pid is the command itself, and stop_engine says when it
                       had to escalate, and require_capture refuses a missing capture
-                      with a reason rather than a FileNotFoundError"
+                      with a reason rather than a FileNotFoundError,
+                      and wait_for_history counts the commands the engine accepted"

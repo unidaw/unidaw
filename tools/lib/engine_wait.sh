@@ -390,6 +390,42 @@ wait_for_published() {
   return 1
 }
 
+# WAIT FOR THE ENGINE TO HAVE ACTED ON N COMMANDS.
+#
+# The engine appends one line per ACCEPTED command to history.jsonl in the project directory —
+# {seq, ts_ms, author, scope, base_version, op, outcome, params} — written from the command thread
+# after it has acted. So "the file has N lines" is precisely the thing a `sleep 1.2` after a
+# `cli do ...` was guessing at, and it is the same signal whatever the command was.
+#
+# THIS IS "THE ENGINE ACTED", NOT "THE UI CAN SEE IT". The consumer thread publishes to shared
+# memory on its own tick, so a check that then reads published state through `daw-cli get` wants
+# wait_for_published instead. Use this one when what happens next reads the LOG, the SAVED FILE, or
+# issues another command.
+#
+# Counting LINES rather than parsing seq is deliberate: the writer holds a mutex per line, so a
+# partial line cannot appear, and a count needs no JSON parser in the hot path of a poll.
+#
+# DAW_NO_HISTORY disables the journal entirely. A check that sets it must not use this.
+#
+# USAGE:  wait_for_history <project-dir> <count> [seconds=20]
+#
+# Returns non-zero on timeout and the CALLER still asserts, exactly as wait_until documents.
+wait_for_history() {
+  local dir="$1" want="$2" secs="${3:-20}"
+  local tries=$(( secs * 4 ))
+  local i=0 n=0
+  while [ "$i" -lt "$tries" ]; do
+    # `wc -l < file` fails in the SHELL's redirection when the file is absent, and 2>/dev/null on
+    # wc cannot suppress that — the redirect is evaluated first. Pass the path as an argument so
+    # the error is wc's own and can be silenced: a polling library must not print once per poll.
+    n=$(wc -l "$dir/history.jsonl" 2>/dev/null | awk '{print $1}')
+    [ -n "$n" ] && [ "$n" -ge "$want" ] 2>/dev/null && return 0
+    sleep 0.25
+    i=$((i + 1))
+  done
+  return 1
+}
+
 # USAGE:  wait_until <seconds> <command...>     — polls every 0.25s until the command succeeds.
 # Returns non-zero on timeout, and the CALLER still asserts: this removes the race, it does not
 # substitute for the assertion. A check whose poll times out must still fail with its own message
