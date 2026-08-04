@@ -1,5 +1,6 @@
 // Bodies for apps/engine_sampler_commands.h. Each moved verbatim out of handleUiEntry;
 // see the header for why they are void and what that preserves.
+#include <filesystem>
 #include "apps/engine_sampler_commands.h"
 
 #include <algorithm>
@@ -158,7 +159,6 @@ void handleSamplerSlice(SamplerCommandDeps& deps,
   auto& tracksMutex = deps.trackTable.tracksMutex;
   auto& tempoProvider = deps.tempoProvider;
   const auto& reportSamplerReject = deps.reportSamplerReject;
-  const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   const bool isSlice = commandType == daw::UiCommandType::SamplerSlice;
   daw::UiSamplerSlicePayload sp{};
   daw::UiSamplerMarkerPayload mp{};
@@ -339,7 +339,7 @@ void handleSamplerSlice(SamplerCommandDeps& deps,
       break;
     }
     if (ok) {
-      refreshSamplerForTrack(*runtime);
+      refreshSamplerForTrack(deps.samplerRefreshDeps, *runtime);
     }
   }
   if (!ok) {
@@ -689,7 +689,6 @@ void handleSamplerSetSlot(SamplerCommandDeps& deps,
   auto& tracks = deps.trackTable.tracks;
   auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& reportSamplerReject = deps.reportSamplerReject;
-  const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerSetSlotPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, p.trackId);
@@ -844,7 +843,7 @@ void handleSamplerSetSlot(SamplerCommandDeps& deps,
     }
   done:
     if (applied) {
-      refreshSamplerForTrack(*runtime);
+      refreshSamplerForTrack(deps.samplerRefreshDeps, *runtime);
     }
   }
   if (!applied) {
@@ -878,7 +877,6 @@ void handleSamplerSetDevice(SamplerCommandDeps& deps,
   auto& tracks = deps.trackTable.tracks;
   auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& reportSamplerReject = deps.reportSamplerReject;
-  const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerSetDevicePayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, p.trackId);
@@ -938,7 +936,7 @@ void handleSamplerSetDevice(SamplerCommandDeps& deps,
     // the model's value beside the snapshot's slots — which is exactly the defect #96 was:
     // an answer whose parts describe different moments. One source, one clock, one refresh.
     if (applied) {
-      refreshSamplerForTrack(*runtime);
+      refreshSamplerForTrack(deps.samplerRefreshDeps, *runtime);
     }
   }
   if (!applied) {
@@ -975,7 +973,6 @@ void handleSamplerSetFilter(SamplerCommandDeps& deps,
   auto& tracks = deps.trackTable.tracks;
   auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& reportSamplerReject = deps.reportSamplerReject;
-  const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerFilterPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, p.trackId);
@@ -1031,7 +1028,7 @@ void handleSamplerSetFilter(SamplerCommandDeps& deps,
       }
     }
     if (applied) {
-      refreshSamplerForTrack(*runtime);
+      refreshSamplerForTrack(deps.samplerRefreshDeps, *runtime);
     }
   }
   if (!applied) {
@@ -1066,7 +1063,6 @@ void handleSamplerSetVintage(SamplerCommandDeps& deps,
   auto& tracks = deps.trackTable.tracks;
   auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& reportSamplerReject = deps.reportSamplerReject;
-  const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerVintagePayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, p.trackId);
@@ -1122,7 +1118,7 @@ void handleSamplerSetVintage(SamplerCommandDeps& deps,
       }
     }
     if (applied) {
-      refreshSamplerForTrack(*runtime);
+      refreshSamplerForTrack(deps.samplerRefreshDeps, *runtime);
     }
   }
   if (!applied) {
@@ -1157,7 +1153,6 @@ void handleSamplerSetLfo(SamplerCommandDeps& deps,
   auto& tracks = deps.trackTable.tracks;
   auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& reportSamplerReject = deps.reportSamplerReject;
-  const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerLfoPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, p.trackId);
@@ -1232,7 +1227,7 @@ void handleSamplerSetLfo(SamplerCommandDeps& deps,
       }
     }
     if (applied) {
-      refreshSamplerForTrack(*runtime);
+      refreshSamplerForTrack(deps.samplerRefreshDeps, *runtime);
     }
   }
   if (!applied) {
@@ -1264,7 +1259,6 @@ void handleSamplerSetEnvelope(SamplerCommandDeps& deps,
   auto& tracks = deps.trackTable.tracks;
   auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& reportSamplerReject = deps.reportSamplerReject;
-  const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerEnvelopePayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, p.trackId);
@@ -1337,7 +1331,7 @@ void handleSamplerSetEnvelope(SamplerCommandDeps& deps,
       }
     }
     if (applied) {
-      refreshSamplerForTrack(*runtime);
+      refreshSamplerForTrack(deps.samplerRefreshDeps, *runtime);
     }
   }
   if (!applied) {
@@ -1385,7 +1379,6 @@ void handleSamplerLoad(SamplerCommandDeps& deps,
   auto& tracks = deps.trackTable.tracks;
   auto& tracksMutex = deps.trackTable.tracksMutex;
   const auto& reportSamplerReject = deps.reportSamplerReject;
-  const auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   daw::UiSamplerLoadPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
   const std::string name(p.name, strnlen(p.name, sizeof(p.name)));
@@ -1452,7 +1445,7 @@ void handleSamplerLoad(SamplerCommandDeps& deps,
       break;
     }
     if (found) {
-      refreshSamplerForTrack(*runtime);
+      refreshSamplerForTrack(deps.samplerRefreshDeps, *runtime);
     }
   }
   if (!found) {
@@ -1476,6 +1469,77 @@ void handleSamplerLoad(SamplerCommandDeps& deps,
       .field("fixed_pitch", (p.flags & daw::kSamplerLoadFixedPitch) ? 1u : 0u)
       .field("file", name);
   return;
+}
+
+std::string resolveSourcePath(const std::string& loadedProjectDir,
+                              const std::string& sourcePath) {
+
+    std::filesystem::path sp(sourcePath);
+    std::filesystem::path base = sp.is_absolute() || loadedProjectDir.empty()
+                                     ? sp
+                                     : std::filesystem::path(loadedProjectDir) / sp;
+    // A BARE NAME ALSO LOOKS IN THE PROJECT'S SIBLING audio/ DIRECTORY, which is where samples
+    // actually live: projects sit in presets/projects/ and every one references its audio as
+    // "../audio/<name>".
+    //
+    // That prefix is NINE of the load command's TWENTY-FOUR name bytes, leaving fifteen for a
+    // filename — so "../audio/waveform_probe.wav" is twenty-seven and the repo's own sample could
+    // not be named by the command at all. The web-UI agent hit it building a load verb and worked
+    // around it by copying a wav next to the project, saying in a comment that it was a
+    // workaround rather than a test.
+    //
+    // A PURE FALLBACK, tried only when the primary does not exist, so nothing that resolves today
+    // resolves anywhere else tomorrow. It is a search path and not a claim that two directories
+    // are equivalent: ambiguity is settled by ORDER, project directory first.
+    //
+    // This does not remove the 24-byte cap, it moves it off the common case. A long enough
+    // filename still will not fit, and the general answer is to carry the path over the bulk
+    // carrier (opcode 83) the way SamplerSetEnvelopePoints does.
+    std::error_code exists_ec;
+    if (!sp.is_absolute() && !loadedProjectDir.empty() &&
+        !std::filesystem::exists(base, exists_ec)) {
+      const std::filesystem::path alt =
+          std::filesystem::path(loadedProjectDir) / ".." / "audio" / sp;
+      if (std::filesystem::exists(alt, exists_ec)) {
+        base = alt;
+      }
+    }
+    std::error_code rec;
+    std::filesystem::path canon = std::filesystem::weakly_canonical(base, rec);
+    return rec ? base.lexically_normal().string() : canon.string();
+}
+
+void refreshSamplerForTrack(SamplerRefreshDeps& deps, TrackRuntime& rt) {
+  auto& engineConfig = deps.engineConfig;
+  auto& samplerKitVersion = deps.samplerKitVersion;
+  auto& rebuildSamplerRender = deps.rebuildSamplerRender;
+
+    // THE ONE FUNNEL every sampler edit passes through — load, set-slot, slice, marker, envelope,
+    // LFO — which is why the kit version is bumped here rather than at each of them. A counter
+    // maintained at N call sites is a counter that is wrong at the site someone forgets.
+    const uint32_t newVersion =
+        samplerKitVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
+    const daw::Device* found = nullptr;
+    for (const auto& d : rt.track.chain.devices) {
+      if (d.kind == daw::DeviceKind::Sampler && d.hasSampler) {
+        found = &d;
+        break;  // one sampler per track for now: it is a head-of-chain instrument
+      }
+    }
+    if (!found) {
+      rt.samplerDeviceId.store(0, std::memory_order_release);
+      rt.samplerSnapshot.reset();
+      rt.samplerRuntime.setSnapshot(nullptr);
+      return;
+    }
+    rt.samplerDeviceId.store(found->id, std::memory_order_release);
+    auto built = rebuildSamplerRender(found->sampler, rt.trackId, found->id);
+    // Stamped before it is shared, which is the only moment it can be: everything downstream
+    // holds it as const, which is what makes a snapshot safe to read from the audio thread.
+    const_cast<daw::SamplerRender*>(built.get())->version = newVersion;
+    rt.samplerSnapshot = std::move(built);
+    rt.samplerRuntime.configure(found->sampler.voiceCap, engineConfig.sampleRate);
+    rt.samplerRuntime.setSnapshot(rt.samplerSnapshot);
 }
 
 }  // namespace daw::engine

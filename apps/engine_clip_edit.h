@@ -58,6 +58,13 @@ struct ClipEditDeps {
   std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&)> rebuildFlatAndPublish;
   std::function<TrackStoreState(const TrackRuntime&)> snapshotTrackStore;
   TrackTable& trackTable;
+  // ADDED WITH requireMatchingClipVersion, which REFUSES rather than returning a value: it tells
+  // the caller through emitClipReject and records the refusal in the journal, so both arrive here
+  // together. clipVersion, emitUiDiff and trackTable were already members.
+  const std::function<void(daw::UiClipRejectReason, uint32_t, uint32_t, uint32_t,
+                           daw::UiCommandType)>& emitClipReject;
+  const std::function<void(const char*, const char*, uint32_t, uint32_t,
+                           const std::string&)>& historyAppend;
 };
 
 EditTarget locateEditTarget(LocateTargetDeps& deps, TrackRuntime& rt, uint64_t absTick,
@@ -86,5 +93,15 @@ bool applyAddChord(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, uint
 bool applyRemoveNote(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, uint8_t pitch, uint16_t flags, bool recordUndo);
 bool applyRemoveChord(ClipEditDeps& deps, uint32_t trackId, uint32_t chordId, bool recordUndo);
 bool applyRemoveChordAt(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, uint8_t column, bool recordUndo);
+
+// THE OPTIMISTIC-CONCURRENCY GUARD. Every clip edit carries the clipVersion it was composed
+// against; if the engine has moved on, the edit is REFUSED rather than applied to a document the
+// caller has not seen. That refusal goes to the UI and to the journal, which is why this needs
+// both emitClipReject and historyAppend.
+bool requireMatchingClipVersion(ClipEditDeps& deps, uint32_t baseVersion, daw::UiCommandType commandType, uint32_t trackId);
+
+// Which placement covers this tick on this track, if any. The one answer to a question that used
+// to be asked five different ways.
+PlacementHit findPlacementAt(ClipEditDeps& deps, TrackRuntime& rt, uint64_t nanotick);
 
 }  // namespace daw::engine

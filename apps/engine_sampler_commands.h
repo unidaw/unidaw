@@ -39,6 +39,20 @@ namespace daw::engine {
 //
 // The four callables stay as they were written — passing them keeps the handlers a pure move.
 // Turning them into methods on some engine object is a later step and a separate argument.
+// WHAT REBUILDING A KIT NEEDS, and nothing more. Split out from SamplerCommandDeps for one
+// concrete reason: main() resolves a sample path while it is still LOADING the project, ~700
+// lines before the command deps can exist (those need applyAddNote, which needs the clip store).
+// A struct of references cannot be built before its members do, so the two operations that are
+// needed early get their own struct built early, and SamplerCommandDeps holds a reference to it.
+// This is the same remedy TrackSetupDeps/TrackLifecycleDeps uses, and it is the documented answer
+// to main()'s linear declaration order.
+struct SamplerRefreshDeps {
+  const daw::HostConfig& engineConfig;
+  std::atomic<uint32_t>& samplerKitVersion;
+  const std::function<std::shared_ptr<const daw::SamplerRender>(
+      const daw::SamplerState&, uint32_t, uint32_t)>& rebuildSamplerRender;
+};
+
 struct SamplerCommandDeps {
   // The read-back commands (RequestSamplerKit, RequestSamplerEnvelope) write their answer
   // straight into the published region, so the SHM state is a dependency like any other. It was
@@ -48,10 +62,13 @@ struct SamplerCommandDeps {
   UiShmState& uiShm;
   TrackTable& trackTable;
   daw::TempoMapProvider& tempoProvider;
+  // refreshSamplerForTrack USED TO BE A MEMBER here — a std::function main() built and handed
+  // over. It is a function in this file now, and the command handlers below reach it directly, so
+  // the indirection is gone rather than relocated. What it needs arrives as SamplerRefreshDeps.
+  SamplerRefreshDeps& samplerRefreshDeps;
 
   const std::function<void(daw::UiCommandType, daw::UiSamplerRejectReason,
                            uint32_t, uint32_t, uint16_t)>& reportSamplerReject;
-  const std::function<void(TrackRuntime&)>& refreshSamplerForTrack;
   const std::function<std::shared_ptr<const daw::SamplerRender>(
       const daw::SamplerState&, uint32_t, uint32_t)>& rebuildSamplerRender;
   const std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint16_t, bool,
@@ -102,5 +119,21 @@ void handleSamplerLoad(SamplerCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType);
+
+// TAKES loadedProjectDir DIRECTLY RATHER THAN A DEPS STRUCT, and not for brevity: rebuildSampler-
+// Render calls this, and SamplerRefreshDeps holds rebuildSamplerRender, so a struct parameter here
+// would need the struct to exist before the lambda that the struct refers to. A pure function of
+// (project directory, stored path) has no such cycle — and that is what this always was.
+//
+// Where does this sample actually live? A project stores sample paths RELATIVE to itself, so the
+// same project opened from a different directory has to resolve them again. Falls back to the
+// sibling audio/ directory and to the configured search path before giving up.
+std::string resolveSourcePath(const std::string& loadedProjectDir,
+                              const std::string& sourcePath);
+
+// Rebuild the render for whatever kit this track now has and publish the new version. Every
+// sampler edit ends here; it is the one place that turns edited SamplerState into something the
+// producer can play.
+void refreshSamplerForTrack(SamplerRefreshDeps& deps, TrackRuntime& rt);
 
 }  // namespace daw::engine

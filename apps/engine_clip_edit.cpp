@@ -929,4 +929,99 @@ bool applyRemoveChordAt(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick,
     return emitRemoveChordDiff(deps, trackId, *removed, absTick);
 }
 
+bool requireMatchingClipVersion(ClipEditDeps& deps, uint32_t baseVersion, daw::UiCommandType commandType, uint32_t trackId) {
+  auto& clipVersion = deps.clipVersion;
+  auto& emitClipReject = deps.emitClipReject;
+  auto& emitUiDiff = deps.emitUiDiff;
+  auto& historyAppend = deps.historyAppend;
+  auto& tracks = deps.trackTable.tracks;
+  auto& tracksMutex = deps.trackTable.tracksMutex;
+
+    uint32_t current = clipVersion.load(std::memory_order_acquire);
+    // Undo/Redo (and the other global-scope ops) can touch ANY track, so they are
+    // gated on the global counter — comparing them against the caller's incidental
+    // trackId would let an undo of a track-3 edit ride on track 0's version.
+    if (!daw::uiCommandIsGlobalScope(commandType)) {
+      bool haveTrack = false;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (trackId < tracks.size() && tracks[trackId] &&
+            !tracks[trackId]->removed.load(std::memory_order_acquire)) {
+          current = tracks[trackId]->trackClipVersion.load(std::memory_order_acquire);
+          haveTrack = true;
+        }
+      }
+      if (!haveTrack) {
+        // A track-scoped edit naming a track that is not there used to fall through to
+        // the global counter, get ACCEPTED, and then quietly do nothing when the edit
+        // itself could not find the track. Refuse it here and say why: unlike a stale
+        // base, retrying will never help, and the caller needs to know that.
+        historyAppend(daw::uiCommandTypeName(commandType), "rejected:no_track", trackId,
+                      baseVersion, "");
+        DAW_EVENT("clip.unknown_track")
+            .field("track", trackId)
+            .field("command", static_cast<uint32_t>(commandType))
+            .field("action", "rejected");
+        emitClipReject(daw::UiClipRejectReason::UnknownTrack, trackId, baseVersion,
+                       current, commandType);
+        return false;
+      }
+    }
+    daw::UiDiffPayload diffPayload{};
+    if (daw::requireMatchingClipVersion(baseVersion, current, diffPayload)) {
+      return true;
+    }
+    // Say WHICH track this version belongs to. The payload's clipVersion is now a
+    // per-track counter (M2.17), and leaving trackId at its default 0 hands a client a
+    // track-4 version labelled as track 0's — a trap that costs nothing to remove and
+    // would be very hard to find. Global-scope commands keep 0, which is correct there:
+    // they are gated on the global counter.
+    const uint32_t scopeTrack =
+        daw::uiCommandIsGlobalScope(commandType) ? 0u : trackId;
+    diffPayload.trackId = scopeTrack;
+    emitUiDiff(diffPayload);
+    // Say it OUT LOUD. A resync request tells the caller to re-read; it does not tell
+    // them they were refused, which edit, or what to retry with — so a client that
+    // stamps the wrong base sees only "nothing happened", on every edit, forever.
+    emitClipReject(daw::UiClipRejectReason::StaleBase, scopeTrack, baseVersion, current,
+                   commandType);
+    historyAppend(daw::uiCommandTypeName(commandType), "rejected:version", trackId,
+                  baseVersion, "");
+    DAW_EVENT("clip.version_mismatch")
+        .field("base", baseVersion)
+        .field("current", current)
+        .field("command", static_cast<uint32_t>(commandType))
+        .field("track", trackId)
+        .field("action", "resync_requested");
+    return false;
+}
+
+PlacementHit findPlacementAt(ClipEditDeps& deps, TrackRuntime& rt, uint64_t nanotick) {
+
+    PlacementHit hit;
+    for (auto& pl : rt.sourcePlacements) {
+      if (!pl.at.has_value()) {
+        continue;  // loose session cell: no timeline position
+      }
+      uint64_t len = pl.lengthNanoticks;
+      if (len == 0) {
+        for (const auto& c : rt.ownedClips) {
+          if (c.id == pl.clipId) {
+            len = c.lengthNanoticks;
+            break;
+          }
+        }
+      }
+      if (nanotick < *pl.at || nanotick >= *pl.at + len) {
+        continue;
+      }
+      ++hit.candidates;
+      if (!hit.placement || *pl.at >= *hit.placement->at) {
+        hit.placement = &pl;
+        hit.end = *pl.at + len;
+      }
+    }
+    return hit;
+}
+
 }  // namespace daw::engine

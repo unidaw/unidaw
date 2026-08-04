@@ -1916,6 +1916,8 @@ int main(int argc, char** argv) {
       logUiDiffDrop();
     }
   };
+  const std::function<void(daw::UiClipRejectReason, uint32_t, uint32_t, uint32_t,
+                           daw::UiCommandType)> emitClipRejectFn = emitClipReject;
 
   daw::engine::ChainSnapshotDeps chainSnapshotDeps{
       chainVersion, getRingUiOut, resolveDevicePluginPath};
@@ -2059,42 +2061,6 @@ int main(int argc, char** argv) {
   // Resolve a clip's sourcePath the one way both the decode funnel and the clip-
   // descriptor publish must agree on: absolute paths as given; relative paths against
   // the project directory; then fold '..'/symlinks so one file yields one stable key.
-  auto resolveSourcePath = [&](const std::string& sourcePath) -> std::string {
-    std::filesystem::path sp(sourcePath);
-    std::filesystem::path base = sp.is_absolute() || loadedProjectDir.empty()
-                                     ? sp
-                                     : std::filesystem::path(loadedProjectDir) / sp;
-    // A BARE NAME ALSO LOOKS IN THE PROJECT'S SIBLING audio/ DIRECTORY, which is where samples
-    // actually live: projects sit in presets/projects/ and every one references its audio as
-    // "../audio/<name>".
-    //
-    // That prefix is NINE of the load command's TWENTY-FOUR name bytes, leaving fifteen for a
-    // filename — so "../audio/waveform_probe.wav" is twenty-seven and the repo's own sample could
-    // not be named by the command at all. The web-UI agent hit it building a load verb and worked
-    // around it by copying a wav next to the project, saying in a comment that it was a
-    // workaround rather than a test.
-    //
-    // A PURE FALLBACK, tried only when the primary does not exist, so nothing that resolves today
-    // resolves anywhere else tomorrow. It is a search path and not a claim that two directories
-    // are equivalent: ambiguity is settled by ORDER, project directory first.
-    //
-    // This does not remove the 24-byte cap, it moves it off the common case. A long enough
-    // filename still will not fit, and the general answer is to carry the path over the bulk
-    // carrier (opcode 83) the way SamplerSetEnvelopePoints does.
-    std::error_code exists_ec;
-    if (!sp.is_absolute() && !loadedProjectDir.empty() &&
-        !std::filesystem::exists(base, exists_ec)) {
-      const std::filesystem::path alt =
-          std::filesystem::path(loadedProjectDir) / ".." / "audio" / sp;
-      if (std::filesystem::exists(alt, exists_ec)) {
-        base = alt;
-      }
-    }
-    std::error_code rec;
-    std::filesystem::path canon = std::filesystem::weakly_canonical(base, rec);
-    return rec ? base.lexically_normal().string() : canon.string();
-  };
-
   // REGISTER A DECODED FILE FOR WAVEFORM DISPLAY — one definition, two callers.
   //
   // `decodeAudioFile` already BUILDS the min/max pyramid; the clip path interned it and the
@@ -2136,6 +2102,12 @@ int main(int argc, char** argv) {
   // atomic_store_explicit, exactly as trackSnapshot and audioRender already are. The snapshot
   // OWNS its audio by shared_ptr, so a render in flight keeps its buffers alive by construction
   // and the last reference dies here, on the command thread, where a free is legal.
+  // Both moved into engine_sampler_commands as free functions. main() keeps forwarders because
+  // it still calls them; the module itself reaches them directly, without a std::function.
+  auto resolveSourcePath = [&](const std::string& sourcePath) {
+    return daw::engine::resolveSourcePath(loadedProjectDir, sourcePath);
+  };
+
   auto rebuildSamplerRender =
       [&](const daw::SamplerState& st,
           uint32_t trackId,
@@ -2211,38 +2183,18 @@ int main(int argc, char** argv) {
     return out;
   };
 
+  const std::function<std::shared_ptr<const daw::SamplerRender>(
+      const daw::SamplerState&, uint32_t, uint32_t)> rebuildSamplerRenderFn =
+      rebuildSamplerRender;
+  daw::engine::SamplerRefreshDeps samplerRefreshDeps{
+      engineConfig, samplerKitVersion, rebuildSamplerRenderFn};
+  auto refreshSamplerForTrack = [&](TrackRuntime& rt) {
+    daw::engine::refreshSamplerForTrack(samplerRefreshDeps, rt);
+  };
+
   // Installs (or clears) a track's sampler from its device chain. Called from EVERY site that
   // changes a chain, so "did you remember to rebuild the sampler" is not a question anyone has to
   // answer twice. Caller holds trackMutex.
-  auto refreshSamplerForTrack = [&](TrackRuntime& rt) {
-    // THE ONE FUNNEL every sampler edit passes through — load, set-slot, slice, marker, envelope,
-    // LFO — which is why the kit version is bumped here rather than at each of them. A counter
-    // maintained at N call sites is a counter that is wrong at the site someone forgets.
-    const uint32_t newVersion =
-        samplerKitVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
-    const daw::Device* found = nullptr;
-    for (const auto& d : rt.track.chain.devices) {
-      if (d.kind == daw::DeviceKind::Sampler && d.hasSampler) {
-        found = &d;
-        break;  // one sampler per track for now: it is a head-of-chain instrument
-      }
-    }
-    if (!found) {
-      rt.samplerDeviceId.store(0, std::memory_order_release);
-      rt.samplerSnapshot.reset();
-      rt.samplerRuntime.setSnapshot(nullptr);
-      return;
-    }
-    rt.samplerDeviceId.store(found->id, std::memory_order_release);
-    auto built = rebuildSamplerRender(found->sampler, rt.trackId, found->id);
-    // Stamped before it is shared, which is the only moment it can be: everything downstream
-    // holds it as const, which is what makes a snapshot safe to read from the audio thread.
-    const_cast<daw::SamplerRender*>(built.get())->version = newVersion;
-    rt.samplerSnapshot = std::move(built);
-    rt.samplerRuntime.configure(found->sampler.voiceCap, engineConfig.sampleRate);
-    rt.samplerRuntime.setSnapshot(rt.samplerSnapshot);
-  };
-
   // Resolve a track's placed AUDIO clips into a sample-domain render list for the
   // audio thread: decode each source (deduped per rebuild), and convert its
   // placement to output frames. Runs off the audio thread (decodes files); the caller
@@ -2583,68 +2535,6 @@ int main(int argc, char** argv) {
   // because someone typed on track 1 — the collision that made `daw-cli do` need --force
   // and made two authors impossible. Falls back to the global counter when the track is
   // unknown, which keeps non-track-scoped edits behaving exactly as before.
-  auto requireMatchingClipVersion = [&](uint32_t baseVersion,
-                                        daw::UiCommandType commandType,
-                                        uint32_t trackId) -> bool {
-    uint32_t current = clipVersion.load(std::memory_order_acquire);
-    // Undo/Redo (and the other global-scope ops) can touch ANY track, so they are
-    // gated on the global counter — comparing them against the caller's incidental
-    // trackId would let an undo of a track-3 edit ride on track 0's version.
-    if (!daw::uiCommandIsGlobalScope(commandType)) {
-      bool haveTrack = false;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (trackId < tracks.size() && tracks[trackId] &&
-            !tracks[trackId]->removed.load(std::memory_order_acquire)) {
-          current = tracks[trackId]->trackClipVersion.load(std::memory_order_acquire);
-          haveTrack = true;
-        }
-      }
-      if (!haveTrack) {
-        // A track-scoped edit naming a track that is not there used to fall through to
-        // the global counter, get ACCEPTED, and then quietly do nothing when the edit
-        // itself could not find the track. Refuse it here and say why: unlike a stale
-        // base, retrying will never help, and the caller needs to know that.
-        historyAppend(daw::uiCommandTypeName(commandType), "rejected:no_track", trackId,
-                      baseVersion, "");
-        DAW_EVENT("clip.unknown_track")
-            .field("track", trackId)
-            .field("command", static_cast<uint32_t>(commandType))
-            .field("action", "rejected");
-        emitClipReject(daw::UiClipRejectReason::UnknownTrack, trackId, baseVersion,
-                       current, commandType);
-        return false;
-      }
-    }
-    daw::UiDiffPayload diffPayload{};
-    if (daw::requireMatchingClipVersion(baseVersion, current, diffPayload)) {
-      return true;
-    }
-    // Say WHICH track this version belongs to. The payload's clipVersion is now a
-    // per-track counter (M2.17), and leaving trackId at its default 0 hands a client a
-    // track-4 version labelled as track 0's — a trap that costs nothing to remove and
-    // would be very hard to find. Global-scope commands keep 0, which is correct there:
-    // they are gated on the global counter.
-    const uint32_t scopeTrack =
-        daw::uiCommandIsGlobalScope(commandType) ? 0u : trackId;
-    diffPayload.trackId = scopeTrack;
-    emitUiDiff(diffPayload);
-    // Say it OUT LOUD. A resync request tells the caller to re-read; it does not tell
-    // them they were refused, which edit, or what to retry with — so a client that
-    // stamps the wrong base sees only "nothing happened", on every edit, forever.
-    emitClipReject(daw::UiClipRejectReason::StaleBase, scopeTrack, baseVersion, current,
-                   commandType);
-    historyAppend(daw::uiCommandTypeName(commandType), "rejected:version", trackId,
-                  baseVersion, "");
-    DAW_EVENT("clip.version_mismatch")
-        .field("base", baseVersion)
-        .field("current", current)
-        .field("command", static_cast<uint32_t>(commandType))
-        .field("track", trackId)
-        .field("action", "resync_requested");
-    return false;
-  };
-
   auto requireMatchingHarmonyVersion = [&](uint32_t baseVersion,
                                            daw::UiCommandType commandType) -> bool {
     const uint32_t current = harmonyVersion.load(std::memory_order_acquire);
@@ -2669,7 +2559,13 @@ int main(int argc, char** argv) {
       commitStructuralEdit, consumeClipVersionForNoOp, emitChordDiff, emitUiDiff,
       forkOwnedClip, growLengthsForContent, locateEditTarget, transport, nextChordId,
       nextClipId, patternTicks, pushStructuralUndo, rebuildFlatAndPublish,
-      snapshotTrackStore, trackTable
+      snapshotTrackStore, trackTable, emitClipRejectFn, historyAppendFn
+  };
+  auto requireMatchingClipVersion = [&](uint32_t baseVersion, daw::UiCommandType commandType, uint32_t trackId) {
+    return daw::engine::requireMatchingClipVersion(clipEditDeps, baseVersion, commandType, trackId);
+  };
+  auto findPlacementAt = [&](TrackRuntime& rt, uint64_t nanotick) {
+    return daw::engine::findPlacementAt(clipEditDeps, rt, nanotick);
   };
 
   auto applyAddNote = [&](uint32_t trackId, uint64_t nanotick, uint64_t duration,
@@ -2742,33 +2638,6 @@ int main(int argc, char** argv) {
   // tie the later one in the list. "Topmost wins" is the convention every arranger uses for
   // stacked material, and stating it is the point: an arbitrary rule that happens to be stable
   // is still unpredictable to the person using it.
-  auto findPlacementAt = [&](TrackRuntime& rt, uint64_t nanotick) -> PlacementHit {
-    PlacementHit hit;
-    for (auto& pl : rt.sourcePlacements) {
-      if (!pl.at.has_value()) {
-        continue;  // loose session cell: no timeline position
-      }
-      uint64_t len = pl.lengthNanoticks;
-      if (len == 0) {
-        for (const auto& c : rt.ownedClips) {
-          if (c.id == pl.clipId) {
-            len = c.lengthNanoticks;
-            break;
-          }
-        }
-      }
-      if (nanotick < *pl.at || nanotick >= *pl.at + len) {
-        continue;
-      }
-      ++hit.candidates;
-      if (!hit.placement || *pl.at >= *hit.placement->at) {
-        hit.placement = &pl;
-        hit.end = *pl.at + len;
-      }
-    }
-    return hit;
-  };
-
   auto editIsLocalScope = [&](uint32_t trackId, uint64_t nanotick, uint16_t flags) -> bool {
     if ((flags & daw::kUiEditScopeLocal) != 0) {
       return true;
@@ -2936,10 +2805,6 @@ int main(int argc, char** argv) {
   const std::function<void(daw::UiCommandType, daw::UiSamplerRejectReason,
                            uint32_t, uint32_t, uint16_t)> reportSamplerRejectFn =
       reportSamplerReject;
-  const std::function<void(TrackRuntime&)> refreshSamplerForTrackFn = refreshSamplerForTrack;
-  const std::function<std::shared_ptr<const daw::SamplerRender>(
-      const daw::SamplerState&, uint32_t, uint32_t)> rebuildSamplerRenderFn =
-      rebuildSamplerRender;
   const std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint16_t, bool,
                            std::optional<daw::EventId>, uint16_t, uint16_t)> applyAddNoteFn =
       [&](uint32_t t, uint64_t n, uint64_t d, uint8_t p, uint8_t v, uint16_t f, bool u,
@@ -2947,8 +2812,8 @@ int main(int argc, char** argv) {
         return applyAddNote(t, n, d, p, v, f, u, id, snd, so);
       };
   daw::engine::SamplerCommandDeps samplerCommandDeps{
-      uiShm, trackTable, tempoProvider,
-      reportSamplerRejectFn, refreshSamplerForTrackFn, rebuildSamplerRenderFn, applyAddNoteFn};
+      uiShm, trackTable, tempoProvider, samplerRefreshDeps,
+      reportSamplerRejectFn, rebuildSamplerRenderFn, applyAddNoteFn};
 
   // The automation and clip-field commands moved out too; same shape as the sampler family.
   const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>
@@ -3028,8 +2893,6 @@ int main(int argc, char** argv) {
 
   const std::function<bool(uint32_t, uint32_t, daw::EventId, const daw::RowOpEdit&, bool,
                            daw::UiClipRejectReason&)> applySetRowOpsFn = applySetRowOps;
-  const std::function<void(daw::UiClipRejectReason, uint32_t, uint32_t, uint32_t,
-                           daw::UiCommandType)> emitClipRejectFn = emitClipReject;
   daw::engine::RowopsCommandDeps rowopsCommandDeps{applySetRowOpsFn, emitClipRejectFn};
 
   const std::function<std::string(const std::string&)> resolveSourcePathFn = resolveSourcePath;

@@ -49,7 +49,6 @@ struct Recorded {
     uint16_t targetId;
   };
   std::vector<Reject> rejects;
-  int refreshes = 0;
 };
 
 // A fixture holding everything a handler needs. Kept as one object because the deps struct holds
@@ -70,20 +69,29 @@ struct Fixture {
                         uint32_t d, uint16_t g) {
         rec.rejects.push_back({c, r, t, d, g});
       };
-  std::function<void(TrackRuntime&)> refreshFn = [this](TrackRuntime&) { rec.refreshes++; };
+  // THE REFRESH IS NO LONGER A STUB. refreshSamplerForTrack moved into the module under test, so
+  // the fixture runs the real one and observes what the real one produces: samplerKitVersion, the
+  // counter the UI reads to know a kit was rebuilt. That is a stronger assertion than "our stub
+  // was called" — it fails if the funnel stops bumping the version, which a stub could not see.
+  daw::HostConfig engineConfig{};
+  std::atomic<uint32_t> samplerKitVersion{0};
   std::function<std::shared_ptr<const daw::SamplerRender>(const daw::SamplerState&, uint32_t,
                                                           uint32_t)>
-      rebuildFn = [](const daw::SamplerState&, uint32_t, uint32_t) {
-        return std::shared_ptr<const daw::SamplerRender>{};
+      rebuildSamplerRender = [](const daw::SamplerState&, uint32_t, uint32_t) {
+        // A REAL OBJECT, not a null handle: the funnel stamps the version into what it is given,
+        // so a null here would be a crash in the fixture rather than a finding about the engine.
+        return std::shared_ptr<const daw::SamplerRender>(new daw::SamplerRender());
       };
   std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint16_t, bool,
                      std::optional<daw::EventId>, uint16_t, uint16_t)>
       addNoteFn = [](uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint16_t, bool,
                      std::optional<daw::EventId>, uint16_t, uint16_t) { return true; };
 
+  SamplerRefreshDeps samplerRefreshDeps{engineConfig, samplerKitVersion, rebuildSamplerRender};
+
   SamplerCommandDeps deps() {
-    return SamplerCommandDeps{shm,      trackTable, tempo,
-                              rejectFn, refreshFn,  rebuildFn,   addNoteFn};
+    return SamplerCommandDeps{shm, trackTable, tempo, samplerRefreshDeps,
+                              rejectFn, rebuildSamplerRender, addNoteFn};
   }
 
   // A track carrying one sampler device per id given. Two devices is what makes "addressed by
@@ -143,7 +151,7 @@ void callFilter(Fixture& f, const daw::UiSamplerFilterPayload& p) {
 void testNoSuchTrack() {
   Fixture f;                                  // no trackTable.tracks at all
   callFilter(f, filterPayload(0, 2));
-  CHECK(f.rec.rejects.size() == 1);
+  CHECK(f.rec.rejects.size() == 1u);
   if (f.rec.rejects.size() == 1) {
     CHECK(f.rec.rejects[0].reason == daw::UiSamplerRejectReason::NoSuchTrack);
     CHECK(f.rec.rejects[0].command == daw::UiCommandType::SamplerSetFilter);
@@ -151,15 +159,15 @@ void testNoSuchTrack() {
   }
   // AND IT DID NOT PRETEND TO WORK. A handler that reported the refusal and then also refreshed
   // would publish a new kit version for an edit that never happened.
-  CHECK(f.rec.refreshes == 0);
+  CHECK(f.samplerKitVersion.load() == 0u);
 
   // An id past the end of a NON-empty table is the same answer, and is the case an off-by-one
   // would get wrong while the empty table still passed.
   Fixture g;
   g.addTrack(0, {1});
   callFilter(g, filterPayload(7, 2));
-  CHECK(g.rec.rejects.size() == 1);
-  CHECK(g.rec.refreshes == 0);
+  CHECK(g.rec.rejects.size() == 1u);
+  CHECK(g.samplerKitVersion.load() == 0u);
 }
 
 // ------------------------------------------------------- out of range is REFUSED, not clamped
@@ -170,7 +178,7 @@ void testFilterTypeRefusedNotClamped() {
 
   callFilter(f, filterPayload(0, 7));         // 7 is past BP (4)
 
-  CHECK(f.rec.rejects.size() == 1);
+  CHECK(f.rec.rejects.size() == 1u);
   if (f.rec.rejects.size() == 1) {
     CHECK(f.rec.rejects[0].reason == daw::UiSamplerRejectReason::BadValue);
     // The offending value comes back so the caller can see WHICH value was wrong.
@@ -180,7 +188,7 @@ void testFilterTypeRefusedNotClamped() {
   // BP": a clamp would leave filterType at 4 and report nothing, and the caller would have a
   // filter they did not ask for with no way to discover the mistake.
   CHECK(f.filterTypeOf(0, 1) == before);
-  CHECK(f.rec.refreshes == 0);
+  CHECK(f.samplerKitVersion.load() == 0u);
 
   // 4 (BP) is the last LEGAL value and must be accepted — an off-by-one in the guard would refuse
   // it, and no test of "7 is refused" would notice.
@@ -200,7 +208,7 @@ void testAppliesAndRefreshes() {
   CHECK(f.filterTypeOf(0, 1) == 2);
   // The kit version is bumped through this one funnel, so a handler that edits without refreshing
   // leaves every reader looking at a stale kit.
-  CHECK(f.rec.refreshes == 1);
+  CHECK(f.samplerKitVersion.load() == 1u);
 }
 
 // ------------------------------------------------------------------- addressed BY device id
@@ -212,7 +220,7 @@ void testAddressedByDeviceId() {
   CHECK(f.filterTypeOf(0, 2) == 3);
   // The OTHER device must be untouched. With one device on the track, a handler that edits
   // whatever it finds first is indistinguishable from one that addresses correctly.
-  CHECK(f.filterTypeOf(0, 1) == 0);
+  CHECK(f.filterTypeOf(0, 1) == 0u);
 
   // deviceId 0 means THE FIRST SAMPLER ON THE TRACK — not "every sampler". The handler breaks out
   // of the device loop as soon as one device applied, and UiSamplerFilterPayload documents the
@@ -226,8 +234,8 @@ void testAddressedByDeviceId() {
   Fixture g;
   g.addTrack(0, {1, 2});
   callFilter(g, filterPayload(0, 1, /*deviceId=*/0));
-  CHECK(g.filterTypeOf(0, 1) == 1);
-  CHECK(g.filterTypeOf(0, 2) == 0);   // untouched: the loop stopped at the first sampler
+  CHECK(g.filterTypeOf(0, 1) == 1u);
+  CHECK(g.filterTypeOf(0, 2) == 0u);   // untouched: the loop stopped at the first sampler
 }
 
 }  // namespace
