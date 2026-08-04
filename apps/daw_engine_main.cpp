@@ -43,6 +43,8 @@
 #include "apps/engine_chain_host.h"
 #include "apps/engine_track_rebuild.h"
 #include "apps/engine_restart_worker.h"
+#include "apps/engine_master_render.h"
+#include "apps/engine_ui_thread.h"
 #include "apps/engine_xrun_reporter.h"
 #include "apps/engine_handle_ui_entry.h"
 #include "apps/engine_load_project.h"
@@ -125,15 +127,6 @@ using daw::engineInstanceToken;
 using daw::trackShmName;
 using daw::trackSocketPath;
 using daw::uiShmName;
-
-
-bool uiDebugEnabled() {
-  static const bool enabled = []() {
-    const char* env = std::getenv("DAW_UI_DEBUG");
-    return env && std::string(env) == "1";
-  }();
-  return enabled;
-}
 
 
 // A machine-level cache location, found regardless of the current directory, so a
@@ -1977,6 +1970,15 @@ int main(int argc, char** argv) {
     restartCv.notify_one();
   };
 
+
+  // AT main() SCOPE, NOT BESIDE THE std::thread. masterRenderThread is started inside a nested
+  // block and joined at the end of main(), so both this struct and the std::function it holds a
+  // reference to must live at least that long. The first version of this extraction declared them
+  // in the inner block and ALSO shadowed the outer std::thread with a local one — the thread never
+  // started, and what did start read a destroyed struct. 100 checks failed.
+  const std::function<void(TrackRuntime&)> scheduleHostRestartFn = scheduleHostRestart;
+  daw::engine::MasterRenderDeps masterRenderDeps{
+      running, playing, masterFxActive, masterTrack, audioCallback, scheduleHostRestartFn};
   // 4b: bring the MASTER host in line with its chain. The master is not in the `tracks`
   // vector, so the per-track consumer never drives its host lifecycle — do it here,
   // off the command/load thread. rebuildHostForChain resolves the master's VST paths and
@@ -3734,110 +3736,17 @@ int main(int argc, char** argv) {
     daw::engine::handleUiEntry(handleUiEntryDeps, entry);
   };
 
-  std::thread uiThread([&] {
-    daw::LogLine() << "UI: command thread started" << std::endl;
-    uint64_t lastIdleLogMs = 0;
-    // M2.18: abandoned-slot recovery for the multi-producer rings. A producer reserves
-    // a slot, then fills and publishes it — a few instructions apart. If it dies in
-    // between (Ctrl-C'd daw-cli, crashed UI) the slot never becomes ready and the
-    // consumer would wait at it forever, wedging every later command.
-    //
-    // The threshold is deliberately long. A slot that is merely slow belongs to a
-    // producer that is descheduled or page-faulting, and retiring it while that
-    // producer is still alive lets it publish into a slot someone else has since
-    // claimed. Two seconds is far beyond any scheduling hiccup and far below any
-    // useful patience for a wedged ring.
-    constexpr uint64_t kStalledSlotGraceMs = 2000;
-    struct StallWatch { uint32_t slot = 0; uint64_t sinceMs = 0; bool active = false; };
-    StallWatch stallUi, stallAgent;
-    auto recoverStalledRing = [&](daw::EventRingView& ring, StallWatch& watch,
-                                  const char* which) {
-      uint32_t slot = 0;
-      if (!daw::ringStalledSlot(ring, slot)) {
-        watch.active = false;
-        return;
-      }
-      const uint64_t nowMs = uiDiffNowMs();
-      if (!watch.active || watch.slot != slot) {
-        watch = StallWatch{slot, nowMs, true};
-        return;
-      }
-      if (nowMs - watch.sinceMs < kStalledSlotGraceMs) {
-        return;
-      }
-      DAW_EVENT("ring.abandoned_slot")
-          .field("ring", which)
-          .field("slot", slot)
-          .field("waited_ms", static_cast<uint32_t>(nowMs - watch.sinceMs))
-          .field("action", "retired");
-      daw::LogLine() << "UI: retiring abandoned " << which << " ring slot " << slot
-                << " (producer reserved it and never published; it probably died)"
-                << std::endl;
-      daw::ringSkipStalledSlot(ring);
-      watch.active = false;
-    };
-    while (running.load()) {
-      auto ringUi = getRingUi();
-      auto ringUiEdit = getRingUiEdit();
-      auto ringUiAgent = getRingUiAgent();
-      if (ringUi.mask == 0 && ringUiEdit.mask == 0 && ringUiAgent.mask == 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        continue;
-      }
-      daw::EventEntry uiEntry;
-      daw::UiEditBatchEntry editBatch{};
-      bool handled = false;
-      while (daw::uiEditRingPop(ringUiEdit, editBatch)) {
-        const uint32_t opCount =
-            std::min<uint32_t>(editBatch.opCount, daw::kUiEditBatchMaxOps);
-        if (opCount != editBatch.opCount) {
-          // Only reachable from a malformed or mismatched producer.
-          DAW_EVENT("edit_ring.op_count_clamped")
-              .field("batch", editBatch.batchId)
-              .field("claimed", editBatch.opCount)
-              .field("applied", opCount);
-        } else if (uiDebugEnabled()) {
-          DAW_EVENT("edit_ring.batch")
-              .field("batch", editBatch.batchId)
-              .field("ops", opCount);
-        }
-        for (uint32_t i = 0; i < opCount; ++i) {
-          handleUiEntry(editBatch.ops[i]);
-        }
-        handled = true;
-      }
-      while (daw::ringPop(ringUi, uiEntry)) {
-        if (uiDebugEnabled()) {
-          daw::LogLine() << "UI: received command entry size "
-                    << uiEntry.size << " type " << uiEntry.type << std::endl;
-        }
-        handleUiEntry(uiEntry);
-        handled = true;
-      }
-      // The agent's own ring, drained through the same handler so an agent edit
-      // is indistinguishable from a UI edit once inside the engine.
-      while (daw::ringPop(ringUiAgent, uiEntry)) {
-        handleUiEntry(uiEntry);
-        handled = true;
-      }
-      recoverStalledRing(ringUi, stallUi, "ui");
-      recoverStalledRing(ringUiAgent, stallAgent, "agent");
-      if (!handled) {
-        const uint64_t nowMs = uiDiffNowMs();
-        if (uiDebugEnabled() && nowMs - lastIdleLogMs >= 1000) {
-          lastIdleLogMs = nowMs;
-          const uint32_t read =
-              ringUi.header ? ringUi.header->readIndex.load(std::memory_order_relaxed) : 0;
-          const uint32_t write =
-              ringUi.header ? ringUi.header->writeIndex.load(std::memory_order_relaxed) : 0;
-          daw::LogLine() << "UI: command ring idle (read " << read
-                    << ", write " << write << ")" << std::endl;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      }
-    }
-    daw::LogLine() << "UI: command thread exiting" << std::endl;
-  });
+  // The three ring accessors and uiDiffNowMs are lambdas; UiThreadDeps holds std::function
+  // REFERENCES, so each needs a named object to bind to. A temporary would dangle the moment this
+  // statement ended, and the thread reads them for the life of the process.
+  const std::function<daw::EventRingView()> getRingUiFn = getRingUi;
+  const std::function<daw::EventRingView()> getRingUiAgentFn = getRingUiAgent;
+  const std::function<daw::UiEditRingView()> getRingUiEditFn = getRingUiEdit;
+  const std::function<uint64_t()> uiDiffNowMsFn = uiDiffNowMs;
+  const std::function<void(const daw::EventEntry&)> handleUiEntryFn = handleUiEntry;
+  daw::engine::UiThreadDeps uiThreadDeps{
+      running, getRingUiFn, getRingUiAgentFn, getRingUiEditFn, handleUiEntryFn, uiDiffNowMsFn};
+  std::thread uiThread([&] { daw::engine::runUiThread(uiThreadDeps); });
   daw::LogLine() << "UI: command thread launched" << std::endl;
 
   std::thread producer([&] {
@@ -4267,147 +4176,8 @@ int main(int argc, char** argv) {
         audioCallbackPublished.store(audioCallback.get(), std::memory_order_release);
 
         if (!masterRenderThread.joinable()) {
-          masterRenderThread = std::thread([&] {
-            const uint32_t chn = masterTrack->config.numChannelsOut;
-            // Stride with the SAME block size the hand-off buffers were sized with. Using
-            // engineConfig.blockSize here would smear channels the moment the device
-            // buffer and the engine block size diverge.
-            const uint32_t bs = audioCallback->masterFxBlockSize();
-            std::vector<float> sumScratch;
-            std::vector<float> outScratch(static_cast<size_t>(chn) * bs, 0.0f);
-            uint32_t masterBlockId = 1;
-            uint64_t masterSample = 0;
-            uint32_t consecutiveTimeouts = 0;
-            bool warnedNotConsumed = false;
-            while (running.load(std::memory_order_acquire)) {
-              if (!masterFxActive.load(std::memory_order_acquire) ||
-                  !masterTrack->hostReady.load(std::memory_order_acquire)) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
-                continue;
-              }
-              if (!audioCallback || !audioCallback->takeMasterSum(sumScratch) ||
-                  sumScratch.size() < static_cast<size_t>(chn) * bs) {
-                std::this_thread::sleep_for(std::chrono::microseconds(200));
-                continue;
-              }
-              bool sendFailed = false;
-              bool timedOut = false;
-              bool produced = false;
-              {
-                // Hold controllerMutex across the WHOLE host interaction. The restart
-                // worker takes this same lock to call controller.launch(), which
-                // disconnects and munmaps the very mapping this thread reads and writes —
-                // touching header/mailbox unlocked is a use-after-munmap.
-                std::lock_guard<std::mutex> lock(masterTrack->controllerMutex);
-                const auto* header = masterTrack->controller.shmHeader();
-                const auto* mailbox = masterTrack->controller.mailbox();
-                const size_t shmSize = masterTrack->controller.shmSize();
-                if (!header || !mailbox || header->numBlocks == 0 ||
-                    header->channelStrideBytes == 0) {
-                  sendFailed = true;
-                } else {
-                  const uint64_t stride = header->channelStrideBytes;
-                  const uint32_t blockIndex = masterBlockId % header->numBlocks;
-                  const uint64_t inBlockBytes =
-                      static_cast<uint64_t>(header->numChannelsIn) * stride;
-                  for (uint32_t ch = 0; ch < chn && ch < header->numChannelsIn; ++ch) {
-                    const uint64_t off = header->audioInOffset +
-                                         blockIndex * inBlockBytes +
-                                         static_cast<uint64_t>(ch) * stride;
-                    if (off + stride > shmSize) {
-                      continue;
-                    }
-                    std::memcpy(reinterpret_cast<uint8_t*>(
-                                    const_cast<daw::ShmHeader*>(header)) + off,
-                                sumScratch.data() + static_cast<size_t>(ch) * bs,
-                                bs * sizeof(float));
-                  }
-                  daw::HostTransport tr;
-                  tr.isPlaying = playing.load(std::memory_order_acquire);
-                  if (!masterTrack->controller.sendProcessBlock(
-                          masterBlockId, masterSample, masterSample, 0, 0, tr)) {
-                    sendFailed = true;
-                  } else {
-                    // Bounded wait for THIS block. A dead or wedged host must not hang
-                    // the render thread.
-                    const auto deadline = std::chrono::steady_clock::now() +
-                                          std::chrono::milliseconds(50);
-                    while (mailbox->completedBlockId.load(std::memory_order_acquire) <
-                           masterBlockId) {
-                      if (std::chrono::steady_clock::now() > deadline) {
-                        timedOut = true;
-                        break;
-                      }
-                      std::this_thread::sleep_for(std::chrono::microseconds(100));
-                    }
-                    // ONLY read the out plane when the host actually finished this block.
-                    // On a timeout that slot still holds the block from numBlocks ago (or
-                    // silence), and publishing it would present stale audio as fresh.
-                    if (!timedOut) {
-                      const uint64_t outBlockBytes =
-                          static_cast<uint64_t>(header->numChannelsOut) * stride;
-                      for (uint32_t ch = 0; ch < chn; ++ch) {
-                        float* dst = outScratch.data() + static_cast<size_t>(ch) * bs;
-                        if (ch < header->numChannelsOut) {
-                          const uint64_t off = header->audioOutOffset +
-                                               blockIndex * outBlockBytes +
-                                               static_cast<uint64_t>(ch) * stride;
-                          if (off + stride <= shmSize) {
-                            std::memcpy(dst,
-                                        reinterpret_cast<const uint8_t*>(header) + off,
-                                        bs * sizeof(float));
-                            continue;
-                          }
-                        }
-                        std::fill(dst, dst + bs, 0.0f);
-                      }
-                      produced = true;
-                    }
-                  }
-                }
-              }
-              if (sendFailed) {
-                // The master is not in the tracks vector, so the consumer's periodic
-                // re-arm never sees it: schedule its restart HERE or a dead master host
-                // stays dead for the rest of the session.
-                masterTrack->hostReady.store(false, std::memory_order_release);
-                masterTrack->needsRestart.store(true, std::memory_order_release);
-                scheduleHostRestart(*masterTrack);
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
-                continue;
-              }
-              if (timedOut) {
-                if (++consecutiveTimeouts >= 10) {
-                  daw::LogLine() << "Engine: master FX host is not completing blocks; "
-                               "restarting it." << std::endl;
-                  consecutiveTimeouts = 0;
-                  masterTrack->hostReady.store(false, std::memory_order_release);
-                  masterTrack->needsRestart.store(true, std::memory_order_release);
-                  scheduleHostRestart(*masterTrack);
-                }
-                continue;
-              }
-              consecutiveTimeouts = 0;
-              if (produced) {
-                audioCallback->publishMasterOut(outScratch);
-                ++masterBlockId;
-                masterSample += bs;
-                // If we are feeding the host but the callback never swaps our output in,
-                // master FX is silently doing nothing (e.g. a surround master whose width
-                // does not match the master host's, or a hand-off size mismatch). Say so
-                // once rather than leaving an installed effect mysteriously inaudible.
-                if (!warnedNotConsumed && masterBlockId > 200 &&
-                    audioCallback->masterFxBlocks() == 0) {
-                  warnedNotConsumed = true;
-                  daw::LogLine() << "Engine: master FX is processing but the audio callback is "
-                               "not using it — the master bus width does not match the "
-                               "master host ("
-                            << chn << " ch). The effect is installed but inaudible."
-                            << std::endl;
-                }
-              }
-            }
-          });
+          masterRenderThread =
+              std::thread([&] { daw::engine::runMasterRenderThread(masterRenderDeps); });
         }
       }
       audioCallback->resetForStart();
