@@ -217,8 +217,8 @@ void writeUiArrangeSummaryTo(UiWriterDeps& deps, bool force) {
   auto& lastArrangeSongEnd = deps.lastArrangeSongEnd;
   auto& lastArrangeVersion = deps.lastArrangeVersion;
   auto& markerList = deps.markerList;
-  auto& songEndNanotick = deps.songEndNanotick;
-  auto& songMeter = deps.songMeter;
+  auto& songEndNanotick = deps.songTiming.songEndNanotick;
+  auto& songMeter = deps.songTiming.songMeter;
   auto& uiShm = deps.uiShm;
 
     if (!uiShm.header || uiShm.header->uiArrangeOffset == 0) {
@@ -451,9 +451,9 @@ void runConsumerThread(ConsumerDeps& deps) {
   auto& samplerKitVersion = deps.samplerKitVersion;
   auto& scheduleHostRestart = deps.scheduleHostRestart;
   auto& snapshotTracks = deps.snapshotTracks;
-  auto& songEndNanotick = deps.songEndNanotick;
-  auto& songTimeSigDen = deps.songTimeSigDen;
-  auto& songTimeSigNum = deps.songTimeSigNum;
+  auto& songEndNanotick = deps.songTiming.songEndNanotick;
+  auto& songTimeSigDen = deps.songTiming.songTimeSigDen;
+  auto& songTimeSigNum = deps.songTiming.songTimeSigNum;
   auto& tempoProvider = deps.tempoProvider;
   auto& transportNanotick = deps.transport.transportNanotick;
   auto& uiShm = deps.uiShm;

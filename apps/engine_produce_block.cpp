@@ -51,7 +51,7 @@ void produceBlock(ProducerBlockDeps& deps,
   auto& latencyMgr = deps.latencyMgr;
   auto& loopEndNanotick = deps.transport.loopEndNanotick;
   auto& loopStartNanotick = deps.transport.loopStartNanotick;
-  auto& meterSnapshot = deps.meterSnapshot;
+  auto& meterSnapshot = deps.songTiming.meterSnapshot;
   auto& nextBlockId = deps.nextBlockId;
   auto& nextNoteId = deps.nextNoteId;
   auto& offlineRender = deps.offlineRender;
@@ -78,8 +78,8 @@ void produceBlock(ProducerBlockDeps& deps,
   auto& quantizePitch = deps.quantizePitch;
   auto& renderPool = deps.renderPool;
   auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
-  auto& songTimeSigDen = deps.songTimeSigDen;
-  auto& songTimeSigNum = deps.songTimeSigNum;
+  auto& songTimeSigDen = deps.songTiming.songTimeSigDen;
+  auto& songTimeSigNum = deps.songTiming.songTimeSigNum;
   auto& tempoProvider = deps.tempoProvider;
   auto& tickConverter = deps.tickConverter;
   auto& traceNotes = deps.traceNotes;

@@ -26,6 +26,7 @@
 #include <utility>
 #include <vector>
 
+#include "engine_song_timing.h"
 #include "engine_transport_state.h"
 #include "engine_harmony_timeline.h"
 #include "engine_types.h"
@@ -67,8 +68,7 @@ struct UiWriterDeps {
   daw::PatcherGraphState& patcherGraphState;
   std::atomic<uint32_t>& quantizeVersion;
   std::function<std::vector<TrackRuntime*>()> snapshotTracks;
-  std::atomic<uint64_t>& songEndNanotick;
-  daw::TimeSignatureMap& songMeter;
+  SongTiming& songTiming;
   std::function<bool(const TrackRuntime&)> trackIsPersisted;
   UiShmState& uiShm;
   std::atomic<bool>& warnedPatcherOwnerTooWide;
@@ -101,9 +101,7 @@ struct ConsumerDeps {
   std::atomic<uint32_t>& samplerKitVersion;
   std::function<void(TrackRuntime&)> scheduleHostRestart;
   std::function<std::vector<TrackRuntime*>()> snapshotTracks;
-  std::atomic<uint64_t>& songEndNanotick;
-  std::atomic<uint32_t>& songTimeSigDen;
-  std::atomic<uint32_t>& songTimeSigNum;
+  SongTiming& songTiming;
   daw::TempoMapProvider& tempoProvider;
   UiShmState& uiShm;
   UiWriterDeps& uiWriterDeps;

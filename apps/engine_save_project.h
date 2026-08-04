@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_song_timing.h"
 #include "engine_harmony_timeline.h"
 #include "apps/engine_types.h"
 #include "apps/musical_structures.h"
@@ -39,7 +40,7 @@ struct SaveProjectDeps {
   std::atomic<uint32_t>& liveTrackCount;
   std::vector<daw::ProjectClip>& loadedClips;
   std::mutex& loadedClipsMutex;
-  std::vector<daw::ProjectTempoPoint>& loadedTempoMap;
+  SongTiming& songTiming;
   daw::MarkerList& markerList;
   std::unique_ptr<TrackRuntime>& masterTrack;
   std::atomic<bool>& patcherAssembledFromDevices;
@@ -47,9 +48,6 @@ struct SaveProjectDeps {
   std::atomic<bool>& patcherPoolEdited;
   const daw::PluginCache& pluginCache;
   std::atomic<uint64_t>& projectSeed;
-  daw::TimeSignatureMap& songMeter;
-  std::atomic<uint32_t>& songTimeSigDen;
-  std::atomic<uint32_t>& songTimeSigNum;
   std::vector<std::unique_ptr<TrackRuntime>>& tracks;
   std::mutex& tracksMutex;
   std::function<daw::BarGrid()> songBarGrid;

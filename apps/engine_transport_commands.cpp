@@ -106,7 +106,7 @@ void handlePanic(TransportCommandDeps& deps,
 void handleSetTempo(TransportCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& loadedTempoMap = deps.loadedTempoMap;
+  auto& loadedTempoMap = deps.songTiming.loadedTempoMap;
   auto& tempoProvider = deps.tempoProvider;
 
       // value0 = milli-BPM. flags: 1 = flatten the map to this single tempo (a

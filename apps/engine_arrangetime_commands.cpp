@@ -21,18 +21,18 @@ void handleArrangeTime(ArrangeTimeCommandDeps& deps,
   auto& harmonyMutex = deps.harmonyTimeline.harmonyMutex;
   auto& harmonyVersion = deps.harmonyTimeline.harmonyVersion;
   auto& historyAppend = deps.historyAppend;
-  auto& loadedTempoMap = deps.loadedTempoMap;
+  auto& loadedTempoMap = deps.songTiming.loadedTempoMap;
   auto& markerList = deps.markerList;
-  auto& meterSnapshot = deps.meterSnapshot;
+  auto& meterSnapshot = deps.songTiming.meterSnapshot;
   auto& pushUndo = deps.pushUndo;
   auto& rebuildAudioRender = deps.rebuildAudioRender;
   auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
   auto& recomputeSongEnd = deps.recomputeSongEnd;
   auto& snapshotSongStore = deps.snapshotSongStore;
   auto& snapshotTracks = deps.snapshotTracks;
-  auto& songMeter = deps.songMeter;
-  auto& songTimeSigDen = deps.songTimeSigDen;
-  auto& songTimeSigNum = deps.songTimeSigNum;
+  auto& songMeter = deps.songTiming.songMeter;
+  auto& songTimeSigDen = deps.songTiming.songTimeSigDen;
+  auto& songTimeSigNum = deps.songTiming.songTimeSigNum;
   auto& tempoProvider = deps.tempoProvider;
 
       daw::UiArrangeTimeCommandPayload tp{};

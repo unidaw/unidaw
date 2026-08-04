@@ -26,6 +26,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_song_timing.h"
 #include "engine_harmony_timeline.h"
 #include "apps/engine_pure.h"
 #include "apps/engine_types.h"
@@ -45,18 +46,14 @@ struct ArrangeTimeCommandDeps {
   std::atomic<bool>& clipDirty;
   HarmonyTimeline& harmonyTimeline;
   const std::function<void(const char*, const char*, uint32_t, uint32_t, const std::string&)>& historyAppend;
-  std::vector<daw::ProjectTempoPoint>& loadedTempoMap;
+  SongTiming& songTiming;
   daw::MarkerList& markerList;
-  std::shared_ptr<const daw::TimeSignatureMap>& meterSnapshot;
   const std::function<void(EngineUndoEntry)>& pushUndo;
   const std::function<std::shared_ptr<const AudioRenderList>(const TrackRuntime&)>& rebuildAudioRender;
   const std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&)>& rebuildFlatAndPublish;
   const std::function<void()>& recomputeSongEnd;
   const std::function<SongStoreState()>& snapshotSongStore;
   const std::function<std::vector<TrackRuntime*>()>& snapshotTracks;
-  daw::TimeSignatureMap& songMeter;
-  std::atomic<uint32_t>& songTimeSigDen;
-  std::atomic<uint32_t>& songTimeSigNum;
   daw::TempoMapProvider& tempoProvider;
 };
 

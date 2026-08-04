@@ -17,7 +17,7 @@ bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path,
   auto& liveTrackCount = deps.liveTrackCount;
   auto& loadedClips = deps.loadedClips;
   auto& loadedClipsMutex = deps.loadedClipsMutex;
-  auto& loadedTempoMap = deps.loadedTempoMap;
+  auto& loadedTempoMap = deps.songTiming.loadedTempoMap;
   auto& markerList = deps.markerList;
   auto& masterTrack = deps.masterTrack;
   auto& patcherAssembledFromDevices = deps.patcherAssembledFromDevices;
@@ -25,9 +25,9 @@ bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path,
   auto& patcherPoolEdited = deps.patcherPoolEdited;
   auto& pluginCache = deps.pluginCache;
   auto& projectSeed = deps.projectSeed;
-  auto& songMeter = deps.songMeter;
-  auto& songTimeSigDen = deps.songTimeSigDen;
-  auto& songTimeSigNum = deps.songTimeSigNum;
+  auto& songMeter = deps.songTiming.songMeter;
+  auto& songTimeSigDen = deps.songTiming.songTimeSigDen;
+  auto& songTimeSigNum = deps.songTiming.songTimeSigNum;
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
   const auto& songBarGrid = deps.songBarGrid;

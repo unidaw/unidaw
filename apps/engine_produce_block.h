@@ -32,6 +32,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_song_timing.h"
 #include "engine_transport_state.h"
 #include "engine_harmony_timeline.h"
 #include "engine_types.h"
@@ -65,7 +66,7 @@ struct ProducerBlockDeps {
   std::atomic<uint64_t>& lastOverflowTick;
   daw::LatencyManager& latencyMgr;
   TransportState& transport;
-  std::shared_ptr<const daw::TimeSignatureMap>& meterSnapshot;
+  SongTiming& songTiming;
   std::atomic<uint32_t>& nextBlockId;
   std::atomic<uint32_t>& nextNoteId;
   const bool offlineRender;
@@ -91,8 +92,6 @@ struct ProducerBlockDeps {
   std::function<daw::ResolvedPitch(uint8_t, const daw::HarmonyEvent&)> quantizePitch;
   daw::RenderPool& renderPool;
   std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)> resolveDevicePluginPath;
-  std::atomic<uint32_t>& songTimeSigDen;
-  std::atomic<uint32_t>& songTimeSigNum;
   daw::TempoMapProvider& tempoProvider;
   daw::NanotickConverter& tickConverter;
   const bool traceNotes;

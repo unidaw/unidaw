@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_song_timing.h"
 #include "engine_transport_state.h"
 #include "engine_pure.h"
 #include "engine_types.h"
@@ -32,7 +33,7 @@ namespace daw::engine {
 
 struct TransportCommandDeps {
   std::unordered_map<uint32_t, std::vector<uint8_t>>& heldPreview;
-  std::vector<daw::ProjectTempoPoint>& loadedTempoMap;
+  SongTiming& songTiming;
   TransportState& transport;
   std::unique_ptr<TrackRuntime>& masterTrack;
   std::atomic<bool>& panicPending;

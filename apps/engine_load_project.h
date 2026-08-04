@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "engine_song_timing.h"
 #include "engine_transport_state.h"
 #include "engine_harmony_timeline.h"
 #include "engine_types.h"
@@ -60,11 +61,10 @@ struct LoadProjectDeps {
   std::vector<daw::ProjectClip>& loadedClips;
   std::mutex& loadedClipsMutex;
   std::string& loadedProjectDir;
-  std::vector<daw::ProjectTempoPoint>& loadedTempoMap;
+  SongTiming& songTiming;
   TransportState& transport;
   daw::MarkerList& markerList;
   std::unique_ptr<TrackRuntime>& masterTrack;
-  std::shared_ptr<const daw::TimeSignatureMap>& meterSnapshot;
   std::atomic<uint32_t>& nextClipId;
   std::atomic<bool>& patcherAssembledFromDevices;
   daw::PatcherGraphState& patcherGraphState;
@@ -78,10 +78,6 @@ struct LoadProjectDeps {
   std::function<void()> reconcileMasterHost;
   std::function<void(TrackRuntime&)> refreshSamplerForTrack;
   std::function<void(TrackRuntime&)> resetTrackContent;
-  std::atomic<uint64_t>& songEndNanotick;
-  daw::TimeSignatureMap& songMeter;
-  std::atomic<uint32_t>& songTimeSigDen;
-  std::atomic<uint32_t>& songTimeSigNum;
   daw::TempoMapProvider& tempoProvider;
   std::vector<std::unique_ptr<TrackRuntime>>& tracks;
   std::mutex& tracksMutex;

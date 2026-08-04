@@ -40,6 +40,7 @@
 #include "apps/engine_publish_clips.h"
 #include "apps/engine_clip_edit.h"
 #include "apps/engine_track_setup.h"
+#include "apps/engine_song_timing.h"
 #include "apps/engine_transport_state.h"
 #include "apps/engine_chain_host.h"
 #include "apps/engine_track_rebuild.h"
@@ -1165,7 +1166,7 @@ int main(int argc, char** argv) {
   // placement past the end left the loop where it was and the new material NEVER PLAYED:
   // you would add a section at bar 4, press play, and hear nothing, with no explanation
   // anywhere. Recomputed whenever a placement edit changes the arrangement.
-  std::atomic<uint64_t> songEndNanotick{0};
+  daw::engine::SongTiming songTiming;
   // v29: THE ARRANGEMENT — named positions and the song's meter. Its own version counter,
   // deliberately NOT clipVersion: renaming a marker moves no note, so it must not invalidate
   // anyone's in-flight edit — the same separation quantizeVersion has.
@@ -1179,7 +1180,6 @@ int main(int argc, char** argv) {
   // section deleted one of the two; deleting the section deletes the derivation itself, so a
   // marker's bar is a lookup in the map and there is no pair left to invert.
   daw::MarkerList markerList;
-  daw::TimeSignatureMap songMeter;
   std::mutex arrangeMutex;
   std::atomic<uint32_t> arrangeVersion{0};
   // AN RT-SAFE COPY OF THE METER, for the audio/host thread. The play head has to report the
@@ -1187,8 +1187,6 @@ int main(int argc, char** argv) {
   // meter map, and reporting the default is the bug this replaces. The RT cannot take arrangeMutex,
   // so the map is published as an immutable snapshot and swapped atomically, exactly like
   // trackSnapshot. Never null after startup.
-  std::shared_ptr<const daw::TimeSignatureMap> meterSnapshot =
-      std::make_shared<const daw::TimeSignatureMap>();
   // WHERE A BAR STARTS AND ENDS, according to the song's meter. The rule and the reasons are in
   // apps/engine_pure.h (`barEndTick`), where they can be tested; these two lambdas exist only to
   // supply the meter.
@@ -1204,11 +1202,11 @@ int main(int argc, char** argv) {
   // lets the rule itself be a pure function.
   auto barEndTick = [&](uint64_t tick) -> uint64_t {
     return daw::engine::barEndTick(
-        std::atomic_load_explicit(&meterSnapshot, std::memory_order_acquire).get(), tick);
+        std::atomic_load_explicit(&songTiming.meterSnapshot, std::memory_order_acquire).get(), tick);
   };
   auto barStartTick = [&](uint64_t tick) -> uint64_t {
     return daw::engine::barStartTick(
-        std::atomic_load_explicit(&meterSnapshot, std::memory_order_acquire).get(), tick);
+        std::atomic_load_explicit(&songTiming.meterSnapshot, std::memory_order_acquire).get(), tick);
   };
   // The song's bar grid, for note entry and for segmenting a flat track into clips. Both used to
   // take a bar LENGTH and compute (tick / length) * length, which is right in one meter and wrong
@@ -1365,13 +1363,10 @@ int main(int argc, char** argv) {
   // changes included), rather than collapsing it to the current single tempo. Only
   // the load/save handlers touch it, and both run on the UI command thread, so it
   // needs no lock.
-  std::vector<daw::ProjectTempoPoint> loadedTempoMap{{0, 120.0}};
 
   // The song's time signature, adopted on load. Read on the audio callback (plugin
   // play head) and the publish thread (transport read-back), written on the UI thread
   // at load — relaxed atomics, since a meter one block stale is invisible.
-  std::atomic<uint32_t> songTimeSigNum{4};
-  std::atomic<uint32_t> songTimeSigDen{4};
 
   // Directory of the currently-loaded project file, so a clip's relative sourcePath
   // resolves against the project (portable) rather than the engine's CWD. Set by
@@ -2487,7 +2482,7 @@ int main(int argc, char** argv) {
     if (end == 0) {
       end = patternTicks;  // an empty project keeps the default bar
     }
-    const uint64_t previous = songEndNanotick.exchange(end, std::memory_order_acq_rel);
+    const uint64_t previous = songTiming.songEndNanotick.exchange(end, std::memory_order_acq_rel);
     if (previous == end) {
       return;
     }
@@ -2877,9 +2872,9 @@ int main(int argc, char** argv) {
     {
       std::lock_guard<std::mutex> alock(arrangeMutex);
       s.markers = markerList.markers();
-      s.meterPoints = songMeter.points();
+      s.meterPoints = songTiming.songMeter.points();
     }
-    s.tempoMap = loadedTempoMap;
+    s.tempoMap = songTiming.loadedTempoMap;
     {
       std::lock_guard<std::mutex> hlock(harmonyMutex);
       s.harmony = harmonyEvents;
@@ -2998,23 +2993,23 @@ int main(int argc, char** argv) {
     {
       std::lock_guard<std::mutex> alock(arrangeMutex);
       markerList.setMarkers(state.markers);
-      songMeter.setMap(state.meterPoints);
+      songTiming.songMeter.setMap(state.meterPoints);
       // The RT reads the meter from a snapshot, so a restored map that is not republished is a
       // map the play head never sees — the same rule the automation republish above follows.
       std::atomic_store_explicit(
-          &meterSnapshot,
+          &songTiming.meterSnapshot,
           std::static_pointer_cast<const daw::TimeSignatureMap>(
-              std::make_shared<daw::TimeSignatureMap>(songMeter)),
+              std::make_shared<daw::TimeSignatureMap>(songTiming.songMeter)),
           std::memory_order_release);
     }
-    loadedTempoMap = state.tempoMap;
+    songTiming.loadedTempoMap = state.tempoMap;
     {
       // The PROVIDER is what the transport reads, so a restored map that the provider did not see
       // would play at the wrong tempo positions and save at the right ones — the divergence the
       // ripple itself had to fix.
       std::vector<daw::TempoPoint> pts;
-      pts.reserve(loadedTempoMap.size());
-      for (const auto& pt : loadedTempoMap) {
+      pts.reserve(songTiming.loadedTempoMap.size());
+      for (const auto& pt : songTiming.loadedTempoMap) {
         pts.push_back({pt.nanotick, pt.bpm});
       }
       tempoProvider.setMap(std::move(pts));
@@ -3036,9 +3031,9 @@ int main(int argc, char** argv) {
   // track without stalling audio behind one global lock.
   daw::engine::SaveProjectDeps saveProjectDeps{
       arrangeMutex, harmonyTimeline, liveTrackCount, loadedClips, loadedClipsMutex,
-      loadedTempoMap, markerList, masterTrack, patcherAssembledFromDevices,
-      patcherGraphState, patcherPoolEdited, pluginCache, projectSeed, songMeter,
-      songTimeSigDen, songTimeSigNum, tracks, tracksMutex, songBarGrid, trackIsPersisted
+      songTiming, markerList, masterTrack, patcherAssembledFromDevices, patcherGraphState,
+      patcherPoolEdited, pluginCache, projectSeed, tracks, tracksMutex, songBarGrid,
+      trackIsPersisted
   };
   auto saveProjectToPath = [&](const std::string& path,
                                  std::string* error) -> bool {
@@ -3054,13 +3049,12 @@ int main(int argc, char** argv) {
       auxChildOverlays, buildTrackSnapshot, bumpAllTrackClipVersions, clipDirty,
       clipVersion, emitChainSnapshot, emitModSnapshot, emitRoutingSnapshot, emitUiDiff,
       ensurePlacementIds, ensureTrack, harmonyTimeline, liveTrackCount, loadInProgress,
-      loadedClips, loadedClipsMutex, loadedProjectDir, loadedTempoMap, transport,
-      markerList, masterTrack, meterSnapshot, nextClipId, patcherAssembledFromDevices,
-      patcherGraphState, patternTicks, pluginCache, projectSeed, publishAudioClipTable,
-      rebuildAudioRender, rebuildFlatAndPublish, rebuildHostForChain, reconcileMasterHost,
-      refreshSamplerForTrack, resetTrackContent, songEndNanotick, songMeter, songTimeSigDen,
-      songTimeSigNum, tempoProvider, tracks, tracksMutex, updatePatcherGraphSnapshot,
-      waveformStore
+      loadedClips, loadedClipsMutex, loadedProjectDir, songTiming, transport, markerList,
+      masterTrack, nextClipId, patcherAssembledFromDevices, patcherGraphState, patternTicks,
+      pluginCache, projectSeed, publishAudioClipTable, rebuildAudioRender,
+      rebuildFlatAndPublish, rebuildHostForChain, reconcileMasterHost,
+      refreshSamplerForTrack, resetTrackContent, tempoProvider, tracks, tracksMutex,
+      updatePatcherGraphSnapshot, waveformStore
   };
 
   auto loadProjectFromPath = [&](const std::string& path, std::string* error) -> bool {
@@ -3534,10 +3528,9 @@ int main(int argc, char** argv) {
       rebuildFlatAndPublishFn = rebuildFlatAndPublish;
   daw::engine::ArrangeTimeCommandDeps arrangeTimeCommandDeps{
       arrangeMutex, arrangeVersion, automationVersion, buildTrackSnapshot,
-      bumpClipVersionFor, clipDirty, harmonyTimeline, historyAppend, loadedTempoMap,
-      markerList, meterSnapshot, pushUndo, rebuildAudioRender, rebuildFlatAndPublish,
-      recomputeSongEnd, snapshotSongStore, snapshotTracks, songMeter, songTimeSigDen,
-      songTimeSigNum, tempoProvider
+      bumpClipVersionFor, clipDirty, harmonyTimeline, historyAppend, songTiming, markerList,
+      pushUndo, rebuildAudioRender, rebuildFlatAndPublish, recomputeSongEnd,
+      snapshotSongStore, snapshotTracks, tempoProvider
   };
   daw::engine::TrackpropsCommandDeps trackpropsCommandDeps{
       tracks, tracksMutex, masterTrack, quantizeVersion,
@@ -3619,7 +3612,7 @@ int main(int argc, char** argv) {
       snapshotTrackStoreFn, tracks, tracksMutex};
 
   daw::engine::TransportCommandDeps transportCommandDeps{
-      heldPreview, loadedTempoMap, transport, masterTrack, panicPending, patternTicks,
+      heldPreview, songTiming, transport, masterTrack, panicPending, patternTicks,
       pendingPreviewNotes, previewMutex, resetTimeline, restartCv, running, tempoProvider,
       tracks, tracksMutex
   };
@@ -3727,14 +3720,14 @@ int main(int argc, char** argv) {
       daw::engine::ProducerBlockDeps producerBlockDeps{
       blockDuration, blockTicksFor, debugStall, engineConfig, enqueuePreview, getHarmonyAt,
       getRingCtrl, getRingStd, getScaleForHarmony, harmonyTimeline, lastOverflowTick,
-      latencyMgr, transport, meterSnapshot, nextBlockId, nextNoteId, offlineRender,
+      latencyMgr, transport, songTiming, nextBlockId, nextNoteId, offlineRender,
       panicPending, patcherAssembledFromDevices, patcherGraphSnapshot, patcherParallel,
       patcherPool, pendingPreviewNotes, poolAlwaysOn, poolEngaged, poolWorkEwmaUs,
       previewMutex, producerBlockBudgetUs, producerBlockUsMax, producerBlockUsTotal,
       producerBlocksOverBudget, producerBlocksTimed, producerSamplerUsMax,
       producerSamplerUsTotal, projectSeed, publishedCallback, quantizePitch, renderPool,
-      resolveDevicePluginPath, songTimeSigDen, songTimeSigNum, tempoProvider, tickConverter,
-      traceNotes, patternTicks, warnedEventOutsideBlock, writeMirrorParams
+      resolveDevicePluginPath, tempoProvider, tickConverter, traceNotes, patternTicks,
+      warnedEventOutsideBlock, writeMirrorParams
   };
 
     while (running.load()) {
@@ -3965,8 +3958,8 @@ int main(int argc, char** argv) {
       automationVersion, clipVersion, clipWindowMutex, clipWindowPending, harmonyTimeline,
       laneQuantizeOf, lastArrangeSongEnd, lastArrangeVersion, lastAutomationVersion,
       lastClipAllQuantizeVersion, lastClipAllVersion, lastPatcherVersion, markerList,
-      patcherGraphSnapshot, patcherGraphState, quantizeVersion, snapshotTracks,
-      songEndNanotick, songMeter, trackIsPersisted, uiShm, warnedPatcherOwnerTooWide
+      patcherGraphSnapshot, patcherGraphState, quantizeVersion, snapshotTracks, songTiming,
+      trackIsPersisted, uiShm, warnedPatcherOwnerTooWide
   };
 
   daw::engine::ConsumerDeps consumerDeps{
@@ -3975,9 +3968,8 @@ int main(int argc, char** argv) {
       latencyMgr, liveTrackCount, loadInProgress, transport, masterTrack, maxUiTracks,
       pdcDisabled, projectLoadOk, projectLoadSeq, publishedCallback, quantizeVersion,
       rebuildAudioRender, rebuildFlatAndPublish, reconcileChildTracks, running,
-      samplerKitVersion, scheduleHostRestart, snapshotTracks, songEndNanotick,
-      songTimeSigDen, songTimeSigNum, tempoProvider, uiShm, uiWriterDeps,
-      writeUiClipExtents
+      samplerKitVersion, scheduleHostRestart, snapshotTracks, songTiming, tempoProvider,
+      uiShm, uiWriterDeps, writeUiClipExtents
   };
 
   std::thread consumer([&] { daw::engine::runConsumerThread(consumerDeps); });
@@ -4233,7 +4225,7 @@ int main(int argc, char** argv) {
     // Length: --run-seconds if given, else the song end plus a tail so releases and delays
     // are not cut off mid-decay. A render that stops exactly at the last note is wrong in a
     // way that is easy to miss and annoying to discover later.
-    const uint64_t songEndTick = songEndNanotick.load(std::memory_order_acquire);
+    const uint64_t songEndTick = songTiming.songEndNanotick.load(std::memory_order_acquire);
     double seconds = runSeconds > 0 ? static_cast<double>(runSeconds) : 0.0;
     if (seconds <= 0.0) {
       const double songSeconds =
