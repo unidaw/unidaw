@@ -11,9 +11,9 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: a6bafd9
-- main-cpp-lines: 8789
-- main-function-lines: 7351
+- as-of-commit: 9a5e730
+- main-cpp-lines: 6194
+- main-function-lines: 5964
 - ctest-entries: 166
 
 ## Why this file cannot quietly go stale
@@ -98,14 +98,28 @@ whole 268-line chain module (4). Every count it prints is a LOWER BOUND — cons
 so a `constexpr` local the body uses appears only when the new translation unit fails to compile,
 which has now happened twice.
 
-**`processTrack` (796) is the one that cannot follow them mechanically**, and the reason is worth
-recording because it is not the capture count. Its 29 captures split into two populations:
-fourteen are stable main-scope state and make an ordinary Deps struct, but the other fourteen are
-declared *inside the producer's per-block loop* — including three lambdas. Those cannot be hoisted,
-and passing them through a per-block context means constructing `std::function` objects per block
-per track, which is heap allocation on the producer path. The likely answer is to move the loop
-body with them rather than to move `processTrack` alone. Unlike the other four, the byte-identical
-render oracle genuinely applies here, so whichever shape is chosen has a strong check available.
+**`processTrack` looked like it could not follow them, and that was a wrong decomposition rather
+than a hard problem.** Its 29 captures split in two: fourteen are stable main-scope state, but the
+other fourteen are declared *inside the producer's per-block loop*, three of them lambdas. Passing
+those through a per-block context would construct `std::function` objects per block per track —
+heap allocation on the producer path.
+
+Moving the **whole per-block body** instead (1,196 lines, from where `blockId` is claimed to the
+bottom of the loop) makes every one of them an ordinary local of the new function.
+`processTrack` and `runAudioPatcherNode` come along as locals, no indirection is added anywhere,
+and the interface is 51 stable references plus four per-block values as parameters. The unit that
+resisted extraction was the wrong unit, not a hard one — worth remembering the next time a piece
+looks immovable.
+
+Two things had to be freed first, and neither was about `processTrack`. `EngineAudioCallback`
+(1,190 lines) sat in an **anonymous namespace**, so no other translation unit was permitted to name
+the type the block body holds a pointer to; it now lives in `apps/engine_audio_callback.h`. And
+`kSidechainChannels` had to be *shared* to `apps/engine_types.h` rather than moved, because main()
+still uses it.
+
+The split point was already written in main() — "the waits above are deliberately outside it" —
+and it was verified rather than trusted: the region was walked tracking brace and loop nesting to
+confirm zero `continue`/`break` statements bound to the producer's while loop.
 
 What made each move safe was that the body was relocated VERBATIM — the new function binds local
 references carrying the names the lambda captured, so nested lambdas, shadowing and brace scope
