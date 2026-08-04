@@ -22,7 +22,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 python3 - "$ROOT" <<'PY'
-import re, sys, pathlib
+import re, sys, pathlib, glob
 
 root = pathlib.Path(sys.argv[1])
 payloads = (root / "apps/event_payloads.h").read_text()
@@ -206,6 +206,53 @@ else:
     else:
         print("  every size-dispatched opcode is declared as carrying its own payload (%d)"
               % len(size_dispatched))
+
+# ---------------------------------------------------------------- HANDLER REACH.
+#
+# An opcode can have a value, a name and a CLI verb and still do NOTHING, because none of those
+# three is the code that acts on it. Dispatch is 34 size-gated blocks that return, then one long
+# else-if chain, spread across engine_handle_ui_entry.cpp and the 16 command modules. Until this
+# commit that chain had NO TERMINAL ELSE: an opcode with no arm fell off the bottom and returned
+# normally, and the history journal still recorded it as accepted — because the journal is written
+# from the fact that a command ARRIVED, not from anything dispatch did with it. Write path green
+# end to end, state never moved.
+#
+# The terminal else now makes that loud AT RUNTIME (DAW_EVENT "ui.op_unhandled"), which needs the
+# op to actually be sent to be seen. This is the same property asserted STATICALLY, so an opcode
+# added to the enum with no dispatch code at all fails at source-analysis time, before anyone has
+# to think to exercise it.
+#
+# NAMED IN A DISPATCH SOURCE is deliberately weaker than "correctly handled" — proving the latter
+# from source is what the end-to-end checks are for. This catches the case that actually happens:
+# the enum entry lands, the handler is forgotten, and nothing says so.
+NO_HANDLER_NEEDED = {
+    "None": "not an op — the zero value the enum starts from",
+}
+dispatch_sources = [p for p in sorted(glob.glob(str(root / "apps/*.cpp")) +
+                                      glob.glob(str(root / "apps/*.h")))
+                    if "event_payloads.h" not in p and "tests_main" not in p]
+dispatch_text = "\n".join(open(p).read() for p in dispatch_sources)
+if len(dispatch_sources) < 40:
+    print("  FAIL (setup): found only %d dispatch source(s); the parse has stopped seeing the"
+          % len(dispatch_sources))
+    print("        code it searches, which reads identically to every opcode being handled")
+    ok = False
+else:
+    unhandled = [n for n, _ in ops
+                 if n not in NO_HANDLER_NEEDED
+                 and not re.search(r"UiCommandType::%s\b" % re.escape(n), dispatch_text)]
+    if unhandled:
+        print("  FAIL: %d opcode(s) are named nowhere in any dispatch source:" % len(unhandled))
+        for n in unhandled:
+            print("          %-4s %s" % (dict(ops).get(n, "?"), n))
+        print("        An opcode with no dispatch arm is ACCEPTED and JOURNALLED and then does")
+        print("        nothing, silently and forever. Add a handler, or declare it in")
+        print("        NO_HANDLER_NEEDED with the reason it needs none.")
+        ok = False
+    else:
+        print("  every opcode is named in a dispatch source (%d checked, %d declared as needing"
+              % (len(ops) - len(NO_HANDLER_NEEDED), len(NO_HANDLER_NEEDED)))
+        print("  no handler)")
 
 raise SystemExit(0 if ok else 1)
 PY

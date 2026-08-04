@@ -1714,6 +1714,32 @@ void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
         daw::LogLine() << "UI: Invalid loop range [" << start << ", " << end << ")"
                   << std::endl;
       }
+    } else {
+      // AN OPCODE THAT FALLS OFF THE END OF THIS CHAIN DID NOTHING, AND SAID NOTHING.
+      //
+      // Dispatch here is 34 size-gated blocks — each of which RETURNS — followed by this one
+      // else-if chain. A command with an enum entry, a name, a CLI verb and no arm therefore
+      // reached the bottom, fell out of the chain, and returned normally. The journal still
+      // recorded it as accepted, because the journal is written by the command thread from the
+      // fact that a command ARRIVED, not from anything the dispatch did with it. So the write
+      // path reported success end to end and the state never moved.
+      //
+      // That is the most expensive failure shape on this wire and it is already documented as
+      // such: a wrong payload's default failure mode is a SILENT no-op, which is why the engine
+      // logs *_rejected events everywhere else. This was the one place that could swallow a whole
+      // command without a word.
+      //
+      // A switch on UiCommandType with -Werror=switch would make it a COMPILE error instead —
+      // strictly better, and worth doing when this chain is finally emptied into the command
+      // modules it already has. Until then, loud at runtime beats silent.
+      DAW_EVENT("ui.op_unhandled")
+          .field("op", daw::uiCommandTypeName(commandType))
+          .field("code", static_cast<uint32_t>(payload.commandType))
+          .field("size", static_cast<uint32_t>(entry.size));
+      daw::LogLine() << "UI: opcode " << static_cast<uint32_t>(payload.commandType) << " ("
+                     << daw::uiCommandTypeName(commandType)
+                     << ") reached the end of the dispatch chain with no handler — the command "
+                        "was accepted and journalled, and did nothing." << std::endl;
     }
 }
 
