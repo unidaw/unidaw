@@ -11,10 +11,10 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: 666510a
-- main-cpp-lines: 5487
-- main-function-lines: 5256
-- ctest-entries: 169
+- as-of-commit: 7a6e634
+- main-cpp-lines: 5140
+- main-function-lines: 4909
+- ctest-entries: 170
 
 ## Why this file cannot quietly go stale
 
@@ -180,6 +180,13 @@ or this consumer: none of them touch audio, so a byte-identical render only repo
 path was left alone. What covers those is the line-for-line body diff plus the suite's UI checks,
 which read the very shared-memory blocks the consumer writes.
 
+**And the six UI writers followed the consumer**, since it was their only caller — six
+single-caller lambdas left behind in a file their caller had left is not a shape worth keeping. They
+get their own `UiWriterDeps` (27 members) nested inside `ConsumerDeps` rather than swelling it to
+59, which is what the dispatcher already does with its sixteen `*CommandDeps`.
+
+**`main()` is 4,909 lines against 13,652 when this started, and `main.cpp` 5,140 against 20,387.**
+
 ## Testability, which is the axis the extraction was supposed to buy
 
 The panel's other complaint was that **99% of the suite's runtime boots processes**. Extracting a
@@ -194,6 +201,12 @@ previously only be reached through an engine, a shared-memory ring and a typed n
   exactly the assertion written for it.
 - **`locateEditTarget`'s two rules** — a remove landing outside every placement mints nothing, and
   a new clip inherits the predecessor's grid instead of snapping back to 4/4.
+
+A fourth covers **`reconcileChildTracks`** — which aux child tracks a multi-out parent should have.
+The consumer calls it on EVERY tick, so its idempotence is load-bearing: a broken "does this child
+exist" test would append a child per tick until the 64-track budget broke. It also pins the sampler
+stem-to-bus synthesis, which is the gap S6 left (a sampler has no host to ask for a bus layout, so a
+sampler-only multi-out track used to get no children at all).
 
 A third covers **`handleAssembledBulk`'s size checks** — an envelope declaring more points than it
 carries is refused rather than applied short, because half an envelope is a *valid* envelope and
