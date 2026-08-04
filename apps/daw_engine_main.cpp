@@ -40,6 +40,7 @@
 #include "apps/engine_publish_clips.h"
 #include "apps/engine_clip_edit.h"
 #include "apps/engine_track_setup.h"
+#include "apps/engine_transport_state.h"
 #include "apps/engine_chain_host.h"
 #include "apps/engine_track_rebuild.h"
 #include "apps/engine_restart_worker.h"
@@ -1121,7 +1122,7 @@ int main(int argc, char** argv) {
   }
   updatePatcherGraphSnapshot();
 
-  std::atomic<uint64_t> transportNanotick{0};
+  daw::engine::TransportState transport;
   // TICKS PLAYED SINCE THE TRANSPORT LAST STARTED FROM THE LOOP START, never wrapped.
   //
   // transportNanotick is a POSITION and wraps at the loop end, so nothing in the engine knew
@@ -1137,16 +1138,12 @@ int main(int argc, char** argv) {
   // Reset with the position on any explicit seek, so pass counting restarts from wherever you
   // dropped the playhead — and so a render, which always begins at the loop start, always begins
   // at pass 0.
-  std::atomic<uint64_t> transportElapsedNanotick{0};
-  std::atomic<uint64_t> loopStartNanotick{0};
-  std::atomic<uint64_t> loopEndNanotick{0};
   std::atomic<bool> resetTimeline{false};
   std::mutex restartMutex;
   std::condition_variable restartCv;
   std::deque<TrackRuntime*> restartQueue;
-  loopEndNanotick.store(patternTicks, std::memory_order_release);
+  transport.loopEndNanotick.store(patternTicks, std::memory_order_release);
   std::atomic<bool> clipDirty{true};
-  std::atomic<bool> playing{false};
   // The lane's quantize, read from the one place it lives. Used by BOTH the scheduling
   // copy and the published deviation, so the number the UI draws and the number the
   // audio uses cannot come from different settings.
@@ -1233,7 +1230,6 @@ int main(int argc, char** argv) {
   // Whether the loop was set BY HAND. The loop follows the song end only while it was
   // not — otherwise every note you type would silently reset a loop you had chosen,
   // which is the opposite failure and a worse one.
-  std::atomic<bool> loopUserSet{false};
 
   // M2.17: bump BOTH counters for a track-scoped change — the track's (what acceptance
   // compares, and what the diff hands back to the caller as its new base) and the global
@@ -1966,7 +1962,8 @@ int main(int argc, char** argv) {
   // started, and what did start read a destroyed struct. 100 checks failed.
   const std::function<void(TrackRuntime&)> scheduleHostRestartFn = scheduleHostRestart;
   daw::engine::MasterRenderDeps masterRenderDeps{
-      running, playing, masterFxActive, masterTrack, audioCallback, scheduleHostRestartFn};
+      running, transport, masterFxActive, masterTrack, audioCallback, scheduleHostRestartFn
+  };
   // 4b: bring the MASTER host in line with its chain. The master is not in the `tracks`
   // vector, so the per-track consumer never drives its host lifecycle — do it here,
   // off the command/load thread. rebuildHostForChain resolves the master's VST paths and
@@ -2495,9 +2492,9 @@ int main(int argc, char** argv) {
       return;
     }
     DAW_EVENT("song.end_moved").field("from", previous).field("to", end);
-    if (!loopUserSet.load(std::memory_order_acquire)) {
-      loopStartNanotick.store(0, std::memory_order_release);
-      loopEndNanotick.store(end, std::memory_order_release);
+    if (!transport.loopUserSet.load(std::memory_order_acquire)) {
+      transport.loopStartNanotick.store(0, std::memory_order_release);
+      transport.loopEndNanotick.store(end, std::memory_order_release);
     }
   };
 
@@ -3057,13 +3054,13 @@ int main(int argc, char** argv) {
       auxChildOverlays, buildTrackSnapshot, bumpAllTrackClipVersions, clipDirty,
       clipVersion, emitChainSnapshot, emitModSnapshot, emitRoutingSnapshot, emitUiDiff,
       ensurePlacementIds, ensureTrack, harmonyTimeline, liveTrackCount, loadInProgress,
-      loadedClips, loadedClipsMutex, loadedProjectDir, loadedTempoMap, loopEndNanotick,
-      loopStartNanotick, loopUserSet, markerList, masterTrack, meterSnapshot, nextClipId,
-      patcherAssembledFromDevices, patcherGraphState, patternTicks, pluginCache,
-      projectSeed, publishAudioClipTable, rebuildAudioRender, rebuildFlatAndPublish,
-      rebuildHostForChain, reconcileMasterHost, refreshSamplerForTrack, resetTrackContent,
-      songEndNanotick, songMeter, songTimeSigDen, songTimeSigNum, tempoProvider, tracks,
-      tracksMutex, updatePatcherGraphSnapshot, waveformStore
+      loadedClips, loadedClipsMutex, loadedProjectDir, loadedTempoMap, transport,
+      markerList, masterTrack, meterSnapshot, nextClipId, patcherAssembledFromDevices,
+      patcherGraphState, patternTicks, pluginCache, projectSeed, publishAudioClipTable,
+      rebuildAudioRender, rebuildFlatAndPublish, rebuildHostForChain, reconcileMasterHost,
+      refreshSamplerForTrack, resetTrackContent, songEndNanotick, songMeter, songTimeSigDen,
+      songTimeSigNum, tempoProvider, tracks, tracksMutex, updatePatcherGraphSnapshot,
+      waveformStore
   };
 
   auto loadProjectFromPath = [&](const std::string& path, std::string* error) -> bool {
@@ -3168,9 +3165,9 @@ int main(int argc, char** argv) {
   daw::engine::ClipEditDeps clipEditDeps{
       barEndTick, bumpClipVersionFor, bumpTrackClipVersion, clipDirty, clipVersion,
       commitStructuralEdit, consumeClipVersionForNoOp, emitChordDiff, emitUiDiff,
-      forkOwnedClip, growLengthsForContent, locateEditTarget, loopEndNanotick,
-      loopStartNanotick, nextChordId, nextClipId, patternTicks, pushStructuralUndo,
-      rebuildFlatAndPublish, snapshotTrackStore, tracks, tracksMutex
+      forkOwnedClip, growLengthsForContent, locateEditTarget, transport, nextChordId,
+      nextClipId, patternTicks, pushStructuralUndo, rebuildFlatAndPublish,
+      snapshotTrackStore, tracks, tracksMutex
   };
 
   auto applyAddNote = [&](uint32_t trackId, uint64_t nanotick, uint64_t duration,
@@ -3514,9 +3511,10 @@ int main(int argc, char** argv) {
   const std::function<void()> reconcileMasterHostFn = reconcileMasterHost;
   const std::function<void(TrackRuntime&)> refreshSamplerForTrackFn2 = refreshSamplerForTrack;
   daw::engine::ChainCommandDeps chainCommandDeps{
-      tracks, tracksMutex, masterTrack, playing, pluginCache,
-      buildTrackSnapshotFn, emitChainErrorFn, emitChainSnapshotFn, rebuildHostForChainFn,
-      reconcileMasterHostFn, refreshSamplerForTrackFn2};
+      tracks, tracksMutex, masterTrack, transport, pluginCache, buildTrackSnapshotFn,
+      emitChainErrorFn, emitChainSnapshotFn, rebuildHostForChainFn, reconcileMasterHostFn,
+      refreshSamplerForTrackFn2
+  };
 
   const std::function<bool(uint32_t, uint32_t, daw::EventId, const daw::RowOpEdit&, bool,
                            daw::UiClipRejectReason&)> applySetRowOpsFn = applySetRowOps;
@@ -3589,9 +3587,10 @@ int main(int argc, char** argv) {
   const std::function<void(TrackRuntime&, uint32_t)> updateTrackChainForInstrumentFn =
       updateTrackChainForInstrument;
   daw::engine::DeviceCommandDeps deviceCommandDeps{
-      tracks, tracksMutex, playing, audioPlaybackBlockId, pluginPath,
+      tracks, tracksMutex, transport, audioPlaybackBlockId, pluginPath,
       resolveDevicePluginPathFn, rebuildHostForChainFn, emitChainSnapshotFn, ensureTrackFn,
-      resolvePluginPathFn, updateTrackChainForInstrumentFn};
+      resolvePluginPathFn, updateTrackChainForInstrumentFn
+  };
 
   // std::function wrappers so the Deps struct can hold references with a lifetime. A raw
   // lambda bound to a const std::function& would create a temporary that dies at the end of
@@ -3620,10 +3619,10 @@ int main(int argc, char** argv) {
       snapshotTrackStoreFn, tracks, tracksMutex};
 
   daw::engine::TransportCommandDeps transportCommandDeps{
-      heldPreview, loadedTempoMap, loopEndNanotick, loopStartNanotick, loopUserSet,
-      masterTrack, panicPending, patternTicks, pendingPreviewNotes, playing, previewMutex,
-      resetTimeline, restartCv, running, tempoProvider, tracks, tracksMutex,
-      transportElapsedNanotick, transportNanotick};
+      heldPreview, loadedTempoMap, transport, masterTrack, panicPending, patternTicks,
+      pendingPreviewNotes, previewMutex, resetTimeline, restartCv, running, tempoProvider,
+      tracks, tracksMutex
+  };
 
   daw::engine::HandleUiEntryDeps handleUiEntryDeps{
       arrangeTimeCommandDeps, automationCommandDeps, bulkStreams, bulkTick,
@@ -3728,15 +3727,14 @@ int main(int argc, char** argv) {
       daw::engine::ProducerBlockDeps producerBlockDeps{
       blockDuration, blockTicksFor, debugStall, engineConfig, enqueuePreview, getHarmonyAt,
       getRingCtrl, getRingStd, getScaleForHarmony, harmonyTimeline, lastOverflowTick,
-      latencyMgr, loopEndNanotick, loopStartNanotick, meterSnapshot, nextBlockId,
-      nextNoteId, offlineRender, panicPending, patcherAssembledFromDevices,
-      patcherGraphSnapshot, patcherParallel, patcherPool, pendingPreviewNotes, playing,
-      poolAlwaysOn, poolEngaged, poolWorkEwmaUs, previewMutex, producerBlockBudgetUs,
-      producerBlockUsMax, producerBlockUsTotal, producerBlocksOverBudget,
-      producerBlocksTimed, producerSamplerUsMax, producerSamplerUsTotal, projectSeed,
-      publishedCallback, quantizePitch, renderPool, resolveDevicePluginPath, songTimeSigDen,
-      songTimeSigNum, tempoProvider, tickConverter, traceNotes, transportElapsedNanotick,
-      transportNanotick, patternTicks, warnedEventOutsideBlock, writeMirrorParams
+      latencyMgr, transport, meterSnapshot, nextBlockId, nextNoteId, offlineRender,
+      panicPending, patcherAssembledFromDevices, patcherGraphSnapshot, patcherParallel,
+      patcherPool, pendingPreviewNotes, poolAlwaysOn, poolEngaged, poolWorkEwmaUs,
+      previewMutex, producerBlockBudgetUs, producerBlockUsMax, producerBlockUsTotal,
+      producerBlocksOverBudget, producerBlocksTimed, producerSamplerUsMax,
+      producerSamplerUsTotal, projectSeed, publishedCallback, quantizePitch, renderPool,
+      resolveDevicePluginPath, songTimeSigDen, songTimeSigNum, tempoProvider, tickConverter,
+      traceNotes, patternTicks, warnedEventOutsideBlock, writeMirrorParams
   };
 
     while (running.load()) {
@@ -3755,20 +3753,20 @@ int main(int argc, char** argv) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         continue;
       }
-      const bool isPlaying = playing.load(std::memory_order_acquire);
+      const bool isPlaying = transport.playing.load(std::memory_order_acquire);
       auto advanceTransport = [&]() {
         const auto loop = daw::engine::effectiveLoop(
-            loopStartNanotick.load(std::memory_order_acquire),
-            loopEndNanotick.load(std::memory_order_acquire), patternTicks);
+            transport.loopStartNanotick.load(std::memory_order_acquire),
+            transport.loopEndNanotick.load(std::memory_order_acquire), patternTicks);
         const uint64_t loopStartTicks = loop.startTick;
         const uint64_t loopEndTicks = loop.endTick;
         const uint64_t currentTicks =
-            transportNanotick.load(std::memory_order_acquire);
+            transport.transportNanotick.load(std::memory_order_acquire);
         const uint64_t blockTicks = blockTicksFor(currentTicks);
         uint64_t nextTicks = currentTicks + blockTicks;
         nextTicks = daw::engine::advanceTransportTick(nextTicks, loopStartTicks, loopEndTicks);
-        transportNanotick.store(nextTicks, std::memory_order_release);
-        transportElapsedNanotick.fetch_add(blockTicks, std::memory_order_acq_rel);
+        transport.transportNanotick.store(nextTicks, std::memory_order_release);
+        transport.transportElapsedNanotick.fetch_add(blockTicks, std::memory_order_acq_rel);
       };
       bool anyReady = false;
       for (auto* runtime : trackSnapshot) {
@@ -3791,10 +3789,10 @@ int main(int argc, char** argv) {
         tickCarry = 0.0L;
         // And the pass count, for the same reason: a render begins at the loop start, so it must
         // begin at pass 0 every time or two bounces of one project would differ.
-        transportElapsedNanotick.store(0, std::memory_order_release);
+        transport.transportElapsedNanotick.store(0, std::memory_order_release);
         // Rewind to the loop start (Stop), resetting the audio playback position
         // with it so the next Play begins there rather than mid-block.
-        transportNanotick.store(loopStartNanotick.load(std::memory_order_acquire),
+        transport.transportNanotick.store(transport.loopStartNanotick.load(std::memory_order_acquire),
                                 std::memory_order_release);
         audioPlaybackBlockId.store(0, std::memory_order_release);
       }
@@ -3974,12 +3972,12 @@ int main(int argc, char** argv) {
   daw::engine::ConsumerDeps consumerDeps{
       audioPlaybackBlockId, auxChildOverlayMutex, auxChildOverlays, buildTrackSnapshot,
       clipVersion, engineConfig, ensurePlacementIds, harmonyTimeline, lastOverflowTick,
-      latencyMgr, liveTrackCount, loadInProgress, loopEndNanotick, loopStartNanotick,
-      masterTrack, maxUiTracks, pdcDisabled, playing, projectLoadOk, projectLoadSeq,
-      publishedCallback, quantizeVersion, rebuildAudioRender, rebuildFlatAndPublish,
-      reconcileChildTracks, running, samplerKitVersion, scheduleHostRestart, snapshotTracks,
-      songEndNanotick, songTimeSigDen, songTimeSigNum, tempoProvider, transportNanotick,
-      uiShm, uiWriterDeps, writeUiClipExtents
+      latencyMgr, liveTrackCount, loadInProgress, transport, masterTrack, maxUiTracks,
+      pdcDisabled, projectLoadOk, projectLoadSeq, publishedCallback, quantizeVersion,
+      rebuildAudioRender, rebuildFlatAndPublish, reconcileChildTracks, running,
+      samplerKitVersion, scheduleHostRestart, snapshotTracks, songEndNanotick,
+      songTimeSigDen, songTimeSigNum, tempoProvider, uiShm, uiWriterDeps,
+      writeUiClipExtents
   };
 
   std::thread consumer([&] { daw::engine::runConsumerThread(consumerDeps); });
@@ -4036,7 +4034,7 @@ int main(int argc, char** argv) {
           effBlockSize,
           engineConfig.numBlocks,
           &audioPlaybackBlockId);
-      audioCallback->setPlaying(&playing);
+      audioCallback->setPlaying(&transport.playing);
       // Movement 4 surround master: the mix width follows the device, but
       // DAW_MASTER_CHANNELS forces a wider (e.g. 5.1) master for placement + capture even
       // on a stereo device — the device just hears the downmixed front L/R. Determined
@@ -4174,7 +4172,9 @@ int main(int argc, char** argv) {
   std::thread xrunReporter;
   // Declared out here, not inside the `if`: see XrunReporterDeps for why the scope matters.
   daw::engine::XrunReporterDeps xrunReporterDeps{
-      running, audioCallback, playing, nextBlockId, audioPlaybackBlockId, observedPipelineBlocks};
+      running, audioCallback, transport, nextBlockId, audioPlaybackBlockId,
+      observedPipelineBlocks
+  };
   if (!testMode && audioCallback) {
     const double blockMs = engineConfig.sampleRate > 0.0
         ? static_cast<double>(engineConfig.blockSize) /
@@ -4276,7 +4276,7 @@ int main(int argc, char** argv) {
     // is therefore always tick 0. Arming before starting the transport would reintroduce exactly
     // the variability the gate exists to remove.
     resetTimeline.store(true, std::memory_order_release);
-    playing.store(true, std::memory_order_release);
+    transport.playing.store(true, std::memory_order_release);
     offlineProducerArmed.store(true, std::memory_order_release);
     // Now that production is running, wait for a track to be genuinely PRODUCING before the
     // first block is mixed — otherwise block 1 is mixed while every track is still inactive,
@@ -4321,7 +4321,7 @@ int main(int argc, char** argv) {
       }
       ++rendered;
     }
-    playing.store(false, std::memory_order_release);
+    transport.playing.store(false, std::memory_order_release);
 
     if (!haveSomethingToRender) {
       std::cout << "Offline render: nothing written" << std::endl;

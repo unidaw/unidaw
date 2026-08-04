@@ -11,11 +11,11 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: 9c49677
-- main-cpp-lines: 5141
-- main-function-lines: 4910
-- ctest-entries: 174
-- main-function-ceiling: 4313
+- as-of-commit: 003ea69
+- main-cpp-lines: 4540
+- main-function-lines: 4313
+- ctest-entries: 176
+- main-function-ceiling: 4312
 
 ## Why this file cannot quietly go stale
 
@@ -244,6 +244,50 @@ explaining that fix; `progress_check` caught this file; `-Werror=unused-variable
 dependencies that an extraction had orphaned. Ratchets disagreeing with each other's text, and
 being right, is the system working — and the fourteen orphaned deps are the difference between
 decomposition and relocation, since silencing them would have left the hub struct at 73 members.
+
+## 2026-08-04 (later) — the wall, and engine objects instead
+
+The re-score above named main() as the binding constraint. Four thread bodies came out of it
+(xrunReporter, restartWorker, uiThread, masterRenderThread) at 5-6 dependencies each, and
+applyRemoveNote came out with a 39-line duplicate of engine_clip_edit deleted rather than moved.
+Then the approach stopped working, and the measurement is why:
+
+    the producer thread          310 lines  ->  a 53-member deps struct
+    the 14 largest lambdas       699 lines  ->  a 116-member deps struct
+    per group (undo, harmony, track, modlink)  ~19-30 new members for ~100 lines each
+
+The union amortises exactly as the group-by-captures rule predicts, and plateaus near SIX LINES OF
+BODY PER NEW DEPENDENCY. Both figures are worse than the 72-member HandleUiEntryDeps the panel named
+as a defect, so continuing would trade the structure axis against the coupling axis — which is
+precisely what the re-score caught happening the first time round (deps 466 -> 486 while shrinkage
+was being reported). The producer version was built, measured and REVERTED.
+
+**These lambdas are not handlers that happen to live in main(). They ARE main()'s state
+manipulation**, and a struct of references cannot express that more cheaply than the state does.
+
+**So the state moves with the code that owns it.** Two objects so far:
+
+  HarmonyTimeline   4 state members + 4 operations. Those four appeared as 17 separate members
+                    across seven *Deps structs; each now holds one HarmonyTimeline&.
+  TransportState    6 atomics, no methods. They appeared 25 times across ten structs.
+
+    total deps members   509 -> 485, past the 486 the re-score measured
+    main()             4,922 -> 4,312
+
+**Cohesive objects, NOT one god EngineState** — that would be the 72-member hub again at larger
+scale. And the transport deliberately has no methods: the transport COMMANDS are a separate module,
+because a command validates and journals and refuses on the UI thread while this holds six numbers
+the producer reads every block.
+
+**Member names are the old capture names on purpose** — `harmonyEvents`, not `events`. That is what
+lets a 95-line move be proven identical by a line-for-line diff instead of reviewed by eye. Renaming
+is a separate edit.
+
+**main-function-ceiling** is a monotone ratchet added the same day, measured on the WORKING TREE
+with `<=`. The equality check that preceded it green-lit a 13-line regression in the very number a
+panel had named as the constraint, because a fact that is checked is not a constraint that is held.
+It has been lowered eight times since and raised never — and it has already refused two of my own
+commits, once when a comment I added pushed main() one line over and I compacted the code instead.
 
 ## Testability, which is the axis the extraction was supposed to buy
 

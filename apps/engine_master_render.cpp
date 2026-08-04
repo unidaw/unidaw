@@ -9,7 +9,7 @@ namespace daw::engine {
 
 void runMasterRenderThread(MasterRenderDeps& deps) {
   auto& running = deps.running;
-  auto& playing = deps.playing;
+  auto& playing = deps.transport.playing;
   auto& masterFxActive = deps.masterFxActive;
   auto& masterTrack = deps.masterTrack;
   auto& audioCallback = deps.audioCallback;

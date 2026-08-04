@@ -11,10 +11,10 @@ namespace daw::engine {
 void handleSetLoopRange(TransportCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& loopEndNanotick = deps.loopEndNanotick;
-  auto& loopStartNanotick = deps.loopStartNanotick;
-  auto& loopUserSet = deps.loopUserSet;
-  auto& transportNanotick = deps.transportNanotick;
+  auto& loopEndNanotick = deps.transport.loopEndNanotick;
+  auto& loopStartNanotick = deps.transport.loopStartNanotick;
+  auto& loopUserSet = deps.transport.loopUserSet;
+  auto& transportNanotick = deps.transport.transportNanotick;
 
       const uint64_t start =
           (static_cast<uint64_t>(payload.noteNanotickHi) << 32) |
@@ -48,7 +48,7 @@ void handlePanic(TransportCommandDeps& deps,
   auto& masterTrack = deps.masterTrack;
   auto& panicPending = deps.panicPending;
   auto& pendingPreviewNotes = deps.pendingPreviewNotes;
-  auto& playing = deps.playing;
+  auto& playing = deps.transport.playing;
   auto& previewMutex = deps.previewMutex;
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
@@ -158,7 +158,7 @@ void handleStop(TransportCommandDeps& deps,
             const daw::UiCommandPayload& payload) {
   auto& heldPreview = deps.heldPreview;
   auto& pendingPreviewNotes = deps.pendingPreviewNotes;
-  auto& playing = deps.playing;
+  auto& playing = deps.transport.playing;
   auto& previewMutex = deps.previewMutex;
   auto& resetTimeline = deps.resetTimeline;
 
@@ -184,11 +184,11 @@ void handleStop(TransportCommandDeps& deps,
 void handleSetPosition(TransportCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& loopEndNanotick = deps.loopEndNanotick;
-  auto& loopStartNanotick = deps.loopStartNanotick;
+  auto& loopEndNanotick = deps.transport.loopEndNanotick;
+  auto& loopStartNanotick = deps.transport.loopStartNanotick;
   auto& patternTicks = deps.patternTicks;
-  auto& transportElapsedNanotick = deps.transportElapsedNanotick;
-  auto& transportNanotick = deps.transportNanotick;
+  auto& transportElapsedNanotick = deps.transport.transportElapsedNanotick;
+  auto& transportNanotick = deps.transport.transportNanotick;
 
       const uint64_t target =
           static_cast<uint64_t>(payload.noteNanotickLo) |
@@ -210,7 +210,7 @@ void handleSetPosition(TransportCommandDeps& deps,
 void handleQuit(TransportCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& playing = deps.playing;
+  auto& playing = deps.transport.playing;
   auto& restartCv = deps.restartCv;
   auto& running = deps.running;
 
@@ -228,7 +228,7 @@ void handleQuit(TransportCommandDeps& deps,
 void handleTogglePlay(TransportCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& playing = deps.playing;
+  auto& playing = deps.transport.playing;
 
       const bool next = !playing.load(std::memory_order_acquire);
       playing.store(next, std::memory_order_release);

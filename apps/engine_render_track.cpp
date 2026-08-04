@@ -39,7 +39,7 @@ bool renderTrack(RenderTrackDeps& deps,
   auto& projectSeed = deps.projectSeed;
   auto& tempoProvider = deps.tempoProvider;
   auto& traceNotes = deps.traceNotes;
-  auto& transportElapsedNanotick = deps.transportElapsedNanotick;
+  auto& transportElapsedNanotick = deps.transport.transportElapsedNanotick;
   auto& warnedEventOutsideBlock = deps.warnedEventOutsideBlock;
   const auto& getHarmonyAt = deps.getHarmonyAt;
   const auto& getScaleForHarmony = deps.getScaleForHarmony;

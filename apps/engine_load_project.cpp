@@ -42,9 +42,9 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   auto& loadedClipsMutex = deps.loadedClipsMutex;
   auto& loadedProjectDir = deps.loadedProjectDir;
   auto& loadedTempoMap = deps.loadedTempoMap;
-  auto& loopEndNanotick = deps.loopEndNanotick;
-  auto& loopStartNanotick = deps.loopStartNanotick;
-  auto& loopUserSet = deps.loopUserSet;
+  auto& loopEndNanotick = deps.transport.loopEndNanotick;
+  auto& loopStartNanotick = deps.transport.loopStartNanotick;
+  auto& loopUserSet = deps.transport.loopUserSet;
   auto& markerList = deps.markerList;
   auto& masterTrack = deps.masterTrack;
   auto& meterSnapshot = deps.meterSnapshot;

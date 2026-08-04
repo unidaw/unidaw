@@ -49,8 +49,8 @@ void produceBlock(ProducerBlockDeps& deps,
   auto& getScaleForHarmony = deps.getScaleForHarmony;
   auto& lastOverflowTick = deps.lastOverflowTick;
   auto& latencyMgr = deps.latencyMgr;
-  auto& loopEndNanotick = deps.loopEndNanotick;
-  auto& loopStartNanotick = deps.loopStartNanotick;
+  auto& loopEndNanotick = deps.transport.loopEndNanotick;
+  auto& loopStartNanotick = deps.transport.loopStartNanotick;
   auto& meterSnapshot = deps.meterSnapshot;
   auto& nextBlockId = deps.nextBlockId;
   auto& nextNoteId = deps.nextNoteId;
@@ -61,7 +61,7 @@ void produceBlock(ProducerBlockDeps& deps,
   auto& patcherParallel = deps.patcherParallel;
   auto& patcherPool = deps.patcherPool;
   auto& pendingPreviewNotes = deps.pendingPreviewNotes;
-  auto& playing = deps.playing;
+  auto& playing = deps.transport.playing;
   auto& poolAlwaysOn = deps.poolAlwaysOn;
   auto& poolEngaged = deps.poolEngaged;
   auto& poolWorkEwmaUs = deps.poolWorkEwmaUs;
@@ -83,8 +83,8 @@ void produceBlock(ProducerBlockDeps& deps,
   auto& tempoProvider = deps.tempoProvider;
   auto& tickConverter = deps.tickConverter;
   auto& traceNotes = deps.traceNotes;
-  auto& transportElapsedNanotick = deps.transportElapsedNanotick;
-  auto& transportNanotick = deps.transportNanotick;
+  auto& transportElapsedNanotick = deps.transport.transportElapsedNanotick;
+  auto& transportNanotick = deps.transport.transportNanotick;
   auto& patternTicks = deps.patternTicks;
   auto& warnedEventOutsideBlock = deps.warnedEventOutsideBlock;
   auto& writeMirrorParams = deps.writeMirrorParams;
@@ -152,7 +152,7 @@ void produceBlock(ProducerBlockDeps& deps,
           projectSeed,
           tempoProvider,
           traceNotes,
-          transportElapsedNanotick,
+          deps.transport,
           warnedEventOutsideBlock,
           getHarmonyAt,
           getScaleForHarmony,

@@ -16,6 +16,7 @@
 #include <memory>
 #include <string>
 
+#include "engine_transport_state.h"
 #include "engine_audio_callback.h"
 
 namespace daw::engine {
@@ -33,7 +34,7 @@ namespace daw::engine {
 struct XrunReporterDeps {
   std::atomic<bool>& running;
   std::unique_ptr<EngineAudioCallback>& audioCallback;
-  std::atomic<bool>& playing;
+  TransportState& transport;
   std::atomic<uint32_t>& nextBlockId;
   std::atomic<uint32_t>& audioPlaybackBlockId;
   std::atomic<uint32_t>& observedPipelineBlocks;

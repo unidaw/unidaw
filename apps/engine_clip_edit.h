@@ -23,6 +23,7 @@
 #include <optional>
 #include <vector>
 
+#include "engine_transport_state.h"
 #include "engine_types.h"
 #include "event_payloads.h"
 #include "note_entry.h"
@@ -48,8 +49,7 @@ struct ClipEditDeps {
   std::function<void(TrackRuntime&, size_t)> forkOwnedClip;
   std::function<void(TrackRuntime&, const EditTarget&)> growLengthsForContent;
   std::function<EditTarget(TrackRuntime&, uint64_t, bool)> locateEditTarget;
-  std::atomic<uint64_t>& loopEndNanotick;
-  std::atomic<uint64_t>& loopStartNanotick;
+  TransportState& transport;
   std::atomic<uint32_t>& nextChordId;
   std::atomic<uint32_t>& nextClipId;
   const uint64_t patternTicks;

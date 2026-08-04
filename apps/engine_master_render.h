@@ -16,6 +16,7 @@
 #include <functional>
 #include <memory>
 
+#include "engine_transport_state.h"
 #include "engine_audio_callback.h"
 #include "engine_types.h"
 
@@ -23,7 +24,7 @@ namespace daw::engine {
 
 struct MasterRenderDeps {
   std::atomic<bool>& running;
-  std::atomic<bool>& playing;
+  TransportState& transport;
   std::atomic<bool>& masterFxActive;
   std::unique_ptr<TrackRuntime>& masterTrack;
   std::unique_ptr<EngineAudioCallback>& audioCallback;

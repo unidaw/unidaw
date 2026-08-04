@@ -11,7 +11,7 @@ namespace daw::engine {
 void runXrunReporter(XrunReporterDeps& deps, double blockMs, bool latencyReport) {
   auto& running = deps.running;
   auto& audioCallback = deps.audioCallback;
-  auto& playing = deps.playing;
+  auto& playing = deps.transport.playing;
   auto& nextBlockId = deps.nextBlockId;
   auto& audioPlaybackBlockId = deps.audioPlaybackBlockId;
   auto& observedPipelineBlocks = deps.observedPipelineBlocks;

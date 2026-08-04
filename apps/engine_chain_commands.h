@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_transport_state.h"
 #include "apps/engine_pure.h"
 #include "apps/engine_types.h"
 #include "apps/event_payloads.h"
@@ -28,7 +29,7 @@ struct ChainCommandDeps {
   std::vector<std::unique_ptr<TrackRuntime>>& tracks;
   std::mutex& tracksMutex;
   std::unique_ptr<TrackRuntime>& masterTrack;
-  std::atomic<bool>& playing;
+  TransportState& transport;
   const daw::PluginCache& pluginCache;
   const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>& buildTrackSnapshot;
   const std::function<void(uint16_t, uint32_t, uint32_t, uint32_t, uint32_t)>& emitChainError;

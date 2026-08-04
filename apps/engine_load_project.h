@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "engine_transport_state.h"
 #include "engine_harmony_timeline.h"
 #include "engine_types.h"
 #include "markers.h"
@@ -60,9 +61,7 @@ struct LoadProjectDeps {
   std::mutex& loadedClipsMutex;
   std::string& loadedProjectDir;
   std::vector<daw::ProjectTempoPoint>& loadedTempoMap;
-  std::atomic<uint64_t>& loopEndNanotick;
-  std::atomic<uint64_t>& loopStartNanotick;
-  std::atomic<bool>& loopUserSet;
+  TransportState& transport;
   daw::MarkerList& markerList;
   std::unique_ptr<TrackRuntime>& masterTrack;
   std::shared_ptr<const daw::TimeSignatureMap>& meterSnapshot;

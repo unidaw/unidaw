@@ -185,8 +185,8 @@ bool applyAddNote(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, uint6
   auto& forkOwnedClip = deps.forkOwnedClip;
   auto& growLengthsForContent = deps.growLengthsForContent;
   auto& locateEditTarget = deps.locateEditTarget;
-  auto& loopEndNanotick = deps.loopEndNanotick;
-  auto& loopStartNanotick = deps.loopStartNanotick;
+  auto& loopEndNanotick = deps.transport.loopEndNanotick;
+  auto& loopStartNanotick = deps.transport.loopStartNanotick;
   auto& patternTicks = deps.patternTicks;
   auto& snapshotTrackStore = deps.snapshotTrackStore;
   auto& tracks = deps.tracks;
@@ -646,8 +646,8 @@ bool applyAddChord(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, uint
   auto& forkOwnedClip = deps.forkOwnedClip;
   auto& growLengthsForContent = deps.growLengthsForContent;
   auto& locateEditTarget = deps.locateEditTarget;
-  auto& loopEndNanotick = deps.loopEndNanotick;
-  auto& loopStartNanotick = deps.loopStartNanotick;
+  auto& loopEndNanotick = deps.transport.loopEndNanotick;
+  auto& loopStartNanotick = deps.transport.loopStartNanotick;
   auto& nextChordId = deps.nextChordId;
   auto& patternTicks = deps.patternTicks;
   auto& snapshotTrackStore = deps.snapshotTrackStore;

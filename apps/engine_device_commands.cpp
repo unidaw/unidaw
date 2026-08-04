@@ -103,7 +103,7 @@ void handleSetDeviceParam(DeviceCommandDeps& deps,
             const daw::UiCommandPayload& payload) {
   auto& tracks = deps.tracks;
   auto& tracksMutex = deps.tracksMutex;
-  auto& playing = deps.playing;
+  auto& playing = deps.transport.playing;
   auto& audioPlaybackBlockId = deps.audioPlaybackBlockId;
   const auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
   {

@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_transport_state.h"
 #include "engine_pure.h"
 #include "engine_types.h"
 #include "event_payloads.h"
@@ -32,14 +33,11 @@ namespace daw::engine {
 struct TransportCommandDeps {
   std::unordered_map<uint32_t, std::vector<uint8_t>>& heldPreview;
   std::vector<daw::ProjectTempoPoint>& loadedTempoMap;
-  std::atomic<uint64_t>& loopEndNanotick;
-  std::atomic<uint64_t>& loopStartNanotick;
-  std::atomic<bool>& loopUserSet;
+  TransportState& transport;
   std::unique_ptr<TrackRuntime>& masterTrack;
   std::atomic<bool>& panicPending;
   const uint64_t patternTicks;
   std::vector<PreviewNoteReq>& pendingPreviewNotes;
-  std::atomic<bool>& playing;
   std::mutex& previewMutex;
   std::atomic<bool>& resetTimeline;
   std::condition_variable& restartCv;
@@ -47,8 +45,6 @@ struct TransportCommandDeps {
   daw::TempoMapProvider& tempoProvider;
   std::vector<std::unique_ptr<TrackRuntime>>& tracks;
   std::mutex& tracksMutex;
-  std::atomic<uint64_t>& transportElapsedNanotick;
-  std::atomic<uint64_t>& transportNanotick;
 };
 
 void handleSetLoopRange(TransportCommandDeps& deps,

@@ -434,12 +434,12 @@ void runConsumerThread(ConsumerDeps& deps) {
   auto& latencyMgr = deps.latencyMgr;
   auto& liveTrackCount = deps.liveTrackCount;
   auto& loadInProgress = deps.loadInProgress;
-  auto& loopEndNanotick = deps.loopEndNanotick;
-  auto& loopStartNanotick = deps.loopStartNanotick;
+  auto& loopEndNanotick = deps.transport.loopEndNanotick;
+  auto& loopStartNanotick = deps.transport.loopStartNanotick;
   auto& masterTrack = deps.masterTrack;
   auto& maxUiTracks = deps.maxUiTracks;
   auto& pdcDisabled = deps.pdcDisabled;
-  auto& playing = deps.playing;
+  auto& playing = deps.transport.playing;
   auto& projectLoadOk = deps.projectLoadOk;
   auto& projectLoadSeq = deps.projectLoadSeq;
   auto& publishedCallback = deps.publishedCallback;
@@ -455,7 +455,7 @@ void runConsumerThread(ConsumerDeps& deps) {
   auto& songTimeSigDen = deps.songTimeSigDen;
   auto& songTimeSigNum = deps.songTimeSigNum;
   auto& tempoProvider = deps.tempoProvider;
-  auto& transportNanotick = deps.transportNanotick;
+  auto& transportNanotick = deps.transport.transportNanotick;
   auto& uiShm = deps.uiShm;
 
   auto writeUiClipWindowSnapshot = [&](const std::vector<TrackRuntime*>& trackSnapshot) {

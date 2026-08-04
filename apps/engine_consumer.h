@@ -26,6 +26,7 @@
 #include <utility>
 #include <vector>
 
+#include "engine_transport_state.h"
 #include "engine_harmony_timeline.h"
 #include "engine_types.h"
 #include "latency_manager.h"
@@ -85,12 +86,10 @@ struct ConsumerDeps {
   daw::LatencyManager& latencyMgr;
   std::atomic<uint32_t>& liveTrackCount;
   std::atomic<bool>& loadInProgress;
-  std::atomic<uint64_t>& loopEndNanotick;
-  std::atomic<uint64_t>& loopStartNanotick;
+  TransportState& transport;
   std::unique_ptr<TrackRuntime>& masterTrack;
   const uint32_t maxUiTracks;
   const bool pdcDisabled;
-  std::atomic<bool>& playing;
   std::atomic<uint32_t>& projectLoadOk;
   std::atomic<uint32_t>& projectLoadSeq;
   std::function<EngineAudioCallback*()> publishedCallback;
@@ -106,7 +105,6 @@ struct ConsumerDeps {
   std::atomic<uint32_t>& songTimeSigDen;
   std::atomic<uint32_t>& songTimeSigNum;
   daw::TempoMapProvider& tempoProvider;
-  std::atomic<uint64_t>& transportNanotick;
   UiShmState& uiShm;
   UiWriterDeps& uiWriterDeps;
   std::function<void(bool)> writeUiClipExtents;

@@ -32,6 +32,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_transport_state.h"
 #include "engine_harmony_timeline.h"
 #include "apps/engine_types.h"
 #include "apps/latency_manager.h"
@@ -61,7 +62,7 @@ struct RenderTrackDeps {
   std::atomic<uint64_t>& projectSeed;
   daw::TempoMapProvider& tempoProvider;
   const bool& traceNotes;
-  std::atomic<uint64_t>& transportElapsedNanotick;
+  TransportState& transport;
   std::atomic<bool>& warnedEventOutsideBlock;
   std::function<std::optional<daw::HarmonyEvent>(uint64_t)> getHarmonyAt;
   std::function<const daw::Scale*(const daw::HarmonyEvent&)> getScaleForHarmony;

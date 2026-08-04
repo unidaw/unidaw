@@ -32,6 +32,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_transport_state.h"
 #include "engine_harmony_timeline.h"
 #include "engine_types.h"
 #include "event_ring.h"
@@ -63,8 +64,7 @@ struct ProducerBlockDeps {
   HarmonyTimeline& harmonyTimeline;
   std::atomic<uint64_t>& lastOverflowTick;
   daw::LatencyManager& latencyMgr;
-  std::atomic<uint64_t>& loopEndNanotick;
-  std::atomic<uint64_t>& loopStartNanotick;
+  TransportState& transport;
   std::shared_ptr<const daw::TimeSignatureMap>& meterSnapshot;
   std::atomic<uint32_t>& nextBlockId;
   std::atomic<uint32_t>& nextNoteId;
@@ -75,7 +75,6 @@ struct ProducerBlockDeps {
   bool& patcherParallel;
   std::unique_ptr<daw::engine::WorkerPool>& patcherPool;
   std::vector<PreviewNoteReq>& pendingPreviewNotes;
-  std::atomic<bool>& playing;
   bool& poolAlwaysOn;
   bool& poolEngaged;
   double& poolWorkEwmaUs;
@@ -97,8 +96,6 @@ struct ProducerBlockDeps {
   daw::TempoMapProvider& tempoProvider;
   daw::NanotickConverter& tickConverter;
   const bool traceNotes;
-  std::atomic<uint64_t>& transportElapsedNanotick;
-  std::atomic<uint64_t>& transportNanotick;
   const uint64_t patternTicks;
   std::atomic<bool>& warnedEventOutsideBlock;
   std::function<void(TrackRuntime&, const TrackStateSnapshot&, uint64_t)> writeMirrorParams;
