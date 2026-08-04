@@ -568,6 +568,18 @@ target_link_libraries(engine_pure_tests PRIVATE engine_commands)
 # there was no way to ask a command a question without building an engine, mapping shared memory
 # and writing a payload into a ring — which is why the REJECT paths, most of what these handlers
 # do, had no direct coverage at all.
+# 362 lines with no unit coverage: six distinct refusal reasons, all of them silent on this wire.
+# The centrepiece is the forward-flow rule — a device modulating ITSELF is legal and used to be
+# refused, so a preset could load a link no command could recreate.
+add_executable(engine_modlink_commands_tests
+  apps/engine_modlink_commands_tests_main.cpp
+)
+target_include_directories(engine_modlink_commands_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(engine_modlink_commands_tests PRIVATE engine_commands)
+
 add_executable(engine_sampler_commands_tests
   apps/engine_sampler_commands_tests_main.cpp
 )
@@ -1496,6 +1508,12 @@ add_test(NAME engine_pure
   COMMAND engine_pure_tests
 )
 set_tests_properties(engine_pure PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME engine_modlink_commands
+  COMMAND engine_modlink_commands_tests
+)
+set_tests_properties(engine_modlink_commands PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME engine_sampler_commands
   COMMAND engine_sampler_commands_tests
