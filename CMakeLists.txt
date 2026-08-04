@@ -1255,6 +1255,14 @@ add_test(NAME track_readback
 )
 set_tests_properties(track_readback PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# Save and load are two hand-written lists joined by a string literal typed twice. A field saved and
+# never loaded round-trips as its DEFAULT, and the next save writes that default back — the user's
+# setting destroyed by opening and saving, with the save side working perfectly throughout.
+add_test(NAME roundtrip_reach
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/roundtrip_reach_check.sh
+)
+set_tests_properties(roundtrip_reach PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120)
+
 # The C++ -> JS bit constants were the one contract boundary with no mechanical check, and one had
 # diverged: FLAG_ALLOW_OVERLAP held bit 3 (sound-addressed) while claiming bit 4. Rust was right.
 add_test(NAME js_flag_mirror
