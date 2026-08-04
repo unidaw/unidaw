@@ -142,6 +142,7 @@ add_library(engine_commands STATIC
   apps/engine_arrangetime_commands.cpp
   apps/engine_placement_commands.cpp
   apps/engine_transport_commands.cpp
+  apps/engine_restart_worker.cpp
   apps/engine_xrun_reporter.cpp
   apps/engine_pure.cpp
   apps/engine_rt_helpers.cpp
