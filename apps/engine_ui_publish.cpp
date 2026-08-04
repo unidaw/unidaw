@@ -5,6 +5,10 @@
 
 namespace daw::engine {
 
+// EVERY WRITE TO THE UI-OUT RING GOES THROUGH sendUiDiff, including this one's three. The bytes are
+// the same — sendUiDiff builds the entry exactly as makeUiDiffEntry did — but a snapshot that does
+// not fit the ring is now counted and rate-limit-logged like any other drop, instead of being
+// discarded with the return value.
 void emitModSnapshot(UiPublishDeps& deps, TrackRuntime& runtime) {
   auto& modVersion = deps.modVersion;
   auto& getRingUiOut = deps.getRingUiOut;
@@ -50,8 +54,7 @@ void emitModSnapshot(UiPublishDeps& deps, TrackRuntime& runtime) {
           .field("links", 0)
           .field("version", version)
           .field("empty_sentinel", true);
-      const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
-      daw::ringWrite(ringUiOut, entry);
+      sendUiDiff(deps, ringUiOut, daw::EventType::UiDiff, payload);
       return;
     }
     for (const auto& link : registry.links) {
@@ -67,8 +70,7 @@ void emitModSnapshot(UiPublishDeps& deps, TrackRuntime& runtime) {
       payload.targetId = link.target.targetId;
       payload.depth = link.depth;
       payload.bias = link.bias;
-      const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
-      daw::ringWrite(ringUiOut, entry);
+      sendUiDiff(deps, ringUiOut, daw::EventType::UiDiff, payload);
       ++published;
       if (link.target.kind == daw::ModTargetKind::VstParam) {
         daw::UiModLinkUid16DiffPayload uidPayload{};
@@ -77,13 +79,7 @@ void emitModSnapshot(UiPublishDeps& deps, TrackRuntime& runtime) {
         uidPayload.modVersion = version;
         uidPayload.linkId = link.linkId;
         std::memcpy(uidPayload.uid16, link.target.uid16, sizeof(uidPayload.uid16));
-        daw::EventEntry uidEntry{};
-        uidEntry.sampleTime = 0;
-        uidEntry.blockId = 0;
-        uidEntry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
-        uidEntry.size = sizeof(uidPayload);
-        std::memcpy(uidEntry.payload, &uidPayload, sizeof(uidPayload));
-        daw::ringWrite(ringUiOut, uidEntry);
+        sendUiDiff(deps, ringUiOut, daw::EventType::UiDiff, uidPayload);
       }
     }
     DAW_EVENT("modsnapshot.published")
@@ -190,8 +186,12 @@ void emitRoutingSnapshot(UiPublishDeps& deps, TrackRuntime& runtime) {
     if (routing.preFaderSend) {
       payload.flags |= 0x1u;
     }
-    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
-    daw::ringWrite(ringUiOut, entry);
+    // THROUGH sendUiDiff, not a bare ringWrite. These four used to call daw::ringWrite and
+    // DISCARD the result, so a refusal that did not fit the ring vanished twice over: the UI never
+    // learned its command was rejected, and nothing counted the loss. Same bytes on the wire —
+    // sendUiDiff builds the entry exactly as makeUiDiffEntry did — one accounting path instead of
+    // five hand-written copies of it.
+    sendUiDiff(deps, ringUiOut, daw::EventType::UiDiff, payload);
 }
 
 void emitPatcherGraphDelta(UiPublishDeps& deps, uint32_t trackId, uint16_t flags,
@@ -219,8 +219,12 @@ void emitPatcherGraphDelta(UiPublishDeps& deps, uint32_t trackId, uint16_t flags
     payload.srcPortId = srcPortId;
     payload.dstPortId = dstPortId;
     payload.edgeKind = edgeKind;
-    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
-    daw::ringWrite(ringUiOut, entry);
+    // THROUGH sendUiDiff, not a bare ringWrite. These four used to call daw::ringWrite and
+    // DISCARD the result, so a refusal that did not fit the ring vanished twice over: the UI never
+    // learned its command was rejected, and nothing counted the loss. Same bytes on the wire —
+    // sendUiDiff builds the entry exactly as makeUiDiffEntry did — one accounting path instead of
+    // five hand-written copies of it.
+    sendUiDiff(deps, ringUiOut, daw::EventType::UiDiff, payload);
 }
 
 void emitPatcherGraphError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId, uint32_t nodeId, uint32_t srcNodeId, uint32_t dstNodeId, uint32_t srcPortId, uint32_t dstPortId, uint32_t edgeKind) {
@@ -240,8 +244,12 @@ void emitPatcherGraphError(UiPublishDeps& deps, uint16_t errorCode, uint32_t tra
     payload.srcPortId = srcPortId;
     payload.dstPortId = dstPortId;
     payload.edgeKind = edgeKind;
-    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
-    daw::ringWrite(ringUiOut, entry);
+    // THROUGH sendUiDiff, not a bare ringWrite. These four used to call daw::ringWrite and
+    // DISCARD the result, so a refusal that did not fit the ring vanished twice over: the UI never
+    // learned its command was rejected, and nothing counted the loss. Same bytes on the wire —
+    // sendUiDiff builds the entry exactly as makeUiDiffEntry did — one accounting path instead of
+    // five hand-written copies of it.
+    sendUiDiff(deps, ringUiOut, daw::EventType::UiDiff, payload);
 }
 
 void emitChainError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId, uint32_t deviceId, uint32_t deviceKind, uint32_t insertIndex) {
@@ -259,8 +267,12 @@ void emitChainError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId, u
     payload.deviceId = deviceId;
     payload.deviceKind = deviceKind;
     payload.insertIndex = insertIndex;
-    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
-    daw::ringWrite(ringUiOut, entry);
+    // THROUGH sendUiDiff, not a bare ringWrite. These four used to call daw::ringWrite and
+    // DISCARD the result, so a refusal that did not fit the ring vanished twice over: the UI never
+    // learned its command was rejected, and nothing counted the loss. Same bytes on the wire —
+    // sendUiDiff builds the entry exactly as makeUiDiffEntry did — one accounting path instead of
+    // five hand-written copies of it.
+    sendUiDiff(deps, ringUiOut, daw::EventType::UiDiff, payload);
     DAW_EVENT("chain.rejected")
         .field("track", trackId)
         .field("device", deviceId)
@@ -326,8 +338,12 @@ void emitModError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId,
     payload.errorCode = errorCode;
     payload.trackId = trackId;
     payload.linkId = linkId;
-    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
-    daw::ringWrite(ringUiOut, entry);
+    // THROUGH sendUiDiff, not a bare ringWrite. These four used to call daw::ringWrite and
+    // DISCARD the result, so a refusal that did not fit the ring vanished twice over: the UI never
+    // learned its command was rejected, and nothing counted the loss. Same bytes on the wire —
+    // sendUiDiff builds the entry exactly as makeUiDiffEntry did — one accounting path instead of
+    // five hand-written copies of it.
+    sendUiDiff(deps, ringUiOut, daw::EventType::UiDiff, payload);
     DAW_EVENT("modlink.rejected")
         .field("track", trackId)
         // A refusal that arrives BEFORE the auto-assign reports the sentinel, because there is no
@@ -352,8 +368,12 @@ void emitRoutingError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId)
     payload.diffType = static_cast<uint16_t>(daw::UiDiffType::RoutingError);
     payload.errorCode = errorCode;
     payload.trackId = trackId;
-    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
-    daw::ringWrite(ringUiOut, entry);
+    // THROUGH sendUiDiff, not a bare ringWrite. These four used to call daw::ringWrite and
+    // DISCARD the result, so a refusal that did not fit the ring vanished twice over: the UI never
+    // learned its command was rejected, and nothing counted the loss. Same bytes on the wire —
+    // sendUiDiff builds the entry exactly as makeUiDiffEntry did — one accounting path instead of
+    // five hand-written copies of it.
+    sendUiDiff(deps, ringUiOut, daw::EventType::UiDiff, payload);
     DAW_EVENT("routing.rejected")
         .field("track", trackId)
         .field("reason", errorScopeName("routing", errorCode));
@@ -365,9 +385,6 @@ void emitRoutingError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId)
 void emitClipReject(UiPublishDeps& deps, daw::UiClipRejectReason reason, uint32_t trackId,
                     uint32_t sentBase, uint32_t currentBase, daw::UiCommandType commandType) {
   auto& getRingUiOut = deps.getRingUiOut;
-  auto& uiDiffSent = deps.uiDiffSent;
-  auto& uiDiffDropped = deps.uiDiffDropped;
-  auto logUiDiffDrop = [&](auto&&... a) { return daw::engine::logUiDiffDrop(deps, decltype(a)(a)...); };
 
 
     auto ringUiOut = getRingUiOut();
@@ -381,13 +398,10 @@ void emitClipReject(UiPublishDeps& deps, daw::UiClipRejectReason reason, uint32_
     payload.sentBase = sentBase;
     payload.currentBase = currentBase;
     payload.commandType = static_cast<uint16_t>(commandType);
-    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
-    if (daw::ringWrite(ringUiOut, entry)) {
-      uiDiffSent.fetch_add(1, std::memory_order_relaxed);
-    } else {
-      uiDiffDropped.fetch_add(1, std::memory_order_relaxed);
-      logUiDiffDrop();
-    }
+    // THE LAST HAND-WRITTEN COPY OF THE ACCOUNTING, now gone. This was sendUiDiff's body inlined:
+    // same write, same two counters, same drop log — a second copy of a rule that agreed on the
+    // bytes and could drift on the behaviour. It is the one call now.
+    sendUiDiff(deps, ringUiOut, daw::EventType::UiDiff, payload);
 }
 
 void reportSamplerReject(UiPublishDeps& deps, daw::UiCommandType command,

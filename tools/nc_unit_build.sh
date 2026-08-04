@@ -81,4 +81,22 @@ print('cd %s/build && %s' % (root, link))
 PY
 
 bash "$OUT/build.sh"
+
+# ---- A SABOTAGE IN A HEADER NEEDS EVERY TU THAT INSTANTIATES IT REBUILT, and forgetting one prints
+# exactly like a check that found no problem. It happened here: the drop accounting lives in a
+# template in engine_ui_publish.h, the test calls it through a function in engine_ui_publish.cpp,
+# and rebuilding only the test binary left the OLD accounting linked in. The control said PASS.
+#
+# This cannot know which TUs matter without an include graph, so it says what it does know: which
+# headers are modified, and that each of their includers must be on the command line.
+if git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  DIRTY_H="$(git -C "$ROOT" diff --name-only -- 'apps/*.h' 2>/dev/null || true)"
+  if [ -n "$DIRTY_H" ]; then
+    echo "nc_unit_build: NOTE — modified header(s) in this tree:" >&2
+    printf '%s\n' "$DIRTY_H" | sed 's/^/                 /' >&2
+    echo "               If your change is IN one of them, every .cpp that includes it must be" >&2
+    echo "               passed as an extra source, or the control will not reach the binary." >&2
+  fi
+fi
+
 echo "$OUT/$TARGET"

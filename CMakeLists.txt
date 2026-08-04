@@ -618,6 +618,18 @@ target_link_libraries(engine_modlink_commands_tests PRIVATE engine_commands)
 # lambdas inside main() until they moved to engine_clip_edit, so nothing could reach them without
 # starting an engine, and the ORDER of the two version bumps is a contract no end-to-end check can
 # see.
+# The UI diff path — delivery, drop counting and the rate-limited drop log. Every failure here is
+# silent by design: a diff that does not fit the ring is DROPPED, not blocked, so a delivered diff
+# and a discarded one look identical to the caller and identical to any end-to-end check.
+add_executable(engine_ui_publish_tests
+  apps/engine_ui_publish_tests_main.cpp
+)
+target_include_directories(engine_ui_publish_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(engine_ui_publish_tests PRIVATE engine_commands)
+
 add_executable(engine_clip_helpers_tests
   apps/engine_clip_helpers_tests_main.cpp
 )
@@ -1215,6 +1227,14 @@ add_test(NAME lock_order
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/lock_order_check.sh
 )
 set_tests_properties(lock_order PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+
+# Every write to the UI-out ring must go through sendUiDiff, which is what counts the drops. Six
+# emitters used to call ringWrite directly and discard the result: same bytes on the wire, so
+# nothing could tell the difference, and a refusal that did not fit the ring was lost in silence.
+add_test(NAME ui_diff_accounting
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/ui_diff_accounting_check.sh
+)
+set_tests_properties(ui_diff_accounting PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 add_test(NAME master_track
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/master_track_check.sh
 )
@@ -1575,6 +1595,12 @@ add_test(NAME engine_modlink_commands
   COMMAND engine_modlink_commands_tests
 )
 set_tests_properties(engine_modlink_commands PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME engine_ui_publish
+  COMMAND engine_ui_publish_tests
+)
+set_tests_properties(engine_ui_publish PROPERTIES
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME engine_clip_helpers
