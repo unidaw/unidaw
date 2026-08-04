@@ -140,6 +140,21 @@ notes() {
   cli get notes --track 0 2>/dev/null | sed -n 's/.*"note_count": \([0-9]*\).*/\1/p' | head -1
 }
 
+# EACH WAIT BELOW NAMES THE CHANGE IT IS WAITING FOR, because that is the only thing that makes
+# it a wait rather than a guess. A fixed sleep gets less correct as the machine gets busier; a
+# predicate gets slower. Every one of these is a value that is DIFFERENT after the command than
+# before it, which is what stops the poll from matching on its first read and waiting for nothing.
+fork_applied() {
+  grep '"event":"scratch.applied"' "$TMP/eng.log" 2>/dev/null | grep -q '"op":"fork_placement_clip"'
+}
+notes_above() { [ "$(notes)" -gt "$1" ] 2>/dev/null; }
+notes_equal() { [ "$(notes)" = "$1" ]; }
+spread_is()   { [ "$(spread)" = "$1" ]; }
+spread_isnt() { [ "$(spread)" != "$1" ]; }
+saved_parses() {
+  python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$TMP/scout.uniproj.json" 2>/dev/null
+}
+
 BEFORE="$(spread)"
 [ "$BEFORE" = "1:1 2:1 3:1" ] || \
   fail "the fixture should start with three appearances of clip 1, got [$BEFORE]"
@@ -149,7 +164,12 @@ echo "  loaded: $BEFORE, $N_BEFORE notes on the track"
 # ---- FORKS, and only the one named. The other two appearances must keep playing the original,
 # because that is the difference between a draft and an edit.
 cli do scratch fork --track 0 --placement 2 >/dev/null 2>&1 || true
-sleep 1.3
+wait_until 20 fork_applied || true
+# AND THEN FOR THE PUBLISHED VIEW, which is a SECOND thing. scratch.applied means the engine ACTED;
+# the extents region this check reads is republished by the consumer on its own tick. Waiting only
+# for the event failed 3 runs in 6 — the fork was journalled and `spread` still returned the
+# pre-fork map, which reads exactly like the fork having edited the clip instead of the appearance.
+wait_until 20 spread_isnt "$BEFORE" || true
 grep '"event":"scratch.applied"' "$TMP/eng.log" | grep -q '"op":"fork_placement_clip"' || \
   fail "the fork was not applied: $(grep -o '"event":"scratch[a-z._]*"[^}]*' "$TMP/eng.log" | tail -1)"
 FORKED="$(spread)"
@@ -176,7 +196,7 @@ esac
 # covers bar 2, so this tick is inside it.
 cli do note --track 0 --nanotick $((BAR + Q / 2)) --pitch 55 --velocity 100 \
     --duration $((Q / 2)) >/dev/null 2>&1 || true
-sleep 1.3
+wait_until 20 notes_above "$N_BEFORE" || true
 N_DRAFT="$(notes)"
 [ "$N_DRAFT" -gt "$N_BEFORE" ] || \
   fail "the write after the fork did not land at all ($N_BEFORE -> $N_DRAFT)"
@@ -184,7 +204,7 @@ echo "  isolates: the agent's write landed in the draft ($N_BEFORE -> $N_DRAFT n
 
 # ---- SWAPS, and restores EXACTLY. This is the A/B.
 cli do scratch swap --track 0 --placement 2 >/dev/null 2>&1 || true
-sleep 1.3
+wait_until 20 notes_equal "$N_BEFORE" || true
 SWAPPED="$(spread)"
 N_YOURS="$(notes)"
 [ "$N_YOURS" = "$N_BEFORE" ] || \
@@ -202,15 +222,18 @@ echo "  swaps: back to yours exactly, draft still one command away ($SWAPPED)"
 # BEFORE all this and it must be what undo removes.
 cli do note --track 0 --nanotick $((Q / 2)) --pitch 60 --velocity 100 \
     --duration $((Q / 2)) >/dev/null 2>&1 || true
-sleep 1.2
+wait_until 20 notes_above "$N_YOURS" || true
 N_TYPED="$(notes)"
+# The two swaps go OUT and BACK, so the thing that changes is the appearance map, not the count —
+# waiting on `notes` here would match instantly both times and wait for nothing.
+SPREAD_YOURS="$(spread)"
 cli do scratch swap --track 0 --placement 2 >/dev/null 2>&1 || true
-sleep 1.2
+wait_until 20 spread_isnt "$SPREAD_YOURS" || true
 cli do scratch swap --track 0 --placement 2 >/dev/null 2>&1 || true
-sleep 1.2
+wait_until 20 spread_is "$SPREAD_YOURS" || true
 [ "$(notes)" = "$N_TYPED" ] || fail "two swaps did not return to where they started"
 cli do undo >/dev/null 2>&1 || true
-sleep 1.3
+wait_until 20 notes_equal "$N_YOURS" || true
 N_UNDONE="$(notes)"
 [ "$N_UNDONE" = "$N_YOURS" ] || \
   fail "after typing a note, auditioning twice and pressing undo, the track has $N_UNDONE notes —
@@ -221,7 +244,7 @@ echo "  undo: an audition is not an edit — undo still removed the typed note"
 
 # ---- SURVIVES. A draft is work; it has to be there tomorrow.
 cli do save scout --force >/dev/null 2>&1 || true
-sleep 1.8
+wait_until 20 saved_parses || true
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 SAVED="$(python3 - "$TMP/scout.uniproj.json" <<'PYS'
 import json, sys
