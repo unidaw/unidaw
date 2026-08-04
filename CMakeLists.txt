@@ -96,6 +96,7 @@ set_source_files_properties(apps/engine_render_track.cpp apps/engine_save_projec
                             apps/engine_track_setup.cpp
                             apps/engine_clip_edit.cpp
                             apps/engine_publish_clips.cpp
+                            apps/engine_produce_block.cpp
                             PROPERTIES COMPILE_OPTIONS -Werror=unused-variable)
 set_source_files_properties(${_engine_command_sources}
   PROPERTIES COMPILE_OPTIONS "${engine_commands_warnings}")
@@ -148,6 +149,7 @@ add_library(engine_commands STATIC
   apps/engine_track_setup.cpp
   apps/engine_clip_edit.cpp
   apps/engine_publish_clips.cpp
+  apps/engine_produce_block.cpp
   apps/engine_save_project.cpp
   apps/engine_sampler_commands.cpp
   apps/engine_automation_commands.cpp

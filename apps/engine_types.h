@@ -63,6 +63,13 @@
 // out as a net widening of scope. It was a regression introduced by the fix for a different one.
 namespace daw::engine {
 
+// Shared for the same reason as kMaxAuxOutputChannels below: engine_produce_block.cpp needs
+// it and so does main(), and two copies of a channel count is how two files come to disagree
+// about a memory layout.
+// Movement 4 sidechain: stereo key input carried in the per-track input plane after the
+// main channels. The sidechain occupies [numChannelsOut, numChannelsOut + this).
+constexpr uint32_t kSidechainChannels = 2;
+
 // Moved here from daw_engine_main.cpp file scope: engine_track_setup.cpp needs it too, and a
 // second copy of a capacity constant is how two files come to disagree about how wide a
 // plane is.
