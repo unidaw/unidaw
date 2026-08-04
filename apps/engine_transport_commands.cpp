@@ -44,12 +44,12 @@ void handleSetLoopRange(TransportCommandDeps& deps,
 void handlePanic(TransportCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& heldPreview = deps.heldPreview;
+  auto& heldPreview = deps.previewQueue.heldPreview;
   auto& masterTrack = deps.masterTrack;
   auto& panicPending = deps.panicPending;
-  auto& pendingPreviewNotes = deps.pendingPreviewNotes;
+  auto& pendingPreviewNotes = deps.previewQueue.pendingPreviewNotes;
   auto& playing = deps.transport.playing;
-  auto& previewMutex = deps.previewMutex;
+  auto& previewMutex = deps.previewQueue.previewMutex;
   auto& tracks = deps.trackTable.tracks;
   auto& tracksMutex = deps.trackTable.tracksMutex;
 
@@ -156,10 +156,10 @@ void handleSetTempo(TransportCommandDeps& deps,
 void handleStop(TransportCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& heldPreview = deps.heldPreview;
-  auto& pendingPreviewNotes = deps.pendingPreviewNotes;
+  auto& heldPreview = deps.previewQueue.heldPreview;
+  auto& pendingPreviewNotes = deps.previewQueue.pendingPreviewNotes;
   auto& playing = deps.transport.playing;
-  auto& previewMutex = deps.previewMutex;
+  auto& previewMutex = deps.previewQueue.previewMutex;
   auto& resetTimeline = deps.resetTimeline;
 
       // Halt and rewind to the loop start. resetTimeline is drained by the

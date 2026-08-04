@@ -26,6 +26,7 @@
 #include "engine_song_timing.h"
 #include "engine_transport_state.h"
 #include "engine_pure.h"
+#include "engine_preview_queue.h"
 #include "engine_types.h"
 #include "event_payloads.h"
 #include "event_ring.h"
@@ -33,14 +34,13 @@
 namespace daw::engine {
 
 struct TransportCommandDeps {
-  std::unordered_map<uint32_t, std::vector<uint8_t>>& heldPreview;
+  // Three members and a std::function became one: see apps/engine_preview_queue.h.
+  PreviewQueue& previewQueue;
   SongTiming& songTiming;
   TransportState& transport;
   std::unique_ptr<TrackRuntime>& masterTrack;
   std::atomic<bool>& panicPending;
   const uint64_t patternTicks;
-  std::vector<PreviewNoteReq>& pendingPreviewNotes;
-  std::mutex& previewMutex;
   std::atomic<bool>& resetTimeline;
   std::condition_variable& restartCv;
   std::atomic<bool>& running;

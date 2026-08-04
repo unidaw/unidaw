@@ -36,6 +36,7 @@
 #include "engine_song_timing.h"
 #include "engine_transport_state.h"
 #include "engine_harmony_timeline.h"
+#include "engine_preview_queue.h"
 #include "engine_types.h"
 #include "event_ring.h"
 #include "harmony_timeline.h"
@@ -54,11 +55,12 @@ namespace daw::engine {
 class EngineAudioCallback;
 
 struct ProducerBlockDeps {
+  // Three members and a std::function became one: see apps/engine_preview_queue.h.
+  PreviewQueue& previewQueue;
   const std::chrono::duration<double>& blockDuration;
   std::function<uint64_t(uint64_t)> blockTicksFor;
   const bool debugStall;
   const daw::HostConfig& engineConfig;
-  std::function<void(uint32_t, uint8_t, uint8_t, bool)> enqueuePreview;
   std::function<std::optional<daw::HarmonyEvent>(uint64_t)> getHarmonyAt;
   std::function<daw::EventRingView(TrackRuntime&)> getRingCtrl;
   std::function<daw::EventRingView(TrackRuntime&)> getRingStd;
@@ -75,11 +77,9 @@ struct ProducerBlockDeps {
   PatcherGraphOwner& patcherGraph;
   bool& patcherParallel;
   std::unique_ptr<daw::engine::WorkerPool>& patcherPool;
-  std::vector<PreviewNoteReq>& pendingPreviewNotes;
   bool& poolAlwaysOn;
   bool& poolEngaged;
   double& poolWorkEwmaUs;
-  std::mutex& previewMutex;
   const uint64_t producerBlockBudgetUs;
   std::atomic<uint64_t>& producerBlockUsMax;
   std::atomic<uint64_t>& producerBlockUsTotal;

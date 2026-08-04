@@ -36,14 +36,16 @@
 #include <vector>
 
 #include "engine_produce_block.h"
+#include "engine_preview_queue.h"
 #include "engine_types.h"
 
 namespace daw::engine {
 
 struct ProducerThreadDeps {
+  // Three members and a std::function became one: see apps/engine_preview_queue.h.
+  PreviewQueue& previewQueue;
   std::atomic<uint32_t>& audioPlaybackBlockId;
   const daw::HostConfig& engineConfig;
-  std::function<void(uint32_t, uint8_t, uint8_t, bool)> enqueuePreview;
   std::function<std::optional<daw::HarmonyEvent>(uint64_t)> getHarmonyAt;
   std::function<daw::EventRingView(TrackRuntime&)> getRingCtrl;
   std::function<daw::EventRingView(TrackRuntime&)> getRingStd;
@@ -60,11 +62,9 @@ struct ProducerThreadDeps {
   bool& patcherParallel;
   std::unique_ptr<daw::engine::WorkerPool>& patcherPool;
   const uint64_t patternTicks;
-  std::vector<PreviewNoteReq>& pendingPreviewNotes;
   bool& poolAlwaysOn;
   bool& poolEngaged;
   double& poolWorkEwmaUs;
-  std::mutex& previewMutex;
   std::atomic<uint64_t>& producerBlocksOverBudget;
   std::atomic<uint64_t>& producerBlocksTimed;
   std::atomic<uint64_t>& producerBlockUsMax;

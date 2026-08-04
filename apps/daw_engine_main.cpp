@@ -39,6 +39,8 @@
 #include "apps/engine_shutdown.h"
 #include "apps/engine_song_store.h"
 #include "apps/engine_ui_shm.h"
+#include "apps/engine_history_journal.h"
+#include "apps/engine_preview_queue.h"
 #include "apps/engine_produce_block.h"
 #include "apps/engine_startup.h"
 #include "apps/engine_producer_thread.h"
@@ -770,20 +772,12 @@ int main(int argc, char** argv) {
   // Seed the counter above any id already present in `placements`, then give every
   // unassigned (id == 0) placement a fresh stable id. Called wherever placements enter the
   // store (load, restore, single-note creation).
-  std::mutex previewMutex;
-  std::vector<PreviewNoteReq> pendingPreviewNotes;
-  std::unordered_map<uint32_t, std::vector<uint8_t>> heldPreview;  // trackId -> held pitches
+  // Three locals and their lambda became one object: see apps/engine_preview_queue.h. They were
+  // passed individually into three different Deps structs — seven member slots for one idea.
+  daw::engine::PreviewQueue previewQueue;
   // Enqueue an audition and update the held-pitch set. Caller holds nothing; this locks.
   auto enqueuePreview = [&](uint32_t trackId, uint8_t pitch, uint8_t velocity, bool on) {
-    std::lock_guard<std::mutex> lock(previewMutex);
-    pendingPreviewNotes.push_back({trackId, pitch, velocity, on});
-    auto& held = heldPreview[trackId];
-    const auto it = std::find(held.begin(), held.end(), pitch);
-    if (on) {
-      if (it == held.end()) held.push_back(pitch);
-    } else if (it != held.end()) {
-      held.erase(it);
-    }
+    previewQueue.enqueuePreview(trackId, pitch, velocity, on);
   };
   // The project's generation seed (ABI 4). Folded into every generator's hash so a song
   // reproduces exactly, and changing this one number re-rolls every generated variation.
@@ -835,40 +829,14 @@ int main(int argc, char** argv) {
   // plus schema-version replay is a project of its own; as a record it is nearly free.
   // Written from the command thread only (it does IO), guarded so a later multi-producer
   // ring cannot interleave half-lines.
-  std::mutex historyMutex;
-  uint64_t historySeq = 0;
-  auto historyPath = [&]() -> std::filesystem::path {
-    const std::string dir =
-        loadedProjectDir.empty() ? daw::defaultProjectDir() : loadedProjectDir;
-    return std::filesystem::path(dir) / "history.jsonl";
-  };
+  // The mutex, the sequence number, the path and the writer became one object: see
+  // apps/engine_history_journal.h. The lock guards the file AND the counter, so they were never
+  // separable; they were three main() locals and a lambda purely because that is where they landed.
+  daw::engine::HistoryJournal historyJournal{loadedProjectDir};
+  // historyPath has no forwarder: its only caller was historyAppend, which moved with it.
   auto historyAppend = [&](const char* op, const char* outcome, uint32_t scopeTrack,
                            uint32_t baseVersion, const std::string& params) {
-    if (std::getenv("DAW_NO_HISTORY")) {
-      return;
-    }
-    std::lock_guard<std::mutex> lock(historyMutex);
-    const auto path = historyPath();
-    std::error_code ec;
-    std::filesystem::create_directories(path.parent_path(), ec);
-    std::ofstream out(path, std::ios::app);
-    if (!out) {
-      return;
-    }
-    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                         std::chrono::system_clock::now().time_since_epoch())
-                         .count();
-    out << "{\"seq\":" << ++historySeq << ",\"ts_ms\":" << now
-        << ",\"author\":\"ui\",\"scope\":";
-    if (scopeTrack == 0xFFFFFFFFu) {
-      out << "\"global\"";
-    } else if (scopeTrack == daw::kMasterTrackId) {
-      out << "\"master\"";
-    } else {
-      out << "\"track:" << scopeTrack << "\"";
-    }
-    out << ",\"base_version\":" << baseVersion << ",\"op\":\"" << op
-        << "\",\"outcome\":\"" << outcome << "\",\"params\":{" << params << "}}\n";
+    historyJournal.historyAppend(op, outcome, scopeTrack, baseVersion, params);
   };
   // Engine-lifetime registry of decoded audio sources for waveform display: owns the
   // min/max pyramids the RequestWaveform handler slices, keyed by a stable sourceId.
@@ -2139,8 +2107,8 @@ int main(int argc, char** argv) {
       snapshotTrackStoreFn, trackTable};
 
   daw::engine::TransportCommandDeps transportCommandDeps{
-      heldPreview, songTiming, transport, masterTrack, panicPending, patternTicks,
-      pendingPreviewNotes, previewMutex, resetTimeline, restartCv, running, tempoProvider,
+      previewQueue, songTiming, transport, masterTrack, panicPending, patternTicks,
+      resetTimeline, restartCv, running, tempoProvider,
       trackTable
   };
 
@@ -2171,11 +2139,11 @@ int main(int argc, char** argv) {
   daw::LogLine() << "UI: command thread launched" << std::endl;
 
   daw::engine::ProducerThreadDeps producerThreadDeps{
-     audioPlaybackBlockId, engineConfig, enqueuePreview, getHarmonyAt, getRingCtrl, getRingStd,
+      previewQueue, audioPlaybackBlockId, engineConfig, getHarmonyAt, getRingCtrl, getRingStd,
       getScaleForHarmony, harmonyTimeline, lastOverflowTick, latencyMgr, nextBlockId,
       nextNoteId, offlineProducerArmed, offlineRender, panicPending, patcherGraph,
-      patcherParallel, patcherPool, patternTicks, pendingPreviewNotes, poolAlwaysOn,
-      poolEngaged, poolWorkEwmaUs, previewMutex, producerBlocksOverBudget, producerBlocksTimed,
+      patcherParallel, patcherPool, patternTicks, poolAlwaysOn,
+      poolEngaged, poolWorkEwmaUs, producerBlocksOverBudget, producerBlocksTimed,
       producerBlockUsMax, producerBlockUsTotal, producerSamplerUsMax, producerSamplerUsTotal,
       projectSeed, publishedCallback, quantizePitch, renderPool, resetTimeline,
       resolveDevicePluginPath, running, snapshotTracks, songTiming, tempoProvider,

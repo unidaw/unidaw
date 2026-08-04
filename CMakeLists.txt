@@ -103,6 +103,8 @@ set_source_files_properties(apps/engine_render_track.cpp apps/engine_save_projec
                             apps/engine_audio_start.cpp
                             apps/engine_shutdown.cpp
                             apps/engine_ui_shm.cpp
+                            apps/engine_preview_queue.cpp
+                            apps/engine_history_journal.cpp
                             apps/engine_song_store.cpp
                             apps/engine_consumer.cpp
                             PROPERTIES COMPILE_OPTIONS -Werror=unused-variable)
@@ -175,6 +177,8 @@ add_library(engine_commands STATIC
   apps/engine_audio_start.cpp
   apps/engine_shutdown.cpp
   apps/engine_ui_shm.cpp
+  apps/engine_preview_queue.cpp
+  apps/engine_history_journal.cpp
   apps/engine_song_store.cpp
   apps/engine_consumer.cpp
   apps/engine_save_project.cpp
@@ -621,6 +625,18 @@ target_link_libraries(engine_modlink_commands_tests PRIVATE engine_commands)
 # The UI diff path — delivery, drop counting and the rate-limited drop log. Every failure here is
 # silent by design: a diff that does not fit the ring is DROPPED, not blocked, so a delivered diff
 # and a discarded one look identical to the caller and identical to any end-to-end check.
+# The history journal. Nothing in the suite asserted the ENGINE writes history.jsonl — daw_lint
+# reads it and lint_check covers that reader against a fixture it writes itself, so the reader was
+# covered and the writer was not. Sabotaging historyAppend to a no-op left the whole suite green.
+add_executable(engine_history_journal_tests
+  apps/engine_history_journal_tests_main.cpp
+)
+target_include_directories(engine_history_journal_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(engine_history_journal_tests PRIVATE engine_commands)
+
 add_executable(engine_ui_publish_tests
   apps/engine_ui_publish_tests_main.cpp
 )
@@ -1595,6 +1611,12 @@ add_test(NAME engine_modlink_commands
   COMMAND engine_modlink_commands_tests
 )
 set_tests_properties(engine_modlink_commands PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME engine_history_journal
+  COMMAND engine_history_journal_tests
+)
+set_tests_properties(engine_history_journal PROPERTIES
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME engine_ui_publish

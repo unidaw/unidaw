@@ -9,9 +9,9 @@
 namespace daw::engine {
 
 void runProducerThread(ProducerThreadDeps& deps) {
+  auto& previewQueue = deps.previewQueue;
   auto& audioPlaybackBlockId = deps.audioPlaybackBlockId;
   auto& engineConfig = deps.engineConfig;
-  auto& enqueuePreview = deps.enqueuePreview;
   auto& getHarmonyAt = deps.getHarmonyAt;
   auto& getRingCtrl = deps.getRingCtrl;
   auto& getRingStd = deps.getRingStd;
@@ -28,11 +28,9 @@ void runProducerThread(ProducerThreadDeps& deps) {
   auto& patcherParallel = deps.patcherParallel;
   auto& patcherPool = deps.patcherPool;
   auto& patternTicks = deps.patternTicks;
-  auto& pendingPreviewNotes = deps.pendingPreviewNotes;
   auto& poolAlwaysOn = deps.poolAlwaysOn;
   auto& poolEngaged = deps.poolEngaged;
   auto& poolWorkEwmaUs = deps.poolWorkEwmaUs;
-  auto& previewMutex = deps.previewMutex;
   auto& producerBlocksOverBudget = deps.producerBlocksOverBudget;
   auto& producerBlocksTimed = deps.producerBlocksTimed;
   auto& producerBlockUsMax = deps.producerBlockUsMax;
@@ -131,11 +129,11 @@ void runProducerThread(ProducerThreadDeps& deps) {
       // Built once per producer thread, immediately before the loop: every member is a
       // reference to something that outlives it, so the per-block call adds no work.
       daw::engine::ProducerBlockDeps producerBlockDeps{
-      blockDuration, blockTicksFor, debugStall, engineConfig, enqueuePreview, getHarmonyAt,
+      previewQueue, blockDuration, blockTicksFor, debugStall, engineConfig, getHarmonyAt,
       getRingCtrl, getRingStd, getScaleForHarmony, harmonyTimeline, lastOverflowTick,
       latencyMgr, transport, songTiming, nextBlockId, nextNoteId, offlineRender,
-      panicPending, patcherGraph, patcherParallel, patcherPool, pendingPreviewNotes,
-      poolAlwaysOn, poolEngaged, poolWorkEwmaUs, previewMutex, producerBlockBudgetUs,
+      panicPending, patcherGraph, patcherParallel, patcherPool,
+      poolAlwaysOn, poolEngaged, poolWorkEwmaUs, producerBlockBudgetUs,
       producerBlockUsMax, producerBlockUsTotal, producerBlocksOverBudget,
       producerBlocksTimed, producerSamplerUsMax, producerSamplerUsTotal, projectSeed,
       publishedCallback, quantizePitch, renderPool, resolveDevicePluginPath, tempoProvider,

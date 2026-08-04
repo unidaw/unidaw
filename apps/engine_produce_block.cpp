@@ -42,7 +42,9 @@ void produceBlock(ProducerBlockDeps& deps,
   auto& blockTicksFor = deps.blockTicksFor;
   auto& debugStall = deps.debugStall;
   auto& engineConfig = deps.engineConfig;
-  auto& enqueuePreview = deps.enqueuePreview;
+  auto enqueuePreview = [&](uint32_t t_, uint8_t p_, uint8_t v_, bool on_) {
+    deps.previewQueue.enqueuePreview(t_, p_, v_, on_);
+  };
   auto& getHarmonyAt = deps.getHarmonyAt;
   auto& getRingCtrl = deps.getRingCtrl;
   auto& getRingStd = deps.getRingStd;
@@ -59,12 +61,12 @@ void produceBlock(ProducerBlockDeps& deps,
   auto& patcherGraphSnapshot = deps.patcherGraph.patcherGraphSnapshot;
   auto& patcherParallel = deps.patcherParallel;
   auto& patcherPool = deps.patcherPool;
-  auto& pendingPreviewNotes = deps.pendingPreviewNotes;
+  auto& pendingPreviewNotes = deps.previewQueue.pendingPreviewNotes;
   auto& playing = deps.transport.playing;
   auto& poolAlwaysOn = deps.poolAlwaysOn;
   auto& poolEngaged = deps.poolEngaged;
   auto& poolWorkEwmaUs = deps.poolWorkEwmaUs;
-  auto& previewMutex = deps.previewMutex;
+  auto& previewMutex = deps.previewQueue.previewMutex;
   auto& producerBlockBudgetUs = deps.producerBlockBudgetUs;
   auto& producerBlockUsMax = deps.producerBlockUsMax;
   auto& producerBlockUsTotal = deps.producerBlockUsTotal;
