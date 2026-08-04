@@ -43,6 +43,7 @@
 #include "apps/engine_arrange_markers.h"
 #include "apps/engine_track_table.h"
 #include "apps/engine_patcher_graph_owner.h"
+#include "apps/engine_song_extent.h"
 #include "apps/engine_song_timing.h"
 #include "apps/engine_transport_state.h"
 #include "apps/engine_chain_host.h"
@@ -1447,8 +1448,10 @@ int main(int argc, char** argv) {
       }
       return daw::makeEventRing(uiShm.base, uiShm.header->ringUiOutOffset);
   };
+  const std::function<void(const char*, const char*, uint32_t, uint32_t,
+                          const std::string&)> historyAppendFn = historyAppend;
   daw::engine::UiPublishDeps uiPublishDeps{modVersion, getRingStd, getRingUiOut, routingVersion,
-                                           patcherGraphVersion};
+                                           patcherGraphVersion, historyAppendFn};
   auto emitModSnapshot = [&](TrackRuntime& runtime) {
     daw::engine::emitModSnapshot(uiPublishDeps, runtime);
   };
@@ -1464,6 +1467,17 @@ int main(int argc, char** argv) {
                                    uint32_t srcPortId, uint32_t dstPortId, uint32_t edgeKind) {
     daw::engine::emitPatcherGraphDelta(uiPublishDeps, trackId, flags, nodeId, nodeType, srcNodeId,
                                        dstNodeId, srcPortId, dstPortId, edgeKind);
+  };
+  auto emitPatcherGraphError = [&](uint16_t errorCode, uint32_t trackId, uint32_t nodeId,
+                                   uint32_t srcNodeId, uint32_t dstNodeId, uint32_t srcPortId,
+                                   uint32_t dstPortId, uint32_t edgeKind) {
+    daw::engine::emitPatcherGraphError(uiPublishDeps, errorCode, trackId, nodeId, srcNodeId,
+                                       dstNodeId, srcPortId, dstPortId, edgeKind);
+  };
+  auto emitChainError = [&](uint16_t errorCode, uint32_t trackId, uint32_t deviceId,
+                            uint32_t deviceKind, uint32_t insertIndex) {
+    daw::engine::emitChainError(uiPublishDeps, errorCode, trackId, deviceId, deviceKind,
+                                insertIndex);
   };
   auto getRingUiEdit = [&]() {
       if (!uiShm.header) {
@@ -1489,6 +1503,14 @@ int main(int argc, char** argv) {
     return snapshot;
   };
 
+  // Below snapshotTracks, which it takes: a struct of references cannot be built before its
+  // members exist, and snapshotTracksFn is the wrapper for the lambda just above.
+  const std::function<std::vector<TrackRuntime*>()> snapshotTracksFn = snapshotTracks;
+  daw::engine::SongExtentDeps songExtentDeps{transport, songTiming, snapshotTracksFn, patternTicks};
+  auto trackWindowEnd = [&](const TrackRuntime& rt) {
+    return daw::engine::trackWindowEnd(songExtentDeps, rt);
+  };
+  auto recomputeSongEnd = [&] { daw::engine::recomputeSongEnd(songExtentDeps); };
   // RE-ASSEMBLE THE PATCHER POOL FROM THE LIVE DEVICE GRAPHS.
   //
   // Each device owns an AUTHORED graph (device.patcher) with device-local node ids. The engine
@@ -1910,32 +1932,6 @@ int main(int argc, char** argv) {
   // ops. So: the diff still goes on the ring for the UI, and the same refusal is now
   // also an event and a journal line.
 
-  auto emitChainError = [&](uint16_t errorCode,
-                            uint32_t trackId,
-                            uint32_t deviceId,
-                            uint32_t deviceKind,
-                            uint32_t insertIndex) {
-    auto ringUiOut = getRingUiOut();
-    if (ringUiOut.mask == 0) {
-      return;
-    }
-    daw::UiChainErrorPayload payload{};
-    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::ChainError);
-    payload.errorCode = errorCode;
-    payload.trackId = trackId;
-    payload.deviceId = deviceId;
-    payload.deviceKind = deviceKind;
-    payload.insertIndex = insertIndex;
-    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
-    daw::ringWrite(ringUiOut, entry);
-    DAW_EVENT("chain.rejected")
-        .field("track", trackId)
-        .field("device", deviceId)
-        .field("reason", errorScopeName("chain", errorCode));
-    historyAppend("chain", ("rejected:" + errorScopeName("chain", errorCode)).c_str(),
-                  trackId, 0, "");
-  };
-
   auto emitRoutingError = [&](uint16_t errorCode, uint32_t trackId) {
     auto ringUiOut = getRingUiOut();
     if (ringUiOut.mask == 0) {
@@ -1976,32 +1972,6 @@ int main(int argc, char** argv) {
         .field("reason", errorScopeName("mod", errorCode));
     historyAppend("mod_link", ("rejected:" + errorScopeName("mod", errorCode)).c_str(),
                   trackId, 0, "");
-  };
-
-  auto emitPatcherGraphError = [&](uint16_t errorCode,
-                                   uint32_t trackId,
-                                   uint32_t nodeId,
-                                   uint32_t srcNodeId,
-                                   uint32_t dstNodeId,
-                                   uint32_t srcPortId,
-                                   uint32_t dstPortId,
-                                   uint32_t edgeKind) {
-    auto ringUiOut = getRingUiOut();
-    if (ringUiOut.mask == 0) {
-      return;
-    }
-    daw::UiPatcherGraphErrorPayload payload{};
-    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::PatcherGraphError);
-    payload.errorCode = errorCode;
-    payload.trackId = trackId;
-    payload.nodeId = nodeId;
-    payload.srcNodeId = srcNodeId;
-    payload.dstNodeId = dstNodeId;
-    payload.srcPortId = srcPortId;
-    payload.dstPortId = dstPortId;
-    payload.edgeKind = edgeKind;
-    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
-    daw::ringWrite(ringUiOut, entry);
   };
 
   auto emitHarmonyDiff = [&](const daw::UiHarmonyDiffPayload& diffPayload) {
@@ -2069,74 +2039,9 @@ int main(int argc, char** argv) {
   // matter: without the follow, material added past the old end is silent forever;
   // without the guard, every placement edit would quietly discard a loop the user chose,
   // which is the same bug pointing the other way.
-  auto recomputeSongEnd = [&]() {
-    uint64_t end = 0;
-    const auto snapshot = snapshotTracks();
-    for (auto* rt : snapshot) {
-      if (!rt || rt->removed.load(std::memory_order_acquire)) {
-        continue;
-      }
-      std::lock_guard<std::mutex> lock(rt->trackMutex);
-      for (const auto& pl : rt->sourcePlacements) {
-        if (!pl.at.has_value()) {
-          continue;  // a loose session cell has no timeline position
-        }
-        const uint64_t len = daw::engine::placementLength(pl, rt->ownedClips);
-        end = std::max(end, daw::engine::placementReach(*pl.at, len));
-      }
-    }
-    if (end == 0) {
-      end = patternTicks;  // an empty project keeps the default bar
-    }
-    const uint64_t previous = songTiming.songEndNanotick.exchange(end, std::memory_order_acq_rel);
-    if (previous == end) {
-      return;
-    }
-    DAW_EVENT("song.end_moved").field("from", previous).field("to", end);
-    if (!transport.loopUserSet.load(std::memory_order_acquire)) {
-      transport.loopStartNanotick.store(0, std::memory_order_release);
-      transport.loopEndNanotick.store(end, std::memory_order_release);
-    }
-  };
-
   // The flatten window for a track: past every placement's resolved end, at least
   // one pattern bar. Used so a note stretched or looped past the old arrangement
   // end still lands in the derived flat clip.
-  auto trackWindowEnd = [&](const TrackRuntime& rt) -> uint64_t {
-    uint64_t end = patternTicks;
-    for (const auto& pl : rt.sourcePlacements) {
-      if (!pl.at.has_value()) {
-        continue;
-      }
-      uint64_t clipLen = 0;
-      uint64_t contentEnd = 0;
-      for (const auto& c : rt.ownedClips) {
-        if (c.id == pl.clipId) {
-          clipLen = c.lengthNanoticks;
-          for (const auto& e : c.clip.events()) {
-            uint64_t dur = 0;
-            if (e.type == daw::MusicalEventType::Note) {
-              dur = e.payload.note.durationNanoticks;
-            } else if (e.type == daw::MusicalEventType::Chord) {
-              dur = e.payload.chord.durationNanoticks;
-            }
-            contentEnd = std::max(contentEnd, e.nanotickOffset + dur);
-          }
-          break;
-        }
-      }
-      // A placement reaches at + its timeline extent. For a linear length-0 clip
-      // that extent IS its content, so a note entered past patternTicks stays
-      // inside the flatten window — otherwise it is scheduled out of range and
-      // silently vanishes from the derived clip.
-      const uint64_t extent = pl.lengthNanoticks > 0
-                                  ? pl.lengthNanoticks
-                                  : (clipLen > 0 ? clipLen : contentEnd);
-      end = std::max(end, *pl.at + std::max(extent, contentEnd));
-    }
-    return end;
-  };
-
   // The single funnel for the structural note store: re-derive track.clip and the
   // rail extents from (sourcePlacements + ownedClips) and return a fresh snapshot.
   // Assumes runtime->trackMutex is held; the caller atomic_stores the returned
@@ -3048,8 +2953,6 @@ int main(int argc, char** argv) {
   // The automation and clip-field commands moved out too; same shape as the sampler family.
   const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>
       buildTrackSnapshotFn = buildTrackSnapshot;
-  const std::function<void(const char*, const char*, uint32_t, uint32_t, const std::string&)>
-      historyAppendFn = historyAppend;
   const std::function<bool(const TrackRuntime&)> trackIsPersistedFn = trackIsPersisted;
   const std::function<bool(uint32_t, daw::UiCommandType, uint32_t)>
       requireMatchingClipVersionFn = requireMatchingClipVersion;
@@ -3083,7 +2986,6 @@ int main(int argc, char** argv) {
   // exist by then; snapshotTracks itself has existed since line ~1466 and only its wrapper was
   // late. A second wrapper would also have needed a second NAME, and deps_order_check reads the
   // name — it rejected snapshotTracksPaFn against member snapshotTracks, correctly.
-  const std::function<std::vector<TrackRuntime*>()> snapshotTracksFn = snapshotTracks;
   daw::engine::PatcherAssembleDeps patcherAssembleDeps{patcherGraph, trackTable, snapshotTracksFn};
   auto reassemblePatcherFromDevices = [&] {
     return daw::engine::reassemblePatcherFromDevices(patcherAssembleDeps);

@@ -1,5 +1,6 @@
 #include "engine_ui_publish.h"
 
+#include "engine_pure.h"
 #include "event_log.h"
 
 namespace daw::engine {
@@ -220,6 +221,52 @@ void emitPatcherGraphDelta(UiPublishDeps& deps, uint32_t trackId, uint16_t flags
     payload.edgeKind = edgeKind;
     const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
     daw::ringWrite(ringUiOut, entry);
+}
+
+void emitPatcherGraphError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId, uint32_t nodeId, uint32_t srcNodeId, uint32_t dstNodeId, uint32_t srcPortId, uint32_t dstPortId, uint32_t edgeKind) {
+  auto& getRingUiOut = deps.getRingUiOut;
+
+    auto ringUiOut = getRingUiOut();
+    if (ringUiOut.mask == 0) {
+      return;
+    }
+    daw::UiPatcherGraphErrorPayload payload{};
+    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::PatcherGraphError);
+    payload.errorCode = errorCode;
+    payload.trackId = trackId;
+    payload.nodeId = nodeId;
+    payload.srcNodeId = srcNodeId;
+    payload.dstNodeId = dstNodeId;
+    payload.srcPortId = srcPortId;
+    payload.dstPortId = dstPortId;
+    payload.edgeKind = edgeKind;
+    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
+    daw::ringWrite(ringUiOut, entry);
+}
+
+void emitChainError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId, uint32_t deviceId, uint32_t deviceKind, uint32_t insertIndex) {
+  auto& getRingUiOut = deps.getRingUiOut;
+  auto& historyAppend = deps.historyAppend;
+
+    auto ringUiOut = getRingUiOut();
+    if (ringUiOut.mask == 0) {
+      return;
+    }
+    daw::UiChainErrorPayload payload{};
+    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::ChainError);
+    payload.errorCode = errorCode;
+    payload.trackId = trackId;
+    payload.deviceId = deviceId;
+    payload.deviceKind = deviceKind;
+    payload.insertIndex = insertIndex;
+    const daw::EventEntry entry = daw::engine::makeUiDiffEntry(payload);
+    daw::ringWrite(ringUiOut, entry);
+    DAW_EVENT("chain.rejected")
+        .field("track", trackId)
+        .field("device", deviceId)
+        .field("reason", errorScopeName("chain", errorCode));
+    historyAppend("chain", ("rejected:" + errorScopeName("chain", errorCode)).c_str(),
+                  trackId, 0, "");
 }
 
 }  // namespace daw::engine

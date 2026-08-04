@@ -3,7 +3,7 @@
 // TELLING THE UI SOMETHING CHANGED — everything that writes a structured update into the outgoing
 // UI ring.
 //
-// Four operations, and they are one concern: the mod snapshot, the mirror parameters behind a knob
+// Six operations, and they are one concern: the mod snapshot, the mirror parameters behind a knob
 // a modulator is turning, the routing snapshot, and the patcher graph delta. Each takes a version
 // counter, formats a payload, and pushes it into the ring the UI drains. The module arrived as
 // engine_mod_publish with the first two and was renamed one commit later when the other two
@@ -33,6 +33,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <string>
 
 #include "engine_types.h"
 #include "event_ring.h"
@@ -49,6 +50,10 @@ struct UiPublishDeps {
   // that sees a new number knows the payload behind it is already there.
   std::atomic<uint32_t>& routingVersion;
   std::atomic<uint32_t>& patcherGraphVersion;
+  // THE ERROR EMITTERS ALSO JOURNAL. A refusal the UI can see and a refusal the journal records are
+  // the same event, and a caller that gets one without the other has to guess which half happened.
+  const std::function<void(const char*, const char*, uint32_t, uint32_t,
+                           const std::string&)>& historyAppend;
 };
 
 void emitModSnapshot(UiPublishDeps& deps, TrackRuntime& runtime);
@@ -60,5 +65,7 @@ void emitRoutingSnapshot(UiPublishDeps& deps, TrackRuntime& runtime);
 void emitPatcherGraphDelta(UiPublishDeps& deps, uint32_t trackId, uint16_t flags, uint32_t nodeId,
                            uint32_t nodeType, uint32_t srcNodeId, uint32_t dstNodeId,
                            uint32_t srcPortId, uint32_t dstPortId, uint32_t edgeKind);
+void emitPatcherGraphError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId, uint32_t nodeId, uint32_t srcNodeId, uint32_t dstNodeId, uint32_t srcPortId, uint32_t dstPortId, uint32_t edgeKind);
+void emitChainError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId, uint32_t deviceId, uint32_t deviceKind, uint32_t insertIndex);
 
 }  // namespace daw::engine

@@ -145,6 +145,7 @@ add_library(engine_commands STATIC
   apps/engine_restart_worker.cpp
   apps/engine_harmony_timeline.cpp
   apps/engine_master_render.cpp
+  apps/engine_song_extent.cpp
   apps/engine_ui_publish.cpp
   apps/engine_patcher_assemble.cpp
   apps/engine_ui_thread.cpp
