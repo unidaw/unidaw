@@ -85,7 +85,7 @@ EOF
 ( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 30 >"$TMP/engine.log" 2>&1 ) &
 ENG=$!
-sleep 2.5
+wait_for_boot "$TMP/engine.log" "$ENG" 80 "UI: command thread started"
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 fail() { echo "  FAIL: $*"; kill "$ENG" 2>/dev/null || true; wait "$ENG" 2>/dev/null || true; exit 1; }
 # How many notes of this pitch does the track play?
@@ -112,7 +112,13 @@ echo "  loaded: bass 3 (one per chorus), hat 4 (the 1-bar clip looping)"
 # A CLIP-scope edit (the default, no --local) writes to the clip, so every appearance of
 # it gains the note. Chorus 1 is at bar 1; the new note goes at bar 2 of it.
 cli do note --track 0 --nanotick $((1 * BAR)) --pitch 38 --duration 240000 >/dev/null 2>&1 || true
-sleep 1.2
+# BOTH WAITS, in this order, and the order is the point. The journal says the
+# engine ACTED; the published poll says the UI can SEE it. Neither alone is
+# enough: a poll for a value the system ALREADY HAS matches on its first read
+# and waits for nothing — which is what a refusal assertion ("this must still
+# be 0") always is, and it let the next command race.
+wait_for_history "$TMP" 2
+wait_for_published 20 "3" count_pitch 0 38
 FIX="$(count_pitch 0 38)"
 [ "$FIX" = "3" ] || \
   fail "a clip-scope edit in chorus 1 should appear in all THREE choruses, got $FIX —
@@ -125,7 +131,13 @@ echo "  half 1: a clip-scope fix in chorus 1 appears in all 3 choruses"
 # repeated per iteration) or 0 (dropped past the clip length) — never 1.
 cli do note --track 1 --local --nanotick $((18 * BAR + 2 * Q)) --pitch 46 \
   --duration 60000 >/dev/null 2>&1 || true
-sleep 1.2
+# BOTH WAITS, in this order, and the order is the point. The journal says the
+# engine ACTED; the published poll says the UI can SEE it. Neither alone is
+# enough: a poll for a value the system ALREADY HAS matches on its first read
+# and waits for nothing — which is what a refusal assertion ("this must still
+# be 0") always is, and it let the next command race.
+wait_for_history "$TMP" 3
+wait_for_published 20 "1" count_pitch 1 46
 ADDED="$(count_pitch 1 46)"
 [ "$ADDED" = "1" ] || \
   fail "the hat added to chorus 3 should sound EXACTLY ONCE, got $ADDED — 4 means it was
@@ -141,7 +153,13 @@ HAT1="$(count_pitch 1 42)"
 # local hat in place. This is the sentence's "and" — a design that satisfies the halves
 # only separately fails here.
 cli do note --track 0 --nanotick $((2 * BAR)) --pitch 40 --duration 240000 >/dev/null 2>&1 || true
-sleep 1.2
+# BOTH WAITS, in this order, and the order is the point. The journal says the
+# engine ACTED; the published poll says the UI can SEE it. Neither alone is
+# enough: a poll for a value the system ALREADY HAS matches on its first read
+# and waits for nothing — which is what a refusal assertion ("this must still
+# be 0") always is, and it let the next command race.
+wait_for_history "$TMP" 4
+wait_for_published 20 "3" count_pitch 0 40
 FIX2="$(count_pitch 0 40)"
 STILL="$(count_pitch 1 46)"
 [ "$FIX2" = "3" ] || fail "the second clip-scope fix reached $FIX2 choruses, not 3"
@@ -150,7 +168,13 @@ echo "  both: a second clip fix still reaches all 3, and the local hat survives 
 
 # ---- A LOCAL DELETE mutes a base note in ONE appearance only.
 cli do delete-note --track 0 --local --nanotick $((8 * BAR)) --pitch 36 >/dev/null 2>&1 || true
-sleep 1.2
+# BOTH WAITS, in this order, and the order is the point. The journal says the
+# engine ACTED; the published poll says the UI can SEE it. Neither alone is
+# enough: a poll for a value the system ALREADY HAS matches on its first read
+# and waits for nothing — which is what a refusal assertion ("this must still
+# be 0") always is, and it let the next command race.
+wait_for_history "$TMP" 5
+wait_for_published 20 "2" count_pitch 0 36
 AFTER_MUTE="$(count_pitch 0 36)"
 [ "$AFTER_MUTE" = "2" ] || \
   fail "muting the bass in chorus 2 should leave 2 of 3 sounding, got $AFTER_MUTE — a
@@ -165,7 +189,13 @@ echo "  local delete: the bass is silenced in chorus 2 only (2 of 3 remain)"
 # defaults --duration to 0, so `do note --local --pitch N` was exactly that gesture: accepted,
 # reported applied, permanently silent.
 cli do note --track 1 --local --nanotick $((17 * BAR + 1 * Q)) --pitch 51 >/dev/null 2>&1 || true
-sleep 1.2
+# BOTH WAITS, in this order, and the order is the point. The journal says the
+# engine ACTED; the published poll says the UI can SEE it. Neither alone is
+# enough: a poll for a value the system ALREADY HAS matches on its first read
+# and waits for nothing — which is what a refusal assertion ("this must still
+# be 0") always is, and it let the next command race.
+wait_for_history "$TMP" 6
+wait_for_published 20 "1" count_pitch 1 51
 NODUR="$(count_pitch 1 51)"
 [ "$NODUR" = "1" ] || fail "the local add of pitch 51 did not land at all (count $NODUR)"
 # ASSERT THE DURATION, not the existence. A zero-length note is still published, so counting it
@@ -185,7 +215,13 @@ echo "  no length: a local add without --duration gets a real length (${NODUR_LE
 # phantom note-shaped nothing. It must be refused with a reason, not accepted.
 cli do note --track 1 --local --nanotick $((17 * BAR + 3 * Q)) --pitch 53 --velocity 0 \
   >/dev/null 2>&1 || true
-sleep 1.2
+# BOTH WAITS, in this order, and the order is the point. The journal says the
+# engine ACTED; the published poll says the UI can SEE it. Neither alone is
+# enough: a poll for a value the system ALREADY HAS matches on its first read
+# and waits for nothing — which is what a refusal assertion ("this must still
+# be 0") always is, and it let the next command race.
+wait_for_history "$TMP" 7
+wait_for_published 20 "0" count_pitch 1 53
 [ "$(count_pitch 1 53)" = "0" ] || \
   fail "an OFF gesture in local scope stored a phantom event ($(count_pitch 1 53) of pitch 53)"
 grep -q '"reason":"note_off_needs_clip_scope"' "$TMP/engine.log" || \
@@ -205,7 +241,13 @@ echo "  off gesture: refused in local scope, with a reason"
 # appearance; within it the note recurs). The point of the assertion is that it does SOMETHING:
 # 4 was the broken answer.
 cli do delete-note --track 1 --local --nanotick $((18 * BAR)) --pitch 42 >/dev/null 2>&1 || true
-sleep 1.2
+# BOTH WAITS, in this order, and the order is the point. The journal says the
+# engine ACTED; the published poll says the UI can SEE it. Neither alone is
+# enough: a poll for a value the system ALREADY HAS matches on its first read
+# and waits for nothing — which is what a refusal assertion ("this must still
+# be 0") always is, and it let the next command race.
+wait_for_history "$TMP" 8
+wait_for_published 20 "0" count_pitch 1 42
 LOOPDEL="$(count_pitch 1 42)"
 [ "$LOOPDEL" = "0" ] || \
   fail "a local delete in the third iteration of a looping clip left $LOOPDEL hat(s) — 4 means
@@ -218,16 +260,34 @@ echo "  loop delete: a local delete inside a loop repeat mutes the clip note in 
 
 # Put it back so the revert assertions below still measure what they were written to measure.
 cli do revert-overrides --track 1 --placement 21 >/dev/null 2>&1 || true
-sleep 1.2
+# BOTH WAITS, in this order, and the order is the point. The journal says the
+# engine ACTED; the published poll says the UI can SEE it. Neither alone is
+# enough: a poll for a value the system ALREADY HAS matches on its first read
+# and waits for nothing — which is what a refusal assertion ("this must still
+# be 0") always is, and it let the next command race.
+wait_for_history "$TMP" 9
+wait_for_published 20 "4" count_pitch 1 42
 [ "$(count_pitch 1 42)" = "4" ] || fail "the revert did not restore the base hats"
 cli do note --track 1 --local --nanotick $((18 * BAR + 2 * Q)) --pitch 46 \
   --duration 60000 >/dev/null 2>&1 || true
-sleep 1.2
+# BOTH WAITS, in this order, and the order is the point. The journal says the
+# engine ACTED; the published poll says the UI can SEE it. Neither alone is
+# enough: a poll for a value the system ALREADY HAS matches on its first read
+# and waits for nothing — which is what a refusal assertion ("this must still
+# be 0") always is, and it let the next command race.
+wait_for_history "$TMP" 10
+wait_for_published 20 "1" count_pitch 1 46
 [ "$(count_pitch 1 46)" = "1" ] || fail "could not re-add the local hat for the revert test"
 
 # ---- ONE-CLICK REVERT clears the overrides on one appearance and leaves the clip alone.
 cli do revert-overrides --track 1 --placement 21 >/dev/null 2>&1 || true
-sleep 1.2
+# BOTH WAITS, in this order, and the order is the point. The journal says the
+# engine ACTED; the published poll says the UI can SEE it. Neither alone is
+# enough: a poll for a value the system ALREADY HAS matches on its first read
+# and waits for nothing — which is what a refusal assertion ("this must still
+# be 0") always is, and it let the next command race.
+wait_for_history "$TMP" 11
+wait_for_published 20 "0" count_pitch 1 46
 REVERTED="$(count_pitch 1 46)"
 BASE_LEFT="$(count_pitch 1 42)"
 [ "$REVERTED" = "0" ] || fail "revert left $REVERTED added hats"
@@ -249,9 +309,16 @@ echo "  revert: the added hat is gone, the clip's own 4 hats are untouched"
 # inferred from occupancy rather than from the flag, it would depend on whether the cell was
 # empty. Only honouring the placement gives exactly one.
 cli do placement-scope --track 0 --placement 13 >/dev/null 2>&1 || true
-sleep 1
-LOCALFLAG="$({ cli get extents 2>/dev/null | tr '{' '\n' | grep '"placement": 13,' \
-  | sed -n 's/.*"local_edits": \([a-z]*\).*/\1/p' | head -1; } || true)"
+# BOTH WAITS, in this order, and the order is the point. The journal says the
+# engine ACTED; the published poll says the UI can SEE it. Neither alone is
+# enough: a poll for a value the system ALREADY HAS matches on its first read
+# and waits for nothing — which is what a refusal assertion ("this must still
+# be 0") always is, and it let the next command race.
+wait_for_history "$TMP" 12
+local_flag() { { cli get extents 2>/dev/null | tr '{' '\n' | grep '"placement": 13,' \
+  | sed -n 's/.*"local_edits": \([a-z]*\).*/\1/p' | head -1; } || true; }
+wait_for_published 20 "true" local_flag
+LOCALFLAG="$(local_flag)"
 [ "$LOCALFLAG" = "true" ] || \
   fail "after marking placement 13 the published extent says local_edits=$LOCALFLAG — a toggle
         whose state cannot be read is one the interface has to guess at, and the extents rebuild
@@ -259,7 +326,13 @@ LOCALFLAG="$({ cli get extents 2>/dev/null | tr '{' '\n' | grep '"placement": 13
 
 # Chorus 3 is placement 13 (bar 17). Type WITHOUT --local.
 cli do note --track 0 --nanotick $((17 * BAR)) --pitch 44 --duration 240000 >/dev/null 2>&1 || true
-sleep 1.2
+# BOTH WAITS, in this order, and the order is the point. The journal says the
+# engine ACTED; the published poll says the UI can SEE it. Neither alone is
+# enough: a poll for a value the system ALREADY HAS matches on its first read
+# and waits for nothing — which is what a refusal assertion ("this must still
+# be 0") always is, and it let the next command race.
+wait_for_history "$TMP" 13
+wait_for_published 20 "1" count_pitch 0 44
 SCOPED="$(count_pitch 0 44)"
 [ "$SCOPED" = "1" ] || \
   fail "a note typed into a placement marked for local edits, with NO --local flag, sounded
@@ -270,10 +343,21 @@ echo "  placement scope: an edit with no --local flag stayed local because the p
 # And clearing it puts the behaviour back — otherwise the toggle is one-way and the state is a
 # trap rather than a control.
 cli do placement-scope --track 0 --placement 13 --on 0 >/dev/null 2>&1 || true
-sleep 1
+# BOTH WAITS, in this order, and the order is the point. The journal says the
+# engine ACTED; the published poll says the UI can SEE it. Neither alone is
+# enough: a poll for a value the system ALREADY HAS matches on its first read
+# and waits for nothing — which is what a refusal assertion ("this must still
+# be 0") always is, and it let the next command race.
+wait_for_history "$TMP" 14
 cli do note --track 0 --nanotick $((17 * BAR + 1 * Q)) --pitch 45 --duration 240000 \
   >/dev/null 2>&1 || true
-sleep 1.2
+# BOTH WAITS, in this order, and the order is the point. The journal says the
+# engine ACTED; the published poll says the UI can SEE it. Neither alone is
+# enough: a poll for a value the system ALREADY HAS matches on its first read
+# and waits for nothing — which is what a refusal assertion ("this must still
+# be 0") always is, and it let the next command race.
+wait_for_history "$TMP" 15
+wait_for_published 20 "3" count_pitch 0 45
 UNSCOPED="$(count_pitch 0 45)"
 [ "$UNSCOPED" = "3" ] || \
   fail "after clearing the placement's scope a normal edit reached $UNSCOPED choruses, not 3 —
@@ -294,7 +378,13 @@ echo "  and clearing it restores clip scope (the next edit reaches all 3)"
 #   REDO must bring it back. Without the push there is no entry that carries it.
 cli do note --track 1 --local --nanotick $((17 * BAR + 1 * Q)) --pitch 50 \
   --duration 60000 >/dev/null 2>&1 || true
-sleep 1.2
+# BOTH WAITS, in this order, and the order is the point. The journal says the
+# engine ACTED; the published poll says the UI can SEE it. Neither alone is
+# enough: a poll for a value the system ALREADY HAS matches on its first read
+# and waits for nothing — which is what a refusal assertion ("this must still
+# be 0") always is, and it let the next command race.
+wait_for_history "$TMP" 16
+wait_for_published 20 "1" count_pitch 1 50
 [ "$(count_pitch 1 50)" = "1" ] || \
   fail "the setup failed: the local note was not added, so the undo assertions below would
         pass for the wrong reason"
@@ -302,7 +392,13 @@ BEFORE_UNDO_CLIP="$(count_pitch 0 40)"
 [ "$BEFORE_UNDO_CLIP" = "3" ] || fail "expected the clip-scope fix on 3 choruses, got $BEFORE_UNDO_CLIP"
 
 cli do undo >/dev/null 2>&1 || true
-sleep 1.2
+# BOTH WAITS, in this order, and the order is the point. The journal says the
+# engine ACTED; the published poll says the UI can SEE it. Neither alone is
+# enough: a poll for a value the system ALREADY HAS matches on its first read
+# and waits for nothing — which is what a refusal assertion ("this must still
+# be 0") always is, and it let the next command race.
+wait_for_history "$TMP" 17
+wait_for_published 20 "0" count_pitch 1 50
 AFTER_UNDO="$(count_pitch 1 50)"
 STILL_CLIP="$(count_pitch 0 40)"
 [ "$AFTER_UNDO" = "0" ] || \
@@ -321,7 +417,13 @@ UNDO_RESURRECTED="$(count_pitch 1 46)"
   fail "undo restored the REVERTED hat ($UNDO_RESURRECTED back) instead of taking back the
         local edit — Ctrl-Z reached past the local edit to the previous entry"
 cli do redo >/dev/null 2>&1 || true
-sleep 1.2
+# BOTH WAITS, in this order, and the order is the point. The journal says the
+# engine ACTED; the published poll says the UI can SEE it. Neither alone is
+# enough: a poll for a value the system ALREADY HAS matches on its first read
+# and waits for nothing — which is what a refusal assertion ("this must still
+# be 0") always is, and it let the next command race.
+wait_for_history "$TMP" 18
+wait_for_published 20 "1" count_pitch 1 50
 AFTER_REDO="$(count_pitch 1 50)"
 [ "$AFTER_REDO" = "1" ] || \
   fail "redo did not restore the local edit (pitch 50 count $AFTER_REDO) — it was
