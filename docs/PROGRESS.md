@@ -11,10 +11,10 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: 9a5e730
+- as-of-commit: bee50f4
 - main-cpp-lines: 6194
 - main-function-lines: 5964
-- ctest-entries: 166
+- ctest-entries: 168
 
 ## Why this file cannot quietly go stale
 
@@ -168,6 +168,25 @@ whole number of frames, and connecting Bluetooth headphones moved the default ou
 was plugged in), which in turn exposed a second copy of the sample rate: `effSampleRate` read the
 device directly while `baseConfig` carried its own — the same config-versus-pump divergence
 `--block-size` had already been repaired for, one field away.
+
+## Testability, which is the axis the extraction was supposed to buy
+
+The panel's other complaint was that **99% of the suite's runtime boots processes**. Extracting a
+function only *enables* a unit test; it does not write one, and an extraction with no test behind it
+has improved a line count and nothing else. Two are now written, both against rules that could
+previously only be reached through an engine, a shared-memory ring and a typed note:
+
+- **`rebuildFlatAndPublish`'s mute prune** — a mute naming a deleted note is dropped, but ONLY when
+  the clip is installed, because during load a placement can name a clip that has not arrived yet
+  and every mute on it would look dead. Deleting the guard outright segfaults; the interesting
+  sabotage is the plausible one (treat an absent clip as proof the mutes are dead), which fails
+  exactly the assertion written for it.
+- **`locateEditTarget`'s two rules** — a remove landing outside every placement mints nothing, and
+  a new clip inherits the predecessor's grid instead of snapping back to 4/4.
+
+Both were verified by sabotage rather than by passing. The pattern worth keeping: pick the rule
+whose failure is QUIET. A crash gets found; a delete that silently creates a clip, or a section
+whose rows are subdivided differently than the one before it, gets blamed on the user.
 
 ## Open, and needing a decision rather than work
 
