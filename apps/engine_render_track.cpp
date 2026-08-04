@@ -32,6 +32,7 @@ bool renderTrack(RenderTrackDeps& deps,
   auto& lastOverflowTick = deps.lastOverflowTick;
   auto& latencyMgr = deps.latencyMgr;
   auto& nextNoteId = deps.nextNoteId;
+  auto& patcherAssembledFromDevices = deps.patcherAssembledFromDevices;
   auto& patcherGraphSnapshot = deps.patcherGraphSnapshot;
   auto& patcherParallel = deps.patcherParallel;
   auto& patcherPool = deps.patcherPool;
@@ -231,6 +232,33 @@ bool renderTrack(RenderTrackDeps& deps,
             useNodeFilter = true;
             break;
           }
+        }
+        // THE FILTER FAILS CLOSED WHEN THE POOL IS PER-DEVICE, and until this line it failed open.
+        //
+        // The loop above asks "does THIS track carry a patcher device". A track carrying none left
+        // useNodeFilter false, and false does not mean "filter by something else" — it disables the
+        // ownership guard in runNode entirely and takes the branch that runs EVERY node in the pool.
+        // The pool is global: reassemblePatcherFromDevices concatenates every track's subgraph into
+        // one graph with re-id'd nodes. So a track with no patcher ran every other track's nodes and
+        // merged their events into its own scratchpad, and therefore its own instrument.
+        //
+        // Measured, two tracks, offline render: track 0 held the patcher AND a 300 Hz sampler,
+        // track 1 held a 900 Hz sampler and no patcher, no clip, no placement and no note. The
+        // render came out at 900 Hz on track 1's pan side, with track 0 SILENT — the generated
+        // notes played the wrong track's instrument rather than merely also playing it.
+        //
+        // ASKING THE TRACK WAS NEVER THE RIGHT QUESTION; the right one is what kind of pool this is,
+        // and the answer already existed on the engine as patcherAssembledFromDevices. It was not
+        // reachable from here: RenderTrackDeps did not carry it, so the render path could not tell a
+        // per-device pool from a legacy whole-project graph and guessed from the only thing it could
+        // see. When the pool IS per-device every node belongs to exactly one device on exactly one
+        // track, so every track must filter — and a track that owns nothing runs nothing.
+        //
+        // The legacy branch stays for a pool that is NOT per-device assembled, where the graph
+        // genuinely belongs to the project rather than to a device and every track running it is
+        // the defined behaviour.
+        if (patcherAssembledFromDevices.load(std::memory_order_acquire)) {
+          useNodeFilter = true;
         }
         if (useNodeFilter) {
           if (nodeAllowed.size() != nodeCount) {
@@ -575,6 +603,15 @@ bool renderTrack(RenderTrackDeps& deps,
           }
         };
 
+        // A NODE THIS TRACK DOES NOT RUN MUST NOT STILL HOLD LAST BLOCK'S EVENTS. runNode zeroes
+        // buffer.count only for nodes it actually runs, and it returns BEFORE that zeroing when the
+        // ownership guard rejects a node — while mergeNodeBuffers below walks the whole topoOrder
+        // unconditionally. So a buffer left populated is re-emitted at its stale sampleTime on every
+        // block from then on. That was survivable while every track ran every node (nothing was ever
+        // skipped); with the filter now closed it would be the failure mode replacing the leak.
+        for (uint32_t i = 0; i < nodeCount && i < nodeBuffers.size(); ++i) {
+          nodeBuffers[i].count = 0;
+        }
         if (useNodeFilter && !chainOrder.empty()) {
           std::vector<uint8_t> visitState(nodeCount, 0);
           std::vector<uint32_t> stack;
@@ -613,7 +650,11 @@ bool renderTrack(RenderTrackDeps& deps,
           for (uint32_t nodeIndex : chainOrder) {
             runNodeWithDeps(nodeIndex);
           }
-        } else {
+          // AND WHEN useNodeFilter IS SET WITH AN EMPTY chainOrder, neither branch runs: the pool is
+          // per-device and this track owns no node in it. That is the case the old `else` swallowed
+          // — it read "not filtered" as "run everything", which is precisely backwards for a track
+          // that owns nothing.
+        } else if (!useNodeFilter) {
           for (uint16_t depth = 0; depth <= maxDepth; ++depth) {
             std::vector<uint32_t> depthNodes;
             for (uint32_t i = 0; i < nodeCount; ++i) {

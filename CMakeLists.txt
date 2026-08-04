@@ -1250,6 +1250,27 @@ add_test(NAME track_readback
 )
 set_tests_properties(track_readback PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# The patcher pool is GLOBAL and ownership is a render-time filter, so a track that owns no node
+# must run none. It ran all of them: a two-track project played track 0's generated notes out of
+# track 1's sampler, which held no patcher, no clip and no note.
+add_test(NAME patcher_track_scope
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/patcher_track_scope_check.sh
+)
+set_tests_properties(patcher_track_scope PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+# A control the UI cannot READ is write-only, whatever the command does. Covers the published
+# readback of SetTrackHarmonyQuantize (10) and the reported outcome of SavePatcherPreset (29).
+#
+# THIS ENTRY IS THE POINT OF THE COMMIT THAT ADDED IT. The script has existed and PASSED for
+# weeks while being named in this file zero times: check_registry_check.sh asked "is the name a
+# substring of the CMake text", and `readback_check.sh` is a suffix of the four *_readback_check.sh
+# entries around it. The ratchet built to find unrun checks reported the only unrun check as
+# registered, and three separate commits improved a script that produced no result.
+add_test(NAME readback
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/readback_check.sh
+)
+set_tests_properties(readback PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 # A sampler's audio is addressable for drawing, and it is the RIGHT audio. The load-bearing
 # property is the source NO audio clip names: every other assertion here passes with the sampler's
 # interning deleted, because the clip path covers for it.

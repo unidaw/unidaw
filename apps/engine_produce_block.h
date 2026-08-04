@@ -70,6 +70,7 @@ struct ProducerBlockDeps {
   std::atomic<uint32_t>& nextNoteId;
   const bool offlineRender;
   std::atomic<bool>& panicPending;
+  std::atomic<bool>& patcherAssembledFromDevices;
   std::shared_ptr<daw::PatcherGraph>& patcherGraphSnapshot;
   bool& patcherParallel;
   std::unique_ptr<daw::engine::WorkerPool>& patcherPool;

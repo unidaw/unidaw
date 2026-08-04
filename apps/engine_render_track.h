@@ -50,6 +50,11 @@ struct RenderTrackDeps {
   std::atomic<uint64_t>& lastOverflowTick;
   daw::LatencyManager& latencyMgr;
   std::atomic<uint32_t>& nextNoteId;
+  // TRUE when the live pool was assembled FROM DEVICES, i.e. every node in it belongs to exactly
+  // one device on exactly one track. Without this the render path cannot tell that pool apart from
+  // a legacy whole-project graph, and it has to guess — which it did, by asking only whether THIS
+  // track carries a patcher device. A track that carried none then ran every OTHER track's nodes.
+  std::atomic<bool>& patcherAssembledFromDevices;
   std::shared_ptr<daw::PatcherGraph>& patcherGraphSnapshot;
   bool& patcherParallel;
   std::unique_ptr<WorkerPool>& patcherPool;
