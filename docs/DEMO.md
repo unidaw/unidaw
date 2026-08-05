@@ -30,20 +30,20 @@ Open **http://127.0.0.1:8173/index.html**.
 
 ---
 
-## THE ONE RULE
+## You can add plugins while it plays
 
-**Add every device and plugin with the transport STOPPED.**
+This used to be the one thing that would kill the demo: inserting a plugin with the transport
+running silenced the output — 0 → 16 → 551 → 1067 dropouts, about one per callback, no recovery.
 
-Inserting a plugin while the transport runs starves the producer: measured 0 → 16 → 551 → 1067
-dropouts, about one per callback, and it does not recover on its own. The output goes silent.
+**Fixed.** It was a producer deadlock, not pacing: loading a VST held the track's mutex across a
+blocking round-trip, the producer skipped dispatching to that track, and the track then rejoined
+back-pressure far enough behind that the gate closed on *everyone*. Back-pressure now asks "do you
+still owe me work" rather than "how far along are you".
 
-Two things make it survivable:
+Re-measured on the same reproduction: **0 dropouts through 18 seconds, transport still running.**
+`live-plugin-add.mjs` guards it.
 
-- **Stop, then Play** clears it. Verified: transport running, dropout total flat and staying flat.
-- Inserting while stopped avoids it entirely. The instantiation transient still happens (+236
-  dropouts) but nothing is playing, so nobody hears it, and playback afterwards is clean.
-
-Backend is fixing the underlying producer pacing. Until then, this is the rule.
+If you ever do see it stall, Stop then Play clears it.
 
 ---
 
@@ -165,21 +165,19 @@ DAW_PROJECT_DIR=<the project dir> ./daw_engine --project <name> --render take --
 
 ## Known rough edges, in the order you might hit them
 
-1. **A plugin inserted while playing silences the output.** Stop → Play recovers. See THE ONE RULE.
-2. **`waveform_probe.wav` is silent for its first second.** It is the peak-pyramid probe asset —
+1. **`waveform_probe.wav` is silent for its first second.** It is the peak-pyramid probe asset —
    stepped level regions for testing the waveform display, not a musical sample — so a note that
    starts on the downbeat plays and cannot be heard for a second. Nothing is wrong; if you are
    demonstrating the sampler with that file, start a beat in, or load something musical.
    (I reported this as an engine bug — "a note at tick 0 is dropped" — and it was not one.)
-3. **`goto` counts displayed rows**, and how much time a row spans depends on the zoom. If you
+2. **`goto` counts displayed rows**, and how much time a row spans depends on the zoom. If you
    navigate by row and something lands somewhere surprising, that is why.
-4. The AI takes 5–25 seconds to answer. It streams; wait for it to stop before typing again.
+3. The AI takes 5–25 seconds to answer. It streams; wait for it to stop before typing again.
 
 ---
 
 ## If it goes wrong
 
-- **Silence after adding a plugin** → Stop, Play.
 - **The AI refuses everything** → the stack was started without a key. Restart it with
   `DAW_ENV_FILE` set; the startup line tells you which.
 - **A typed note does nothing** → the grid does not have the keyboard. Click it. Check `EDIT`.

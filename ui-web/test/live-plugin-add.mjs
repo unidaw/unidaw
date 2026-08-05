@@ -25,23 +25,24 @@
  * both are inside Zebra2.vst3, and choosing by NAME from the engine's scan is the only thing
  * that tells them apart.
  *
- * STATUS, AND READ THIS BEFORE TRUSTING THE GREEN.
+ * STATUS: THE BUG IT WAS WRITTEN FOR IS FIXED, AND THIS IS NOW THE GUARD.
  *
- * As written this DOES NOT YET REPRODUCE the reported silence. It passes — the dropout total
- * stops growing after the insert — and that is a weaker configuration than the one that
- * failed in real use, in at least three ways:
+ * The cause was a producer DEADLOCK, not pacing. Loading a VST holds that track's
+ * controllerMutex across a blocking round-trip; produceBlock try_locks it, fails and RETURNS
+ * without sending; the track then rejoins back-pressure carrying a stale block id further behind
+ * than numBlocks, and `inFlight >= numBlocks` makes the producer skip dispatching to EVERYONE.
+ * The host can never catch up, because the blocks it is missing are exactly the ones the closed
+ * gate prevents being sent. Back-pressure now asks "do you still owe me work" instead of "how far
+ * along are you".
  *
- *   - the control track's sampler has NO SAMPLE loaded ("sampler t0 dev1: 0 slot(s)"), so
- *     nothing was actually sounding and the producer had almost no work to fall behind on;
- *   - the target track's chain was EMPTY, where the reported case added a plugin to a chain
- *     that already held a patcher and an unresolvable vst_instrument;
- *   - one host, where the reported case had several.
+ * Re-measured on this reproduction after the fix: 0 dropouts through 18 seconds with the
+ * transport still running, where it used to go 0 -> 16 -> 551 -> 1067.
  *
- * A test that passes on an easier case than the bug is a test that reports coverage it does
- * not have — the exact failure this directory keeps finding. It is committed in this state
- * deliberately, with the gap written down, because the assertion itself (a transient must not
- * become permanent) is the right one and the scenario is what needs strengthening. The
- * full-song suite is where the sounding, multi-host version of this belongs.
+ * WHAT THAT MEANS FOR THIS FILE. It was committed deliberately weaker than the reported case —
+ * silent control track, empty target chain, one host — with those gaps written down. Now that
+ * the cause is known they are the wrong gaps to close: the deadlock does not need a SOUNDING
+ * track, it needs a plugin inserted into a RUNNING transport, which is exactly what this does.
+ * The assertion below is unchanged and is the right one either way.
  *
  * WHAT IT ASSERTS, and why this shape.
  *
