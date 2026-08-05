@@ -192,13 +192,35 @@ daw::SamplerEvent samplerNoteOnFor(uint32_t offsetInBlock, uint8_t pitch, uint8_
 
 std::optional<BlockPlacement> placeInBlock(uint64_t tickDelta, uint64_t blockSampleStart,
                                            long double samplesPerTick, uint32_t blockSize) {
-  const uint64_t sampleTime = blockSampleStart + tickDeltaToSamples(tickDelta, samplesPerTick);
-  const int64_t offset =
-      static_cast<int64_t>(sampleTime) - static_cast<int64_t>(blockSampleStart);
-  if (offset < 0 || offset >= static_cast<int64_t>(blockSize)) {
+  // MEMBERSHIP IS DECIDED BY FLOOR; THE POSITION IS ROUNDED AND THEN CLAMPED. Two different
+  // questions were being answered by one number, and that cost a note.
+  //
+  // tickDeltaToSamples ROUNDS, deliberately — truncating loses up to a sample per event and the
+  // error accumulates across a block. But a nanotick is far smaller than a sample (0.0229688 at
+  // 120 bpm / 44.1 kHz / Q=960000), so a tick INSIDE this block's window can round UP to exactly
+  // blockSize: tickDelta 22290 of a 22291-tick window is 511.973 samples and rounds to 512. This
+  // returned nothing for it, the caller skipped it, and the next block never emitted it either
+  // because its tick window starts after that tick. The event simply vanished — 21 of every 22291
+  // in-window positions, which reads as "a note goes missing sometimes".
+  //
+  // THE PATCHER PATH ALREADY FIXED THIS BY CLAMPING and its comment says, in as many words, that
+  // "the CLIP path converts ticks to samples by a different route that has not been audited for
+  // the same property". It had not. This is that audit: two paths that agreed on intent and
+  // differed in behaviour, which is the shape this codebase keeps paying for.
+  //
+  // REJECTION SURVIVES, AND IT MUST. An event genuinely in a LATER block is still nothing —
+  // clamping those would bunch every future event onto the boundary and play them at once, which
+  // is what the callers' `continue` is for. floor() is what separates the two: if the event's own
+  // sample lies past this block however it is rounded, it is not this block's event.
+  const long double exact = static_cast<long double>(tickDelta) * samplesPerTick;
+  if (exact < 0.0L || std::floor(exact) >= static_cast<long double>(blockSize)) {
     return std::nullopt;
   }
-  return BlockPlacement{sampleTime, static_cast<uint32_t>(offset)};
+  uint64_t offset = tickDeltaToSamples(tickDelta, samplesPerTick);
+  if (offset >= blockSize) {
+    offset = blockSize - 1;  // half a sample early is inaudible; a missing note is not
+  }
+  return BlockPlacement{blockSampleStart + offset, static_cast<uint32_t>(offset)};
 }
 
 void queuePendingStrikes(TrackRuntime& runtime, const std::vector<PendingStrike>& strikes) {

@@ -476,6 +476,36 @@ void testPlaceInBlock() {
   CHECK(!placeInBlock(256, 1000, 2.0L, 512).has_value());   // 512 == blockSize, first sample past
   CHECK(!placeInBlock(1000, 1000, 2.0L, 512).has_value());
 
+  // AN EVENT INSIDE THIS BLOCK'S TICK WINDOW MUST NOT BE LOST TO ROUNDING. This is the case the
+  // patcher path already fixed and this one had not, and it is not exotic — it is the last ~21
+  // nanoticks of EVERY block at ordinary settings.
+  //
+  // A nanotick is far smaller than a sample: at 120 bpm, 44.1 kHz and 960000 nanoticks to the
+  // quarter, samplesPerTick is 0.0229688, so a 512-frame block spans 22291 ticks. tickDelta 22290
+  // is INSIDE that window and converts to 511.973 samples — and tickDeltaToSamples ROUNDS, giving
+  // 512, which is the first sample of the NEXT block. Dropping it there loses the event outright:
+  // the next block's tick window starts after it, so nothing ever emits it.
+  //
+  // 21 of the 22291 in-window ticks land this way. That is ~0.09% of positions — rare enough to
+  // read as "a note goes missing sometimes", which is exactly how it has been reported.
+  {
+    const long double spt = 0.0229687500L;  // 120 bpm, 44.1 kHz, Q=960000
+    const auto edge = placeInBlock(/*tickDelta=*/22290, /*blockSampleStart=*/0, spt, 512);
+    CHECK(edge.has_value());
+    if (edge) {
+      // Clamped to the block's last sample, not pushed into the next block and not dropped. Half
+      // a sample early is inaudible; a missing note is not.
+      CHECK(edge->offsetInBlock == 511);
+      CHECK(edge->sampleTime == 511);
+    }
+  }
+
+  // AND THE REJECTION MUST SURVIVE THE FIX. An event genuinely in a LATER block is still nothing:
+  // clamping those would bunch every future event onto the boundary and play them at once. The
+  // test is FLOOR, not round — floor(tickDelta * samplesPerTick) >= blockSize means the event's
+  // own sample lies past this block however it is rounded.
+  CHECK(!placeInBlock(22400, 0, 0.0229687500L, 512).has_value());  // 514.3 samples: a later block
+
   // The last sample IN the block is accepted — the boundary is exclusive at the top only.
   const auto last = placeInBlock(511, 1000, 1.0L, 512);
   CHECK(last.has_value());
