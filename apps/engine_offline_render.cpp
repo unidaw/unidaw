@@ -136,11 +136,11 @@ void runOfflinePump(OfflineRenderDeps& deps) {
     transport.playing.store(true, std::memory_order_release);
     offlineProducerArmed.store(true, std::memory_order_release);
     // Now that production is running, wait for EVERY unmuted track to be genuinely PRODUCING
-    // before the first block is mixed. ANY is not enough and that was task #16: a project whose
-    // track 0 needs no plugin and whose track 1 hosts an instrument satisfied "any ready track"
-    // the moment track 0 came up, so block 1 was produced while track 1's host was still
-    // launching. Its note at tick 0 reached no instrument and reappeared one whole loop later —
-    // which is why the symptom reads as "nothing sounded on the note side at the head".
+    // before the first block is mixed. ANY is not enough and that was task #16: at this point BOTH
+    // hosts are already up and NEITHER track is active yet (measured — see awaitAllReadyTracks),
+    // so "any ready track" returns the instant the first one starts producing and block 1 is mixed
+    // with the other still silent. Its note at tick 0 reaches nothing and reappears one whole loop
+    // later, which is why the symptom reads as "nothing sounded on the note side at the head".
     //
     // Offline has no deadline to miss, so waiting for all of them costs nothing but the launch
     // time that was going to be spent anyway.

@@ -776,11 +776,21 @@ public:
   //
   // awaitAnyReadyTrack answers "is the pipeline alive at all", which is the right question for
   // deciding whether there is anything to render — and the WRONG one for deciding when to start.
-  // It returns on the FIRST ready track, so a project whose track 0 needs no plugin and whose
-  // track 1 hosts an instrument starts rendering as soon as track 0 is up. Block 1 is then
-  // produced while track 1's host is still launching, the note at tick 0 never reaches an
-  // instrument, and it reappears a whole loop later. That is task #16, and it is timing-dependent
-  // purely because a host launch is a socket, a Hello and a plugin load.
+  // It returns on the FIRST track satisfying the predicate, so the render begins with the others
+  // possibly still not producing, and whatever they owed to that block is missing from it.
+  //
+  // MEASURED, at the moment the offline pump asks with requireActive=true:
+  //
+  //     poll 0  track=0 muted=0 hostReady=1 active=0
+  //     poll 0  track=1 muted=0 hostReady=1 active=0
+  //
+  // BOTH HOSTS ARE ALREADY UP AND NEITHER TRACK IS ACTIVE YET. The thing being waited for is not
+  // the host launch — it is the producer having actually rendered into that track. So `any`
+  // proceeds the instant ONE track starts producing, with the other still silent, and the note at
+  // tick 0 on the slower track reaches nothing and reappears a whole loop later. That is task #16.
+  // It takes ~8 polls at 2 ms for both to come up, which is more than one 512-frame block at
+  // 44.1 kHz — the window is present on every run, and only whether tick 0's block falls inside
+  // it varies.
   //
   // THE FUNCTION ABOVE ALREADY FOUND THIS ONE CASE OVER. Its own comment describes "one muted
   // track already up and an unmuted one still launching" satisfying "any ready track" and the
