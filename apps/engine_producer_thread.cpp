@@ -246,7 +246,9 @@ void runProducerThread(ProducerThreadDeps& deps) {
         // asked a question without booting an engine — which matters because getting it wrong
         // froze the transport for every track and took a live stack sample to find. See the
         // header for the deadlock it now excludes.
-        hostProgress.push_back({true, completed});
+        hostProgress.push_back(
+            {true, completed,
+             runtime->lastDispatchedBlockId.load(std::memory_order_acquire)});
       }
       // THE RULE, applied where it can be tested: apps/engine_rt_helpers.h.
       const auto progress = daw::engine::completedMinimum(

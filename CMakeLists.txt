@@ -1218,6 +1218,16 @@ add_test(NAME ask_path_check
 set_tests_properties(ask_path_check PROPERTIES
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 420 RUN_SERIAL TRUE)
 
+# tools/plugin_insert_stall_repro.sh is DELIBERATELY NOT REGISTERED. It was written to be the
+# live half of the completedMinimum fix and it does not reproduce the bug: with the fix disabled
+# and the pipeline shortened to 2 blocks it still reported zero stalls after the insert, because
+# the in-tree Identity plugin loads far too fast to hold a track's controllerMutex past the
+# window. A check that is green with the fix reverted guards nothing, and the suite already has
+# one honest non-reproducing property test (host_stall_check) — a second would be clutter that
+# reads like coverage. The rule itself IS pinned, by testCompletedMinimum in
+# apps/engine_rt_helpers_tests_main.cpp, whose control fails precisely the frozen-state
+# assertions. See the script's header for what a real live reproduction would need.
+
 # An AUDIO clip's in-point, gain and fades (opcode 95). Three layers have to move together and the
 # check asserts each one separately: the descriptor table (which was a load-time snapshot until
 # this command existed), the baked audio render (which the table cannot see), and the saved file.

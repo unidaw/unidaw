@@ -1099,6 +1099,13 @@ void produceBlock(ProducerBlockDeps& deps,
             runtime->needsRestart.store(true, std::memory_order_release);
             break;
           }
+          // THIS HOST NOW OWES US THIS BLOCK. Recorded here, at the only place a block is
+          // actually handed over, so the back-pressure minimum can tell a host that is behind
+          // because it is SLOW from one that is behind because it was SKIPPED — the early
+          // `return` on a failed try_lock above, which a VST load causes for 4-7 blocks. Gating
+          // on the second is a deadlock: it can never advance without a dispatch, and the gate
+          // is what stops the dispatch. See daw::engine::completedMinimum.
+          runtime->lastDispatchedBlockId.store(blockId, std::memory_order_release);
           patcherAudioValid = false;
           if (!segment.audioNodeIds.empty()) {
             for (uint32_t ch = 0; ch < engineConfig.numChannelsOut; ++ch) {

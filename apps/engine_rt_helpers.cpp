@@ -480,6 +480,15 @@ uint64_t clampTickIntoLoop(uint64_t tick, uint64_t loopStartTick, uint64_t loopE
 CompletedMinimum completedMinimum(const std::vector<HostProgress>& hosts, uint32_t nextBlockId) {
   CompletedMinimum out;
   uint32_t lowest = std::numeric_limits<uint32_t>::max();
+  // TWO DIFFERENT QUESTIONS, and merging them starved the producer almost completely.
+  // `anyContributing` answers "is any host producing at all" — the caller turns its negation into
+  // throttleInactive, which makes produceBlock SLEEP A WHOLE BLOCK every iteration (that is the
+  // pacing for an all-sampler project, which has no hosts). `anyOwing` answers "does anyone still
+  // owe me a block", which is the only question back-pressure should ask. A first version of this
+  // excluded owes-nothing hosts from BOTH, so in ordinary steady state — every host having
+  // finished exactly what it was sent — anyContributing went false and the producer slept itself
+  // to death: `panic` went from "no block ready for 509 of 1469 callbacks" to 1463 of 1468.
+  bool anyOwing = false;
   for (const auto& h : hosts) {
     if (!h.active) {
       continue;
@@ -487,10 +496,22 @@ CompletedMinimum completedMinimum(const std::vector<HostProgress>& hosts, uint32
     if (h.completedBlockId == 0) {
       continue;   // attached but has finished nothing yet — see the header
     }
+    // It exists and it is producing. That is true whether or not it currently owes anything, and
+    // it is what keeps the throttle off.
     out.anyContributing = true;
+    if (h.lastDispatchedBlockId > 0 && h.completedBlockId >= h.lastDispatchedBlockId) {
+      // OWES NOTHING, so it cannot advance without new work — gating on it deadlocks. See the
+      // header: this is the skipped-for-dispatch case (a VST load holds the track's
+      // controllerMutex, produce_block try_locks it and returns), where the host rejoins with a
+      // stale id it can never improve on because the closed gate is what stops the dispatch.
+      continue;
+    }
+    anyOwing = true;
     lowest = std::min(lowest, h.completedBlockId);
   }
-  out.minCompleted = out.anyContributing
+  // Nobody owing is not the same as nobody producing: the producer is free to make the next
+  // block, so the minimum is the same one-behind fallback used when there are no hosts at all.
+  out.minCompleted = anyOwing
                          ? lowest
                          : (nextBlockId > 0 ? nextBlockId - 1 : 0);
   return out;

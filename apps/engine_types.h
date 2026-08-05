@@ -360,6 +360,12 @@ struct TrackRuntime {
   std::mutex paramMirrorMutex;
   std::mutex controllerMutex;
   std::atomic<bool> active{false};
+  // THE LAST BLOCK THIS HOST WAS ACTUALLY SENT. Written by the producer right after a
+  // successful sendProcessBlock, read by the back-pressure minimum. Without it the producer
+  // cannot tell a host that is SLOW from one it SKIPPED — engine_produce_block try_locks
+  // controllerMutex and returns when a VST load holds it — and gating on the second deadlocks
+  // the transport for every track. See daw::engine::completedMinimum in engine_rt_helpers.h.
+  std::atomic<uint32_t> lastDispatchedBlockId{0};
   // v22 add/remove track: a tombstoned slot — the track was removed but its slot is kept
   // so neighbours' ids don't renumber. Published with kUiTrackFlagAbsent, skipped by save
   // and the mix, refillable by AddTrack. A live track has this false.
