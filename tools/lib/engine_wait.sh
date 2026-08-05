@@ -469,9 +469,17 @@ history_lines() {
 # times out and returns non-zero — which is the caller's `|| fail "..."` doing its job, with its
 # own message about what was refused.
 #
+# PASS `env` IF THE INVOCATION HAS AN ASSIGNMENT PREFIX. `DAW_UI_SHM_NAME=x "$CLI" do ...` is a
+# SHELL parse: the prefix is an assignment only because the shell is reading that line. Handed to
+# this function it arrives in "$@", where it is argv[0] — and the shell then looks for a program
+# literally named `DAW_UI_SHM_NAME=/lm_123`, fails, and this returns non-zero. A site written
+# `... || true` swallows that, AND THE COMMAND NEVER RAN. Three checks failed with "the save
+# produced no file" before I saw it, which reads as a race and is not one.
+#
 # USAGE:  after_command <project-dir> <cli-invocation...>
 #   e.g.  after_command "$TMP" cli do set-row-ops --track 0 --note 100 --prob 60 \
 #             || fail "row-ops write refused"
+#   e.g.  after_command "$TMP" env DAW_UI_SHM_NAME="$shm" "$CLI" do load lm --force || true
 after_command() {
   local dir="$1"; shift
   local before

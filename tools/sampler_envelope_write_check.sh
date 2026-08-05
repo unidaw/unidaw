@@ -36,6 +36,9 @@
 #
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# SOURCED FIRST so this file's own helpers still win: a later definition replaces an earlier one,
+# and what is wanted here are the WAIT primitives.
+. "$ROOT/tools/lib/engine_wait.sh"
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
@@ -163,8 +166,7 @@ shape() {
       >/dev/null 2>&1 || fail "sampler-env was refused for '$name'"
     sleep 0.6
   fi
-  DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do save "$name" --force >/dev/null 2>&1 || true
-  sleep 1.5
+  after_command "$TMP" env DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do save "$name" --force || true
   kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
   [ -f "$TMP/$name.uniproj.json" ] || fail "'$name' produced no saved project"
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/envrnd_$$_$name" \
@@ -330,13 +332,10 @@ lfoShape() {  # like shape(), but sends sampler-lfo
   local name="$1"; shift
   local shm="/lfochk_$$_$name"
   start_engine "$shm" "$TMP/$name.eng.log"
-  DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do load env --force >/dev/null 2>&1 || true
-  sleep 1.2
-  DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do sampler-lfo "$@" \
-    >/dev/null 2>&1 || fail "sampler-lfo was refused for '$name'"
-  sleep 0.6
-  DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do save "$name" --force >/dev/null 2>&1 || true
-  sleep 1.5
+  after_command "$TMP" env DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do load env --force || true
+  after_command "$TMP" env DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do sampler-lfo "$@" \
+    || fail "sampler-lfo was refused for '$name'"
+  after_command "$TMP" env DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do save "$name" --force || true
   kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/lforn_$$_$name" \
       ./daw_engine --project "$name" --render "$name" --run-seconds 6 --block-size 256 \

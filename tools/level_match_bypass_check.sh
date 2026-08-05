@@ -66,8 +66,7 @@ run() {  # run <extra-env> <name>
       DAW_CAPTURE_SECONDS=14 ./daw_engine --run-seconds 18 >"$TMP/$2.log" 2>&1 ) &
   local eng=$!
   sleep 2.5
-  DAW_UI_SHM_NAME="$shm" "$CLI" do load lm --force >/dev/null 2>&1 || true
-  sleep 1.5
+  after_command "$TMP" env DAW_UI_SHM_NAME="$shm" "$CLI" do load lm --force || true
   DAW_UI_SHM_NAME="$shm" "$CLI" do play --force >/dev/null 2>&1 || true
   sleep 6   # run ACTIVE long enough for the insert's gain to be measured
   DAW_UI_SHM_NAME="$shm" "$CLI" do set-bypass --track master --device 0 --bypass 1 --force \

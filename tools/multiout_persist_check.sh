@@ -135,8 +135,7 @@ DAW_UI_SHM_NAME="$SHM" "$CLI" do note --force --track 3 --nanotick $((3 * Q)) \
 wait_for "$SHM" 3 67 1 || fail "the note was not accepted on the bus-2 stem (track 3)"
 echo "  authored: pitch 60 on the bus-1 stem (track 2), pitch 67 on the bus-2 stem (track 3)"
 
-DAW_UI_SHM_NAME="$SHM" "$CLI" do save moout --force >/dev/null 2>&1 || true
-sleep 1.5
+after_command "$TMP" env DAW_UI_SHM_NAME="$SHM" "$CLI" do save moout --force || true
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 
 [ -f "$TMP/moout.uniproj.json" ] || fail "the save produced no file"
@@ -204,8 +203,7 @@ echo "  the parent and the filler track are still empty — the stems did not fo
 
 # ---- SAVE AGAIN: a load -> save round trip must be faithful, or the second save quietly
 # deletes what the first one wrote (the mod-link failure mode).
-DAW_UI_SHM_NAME="$SHM2" "$CLI" do save moagain --force >/dev/null 2>&1 || true
-sleep 1.5
+after_command "$TMP" env DAW_UI_SHM_NAME="$SHM2" "$CLI" do save moagain --force || true
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 
 python3 - "$TMP/moout.uniproj.json" "$TMP/moagain.uniproj.json" <<'PY'
