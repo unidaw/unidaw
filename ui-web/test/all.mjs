@@ -33,6 +33,10 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  */
 const EXCLUDED = {
   'ask-live.mjs': 'needs an API key and the network, and costs money per run',
+  // Same bargain as ask-live, different question: ask-live covers the agent's plumbing,
+  // ai-demo types the sentences a person types and asserts the SONG changed. Both cost
+  // money per run, so both are deliberate rather than swept.
+  'ai-demo.mjs': 'asks a real model real questions — needs a key and costs money per run',
   'audible.mjs': 'live capture — see THE CAPTURE PROBLEM below',
   'chop-audible.mjs': 'live capture — see THE CAPTURE PROBLEM below',
   'sound-op-audible.mjs': 'live capture — see THE CAPTURE PROBLEM below',

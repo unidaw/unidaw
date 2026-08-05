@@ -244,8 +244,16 @@ before the round trip.
 spaces — a file name may contain a space. If the spread would run past 127 the *whole batch* is
 refused.
 
-A freshly loaded slot is a one-shot pinned to one key: **MIDI 36, which Uni writes as `C-2`** —
-`fixed pitch`, root 36 by default. So:
+**One file spreads; a list is a kit.** A single sample lands across the whole keyboard with its
+root at **MIDI 60 (`C-4`, middle C)**, so any note you play sounds it, transposed. A
+comma-separated list is a drum kit and each file is pinned to its own key from 36 upward, one
+per key, which is what a kit wants.
+
+It used to pin a single sample to MIDI 36 as well, so loading one and playing a note produced
+silence unless you knew to move the slot. `slot <track> <device> <slot> keylow|keyhigh|root`
+still pins one by hand, and a **chop** mints one slot per slice regardless.
+
+So:
 
 ```
 goto 0 0                   cursor on row 0, track 0

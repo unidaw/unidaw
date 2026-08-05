@@ -524,7 +524,7 @@ export function createCommands(api) {
      */
     'load-sample': { help: 'load-sample <track> <device> <file> — one or more files, '
                          + 'comma-separated, onto consecutive keys; a trailing number is the '
-                         + 'root key (default 36)',
+                         + 'root key (one file spreads from 60; a list pins one per key from 36)',
       args: [A_TRACK, { name: 'device', type: 'int', min: 0 },
              { name: 'file', type: 'text', rest: true }],
       run: (a) => {
@@ -534,20 +534,34 @@ export function createCommands(api) {
          * `load-sample 0 0 808` would read the file name as a key and load nothing.
          */
         const words = rest.split(' ');
-        let root = 36;
+        let root = null;
         if (words.length > 1 && /^\d+$/.test(words[words.length - 1])) {
           root = Number(words.pop());
           if (root > 127) return 'root must be 0..127';
         }
         const files = words.join(' ').split(',').map((f) => f.trim()).filter(Boolean);
         if (!files.length) return 'load-sample needs a file name';
+        /*
+         * ONE FILE SPREADS, A LIST IS A KIT.
+         *
+         * A lone sample is the melodic case: it belongs across the keyboard from middle C,
+         * so playing any note sounds it. A comma list is a drum kit and each file belongs on
+         * its OWN key from C-2 upward, which is what it has always done.
+         *
+         * The default used to be C-2 fixed-pitch for both, so a single sample answered one
+         * key nobody types on and the whole load-and-play gesture was silent.
+         */
+        const kit = files.length > 1;
+        if (root === null) root = kit ? 36 : 60;
         if (root + files.length - 1 > 127) {
           return `${files.length} samples from key ${root} would run past 127 — the last `
                + `${root + files.length - 1 - 127} would land on top of each other, so none was `
                + 'loaded';
         }
         for (let i = 0; i < files.length; i++) {
-          if (!api.loadSample(Number(a[0]), Number(a[1]), files[i], root + i)) return refusal(api);
+          if (!api.loadSample(Number(a[0]), Number(a[1]), files[i], root + i, kit)) {
+            return refusal(api);
+          }
         }
         return files.length === 1 ? `loading ${files[0]} on key ${root}`
           : `loading ${files.length} samples on keys ${root}-${root + files.length - 1}`;

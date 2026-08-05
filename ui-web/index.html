@@ -1737,9 +1737,27 @@ function loadSample(track, device, name, rootKey, fixedPitch) {
     schedule();
     return false;
   }
+  /*
+   * SPREAD ACROSS THE KEYBOARD BY DEFAULT, root at middle C.
+   *
+   * This defaulted to root 36 with FIXED PITCH, which the engine turns into
+   * `keyLow = keyHigh = 36` — a slot answering exactly C-2. The tracker's default octave
+   * writes 48, so the first gesture anyone performs — sampler on a track, file into it,
+   * play a note — produced SILENCE, and nothing said why.
+   *
+   * The engine was already right: without the fixed-pitch flag it mints keyLow 0 /
+   * keyHigh 127, transposing from the root. The pinning was this side's default alone, and
+   * every suite that touches the sampler worked around it by moving the slot onto the keys
+   * the keyboard had written — three commands, with a comment explaining that it must. A
+   * workaround in every caller is the product's behaviour, not a workaround.
+   *
+   * PINNING IS STILL WHAT A DRUM KIT WANTS, and it still happens: `load-sample` passes
+   * `fixed` for a comma list so each file lands on its own key, and a CHOP mints one slot
+   * per slice regardless. This is the lone sample, which is the melodic case.
+   */
   conn.send({ type: 'samplerload', track: Number(track) || 0, device: Number(device) || 0,
-              name: n, root: rootKey === undefined ? 36 : Number(rootKey),
-              fixed: fixedPitch === false ? 0 : 1 });
+              name: n, root: rootKey === undefined ? 60 : Number(rootKey),
+              fixed: fixedPitch ? 1 : 0 });
   // The kit is answered from the engine's own snapshot, so nothing is assumed here — the card
   // redraws when the version moves, which is what the version is for.
   state.reject = null;
