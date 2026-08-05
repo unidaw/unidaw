@@ -1332,6 +1332,17 @@ add_test(NAME opcode_mirror
 set_tests_properties(opcode_mirror PROPERTIES
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
 
+# EVERY event placed in a block goes through placeInBlock. The RULE is pinned by behaviour
+# elsewhere (block_edge_note, note_off_edge, and placeInBlock's unit tests); what those cannot see
+# is a NEW SITE doing the conversion by hand, which is exactly how this defect kept returning —
+# seven sites computed it, three note-offs kept the old arithmetic for a day, and the chord
+# column-cut for longer still.
+add_test(NAME block_placement_rule
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/block_placement_rule_check.sh
+)
+set_tests_properties(block_placement_rule PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
+
 add_test(NAME note_off_edge
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/note_off_edge_check.sh
 )

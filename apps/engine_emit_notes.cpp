@@ -294,11 +294,29 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
               const uint8_t baseVelocity = 100;
               const uint8_t column = event->payload.chord.column;
 
+              // THE LAST SITE THAT HAND-ROLLED THIS, and the seventh to be fixed. Every other
+              // placement in the block goes through placeInBlock; this one converted with the
+              // ROUNDING helper and did not clamp, so a tick INSIDE the block could produce
+              // sampleTime == blockSampleStart + blockSize exactly.
+              //
+              // WHAT THAT COSTS IS NOT A LATE NOTE. The host windows a block on
+              // [blockStart, blockEnd) and BREAKS out of its collect loop on the first entry at
+              // or past blockEnd (juce_host_process_main.cpp) — so that one entry stops every
+              // event queued behind it from being collected at all. On the next block those
+              // events are < blockStart and are POPPED AND DISCARDED. An aux child's MIDI is
+              // written into the parent's ring after the parent's own, so a chord on one of
+              // those ticks silently deletes a whole block of the child's notes.
+              //
+              // The sampler tee clamps (samplerNoteOffFor) while the hosted plugin did not, so
+              // the two instrument engines on one track also disagreed by a full block about
+              // when the same chord cut its column.
               const uint64_t chordDelta =
                   baseTickDelta + (event->nanotickOffset - rangeStart);
-              const uint64_t chordSample =
-                  blockSampleStart + tickDeltaToSamples(chordDelta);
-              cutActiveNoteInColumn(column, chordSample, currentBlockId);
+              const auto chordPlaced = daw::engine::placeInBlock(
+                  chordDelta, blockSampleStart, samplesPerTick, engineConfig.blockSize);
+              if (chordPlaced) {
+                cutActiveNoteInColumn(column, chordPlaced->sampleTime, currentBlockId);
+              }
 
               const auto harmony = getHarmonyAt(event->nanotickOffset);
               if (!harmony.has_value()) {
