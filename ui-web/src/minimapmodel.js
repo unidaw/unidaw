@@ -22,8 +22,13 @@
 // No DOM here, by the same boundary rule as viewmodel.js — this is plain data,
 // the renderer consumes it and nothing else, and a test reads the same shape.
 
-const TICKS_PER_BEAT = 960000;
-const TICKS_PER_BAR = TICKS_PER_BEAT * 4;
+import { DEFAULT_METER, ticksPerBar, ticksPerBeat } from './meter.js';
+
+// NO PRIVATE BEAT OR BAR LENGTH. Both constants that used to live here were 4/4 assumptions —
+// 960000 is a QUARTER, which is only the beat when the denominator is 4, and multiplying it by
+// four is only the bar when the numerator is 4. Everything below takes them from the meter now.
+// In 4/4 every number is unchanged; in 6/8 the minimap used to round the song's extent to a
+// 4/4 bar and count eighths as quarters, so its marks disagreed with the ruler beside them.
 
 /** Buckets the model will ever produce. See the header for why it is bounded. */
 export const MAX_MARKS = 256;
@@ -33,7 +38,7 @@ export const MAX_MARKS = 256;
  * length gives a viewport rectangle taller than the column and a playhead that
  * crosses it in seconds — technically true and useless.
  */
-const MIN_SONG_TICKS = TICKS_PER_BAR * 16;
+const MIN_SONG_BARS = 16;
 
 /**
  * The design's density scale: `min(0.6, events / 34)` per beat, measured off
@@ -91,7 +96,7 @@ export function createMinimapBuffer(maxMarks = MAX_MARKS) {
     markCount: 0,
     /** A mark spans this many beats; 1 until the song outgrows the cap. */
     beatsPerMark: 1,
-    ticksPerMark: TICKS_PER_BEAT,
+    ticksPerMark: ticksPerBeat(DEFAULT_METER),
 
     /** The span the column represents, top to bottom. */
     songTicks: 0,
@@ -169,7 +174,7 @@ function pow2AtLeast(n) {
  * the last placement's end is the end of the material. Notes are the fallback
  * for a feed that has not published extents, not a second opinion.
  */
-function contentEndOf(engine) {
+function contentEndOf(engine, perBar) {
   let end = 0;
   const ec = engine.extentCount || 0;
   for (let i = 0; i < ec; i++) {
@@ -183,7 +188,7 @@ function contentEndOf(engine) {
     const t = n.tOff > n.tOn ? n.tOff : n.tOn;
     if (t > end) end = t;
   }
-  return end > 0 ? end + TICKS_PER_BAR : 0;
+  return end > 0 ? end + perBar : 0;
 }
 
 /**
@@ -205,7 +210,13 @@ export function buildMinimapModel(opts, buf) {
     startTick = 0,
     visibleTicks = 0,
     playheadTick = engine ? engine.playheadTick : 0,
+    // Defaulted rather than required, so an existing caller keeps working — but index.html DOES
+    // pass it (o.meter = songMeter(), the same idiom the other four models here use). A default
+    // nobody ever overrides is a guard seeded to its own value.
+    meter = DEFAULT_METER,
   } = opts;
+  const perBeat = ticksPerBeat(meter);
+  const perBar = ticksPerBar(meter);
 
   if (!buf) buf = createMinimapBuffer();
 
@@ -229,7 +240,7 @@ export function buildMinimapModel(opts, buf) {
   // well as a field change).
   if (buf._cNotesRev !== notesRev || buf._cNoteCount !== noteCount || buf._cExtRev !== extRev) {
     buf._cNotesRev = notesRev; buf._cNoteCount = noteCount; buf._cExtRev = extRev;
-    buf._content = engine ? contentEndOf(engine) : 0;
+    buf._content = engine ? contentEndOf(engine, perBar) : 0;
   }
   const content = buf._content;
   buf.contentTicks = content;
@@ -247,10 +258,11 @@ export function buildMinimapModel(opts, buf) {
   // So the span is fixed by the content, the viewport rectangle clamps to the
   // bottom when you go past the end, and `beyond` says it is pinned rather than
   // positioned. Rounded up to a bar to keep the last mark whole.
-  const floor = content > MIN_SONG_TICKS ? content : MIN_SONG_TICKS;
-  const songTicks = Math.ceil(floor / TICKS_PER_BAR) * TICKS_PER_BAR;
+  const minSongTicks = perBar * MIN_SONG_BARS;
+  const floor = content > minSongTicks ? content : minSongTicks;
+  const songTicks = Math.ceil(floor / perBar) * perBar;
   buf.beyond = startTick >= songTicks;
-  const songBeats = Math.round(songTicks / TICKS_PER_BEAT);
+  const songBeats = Math.round(songTicks / perBeat);
   buf.songTicks = songTicks;
   buf.songBeats = songBeats;
 
@@ -258,7 +270,7 @@ export function buildMinimapModel(opts, buf) {
   const markCount = Math.min(buf._cap, Math.ceil(songBeats / beatsPerMark));
   const prevMarkCount = buf.markCount;
   buf.beatsPerMark = beatsPerMark;
-  buf.ticksPerMark = beatsPerMark * TICKS_PER_BEAT;
+  buf.ticksPerMark = beatsPerMark * perBeat;
   buf.markCount = markCount;
 
   const stale = buf._notesRev !== notesRev

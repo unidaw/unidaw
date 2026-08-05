@@ -5,11 +5,17 @@
 // publish rate, so rebuilding it would allocate a string and a Text node ~86
 // times a second, which is exactly what GUIDELINES 3.1 and 3.2 forbid.
 
-import { DEFAULT_METER, meterText } from './meter.js';
+import { DEFAULT_METER, meterText, ticksPerBeat } from './meter.js';
 
-const NANOTICKS_PER_QUARTER = 960000;
-const BEATS_PER_BAR = 4;
-const NANOTICKS_PER_SUB = NANOTICKS_PER_QUARTER / 1000;
+// NO PRIVATE BEATS_PER_BAR HERE ANY MORE. The position readout used a local `4` for the bar
+// length AND treated a QUARTER as the beat — two separate 4/4 assumptions stacked. In 6/8 the
+// first counts a six-beat bar in fours and the second calls an eighth a quarter, so the number
+// under the playhead disagrees with the ruler the notes are drawn against. meter.js owns that
+// rule (a beat is the DENOMINATOR's unit, hence its 4/denominator ratio) and was already
+// imported here for meterText.
+//
+// `sub` is now thousandths of a BEAT rather than of a quarter, so its 0..999 table is exactly as
+// wide in every meter. In 4/4 every number this produces is identical to what it replaced.
 
 /**
  * Every sub-beat field the readout can show, interned at load.
@@ -618,17 +624,19 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
       if (editStep !== lastStep) { lastStep = editStep; stepLabel.firstChild.nodeValue = 'step ' + editStep; }
       if (playheadTick !== lastTick) {
         lastTick = playheadTick;
-        const beat = Math.floor(playheadTick / NANOTICKS_PER_QUARTER);
+        const perBeat = ticksPerBeat(meter);
+        const beat = Math.floor(playheadTick / perBeat);
         // A beat is 500 ms at 120 BPM, so this concatenation runs about twice a
         // second rather than sixty times — the rate the value it describes
         // actually changes at, which is the point of splitting the node.
         if (beat !== lastBeat) {
           lastBeat = beat;
           posLabel.firstChild.nodeValue =
-            (Math.floor(beat / BEATS_PER_BAR) + 1) + ':' + ((beat % BEATS_PER_BAR) + 1) + ':';
+            (Math.floor(beat / meter.numerator) + 1) + ':' +
+            ((beat % meter.numerator) + 1) + ':';
         }
         // Bounded 0..999 by the modulo above, so the table always has an entry.
-        const sub = Math.floor((playheadTick % NANOTICKS_PER_QUARTER) / NANOTICKS_PER_SUB);
+        const sub = Math.floor((playheadTick % perBeat) / (perBeat / 1000));
         if (sub !== lastSub) { lastSub = sub; posSub.nodeValue = SUB[sub]; }
       }
       if (tstate !== lastTransport) {
