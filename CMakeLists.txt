@@ -628,6 +628,19 @@ target_link_libraries(engine_modlink_commands_tests PRIVATE engine_commands)
 # The history journal. Nothing in the suite asserted the ENGINE writes history.jsonl — daw_lint
 # reads it and lint_check covers that reader against a fixture it writes itself, so the reader was
 # covered and the writer was not. Sabotaging historyAppend to a no-op left the whole suite green.
+# The two readiness waits. The offline pump must wait for EVERY unmuted track to be producing, not
+# ANY — waiting for any was task #16. The only detector was audio_loop, which fails intermittently
+# (14 passes, one failure, 10 passes), so reverting the fix left a green suite. These state the
+# difference between the two functions exactly, with no engine and no shared memory.
+add_executable(engine_readiness_tests
+  apps/engine_readiness_tests_main.cpp
+)
+target_include_directories(engine_readiness_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(engine_readiness_tests PRIVATE engine_commands)
+
 add_executable(engine_history_journal_tests
   apps/engine_history_journal_tests_main.cpp
 )
@@ -1641,6 +1654,12 @@ add_test(NAME engine_modlink_commands
   COMMAND engine_modlink_commands_tests
 )
 set_tests_properties(engine_modlink_commands PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME engine_readiness
+  COMMAND engine_readiness_tests
+)
+set_tests_properties(engine_readiness PROPERTIES
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME engine_history_journal
