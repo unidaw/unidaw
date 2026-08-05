@@ -181,8 +181,7 @@ esac
 echo "  loaded: $BEFORE"
 
 # ---- RIPPLE. Insert 4 bars at bar 5: everything at or after it moves by 4 bars.
-cli do time insert --nanotick 15360000 --bars 4 >/dev/null 2>&1 || true
-sleep 1.5
+after_command "$TMP" cli do time insert --nanotick 15360000 --bars 4 || true
 grep -q '"event":"time.edited"' "$TMP/eng.log" || \
   fail "the ripple was not applied: $(grep -o '"event":"time[a-z._]*"[^}]*' "$TMP/eng.log" | tail -1)"
 grep '"event":"time.edited"' "$TMP/eng.log" | tail -1 | grep -q '"undoable":true' || \
@@ -219,8 +218,7 @@ PYG
 echo "  on the grid: the 7/8 change still lands on a bar line after the insert"
 
 # ---- UNDO. Every one of the five back.
-cli do undo >/dev/null 2>&1 || true
-sleep 1.6
+after_command "$TMP" cli do undo || true
 grep -q '"event":"undo.song"' "$TMP/eng.log" || \
   fail "the undo did not restore a SONG-scoped entry, so the ripple pushed none — this is the
         defect: the largest destructive edit in the program with no way back:
@@ -245,8 +243,7 @@ RT_UNDONE="$(runtime_points)"
 echo "  runtime agrees: the published read-back matches too ($RT_UNDONE)"
 
 # ---- REDO puts it back, or the entry was consumed rather than moved.
-cli do redo >/dev/null 2>&1 || true
-sleep 1.6
+after_command "$TMP" cli do redo || true
 grep -q '"event":"redo.song"' "$TMP/eng.log" || fail "redo did not re-apply the song entry"
 REDONE="$(state redone)"
 [ "$REDONE" = "$AFTER" ] || \

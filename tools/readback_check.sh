@@ -24,6 +24,9 @@
 #
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# SOURCED FIRST so this file's own helpers still win: a later definition replaces an earlier one,
+# and what is wanted here are the WAIT primitives.
+. "$ROOT/tools/lib/engine_wait.sh"
 . "$ROOT/tools/lib/engine_wait.sh"
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
@@ -120,9 +123,13 @@ echo "  reads: the loaded flag is published per track (0=off, 1=on)"
 
 # ---- AND IT FOLLOWS THE COMMAND. Toggle track 0 on and watch it change: a flag published from
 # the LOADED document rather than from live state would stay put here.
+# NOT after_command. The assertion below reads PUBLISHED state, and the journal says the engine
+# ACTED, not that the consumer has published — those are different ticks. Waiting for the wrong one
+# is how a check reads the value it was about to change.
 cli do harmony-quantize --track 0 --on >/dev/null 2>&1 \
   || cli do harmony-quantize --track 0 >/dev/null 2>&1 || true
-sleep 1.2
+published_on() { [ "$(hq_of "$SHM" 0)" = "true" ]; }
+wait_until 20 published_on || true
 A1="$(hq_of "$SHM" 0)"
 [ "$A1" = "true" ] || \
   fail "after SetTrackHarmonyQuantize on track 0 the published flag is still '$A1' — it is being
@@ -131,8 +138,7 @@ A1="$(hq_of "$SHM" 0)"
 echo "  follows: a toggle moves the published flag"
 
 # ---- REPORTS: a preset save says whether it wrote.
-cli do patcher-save --name rbpreset >/dev/null 2>&1 || true
-sleep 1
+after_command "$TMP" cli do patcher-save --name rbpreset || true
 grep -q '"event":"patcher_preset.saved"' "$TMP/eng.log" || \
   fail "SavePatcherPreset reported nothing. The outcome went to stderr, which daw-cli can read
         and a browser cannot, so a save button had no way to know whether it worked"
@@ -140,8 +146,7 @@ grep '"event":"patcher_preset.saved"' "$TMP/eng.log" | grep -q '"ok":true' || \
   fail "the preset save reported a failure: $(grep '"event":"patcher_preset.saved"' "$TMP/eng.log" | tail -1)"
 # A REFUSAL must report too — a command that is declined and says nothing is the shape this
 # whole exercise is about.
-cli do patcher-save --name "" >/dev/null 2>&1 || true
-sleep 1
+after_command "$TMP" cli do patcher-save --name "" || true
 if [ "$(grep -c '"event":"patcher_preset.saved"' "$TMP/eng.log")" -ge 2 ]; then
   grep '"event":"patcher_preset.saved"' "$TMP/eng.log" | tail -1 | grep -q '"ok":false' || \
     fail "an empty preset name was refused but reported ok"
@@ -155,8 +160,7 @@ fi
 
 # ---- SURVIVES a save and a reload in a FRESH engine. The flag is only useful if what the UI
 # draws after reopening a project is what the project says.
-cli do save rbout --force >/dev/null 2>&1 || true
-sleep 1.6
+after_command "$TMP" cli do save rbout --force || true
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 
 SHM2="/rbchk2_$$"

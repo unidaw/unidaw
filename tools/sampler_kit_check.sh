@@ -116,8 +116,7 @@ cli do load blank --force >/dev/null 2>&1 || true
 wait_for_boot "$TMP/eng.log" "$ENG" 80
 sleep 1.0
 
-cli do add-device --track 0 --kind sampler --device-id 1 >/dev/null 2>&1 || true
-sleep 1.0
+after_command "$TMP" cli do add-device --track 0 --kind sampler --device-id 1 || true
 
 # ---- LAYS DOWN. One command, eight slots, eight consecutive keys from C-1.
 cli do sampler-load --track 0 --device 1 --root 36 \
@@ -138,8 +137,7 @@ echo "  lays down: 8 slots on keys 36..43 from one --files command"
 # ---- CONFIGURE by command: slots 1 and 2 choke each other, slot 4 rings on repeat.
 cli do sampler-slot --track 0 --device 1 --slot 1 --field voice-group --value 1 >/dev/null 2>&1
 cli do sampler-slot --track 0 --device 1 --slot 2 --field voice-group --value 1 >/dev/null 2>&1
-cli do sampler-slot --track 0 --device 1 --slot 4 --field nna --value 2 >/dev/null 2>&1
-sleep 1.5
+after_command "$TMP" cli do sampler-slot --track 0 --device 1 --slot 4 --field nna --value 2 
 SET="$(grep -c '"event":"sampler.slot_set"' "$TMP/eng.log")"
 [ "$SET" = "3" ] || fail "expected 3 sampler.slot_set events, got $SET:
         $(grep -o '\"event\":\"sampler.set_slot_rejected\"[^}]*' "$TMP/eng.log" | tail -3)"
@@ -212,8 +210,7 @@ echo "$MISSING" | grep -q '"found": false' || \
   fail "asking for a device that does not exist should answer found:false, got: $MISSING"
 echo "  refuses: a missing device answers found:false, not an empty kit"
 
-cli do save kit --force >/dev/null 2>&1 || true
-sleep 1.8
+after_command "$TMP" cli do save kit --force || true
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 
 # ---- The saved kit is what we asked for. Read before rendering, so a render failure below is

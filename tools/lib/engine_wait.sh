@@ -443,3 +443,39 @@ wait_until() {
   done
   return 1
 }
+
+# HOW MANY COMMANDS THE ENGINE HAS ACTED ON SO FAR. Prints 0 when the journal does not exist yet,
+# which is the honest answer before the first accepted command and keeps callers from having to
+# special-case a fresh project directory.
+#
+# USAGE:  history_lines <project-dir>
+history_lines() {
+  local n
+  n=$(wc -l "$1/history.jsonl" 2>/dev/null | awk '{print $1}')
+  [ -n "$n" ] && echo "$n" || echo 0
+}
+
+# ISSUE ONE COMMAND AND WAIT FOR THE ENGINE TO HAVE ACTED ON IT.
+#
+# This is the shape almost every `cli do ... ; sleep 0.6` in this repo was reaching for. The sleep
+# was a guess at how long the command thread would take; the journal says exactly when it is done.
+#
+# IT READS THE COUNT BEFORE AND WAITS FOR ONE MORE, rather than tracking a running total in the
+# caller. A hand-maintained counter is wrong the first time someone inserts a command in the middle
+# of a check and does not renumber the rest — and it is wrong SILENTLY, because waiting for a count
+# that has already been passed returns immediately and the race comes straight back.
+#
+# THE CALLER STILL ASSERTS. A refused command may not be journalled at all, in which case this
+# times out and returns non-zero — which is the caller's `|| fail "..."` doing its job, with its
+# own message about what was refused.
+#
+# USAGE:  after_command <project-dir> <cli-invocation...>
+#   e.g.  after_command "$TMP" cli do set-row-ops --track 0 --note 100 --prob 60 \
+#             || fail "row-ops write refused"
+after_command() {
+  local dir="$1"; shift
+  local before
+  before=$(history_lines "$dir")
+  "$@" >/dev/null 2>&1 || return 1
+  wait_for_history "$dir" $((before + 1)) 20
+}

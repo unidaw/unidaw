@@ -108,8 +108,7 @@ cli do load blank --force >/dev/null 2>&1 || true
 wait_for_boot "$TMP/eng.log" "$ENG" 80
 sleep 1.0
 
-cli do add-device --track 0 --kind sampler --device-id 1 >/dev/null 2>&1 || true
-sleep 1.0
+after_command "$TMP" cli do add-device --track 0 --kind sampler --device-id 1 || true
 cli do sampler-load --track 0 --device 1 --file brk.wav --root 60 >/dev/null 2>&1 || true
 wait_for_event "$TMP/eng.log" '"event":"sampler.loaded"' 80 "the sampler load" || true
 grep -q '"event":"sampler.loaded"' "$TMP/eng.log" || fail "the break did not load"
@@ -158,8 +157,7 @@ print("  read-back: %d slice slots, each fixed-pitch on its own key" % len(slice
 # This is Octatrack's CREATE LINEAR LOCKS and Bitwig's slice-to-drum-machine clip, with the
 # difference that matters: re-cutting afterwards moves what the rows PLAY without moving what
 # they SAY. Bitwig emits its clip once, one-way.
-cli do sampler-emit-rows --track 0 --device 1 --source 1 --at 0 --column 0 >/dev/null 2>&1 || true
-sleep 1.5
+after_command "$TMP" cli do sampler-emit-rows --track 0 --device 1 --source 1 --at 0 --column 0 || true
 EMITTED="$(grep -o '"event":"sampler.rows_emitted"[^}]*' "$TMP/eng.log" | tail -1)"
 [ -n "$EMITTED" ] || fail "no sampler.rows_emitted event:
         $(grep -o '"event":"sampler.emit_rejected"[^}]*' "$TMP/eng.log" | tail -2)"
@@ -199,12 +197,10 @@ tr = [t for t in d['tracks'] if not t.get('is_master')][0]
 dev = [x for x in tr['device_chain'] if x['kind'] == 'sampler'][0]
 print(len(dev['sampler']['slice_sets'][0]['markers']))
 ")"
-cli do sampler-marker --track 0 --device 1 --source 1 --op add --frame 6000 >/dev/null 2>&1 || true
-sleep 1.2
+after_command "$TMP" cli do sampler-marker --track 0 --device 1 --source 1 --op add --frame 6000 || true
 grep -q '"event":"sampler.marker"' "$TMP/eng.log" || \
   fail "no sampler.marker event: $(grep -o '\"event\":\"sampler.slice_rejected\"[^}]*' "$TMP/eng.log" | tail -1)"
-cli do save chop2 --force >/dev/null 2>&1 || true
-sleep 1.8
+after_command "$TMP" cli do save chop2 --force || true
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 
 python3 - "$TMP/chop.uniproj.json" "$TMP/chop2.uniproj.json" "$BEFORE_M" <<'PYS'

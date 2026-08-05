@@ -32,6 +32,9 @@
 #
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# SOURCED FIRST so this file's own start_engine and cleanup still win: a later definition replaces
+# an earlier one, and the point here is the WAIT primitives, not the launcher.
+. "$ROOT/tools/lib/engine_wait.sh"
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
@@ -147,34 +150,27 @@ PY
 SHM="/rowops_$$"
 start_engine "$SHM" "$TMP/eng.log"
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
-cli do load rowops --force >/dev/null 2>&1 || true
-sleep 1.5
+after_command "$TMP" cli do load rowops --force || true
 
 # ---- WRITES. Every op, on note 100.
-cli do set-row-ops --track 0 --note 100 --ret 3 --prob 60 --sound 7 --offset 16384 \
-    --delay 120000 >/dev/null 2>&1 || fail "set-row-ops was refused"
-sleep 0.6
+after_command "$TMP" cli do set-row-ops --track 0 --note 100 --ret 3 --prob 60 --sound 7 --offset 16384 \
+    --delay 120000 || fail "set-row-ops was refused"
 # ---- MASKS, part 1: only probability on note 101. The other four must stay zero.
-cli do set-row-ops --track 0 --note 101 --prob 25 >/dev/null 2>&1 || fail "masked write refused"
-sleep 0.6
+after_command "$TMP" cli do set-row-ops --track 0 --note 101 --prob 25 || fail "masked write refused"
 # ---- MASKS, part 2: set two ops on note 102, then clear ONE of them.
-cli do set-row-ops --track 0 --note 102 --ret 4 --sound 9 >/dev/null 2>&1 || fail "write refused"
-sleep 0.6
-cli do set-row-ops --track 0 --note 102 --clear ret >/dev/null 2>&1 || fail "clear refused"
-sleep 0.6
+after_command "$TMP" cli do set-row-ops --track 0 --note 102 --ret 4 --sound 9 || fail "write refused"
+after_command "$TMP" cli do set-row-ops --track 0 --note 102 --clear ret || fail "clear refused"
 
 # ---- AUTHORED IDS. Address the AGENT note (author 1, counter 100). The human note 100 already
 # carries ops from the first write above, so if the id truncates, this command lands on it and
 # changes them — which is exactly the silent wrong-note edit a 32-bit id produced.
 AGENT_ID=$(python3 -c "print((1 << 48) | 100)")
-cli do set-row-ops --track 0 --note "$AGENT_ID" --prob 77 >/dev/null 2>&1 || \
+after_command "$TMP" cli do set-row-ops --track 0 --note "$AGENT_ID" --prob 77 || \
   fail "addressing an agent-authored note was refused"
-sleep 0.6
 
 # ---- OVERRIDES. A note that lives on the PLACEMENT, not in the clip.
-cli do set-row-ops --track 0 --note 200 --ret 6 >/dev/null 2>&1 || \
+after_command "$TMP" cli do set-row-ops --track 0 --note 200 --ret 6 || \
   fail "editing a placement-local note was refused"
-sleep 0.6
 
 # ---- THE STATEFUL CONDITIONS ARE SETTABLE. PRE (130) and NOT PRE (131) shipped able to parse,
 # format, resolve and round-trip through a project file while this command refused every value
@@ -187,15 +183,12 @@ sleep 0.6
 # the command is QUEUED — the engine's refusal happens later and on the other side of the ring, so
 # an edit the engine throws away looks like a success here. That is the same silent no-op the
 # refusal itself is, one layer out, and it is why `|| fail` on a `do` is never the real check.
-cli do set-row-ops --track 0 --note 102 --condition pre >/dev/null 2>&1 || \
+after_command "$TMP" cli do set-row-ops --track 0 --note 102 --condition pre || \
   fail "daw-cli could not even parse --condition pre"
-sleep 0.6
-cli do set-row-ops --track 0 --note 101 --condition npre >/dev/null 2>&1 || \
+after_command "$TMP" cli do set-row-ops --track 0 --note 101 --condition npre || \
   fail "daw-cli could not even parse --condition npre"
-sleep 0.6
 
-cli do save afterA --force >/dev/null 2>&1 || true
-sleep 1.8
+after_command "$TMP" cli do save afterA --force || true
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 [ -f "$TMP/afterA.uniproj.json" ] || fail "the save produced no file"
 
@@ -265,10 +258,8 @@ echo "  trig conditions: 101=$C101 (npre=131) 102=$C102 (pre=130) 103=$C103 (unt
 SHM2="/rowops2_$$"
 start_engine "$SHM2" "$TMP/eng2.log"
 cli() { DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
-cli do load afterA --force >/dev/null 2>&1 || true
-sleep 1.5
-cli do save afterB --force >/dev/null 2>&1 || true
-sleep 1.8
+after_command "$TMP" cli do load afterA --force || true
+after_command "$TMP" cli do save afterB --force || true
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 [ -f "$TMP/afterB.uniproj.json" ] || fail "the reload's save produced no file"
 

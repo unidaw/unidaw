@@ -138,8 +138,7 @@ wait_for_boot "$TMP/eng.log" "$ENG" 80
 sleep 1.2
 
 # ---- LANDS + ISOLATED. Add an LFO to DEVICE 1 only.
-cli do patcher-node --track 0 --device 1 --type lfo >/dev/null 2>&1 || true
-sleep 1
+after_command "$TMP" cli do patcher-node --track 0 --device 1 --type lfo || true
 grep -q '"event":"patcher_device_edit.applied"' "$TMP/eng.log" || \
   fail "the per-device edit was not applied. Without --device the command edits the shared pool
         and is never saved for a project with per-device graphs, so the engine must report which
@@ -165,8 +164,7 @@ grep -q '"event":"patcher.reassembled"' "$TMP/eng.log" || \
 echo "  executes: the pool was re-derived from the device graphs after the edit"
 
 # ---- A BAD ADDRESS IS REFUSED, not silently applied somewhere else.
-cli do patcher-node --track 0 --device 99 --type lfo >/dev/null 2>&1 || true
-sleep 1
+after_command "$TMP" cli do patcher-node --track 0 --device 99 --type lfo || true
 grep '"event":"patcher_device_edit.rejected"' "$TMP/eng.log" | grep -q '"reason":"no_such_device"' || \
   fail "an edit naming a device that does not exist was not refused. Retrying will never help, so
         the caller has to be told rather than left to assume it worked"
@@ -188,8 +186,7 @@ cli() { DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load pdout --force >/dev/null 2>&1 || true
 wait_for_boot "$TMP/eng2.log" "$ENG" 80
 sleep 1.2
-cli do save pdagain --force >/dev/null 2>&1 || true
-sleep 1.6
+after_command "$TMP" cli do save pdagain --force || true
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 AGAIN="$(nodes_of "$TMP/pdagain.uniproj.json")"
 [ "$AGAIN" = "$AFTER" ] || \

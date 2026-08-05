@@ -275,8 +275,7 @@ echo "  caches: an automation write moves the version ($V1 -> $V2) and the point
 # must move by 2 bars, while the points before it stay. Asserted against the
 # READ-BACK, which is published from the RT snapshot — so this fails if the ripple moves the
 # model and the file but not what plays.
-cli do time insert --nanotick 15360000 --bars 2 >/dev/null 2>&1 || true
-sleep 1.5
+after_command "$TMP" cli do time insert --nanotick 15360000 --bars 2 || true
 grep -q '"event":"time.edited"' "$TMP/eng.log" || \
   fail "the time edit was not applied: $(grep -o '"event":"time[a-z._]*"[^}]*' "$TMP/eng.log" | tail -1)"
 
@@ -311,8 +310,7 @@ echo "  ripples: the read-back shows the moved ticks — the RT snapshot rippled
 # and must be refused.
 BEFORE_SHRINK="$(points_of 0 cutoff)"
 # Removing 3 bars ending at bar 7 vacates [3*BAR, 6*BAR], which holds a point.
-cli do time remove --nanotick 23040000 --bars 3 >/dev/null 2>&1 || true
-sleep 1.4
+after_command "$TMP" cli do time remove --nanotick 23040000 --bars 3 || true
 grep '"event":"time_edit.rejected"' "$TMP/eng.log" | grep -q '"reason":"automation_in_removed_bars"' ||   fail "removing bars that hold automation was NOT refused. What happens instead
         is silent: the sweep stays put, the markers slide over it, and a point at the boundary
         collapses onto the one already at the new end — one of the two is gone with no undo entry
@@ -326,8 +324,7 @@ echo "  refuses: a removal of bars holding automation is refused by lane name, a
 
 # ---- AND THE FILE AGREES. The read-back and the save are two views of the same edit; if they
 # disagree, one of them is the bug, and the point of checking both is that neither can hide it.
-cli do save arout --force >/dev/null 2>&1 || true
-sleep 1.6
+after_command "$TMP" cli do save arout --force || true
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 FILE_R="$(python3 - "$TMP/arout.uniproj.json" <<'PYF'
 import json, sys

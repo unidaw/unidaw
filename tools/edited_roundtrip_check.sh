@@ -144,8 +144,7 @@ cli do automation --track 0 --param index:0 --nanotick $((1 * BAR)) --value 0.7 
 cli do remove-track --track 1 --force             >/dev/null 2>&1 || true; sleep 0.6
 cli do time insert --nanotick $((4 * BAR)) --bars 2 >/dev/null 2>&1 || true; sleep 0.8
 
-cli do save editedA --force >/dev/null 2>&1 || true
-sleep 1.8
+after_command "$TMP" cli do save editedA --force || true
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 [ -f "$TMP/editedA.uniproj.json" ] || fail "the session's save produced no file"
 
@@ -266,8 +265,7 @@ echo "  reload (fresh engine) -> save preserves every one of them"
 cli do load editedB --force >/dev/null 2>&1 || true
 wait_load "$TMP/eng2.log" 2 "$ENG" "the second reload"
 sleep 1.5
-cli do save editedC --force >/dev/null 2>&1 || true
-sleep 1.8
+after_command "$TMP" cli do save editedC --force || true
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 C="$(summary "$TMP/editedC.uniproj.json")"
 [ "$C" = "$B" ] || fail "a second round trip changed the document again, so the save is not a
