@@ -137,7 +137,10 @@ if (inserted !== true) {
 // ===========================================================================
 // .hm-row — a harmony row
 // ===========================================================================
-await run('harmony 0 C major');
+// `harmony <root> <scale> [tick]` — root is 0..11 and the scale is a NAME. The first
+// version passed 'C major' as two arguments, which made the scale 'C' and the tick
+// 'major', and the card drew no rows for a reason that had nothing to do with the card.
+await run('harmony 7 major 3840000');
 await settle(1200);
 
 const rows = await page.evaluate(() => document.querySelectorAll('.hm-row').length);

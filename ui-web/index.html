@@ -2592,7 +2592,31 @@ const pendingCard = new Pending(pendingHost, {
 });
 
 const harmonyHost = document.getElementById('harmony');
-const harmonyCard = new Harmony(harmonyHost, {});
+/*
+ * THE HARMONY CARD, WIRED. It was constructed with `{}`.
+ *
+ * `Harmony` registers its row listener ONLY when it is given an `onSelect`, and marks the rows
+ * with `act` at the same time — so with no callback the listener was never registered and the
+ * rows never even carried the class that says they are clickable. A list of the song's key
+ * changes, sitting beside the tracker, that you could not click to go to one.
+ *
+ * Found by auditing every class the UI's own handlers reach for against every class any suite
+ * names: twenty-four interactive classes, two untouched, and both of them dead. The other was
+ * the plugin editor button, which had never worked once. A control nothing clicks is a control
+ * nothing can notice is broken.
+ *
+ * Going to the key change is the obvious meaning of clicking one, and it is what the row
+ * already carries the tick for. Through `dockApi.goto` rather than by assigning the cursor
+ * here, so it drops the op selection and moves focus exactly as every other jump does — a
+ * second way to move the cursor is a second set of rules for what a move clears.
+ */
+const harmonyCard = new Harmony(harmonyHost, {
+  onSelect: (index, tick) => {
+    dockApi.goto(Math.max(0, tickToRow(tick)));
+    state.focus = 'centre';
+    schedule();
+  },
+});
 const harmonyBuf = createHarmonyBuffer();
 
 const inspectHost = document.getElementById('inspect');
