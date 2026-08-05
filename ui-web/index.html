@@ -9480,6 +9480,13 @@ window.__uni = {
   chords: () => (engine ? engine.chords.slice(0, engine.chordCount).map((c) => ({
     tick: c.tick, track: c.track, degree: c.degree, quality: c.quality,
     inversion: c.inversion, octave: c.octave, duration: c.duration,
+    /*
+     * THE STRUM. Decoded off the wire since wire 28 and not exposed here, which made it
+     * readable by the inspector and by nothing else — an agent or a test asking "is this
+     * chord strummed" had no way to find out. `spread` is nanoticks between the first voice
+     * and the last; 0 IS the answer for a block chord, not the absence of one.
+     */
+    spread: c.spread, humanizeTiming: c.humanizeTiming, humanizeVelocity: c.humanizeVelocity,
   })) : []),
   notes: () => (engine ? engine.notes.slice(0, engine.noteCount)
     // `col` is the NOTE COLUMN within the track — the engine's own field, which

@@ -7,7 +7,7 @@
 
 use daw_bridge::control::EngineHandle;
 use daw_bridge::grid::NANOTICKS_PER_QUARTER;
-use daw_bridge::layout::{UiChainCommandPayload, UiCommandPayload, UiCommandType,
+use daw_bridge::layout::{UiChainCommandPayload, UiChordCommandPayload, UiCommandPayload, UiCommandType,
                          UiModLinkCommandPayload, UiModLinkUid16Payload,
                          UiModSourceValuePayload, UiPatcherPresetCommandPayload,
                          UiMarkerCommandPayload, UiArrangeTimeCommandPayload,
@@ -93,6 +93,34 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
                     "duration": { "type": "integer", "description": "Note length in nanoticks (default = step)." },
                     "velocity": { "type": "integer", "minimum": 0, "maximum": 127, "description": "Default 100." },
                     "column": { "type": "integer", "minimum": 0, "description": "Note column / voice lane (default 0)." }
+                }
+            }),
+        },
+        ToolSpec {
+            name: "add_chords",
+            description: "Write chords onto a track, one per step. A chord is a DEGREE of the \
+                          key in force — not a set of pitches — so it follows the harmony \
+                          timeline and survives a key change. Degrees are 1-based as musicians \
+                          write them: 1 is the tonic. Give `spread` to strum it.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "degrees"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "degrees": { "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": 13 },
+                                 "description": "Scale degrees, 1-based, one per step." },
+                    "quality": { "type": "string", "enum": ["degree", "triad", "seventh"],
+                                 "description": "Default triad. `degree` is the single note." },
+                    "inversion": { "type": "integer", "minimum": 0, "maximum": 3 },
+                    "octave": { "type": "integer", "minimum": 0, "maximum": 9, "description": "Default 4." },
+                    "start": { "type": "integer", "description": "Onset of the first chord in nanoticks (default 0)." },
+                    "step": { "type": "integer", "description": "Nanoticks between onsets (default a bar = 3840000)." },
+                    "duration": { "type": "integer", "description": "Chord length in nanoticks (default = step)." },
+                    "spread": { "type": "integer", "minimum": 0,
+                                "description": "Nanoticks between the first voice and the last. \
+                                                0 is a block chord; anything above it is a strum." },
+                    "humanize_timing": { "type": "integer", "minimum": 0, "maximum": 255 },
+                    "humanize_velocity": { "type": "integer", "minimum": 0, "maximum": 255 }
                 }
             }),
         },
@@ -1321,6 +1349,7 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
     match call.tool.as_str() {
         "observe" => observe_tool(handle, &call.args),
         "add_notes" => add_notes(handle, &call.args),
+        "add_chords" => add_chords(handle, &call.args),
         "transport" => transport(handle, &call.args),
         "save" => named(handle, UiCommandType::SaveProject, &call.args, "saved"),
         "load" => named(handle, UiCommandType::LoadProject, &call.args, "loaded"),
@@ -1362,6 +1391,106 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "write_automation_point" => write_automation_point(handle, &call.args),
         other => ToolResult::err(format!("unknown tool {other:?}")),
     }
+}
+
+/// Write chords, one per step.
+///
+/// A CHORD IS NOT A SET OF PITCHES and the tool is shaped to stop a model treating it as one.
+/// It is a degree, a quality and an inversion resolved against the harmony timeline, which is
+/// what lets a chord track survive a key change — write pitches instead and the key change
+/// moves the notes around them.
+///
+/// The agent had no way to write one at all: `add_notes` was the only thing it could put in a
+/// clip, so "give me a chord progression" produced either a pile of simultaneous notes or a
+/// polite refusal. Chords and strums are on the demo list, and the console has had them since
+/// they existed.
+///
+/// DEGREES ARE 1-BASED HERE, as musicians write them and as the console's `chord` verb takes
+/// them, and 0-based on the wire. The conversion happens once, here, rather than being
+/// explained to a model in the description — a tool whose numbering differs from the way the
+/// domain is spoken about is a tool that gets called wrong.
+fn add_chords(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let track = match arg_u64(args, "track") {
+        Some(t) => t as u32,
+        None => return ToolResult::err("add_chords needs \"track\""),
+    };
+    let degrees: Vec<u16> = match args.get("degrees").and_then(|v| v.as_array()) {
+        Some(arr) => {
+            let mut out = Vec::with_capacity(arr.len());
+            for d in arr {
+                match d.as_u64() {
+                    Some(v) if (1..=13).contains(&v) => out.push(v as u16),
+                    _ => return ToolResult::err(format!("bad degree {d} (expected 1..13)")),
+                }
+            }
+            out
+        }
+        None => return ToolResult::err("add_chords needs \"degrees\" (an array)"),
+    };
+    if degrees.is_empty() {
+        return ToolResult::err("\"degrees\" was empty");
+    }
+    // The engine's own numbering: 0 the degree alone, 1 a triad, 2 a seventh.
+    let quality = match args.get("quality").and_then(|v| v.as_str()) {
+        None | Some("triad") => 1u8,
+        Some("degree") => 0,
+        Some("seventh") => 2,
+        Some(other) => return ToolResult::err(format!("quality must be degree, triad or seventh (got {other})")),
+    };
+    let inversion = arg_u64(args, "inversion").unwrap_or(0).min(3) as u8;
+    let octave = arg_u64(args, "octave").unwrap_or(4).min(9) as u8;
+    let start = arg_u64(args, "start").unwrap_or(0);
+    // A BAR, not a quarter: chords move at the rate a progression does, and a model given the
+    // note default would write four chords into one bar and call it a progression.
+    let step = arg_u64(args, "step").unwrap_or(NANOTICKS_PER_QUARTER * 4);
+    let duration = arg_u64(args, "duration").unwrap_or(step);
+    let spread = arg_u64(args, "spread").unwrap_or(0).min(u32::MAX as u64) as u32;
+    let ht = arg_u64(args, "humanize_timing").unwrap_or(0).min(255) as u8;
+    let hv = arg_u64(args, "humanize_velocity").unwrap_or(0).min(255) as u8;
+
+    // Same optimistic-concurrency protocol add_notes obeys, and per TRACK for the same
+    // reason: the agent is not privileged and must not read the global counter.
+    let mut base = handle.clip_version_for_track(track);
+    let first_base = base;
+    let mut sent = 0usize;
+    for (index, degree) in degrees.iter().enumerate() {
+        let nanotick = start + step * index as u64;
+        let payload = UiChordCommandPayload {
+            command_type: UiCommandType::WriteChord as u16,
+            flags: 0,
+            track_id: track,
+            base_version: base,
+            nanotick_lo: (nanotick & 0xffff_ffff) as u32,
+            nanotick_hi: (nanotick >> 32) as u32,
+            duration_lo: (duration & 0xffff_ffff) as u32,
+            duration_hi: (duration >> 32) as u32,
+            degree: degree - 1,
+            quality,
+            inversion,
+            base_octave: octave,
+            humanize_timing: ht,
+            humanize_velocity: hv,
+            reserved: 0,
+            spread_nanoticks: spread,
+        };
+        if let Err(e) = handle.send_chord_command(payload) {
+            return ToolResult::err(format!("{e} after {sent} chords"));
+        }
+        sent += 1;
+        base = base.wrapping_add(1);
+    }
+    let applied = handle.wait_for_clip_version(
+        first_base,
+        first_base.wrapping_add(sent as u32),
+        std::time::Duration::from_secs(2),
+    );
+    ToolResult::ok(json!({
+        "sent": sent,
+        "first_base_version": first_base,
+        "applied": applied,
+        "track": track,
+        "strum": spread > 0,
+    }))
 }
 
 fn add_notes(handle: &EngineHandle, args: &Value) -> ToolResult {

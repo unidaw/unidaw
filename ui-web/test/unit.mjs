@@ -2144,7 +2144,9 @@ const OP_REGISTRY = {
   movedevice: { cli: null, agent: 'move_device', why: 'gap' },
   // Chords reached the CLI first (`do chord`) and this app's console never had them at
   // all — writing one meant typing a token into a cell, and removing one was impossible.
-  chord:     { cli: 'chord', agent: null, why: 'gap' },
+  // The agent grew `add_chords` — a degree/quality/inversion write with a strum, not a
+  // pile of simultaneous notes. Both surfaces now, so no `why` and no gap entry.
+  chord:     { cli: 'chord', agent: 'add_chords' },
   delchord:  { cli: null,    agent: null, why: 'gap' },
   // The engine has taken DeleteHarmony since before this UI existed and nothing sent it,
   // so a key change could be added to the timeline and never taken off.
@@ -2455,7 +2457,7 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
  * `mods` is its own case and is explained on its registry row: the read is structurally
  * unavailable to a tool, not merely unwritten.
  */
-const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
+const AGENT_GAP = ['addnode', 'clear', 'columns', 'copy', 'cut',
                    'del', 'delchord', 'delharmony', 'delnode', 'editor',
                    'gain', 'link', 'loop', 'mute', 'new', 'paste', 'patch',
                    'seek', 'solo', 'tempo', 'transpose', 'mods', 'ops',

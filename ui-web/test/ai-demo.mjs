@@ -171,6 +171,33 @@ check(drums.ok, 'asking for a drum pattern writes one',
       `${drums.secs}s, notes ${drums.before.notes} -> ${drums.now.notes} :: ${drums.said.slice(-200)}`);
 
 // ---------------------------------------------------------------------------
+// CHORDS, AND A STRUM. The agent could not write a chord at all until `add_chords`
+// existed — `add_notes` was the only thing it could put in a clip, so "give me a
+// progression" produced a pile of simultaneous notes or a polite refusal.
+//
+// A chord is a DEGREE against the harmony timeline, not a set of pitches, which is what
+// lets a chord track survive a key change. Asserted on chordCount, not noteCount: if the
+// model fell back to writing pitches this passes nothing.
+// ---------------------------------------------------------------------------
+await run('new aichords');
+await page.waitForTimeout(1500);
+const chords = await askFor('write a four chord progression on track 0, and strum them',
+                            (a, b) => b.chords > a.chords);
+check(chords.ok, 'asking for a chord progression writes CHORDS, not notes',
+      `${chords.secs}s, chords ${chords.before.chords} -> ${chords.now.chords} :: ${chords.said.slice(-200)}`);
+check(chords.now.chords >= 3, 'and enough of them to be a progression',
+      `${chords.now.chords} chords`);
+/*
+ * THE STRUM CROSSED THE WIRE. `spread > 0` is the difference between a strum and a block
+ * chord, and it is a field that was decoded away one layer below the UI until this session —
+ * so "the model asked for a strum" and "the song contains one" are separate claims.
+ */
+const strummed = await page.evaluate(() => (window.__uni.chords() || []).map((c) => c.spread));
+check(strummed.length > 0 && strummed.some((v) => v > 0),
+      'and the strum is really on them — read back from the engine',
+      `spreads ${JSON.stringify(strummed)}`);
+
+// ---------------------------------------------------------------------------
 // It edits the song it is looking at, rather than starting from a blank one.
 // ---------------------------------------------------------------------------
 const before = await song();
