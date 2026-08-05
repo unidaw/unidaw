@@ -49,7 +49,11 @@ keep_evidence_then() {
   exit $rc
 }
 trap 'keep_evidence_then cleanup' EXIT
-sleep 2.5
+# The engine starts with NO --project, so it never emits a project.load at boot and the
+# default wait_for_boot pattern would sit here until it timed out. "UI: command thread
+# started" is the marker that means "ready to be told something", which is what the next
+# line does. (Getting this pattern wrong is a mistake this repo has made three times.)
+wait_for_boot "$TMP/engine.log" "$ENG" 80 "UI: command thread started" >/dev/null 2>&1 || true
 DAW_UI_SHM_NAME="$SHM" "$CLI" do load src --force >/dev/null 2>&1 || true; sleep 0.8
 DAW_UI_SHM_NAME="$SHM" "$CLI" do save v4a --force >/dev/null 2>&1 || true; sleep 0.8
 DAW_UI_SHM_NAME="$SHM" "$CLI" do load v4a --force >/dev/null 2>&1 || true; sleep 0.8

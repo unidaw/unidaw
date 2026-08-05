@@ -65,7 +65,11 @@ run() {  # run <extra-env> <name>
       DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" DAW_CAPTURE_WAV="$TMP/$2.wav" \
       DAW_CAPTURE_SECONDS=14 ./daw_engine --run-seconds 18 >"$TMP/$2.log" 2>&1 ) &
   local eng=$!
-  sleep 2.5
+  # The engine starts with NO --project, so it never emits a project.load at boot and the
+  # default wait_for_boot pattern would sit here until it timed out. "UI: command thread
+  # started" is the marker that means "ready to be told something", which is what the next
+  # line does. (Getting this pattern wrong is a mistake this repo has made three times.)
+  wait_for_boot "$TMP/$2.log" "$eng" 80 "UI: command thread started" >/dev/null 2>&1 || true
   after_command "$TMP" env DAW_UI_SHM_NAME="$shm" "$CLI" do load lm --force || true
   DAW_UI_SHM_NAME="$shm" "$CLI" do play --force >/dev/null 2>&1 || true
   sleep 6   # run ACTIVE long enough for the insert's gain to be measured
