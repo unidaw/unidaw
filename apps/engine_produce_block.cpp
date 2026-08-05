@@ -78,8 +78,6 @@ void produceBlock(ProducerBlockDeps& deps,
   auto& quantizePitch = deps.quantizePitch;
   auto& renderPool = deps.renderPoolOwner.renderPool;
   auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
-  auto& songTimeSigDen = deps.songTiming.songTimeSigDen;
-  auto& songTimeSigNum = deps.songTiming.songTimeSigNum;
   auto& tempoProvider = deps.tempoProvider;
   auto& tickConverter = deps.tickConverter;
   auto& traceNotes = deps.traceNotes;
@@ -434,20 +432,21 @@ void produceBlock(ProducerBlockDeps& deps,
           }
         }
 
-        daw::EventEntry transportEntry;
-        transportEntry.sampleTime = pluginSampleStart;
-        transportEntry.blockId = blockId;
-        transportEntry.type = static_cast<uint16_t>(daw::EventType::Transport);
-        transportEntry.size = sizeof(daw::TransportPayload);
-        daw::TransportPayload transportPayload;
-        // Current-position tempo (not the initial one) so a tempo-synced plugin
-        // follows tempo_map changes, matching the ProcessBlockRequest play head.
-        transportPayload.tempoBpm = tempoProvider.bpmAtNanotick(blockStartTicks);
-        transportPayload.timeSigNum = songTimeSigNum.load(std::memory_order_relaxed);
-        transportPayload.timeSigDen = songTimeSigDen.load(std::memory_order_relaxed);
-        transportPayload.playState = isPlaying ? 1 : 0;
-        std::memcpy(transportEntry.payload, &transportPayload, sizeof(transportPayload));
-        daw::ringWrite(ringCtrl, transportEntry);
+        // NO TRANSPORT EVENT IS WRITTEN HERE, and the one that used to be was read by nobody.
+        //
+        // It built a TransportPayload every block for every track and ringWrite'd it into
+        // ringCtrl, under a comment saying it was "so a tempo-synced plugin follows tempo_map
+        // changes". The host SKIPS it — `if (event.type == Transport) continue;` at
+        // juce_host_process_main.cpp:773, and again at :117 — and the tempo a plugin actually
+        // sees travels in ProcessBlockRequest, whose own field says so: "without these every
+        // tempo-synced effect free-runs" (ipc_protocol.h:242). The comment described the
+        // intention; the request delivered it.
+        //
+        // Removing it costs nothing and buys two things on the RT path: one less payload built
+        // and copied per block per track, and — the part that could actually bite — one less
+        // entry consuming ring capacity that real MIDI needs when the ring is under pressure.
+        // Proven inert by byte-identical offline renders of the generator and maximal presets
+        // before and after. EventType::Transport itself stays: the patcher path uses it.
 
         // Inject this track's queued keyjazz auditions at the block boundary. Out of band:
         // these come straight from the keyboard, never the clip store, so they play (and
