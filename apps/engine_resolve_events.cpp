@@ -168,15 +168,18 @@ uint32_t resolveMusicalLogicAndSort(RenderTrackDeps& deps,
             if (logic.duration_ticks > 0) {
               const uint64_t noteEndTick = eventTick + logic.duration_ticks;
               uint64_t offTick = wrapTick(noteEndTick);
-              if (offTick >= windowStartTicks && offTick < windowEndTicks) {
-                const uint64_t offDelta = offTick - windowStartTicks;
-                const uint64_t offSample =
-                    blockSampleStart + tickDeltaToSamples(offDelta);
-                const int64_t offOffset =
-                    static_cast<int64_t>(offSample) -
-                    static_cast<int64_t>(blockSampleStart);
-                if (offOffset >= 0 &&
-                    offOffset < static_cast<int64_t>(engineConfig.blockSize)) {
+              // SAME RULE AS THE NOTE-ON — see apps/engine_rt_helpers.h. Membership decided on the
+              // rounded sample rejected a tick that was inside the block, and the `else` that
+              // registers the note for a later block sits outside this branch, so a generated
+              // note was never released at all.
+              const auto offPlaced =
+                  (offTick >= windowStartTicks && offTick < windowEndTicks)
+                      ? daw::engine::placeInBlock(offTick - windowStartTicks, blockSampleStart,
+                                                  samplesPerTick, engineConfig.blockSize)
+                      : std::nullopt;
+              if (offPlaced) {
+                const uint64_t offSample = offPlaced->sampleTime;
+                {
                   daw::EventEntry noteOffEntry = daw::engine::makeNoteOffEntry(
                       offSample, 0, pitch,
                       channel, tuningCents, noteId,
@@ -184,7 +187,7 @@ uint32_t resolveMusicalLogicAndSort(RenderTrackDeps& deps,
                   appendScratchpad(noteOffEntry, noteEndTick);
                   if (runtime.samplerDeviceId.load(std::memory_order_acquire) != 0) {
                     daw::SamplerEvent se;
-                    se.offsetInBlock = static_cast<uint32_t>(offOffset);
+                    se.offsetInBlock = offPlaced->offsetInBlock;
                     se.kind = daw::SamplerEventKind::NoteOff;
                     se.pitch = pitch;
                     se.velocity = 0;

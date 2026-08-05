@@ -127,14 +127,20 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
                 offTick == wrapTick(onTick)) {
               offTick = loopEndTicks - 1;
             }
-            if (offTick >= rangeStart && offTick < rangeEnd) {
-              const uint64_t offDelta = baseTickDelta + (offTick - rangeStart);
-              const uint64_t offSample =
-                  blockSampleStart + tickDeltaToSamples(offDelta);
-              const int64_t offOffset = static_cast<int64_t>(offSample) -
-                                        static_cast<int64_t>(blockSampleStart);
-              if (offOffset >= 0 &&
-                  offOffset < static_cast<int64_t>(engineConfig.blockSize)) {
+            // THE NOTE-OFF IS PLACED BY THE SAME RULE AS THE NOTE-ON. This computed membership
+            // from the ROUNDED sample, which is the defect placeInBlock exists to prevent: a tick
+            // inside the block whose sample rounds up to exactly blockSize was rejected here AND
+            // fell outside the `else` below, so registerActiveNote never ran and the note was
+            // never released. A permanently stuck note, at 0.5/blockSize of note-offs.
+            const auto offPlaced =
+                (offTick >= rangeStart && offTick < rangeEnd)
+                    ? daw::engine::placeInBlock(baseTickDelta + (offTick - rangeStart),
+                                                blockSampleStart, samplesPerTick,
+                                                engineConfig.blockSize)
+                    : std::nullopt;
+            if (offPlaced) {
+              const uint64_t offSample = offPlaced->sampleTime;
+              {
                 daw::EventEntry noteOffEntry = daw::engine::makeNoteOffEntry(
                     offSample, 0, pitch,
                     midiChannel, noteTuningCents, noteId);
@@ -192,12 +198,19 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
               offTick = wrapTick(offTick);
 
               // Check if this note should end in the current block range
-              if (offTick >= rangeStart && offTick < rangeEnd) {
-                const uint64_t offDelta = baseTickDelta + (offTick - rangeStart);
-                const uint64_t offSample = blockSampleStart + tickDeltaToSamples(offDelta);
-                const int64_t offOffset = static_cast<int64_t>(offSample) - static_cast<int64_t>(blockSampleStart);
-
-                if (offOffset >= 0 && offOffset < static_cast<int64_t>(engineConfig.blockSize)) {
+              // SAME RULE AS THE NOTE-ON — see emitNoteOnWithOff above. Deciding membership on the
+              // rounded sample left the note in activeNotes with its end tick now BEHIND
+              // rangeStart, so it was never matched again until the arrangement looped: the note
+              // sounded a whole extra pass.
+              const auto offPlaced =
+                  (offTick >= rangeStart && offTick < rangeEnd)
+                      ? daw::engine::placeInBlock(baseTickDelta + (offTick - rangeStart),
+                                                  blockSampleStart, samplesPerTick,
+                                                  engineConfig.blockSize)
+                      : std::nullopt;
+              if (offPlaced) {
+                const uint64_t offSample = offPlaced->sampleTime;
+                {
                   daw::EventEntry noteOffEntry = daw::engine::makeNoteOffEntry(
                       offSample, 0, activeNote.pitch,
                       midiChannel, activeNote.tuningCents, activeNote.noteId);

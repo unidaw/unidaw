@@ -199,10 +199,18 @@ daw::SamplerEvent samplerNoteOnFor(uint32_t offsetInBlock, uint8_t pitch, uint8_
 
 // WHERE AN EVENT LANDS IN THIS BLOCK, or nothing if it falls outside it.
 //
-// Four sites computed this identically: convert the tick delta to samples, add the block start,
+// SEVEN sites computed this identically: convert the tick delta to samples, add the block start,
 // subtract the block start again to get the offset, and skip the event if the offset is outside
 // the block. The round-trip is why `offset` is exactly tickDeltaToSamples(tickDelta) — the two
 // returned values are one computation, and separating them is how they could drift.
+//
+// THIS COMMENT SAID "FOUR" AND WAS WRONG, and the three it missed were the note-OFFs. They kept
+// the old rounded arithmetic for a day after the note-ONs were fixed, so a note could be started
+// by the new rule and never stopped by the old one: two sites left it PERMANENTLY STUCK (the
+// branch that registers it for a later block sits outside the one that was rejecting it) and one
+// held it a whole extra loop pass. Counting the copies by memory is how a rule keeps a divergent
+// twin; tools/note_off_edge_check.sh now pins the note-off half, because the note-ON check could
+// not — its fixture is a one-shot slot, which ignores note-off by definition.
 //
 // WHAT THE CALLER DOES ON FAILURE IS THE CALLER'S BUSINESS: three of the four `continue` in a loop
 // and one `return`s from the emitter. That difference stays at the call site, which is the only

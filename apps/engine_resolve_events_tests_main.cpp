@@ -8,7 +8,7 @@
 // complaints have the same cause and the same cure, and this is what the cure looks like: a rule
 // that used to need a render now needs a vector.
 //
-// THE FIXTURE IS THE COST, and it is paid once. RenderTrackDeps has twenty members, so the twenty
+// THE FIXTURE IS THE COST, and it is paid once. RenderTrackDeps has eighteen members, so the
 // lines below are what it takes to ask this function anything at all. The next two extractions out
 // of renderTrack — runNode and emitNotes — reuse it unchanged.
 #include "apps/engine_resolve_events.h"

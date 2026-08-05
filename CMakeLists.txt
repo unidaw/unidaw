@@ -1305,6 +1305,17 @@ set_tests_properties(block_edge_note PROPERTIES
 # notes at samples 0/400/900 came out as two pulses, at 0 and 512, the first at FULL SCALE because
 # the fixture adds and two notes had landed on it. Runs at two pipeline depths because the window
 # is (numBlocks-1)*blockSize and therefore moves.
+# The NOTE-OFF half of the block-boundary rule. block_edge_note_check proves a note-ON on a
+# boundary tick sounds where it is written; its fixture uses a ONE-SHOT slot ("gate": 0), which
+# ignores note-off by definition, so it is structurally incapable of testing the other half. Three
+# hand-rolled note-off sites kept the pre-fix arithmetic and dropped the release: two left a note
+# PERMANENTLY STUCK, one held it a whole extra loop pass.
+add_test(NAME note_off_edge
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/note_off_edge_check.sh
+)
+set_tests_properties(note_off_edge PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 add_test(NAME pdc_head_event
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/pdc_head_event_check.sh
 )
