@@ -116,12 +116,10 @@ echo "  user loop $USER_LOOP survived a later placement edit"
 
 # The song end must still have MOVED under the hood, or "survive" is being satisfied by
 # the song end not tracking at all — which would silently break GROW again later.
-cli do add-placement --track 0 --clip 1 --at $((12 * BAR)) --length "$BAR" >/dev/null 2>&1 || true
-sleep 1
+after_command "$TMP" cli do add-placement --track 0 --clip 1 --at $((12 * BAR)) --length "$BAR" || true
 
 # The sentinel is not a position.
-cli do add-placement --track 0 --clip 1 >/dev/null 2>&1 || true
-sleep 0.8
+after_command "$TMP" cli do add-placement --track 0 --clip 1 || true
 
 kill "$ENG" 2>/dev/null || true
 wait "$ENG" 2>/dev/null || true

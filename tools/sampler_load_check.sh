@@ -104,11 +104,11 @@ done
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load blank --force >/dev/null 2>&1 || true
 wait_for_boot "$TMP/eng.log" "$ENG" 80
-sleep 1.0
+# The sleep that was here is redundant: wait_for_boot above returns on the load event,
+# and after_command below waits for its own journal line. Neither needed a guess in between.
 
 # ---- THE DEVICE EXISTS, created by command on a running engine.
-cli do add-device --track 0 --kind sampler --device-id 7 >/dev/null 2>&1 || true
-sleep 1.0
+after_command "$TMP" cli do add-device --track 0 --kind sampler --device-id 7 || true
 grep -q '"device":7' "$TMP/eng.log" 2>/dev/null || true
 DEVKIND="$(cli get tracks 2>/dev/null | python3 -c '
 import json, sys
@@ -152,9 +152,8 @@ echo "  resolves: the project-relative name found the file and decoded it"
 
 # ---- LOADING THE SAME FILE AGAIN REUSES THE SOURCE. Two slots on one source is the normal case
 # (a slice set is exactly that); decoding it twice would double the memory for nothing.
-cli do sampler-load --track 0 --device 7 --file tone.wav --root 62 --fixed-pitch \
-  >/dev/null 2>&1 || true
-sleep 1.2
+after_command "$TMP" cli do sampler-load --track 0 --device 7 --file tone.wav --root 62 --fixed-pitch \
+  || true
 AGAIN="$(grep -o '"event":"sampler.loaded"[^}]*' "$TMP/eng.log" | tail -1)"
 echo "$AGAIN" | grep -q '"slot":2' || fail "the second load did not mint a NEW slot: $AGAIN"
 echo "$AGAIN" | grep -q '"source":1' || \
@@ -176,8 +175,7 @@ OUT2="$(cli do sampler-load --track 0 --device 7 --file "$LONG" 2>&1)"
 echo "  refuses: absolute paths and over-long names are rejected with a reason, not truncated"
 
 # ---- IT SURVIVES A SAVE. A device you have to rebuild every session is a demo.
-cli do save smpout --force >/dev/null 2>&1 || true
-sleep 1.8
+after_command "$TMP" cli do save smpout --force || true
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 python3 - "$TMP/smpout.uniproj.json" <<'PYS'
 import json, sys

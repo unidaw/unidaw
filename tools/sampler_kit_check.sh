@@ -114,7 +114,8 @@ done
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load blank --force >/dev/null 2>&1 || true
 wait_for_boot "$TMP/eng.log" "$ENG" 80
-sleep 1.0
+# The sleep that was here is redundant: wait_for_boot above returns on the load event,
+# and after_command below waits for its own journal line. Neither needed a guess in between.
 
 after_command "$TMP" cli do add-device --track 0 --kind sampler --device-id 1 || true
 

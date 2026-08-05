@@ -135,7 +135,8 @@ done
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load pd --force >/dev/null 2>&1 || true
 wait_for_boot "$TMP/eng.log" "$ENG" 80
-sleep 1.2
+# The sleep that was here is redundant: wait_for_boot above returns on the load event,
+# and after_command below waits for its own journal line. Neither needed a guess in between.
 
 # ---- LANDS + ISOLATED. Add an LFO to DEVICE 1 only.
 after_command "$TMP" cli do patcher-node --track 0 --device 1 --type lfo || true
@@ -185,7 +186,8 @@ done
 cli() { DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load pdout --force >/dev/null 2>&1 || true
 wait_for_boot "$TMP/eng2.log" "$ENG" 80
-sleep 1.2
+# The sleep that was here is redundant: wait_for_boot above returns on the load event,
+# and after_command below waits for its own journal line. Neither needed a guess in between.
 after_command "$TMP" cli do save pdagain --force || true
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 AGAIN="$(nodes_of "$TMP/pdagain.uniproj.json")"
