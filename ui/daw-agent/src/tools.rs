@@ -164,7 +164,10 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             name: "add_track",
             description: "Append an empty track to the song. It arrives at the end with no \
                           instrument on it; load one with a device command, or write notes \
-                          to it straight away.",
+                          to it straight away. RETURNS THE NEW TRACK'S id as `track` — use \
+                          that, do not assume it is the highest number you have seen, because \
+                          the master track sits after the real ones and the new track takes \
+                          the index the master used to have.",
             params: json!({ "type": "object", "properties": {} }),
         },
         ToolSpec {
@@ -1542,8 +1545,46 @@ fn device_kind_code(name: &str) -> Option<u32> {
     }
 }
 
+/// Add a track and TELL THE CALLER WHICH ONE IT IS.
+///
+/// It used to answer `{"added": true}` and nothing else, which made the very first thing anyone
+/// asks for — "add a track called Bass" — fail in a way that reads like the DAW ignoring you.
+/// With no id in the reply the model has to guess the new track's index, and the guess is wrong:
+/// tracks are dense indices with the MASTER LAST, so adding one puts the new track at the index
+/// the master used to occupy and shifts the master up. Measured: the model added a track, said
+/// "I've added a new track named Bass (track 2)", renamed track 2 — the master — and every later
+/// instruction that referred to "Bass" then failed with "I don't see a track named Bass".
+///
+/// Waiting for the count to grow also makes this tool HONEST. `send_now` returns Ok when the
+/// command is enqueued, not when it is accepted, so the old version reported success for an add
+/// that never happened.
 fn add_track(handle: &EngineHandle) -> ToolResult {
-    send_now(handle, blank(UiCommandType::AddTrack), json!({ "added": true }))
+    let before = handle.read_track_names();
+    if let Err(e) = handle.send_command(blank(UiCommandType::AddTrack)) {
+        return ToolResult::err(e);
+    }
+    // Bounded: the engine drains the ring on its command thread, so this is milliseconds in the
+    // normal case. A budget rather than a fixed sleep, because the answer is "the count grew",
+    // not "some time passed".
+    for _ in 0..80 {
+        let after = handle.read_track_names();
+        if after.len() > before.len() {
+            // The first index where the two lists disagree IS the new track: the insert shifts
+            // the master (and anything after it) up by one. Falling back to the last real slot
+            // keeps a sane answer if the names happen to be identical.
+            let track = before
+                .iter()
+                .zip(after.iter())
+                .position(|(a, b)| a != b)
+                .unwrap_or(after.len().saturating_sub(1));
+            return ToolResult::ok(json!({ "added": true, "track": track }));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    ToolResult::err(
+        "the engine did not add a track (the command was sent but the published track count \
+         never grew)",
+    )
 }
 
 /// Remove a track by its STABLE id.

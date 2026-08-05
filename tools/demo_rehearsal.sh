@@ -50,7 +50,9 @@ def p():
 print(p(), p())")
 EOF
 
-( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$ROOT/presets/projects" \
+# The engine's project dir is the TEMP dir, not presets/: the harmony step verifies itself by
+# saving and reading the file back, and a rehearsal must not write into the repo's presets.
+( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 900 >"$TMP/eng.log" 2>&1 ) &
 ENG=$!
 wait_for_boot "$TMP/eng.log" "$ENG" 120 "UI: command thread started" \
@@ -62,7 +64,7 @@ SC=$!
 port_open() { nc -z 127.0.0.1 "$CMD_PORT" 2>/dev/null; }
 wait_until 60 port_open || { echo "sidecar never opened its command port"; tail -8 "$TMP/side.log"; exit 1; }
 
-cli() { env DAW_UI_SHM_NAME="$SHM" "$CLI" "$@" 2>/dev/null; }
+cli() { env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@" 2>/dev/null; }
 
 # One prompt, one connection, printed as it streams. Returns non-zero if the model reports failure.
 ask() {
@@ -76,6 +78,10 @@ ws.on('message', (m) => {
   let j = null; try { j = JSON.parse(m.toString()); } catch (_) { return; }
   const t = j.agent, text = (j.text || '').replace(/\s+/g, ' ');
   if (t === 'did')  console.log('    did: ' + text.slice(0, 90) + '  ok=' + j.ok);
+  // The model's PROSE, because when it declines to act the reason is only ever in here. Without
+  // it a step that reports "the song did not change" cannot be told apart from one where the
+  // model reasonably refused.
+  else if (t === 'say') console.log('    say: ' + text.slice(0, 150));
   else if (t === 'done')   { clearTimeout(deadline); process.exit(0); }
   else if (t === 'failed') { console.log('    FAILED: ' + text.slice(0,200)); clearTimeout(deadline); process.exit(1); }
 });
@@ -110,14 +116,55 @@ n_tracks() {
 }
 # Each track publishes its head-of-chain device NAME. A sampler landing on a track is therefore
 # visible as that name appearing, which is what "put a sampler on it" has to mean to be real.
-n_samplers(){ cli get tracks | grep -ci '"device": *"[Ss]ampler"' ; }
-n_notes()  { cli get notes 2>/dev/null | grep -c '"pitch"' ; }
+# A track's published `device` field is the HOSTED PLUGIN's name and stays empty for a sampler,
+# so counting it there reports zero however well the add worked. `get sampler-kit` answers
+# {"found": false} / {"found": true}, which is the actual question.
+n_samplers(){
+  local n=0 id
+  for id in $(cli get tracks | sed -n 's/.*"track_id": *\([0-9][0-9]*\).*/\1/p'); do
+    [ "$id" -gt 100000 ] && continue
+    cli get sampler-kit --track "$id" 2>/dev/null | grep -q '"found": *true' && n=$((n+1))
+  done
+  echo "$n"
+}
+# EVERY track's notes, not track 0's. The model routinely makes its own track for a part, and a
+# count that only ever looks at track 0 reports "the song did not change" while the notes are
+# sitting one track over.
+n_notes()  {
+  local total=0 id
+  for id in $(cli get tracks | sed -n 's/.*"track_id": *\([0-9][0-9]*\).*/\1/p'); do
+    [ "$id" -gt 100000 ] && continue      # the master's stable id, not a real lane
+    total=$(( total + $(cli get notes --track "$id" 2>/dev/null | grep -c '"pitch"') ))
+  done
+  echo "$total"
+}
+# For the steps whose result is a SHAPE rather than a count, hash what the engine publishes and
+# require it to change. Weaker than asserting the exact value, and deliberately so: the point of a
+# rehearsal is "did asking for this move the song", and pinning C-minor-specifically would fail
+# the day the model reasonably picks a different voicing for the same request.
+# THERE IS NO `get harmony` QUERY — I wrote one and it hashed the empty string on every call, so
+# the step could only ever report "unchanged" and blame the product. The harmony timeline is only
+# observable through a SAVE, so save and read the file. Valid `get` queries are transport, tracks,
+# diffs, patcher, notes, meters, audio-sources, automation, extents, arrangement, clip,
+# device-params, sampler-envelope, automation-points, sampler-kit, waveform.
+h_harmony(){
+  cli do save rehearsal --force >/dev/null 2>&1
+  local f="$TMP/rehearsal.uniproj.json"
+  [ -f "$f" ] || { echo "nofile"; return; }
+  python3 -c "
+import json,sys
+try: print(len(json.load(open(sys.argv[1])).get('harmony_timeline',[])))
+except Exception: print('unreadable')" "$f"
+}
+h_quantize(){ cli get tracks 2>/dev/null | grep -o '"quantize_grid": *[0-9]*' | tr -d '\n ' ; }
 
 echo "REHEARSING — each step is one prompt, judged by whether the ENGINE changed."
 echo
 step "add a track"        "Add a new track named Bass."                     n_tracks
 step "put a sampler on it" "Put a sampler on the track named Bass."         n_samplers
 step "write a bassline"   "Write a simple four-bar bassline on the track named Bass, root notes on the beat." n_notes
+step "the harmony lane"   "Set the key to C minor from the start of the song."   h_harmony
+step "lane quantize"      "Quantize the Bass track to a 1/16 grid at full strength." h_quantize
 
 echo
 echo "rehearsed: $PASS passed, $FAIL failed"
