@@ -11,11 +11,11 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: da2a674
-- main-cpp-lines: 2277
-- main-function-lines: 2072
-- ctest-entries: 194
-- main-function-ceiling: 2072
+- as-of-commit: 789c769
+- main-cpp-lines: 2191
+- main-function-lines: 1985
+- ctest-entries: 196
+- main-function-ceiling: 1985
 
 ## Why this file cannot quietly go stale
 
@@ -46,6 +46,50 @@ The reason it is built this way: every stale claim found in this repo was in a f
 *intended* to keep current. `tools/meter_bar_check.sh` carried "THE ANCHOR IS NOT FIXED" for months
 after it was fixed — stale in the direction that gets work done twice, by someone with no reason to
 suspect the first attempt exists.
+
+## 2026-08-05 — an engine object, and what it was actually costing not to have one
+
+`main()` went 2,072 → 1,985 and the wiring went from 536 hand-written positional arguments to 473.
+Both numbers are in the checked-facts block; what follows is why they moved, because the shape of
+the problem was not the one the line count suggests.
+
+**Thirteen state groups already existed** — `TrackTable`, `TransportState`, `SongTiming`,
+`ArrangeRail` and the rest, each in its own header documenting what it owns and which lock guards
+it. That work was done and good. What was missing was anything that owned them *together*, and the
+cost showed up as arithmetic: a deps struct needing six pieces of state named all six, at every
+construction, in an order nothing but `tools/deps_order_check.sh` was checking. `apps/engine_state.h`
+is that owner, and it is deliberately not another deps struct — **a deps struct answers "what does
+this function need"; an engine object answers "what IS the engine"**, and only the second lets a
+function take one reference instead of an argument list to keep in sync.
+
+**Twenty-one structs converted, and the sweep stops there on purpose.** Sixteen more still name a
+state group, and every one names exactly *one*. Converting those trades `TrackTable& trackTable`
+for `EngineState& engineState` — one argument for one argument — and the function stops saying what
+it needs. Widening sixteen narrow dependencies so the sweep looks complete is the opposite of the
+point. `tools/deps_state_group_check.sh` enforces the threshold at two, keeps one legal, and derives
+the group list *from `engine_state.h`* rather than keeping a second copy of it.
+
+**The `std::function` adapters were lifetime bookkeeping, not structure.** About sixty
+`const std::function<T> xFn = x;` lines sat in `main()` for one reason: a deps member declared
+`const std::function<T>&` cannot bind a lambda, because the temporary dies at the end of the full
+expression. Declaring 109 such members **by value** across 27 headers let lambdas bind straight
+through and made every adapter redundant. That single change was 85 of the 87 lines. The two structs
+built *inside* `produceBlock` — `RenderTrackDeps` and `NoteResolution` — are excluded and must stay
+excluded, since a by-value `std::function` there would heap-allocate per block per track.
+
+**What the remaining distance is made of, measured rather than guessed.** Of `main()`'s 1,985 lines,
+737 are comments and 147 blank: 1,101 are code. The wiring passes 159 distinct names — 77 lambdas
+and 81 loose locals. Those 81 are the anchor, because a deps struct cannot be constructed where its
+inputs do not exist, and many of them are not engine *state* at all (`engineConfig`, `baseConfig`,
+`audioBackend`, `consumer` are setup). Getting under 1,000 means moving the constructions and their
+forwarders together into something that owns those too — one large move, not another sweep.
+
+Two guards moved during this and both are worth knowing about. `deps_order_check`'s blindness floor
+had to come **down** (480 → 450) because the argument count is falling on purpose; it is set just
+under the live count rather than at a comfortable distance, so it keeps tripping and each drop gets
+read. And `progress_check`'s ceiling refused stage A on its own — the aggregate cost six lines and
+paid nothing back until the conversions landed, which is the correct verdict on a change that only
+sets up future work.
 
 ## 2026-08-05 — three protocols that were published, complete, and read by nobody
 

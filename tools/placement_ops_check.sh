@@ -60,9 +60,19 @@ keep_evidence_then() {
   exit $rc
 }
 trap 'keep_evidence_then cleanup' EXIT
-sleep 2
-DAW_UI_SHM_NAME="$SHM" "$CLI" do load p --force >/dev/null 2>&1 || true
-sleep 1
+# SEVEN FIXED SLEEPS USED TO STAND IN THIS FILE, and `sleep 2` for the boot is a claim about how
+# fast this machine starts an engine while a hundred other tests run. The sibling check
+# track_edit_check lost exactly that race on 2026-08-05 and reported two product defects with
+# every read at -1.
+#
+# THE PATTERN MATTERS: this engine is launched with NO --project, so it never emits a
+# project.load at boot and wait_for_boot's default condition would wait for something that never
+# arrives — consuming the engine's whole life and then blaming it for exiting.
+cli() { DAW_UI_SHM_NAME="$SHM" "$CLI" "$@"; }
+wait_for_boot "$TMP/eng.log" "$ENG" 120 "UI: command thread started"
+cli do load p --force >/dev/null 2>&1 || true
+# ONE load, not two: the boot performed none, so the explicit load is the first.
+wait_for_loads "$TMP/eng.log" "$ENG" 1 60 "the explicit load of the placement fixture"
 
 # `get extents` used to print a trailing comma before ']', so it announced itself as JSON and
 # would not parse — fixed once something finally called json.load on it instead of grepping. The
@@ -85,27 +95,62 @@ snap() { DAW_UI_SHM_NAME="$SHM" "$CLI" get extents >"$TMP/ext.json" 2>/dev/null 
 byclip() { python3 "$TMP/parse.py" "$TMP/ext.json" byclip "$1"; }
 count() { python3 "$TMP/parse.py" "$TMP/ext.json" count; }
 
-snap
+# RE-SNAP ON EVERY POLL. The observable lives in a FILE this check re-fetches, so a predicate
+# that reads ext.json without calling snap first tests a stale copy for the whole timeout — the
+# same defect as a $(...) expanded once at parse time, wearing a different coat.
+snap_until() {  # snap_until <secs> <predicate-fn>
+  local secs="$1"; shift
+  local i=0
+  while [ "$i" -lt $(( secs * 4 )) ]; do
+    snap
+    "$@" && return 0
+    sleep 0.25
+    i=$(( i + 1 ))
+  done
+  snap
+  return 1
+}
+
+# THE LOAD EVENT IS NOT THE PUBLISH. wait_for_loads above says the engine ADOPTED the document;
+# the extents reach shared memory on the consumer's own tick, some time later. The `sleep 1` this
+# replaced was covering that second step, and dropping it made the very first read return
+# `count=0` — after which every assertion below failed, describing an engine that had done
+# nothing wrong. This is the per-site rule: next thing reads PUBLISHED state, so wait on the
+# published state.
+initial_extents_ready() { [ "$(count)" -ge 2 ]; }
+snap_until 30 initial_extents_ready || {
+  echo "  FAIL(setup): the fixture's two placements never reached the published extents, so"
+  echo "        nothing below would be a statement about Move/Resize/Remove/Add."
+  tail -8 "$TMP/eng.log" | sed 's/^/          /'; exit 1; }
+
 read -r P1 S1 _ <<<"$(byclip 1)"     # clip 1's placement id + start
 read -r P2 _  _ <<<"$(byclip 2)"
 echo "initial: clip1 placement=$P1 start=$S1 ; clip2 placement=$P2 ; count=$(count)"
 
 # Move clip1's placement to bar 4.
-DAW_UI_SHM_NAME="$SHM" "$CLI" do move-placement --track 0 --placement "$P1" --at $((4*BAR)) --force >/dev/null 2>&1 || true
-sleep 0.4; snap
+cli do move-placement --track 0 --placement "$P1" --at $((4*BAR)) --force >/dev/null 2>&1 || true
+moved_to_bar4() { local _p _s; read -r _p _s _ <<<"$(byclip 1)"; [ "$_s" = "$((4*BAR))" ]; }
+snap_until 20 moved_to_bar4 || true
 read -r P1b S1b _ <<<"$(byclip 1)"
 # Resize clip1's placement to length = 1 bar.
-DAW_UI_SHM_NAME="$SHM" "$CLI" do resize-placement --track 0 --placement "$P1" --length $BAR --force >/dev/null 2>&1 || true
-sleep 0.4; snap
+cli do resize-placement --track 0 --placement "$P1" --length $BAR --force >/dev/null 2>&1 || true
+resized_to_one_bar() { local _p _s _e; read -r _p _s _e <<<"$(byclip 1)"; [ "$(( _e - _s ))" = "$BAR" ]; }
+snap_until 20 resized_to_one_bar || true
 read -r P1c S1c E1c <<<"$(byclip 1)"
 LEN1=$((E1c - S1c))
-# Remove clip2's placement.
-DAW_UI_SHM_NAME="$SHM" "$CLI" do remove-placement --track 0 --placement "$P2" --force >/dev/null 2>&1 || true
-sleep 0.4; snap
+# Remove clip2's placement. THE BASELINE IS TAKEN BEFORE THE COMMAND, not after: reading it
+# afterwards happens to work only because ext.json still holds the previous snapshot, which is an
+# accident of ordering rather than a fact anyone stated.
+C_BEFORE_RM=$(count)
+count_dropped() { [ "$(count)" -lt "$C_BEFORE_RM" ]; }
+cli do remove-placement --track 0 --placement "$P2" --force >/dev/null 2>&1 || true
+snap_until 20 count_dropped || true
 C_AFTER_RM=$(count)
 # Add a new placement of clip 1 at bar 6.
-DAW_UI_SHM_NAME="$SHM" "$CLI" do add-placement --track 0 --clip 1 --at $((6*BAR)) --length $BAR --force >/dev/null 2>&1 || true
-sleep 0.4; snap
+C_BEFORE_ADD=$(count)
+count_rose() { [ "$(count)" -gt "$C_BEFORE_ADD" ]; }
+cli do add-placement --track 0 --clip 1 --at $((6*BAR)) --length $BAR --force >/dev/null 2>&1 || true
+snap_until 20 count_rose || true
 C_AFTER_ADD=$(count)
 
 # ---- A LENGTH-0 PLACEMENT OF A LENGTH-0 CLIP STILL COVERS ITS CONTENT.
