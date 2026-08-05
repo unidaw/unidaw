@@ -1151,6 +1151,25 @@ add_test(NAME clip_grid_check
 )
 set_tests_properties(clip_grid_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# A clip with more notes than one window PAGE comes back whole. The window protocol is paginated
+# (nextEventIndex + kUiClipWindowFlagComplete) and the engine has honoured the cursor since it was
+# written, while every client sent cursor 0 and read one answer — so `get clip` on a dense clip
+# printed 4096 notes and exited 0, which a caller cannot tell from a clip that short.
+add_test(NAME clip_window_paging_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/clip_window_paging_check.sh
+)
+set_tests_properties(clip_window_paging_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+# THE RUST TEST BINARIES COMPILE. ctest has always built C++ and shell and never the Rust tests,
+# so when a struct gained a field and one test's initialiser was not updated, daw-sidecar's test
+# binary stopped compiling and 75 tests went absent from every run — including the two that guard
+# the sidecar's wire offsets, which had by then drifted 48 bytes from what the page reads.
+# `cargo build` cannot see a test-only compile error. This can.
+add_test(NAME rust_tests_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/rust_tests_check.sh
+)
+set_tests_properties(rust_tests_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 900)
+
 # An AUDIO clip's in-point, gain and fades (opcode 95). Three layers have to move together and the
 # check asserts each one separately: the descriptor table (which was a load-time snapshot until
 # this command existed), the baked audio render (which the table cannot see), and the saved file.
