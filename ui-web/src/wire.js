@@ -54,6 +54,25 @@ const CLIP_GRID_DEN_EXP_SHIFT = 11, CLIP_GRID_DEN_EXP_MASK = 0x7;
  * Writes into a caller-owned record when given one: this is read per rail per
  * frame in the arrangement, and GUIDELINES 3 forbids an object per call there.
  */
+/**
+ * Does the nul-padded name at `at` already equal `have`?
+ *
+ * Allocation-free: it walks the bytes against the characters of the string we are holding,
+ * so an unchanged name costs a comparison and no garbage. Building the string first and
+ * comparing that would allocate once per extent per frame to answer "no".
+ */
+export function nameMatches(v, at, have) {
+  const cur = have === undefined || have === null ? '' : have;
+  let k = 0;
+  for (; k < 32; k++) {
+    const c = v.getUint8(at + k);
+    if (!c) break;
+    if (k >= cur.length || cur.charCodeAt(k) !== c) return false;
+  }
+  // The frame's name ended: it matches only if ours ends in the same place.
+  return k === cur.length;
+}
+
 export function unpackClipGrid(flags, out) {
   const lpb = (flags >>> CLIP_GRID_LPB_SHIFT) & CLIP_GRID_LPB_MASK;
   if (lpb === 0) return null;
@@ -545,6 +564,26 @@ export function decode(buf, store) {
       const st = Number(v.getBigUint64(o + 16, true)), en = Number(v.getBigUint64(o + 24, true));
       if (e.placementId !== pid || e.track !== tr || e.startTick !== st
           || e.endTick !== en || e.flags !== fl || e.clipId !== cid) changed = true;
+      /*
+       * THE NAME IS PART OF "HAS THIS CHANGED", and leaving it out made SetClipText look
+       * like an engine bug.
+       *
+       * A pure rename touches nothing here but the 32 name bytes: every id, tick and flag
+       * is identical. So `changed` stayed false, the decode below never ran, and the
+       * arrangement went on drawing a cached string with the correct one sitting in the
+       * frame beside it. `extentsRevision` never moved either, so nothing downstream
+       * reinvalidated. A reload "fixed" it only because it changes placement ids, which
+       * makes `changed` true for an unrelated reason and re-reads the name as a side effect.
+       *
+       * I reported this to backend as the engine publishing a stale name. It measured the
+       * engine — the new name is on the wire within one publish cycle — and pointed at this
+       * loop. The change detector omitted the one field the new opcode writes.
+       *
+       * COMPARED BYTE BY BYTE AGAINST THE STRING WE ALREADY HAVE, rather than decoding into
+       * a new one and comparing that: this runs per extent per frame, and building a string
+       * to discover it is the same string is the allocation alloc.mjs exists to catch.
+       */
+      if (!nameMatches(v, o + 32, e.name)) changed = true;
       e.placementId = pid; e.clipId = cid; e.track = tr; e.flags = fl;
       e.startTick = st; e.endTick = en;
       // bit0: an audio region. It holds no note events, so the arrange view draws

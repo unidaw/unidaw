@@ -141,25 +141,26 @@ if (clip) {
         `the saved clip is called ${JSON.stringify(savedName)}`);
 
   /*
-   * AND THE PUBLISHED NAME IS STALE — asserted as it IS, so this fails the day it is fixed.
+   * AND THE PUBLISHED NAME FOLLOWS, with no reload.
    *
-   * The engine accepts the write, persists it, and goes on publishing the old name in
-   * UiClipExtent until the project is reloaded. That is a field the project persists and the
-   * surface cannot see, which is the same defect these three commands were wired to close, one
-   * layer further on. Reported to backend.
+   * THIS CHECK WAS INVERTED, and it was inverted around a wrong diagnosis. It asserted that the
+   * published name STAYED STALE and recorded that as an engine gap, reported as such. Backend
+   * measured the engine — the new name is in UiClipExtent within one publish cycle, and
+   * tools/clip_text_check.sh already pins it — and pointed at wire.js, where the change detector
+   * omitted the one field this opcode writes. A pure rename touches only the 32 name bytes, so
+   * `changed` stayed false and the decode never ran.
    *
-   * An inverted check is only honest while its two outcomes stay distinguishable, and these do:
-   * "the rail shows VERSE A" and "the rail shows Clip" cannot be confused. When this fails,
-   * DELETE it and assert the positive.
+   * Worth keeping as a note rather than quietly rewriting: an inverted check is a claim about
+   * where a defect lives, and this one pointed at the wrong half of the system. It passed for
+   * the whole time it was wrong, because it was asserting the symptom.
    */
   const shown = await page.evaluate((id) => {
     const cs = window.__uni.clips ? window.__uni.clips() : [];
     return (cs.find((c) => c.clip === id) || {}).name;
   }, clip.clip);
-  check(shown !== 'VERSE A',
-        'KNOWN GAP: the published extent name is still the old one until reload',
-        `it now reports ${JSON.stringify(shown)} — if this says VERSE A the engine gap is `
-        + 'CLOSED: delete this check and assert the positive');
+  check(shown === 'VERSE A',
+        'and the published name follows immediately, with no reload',
+        `the arrangement shows ${JSON.stringify(shown)}`);
 }
 
 // ===========================================================================
