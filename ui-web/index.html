@@ -1106,6 +1106,29 @@ function nameMarker(id, name) {
   return sendMarker({ type: 'marker', op: 'rename', id: n, name: t });
 }
 
+/**
+ * Recolour an existing marker.
+ *
+ * A marker's colour was WRITE-ONCE: AddMarker assigned it and nothing could change it, on a
+ * field the project persists and the engine publishes and the arrangement draws. That is the
+ * shape this app keeps producing — a value you can see and cannot set — and it is the same
+ * one as a field nothing reads, with the halves swapped.
+ *
+ * The colour is required rather than defaulted. On this wire absent is not "unchanged": a
+ * missing colour would be sent as 0, black is legal, and the marker would silently turn black
+ * — which reads as a broken control rather than as a missing argument.
+ */
+function colorMarker(id, rgb) {
+  const n = Number(id) || 0;
+  if (n <= 0) { state.reject = 'which marker?'; schedule(); return false; }
+  if (!markerExists(n)) { state.reject = `no marker ${n}`; schedule(); return false; }
+  const c = Number(rgb);
+  if (!Number.isFinite(c) || c < 0 || c > 0xffffff) {
+    state.reject = 'a colour is 0..16777215 (0xRRGGBB)'; schedule(); return false;
+  }
+  return sendMarker({ type: 'marker', op: 'color', id: n, color: Math.round(c) });
+}
+
 /** Move a marker to a tick. It moves ALONE — no music follows it. */
 function moveMarker(id, tick) {
   const n = Number(id) || 0;
@@ -3353,6 +3376,46 @@ const dockApi = {
   addMarker: (tick, name) => addMarker(tick, name),
   delMarker: (id) => delMarker(id),
   nameMarker: (id, name) => nameMarker(id, name),
+  colorMarker: (id, rgb) => colorMarker(id, rgb),
+  /**
+   * A clip's NAME or its audio SOURCE PATH.
+   *
+   * These were the last two fields in the project that are persisted, published and drawn on
+   * screen with no command able to write either — so the arrangement could show a clip called
+   * "Clip" forever, and an audio clip could not be repointed at another file without editing
+   * the saved JSON by hand.
+   *
+   * `base` is the clip version this edit was composed against, the same reconciliation every
+   * note edit uses: an edit composed against a version the engine has moved past is refused
+   * rather than applied to whatever is there now.
+   */
+  /**
+   * ASK FOR ONE MODULATOR'S ENVELOPE SHAPE. Answered on the ack channel.
+   *
+   * `samplerEnvelope` (opcode 84) has been able to WRITE a multi-point curve, both loop ranges,
+   * the release fade and the rate since it landed, and nothing could read any of it back — so an
+   * envelope editor built on it would be write-only: able to send a shape and never to draw the
+   * one already in the project. This is the missing half.
+   */
+  samplerEnvelopeShape: (track, device, modSet, target) => {
+    if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
+    return conn.send({ type: 'samplerenvelope', track: Number(track) || 0,
+                       device: Number(device) || 0, modset: Number(modSet) || 0,
+                       target: Number(target) || 0 });
+  },
+  clipText: (track, clip, field, text) => {
+    if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
+    const f = String(field || '').toLowerCase();
+    if (f !== 'name' && f !== 'source' && f !== 'path') {
+      state.reject = 'a clip text field is name or source'; schedule(); return false;
+    }
+    const ok = conn.send({ type: 'cliptext', track: Number(track) || 0,
+                           clip: Number(clip) || 0, field: f,
+                           text: String(text === undefined ? '' : text),
+                           base: engine ? engine.clipVersion : 0 });
+    if (!ok) { state.reject = 'no engine'; schedule(); return false; }
+    state.reject = null; schedule(); return true;
+  },
   moveMarker: (id, tick) => moveMarker(id, tick),
   insertTime: (tick, bars) => insertTime(tick, bars),
   setTimeSig: (sig, tick, flatten) => setTimeSig(sig, tick, flatten),
@@ -8988,6 +9051,9 @@ window.__uni = {
   addMarker: (tick, name) => dockApi.addMarker(tick, name),
   delMarker: (id) => dockApi.delMarker(id),
   nameMarker: (id, name) => dockApi.nameMarker(id, name),
+  colorMarker: (id, rgb) => dockApi.colorMarker(id, rgb),
+  clipText: (t, c, f, x) => dockApi.clipText(t, c, f, x),
+  samplerEnvelopeShape: (t, d, m, target) => dockApi.samplerEnvelopeShape(t, d, m, target),
   moveMarker: (id, tick) => dockApi.moveMarker(id, tick),
   insertTime: (tick, bars) => dockApi.insertTime(tick, bars),
   setTimeSig: (sig, tick, flatten) => dockApi.setTimeSig(sig, tick, flatten),

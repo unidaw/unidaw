@@ -830,6 +830,7 @@ const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'sampl
                      // drag and double-click all come through these same methods.
                      'shared', 'fork', 'swapClip', 'keepClip',
                      'markers', 'addMarker', 'delMarker', 'nameMarker', 'moveMarker',
+                     'colorMarker', 'clipText', 'samplerEnvelopeShape',
                      'insertTime', 'setTimeSig',
                      // Modulation. `mapParam` takes a parameter INDEX and resolves the
                      // uid16 itself — the console should not have to type a 32-character
@@ -2202,6 +2203,14 @@ const OP_REGISTRY = {
   marker:      { cli: 'marker', agent: 'edit_marker' },
   delmarker:   { cli: 'marker', agent: 'edit_marker' },
   namemarker:  { cli: 'marker', agent: 'edit_marker' },
+  // A marker's colour was write-once everywhere, so no surface owed a verb until now.
+  colormarker: { cli: null, agent: null, why: 'gap' },
+  // The clip's name and source path. Reached the engine and this console together;
+  // neither the CLI nor the agent has a verb for either yet.
+  cliptext:    { cli: null, agent: null, why: 'gap' },
+  // The envelope READ-BACK. The write half has a CLI verb; reading one back is new
+  // everywhere, so both the CLI and the agent owe it one.
+  envshape:    { cli: null, agent: null, why: 'gap' },
   movemarker:  { cli: 'marker', agent: 'edit_marker' },
   // The two that change TIME rather than a label, and they are deliberately not marker ops.
   time:        { cli: 'time', agent: 'insert_time' },
@@ -2391,6 +2400,10 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
                  // The sampler filter (opcode 86). It landed engine-side this morning and the
                  // CLI has no verb for it yet — recorded as a gap rather than claimed as covered.
                  'filter', 'soundaddr',
+                 // A marker's COLOUR and a clip's NAME/SOURCE. Both reached the engine and this
+                 // console together — the fields were persisted, published and drawn with no
+                 // writer anywhere, so there was nothing for the CLI to have covered first.
+                 'colormarker', 'cliptext', 'envshape',
                  // Reached the engine from this app first, both of them: saving a patcher preset
                  // and a lane's subdivision. The CLI owes them a verb rather than the reverse.
                  'save-patch', 'lpb', 'note-overlap',
@@ -2453,6 +2466,9 @@ const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
                    // A clip's own grid (opcode 94). It HAS a CLI path — `daw-cli do clip-grid`
                    // shipped with the opcode — so it is only in the agent half of the gap.
                    'clip-grid', 'audio-clip', 'main-gain', 'main-mute', 'del-point',
+                   // With the two above: new commands for fields that had no writer at all,
+                   // so the agent manifest owes them a tool rather than having lost one.
+                   'colormarker', 'cliptext', 'envshape',
                    // With `mods`: a read-back this app has and the agent manifest does not.
                    'kit'];
 

@@ -40,6 +40,8 @@ use daw_bridge::layout::{UiSetRowOpsPayload, UiSamplerLoadPayload, UiSamplerSlic
                          UiSamplerEmitRowsPayload, UiSamplerSlotNameHeader,
                          EventEntry, UiChainCommandPayload, UiChordCommandPayload,
                          UiMarkerCommandPayload, UiArrangeTimeCommandPayload,
+                         UiClipTextHeader, CLIP_TEXT_FIELD_NAME, CLIP_TEXT_FIELD_SOURCE_PATH,
+                         UiSamplerEnvelopeRequestPayload, SAMPLER_ENV_BY_TARGET,
                          UI_TIME_SIG_FLATTEN, UiModLinkCommandPayload,
                          UiModLinkUid16Payload, UiModSourceValuePayload,
                          UiAutomationLaneRequestPayload, UiAutomationPointPayload,
@@ -85,6 +87,14 @@ const WIRE_VERSION: u16 = 28;
 /// unit.mjs against the C++ constant. The copy earns its place: the engine refuses an over-long
 /// name into its LOG, which from a browser is a command that reports success and does nothing.
 const SAMPLER_SLOT_NAME_BYTES: usize = 40;
+
+/// `UiClipExtent::name` (shared_memory.h) — the array a clip name has to fit INCLUDING its nul,
+/// so a name of exactly this length does not fit and the check is `>=`.
+///
+/// Same bargain as SAMPLER_SLOT_NAME_BYTES above and ratcheted the same way: the engine REFUSES
+/// an over-long name rather than shortening it, and its refusal goes to a log the browser cannot
+/// see, so a command that reported success would leave the field unchanged with nothing to read.
+const CLIP_NAME_BYTES: usize = 32;
 
 /// `kPatcherNodeTypeMax` (apps/patcher_graph.h) — the highest valid PatcherNodeType.
 ///
@@ -1437,6 +1447,84 @@ fn parse_f32(body: &str, key: &str) -> Option<f32> {
 /// different socket and a different thread. The wait is bounded and a timeout is REPORTED
 /// rather than returned as an empty lane, because "no answer yet" and "no automation" are
 /// different facts and only one of them is worth drawing.
+/// ASK FOR ONE MODULATOR'S ENVELOPE SHAPE (opcode 97).
+///
+/// SamplerSetEnvelopePoints (84) could WRITE a multi-point curve, both loop ranges, the release
+/// fade and the rate, and nothing could read any of it back — so an envelope editor built on 84
+/// would have been WRITE-ONLY: able to send a shape and never to draw the one already in the
+/// project. A writer with no reader is the same defect as a field with no writer, with the halves
+/// swapped, and this repo has now found it in both directions in one session.
+///
+/// Both halves of the plumbing already existed in daw-bridge — `send_sampler_envelope_request`
+/// and `read_sampler_envelope_slot` — and nothing on this side had ever called either.
+///
+/// Shaped exactly like `request_automation` below, deliberately: same client-owned seq, same
+/// slot arithmetic, same "match every echoed field" rule, same bounded wait. Two request/answer
+/// round trips that behave differently is how one of them ends up subtly wrong.
+fn request_sampler_envelope(handle: &EngineHandle, track: u32, device: u32, mod_set: u32,
+                            modulator: u16, target: u8, by_target: bool) -> String {
+    static NEXT_ENV_SEQ: AtomicU64 = AtomicU64::new(1);
+    let seq = NEXT_ENV_SEQ.fetch_add(1, Ordering::AcqRel) as u32;
+    let payload = UiSamplerEnvelopeRequestPayload {
+        command_type: UiCommandType::RequestSamplerEnvelope as u16,
+        // The SAME bit the write uses. Asking a different way than writing is how a read-back
+        // ends up faithfully answering about a different object.
+        flags: if by_target { SAMPLER_ENV_BY_TARGET } else { 0 },
+        track_id: track,
+        device_id: device,
+        mod_set_id: mod_set,
+        request_seq: seq,
+        modulator_id: modulator,
+        target,
+        reserved0: 0,
+        reserved1: [0; 4],
+    };
+    if let Err(e) = handle.send_sampler_envelope_request(payload) {
+        return format!("{{\"error\":\"{}\"}}", e.replace('"', "'"));
+    }
+    let slot = (seq as usize) % daw_bridge::layout::K_UI_SAMPLER_ENVELOPE_SLOTS;
+    let deadline = Instant::now() + Duration::from_millis(1500);
+    loop {
+        if let Some(a) = handle.read_sampler_envelope_slot(slot) {
+            /*
+             * MATCHED ON THE SEQ AND THE TRACK, and deliberately NOT on the device.
+             *
+             * `device`, `mod_set` and `modulator` are ADDRESSES THE ENGINE RESOLVES: 0 means
+             * "the first sampler", "every mod set", "the envelope for this target". The answer
+             * carries what it resolved TO — the engine's own log shows a request for mod set 0
+             * being answered about mod set 1 — so requiring the reply to echo the zero that was
+             * sent is a match that can never succeed. It did not fail loudly: the loop simply
+             * ran to its deadline and reported "the engine did not answer", while the engine's
+             * log said `sampler.envelope_answered found:1 points:4`.
+             *
+             * The seq is the identity — it is client-owned and picks the slot — and the track is
+             * the one address in this command that is never resolved.
+             */
+            if a.request_seq == seq && a.track_id == track {
+                let pts: Vec<String> = a.points.iter()
+                    .map(|(t, v, tension, flags)| format!("[{t},{v},{tension},{flags}]"))
+                    .collect();
+                return format!(
+                    "{{\"samplerenvelope\":{{\"track\":{},\"device\":{},\"modSet\":{},                     \"modulator\":{},\"target\":{},\"found\":{},\"timeBase\":{},                     \"rateMilli\":{},\"truncated\":{},\"sustainLoop\":[{},{}],                     \"releaseLoop\":[{},{}],\"releaseFade\":{},\"points\":[{}]}}}}",
+                    a.track_id, a.device_id, a.mod_set_id, a.modulator_id, a.target, a.found,
+                    a.time_base, a.rate_milli, a.points_truncated,
+                    a.sustain_loop.0, a.sustain_loop.1,
+                    a.release_loop.0, a.release_loop.1, a.release_fade, pts.join(","));
+            }
+        }
+        if Instant::now() >= deadline {
+            /*
+             * A TIMEOUT IS AN ANSWER AND IT SAYS SO. Returning "found: false" would claim the
+             * engine looked and found nothing, which is a different fact from the engine not
+             * having answered — and the second is the one that means something is wrong.
+             */
+            return "{\"error\":\"the engine did not answer the envelope request in 1.5s\"}"
+                .to_string();
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
 fn request_automation(handle: &EngineHandle, track: u32, target: u32, param: &str) -> String {
     if param.is_empty() {
         return "{\"error\":\"automation needs a param\"}".to_string();
@@ -3212,7 +3300,7 @@ fn build_automation_delete(body: &str) -> Option<Result<UiAutomationPointPayload
 fn build_marker(body: &str) -> Option<Result<UiMarkerCommandPayload, &'static str>> {
     if !is_type(body, "marker") { return None; }
     let Some(op) = parse_str(body, "\"op\"") else {
-        return Some(Err("marker needs an op: add, remove, rename or move"));
+        return Some(Err("marker needs an op: add, remove, rename, move or color"));
     };
     let (command_type, addressed) = match op {
         // The bool is "this op names an EXISTING marker", which everything but add does.
@@ -3220,8 +3308,24 @@ fn build_marker(body: &str) -> Option<Result<UiMarkerCommandPayload, &'static st
         "remove" => (UiCommandType::RemoveMarker, true),
         "rename" => (UiCommandType::RenameMarker, true),
         "move" => (UiCommandType::MoveMarker, true),
-        _ => return Some(Err("marker op must be add, remove, rename or move")),
+        /*
+         * RECOLOUR. The payload has carried `color_rgb` since v29 and AddMarker was the only
+         * thing that ever set it, so a marker's colour was write-ONCE on a field that is both
+         * persisted and published — the arrangement drew it and no surface could change it.
+         *
+         * Its own op rather than a flag on rename, for the reason the engine's comment gives:
+         * a rename that also carried colour would paint the marker with whatever the caller
+         * left at zero, and black is a legal colour, so the damage would be silent.
+         */
+        "color" => (UiCommandType::SetMarkerColor, true),
+        _ => return Some(Err("marker op must be add, remove, rename, move or color")),
     };
+    if command_type as u16 == UiCommandType::SetMarkerColor as u16
+        && parse_num(body, "\"color\"").is_none() {
+        // Absent is not zero on this wire: a recolour with no colour would paint it black
+        // and look exactly like a control that does nothing.
+        return Some(Err("a marker recolour needs the colour to set"));
+    }
     let id = parse_num(body, "\"id\"").unwrap_or(0).max(0) as u32;
     // 0 is the "let the engine assign" sentinel for an add, so a missing id would silently
     // become a NEW marker on a remove or a rename.
@@ -4442,6 +4546,34 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;
                         }
+                        /*
+                         * ONE MODULATOR'S ENVELOPE SHAPE, read back.
+                         *
+                         *   {"type":"samplerenvelope","track":0,"device":0,"modset":1,"target":0}
+                         *
+                         * Answered on this socket like the automation lane and the kit are. See
+                         * `request_sampler_envelope` for why it matters that this exists at all:
+                         * the WRITE has been possible since opcode 84 and nothing could read the
+                         * curve back, so an editor built on it could only ever overwrite.
+                         *
+                         * Addressed by TARGET when no modulator id is given, which is the same
+                         * default the write takes — the alternative is a read-back that answers
+                         * accurately about a modulator the caller did not mean.
+                         */
+                        if is_type(&t, "samplerenvelope") {
+                            let modulator = parse_num(&t, "\"modulator\"")
+                                .unwrap_or(0).clamp(0, u16::MAX as i64) as u16;
+                            let reply = request_sampler_envelope(
+                                &handle,
+                                parse_num(&t, "\"track\"").unwrap_or(0).max(0) as u32,
+                                parse_num(&t, "\"device\"").unwrap_or(0).max(0) as u32,
+                                parse_num(&t, "\"modset\"").unwrap_or(0).max(0) as u32,
+                                modulator,
+                                parse_num(&t, "\"target\"").unwrap_or(0).clamp(0, 255) as u8,
+                                modulator == 0);
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
                         if is_type(&t, "samplerkit") {
                             let track = parse_num(&t, "\"track\"").unwrap_or(0).max(0) as u32;
                             let device = parse_num(&t, "\"device\"").unwrap_or(0).max(0) as u32;
@@ -4773,6 +4905,66 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                     Ok(()) => format!(
                                         "{{\"ok\":true,\"samplerslotname\":{},\"bytes\":{}}}",
                                         header.slot_id, bytes.len()),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                }
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        /*
+                         * A CLIP'S NAME OR ITS AUDIO SOURCE PATH (opcode 98).
+                         *
+                         *   {"type":"cliptext","track":0,"clip":1,"field":"name","text":"verse"}
+                         *   {"type":"cliptext","track":0,"clip":1,"field":"source","text":"kick.wav"}
+                         *
+                         * A BULK command for the reason SamplerSetSlotName is one: a string does
+                         * not fit the 40-byte ring payload. These were the last two GAPs in
+                         * persisted_field_reach — persisted, published, RENDERED, and writable
+                         * from no surface at all, so a clip's name could be drawn and never
+                         * changed and an audio clip could not be repointed without a text editor.
+                         *
+                         * REFUSED RATHER THAN TRUNCATED, matching the engine, which refuses. A
+                         * sidecar that shortened the name would report success for a write the
+                         * engine then rejected — the browser's worst failure shape, because both
+                         * ends behave and the field does not change.
+                         */
+                        if is_type(&t, "cliptext") {
+                            let field = match parse_str(&t, "\"field\"") {
+                                Some("name") => Some(CLIP_TEXT_FIELD_NAME),
+                                Some("source") | Some("path") => Some(CLIP_TEXT_FIELD_SOURCE_PATH),
+                                _ => None,
+                            };
+                            let text = parse_str_value(&t, "\"text\"").unwrap_or("");
+                            let bytes = text.as_bytes();
+                            let reply = if field.is_none() {
+                                "{\"error\":\"cliptext needs field: name or source\"}".to_string()
+                            } else if field == Some(CLIP_TEXT_FIELD_NAME)
+                                      && bytes.len() >= CLIP_NAME_BYTES {
+                                format!(
+                                    "{{\"error\":\"a clip name must be under {CLIP_NAME_BYTES} bytes                                       and this is {} — the engine refuses rather than shortening,                                       so a longer one would change nothing\"}}",
+                                    bytes.len())
+                            } else {
+                                let header = UiClipTextHeader {
+                                    command_type: UiCommandType::SetClipText as u16,
+                                    field: field.unwrap(),
+                                    track_id: parse_num(&t, "\"track\"").unwrap_or(0).max(0) as u32,
+                                    clip_id: parse_num(&t, "\"clip\"").unwrap_or(0).max(0) as u32,
+                                    text_bytes: bytes.len() as u32,
+                                    base_version: parse_num(&t, "\"base\"").unwrap_or(0).max(0) as u32,
+                                };
+                                let mut buf = Vec::with_capacity(20 + bytes.len());
+                                buf.extend_from_slice(unsafe {
+                                    std::slice::from_raw_parts(
+                                        &header as *const UiClipTextHeader as *const u8,
+                                        std::mem::size_of::<UiClipTextHeader>(),
+                                    )
+                                });
+                                buf.extend_from_slice(bytes);
+                                match handle.send_bulk(&buf) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"cliptext\":{},\"bytes\":{}}}",
+                                        header.clip_id, bytes.len()),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                                 }
                             };

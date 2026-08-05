@@ -940,6 +940,48 @@ export function createCommands(api) {
     delmarker: { help: 'delmarker <id> \u2014 unname the point; the music stays put',
       args: [{ name: 'id', type: 'int', min: 1 }],
       run: (a) => (api.delMarker(Number(a[0])) ? `marker ${a[0]} removed` : refusal(api)) },
+    /*
+     * RECOLOUR ONE. The colour was set once by `marker` and never again, so the arrangement
+     * drew a colour nothing could change. Hex accepted as well as decimal because a colour is
+     * a thing people write as 0xRRGGBB and nobody thinks of as 16711680.
+     */
+    colormarker: { help: 'colormarker <id> <rgb> \u2014 recolour a marker; rgb is 0xRRGGBB or decimal',
+      args: [{ name: 'id', type: 'int', min: 1 }, { name: 'rgb', type: 'text' }],
+      run: (a) => {
+        const raw = String(a[1]);
+        const rgb = /^0x/i.test(raw) ? parseInt(raw.slice(2), 16) : Number(raw);
+        return api.colorMarker(Number(a[0]), rgb) ? `marker ${a[0]} recoloured` : refusal(api);
+      } },
+    /*
+     * A CLIP'S NAME OR SOURCE FILE. Both were persisted, published and drawn with no writer on
+     * any surface, so the arrangement showed names nobody could change and an audio clip could
+     * not be pointed at a different file without editing the project by hand.
+     */
+    /*
+     * READ AN ENVELOPE BACK. The write half (`env`) has existed since opcode 84 and this is the
+     * first thing that can see what is already there — without it any editor is write-only.
+     */
+    envshape: { help: 'envshape [track] [device] [modset] [target] \u2014 read one modulator\'s envelope',
+      args: [A_TRACK_OPT, { name: 'device', type: 'int', min: 0, optional: true },
+             { name: 'modset', type: 'int', min: 0, optional: true },
+             { name: 'target', type: 'int', min: 0, max: 4, optional: true }],
+      run: (a) => (api.samplerEnvelopeShape(a[0] === undefined ? undefined : Number(a[0]),
+                                            a[1] === undefined ? 0 : Number(a[1]),
+                                            a[2] === undefined ? 0 : Number(a[2]),
+                                            a[3] === undefined ? 0 : Number(a[3]))
+        ? 'asking the engine\u2026' : refusal(api)) },
+    cliptext: { help: 'cliptext <track> <clip> <name|source> <text> \u2014 a clip\'s name or its audio file',
+      args: [A_TRACK, { name: 'clip', type: 'int', min: 1 },
+             oneOf(['name', 'source']),
+             { name: 'text', type: 'text', rest: true }],
+      run: (a) => {
+        // `a.slice(3).join(' ')`, not `a[3]`: a `rest` argument arrives as separate words, and
+        // taking the first would name a clip "VERSE" when "VERSE A" was typed — the same trap
+        // namemarker below documents.
+        const text = a.slice(3).join(' ');
+        return api.clipText(Number(a[0]), Number(a[1]), a[2], text)
+          ? `clip ${a[1]} ${a[2]} set` : refusal(api);
+      } },
     namemarker: { help: 'namemarker <id> <name> \u2014 rename a marker',
       args: [{ name: 'id', type: 'int', min: 1 },
              { name: 'name', type: 'text', rest: true }],

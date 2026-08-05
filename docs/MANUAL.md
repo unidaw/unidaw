@@ -1566,7 +1566,7 @@ envelope; that is wrong — the default kit is audible.
 
 ## 18. Command reference
 
-102 commands. `help` prints this list live; the palette (`⌘K`) is the same list,
+105 commands. `help` prints this list live; the palette (`⌘K`) is the same list,
 searchable, with argument checking.
 
 **Transport and position** — `play`, `stop` (twice = panic), `seek <tick>`,
