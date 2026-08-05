@@ -83,6 +83,9 @@ void handleSetTrackRouting(TrackCommandDeps& deps,
     runtime->track.routing.midiOut.trackId = routingPayload.midiOutTrackId;
     runtime->track.routing.audioIn.trackId = routingPayload.audioInTrackId;
     runtime->track.routing.audioOut.trackId = routingPayload.audioOutTrackId;
+    runtime->routesToMaster.store(
+        runtime->track.routing.audioOut.kind != daw::TrackRouteKind::None,
+        std::memory_order_relaxed);
     runtime->track.routing.midiIn.inputId = routingPayload.midiInInputId;
     runtime->track.routing.audioIn.inputId = routingPayload.audioInInputId;
     runtime->track.routing.preFaderSend = (routingPayload.flags & 0x1u) != 0;

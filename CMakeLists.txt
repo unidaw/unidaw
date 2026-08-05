@@ -1337,6 +1337,16 @@ set_tests_properties(opcode_mirror PROPERTIES
 # is a NEW SITE doing the conversion by hand, which is exactly how this defect kept returning —
 # seven sites computed it, three note-offs kept the old arithmetic for a day, and the chord
 # column-cut for longer still.
+# routing.audio_out is settable, validated, persisted and published — and the mixer never read
+# it, so "none" silenced nothing. The assertion is a COMPARISON: "none" and "muted" both mean
+# this track contributes nothing, so the two renders must be byte-identical, with a third
+# audible render proving the comparison can tell them apart.
+add_test(NAME audio_out_none
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/audio_out_none_check.sh
+)
+set_tests_properties(audio_out_none PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 add_test(NAME block_placement_rule
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/block_placement_rule_check.sh
 )

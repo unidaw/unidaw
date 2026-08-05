@@ -239,6 +239,15 @@ struct TrackRuntime {
   // Read by the audio thread every block; written by the UI thread.
   std::atomic<float> mixGainLinear{1.0f};
   std::atomic<float> mixPan{0.0f};
+  // WHETHER THIS TRACK'S AUDIO REACHES THE MASTER, mirrored as an atomic for the same reason
+  // mixMute and mixSolo are: the audio callback asks the question every block and must not take
+  // a lock or read the model to answer it. routing.audioOut is the authority; this follows it at
+  // the three sites that assign routing.
+  //
+  // Default TRUE, which is the fail-safe direction: TrackRouting::audioOut itself defaults to
+  // Master, and a track that somehow never had this set should be audible rather than silently
+  // missing from the mix.
+  std::atomic<bool> routesToMaster{true};
   std::atomic<bool> mixMute{false};
   std::atomic<bool> mixSolo{false};
   // Per-lane tracker subdivision (Mock B grids); published so the UI builds a

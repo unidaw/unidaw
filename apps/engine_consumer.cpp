@@ -640,6 +640,7 @@ void runConsumerThread(ConsumerDeps& deps) {
                 info.pan = &runtime->mixPan;
                 info.mute = &runtime->mixMute;
                 info.solo = &runtime->mixSolo;
+                info.routesToMaster = &runtime->routesToMaster;
                 info.shmSize = shmView->size;
                 info.trackId = trackId;
                 info.uiSlot = trackId;  // == this track's published slot

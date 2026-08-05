@@ -133,6 +133,9 @@ void loadTrackFromDocument(LoadProjectDeps& deps,
         // and a saved sidechain/send was silently dropped). Read by rebuildHostForChain
         // below and by the producer's routing, both under this same trackMutex.
         runtime->track.routing = source.routing;
+        runtime->routesToMaster.store(
+            source.routing.audioOut.kind != daw::TrackRouteKind::None,
+            std::memory_order_relaxed);
         // Adopt the project's modulation matrix. Without this a saved mod link was parsed
         // into the document and then DROPPED — the runtime kept its empty list, and the
         // next save (which writes runtime->track.modRegistry.links) emitted an empty
