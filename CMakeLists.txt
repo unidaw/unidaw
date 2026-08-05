@@ -1251,6 +1251,16 @@ set_tests_properties(lock_order PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 # was uncovered — arrangement_check pins markers, the meter and the ripple and never reads
 # song_end_tick, so dropping half the gate left the whole suite green. A placement move is the only
 # edit that separates the two inputs.
+# A sampler feeds the head of the chain and REPLACES what is routed into the track, so a track that
+# is both an instrument and a bus destination loses the send. Whether it should MIX instead is task
+# #92 and is the owner's to decide; this pins the CURRENT answer and the report that makes it
+# visible, so the day it changes, this check says so instead of the suite staying green.
+add_test(NAME sampler_routed_input
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_routed_input_check.sh
+)
+set_tests_properties(sampler_routed_input PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 add_test(NAME arrange_song_end_gate
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/arrange_song_end_gate_check.sh
 )

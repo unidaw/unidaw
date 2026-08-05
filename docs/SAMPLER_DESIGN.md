@@ -809,6 +809,14 @@ Two decisions were raised BY the work rather than by this list and are still the
     because Live and Renoise both mix and the answer is a decision about what a track IS. Task
     #92, unchanged and deliberately not decided by the work.
 
+    `tools/sampler_routed_input_check.sh` now pins the CURRENT answer — that the report fires, once
+    per track, naming the track — so the day the decision is made that check fails and says which
+    of the two things happened, rather than the suite staying green either way. It asserts the
+    REPORT and not the spectrum, because `audio_out: track` turns out to be ADDITIVE (the source
+    still reaches the master) and the routed copy is inaudible in the mix whether the sampler eats
+    it or not: the three measurements are in that file's header. That additivity is undocumented
+    and is its own open question, task #30.
+
   - **How does a note on a CHILD track address the parent's kit?** This is the whole content of
     "MIDI-per-bus for the kit", the last optional item, and it cannot be built without the answer.
     For a hosted multitimbral plugin the rule is settled and shipped: an aux child's notes are
