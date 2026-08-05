@@ -1943,11 +1943,39 @@ fn set_track_name(handle: &EngineHandle, args: &Value) -> ToolResult {
         base_version: 0,
         name: bytes,
     };
-    let as_ui: UiCommandPayload = unsafe { std::mem::transmute(preset) };
-    match handle.send_command(as_ui) {
-        Ok(()) => ToolResult::ok(json!({ "track": track, "name": name })),
-        Err(e) => ToolResult::err(e),
+    // REFUSE A TRACK THAT DOES NOT EXIST, rather than reporting a rename of it.
+    //
+    // Naming a slot the engine has no track for is silently dropped there, and this used to
+    // answer {"track": n, "name": "..."} regardless — so the model said "I've added a new track
+    // named Bass" about a track that was still called Track 2, and every later instruction that
+    // referred to Bass failed. Cheap to catch: the published name list IS the set of valid ids.
+    let names = handle.read_track_names();
+    if track as usize >= names.len() {
+        return ToolResult::err(format!(
+            "there is no track {track} — the song has {} (ids 0..{}). Use the id add_track \
+             returned, or observe first; note the master sits after the real tracks.",
+            names.len(),
+            names.len().saturating_sub(1)
+        ));
     }
+    let as_ui: UiCommandPayload = unsafe { std::mem::transmute(preset) };
+    if let Err(e) = handle.send_command(as_ui) {
+        return ToolResult::err(e);
+    }
+    // And confirm the name actually took. Same reason add_track waits for the count: send_command
+    // returns Ok when the command is ENQUEUED, not when it is accepted.
+    let want = &name[..name.len().min(24)];
+    for _ in 0..80 {
+        let now = handle.read_track_names();
+        if now.get(track as usize).map(|n| n.as_str()) == Some(want) {
+            return ToolResult::ok(json!({ "track": track, "name": name }));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    ToolResult::err(format!(
+        "the engine did not rename track {track} (the command was sent but the published name \
+         never changed)"
+    ))
 }
 
 fn named(handle: &EngineHandle, command: UiCommandType, args: &Value, verb: &str) -> ToolResult {
