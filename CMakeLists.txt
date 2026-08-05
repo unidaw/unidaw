@@ -1255,6 +1255,16 @@ set_tests_properties(lock_order PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 # is both an instrument and a bus destination loses the send. Whether it should MIX instead is task
 # #92 and is the owner's to decide; this pins the CURRENT answer and the report that makes it
 # visible, so the day it changes, this check says so instead of the suite staying green.
+# A note on a block-boundary tick must sound where it is written. A nanotick is far smaller than a
+# sample, so ticks in the last ~0.09% of a block window round UP to blockSize; deciding membership
+# on that rounded value rejected them, and the strike came back a whole loop later. This is task
+# #16's "note stream one loop late", made deterministic — it fires every time at these settings.
+add_test(NAME block_edge_note
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/block_edge_note_check.sh
+)
+set_tests_properties(block_edge_note PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 add_test(NAME sampler_routed_input
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_routed_input_check.sh
 )

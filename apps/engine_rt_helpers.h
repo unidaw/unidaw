@@ -207,6 +207,14 @@ daw::SamplerEvent samplerNoteOnFor(uint32_t offsetInBlock, uint8_t pitch, uint8_
 // WHAT THE CALLER DOES ON FAILURE IS THE CALLER'S BUSINESS: three of the four `continue` in a loop
 // and one `return`s from the emitter. That difference stays at the call site, which is the only
 // part of these four that was ever genuinely different.
+//
+// MEMBERSHIP IS DECIDED BY FLOOR, THE POSITION IS ROUNDED AND CLAMPED — two questions that one
+// number used to answer, at the cost of a note. A nanotick is far smaller than a sample, so a tick
+// INSIDE this block's window can round UP to exactly blockSize; deciding membership on that rounded
+// value dropped it, and the next block never emitted it because its tick window starts after it.
+// Deciding on floor() keeps genuinely-later events rejected — clamping those would bunch every
+// future event onto the boundary — while an in-window overshoot lands on the block's last sample.
+// See the tests: both halves are pinned, because reinstating either failure is a one-line edit.
 struct BlockPlacement {
   uint64_t sampleTime;      // absolute, for the event entry
   uint32_t offsetInBlock;   // relative, for the sampler tee

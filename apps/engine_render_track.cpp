@@ -124,9 +124,15 @@ bool renderTrack(RenderTrackDeps& deps,
                 offsetSamples >= static_cast<int64_t>(engineConfig.blockSize)) {
               // SAID OUT LOUD, ONCE. With the generator's floor conversion in place this cannot
               // fire — its own negative control passes, which is the honest way to describe a
-              // guard that no longer has a reproducer. It is kept because the CLIP path converts
-              // ticks to samples by a different route that has not been audited for the same
-              // property, and because the alternative behaviour here was to DELETE the note.
+              // guard that no longer has a reproducer. It is kept because the alternative
+              // behaviour here was to DELETE the note.
+              //
+              // THE CLIP PATH HAS NOW BEEN AUDITED, and it had the bug this clamp exists to
+              // prevent. placeInBlock (engine_rt_helpers.cpp) decided membership with the ROUNDED
+              // sample, so a tick INSIDE this block's window that rounded up to blockSize was
+              // dropped and never re-emitted — 21 of every 22291 in-window positions at 120 bpm,
+              // 44.1 kHz and a 512-frame block. It decides by FLOOR and clamps the position now,
+              // which is this rule, reached by the other route.
               //
               // If it ever does fire, this line is the difference between a diagnosable report
               // and another year of "a note goes missing sometimes".
@@ -1420,9 +1426,15 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
                 offsetSamples >= static_cast<int64_t>(engineConfig.blockSize)) {
               // SAID OUT LOUD, ONCE. With the generator's floor conversion in place this cannot
               // fire — its own negative control passes, which is the honest way to describe a
-              // guard that no longer has a reproducer. It is kept because the CLIP path converts
-              // ticks to samples by a different route that has not been audited for the same
-              // property, and because the alternative behaviour here was to DELETE the note.
+              // guard that no longer has a reproducer. It is kept because the alternative
+              // behaviour here was to DELETE the note.
+              //
+              // THE CLIP PATH HAS NOW BEEN AUDITED, and it had the bug this clamp exists to
+              // prevent. placeInBlock (engine_rt_helpers.cpp) decided membership with the ROUNDED
+              // sample, so a tick INSIDE this block's window that rounded up to blockSize was
+              // dropped and never re-emitted — 21 of every 22291 in-window positions at 120 bpm,
+              // 44.1 kHz and a 512-frame block. It decides by FLOOR and clamps the position now,
+              // which is this rule, reached by the other route.
               //
               // If it ever does fire, this line is the difference between a diagnosable report
               // and another year of "a note goes missing sometimes".
