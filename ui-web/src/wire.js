@@ -407,7 +407,18 @@ export function decode(buf, store) {
         const cfg = new Int32Array(8);
         for (let k = 0; k < 8; k++) cfg[k] = v.getInt32(b + 8 + k * 4, true);
         store.patcherNodes[i] = { id: v.getUint32(b, true), type: v.getUint8(b + 4),
-                                  hasConfig: v.getUint8(b + 5) !== 0, config: cfg };
+                                  hasConfig: v.getUint8(b + 5) !== 0,
+                                  /*
+                                   * WHOSE GRAPH THIS NODE IS IN. 0 = a pool node, owned by no
+                                   * device. The region publishes the ASSEMBLED POOL — every
+                                   * device's graph unioned with re-id'd nodes — so the region
+                                   * itself cannot say whose graph it is and only this can.
+                                   *
+                                   * It is the fact an edit needs before it can be addressed to
+                                   * a device; without it every patcher command is pool-scoped,
+                                   * and a pool node is not in the graph a project saves.
+                                   */
+                                  owner: v.getUint16(b + 6, true), config: cfg };
       }
       o += nodeCount * PATCHER_NODE_BYTES;
       store.patcherEdges.length = edgeCount;

@@ -831,6 +831,8 @@ const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'sampl
                      'shared', 'fork', 'swapClip', 'keepClip',
                      'markers', 'addMarker', 'delMarker', 'nameMarker', 'moveMarker',
                      'colorMarker', 'clipText', 'samplerEnvelopeShape',
+                     // Which graph a patcher edit lands in — pool, or a device's own.
+                     'patchTarget',
                      'insertTime', 'setTimeSig',
                      // Modulation. `mapParam` takes a parameter INDEX and resolves the
                      // uid16 itself — the console should not have to type a 32-character

@@ -204,7 +204,19 @@ export class Chain {
       // clicks are a third of a second apart and the pool rebinds on any chain
       // change, so a device added or removed in between makes `pos` mean
       // something else entirely.
-      if (c.kind <= 2 && c.patcherNode >= 0) {
+      /*
+       * THE KIND DECIDES, not whether the device already has a node.
+       *
+       * This required `c.patcherNode >= 0` as well, and a patcher device the engine has not
+       * yet given a node is exactly the one you need to open — you open it to BUILD the graph.
+       * So a device added from the rack could never be opened, and the double-click fell
+       * through to the plugin-editor path, which the engine skips for non-VST kinds and logs
+       * to its own stderr: the card looked inert for the same reason `onDelete` did.
+       *
+       * Kinds 0..2 ARE the patcher kinds, so the kind alone already separates a patcher from a
+       * plugin; the node id was never what made the distinction.
+       */
+      if (c.kind <= 2) {
         if (this.onOpenPatcher) this.onOpenPatcher(this.vm.track, c.id, pos);
       } else if (this.onOpenEditor) {
         /*

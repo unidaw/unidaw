@@ -96,6 +96,33 @@ const SAMPLER_SLOT_NAME_BYTES: usize = 40;
 /// see, so a command that reported success would leave the field unchanged with nothing to read.
 const CLIP_NAME_BYTES: usize = 32;
 
+/// `kUiPatcherFlagHasDeviceId` / `kUiPatcherDeviceIdMask` (apps/event_payloads.h).
+///
+/// Per-device addressing rides in the 16-bit `flags` because UiPatcherGraphCommandPayload is
+/// exactly 40 bytes and full: bit 15 says an id is present, bits 0..14 carry it.
+const K_UI_PATCHER_FLAG_HAS_DEVICE_ID: u16 = 1 << 15;
+const K_UI_PATCHER_DEVICE_ID_MASK: u16 = 0x7FFF;
+
+/// The `flags` word for a patcher edit: which graph it lands in.
+///
+/// ONE function, because this is an addressing rule and every copy of an addressing rule in
+/// this repo has eventually disagreed with the others. The graph edit and the node config both
+/// carry it, the engine reads it identically for both, and a config that stayed pool-scoped
+/// while the add went to a device would tune a node that is not the one on screen.
+///
+/// `None` keeps the LEGACY POOL PATH, which existing callers depend on: device ids start at 0,
+/// so a bare 0 cannot mean "unspecified" and the presence bit is what makes absence expressible.
+fn patcher_edit_flags(body: &str) -> Result<u16, &'static str> {
+    match parse_num(body, "\"device\"").filter(|d| *d >= 0) {
+        Some(d) if d <= K_UI_PATCHER_DEVICE_ID_MASK as i64 =>
+            Ok(K_UI_PATCHER_FLAG_HAS_DEVICE_ID | (d as u16)),
+        // Refused rather than masked: an id that wrapped would address a DIFFERENT device and
+        // apply perfectly, which is the worst way for an addressing bug to behave.
+        Some(_) => Err("a patcher device id must fit 15 bits"),
+        None => Ok(0),
+    }
+}
+
 /// `kPatcherNodeTypeMax` (apps/patcher_graph.h) — the highest valid PatcherNodeType.
 ///
 /// A NUMBER, not a member name. The engine's own header explains why: a bound written against
@@ -544,7 +571,17 @@ struct Frame {
     /// per-device graphs later and this shape does not change.
     patcher_version: u32,
     patcher_device: u32,
-    patcher_nodes: Vec<(u32, u8, u8, [i32; 8])>,
+    /// (id, node_type, has_config, owner_device_id, config).
+    ///
+    /// `owner_device_id` is WHICH DEVICE'S GRAPH this node belongs to, or 0 for a pool node
+    /// owned by nothing. The region publishes the ASSEMBLED POOL — every device's graph unioned
+    /// with re-id'd nodes — so the region's own `device_id` cannot answer "whose graph is this"
+    /// and only the per-node owner can. Without it a UI cannot set kUiPatcherFlagHasDeviceId,
+    /// and every patcher edit it sends is pool-scoped: nodes that belong to no device and that
+    /// a project therefore saves nowhere. That is not a hypothetical — a suite in this repo
+    /// built a euclidean and an out node, asserted both existed, and saved a patcher device
+    /// with `nodes: 0`.
+    patcher_nodes: Vec<(u32, u8, u8, u16, [i32; 8])>,
     patcher_edges: Vec<(u32, u32, u32, u32, u8)>,
     /// Scratch, reused so the aggregation path allocates nothing per frame.
     ev: Vec<(u64, u8)>,
@@ -772,9 +809,18 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
         out.extend_from_slice(&b[..take]);
         out.extend(std::iter::repeat(0u8).take(24 - take));
     }
-    for &(id, ty, has_cfg, cfg) in &f.patcher_nodes {
+    for &(id, ty, has_cfg, owner, cfg) in &f.patcher_nodes {
         out.extend_from_slice(&id.to_le_bytes());
-        out.push(ty); out.push(has_cfg); out.push(0); out.push(0);
+        out.push(ty); out.push(has_cfg);
+        /*
+         * THE OWNING DEVICE, into the two bytes that were reserved — the same offset and width
+         * the engine's own UiPatcherNode gives it, and for the same reason it took its reserved
+         * half-word rather than growing: the record stays 40 bytes, nothing downstream moves,
+         * and a reader that does not know about the field sees the zero it always saw, which
+         * means exactly what it used to mean ("a pool node"). Backward compatible in the safe
+         * direction, so no WIRE_VERSION bump.
+         */
+        out.extend_from_slice(&owner.to_le_bytes());
         for v in cfg { out.extend_from_slice(&v.to_le_bytes()); }   // 40 bytes each
     }
     for &(sn, sp, dn, dp, kind) in &f.patcher_edges {
@@ -1220,7 +1266,7 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
         out.patcher_device = view.device_id;
         out.patcher_nodes.clear();
         for n in &view.nodes {
-            out.patcher_nodes.push((n.id, n.node_type, n.has_config, n.config));
+            out.patcher_nodes.push((n.id, n.node_type, n.has_config, n.owner_device_id, n.config));
         }
         out.patcher_edges.clear();
         for e in &view.edges {
@@ -2664,9 +2710,10 @@ fn build_patcher_config(body: &str) -> Option<Result<UiPatcherNodeConfigPayload,
         // engine would apply.
         _ => return Some(Err("no config layout for that node type")),
     }
+    let cfg_flags = match patcher_edit_flags(body) { Ok(f) => f, Err(e) => return Some(Err(e)) };
     Some(Ok(UiPatcherNodeConfigPayload {
         command_type: UiCommandType::SetPatcherNodeConfig as u16,
-        flags: 0,
+        flags: cfg_flags,
         track_id: n("\"track\"").max(0) as u32,
         base_version: n("\"base\"").max(0) as u32,
         node_id: n("\"node\"").max(0) as u32,
@@ -2766,9 +2813,27 @@ fn build_patcher_graph(body: &str) -> Option<Result<UiPatcherGraphCommandPayload
     let link = is_type(body, "patchlink");
     if !(add || del || link) { return None; }
     let n = |k: &str| parse_num(body, k).unwrap_or(0);
+    /*
+     * WHICH GRAPH THIS EDITS, and the difference is not cosmetic.
+     *
+     * With no `device`, the edit is POOL-SCOPED: it lands in the shared pool, on nodes that
+     * belong to no device, and since patcher-is-a-device that is not the graph a project
+     * renders or saves. That was the ONLY thing a UI could send, and it is why a suite could
+     * add a euclidean and an out node, watch both appear in the published graph, and save a
+     * patcher device holding `nodes: 0`.
+     *
+     * The engine carries the id in `flags` because the payload is exactly 40 bytes and full:
+     * bit 15 says one is PRESENT and bits 0..14 are the id. The presence bit is not decoration
+     * — device ids start at 0, so a bare 0 cannot mean "unspecified", and without the bit every
+     * existing caller sending flags=0 would silently start addressing device 0.
+     *
+     * Absent `device` therefore keeps the legacy pool path exactly as it was, which is what the
+     * suites that drive the pool depend on.
+     */
+    let flags = match patcher_edit_flags(body) { Ok(f) => f, Err(e) => return Some(Err(e)) };
     let mut p = UiPatcherGraphCommandPayload {
         command_type: UiCommandType::None as u16,
-        flags: 0,
+        flags,
         track_id: n("\"track\"").max(0) as u32,
         base_version: n("\"base\"").max(0) as u32,
         node_id: n("\"node\"").max(0) as u32,

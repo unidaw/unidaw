@@ -317,24 +317,44 @@ if (patcherVoice !== true) {
 await settle(1500);
 
 /*
- * THE GRAPH. `euclidean` makes a rhythm, `out` is where events leave the patcher, and the
- * link between them is what makes it a graph rather than two boxes. Node ids are read back
- * from `nodes` rather than assumed to be 0 and 1: they are minted by the engine.
+ * OPEN THE DEVICE'S GRAPH BEFORE EDITING IT, and this line is the whole lesson of this
+ * section.
+ *
+ * Without it every patcher edit is POOL-SCOPED: it lands in the shared graph owned by no
+ * device, and since patcher-is-a-device the pool is not what a project renders or saves. The
+ * first version of this suite skipped it, added a euclidean and an out node, asserted from
+ * `__uni.nodes()` that the patcher had two nodes, passed — and saved this device holding
+ * `nodes: 0`. Every assertion was true and the conclusion was false, because `nodes()` reports
+ * the ASSEMBLED POOL and a fact about the pool says nothing about the device.
+ *
+ * A double-click on the patcher card is the app's own gesture for opening a graph.
  */
+const opened = await page.evaluate(() => {
+  const cards = [...document.querySelectorAll('.dv-card')].filter((el) => el.style.display !== 'none');
+  const card = cards.find((el) => /patcher/i.test(el.textContent || ''));
+  if (!card) return null;
+  card.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  return card._devId;
+});
+await settle(900);
+const target = await page.evaluate(() => window.__uni.patchTarget());
+check(opened !== null && target.device === opened && target.track === 2,
+      'the patcher graph is opened for THIS track and device — edits are device-scoped',
+      `${JSON.stringify(target)} vs device ${opened}`);
+
 await run('addnode euclidean');
-await settle(500);
+await settle(600);
 await run('addnode out');
-await settle(500);
+await settle(600);
 const nodeList = await page.evaluate(() => window.__uni.nodes());
 const ids = Array.isArray(nodeList) ? nodeList.map((n) => n.id) : [];
-check(ids.length >= 2, 'the patcher has a euclidean and an out node',
+check(ids.length >= 2, 'two nodes are added',
       JSON.stringify(nodeList).slice(0, 160));
 if (ids.length >= 2) {
-  const linked = await run(`link ${ids[0]} ${ids[1]}`);
+  const linked = await run(`link ${ids[ids.length - 2]} ${ids[ids.length - 1]}`);
   await settle(700);
-  const after = await page.evaluate(() => window.__uni.nodes());
-  check(!/refus|error|no /i.test(String(linked)), 'the two nodes link',
-        `${JSON.stringify(String(linked)).slice(0, 120)} · ${JSON.stringify(after).slice(0, 120)}`);
+  check(!/refus|error|no /i.test(String(linked)), 'and they link',
+        JSON.stringify(String(linked)).slice(0, 120));
 }
 
 await typeNotes(['z', 'x'], 16, 2);
@@ -384,6 +404,23 @@ console.log('   parts on the timeline:',
             parts.map((p) => `${p.name}@${p.atSec.toFixed(2)}s`).join(' '));
 check(parts.length === 3, 'three parts are placed on the timeline',
       JSON.stringify(parts.map((p) => [p.name, +p.atSec.toFixed(2)])));
+
+/*
+ * THE PATCHER GRAPH IS IN THE FILE — the claim the published graph cannot make.
+ *
+ * Nothing on the wire distinguishes "this device's graph has two nodes" from "the pool has two
+ * nodes and this device has none"; that is the defect, so the check has to read the project.
+ */
+const patcherDev = saved
+  ? ((saved.tracks.find((t) => t.track_id === 2) || {}).device_chain || [])
+      .find((d) => String(d.kind || '').includes('patcher'))
+  : null;
+const graph = (patcherDev && (patcherDev.patcher_state || patcherDev.patcher)) || {};
+check((graph.nodes || []).length >= 2,
+      "the patcher nodes are saved in the DEVICE'S graph, not the pool",
+      `the saved device holds ${(graph.nodes || []).length} node(s)`);
+check((graph.edges || []).length >= 1, 'and the link with them',
+      `the saved device holds ${(graph.edges || []).length} edge(s)`);
 
 const noteTotal = ((await st()).engine || {}).noteCount || 0;
 check(noteTotal >= 9, 'every part contributed notes', `${noteTotal} notes`);

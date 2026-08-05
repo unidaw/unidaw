@@ -2016,8 +2016,29 @@ function rackTrack() {
 }
 
 /** Add a node of the armed type. */
+/*
+ * ADDRESSING FOR EVERY PATCHER EDIT: the track and the device whose graph is open.
+ *
+ * `track: 0` was hardcoded here and in linkPatcherNode, and no device was named at all — so
+ * every node this app ever created went into the shared POOL on track 0, owned by nothing.
+ * Since patcher-is-a-device the pool is not the graph a project renders or saves, which is
+ * how a suite came to add a euclidean and an out node, watch both appear in the published
+ * graph, assert they were there, and save the patcher device holding `nodes: 0`.
+ *
+ * `patchDevice < 0` means no device has been opened, and then the edit stays POOL-SCOPED
+ * exactly as before — deliberately, because that is the behaviour the patcher suites drive
+ * and the engine's legacy path. Opening a patcher from the rack is what makes edits land in
+ * a device's own graph.
+ */
+function patchTarget(extra) {
+  const msg = extra || {};
+  msg.track = state.patchTrack | 0;
+  if (state.patchDevice >= 0) msg.device = state.patchDevice;
+  return msg;
+}
+
 function addPatcherNode() {
-  return sendGraph({ type: 'patchadd', nodeType: state.patchAddType, track: 0 });
+  return sendGraph(patchTarget({ type: 'patchadd', nodeType: state.patchAddType }));
 }
 
 /**
@@ -2103,7 +2124,7 @@ function removeTrack(track) {
 function removePatcherNode() {
   const node = selectedPatcherNode();
   if (!node) { state.reject = 'select a node first'; return false; }
-  if (!sendGraph({ type: 'patchdel', node: node.id, track: 0 })) return false;
+  if (!sendGraph(patchTarget({ type: 'patchdel', node: node.id }))) return false;
   state.selectedNode = -1;
   state.patchLinkFrom = null;
   return true;
@@ -2124,8 +2145,8 @@ function linkPatcherNode() {
   const from = state.patchLinkFrom;
   state.patchLinkFrom = null;
   if (from.id === node.id) { state.reject = 'a node cannot connect to itself'; return false; }
-  return sendGraph({ type: 'patchlink', src: from.id, srcType: from.type,
-                     dst: node.id, dstType: node.type, track: 0 });
+  return sendGraph(patchTarget({ type: 'patchlink', src: from.id, srcType: from.type,
+                                 dst: node.id, dstType: node.type }));
 }
 
 /** Drop the pending entries the engine has confirmed. Once per engine frame. */
@@ -2158,7 +2179,9 @@ function nudgePatcher(dir) {
   if (!node) { state.reject = 'select a node first'; return null; }
   const next = nudgeConfig(node.type, configOf(node), state.selectedField, dir);
   if (!next) { state.reject = 'that node has no editable configuration'; return null; }
-  const msg = { type: 'patchcfg', node: node.id, nodeType: node.type, track: 0 };
+  // Through patchTarget like every other graph edit: a config that stayed pool-scoped while
+  // the add went to a device would tune a node that is not the one on screen.
+  const msg = patchTarget({ type: 'patchcfg', node: node.id, nodeType: node.type });
   for (let i = 0; i < 8; i++) msg['c' + i] = next[i];
   if (!conn || !conn.send(msg)) { state.reject = 'no engine'; return null; }
   patchPending.set(node.id, next);
@@ -2684,6 +2707,12 @@ const chain = new Chain(chainHost, {
    * graph, so whatever you were working in is what you want to keep.
    */
   onOpenPatcher: (track, deviceId, pos) => {
+    /*
+     * REMEMBER WHOSE GRAPH THIS IS. Both arguments arrived here and neither was stored, so the
+     * app drew a device's graph and sent every edit to the pool on track 0. See patchTarget.
+     */
+    state.patchTrack = track | 0;
+    state.patchDevice = deviceId >= 0 ? (deviceId | 0) : -1;
     state.chainSelected = pos;
     state.selectedNode = -1;
     state.selectedField = 0;
@@ -4044,8 +4073,14 @@ const dockApi = {
     const src = nodes.find((n) => n.id === a), dst = nodes.find((n) => n.id === b);
     if (!src) throw new Error('no node ' + a);
     if (!dst) throw new Error('no node ' + b);
-    const msg = { type: 'patchlink', src: a, srcType: src.type,
-                  dst: b, dstType: dst.type, track: 0 };
+    /*
+     * THROUGH patchTarget, like every other graph edit. This built its own message with
+     * `track: 0` and no device — a second copy of the addressing rule, which diverged from the
+     * keyboard's the moment the keyboard's was fixed. The console then linked in the POOL while
+     * the keyboard linked in the device, and both reported success.
+     */
+    const msg = patchTarget({ type: 'patchlink', src: a, srcType: src.type,
+                              dst: b, dstType: dst.type });
     if (kind !== undefined && !Number.isNaN(kind)) msg.kind = kind;
     if (!sendGraph(msg)) throw new Error(state.reject || 'refused');
     return 'linking #' + a + ' to #' + b;
@@ -4521,6 +4556,13 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: FIELDS_PER_NOTE,
    */
   editMode: true,
   selectedNode: -1, selectedField: 0, patchAddType: 1, patchLinkFrom: null,
+  /*
+   * WHOSE PATCHER GRAPH IS OPEN. `patchDevice: -1` means none has been opened and edits stay
+   * POOL-SCOPED, which is the engine's legacy path and what the patcher suites drive. Set by
+   * opening a patcher from the rack; see patchTarget for why sending neither was a silent
+   * data loss rather than a cosmetic omission.
+   */
+  patchTrack: 0, patchDevice: -1,
   // Which track's chain the rack shows: null follows the cursor. See the rack's
   // opts below — the master has no lane, so it needs a pointer of its own.
   chainTrack: null,
@@ -8971,8 +9013,14 @@ window.__uni = {
   // tracker column and the chrome share one spelling without hardcoding either.
   harmonyName: (i) => (engine && engine.harmony && engine.harmony[i]
     ? nameHarmony(engine.harmony[i]).label : ''),
+  /** Which graph the next patcher edit will land in — see patchTarget. */
+  patchTarget: () => ({ track: state.patchTrack | 0, device: state.patchDevice }),
   patcher: () => (engine ? { version: engine.patcherVersion, device: engine.patcherDevice,
-    nodes: engine.patcherNodes.map(n => ({ id: n.id, type: n.type, cfg: Array.from(n.config) })),
+    // `owner` is which DEVICE'S graph the node is in, 0 for a pool node owned by nothing.
+    // Without it nothing on this side can tell a device's graph from the assembled pool, which
+    // is how a suite came to assert two nodes existed while the device saved with none.
+    nodes: engine.patcherNodes.map(n => ({ id: n.id, type: n.type, owner: n.owner,
+                                           cfg: Array.from(n.config) })),
     edges: engine.patcherEdges.slice() } : null),
   follow: (on) => { state.followPlayhead = on === undefined ? !state.followPlayhead : !!on;
                     draw(); return state.followPlayhead; },
