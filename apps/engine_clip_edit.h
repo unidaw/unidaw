@@ -28,6 +28,7 @@
 #include "engine_types.h"
 #include "event_payloads.h"
 #include "note_entry.h"
+#include "apps/engine_state.h"
 
 namespace daw::engine {
 
@@ -38,6 +39,8 @@ struct LocateTargetDeps {
 };
 
 struct ClipEditDeps {
+  // The engine's state rather than 2 of its groups by name — apps/engine_state.h.
+  EngineState& engineState;
   std::function<uint64_t(uint64_t)> barEndTick;
   std::atomic<bool>& clipDirty;
   std::atomic<uint32_t>& clipVersion;
@@ -50,14 +53,12 @@ struct ClipEditDeps {
   std::function<void(const daw::UiChordDiffPayload&)> emitChordDiff;
   std::function<void(const daw::UiDiffPayload&)> emitUiDiff;
   std::function<EditTarget(TrackRuntime&, uint64_t, bool)> locateEditTarget;
-  TransportState& transport;
   std::atomic<uint32_t>& nextChordId;
   std::atomic<uint32_t>& nextClipId;
   const uint64_t patternTicks;
   std::function<void(uint32_t, TrackStoreState, TrackStoreState)> pushStructuralUndo;
   std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&)> rebuildFlatAndPublish;
   std::function<TrackStoreState(const TrackRuntime&)> snapshotTrackStore;
-  TrackTable& trackTable;
   // ADDED WITH requireMatchingClipVersion, which REFUSES rather than returning a value: it tells
   // the caller through emitClipReject and records the refusal in the journal, so both arrive here
   // together. clipVersion, emitUiDiff and trackTable were already members.

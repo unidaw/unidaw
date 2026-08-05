@@ -93,10 +93,10 @@ void handleAddPatcherNode(PatcherCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
-  auto& patcherGraphState = deps.patcherGraph.patcherGraphState;
-  auto& patcherPoolEdited = deps.patcherGraph.patcherPoolEdited;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
+  auto& patcherGraphState = deps.engineState.patcherGraph.patcherGraphState;
+  auto& patcherPoolEdited = deps.engineState.patcherGraph.patcherPoolEdited;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   const auto& emitPatcherGraphDelta = deps.emitPatcherGraphDelta;
   const auto& emitPatcherGraphError = deps.emitPatcherGraphError;
@@ -345,10 +345,10 @@ void handleSetPatcherNodeConfig(PatcherCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
-  auto& patcherGraphState = deps.patcherGraph.patcherGraphState;
-  auto& patcherPoolEdited = deps.patcherGraph.patcherPoolEdited;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
+  auto& patcherGraphState = deps.engineState.patcherGraph.patcherGraphState;
+  auto& patcherPoolEdited = deps.engineState.patcherGraph.patcherPoolEdited;
   const auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   const auto& emitPatcherGraphDelta = deps.emitPatcherGraphDelta;
   const auto& emitPatcherGraphError = deps.emitPatcherGraphError;
@@ -462,7 +462,7 @@ void handleSavePatcherPreset(PatcherCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& header,
             daw::UiCommandType commandType) {
-  auto& patcherGraphState = deps.patcherGraph.patcherGraphState;
+  auto& patcherGraphState = deps.engineState.patcherGraph.patcherGraphState;
   const auto& emitUiDiff = deps.emitUiDiff;
   {
   daw::UiPatcherPresetCommandPayload presetPayload{};

@@ -63,10 +63,11 @@ struct Recorded {
 struct Fixture {
   // ONE OBJECT NOW. trackTable.tracks and trackTable.tracksMutex were never apart in any interface, so they are a
   // TrackTable; the handler takes it whole and the fixture builds it whole.
-  TrackTable trackTable;
+  daw::engine::EngineState engineState;
+  TrackTable& trackTable = engineState.trackTable;
   // ONE OBJECT NOW, not four separate locals. PatcherGraphOwner holds the pool, the RT snapshot
   // and the two flags; the handler takes it whole, so the fixture builds it whole.
-  PatcherGraphOwner patcherGraph;
+  PatcherGraphOwner& patcherGraph = engineState.patcherGraph;
   Recorded rec;
 
   std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)> buildSnapshotFn =
@@ -86,7 +87,7 @@ struct Fixture {
   std::function<void()> updateSnapshotFn = [this]() { rec.snapshots++; };
 
   PatcherCommandDeps deps() {
-    return PatcherCommandDeps{trackTable, patcherGraph, buildSnapshotFn,
+    return PatcherCommandDeps{engineState, buildSnapshotFn,
                               emitDeltaFn,     emitErrorFn, emitUiDiffFn, reassembleFn,
                               updateSnapshotFn};
   }

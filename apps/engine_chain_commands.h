@@ -23,13 +23,14 @@
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
 #include "apps/plugin_cache.h"
+#include "apps/engine_state.h"
 
 namespace daw::engine {
 
 struct ChainCommandDeps {
-  TrackTable& trackTable;
+  // The engine's state rather than 2 of its groups by name — apps/engine_state.h.
+  EngineState& engineState;
   std::unique_ptr<TrackRuntime>& masterTrack;
-  TransportState& transport;
   const daw::PluginCache& pluginCache;
   const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>& buildTrackSnapshot;
   const std::function<void(uint16_t, uint32_t, uint32_t, uint32_t, uint32_t)>& emitChainError;

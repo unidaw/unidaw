@@ -16,9 +16,9 @@ namespace daw::engine {
 void handleUndo(UndoCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& undoMutex = deps.undoStacks.undoMutex;
-  auto& undoStack = deps.undoStacks.undoStack;
-  auto& redoStack = deps.undoStacks.redoStack;
+  auto& undoMutex = deps.engineState.undoStacks.undoMutex;
+  auto& undoStack = deps.engineState.undoStacks.undoStack;
+  auto& redoStack = deps.engineState.undoStacks.redoStack;
   const auto& applyUndoEntry = deps.applyUndoEntry;
   const auto& restoreSongStore = deps.restoreSongStore;
   const auto& restoreTrackStore = deps.restoreTrackStore;
@@ -77,9 +77,9 @@ void handleUndo(UndoCommandDeps& deps,
 void handleRedo(UndoCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& undoMutex = deps.undoStacks.undoMutex;
-  auto& undoStack = deps.undoStacks.undoStack;
-  auto& redoStack = deps.undoStacks.redoStack;
+  auto& undoMutex = deps.engineState.undoStacks.undoMutex;
+  auto& undoStack = deps.engineState.undoStacks.undoStack;
+  auto& redoStack = deps.engineState.undoStacks.redoStack;
   const auto& applyUndoEntry = deps.applyUndoEntry;
   const auto& restoreSongStore = deps.restoreSongStore;
   const auto& restoreTrackStore = deps.restoreTrackStore;

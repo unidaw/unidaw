@@ -23,12 +23,13 @@
 #include "apps/engine_types.h"
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
+#include "apps/engine_state.h"
 
 namespace daw::engine {
 
 struct PatcherCommandDeps {
-  TrackTable& trackTable;
-  PatcherGraphOwner& patcherGraph;
+  // The engine's state rather than 2 of its groups by name — apps/engine_state.h.
+  EngineState& engineState;
   const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>& buildTrackSnapshot;
   const std::function<void(uint32_t, uint16_t, uint32_t, uint32_t, uint32_t,
                            uint32_t, uint32_t, uint32_t, uint32_t)>& emitPatcherGraphDelta;

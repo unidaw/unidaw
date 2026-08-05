@@ -21,12 +21,14 @@
 #include "engine_producer_telemetry.h"
 #include "engine_types.h"
 #include "platform_juce/juce_wrapper.h"
+#include "apps/engine_state.h"
 
 namespace daw::engine {
 
 struct ShutdownDeps {
+  // The engine's state rather than 2 of its groups by name — apps/engine_state.h.
+  EngineState& engineState;
   // Six counters in one: see apps/engine_producer_telemetry.h.
-  ProducerTelemetry& producerTelemetry;
   std::unique_ptr<daw::IAudioBackend>& audioBackend;
   std::unique_ptr<EngineAudioCallback>& audioCallback;
   std::thread& consumer;
@@ -38,7 +40,6 @@ struct ShutdownDeps {
   // THE LOAD SUMMARY'S SIX COUNTERS. They are written only by the producer thread and read here
   // after it has been joined, which is why plain relaxed reads are enough at this point.
   std::thread& restartWorker;
-  TrackTable& trackTable;
   std::thread& uiThread;
   UiShmState& uiShm;
   std::thread& xrunReporter;

@@ -149,17 +149,16 @@ void produceBlock(ProducerBlockDeps& deps,
       daw::engine::NoteResolution noteResolution{
           getHarmonyAt, getScaleForHarmony, quantizePitch, wrapTick, nextNoteId};
       daw::engine::RenderTrackDeps renderTrackDeps{
+          deps.engineState,
           noteResolution,
           engineConfig,
           deps.harmonyTimeline,
           lastOverflowTick,
-          deps.engineState.patcherGraph,
           patcherParallel,
           patcherPool,
           projectSeed,
           tempoProvider,
           traceNotes,
-          deps.engineState.transport,
           warnedEventOutsideBlock,
           resolveDevicePluginPath};
       auto renderTrack = [&](TrackRuntime& runtime,

@@ -42,8 +42,8 @@ void handleLoadPluginOnTrack(DeviceCommandDeps& deps,
 void handleOpenPluginEditor(DeviceCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
   const auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
   {
   const uint32_t trackId = payload.trackId;
@@ -101,9 +101,9 @@ void handleOpenPluginEditor(DeviceCommandDeps& deps,
 void handleSetDeviceParam(DeviceCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
-  auto& playing = deps.transport.playing;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
+  auto& playing = deps.engineState.transport.playing;
   auto& audioPlaybackBlockId = deps.audioPlaybackBlockId;
   const auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
   {

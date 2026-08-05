@@ -23,6 +23,7 @@
 #include "engine_song_timing.h"
 #include "engine_transport_state.h"
 #include "engine_types.h"
+#include "apps/engine_state.h"
 
 namespace daw::engine {
 
@@ -37,6 +38,8 @@ bool writeWav16(const std::string& path,
                 uint32_t sampleRate);
 
 struct OfflineRenderDeps {
+  // The engine's state rather than 2 of its groups by name — apps/engine_state.h.
+  EngineState& engineState;
   EngineAudioCallback* audioCallback;  // never null on this path; main() checks before calling
   const uint32_t effBlockSize;
   const double effSampleRate;
@@ -47,9 +50,7 @@ struct OfflineRenderDeps {
   std::atomic<bool>& resetTimeline;
   const int runSeconds;
   std::atomic<bool>& running;
-  SongTiming& songTiming;
   daw::TempoMapProvider& tempoProvider;
-  TransportState& transport;
 };
 
 // Renders the loaded project to deps.renderName and clears deps.running when done. Sets

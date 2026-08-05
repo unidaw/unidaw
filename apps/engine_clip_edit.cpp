@@ -185,12 +185,12 @@ bool applyAddNote(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, uint6
   auto forkOwnedClip = [&](auto&&... a) { return daw::engine::forkOwnedClip(deps, decltype(a)(a)...); };
   auto growLengthsForContent = [&](auto&&... a) { return daw::engine::growLengthsForContent(deps, decltype(a)(a)...); };
   auto& locateEditTarget = deps.locateEditTarget;
-  auto& loopEndNanotick = deps.transport.loopEndNanotick;
-  auto& loopStartNanotick = deps.transport.loopStartNanotick;
+  auto& loopEndNanotick = deps.engineState.transport.loopEndNanotick;
+  auto& loopStartNanotick = deps.engineState.transport.loopStartNanotick;
   auto& patternTicks = deps.patternTicks;
   auto& snapshotTrackStore = deps.snapshotTrackStore;
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
 
     TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
@@ -311,8 +311,8 @@ bool applySetRowOps(ClipEditDeps& deps, uint32_t trackId, uint32_t clipId, daw::
   auto& pushStructuralUndo = deps.pushStructuralUndo;
   auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
   auto& snapshotTrackStore = deps.snapshotTrackStore;
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
 
     TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
@@ -457,8 +457,8 @@ bool applyLocalNoteEdit(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick,
   auto& pushStructuralUndo = deps.pushStructuralUndo;
   auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
   auto& snapshotTrackStore = deps.snapshotTrackStore;
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
 
     TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
@@ -646,13 +646,13 @@ bool applyAddChord(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, uint
   auto forkOwnedClip = [&](auto&&... a) { return daw::engine::forkOwnedClip(deps, decltype(a)(a)...); };
   auto growLengthsForContent = [&](auto&&... a) { return daw::engine::growLengthsForContent(deps, decltype(a)(a)...); };
   auto& locateEditTarget = deps.locateEditTarget;
-  auto& loopEndNanotick = deps.transport.loopEndNanotick;
-  auto& loopStartNanotick = deps.transport.loopStartNanotick;
+  auto& loopEndNanotick = deps.engineState.transport.loopEndNanotick;
+  auto& loopStartNanotick = deps.engineState.transport.loopStartNanotick;
   auto& nextChordId = deps.nextChordId;
   auto& patternTicks = deps.patternTicks;
   auto& snapshotTrackStore = deps.snapshotTrackStore;
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
 
     TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
@@ -770,8 +770,8 @@ bool applyRemoveNote(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, ui
   auto growLengthsForContent = [&](auto&&... a) { return daw::engine::growLengthsForContent(deps, decltype(a)(a)...); };
   auto& locateEditTarget = deps.locateEditTarget;
   auto& snapshotTrackStore = deps.snapshotTrackStore;
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
 
     TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
@@ -851,8 +851,8 @@ bool applyRemoveChord(ClipEditDeps& deps, uint32_t trackId, uint32_t chordId, bo
   auto consumeClipVersionForNoOp = [&](auto&&... a) { return daw::engine::consumeClipVersionForNoOp(deps, decltype(a)(a)...); };
   auto forkOwnedClip = [&](auto&&... a) { return daw::engine::forkOwnedClip(deps, decltype(a)(a)...); };
   auto& snapshotTrackStore = deps.snapshotTrackStore;
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
 
     TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
@@ -893,8 +893,8 @@ bool applyRemoveChordAt(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick,
   auto forkOwnedClip = [&](auto&&... a) { return daw::engine::forkOwnedClip(deps, decltype(a)(a)...); };
   auto& locateEditTarget = deps.locateEditTarget;
   auto& snapshotTrackStore = deps.snapshotTrackStore;
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
 
     TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
@@ -934,8 +934,8 @@ bool requireMatchingClipVersion(ClipEditDeps& deps, uint32_t baseVersion, daw::U
   auto& emitClipReject = deps.emitClipReject;
   auto& emitUiDiff = deps.emitUiDiff;
   auto& historyAppend = deps.historyAppend;
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
 
     uint32_t current = clipVersion.load(std::memory_order_acquire);
     // Undo/Redo (and the other global-scope ops) can touch ANY track, so they are
@@ -1086,8 +1086,8 @@ uint32_t bumpClipVersionFor(ClipEditDeps& deps, TrackRuntime* runtime) {
 
 void bumpAllTrackClipVersions(ClipEditDeps& deps) {
   auto& clipVersion = deps.clipVersion;
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
 
 
     // Per-track values first, the global gate last — see bumpClipVersionFor. The window
@@ -1125,8 +1125,8 @@ void ensurePlacementIds(ClipEditDeps& deps, std::vector<daw::ProjectPlacement>& 
 }
 
 bool editIsLocalScope(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, uint16_t flags) {
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
   auto findPlacementAt = [&](auto&&... a) { return daw::engine::findPlacementAt(deps, decltype(a)(a)...); };
 
 
@@ -1165,8 +1165,8 @@ bool isEditableClip(ClipEditDeps& deps, const TrackRuntime& rt, uint32_t id) {
 }
 
 uint32_t bumpTrackClipVersion(ClipEditDeps& deps, uint32_t trackId) {
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
   auto bumpClipVersionFor = [&](TrackRuntime* rt_) {
     return daw::engine::bumpClipVersionFor(deps, rt_);
   };

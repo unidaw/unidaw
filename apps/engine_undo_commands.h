@@ -22,14 +22,15 @@
 #include "apps/engine_types.h"
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
+#include "apps/engine_state.h"
 
 namespace daw::engine {
 
 struct UndoCommandDeps {
-  TrackTable& trackTable;
+  // The engine's state rather than 2 of its groups by name — apps/engine_state.h.
+  EngineState& engineState;
   // The two stacks and their lock are one thing: every push, undo and redo is a transaction
   // across BOTH vectors. See apps/engine_undo_stacks.h.
-  UndoStacks& undoStacks;
   const std::function<bool(const daw::UndoEntry&, bool)>& applyUndoEntry;
   const std::function<bool(const SongStoreState&)>& restoreSongStore;
   const std::function<bool(uint32_t, const TrackStoreState&)>& restoreTrackStore;

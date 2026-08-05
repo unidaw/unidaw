@@ -55,8 +55,19 @@ import re, glob, os, sys
 # would be empty too and the completeness rule would have nothing to compare. Keep them within
 # sight of the real counts: they were 30/400 against an actual 51/536, enough slack to lose
 # twenty structs without a word.
+#
+# MIN_ARGS LOWERED 2026-08-05, 480 -> 450, and the reason matters because lowering a floor is how
+# a ratchet is usually defeated. The count is falling ON PURPOSE: deps structs are being converted
+# to take one `EngineState&` instead of naming the engine's state groups individually (#26), which
+# is the work this check's whole subject — positional wiring — exists to make safe. 536 -> 474 so
+# far, and it will keep falling as the remaining ~17 structs convert.
+#
+# THE FLOOR STILL HAS TO MEAN SOMETHING. It is set just under the current count rather than at
+# some comfortable distance, precisely so it keeps tripping as the work proceeds and each drop is
+# read and justified rather than absorbed. A floor with room for the next forty arguments to
+# vanish is the stale-floor failure this comment block already records having made once.
 MIN_STRUCTS = 45
-MIN_ARGS = 480
+MIN_ARGS = 450
 
 def struct_members(text, name):
     # SAME TOLERANCE AS THE DECLARATION SCAN ABOVE. These two patterns must agree: with only one

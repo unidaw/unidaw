@@ -22,12 +22,13 @@
 #include "apps/engine_types.h"
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
+#include "apps/engine_state.h"
 
 namespace daw::engine {
 
 struct DeviceCommandDeps {
-  TrackTable& trackTable;
-  TransportState& transport;
+  // The engine's state rather than 2 of its groups by name — apps/engine_state.h.
+  EngineState& engineState;
   std::atomic<uint32_t>& audioPlaybackBlockId;
   const std::string& pluginPath;
   const std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)>& resolveDevicePluginPath;

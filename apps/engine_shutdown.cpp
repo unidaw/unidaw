@@ -22,17 +22,17 @@ void shutdownEngine(ShutdownDeps& deps) {
   auto& masterRenderThread = deps.masterRenderThread;
   auto& observedPipelineBlocks = deps.observedPipelineBlocks;
   auto& producer = deps.producer;
-  auto& producerBlockUsMax = deps.producerTelemetry.producerBlockUsMax;
-  auto& producerBlockUsTotal = deps.producerTelemetry.producerBlockUsTotal;
-  auto& producerBlocksOverBudget = deps.producerTelemetry.producerBlocksOverBudget;
-  auto& producerBlocksTimed = deps.producerTelemetry.producerBlocksTimed;
-  auto& producerSamplerUsMax = deps.producerTelemetry.producerSamplerUsMax;
-  auto& producerSamplerUsTotal = deps.producerTelemetry.producerSamplerUsTotal;
+  auto& producerBlockUsMax = deps.engineState.producerTelemetry.producerBlockUsMax;
+  auto& producerBlockUsTotal = deps.engineState.producerTelemetry.producerBlockUsTotal;
+  auto& producerBlocksOverBudget = deps.engineState.producerTelemetry.producerBlocksOverBudget;
+  auto& producerBlocksTimed = deps.engineState.producerTelemetry.producerBlocksTimed;
+  auto& producerSamplerUsMax = deps.engineState.producerTelemetry.producerSamplerUsMax;
+  auto& producerSamplerUsTotal = deps.engineState.producerTelemetry.producerSamplerUsTotal;
   auto& restartWorker = deps.restartWorker;
   auto& uiThread = deps.uiThread;
   auto& uiShm = deps.uiShm;
   auto& xrunReporter = deps.xrunReporter;
-  auto& tracks = deps.trackTable.tracks;
+  auto& tracks = deps.engineState.trackTable.tracks;
 
   if (restartWorker.joinable()) {
     restartWorker.join();

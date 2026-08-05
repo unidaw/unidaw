@@ -71,9 +71,9 @@ void runOfflinePump(OfflineRenderDeps& deps) {
   auto& resetTimeline = deps.resetTimeline;
   auto& runSeconds = deps.runSeconds;
   auto& running = deps.running;
-  auto& songTiming = deps.songTiming;
+  auto& songTiming = deps.engineState.songTiming;
   auto& tempoProvider = deps.tempoProvider;
-  auto& transport = deps.transport;
+  auto& transport = deps.engineState.transport;
 
     // THE OFFLINE PUMP. This is the whole of "faster than realtime": be the consumer.
     //

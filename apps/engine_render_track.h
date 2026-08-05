@@ -43,6 +43,7 @@
 #include "apps/shared_memory.h"
 #include "apps/time_base.h"
 #include "apps/worker_pool.h"
+#include "apps/engine_state.h"
 
 namespace daw::engine {
 
@@ -71,6 +72,8 @@ struct NoteResolution {
 };
 
 struct RenderTrackDeps {
+  // The engine's state rather than 2 of its groups by name — apps/engine_state.h.
+  EngineState& engineState;
   NoteResolution& noteResolution;
   const daw::HostConfig& engineConfig;
   HarmonyTimeline& harmonyTimeline;
@@ -79,13 +82,11 @@ struct RenderTrackDeps {
   // one device on exactly one track. Without this the render path cannot tell that pool apart from
   // a legacy whole-project graph, and it has to guess — which it did, by asking only whether THIS
   // track carries a patcher device. A track that carried none then ran every OTHER track's nodes.
-  PatcherGraphOwner& patcherGraph;
   bool& patcherParallel;
   std::unique_ptr<WorkerPool>& patcherPool;
   std::atomic<uint64_t>& projectSeed;
   daw::TempoMapProvider& tempoProvider;
   const bool& traceNotes;
-  TransportState& transport;
   std::atomic<bool>& warnedEventOutsideBlock;
   std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)> resolveDevicePluginPath;
 };

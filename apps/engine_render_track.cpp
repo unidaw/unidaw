@@ -33,8 +33,8 @@ bool renderTrack(RenderTrackDeps& deps,
   auto& harmonyEvents = deps.harmonyTimeline.harmonyEvents;
   auto& harmonyMutex = deps.harmonyTimeline.harmonyMutex;
   auto& lastOverflowTick = deps.lastOverflowTick;
-  auto& patcherAssembledFromDevices = deps.patcherGraph.patcherAssembledFromDevices;
-  auto& patcherGraphSnapshot = deps.patcherGraph.patcherGraphSnapshot;
+  auto& patcherAssembledFromDevices = deps.engineState.patcherGraph.patcherAssembledFromDevices;
+  auto& patcherGraphSnapshot = deps.engineState.patcherGraph.patcherGraphSnapshot;
   auto& patcherParallel = deps.patcherParallel;
   auto& patcherPool = deps.patcherPool;
   auto& tempoProvider = deps.tempoProvider;
@@ -535,7 +535,7 @@ bool renderTrack(RenderTrackDeps& deps,
         // stays so the loop-split call site below reads unchanged.
         auto emitNotes = [&](uint64_t rangeStart, uint64_t rangeEnd, uint64_t baseTickDelta) {
           emitNotesInRange(deps.noteResolution, deps.engineConfig, deps.traceNotes,
-                           deps.transport, runtime, trackState, noteCutCtx, rangeStart, rangeEnd,
+                           deps.engineState.transport, runtime, trackState, noteCutCtx, rangeStart, rangeEnd,
                            baseTickDelta, blockSampleStart, loopEndTicks, loopLen,
                            samplesPerTick, midiChannel, currentBlockId, paramTargetIndex);
         };

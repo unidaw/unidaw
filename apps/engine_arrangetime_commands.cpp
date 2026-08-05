@@ -10,8 +10,8 @@ namespace daw::engine {
 void handleArrangeTime(ArrangeTimeCommandDeps& deps,
             const daw::EventEntry& entry,
             daw::UiCommandType commandType) {
-  auto& arrangeMutex = deps.arrange.arrangeMutex;
-  auto& arrangeVersion = deps.arrange.arrangeVersion;
+  auto& arrangeMutex = deps.engineState.arrange.arrangeMutex;
+  auto& arrangeVersion = deps.engineState.arrange.arrangeVersion;
   auto& automationVersion = deps.automationVersion;
   auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   auto& bumpClipVersionFor = deps.bumpClipVersionFor;
@@ -21,18 +21,18 @@ void handleArrangeTime(ArrangeTimeCommandDeps& deps,
   auto& harmonyMutex = deps.harmonyTimeline.harmonyMutex;
   auto& harmonyVersion = deps.harmonyTimeline.harmonyVersion;
   auto& historyAppend = deps.historyAppend;
-  auto& loadedTempoMap = deps.songTiming.loadedTempoMap;
-  auto& markerList = deps.arrange.markerList;
-  auto& meterSnapshot = deps.songTiming.meterSnapshot;
+  auto& loadedTempoMap = deps.engineState.songTiming.loadedTempoMap;
+  auto& markerList = deps.engineState.arrange.markerList;
+  auto& meterSnapshot = deps.engineState.songTiming.meterSnapshot;
   auto& pushUndo = deps.pushUndo;
   auto& rebuildAudioRender = deps.rebuildAudioRender;
   auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
   auto& recomputeSongEnd = deps.recomputeSongEnd;
   auto& snapshotSongStore = deps.snapshotSongStore;
   auto& snapshotTracks = deps.snapshotTracks;
-  auto& songMeter = deps.arrange.songMeter;
-  auto& songTimeSigDen = deps.songTiming.songTimeSigDen;
-  auto& songTimeSigNum = deps.songTiming.songTimeSigNum;
+  auto& songMeter = deps.engineState.arrange.songMeter;
+  auto& songTimeSigDen = deps.engineState.songTiming.songTimeSigDen;
+  auto& songTimeSigNum = deps.engineState.songTiming.songTimeSigNum;
   auto& tempoProvider = deps.tempoProvider;
 
       daw::UiArrangeTimeCommandPayload tp{};

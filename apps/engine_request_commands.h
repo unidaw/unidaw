@@ -26,19 +26,20 @@
 #include "apps/event_ring.h"
 #include "apps/uid_hash.h"
 #include "apps/waveform_store.h"
+#include "apps/engine_state.h"
 
 namespace daw::engine {
 
 struct RequestCommandDeps {
+  // The engine's state rather than 2 of its groups by name — apps/engine_state.h.
+  EngineState& engineState;
   // The one clip-window request in flight, with its lock: see
   // apps/engine_clip_window.h.
-  ClipWindow& clipWindow;
   // These commands ANSWER: they write their reply straight into the published region, so the SHM
   // state is a dependency. Missed by the static scan for the same reason the sampler read-backs
   // missed it — uiShm is declared as `struct UiShmState { ... } uiShm;`, one statement declaring
   // a type AND defining an object, which no search for a variable declaration can see.
   UiShmState& uiShm;
-  TrackTable& trackTable;
   daw::WaveformStore& waveformStore;
   const std::function<std::string(const std::string&)>& resolveSourcePath;
   const std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)>& resolveDevicePluginPath;
