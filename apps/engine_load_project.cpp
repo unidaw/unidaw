@@ -20,8 +20,8 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   auto& arrangeMutex = deps.arrange.arrangeMutex;
   auto& arrangeVersion = deps.arrange.arrangeVersion;
   auto& automationVersion = deps.automationVersion;
-  auto& auxChildOverlayMutex = deps.auxChildOverlayMutex;
-  auto& auxChildOverlays = deps.auxChildOverlays;
+  auto& auxChildOverlayMutex = deps.auxChildOverlays.auxChildOverlayMutex;
+  auto& auxChildOverlays = deps.auxChildOverlays.auxChildOverlays;
   auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   auto& bumpAllTrackClipVersions = deps.bumpAllTrackClipVersions;
   auto& clipDirty = deps.clipDirty;

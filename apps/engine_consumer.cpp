@@ -20,8 +20,8 @@ namespace {
 
 void writeUiClipWindowSnapshotTo(UiWriterDeps& deps, const std::vector<TrackRuntime*>& trackSnapshot) {
   auto& clipVersion = deps.clipVersion;
-  auto& clipWindowMutex = deps.clipWindowMutex;
-  auto& clipWindowPending = deps.clipWindowPending;
+  auto& clipWindowMutex = deps.clipWindow.clipWindowMutex;
+  auto& clipWindowPending = deps.clipWindow.clipWindowPending;
   auto& laneQuantizeOf = deps.laneQuantizeOf;
   auto& uiShm = deps.uiShm;
 
@@ -422,8 +422,8 @@ void writeUiHarmonySnapshotTo(UiWriterDeps& deps) {
 
 void runConsumerThread(ConsumerDeps& deps) {
   auto& audioPlaybackBlockId = deps.audioPlaybackBlockId;
-  auto& auxChildOverlayMutex = deps.auxChildOverlayMutex;
-  auto& auxChildOverlays = deps.auxChildOverlays;
+  auto& auxChildOverlayMutex = deps.auxChildOverlays.auxChildOverlayMutex;
+  auto& auxChildOverlays = deps.auxChildOverlays.auxChildOverlays;
   auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   auto& clipVersion = deps.clipVersion;
   auto& engineConfig = deps.engineConfig;

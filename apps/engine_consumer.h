@@ -26,6 +26,8 @@
 #include <utility>
 #include <vector>
 
+#include "engine_clip_window.h"
+#include "engine_aux_child_overlays.h"
 #include "engine_arrange_markers.h"
 #include "engine_patcher_graph_owner.h"
 #include "engine_song_timing.h"
@@ -49,14 +51,15 @@ class EngineAudioCallback;
 //
 // The six `last*Version` latches are in here because they are the writers' private state, and
 // they stay OWNED BY main() so the move changes no lifetime and no initialisation order.
-struct UiWriterDeps {
+struct UiWriterDeps {  // The one clip-window request in flight, with its lock: see
+  // apps/engine_clip_window.h.
+  ClipWindow& clipWindow;
+
   // Nine publish gates in one: see apps/engine_publish_gates.h.
   PublishGates& publishGates;
   ArrangeMarkers& arrange;
   std::atomic<uint32_t>& automationVersion;
   std::atomic<uint32_t>& clipVersion;
-  std::mutex& clipWindowMutex;
-  std::optional<ClipWindowPending>& clipWindowPending;
   HarmonyTimeline& harmonyTimeline;
   std::function<daw::LaneQuantize(const TrackRuntime&)> laneQuantizeOf;
   PatcherGraphOwner& patcherGraph;
@@ -67,9 +70,11 @@ struct UiWriterDeps {
   UiShmState& uiShm;
 };
 struct ConsumerDeps {
+  // A loaded child track's material, held until its bus exists: see
+  // apps/engine_aux_child_overlays.h.
+  AuxChildOverlays& auxChildOverlays;
+
   std::atomic<uint32_t>& audioPlaybackBlockId;
-  std::mutex& auxChildOverlayMutex;
-  std::map<std::pair<uint32_t, uint32_t>, AuxChildOverlay>& auxChildOverlays;
   std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)> buildTrackSnapshot;
   std::atomic<uint32_t>& clipVersion;
   const daw::HostConfig& engineConfig;

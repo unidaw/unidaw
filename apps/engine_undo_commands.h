@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_undo_stacks.h"
 #include "engine_track_table.h"
 #include "apps/engine_pure.h"
 #include "apps/engine_types.h"
@@ -26,9 +27,9 @@ namespace daw::engine {
 
 struct UndoCommandDeps {
   TrackTable& trackTable;
-  std::mutex& undoMutex;
-  std::vector<EngineUndoEntry>& undoStack;
-  std::vector<EngineUndoEntry>& redoStack;
+  // The two stacks and their lock are one thing: every push, undo and redo is a transaction
+  // across BOTH vectors. See apps/engine_undo_stacks.h.
+  UndoStacks& undoStacks;
   const std::function<bool(const daw::UndoEntry&, bool)>& applyUndoEntry;
   const std::function<bool(const SongStoreState&)>& restoreSongStore;
   const std::function<bool(uint32_t, const TrackStoreState&)>& restoreTrackStore;

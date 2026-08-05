@@ -13,6 +13,7 @@
 #include "apps/audio_shm.h"
 #include "apps/chord_resolver.h"
 #include "apps/clip_edit.h"
+#include "apps/engine_undo_stacks.h"
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
 #include "apps/host_controller.h"
@@ -538,6 +539,34 @@ bool runUndoStackTest() {
   if (clip.events().size() != 1) {
     std::cerr << "Undo add note failed" << std::endl;
     return false;
+  }
+
+  // A NEW EDIT DISCARDS THE REDO BRANCH, and until this was written nothing anywhere asserted it:
+  // deleting `redoStack.clear()` from UndoStacks::push left the whole suite green. Everything above
+  // this line exercises the clip-edit UNDO ENTRIES against a local vector; the engine's two stacks
+  // and the transaction between them are a different object with a different invariant.
+  //
+  // The rule matters because redo entries are store swaps, not inverse edits. After an undo and a
+  // fresh edit, a surviving redo entry restores a whole store recorded on a branch the user left —
+  // it would not misapply, it would silently discard the new edit and everything after it.
+  {
+    daw::engine::UndoStacks stacks;
+    daw::engine::EngineUndoEntry a;
+    a.trackId = 1;
+    stacks.push(a);
+    stacks.redoStack.push_back(a);   // as an undo would have left it
+
+    stacks.push(a);                  // a new edit arrives on the branch
+    if (stacks.undoStack.size() != 2) {
+      std::cerr << "UndoStacks::push did not record the edit" << std::endl;
+      return false;
+    }
+    if (!stacks.redoStack.empty()) {
+      std::cerr << "UndoStacks::push left " << stacks.redoStack.size()
+                << " redo entr(ies) behind — a new edit must discard the redo branch, or redoing "
+                   "restores a store recorded before this edit and drops it" << std::endl;
+      return false;
+    }
   }
   return true;
 }

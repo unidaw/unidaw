@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "engine_aux_child_overlays.h"
 #include "engine_loaded_project.h"
 #include "engine_track_table.h"
 #include "engine_arrange_markers.h"
@@ -44,12 +45,13 @@
 namespace daw::engine {
 
 struct LoadProjectDeps {
+  // A loaded child track\'s material, held until its bus exists: see
+  // apps/engine_aux_child_overlays.h.
+  AuxChildOverlays& auxChildOverlays;
   // What a load left behind: see apps/engine_loaded_project.h.
   LoadedProject& loadedProject;
   ArrangeMarkers& arrange;
   std::atomic<uint32_t>& automationVersion;
-  std::mutex& auxChildOverlayMutex;
-  std::map<std::pair<uint32_t, uint32_t>, AuxChildOverlay>& auxChildOverlays;
   std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)> buildTrackSnapshot;
   std::function<void()> bumpAllTrackClipVersions;
   std::atomic<bool>& clipDirty;

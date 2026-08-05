@@ -322,8 +322,8 @@ void handleRequestWaveform(RequestCommandDeps& deps,
 void handleRequestClipWindow(RequestCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& clipWindowMutex = deps.clipWindowMutex;
-  auto& clipWindowPending = deps.clipWindowPending;
+  auto& clipWindowMutex = deps.clipWindow.clipWindowMutex;
+  auto& clipWindowPending = deps.clipWindow.clipWindowPending;
   {
   daw::UiClipWindowCommandPayload windowPayload{};
   std::memcpy(&windowPayload, entry.payload, sizeof(windowPayload));

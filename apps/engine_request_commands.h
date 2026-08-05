@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "engine_clip_window.h"
 #include "engine_track_table.h"
 #include "apps/engine_pure.h"
 #include "apps/engine_types.h"
@@ -29,6 +30,9 @@
 namespace daw::engine {
 
 struct RequestCommandDeps {
+  // The one clip-window request in flight, with its lock: see
+  // apps/engine_clip_window.h.
+  ClipWindow& clipWindow;
   // These commands ANSWER: they write their reply straight into the published region, so the SHM
   // state is a dependency. Missed by the static scan for the same reason the sampler read-backs
   // missed it — uiShm is declared as `struct UiShmState { ... } uiShm;`, one statement declaring
@@ -36,8 +40,6 @@ struct RequestCommandDeps {
   UiShmState& uiShm;
   TrackTable& trackTable;
   daw::WaveformStore& waveformStore;
-  std::mutex& clipWindowMutex;
-  std::optional<ClipWindowPending>& clipWindowPending;
   const std::function<std::string(const std::string&)>& resolveSourcePath;
   const std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)>& resolveDevicePluginPath;
   const std::function<void(TrackRuntime&)>& rebuildHostForChain;

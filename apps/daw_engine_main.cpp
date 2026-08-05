@@ -39,6 +39,9 @@
 #include "apps/engine_shutdown.h"
 #include "apps/engine_song_store.h"
 #include "apps/engine_ui_shm.h"
+#include "apps/engine_aux_child_overlays.h"
+#include "apps/engine_clip_window.h"
+#include "apps/engine_undo_stacks.h"
 #include "apps/engine_history_journal.h"
 #include "apps/engine_preview_queue.h"
 #include "apps/engine_produce_block.h"
@@ -404,8 +407,8 @@ int main(int argc, char** argv) {
     rt.allowNoteOverlap.store(false, std::memory_order_relaxed);
   };
 
-  std::map<std::pair<uint32_t, uint32_t>, AuxChildOverlay> auxChildOverlays;
-  std::mutex auxChildOverlayMutex;
+  // The map and its lock in one object: apps/engine_aux_child_overlays.h.
+  daw::engine::AuxChildOverlays auxChildOverlays;
   TrackRuntime* uiTrack = nullptr;
   {
     auto runtime = setupTrackRuntime(0, pluginPath, !spawnHost, true);
@@ -801,9 +804,8 @@ int main(int argc, char** argv) {
   // Seeded past every loaded clip id so a fresh id never collides with a
   // retained one. Bumped when a track creates a clip or COW-forks a loaded one.
   std::atomic<uint32_t> nextClipId{1};
-  std::mutex undoMutex;
-  std::vector<EngineUndoEntry> undoStack;
-  std::vector<EngineUndoEntry> redoStack;
+  // The two stacks and their lock in one object: apps/engine_undo_stacks.h.
+  daw::engine::UndoStacks undoStacks;
 
   // Project-level clip definitions retained from load. Placements (per-track,
   // on TrackRuntime::sourcePlacements) reference these by id. Save re-emits the
@@ -990,8 +992,8 @@ int main(int argc, char** argv) {
   // Returns false when there is nothing to assemble or the pool will not build. A pool that will
   // not build is REPORTED and the previous one is left running — a bad edge in one device must not
   // silently take down every other device's graph.
-  std::mutex clipWindowMutex;
-  std::optional<ClipWindowPending> clipWindowPending;
+  // The request slot and its lock in one object: apps/engine_clip_window.h.
+  daw::engine::ClipWindow clipWindow;
 
 
   // v9: publish every track's clip in one region so read-only observers see
@@ -1318,11 +1320,7 @@ int main(int argc, char** argv) {
     sendUiDiff(ringUiOut, daw::EventType::UiChordDiff, diffPayload);
   };
 
-  auto pushUndo = [&](EngineUndoEntry entry) {
-    std::lock_guard<std::mutex> lock(undoMutex);
-    undoStack.push_back(std::move(entry));
-    redoStack.clear();
-  };
+  auto pushUndo = [&](EngineUndoEntry entry) { undoStacks.push(std::move(entry)); };
 
   // Harmony edits keep their absolute-tick undo, wrapped as a non-structural entry
   // so they share one heterogeneous undo stack with structural store swaps.
@@ -1700,7 +1698,7 @@ int main(int argc, char** argv) {
   // here — that needs host restarts and the vst_state blobs described in
   // PROJECT_PERSISTENCE.md, which this version does not yet write.
   daw::engine::LoadProjectDeps loadProjectDeps{
-      loadedProject, arrange, automationVersion, auxChildOverlayMutex, auxChildOverlays,
+      auxChildOverlays, loadedProject, arrange, automationVersion,
       buildTrackSnapshot, bumpAllTrackClipVersions, clipDirty, clipVersion,
       emitChainSnapshot, emitModSnapshot, emitRoutingSnapshot, emitUiDiff,
       ensurePlacementIds, ensureTrack, harmonyTimeline, liveTrackCount, loadInProgress,
@@ -2013,7 +2011,7 @@ int main(int argc, char** argv) {
   const std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)>
       resolveDevicePluginPathFn = resolveDevicePluginPath;
   daw::engine::RequestCommandDeps requestCommandDeps{
-      uiShm, trackTable, waveformStore, clipWindowMutex, clipWindowPending,
+      clipWindow, uiShm, trackTable, waveformStore,
       resolveSourcePathFn, resolveDevicePluginPathFn, rebuildHostForChainFn,
       emitChainSnapshotFn};
 
@@ -2064,7 +2062,7 @@ int main(int argc, char** argv) {
   const std::function<bool(uint32_t, const TrackStoreState&)> restoreTrackStoreFn =
       restoreTrackStore;
   daw::engine::UndoCommandDeps undoCommandDeps{
-      trackTable, undoMutex, undoStack, redoStack,
+      trackTable, undoStacks,
       applyUndoEntryFn, restoreSongStoreFn, restoreTrackStoreFn, requireMatchingClipVersionFn};
 
   const std::function<TrackRuntime*(uint32_t, const std::string&)> ensureTrackFn = ensureTrack;
@@ -2149,13 +2147,13 @@ int main(int argc, char** argv) {
   std::thread producer([&] { daw::engine::runProducerThread(producerThreadDeps); });
 
   daw::engine::UiWriterDeps uiWriterDeps{
-      publishGates, arrange, automationVersion, clipVersion,
-      clipWindowMutex, clipWindowPending, harmonyTimeline, laneQuantizeOf, patcherGraph,
+      clipWindow, publishGates, arrange, automationVersion, clipVersion,
+      harmonyTimeline, laneQuantizeOf, patcherGraph,
       quantizeVersion, snapshotTracks, songTiming, trackIsPersisted, uiShm
   };
 
   daw::engine::ConsumerDeps consumerDeps{
-      audioPlaybackBlockId, auxChildOverlayMutex, auxChildOverlays, buildTrackSnapshot,
+      auxChildOverlays, audioPlaybackBlockId, buildTrackSnapshot,
       clipVersion, engineConfig, ensurePlacementIds, harmonyTimeline, lastOverflowTick,
       latencyMgr, liveTrackCount, loadInProgress, transport, masterTrack, maxUiTracks,
       pdcDisabled, projectLoadOk, projectLoadSeq, publishedCallback, quantizeVersion,
