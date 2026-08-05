@@ -49,6 +49,10 @@
 
 import { createField, begin as fieldBegin, cancel as fieldCancel,
          feed as fieldFeed, display } from './textfield.js';
+// The engine's device enum, imported rather than restated. chainmodel's own comment
+// says why: a hand-maintained mirror of an engine enum drifts, and that one already
+// had — the sampler landed as kind 5 and every sampler on screen read "kind 5 #9".
+import { DEVICE_KINDS } from './chainmodel.js';
 
 function div(cls, parent) {
   const el = document.createElement('div');
@@ -77,6 +81,22 @@ const KINDS = [
   { key: 'all',  label: 'ALL',      badge: '',     live: true,  feed: '' },
   { key: 'proj', label: 'PROJECTS', badge: 'PROJ', live: true,  feed: '' },
   { key: 'plug', label: 'PLUGINS',  badge: 'PLUG', live: false, feed: 'plug' },
+  /*
+   * THE DEVICES THE ENGINE HAS BUILT IN, and the reason this category exists.
+   *
+   * Jaakko: "how do I add the built-in Sampler to a track's device chain?" The answer
+   * was that you could not. Six device kinds exist; the rack's "+" was hard-coded to
+   * `patcher event`, and this rail listed only projects and plugins — so five of the
+   * six, the sampler among them, were reachable from the console and from nowhere on
+   * screen. `dock.js` even carried a comment claiming the console and the "+" card
+   * call the same function "so the console and the pointer cannot come to mean
+   * different things by 'add a device'". They call it with different fixed kinds, so
+   * they meant different things anyway.
+   *
+   * `live: true` with no feed: unlike plugins these are not scanned, they are the
+   * engine's own enum, so the category is always available and never empty.
+   */
+  { key: 'devs', label: 'DEVICES',  badge: 'DEV',  live: true,  feed: '' },
   { key: 'pset', label: 'PRESETS',  badge: 'PSET', live: false, feed: '' },
   { key: 'smpl', label: 'SAMPLES',  badge: 'SMPL', live: false, feed: '' },
   { key: 'clip', label: 'CLIPS',    badge: 'CLIP', live: false, feed: '' },
@@ -88,9 +108,11 @@ const KINDS = [
 /** Which chip the catalogue lights up. Found once; it is a constant table. */
 const PLUG_CHIP = KINDS.findIndex((k) => k.feed === 'plug');
 
-/** A row is one of two things, and which one decides everything about it. */
+/** A row is one of three things, and which one decides everything about it. */
 export const KIND_PROJECT = 'project';
 export const KIND_PLUGIN = 'plugin';
+/** A device kind the engine has built in — added by NAME, not by a scan index. */
+export const KIND_DEVICE = 'device';
 
 /** Where the catalogue stands. Not a boolean: "not yet" is not "none". */
 export const PLUG_PENDING = 'pending';
@@ -112,6 +134,24 @@ const MARK_EFFECT = 'FX';
 const MARK_FAILED = '!';
 const BADGE_PROJECT = 'PROJ';
 const BADGE_PLUGIN = 'PLUG';
+const BADGE_DEVICE = 'DEV';
+/*
+ * What each built-in kind IS, in the one line the rail has room for. The engine's enum
+ * names them ("patcher event", "sampler"); it does not say what they do, and a list of
+ * six nouns is not a thing anyone can choose from.
+ *
+ * Indexed by DeviceKind, so this is positional against DEVICE_KINDS — which is imported
+ * rather than restated for the reason chainmodel's own comment gives: a hand-maintained
+ * mirror of an engine enum drifts, and this one already had once.
+ */
+const DEVICE_META = [
+  'a patcher graph for notes and control',
+  'a patcher graph that makes sound',
+  'a patcher graph for audio effects',
+  'a plugin instrument — pick one from PLUGINS instead',
+  'a plugin effect — pick one from PLUGINS instead',
+  'the built-in sampler: load a file, chop it, play it across the keys',
+];
 const SEP = ' · ';
 
 const HINT_SAVING = 'Enter saves · Esc cancels';
@@ -162,7 +202,47 @@ export function makeRow() {
            // indices into a list, so "the third row on screen" is not the third
            // plugin, and an insert keyed on a position that moves is the bug in
            // GUIDELINES 2.1 with a plugin on the end of it. -1 = not a plugin.
-           pluginIndex: -1 };
+           pluginIndex: -1,
+           // Which DeviceKind a DEVICES row makes. -1 = not a device row. Declared
+           // here rather than assigned when a device row is filled: the pool's records
+           // are mutated in place forever, and a record that grows a property later
+           // changes its hidden class on a path that runs per frame.
+           deviceKind: -1 };
+}
+
+/**
+ * The built-in kinds this rail offers, as DeviceKind numbers.
+ *
+ * NOT all six. `vst instrument` and `vst effect` are deliberately absent: adding one
+ * without naming a plugin makes a device with an empty vstRef, which is precisely the
+ * card Jaakko asked about — "what's the VST instrument on track 1/Bass that doesn't
+ * have anything loaded". The engine keeps it in the chain, nothing can load into it,
+ * and the rack draws a box with a kind name and no plugin.
+ *
+ * A plugin device is made by choosing the PLUGIN, in the PLUGINS category, which
+ * carries the vendor/name/path/uid the engine needs. Offering the bare kind here would
+ * be a control whose only outcome is a broken device.
+ */
+const ADDABLE_DEVICE_KINDS = [0, 1, 2, 5];
+
+/** Fill `row` from a DeviceKind number. The list is a constant, so this runs once. */
+export function setDeviceRow(row, kind) {
+  const name = DEVICE_KINDS[kind] || ('kind ' + kind);
+  row.kind = KIND_DEVICE;
+  row.badge = BADGE_DEVICE;
+  row.name = name;
+  row.meta = DEVICE_META[kind] || '';
+  row.mark = MARK_NONE;
+  row.ok = true;
+  row.recent = false;
+  row.instrument = false;
+  row.plugin = null;
+  row.pluginIndex = -1;
+  row.deviceKind = kind;
+  // Searchable by what it is as well as what it is called: typing "sampler", "patcher"
+  // or "chop" should all narrow to something useful.
+  row.lower = (name + ' ' + row.meta).toLowerCase();
+  return row;
 }
 
 /**
@@ -376,7 +456,13 @@ export class Browser {
     /** Pooled records, one per catalogue entry, in the scanner's order. */
     this.plugRows = [];
     this.plugCount = 0;
-    /** Both feeds in display order: projects, then plugins. References only. */
+    /*
+     * The built-in devices. Built ONCE, here, because unlike the other two this is not
+     * a feed — it is the engine's enum, known at load, and it never changes.
+     */
+    this.devRows = ADDABLE_DEVICE_KINDS.map((k) => setDeviceRow(makeRow(), k));
+    this.devCount = this.devRows.length;
+    /** All feeds in display order: projects, plugins, devices. References only. */
     this.rows = [];
     /** The project names as last adopted, so a rename is caught by content. */
     this.projects = [];
@@ -609,6 +695,7 @@ export class Browser {
     rows.length = 0;
     for (let i = 0; i < this.projCount; i++) rows.push(this.projRows[i]);
     for (let i = 0; i < this.plugCount; i++) rows.push(this.plugRows[i]);
+    for (let i = 0; i < this.devCount; i++) rows.push(this.devRows[i]);
     this._refilter();
   }
 
@@ -626,6 +713,7 @@ export class Browser {
       const r = this.rows[i];
       if (cat === 'proj' && r.kind !== KIND_PROJECT) continue;
       if (cat === 'plug' && r.kind !== KIND_PLUGIN) continue;
+      if (cat === 'devs' && r.kind !== KIND_DEVICE) continue;
       if (q && r.lower.indexOf(q) < 0) continue;
       v.push(i);
     }

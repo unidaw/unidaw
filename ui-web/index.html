@@ -119,7 +119,7 @@ import { buildMixerModel, createMixerBuffer, createMixerState, reconcileMixer,
 import { Piano } from './src/piano.js';
 import { buildPianoModel, createPianoBuffer, PIANO_ZOOM, fitLowPitch,
          notesInRect, noteKey, transposedKey } from './src/pianomodel.js';
-import { Browser, KIND_PLUGIN } from './src/browser.js';
+import { Browser, KIND_PLUGIN, KIND_DEVICE } from './src/browser.js';
 import { Dock, quantizeGridName, quantizeGridTicks, QUANTIZE_CYCLE } from './src/dock.js';
 import { createPanes } from './src/panes.js';
 import { createHelp, GLOBAL_KEYS, SURFACE_KEYS } from './src/help.js';
@@ -2222,6 +2222,7 @@ const browser = new Browser(browserHost, {
   onOpen: (row) => {
     if (!row) return;
     if (row.kind === KIND_PLUGIN) { insertPlugin(row); return; }
+    if (row.kind === KIND_DEVICE) { insertBuiltinDevice(row); return; }
     const name = row.name;
     forgetPatcherGraph();
     forgetChains();
@@ -2232,6 +2233,48 @@ const browser = new Browser(browserHost, {
     schedule();
   },
 });
+
+/**
+ * Put one of the engine's BUILT-IN devices into the cursor's track.
+ *
+ * Jaakko, with a sampler he could not make: "how do I add the built-in Sampler to a
+ * track's device chain?" You could not. Six kinds exist; the rack's "+" sent a fixed
+ * `patcher event` and the rail listed only projects and plugins, so the sampler — the
+ * one device this app implements itself — was reachable from the console and from
+ * nowhere on screen.
+ *
+ * The SAME `dockApi.addDevice` the console's `sampler` verb calls, so the two surfaces
+ * cannot come to mean different things by "add a device". dock.js already claimed that
+ * was true of the "+" card; it was not, because "+" passed a different fixed kind.
+ *
+ * The instrument rule is checked here for the reason insertPlugin checks it: the engine
+ * refuses a second instrument with a numeric chain error the UI can only render as
+ * "chain error on track 0 (code 1)", and the rule is knowable from the chain in hand.
+ */
+function insertBuiltinDevice(row) {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return; }
+  const track = state.cursor.track;
+  // Kinds 1 (patcher instrument) and 5 (sampler) are instruments, and a chain holds one.
+  const instrument = row.deviceKind === 1 || row.deviceKind === 5;
+  if (instrument && chainHasInstrument(track)) {
+    state.reject = 'track ' + (track + 1) + ' already has an instrument — '
+                 + 'remove it first, or add this on another track';
+    schedule();
+    return;
+  }
+  if (!dockApi.addDevice(track, row.name)) {
+    state.reject = state.reject || 'the engine refused that device';
+    schedule();
+    return;
+  }
+  // Same three as insertPlugin: name what was asked for, drop the id-keyed parameter
+  // cache, and get the rail out from in front of the rack it just changed.
+  pendingInsert = { track, name: row.name, at: performance.now() };
+  paramsAsked.clear();
+  state.reject = null;
+  state.browserOpen = false;
+  schedule();
+}
 
 /**
  * Put a plugin from the rail into the cursor's track.
