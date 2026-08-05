@@ -50,11 +50,20 @@ import re, glob, os, sys
 # parse could have silently stopped seeing SIXTY-FIVE PERCENT of the structs and still reported
 # PASS. A floor that trails the tree that far is the "test that verifies nothing" shape the floor
 # was added to prevent, one level up. Keep these within sight of the real counts.
-MIN_STRUCTS = 30
-MIN_ARGS = 400
+# BACKSTOPS ONLY, now that the completeness rule above catches a struct that drops out of the
+# parse. These catch the cruder failure — the glob or the whole regex breaking — where `wired`
+# would be empty too and the completeness rule would have nothing to compare. Keep them within
+# sight of the real counts: they were 30/400 against an actual 51/536, enough slack to lose
+# twenty structs without a word.
+MIN_STRUCTS = 45
+MIN_ARGS = 480
 
 def struct_members(text, name):
-    m = re.search(r'^struct %s \{' % re.escape(name), text, re.M)
+    # SAME TOLERANCE AS THE DECLARATION SCAN ABOVE. These two patterns must agree: with only one
+    # of them accepting a brace on the next line, the struct is FOUND and then cannot be READ, and
+    # the check dies with a TypeError instead of reporting anything — which is how the first
+    # attempt at this fix behaved.
+    m = re.search(r'^struct %s\s*\{' % re.escape(name), text, re.M)
     if not m:
         return None
     i, d, body = m.end(), 1, []
@@ -120,13 +129,22 @@ def brace_body(text, start):
         i += 1
     return buf
 
+# THE DECLARATION MAY PUT ITS BRACE ON THE NEXT LINE. The pattern used to be `^struct (\w*Deps) \{`
+# with a literal space, so moving the brace down a line — which is what clang-format does to a long
+# declaration, and there is no .clang-format in this repo to stop it — made the struct AND EVERY
+# ONE OF ITS CALL SITES invisible. A swap of two same-typed members then reported PASS. Demonstrated
+# on TransportCommandDeps: the compared-argument count fell from 535 to 525 and nothing said so.
 structs = {}
 for path in sorted(glob.glob('apps/*.h')):
     text = open(path).read()
-    for m in re.finditer(r'^struct (\w*Deps) \{', text, re.M):
+    for m in re.finditer(r'^struct (\w*Deps)\s*\{', text, re.M):
         structs[m.group(1)] = (os.path.basename(path), struct_members(text, m.group(1)))
 
-sources = {p: open(p).read() for p in sorted(glob.glob('apps/*.cpp'))}
+# HEADERS ARE SCANNED FOR INITIALISERS TOO, not just for declarations. This globbed apps/*.cpp
+# alone, so an aggregate initialiser written inside a header was never compared — a second silent
+# evasion, and one that does not even move the site count.
+sources = {p: open(p).read()
+           for p in sorted(glob.glob('apps/*.cpp') + glob.glob('apps/*.h'))}
 
 ok = True
 compared = skipped = sites = 0
@@ -159,6 +177,30 @@ for name, (hdr, members) in sorted(structs.items()):
                     print('        share a type the compiler accepts the swap silently. Declared')
                     print('        in %s.' % hdr)
                     ok = False
+
+# ---- COMPLETENESS: EVERY STRUCT THAT IS WIRED MUST ALSO BE PARSED.
+#
+# This is the rule the floors below were standing in for, and it does the job properly. A floor is
+# a guess about how much the scan should find; this asks whether the scan found what the tree
+# actually uses. If a source aggregate-initialises SomethingDeps and the declaration parse never
+# saw SomethingDeps, then that struct's call sites are being checked by nobody — which is exactly
+# the state a brace on the wrong line used to produce, silently.
+wired = set()
+for path, text in sources.items():
+    for m in re.finditer(r'(?:daw::engine::)?\b(\w+Deps)\s+\w+\s*\{', text):
+        wired.add(m.group(1))
+unseen = sorted(wired - set(structs))
+if unseen:
+    print('  FAIL: %d *Deps struct(s) are aggregate-initialised somewhere in apps/ but were never'
+          % len(unseen))
+    print('        parsed as a declaration, so their positional wiring is checked by nothing:')
+    for name in unseen:
+        print('          %s' % name)
+    print('        Usually the declaration is not matching `^struct <Name>Deps {` — a brace moved')
+    print('        to the next line, an attribute, or the struct living outside apps/*.h. Fix the')
+    print('        parse rather than the declaration; the point of this check is that it cannot')
+    print('        quietly stop looking.')
+    ok = False
 
 if len(structs) < MIN_STRUCTS:
     print('  FAIL: found only %d *Deps struct(s); expected at least %d.' % (len(structs), MIN_STRUCTS))
