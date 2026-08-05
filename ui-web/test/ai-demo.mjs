@@ -198,6 +198,35 @@ check(strummed.length > 0 && strummed.some((v) => v > 0),
       `spreads ${JSON.stringify(strummed)}`);
 
 // ---------------------------------------------------------------------------
+// THE WHOLE SAMPLER GESTURE IN ONE SENTENCE. The agent had no sampler tooling at all:
+// its device-kind list was three of the engine's six with the sampler absent, and there
+// was no way to give one a file. "Load a kick" was unanswerable.
+// ---------------------------------------------------------------------------
+await run('new aisampler');
+await page.waitForTimeout(1500);
+const smp = await askFor(
+  'put a sampler on track 0, load waveform_probe.wav into it, and write a four note phrase',
+  (a, b) => b.notes > a.notes);
+check(smp.ok, 'asking for a sampler part builds one — device, file and notes',
+      `${smp.secs}s, notes ${smp.before.notes} -> ${smp.now.notes} :: ${smp.said.slice(-200)}`);
+const chain = await page.evaluate(() => window.__uni.chainProbe());
+check(!!chain && /sampler/i.test((chain.titles || []).join(',')),
+      'and the sampler is really on the track', JSON.stringify(chain && chain.titles));
+/*
+ * AND THE FILE REACHED IT. `sent: true` is what the tool answers; a slot in the kit is what
+ * the engine did with it, and the two were not the same thing for the plugin editor button.
+ */
+const slots = await page.evaluate(() => {
+  for (let d = 0; d < 6; d++) {
+    const k = window.__uni.samplerKitCached(0, d);
+    if (k && k.slots) return k.slots.length;
+  }
+  return 0;
+});
+check(slots > 0, 'and the file is in it — a slot, not just an accepted command',
+      `${slots} slot(s)`);
+
+// ---------------------------------------------------------------------------
 // It edits the song it is looking at, rather than starting from a blank one.
 // ---------------------------------------------------------------------------
 const before = await song();

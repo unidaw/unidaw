@@ -487,16 +487,41 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
         ToolSpec {
             name: "add_device",
             description: "Insert a device into a track's chain at a position (0 is first). \
-                          kind: vst_effect, vst_instrument or patcher. A VST needs `plugin`, \
-                          the name as the plugin catalogue reports it.",
+                          `sampler` is the built-in sampler — give it a file with load_sample. \
+                          The patcher kinds are event/instrument/audio graphs. A VST needs \
+                          `plugin`, the name as the plugin catalogue reports it.",
             params: json!({
                 "type": "object",
                 "required": ["track"],
                 "properties": {
                     "track": { "type": "integer", "minimum": 0 },
-                    "kind": { "type": "string", "enum": ["vst_effect", "vst_instrument", "patcher"] },
+                    "kind": { "type": "string",
+                              "enum": ["sampler", "vst_effect", "vst_instrument",
+                                       "patcher", "patcher_instrument", "patcher_audio"] },
                     "position": { "type": "integer", "minimum": 0 },
                 },
+            }),
+        },
+        ToolSpec {
+            name: "load_sample",
+            description: "Give a track's sampler an audio file, by NAME — the engine resolves \
+                          it against the project's own directory and its sibling audio/ folder, \
+                          so a bare file name is what this takes, never a path. One file lands \
+                          across the whole keyboard from its root so any note plays it; set \
+                          `fixed` to pin it to one key, which is what a drum wants.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "file"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "file": { "type": "string", "description": "File name, under 24 bytes." },
+                    "device": { "type": "integer", "minimum": 0,
+                                "description": "The sampler's device id; 0 means the first sampler on the track." },
+                    "root": { "type": "integer", "minimum": 0, "maximum": 127,
+                              "description": "The key it plays at original pitch. Default 60, middle C." },
+                    "fixed": { "type": "boolean",
+                               "description": "Pin it to the root key alone instead of spreading it." }
+                }
             }),
         },
         ToolSpec {
@@ -955,17 +980,76 @@ fn add_device(handle: &EngineHandle, args: &Value) -> ToolResult {
     // snapshot's `kind`. Named here rather than passed as a number, for the reason the
     // sidecar's mod kinds are named: a literal that means something else after the next enum
     // change is the kind that outlives its meaning.
+    // The engine's six DeviceKinds. This listed THREE — the sampler and two of the patcher
+    // kinds were simply absent, so the agent could not make the one device this app implements
+    // itself. Same one-entry-short drift the sidecar's DEVICE_KINDS and the page's own table
+    // each had once; it is the third time this enum has been mirrored incompletely, which is an
+    // argument about the mirror rather than about anyone's carefulness.
     let kind = match arg_str(args, "kind").unwrap_or("vst_effect") {
         "patcher" | "patcher_event" => 0u32,
+        "patcher_instrument" => 1,
+        "patcher_audio" => 2,
         "vst_instrument" => 3,
         "vst_effect" => 4,
-        other => return ToolResult::err(format!("unknown device kind {other:?}")),
+        "sampler" => 5,
+        other => return ToolResult::err(format!(
+            "unknown device kind {other:?} — it is one of sampler, vst_instrument, vst_effect, \
+             patcher, patcher_instrument, patcher_audio")),
     };
     let mut p = chain_blank(UiCommandType::AddDevice, track as u32);
     p.device_kind = kind;
     p.insert_index = arg_u64(args, "position").unwrap_or(0) as u32;
     match handle.send_chain_command(p) {
         Ok(()) => ToolResult::ok(json!({ "sent": true, "track": track, "kind": kind })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
+/// Give a sampler a file.
+///
+/// The agent had NO sampler tooling at all — it could not add one (the device-kind list was
+/// three of six and the sampler was not among them) and it could not feed one. "Load a kick"
+/// was unanswerable, and the sampler is the one instrument this app implements itself.
+///
+/// BY NAME, NEVER A PATH, because that is what the command carries: 24 bytes, resolved by the
+/// engine against the project directory and then its sibling audio/. Refused here as well as
+/// in the engine when it will not fit — the engine REFUSES an over-long name into its log,
+/// which from a tool call is a success that changed nothing.
+fn load_sample(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(track) = arg_u64(args, "track") else {
+        return ToolResult::err("load_sample needs \"track\"");
+    };
+    let Some(file) = arg_str(args, "file") else {
+        return ToolResult::err("load_sample needs \"file\" (a bare file name, not a path)");
+    };
+    let bytes = file.as_bytes();
+    if bytes.is_empty() {
+        return ToolResult::err("\"file\" was empty");
+    }
+    if bytes.len() >= 24 {
+        return ToolResult::err(format!(
+            "\"{file}\" is {} bytes and the load command carries 24 — the engine refuses rather \
+             than shortening, so a longer name would change nothing",
+            bytes.len()));
+    }
+    let mut name = [0u8; 24];
+    name[..bytes.len()].copy_from_slice(bytes);
+    // Spread across the keyboard unless asked otherwise — the same default the UI takes, and
+    // for the same reason: a sample pinned to one key is silent for every note but that one.
+    let fixed = args.get("fixed").and_then(|v| v.as_bool()).unwrap_or(false);
+    let payload = daw_bridge::layout::UiSamplerLoadPayload {
+        command_type: UiCommandType::SamplerLoad as u16,
+        flags: if fixed { daw_bridge::layout::SAMPLER_LOAD_FIXED_PITCH } else { 0 },
+        track_id: track as u32,
+        device_id: arg_u64(args, "device").unwrap_or(0) as u32,
+        root_key: arg_u64(args, "root").unwrap_or(60).min(127) as u8,
+        reserved: [0; 3],
+        name,
+    };
+    match handle.send_sampler_load(payload) {
+        Ok(()) => ToolResult::ok(json!({
+            "sent": true, "track": track, "file": file, "fixed": fixed,
+        })),
         Err(e) => ToolResult::err(e),
     }
 }
@@ -1379,6 +1463,7 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "set_time_signature" => set_time_signature(handle, &call.args),
         "device_params" => device_params(handle, &call.args),
         "add_device" => add_device(handle, &call.args),
+        "load_sample" => load_sample(handle, &call.args),
         "remove_device" => chain_edit(handle, &call.args, UiCommandType::RemoveDevice),
         "move_device" => move_device(handle, &call.args),
         "set_bypass" => set_bypass(handle, &call.args),

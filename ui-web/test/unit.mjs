@@ -2274,8 +2274,10 @@ const OP_REGISTRY = {
   kit:       { cli: null, agent: null, why: 'gap' },
   // The sampler, reachable at last. daw-cli had both from the day the opcodes landed, so the
   // CLI paths are real and only the agent manifest owes them tools.
-  sampler:   { cli: 'add-device', agent: null, why: 'gap' },
-  'load-sample': { cli: 'sampler-load', agent: null, why: 'gap' },
+  // The agent's device-kind list was three of the engine's six and the sampler was not
+  // among them, so it could not make the one instrument this app implements itself.
+  sampler:   { cli: 'add-device', agent: 'add_device' },
+  'load-sample': { cli: 'sampler-load', agent: 'load_sample' },
   slice:     { cli: 'sampler-slice', agent: null, why: 'gap' },
   // Row ops. daw-cli reached the engine FIRST here — `do set-row-ops` shipped with the opcode —
   // so the CLI path is real from day one and only the agent manifest owes it a tool.
@@ -2465,7 +2467,7 @@ const AGENT_GAP = ['addnode', 'clear', 'columns', 'copy', 'cut',
                    'filter', 'env', 'slot', 'soundaddr', 'bank', 'emit',
                    // With `ops`, and for the same reason: the agent has no row-op tool at all.
                    'op',
-                   'sampler', 'load-sample', 'slice', 'slot-name', 'vintage',
+                   'slice', 'slot-name', 'vintage',
                    'harmony-quantize', 'save-patch', 'lpb', 'note-overlap',
                    // A clip's own grid (opcode 94). It HAS a CLI path — `daw-cli do clip-grid`
                    // shipped with the opcode — so it is only in the agent half of the gap.
