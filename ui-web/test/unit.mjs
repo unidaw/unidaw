@@ -809,8 +809,9 @@ test('a project row leaves its meta line to the renderer', () => {
 const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'samplerKitCached',
                      'rowOps', 'opsAtCursor', 'opAtCursor', 'opsTextAtCursor', 'noteIdAtCursor',
                      'loadSample', 'addDevice', 'sliceSample', 'samplerFilter', 'samplerEnvelope', 'samplerSlot', 'samplerDevice', 'samplerEmit', 'soundAddressed',
-                     'setView', 'load', 'save', 'listProjects', 'transport', 'seek', 'tempo',
+                     'setView', 'load', 'save', 'listProjects', 'transport', 'tempo',
                      'note', 'del', 'goto', 'zoom', 'octave', 'gain', 'strip', 'state',
+                     'seek',
                      'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
                      'nodes', 'addNode', 'delNode', 'linkNodes', 'patch', 'copy', 'paste',
                      'cut', 'addTrack', 'removeTrack', 'noteColumns', 'delDevice', 'bypass',
@@ -2238,10 +2239,13 @@ const OP_REGISTRY = {
   play:      { cli: 'play',        agent: 'transport' },
   // Covered on two.
   del:       { cli: 'delete-note', agent: null, why: 'gap' },
-  tempo:     { cli: 'set-tempo',   agent: null, why: 'gap' },
-  gain:      { cli: 'mixer',       agent: null, why: 'gap' },
-  mute:      { cli: 'mixer',       agent: null, why: 'gap' },
-  solo:      { cli: 'mixer',       agent: null, why: 'gap' },
+  tempo:     { cli: 'set-tempo',   agent: 'set_tempo' },
+  // set_mixer takes gain_db, pan, mute and solo — these three were recorded as gaps while
+  // the tool that does them was already in the manifest. A stale gap entry is read as a
+  // finding by whoever picks it up, which is work spent on a job already done.
+  gain:      { cli: 'mixer',       agent: 'set_mixer' },
+  mute:      { cli: 'mixer',       agent: 'set_mixer' },
+  solo:      { cli: 'mixer',       agent: 'set_mixer' },
   undo:      { cli: null,          agent: 'undo',           why: 'gap' },
   redo:      { cli: null,          agent: 'redo',           why: 'gap' },
   rename:    { cli: null,          agent: 'set_track_name', why: 'gap' },
@@ -2252,8 +2256,9 @@ const OP_REGISTRY = {
   cut:       { cli: null, agent: null, why: 'gap' },
   paste:     { cli: null, agent: null, why: 'gap' },
   transpose: { cli: null, agent: null, why: 'gap' },
-  loop:      { cli: null, agent: null, why: 'gap' },
-  seek:      { cli: null, agent: null, why: 'gap' },
+  loop:      { cli: null, agent: 'set_loop', why: 'gap' },
+  // `transport` with action=seek IS this op; it was recorded as having no tool at all.
+  seek:      { cli: null, agent: 'transport', why: 'gap' },
   // One tool, three actions — add, link and remove all address ONE patcher device,
   // which is the thing that makes them land in the graph a project saves.
   addnode:   { cli: null, agent: 'patcher_node', why: 'gap' },
@@ -2463,8 +2468,8 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
  */
 const AGENT_GAP = ['clear', 'columns', 'copy', 'cut',
                    'del', 'delchord', 'delharmony', 'editor',
-                   'gain', 'loop', 'mute', 'new', 'paste', 'patch',
-                   'seek', 'solo', 'tempo', 'transpose', 'mods', 'ops',
+                   'new', 'paste', 'patch',
+                   'transpose', 'mods', 'ops',
                    // With the other sampler verbs: the agent has no sampler tooling at all.
                    'filter', 'env', 'slot', 'soundaddr', 'bank', 'emit',
                    // With `ops`, and for the same reason: the agent has no row-op tool at all.
