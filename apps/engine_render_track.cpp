@@ -38,7 +38,6 @@ bool renderTrack(RenderTrackDeps& deps,
   auto& patcherParallel = deps.patcherParallel;
   auto& patcherPool = deps.patcherPool;
   auto& tempoProvider = deps.tempoProvider;
-  auto& warnedEventOutsideBlock = deps.warnedEventOutsideBlock;
   const auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
   const auto& wrapTick = deps.wrapTick;
   {
@@ -110,50 +109,19 @@ bool renderTrack(RenderTrackDeps& deps,
             int64_t offsetSamples =
                 static_cast<int64_t>(entry.sampleTime) -
                 static_cast<int64_t>(blockSampleStart);
-            // CLAMPED INTO THE BLOCK, NOT DROPPED.
+            // NO CLAMP HERE, AND NONE IS REACHABLE. The window test eight lines above bounds
+            // entry.sampleTime to [blockSampleStart, blockSampleStart + blockSize), and nothing
+            // between the two touches either value, so offsetSamples is in [0, blockSize) by
+            // construction. This carried a 44-line copy of the clamp that engine_resolve_events
+            // needs — including a DAW_EVENT described as "the difference between a diagnosable
+            // report and another year of a note goes missing sometimes", which could never fire.
             //
-            // Everything in this scratchpad was generated FOR this block's TICK window, so it
-            // belongs to this block by construction. Its sample time is a CONVERSION of that
-            // tick, and a conversion can land a sample outside: at 120 bpm and 44.1 kHz the
-            // sixteenth at 1.875 s sits at sample 82687.5, so a block covering [82432, 82688)
-            // converts it to 82688 — the first sample of the NEXT block. This test dropped it
-            // there, and the next block never emitted it either, because its TICK window starts
-            // after that step. The note simply vanished.
-            //
-            // It bites only when a step lands almost exactly on a block boundary, so WHICH notes
-            // vanish depends on the buffer size: at 256 frames that sixteenth is on a boundary
-            // and is lost, at 1024 it is not and it plays. One missing note in an eight-second
-            // render at one buffer size — which is why it survived until a check demanded that
-            // two renders be BIT-IDENTICAL rather than merely similar.
-            //
-            // Half a sample early is inaudible; a missing note is not. Widening the window
-            // instead would let the same event be emitted by two consecutive blocks, which is a
-            // doubled note rather than a missing one — no better.
-            if (offsetSamples < 0 ||
-                offsetSamples >= static_cast<int64_t>(engineConfig.blockSize)) {
-              // SAID OUT LOUD, ONCE. With the generator's floor conversion in place this cannot
-              // fire — its own negative control passes, which is the honest way to describe a
-              // guard that no longer has a reproducer. It is kept because the alternative
-              // behaviour here was to DELETE the note.
-              //
-              // THE CLIP PATH HAS NOW BEEN AUDITED, and it had the bug this clamp exists to
-              // prevent. placeInBlock (engine_rt_helpers.cpp) decided membership with the ROUNDED
-              // sample, so a tick INSIDE this block's window that rounded up to blockSize was
-              // dropped and never re-emitted — 21 of every 22291 in-window positions at 120 bpm,
-              // 44.1 kHz and a 512-frame block. It decides by FLOOR and clamps the position now,
-              // which is this rule, reached by the other route.
-              //
-              // If it ever does fire, this line is the difference between a diagnosable report
-              // and another year of "a note goes missing sometimes".
-              if (!warnedEventOutsideBlock.exchange(true, std::memory_order_relaxed)) {
-                DAW_EVENT("patcher.event_outside_block")
-                    .field("offset", offsetSamples)
-                    .field("block_size", static_cast<uint32_t>(engineConfig.blockSize));
-              }
-              offsetSamples = offsetSamples < 0
-                                  ? 0
-                                  : static_cast<int64_t>(engineConfig.blockSize) - 1;
-            }
+            // Proven twice before deleting: an abort() here does not trigger while
+            // tools/midi_route_check.sh renders both routing directions, and the SAME abort under
+            // an inverted condition does. The first probe of this branch was worthless — the
+            // enclosing loop had no fixture at all then, so it could not have fired whatever the
+            // code did. The live copy of the rule is in apps/engine_resolve_events.cpp, where the
+            // offset is NOT pre-bounded.
             const uint64_t tickDelta = static_cast<uint64_t>(std::llround(
                 static_cast<long double>(offsetSamples) / samplesPerTick));
             const uint64_t eventTick = wrapTick(windowStartTicks + tickDelta);
