@@ -123,20 +123,38 @@ check(railShut, 'the rail closes, so the result of the click is visible');
 // ---------------------------------------------------------------------------
 // A chain holds ONE instrument, and the refusal says so in words.
 //
-// `patcher instrument` and NOT a second sampler, because the engine does not count a
-// sampler as an instrument kind: device_chain.cpp's isInstrumentKind lists VstInstrument
-// and PatcherInstrument only. This side mirrors that predicate, so testing with a sampler
-// would be asserting a rule neither end has.
+// A SAMPLER IS AN INSTRUMENT, and this comment used to say it was not.
 //
-// THAT OMISSION LOOKS LIKE A BUG, and it is the engine's to answer: TrackRuntime holds
-// `samplerDeviceId` — ONE atomic, documented "0 = this track has no sampler" — so a chain
-// the engine happily accepts with two samplers has a second one the runtime can never
-// address. Same shape as the empty VST card: a device you can see and cannot reach.
-// Reported to backend rather than papered over here; a mirror that invents a stricter rule
-// than the thing it mirrors is the divergence this repo keeps paying for.
+// It read: "the engine does not count a sampler as an instrument kind: device_chain.cpp's
+// isInstrumentKind lists VstInstrument and PatcherInstrument only", and called the omission a
+// bug for backend to answer. It was, they answered it, and isInstrumentKind lists three kinds
+// now. Neither this note nor the UI's mirror followed — so both went on stating the old rule
+// while naming the changed file as their authority.
+//
+// The track below ALREADY HOLDS A SAMPLER by the time these clicks happen, which is why the
+// first one is refused and not the second: with the sampler counted, the very first instrument
+// added on top of it is one too many. That is also the ordinary case — a sampler, then a plugin
+// — and until now it produced "chain error on track 0 (code 1)".
+//
+// unit.mjs now reads isInstrumentKind out of device_chain.cpp and fails if the mirror drifts,
+// because a comment cannot notice that its subject changed.
 // ---------------------------------------------------------------------------
 const addTwice = async (want) => {
-  await page.keyboard.press('Meta+b');
+  /*
+   * ENSURE OPEN, DO NOT TOGGLE. ⌘B is a toggle and the refusal path deliberately leaves the rail
+   * OPEN — only a successful insert closes it, so that the rack it just changed is visible. So
+   * the second call used to press ⌘B on an already-open rail, SHUT it, find no rows, and report
+   * "clicked = false", which reads exactly like a missing row.
+   *
+   * The other suites' `pick` helper checks first for this reason. This one did not, and the
+   * difference only surfaced once a refusal started firing on the FIRST click instead of the
+   * second — the helper was correct precisely as long as the bug it was testing for existed.
+   */
+  const open = await page.evaluate(() => {
+    const r = document.querySelector('.br');
+    return !!r && r.offsetParent !== null && getComputedStyle(r).display !== 'none';
+  });
+  if (!open) await page.keyboard.press('Meta+b');
   await page.waitForTimeout(500);
   await page.evaluate(() => {
     document.querySelector('.br-chip[data-cat="devs"]').dispatchEvent(
@@ -159,8 +177,8 @@ const addTwice = async (want) => {
 // Assert the CLICKS LANDED. Without this, a matcher that finds no row reports the same
 // empty `reject` as a guard that never fired — the two failures are indistinguishable,
 // and the first one wasted a run here already.
-const hit1 = await addTwice('patcher instrument');  // allowed: only a sampler so far
-const hit2 = await addTwice('patcher instrument');  // refused: now there IS an instrument
+const hit1 = await addTwice('patcher instrument');  // refused: the sampler IS an instrument
+const hit2 = await addTwice('patcher instrument');  // and still refused
 check(hit1 && hit2, 'the patcher-instrument row was found and clicked both times',
       `first=${hit1} second=${hit2}`);
 

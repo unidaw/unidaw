@@ -2222,20 +2222,32 @@ const PLUGIN_NO_SLOT = 'that plugin has no place in the engine\'s scan, so it ca
  *
  * A chain may hold exactly one (device_chain.cpp isInstrumentKind/hasInstrument),
  * which is a real musical rule and not a limitation: a track is one voice.
+ *
+ * THE SAMPLER BELONGS IN THIS LIST, AND DID NOT UNTIL NOW. The omission was written
+ * down as a fact — here and in device-rail.mjs — citing device_chain.cpp as saying so.
+ * It did say so; I reported the gap, backend closed it, and both notes went on
+ * asserting the old rule while claiming the engine's source as their authority.
+ *
+ * What that cost: a track carrying a sampler answered `chainHasInstrument` with false,
+ * so the UI cheerfully sent an AddDevice the engine then refused with a numeric code,
+ * and the person saw "chain error on track 0 (code 1)". Adding a sampler and then a
+ * plugin is the most ordinary thing anyone does on a track.
+ *
+ * A comment cannot notice that its subject changed. `unit.mjs` now reads
+ * isInstrumentKind out of device_chain.cpp and fails if this list stops matching it.
  */
 const KIND_PATCHER_INSTRUMENT = 1;
 const KIND_VST_INSTRUMENT = 3;
-/* The built-in sampler. NOT an instrument kind by the engine's rule — see
-   device_chain.cpp isInstrumentKind, which lists the two above and not this one — so it
-   is declared here for addressing a load, not for the instrument test below. */
 const KIND_SAMPLER = 5;
+const INSTRUMENT_KINDS = [KIND_PATCHER_INSTRUMENT, KIND_VST_INSTRUMENT, KIND_SAMPLER];
+/** One predicate for "is this an instrument", asked of both the chain and the incoming device. */
+function isInstrumentKind(kind) { return INSTRUMENT_KINDS.indexOf(kind) >= 0; }
 function chainHasInstrument(track) {
   const here = chains[track];
   const devices = here && here.devices;
   if (!devices) return false;
   for (let i = 0; i < devices.length; i++) {
-    const k = devices[i].kind;
-    if (k === KIND_PATCHER_INSTRUMENT || k === KIND_VST_INSTRUMENT) return true;
+    if (isInstrumentKind(devices[i].kind)) return true;
   }
   return false;
 }
@@ -2365,8 +2377,10 @@ function loadSampleIntoTrack(row) {
 function insertBuiltinDevice(row) {
   if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return; }
   const track = state.cursor.track;
-  // Kinds 1 (patcher instrument) and 5 (sampler) are instruments, and a chain holds one.
-  const instrument = row.deviceKind === 1 || row.deviceKind === 5;
+  // The SAME predicate the chain is scanned with. These were two separate spellings of
+  // "instrument" and they disagreed about the sampler, which is how an incoming sampler
+  // could be judged an instrument while a sampler already in the chain was not one.
+  const instrument = isInstrumentKind(row.deviceKind);
   if (instrument && chainHasInstrument(track)) {
     state.reject = 'track ' + (track + 1) + ' already has an instrument — '
                  + 'remove it first, or add this on another track';

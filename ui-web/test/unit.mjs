@@ -3589,3 +3589,44 @@ test('the waveform cache key is built in exactly one place', async () => {
     + 'how a window that had arrived was reported missing, and how fixing that broke the '
     + 'arrangement');
 });
+
+test('the instrument-kind mirror still matches the engine', async () => {
+  /*
+   * THE RULE LIVES IN C++ AND IS MIRRORED IN JS, SO THE MIRROR IS CHECKED AGAINST IT.
+   *
+   * `chainHasInstrument` decides whether the UI refuses a second instrument in words or lets
+   * the engine refuse it with a numeric code. It listed two kinds; the engine's
+   * `isInstrumentKind` lists three. The sampler had been added engine-side after I reported it
+   * missing, and this side never followed — while a comment here went on stating the old rule
+   * and CITING device_chain.cpp as its authority.
+   *
+   * The result was the ordinary case failing: put a sampler on a track, add a plugin, get
+   * "chain error on track 0 (code 1)". A stale mirror does not announce itself, and a comment
+   * cannot notice that the file it quotes has changed.
+   *
+   * So the check reads the predicate out of the engine and compares. It fails on a kind added
+   * to either side alone, which is the only failure mode a mirror has.
+   */
+  const { readFileSync } = await import('node:fs');
+  const cpp = readFileSync(new URL('../../apps/device_chain.cpp', import.meta.url), 'utf8');
+  const body = cpp.match(/bool isInstrumentKind\([^)]*\)\s*\{([\s\S]*?)\}/);
+  assert.ok(body, 'isInstrumentKind was not found in apps/device_chain.cpp — if it moved or was '
+                + 'renamed, this check is blind and must be repointed, not deleted');
+  const engineKinds = [...body[1].matchAll(/DeviceKind::(\w+)/g)].map((m) => m[1]).sort();
+
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const list = html.match(/const INSTRUMENT_KINDS = \[([^\]]*)\]/);
+  assert.ok(list, 'INSTRUMENT_KINDS was not found in index.html');
+  // The mirror names kinds by constant; map them onto the engine's spelling to compare.
+  const NAMES = { KIND_PATCHER_INSTRUMENT: 'PatcherInstrument', KIND_VST_INSTRUMENT: 'VstInstrument',
+                  KIND_SAMPLER: 'Sampler' };
+  const uiKinds = list[1].split(',').map((x) => x.trim()).filter(Boolean)
+                         .map((x) => NAMES[x] || `UNMAPPED(${x})`).sort();
+
+  assert.deepEqual(uiKinds, engineKinds,
+    `the UI's instrument kinds ${JSON.stringify(uiKinds)} no longer match the engine's `
+    + `${JSON.stringify(engineKinds)}. A kind on the engine's list and not the UI's means the UI `
+    + `sends an AddDevice the engine refuses with a numeric code; the other way round means the `
+    + `UI refuses something that is allowed. Fix INSTRUMENT_KINDS in index.html — and if a kind `
+    + `is genuinely new, add it to NAMES here too.`);
+});
