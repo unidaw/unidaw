@@ -38,7 +38,7 @@ struct PatcherAssembleDeps {
   // The engine's state rather than 2 of its groups by name — apps/engine_state.h.
   EngineState& engineState;
   // The producer's view of the track list, taken without holding tracksMutex across the walk.
-  const std::function<std::vector<TrackRuntime*>()>& snapshotTracks;
+  std::function<std::vector<TrackRuntime*>()> snapshotTracks;
 };
 
 // Takes the graph alone, not the whole deps struct: publishing the snapshot needs nothing about

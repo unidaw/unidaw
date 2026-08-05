@@ -32,7 +32,7 @@ struct RestartWorkerDeps {
   std::mutex& restartMutex;
   std::condition_variable& restartCv;
   std::deque<TrackRuntime*>& restartQueue;
-  const std::function<void(TrackRuntime&)>& applyHostBypassStates;
+  std::function<void(TrackRuntime&)> applyHostBypassStates;
 };
 
 void runRestartWorker(RestartWorkerDeps& deps);

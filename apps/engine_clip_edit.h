@@ -62,10 +62,10 @@ struct ClipEditDeps {
   // ADDED WITH requireMatchingClipVersion, which REFUSES rather than returning a value: it tells
   // the caller through emitClipReject and records the refusal in the journal, so both arrive here
   // together. clipVersion, emitUiDiff and trackTable were already members.
-  const std::function<void(daw::UiClipRejectReason, uint32_t, uint32_t, uint32_t,
-                           daw::UiCommandType)>& emitClipReject;
-  const std::function<void(const char*, const char*, uint32_t, uint32_t,
-                           const std::string&)>& historyAppend;
+  std::function<void(daw::UiClipRejectReason, uint32_t, uint32_t, uint32_t,
+                           daw::UiCommandType)> emitClipReject;
+  std::function<void(const char*, const char*, uint32_t, uint32_t,
+                           const std::string&)> historyAppend;
 };
 
 EditTarget locateEditTarget(LocateTargetDeps& deps, TrackRuntime& rt, uint64_t absTick,

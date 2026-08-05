@@ -30,15 +30,14 @@ struct AutomationCommandDeps {
   TrackTable& trackTable;
   std::atomic<uint32_t>& automationVersion;
   UiShmState& uiShm;
-  const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>&
-      buildTrackSnapshot;
-  const std::function<void(const char*, const char*, uint32_t, uint32_t,
-                           const std::string&)>& historyAppend;
-  const std::function<bool(const TrackRuntime&)>& trackIsPersisted;
+  std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)> buildTrackSnapshot;
+  std::function<void(const char*, const char*, uint32_t, uint32_t,
+                           const std::string&)> historyAppend;
+  std::function<bool(const TrackRuntime&)> trackIsPersisted;
   // The per-track optimistic-concurrency gate. There is also a daw::requireMatchingClipVersion in
   // clip_edit.h with a DIFFERENT signature; this is main's own lambda, which additionally knows
   // that global-scope ops gate on the global counter rather than the caller's incidental trackId.
-  const std::function<bool(uint32_t, daw::UiCommandType, uint32_t)>& requireMatchingClipVersion;
+  std::function<bool(uint32_t, daw::UiCommandType, uint32_t)> requireMatchingClipVersion;
 };
 
 void handleSetAutomationTarget(AutomationCommandDeps& deps,

@@ -65,23 +65,59 @@ keep_evidence_then() {
   exit $rc
 }
 trap 'keep_evidence_then cleanup' EXIT
-sleep 2
-DAW_UI_SHM_NAME="$SHM" "$CLI" do load three --force >/dev/null 2>&1 || true
-sleep 1
 
-notes_on() { DAW_UI_SHM_NAME="$SHM" "$CLI" get clip --track "$1" --force 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d.get("notes",[])))' 2>/dev/null || echo -1; }
+# FIVE FIXED SLEEPS USED TO STAND HERE, and under a full parallel ctest the first one lost. On
+# 2026-08-05 this check reported "rename not persisted" and "removed track's notes still
+# published" while every read came back -1 — including B1_BEFORE, taken BEFORE any edit. A
+# baseline that cannot be read is not a failed assertion, it is a check that started measuring
+# before the engine existed, and it accuses the product in the engine's own words.
+#
+# `sleep 2` is a claim about how fast this machine boots an engine while a hundred other tests
+# run. wait_for_boot asks the engine instead, and fails immediately with the log tail if it died.
+cli() { DAW_UI_SHM_NAME="$SHM" "$CLI" "$@"; }
+# THE PATTERN MATTERS: this engine is launched with NO --project, so it never emits a
+# project.load at boot and wait_for_boot's DEFAULT condition would wait for something that never
+# arrives — which is exactly what it did on the first attempt, burning the engine's whole
+# 14-second life and then reporting "the engine EXITED before its project loaded". True, and
+# about the harness. What it needs is the command thread, which is what makes `do load` land.
+wait_for_boot "$TMP/eng.log" "$ENG" 120 "UI: command thread started"
+
+# ONE load, not two: the boot did not perform one, so the explicit load below is the first.
+cli do load three --force >/dev/null 2>&1 || true
+wait_for_loads "$TMP/eng.log" "$ENG" 1 60 "the explicit load of the three-track fixture"
+
+notes_on() { cli get clip --track "$1" --force 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d.get("notes",[])))' 2>/dev/null || echo -1; }
+
+# THE READ PATH HAS TO BE WORKING BEFORE ANY ASSERTION RESTS ON IT. Every number below is a note
+# count, and -1 means the read FAILED rather than "no notes" — indistinguishable in the
+# assertions, and only one of them is about the product. project.load says the document was
+# adopted; it does not say the clip window has been published yet.
+#
+# THESE ARE FUNCTIONS, NOT STRINGS, and that is not style. The first version passed
+# `sh -c "[ \"$(...)\" != -1 ]"` — where bash expands the $(...) ONCE, while parsing the line, so
+# every iteration re-tested a value frozen at that instant. A wait that does not re-evaluate is a
+# sleep wearing a wait's name, and it failed for that reason rather than for anything it measured.
+clip_readable() { [ "$(notes_on 0)" != "-1" ]; }
+wait_until 30 clip_readable || {
+  echo "  FAIL(setup): the published clip window never became readable, so nothing below would"
+  echo "        be a statement about the engine's edits."
+  tail -8 "$TMP/eng.log" | sed 's/^/          /'; exit 1; }
 
 # --- Bug A: rename track 0, save, read the saved name ---
-DAW_UI_SHM_NAME="$SHM" "$CLI" do rename --track 0 --name Drums --force >/dev/null 2>&1 || true
-sleep 0.3
-DAW_UI_SHM_NAME="$SHM" "$CLI" do save saved --force >/dev/null 2>&1 || true
-sleep 0.5
+cli do rename --track 0 --name Drums --force >/dev/null 2>&1 || true
+cli do save saved --force >/dev/null 2>&1 || true
+# The SAVE is a file appearing, so wait for the file rather than for a duration.
+wait_until 30 test -s "$TMP/saved.uniproj.json"
 SAVED_NAME="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(next((t["name"] for t in d["tracks"] if t["track_id"]==0), "?"))' "$TMP/saved.uniproj.json" 2>/dev/null || echo ERR)"
 
 # --- Bug B: remove the MIDDLE track (1), its published clip must go empty ---
 B1_BEFORE="$(notes_on 1)"; T0_BEFORE="$(notes_on 0)"; T2_BEFORE="$(notes_on 2)"
-DAW_UI_SHM_NAME="$SHM" "$CLI" do remove-track --track 1 --force >/dev/null 2>&1 || true
-sleep 0.5
+cli do remove-track --track 1 --force >/dev/null 2>&1 || true
+# Wait for the OBSERVABLE the assertion is about — the removed track's window going empty — not
+# for half a second. If it never empties the assertion below still fails and says so; this only
+# removes the race, it does not replace the check.
+removed_track_empty() { [ "$(notes_on 1)" = "0" ]; }
+wait_until 30 removed_track_empty || true
 B1_AFTER="$(notes_on 1)"; T0_AFTER="$(notes_on 0)"; T2_AFTER="$(notes_on 2)"
 wait "$ENG" 2>/dev/null || true
 

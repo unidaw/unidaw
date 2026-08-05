@@ -30,14 +30,14 @@ namespace daw::engine {
 struct PatcherCommandDeps {
   // The engine's state rather than 2 of its groups by name — apps/engine_state.h.
   EngineState& engineState;
-  const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>& buildTrackSnapshot;
-  const std::function<void(uint32_t, uint16_t, uint32_t, uint32_t, uint32_t,
-                           uint32_t, uint32_t, uint32_t, uint32_t)>& emitPatcherGraphDelta;
-  const std::function<void(uint16_t, uint32_t, uint32_t, uint32_t, uint32_t,
-                           uint32_t, uint32_t, uint32_t)>& emitPatcherGraphError;
-  const std::function<void(const daw::UiDiffPayload&)>& emitUiDiff;
-  const std::function<bool()>& reassemblePatcherFromDevices;
-  const std::function<void()>& updatePatcherGraphSnapshot;
+  std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)> buildTrackSnapshot;
+  std::function<void(uint32_t, uint16_t, uint32_t, uint32_t, uint32_t,
+                           uint32_t, uint32_t, uint32_t, uint32_t)> emitPatcherGraphDelta;
+  std::function<void(uint16_t, uint32_t, uint32_t, uint32_t, uint32_t,
+                           uint32_t, uint32_t, uint32_t)> emitPatcherGraphError;
+  std::function<void(const daw::UiDiffPayload&)> emitUiDiff;
+  std::function<bool()> reassemblePatcherFromDevices;
+  std::function<void()> updatePatcherGraphSnapshot;
 };
 
 void handleAddPatcherNode(PatcherCommandDeps& deps,

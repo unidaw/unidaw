@@ -880,8 +880,6 @@ int main(int argc, char** argv) {
       }
       return daw::makeEventRing(uiShm.base, uiShm.header->ringUiOutOffset);
   };
-  const std::function<void(const char*, const char*, uint32_t, uint32_t,
-                          const std::string&)> historyAppendFn = historyAppend;
   // MOVED UP TO HERE from beside the diff emitters, because UiPublishDeps now holds them and a
   // struct of references cannot be built before its members exist. They are four independent
   // declarations with nothing above them, so moving them is a move and not a reordering of work.
@@ -891,7 +889,7 @@ int main(int argc, char** argv) {
   const auto uiDiffStart = std::chrono::steady_clock::now();
   daw::engine::UiPublishDeps uiPublishDeps{modVersion,          getRingStd,   getRingUiOut,
                                            routingVersion,      patcherGraphVersion,
-                                           historyAppendFn,     uiDiffSent,   uiDiffDropped,
+                                           historyAppend,     uiDiffSent,   uiDiffDropped,
                                            uiDiffDropLogMs,     uiDiffStart};
   // The eight diff/error emitters are functions in engine_ui_publish now. main() keeps forwarders
   // because callers all through the file still use them by name.
@@ -971,9 +969,8 @@ int main(int argc, char** argv) {
   };
 
   // Below snapshotTracks, which it takes: a struct of references cannot be built before its
-  // members exist, and snapshotTracksFn is the wrapper for the lambda just above.
-  const std::function<std::vector<TrackRuntime*>()> snapshotTracksFn = snapshotTracks;
-  daw::engine::SongExtentDeps songExtentDeps{engineState, snapshotTracksFn, patternTicks};
+  // members exist, and snapshotTracks is the wrapper for the lambda just above.
+  daw::engine::SongExtentDeps songExtentDeps{engineState, snapshotTracks, patternTicks};
   auto trackWindowEnd = [&](const TrackRuntime& rt) {
     return daw::engine::trackWindowEnd(songExtentDeps, rt);
   };
@@ -1203,11 +1200,9 @@ int main(int argc, char** argv) {
   // BUILT HERE, not beside trackSetupDeps at the top: rebuildHostForChain and scheduleHostRestart
   // are declared just above, and a struct of references cannot be built before its members exist.
   // See TrackLifecycleDeps for why that forces two structs rather than one.
-  const std::function<void(TrackRuntime&)> rebuildHostForChainFn = rebuildHostForChain;
-  const std::function<void(TrackRuntime&)> scheduleHostRestartFn = scheduleHostRestart;
   daw::engine::TrackLifecycleDeps trackLifecycleDeps{
       trackSetupDeps, trackTable, masterTrack, liveTrackCount, masterFxActive,
-      rebuildHostForChainFn, scheduleHostRestartFn};
+      rebuildHostForChain, scheduleHostRestart};
   auto ensureTrack = [&](uint32_t trackId, const std::string& pluginPath) {
     return daw::engine::ensureTrack(trackLifecycleDeps, trackId, pluginPath);
   };
@@ -1222,7 +1217,7 @@ int main(int argc, char** argv) {
   // in the inner block and ALSO shadowed the outer std::thread with a local one — the thread never
   // started, and what did start read a destroyed struct. 100 checks failed.
   daw::engine::MasterRenderDeps masterRenderDeps{
-      running, transport, masterFxActive, masterTrack, audioCallback, scheduleHostRestartFn
+      running, transport, masterFxActive, masterTrack, audioCallback, scheduleHostRestart
   };
   // 4b: bring the MASTER host in line with its chain. The master is not in the `tracks`
   // vector, so the per-track consumer never drives its host lifecycle — do it here,
@@ -1287,8 +1282,6 @@ int main(int argc, char** argv) {
   // A refusal, on the outbound ring, with the numbers that settle it. Everything the
   // caller needs to recover is here: which track the version was compared against, what
   // it sent, and what to retry with.
-  const std::function<void(daw::UiClipRejectReason, uint32_t, uint32_t, uint32_t,
-                           daw::UiCommandType)> emitClipRejectFn = emitClipReject;
 
   daw::engine::ChainSnapshotDeps chainSnapshotDeps{
       uiPublishDeps, chainVersion, getRingUiOut, resolveDevicePluginPath};
@@ -1509,11 +1502,8 @@ int main(int argc, char** argv) {
     return out;
   };
 
-  const std::function<std::shared_ptr<const daw::SamplerRender>(
-      const daw::SamplerState&, uint32_t, uint32_t)> rebuildSamplerRenderFn =
-      rebuildSamplerRender;
   daw::engine::SamplerRefreshDeps samplerRefreshDeps{
-      engineConfig, samplerKitVersion, rebuildSamplerRenderFn};
+      engineConfig, samplerKitVersion, rebuildSamplerRender};
   auto refreshSamplerForTrack = [&](TrackRuntime& rt) {
     daw::engine::refreshSamplerForTrack(samplerRefreshDeps, rt);
   };
@@ -1672,8 +1662,8 @@ int main(int argc, char** argv) {
   daw::engine::ClipEditDeps clipEditDeps{
      engineState, barEndTick, clipDirty, clipVersion, nextPlacementId, commitStructuralEdit,
       emitChordDiff, emitUiDiff, locateEditTarget, nextChordId, nextClipId, patternTicks,
-      pushStructuralUndo, rebuildFlatAndPublish, snapshotTrackStore, emitClipRejectFn,
-      historyAppendFn
+      pushStructuralUndo, rebuildFlatAndPublish, snapshotTrackStore, emitClipReject,
+      historyAppend
   };
   // Six helpers that used to be lambdas here are functions in engine_clip_edit now — three of
   // them were MEMBERS of the struct above, so it lost three std::functions and gained one
@@ -1912,9 +1902,6 @@ int main(int argc, char** argv) {
   // These std::function objects wrap lambdas that are still defined above and still capture by
   // reference; the struct holds references to THESE, so all of it lives exactly as long as main's
   // scope. Command-thread only, so the indirection costs nothing that matters here.
-  const std::function<void(daw::UiCommandType, daw::UiSamplerRejectReason,
-                           uint32_t, uint32_t, uint16_t)> reportSamplerRejectFn =
-      reportSamplerReject;
   const std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint16_t, bool,
                            std::optional<daw::EventId>, uint16_t, uint16_t)> applyAddNoteFn =
       [&](uint32_t t, uint64_t n, uint64_t d, uint8_t p, uint8_t v, uint16_t f, bool u,
@@ -1923,99 +1910,63 @@ int main(int argc, char** argv) {
       };
   daw::engine::SamplerCommandDeps samplerCommandDeps{
       uiShm, trackTable, tempoProvider, samplerRefreshDeps,
-      reportSamplerRejectFn, rebuildSamplerRenderFn, applyAddNoteFn};
+      reportSamplerReject, rebuildSamplerRender, applyAddNoteFn};
 
   // The automation and clip-field commands moved out too; same shape as the sampler family.
-  const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>
-      buildTrackSnapshotFn = buildTrackSnapshot;
-  const std::function<bool(const TrackRuntime&)> trackIsPersistedFn = trackIsPersisted;
-  const std::function<bool(uint32_t, daw::UiCommandType, uint32_t)>
-      requireMatchingClipVersionFn = requireMatchingClipVersion;
   daw::engine::AutomationCommandDeps automationCommandDeps{
       trackTable, automationVersion, uiShm,
-      buildTrackSnapshotFn, historyAppendFn, trackIsPersistedFn,
-      requireMatchingClipVersionFn};
+      buildTrackSnapshot, historyAppend, trackIsPersisted,
+      requireMatchingClipVersion};
 
-  const std::function<uint32_t(TrackRuntime*)> bumpClipVersionForFn = bumpClipVersionFor;
-  const std::function<void()> publishAudioClipTableFn = publishAudioClipTable;
-  const std::function<std::shared_ptr<const AudioRenderList>(const TrackRuntime&)>
-      rebuildAudioRenderFn = rebuildAudioRender;
-  const std::function<void(bool)> writeUiClipExtentsFn = writeUiClipExtents;
   daw::engine::ClipCommandDeps clipCommandDeps{
       trackTable, clipVersion, uiShm,
-      bumpClipVersionForFn, publishAudioClipTableFn, rebuildAudioRenderFn, writeUiClipExtentsFn};
+      bumpClipVersionFor, publishAudioClipTable, rebuildAudioRender, writeUiClipExtents};
 
-  const std::function<void(uint16_t, uint32_t, uint32_t)> emitModErrorFn = emitModError;
-  const std::function<void(TrackRuntime&)> emitModSnapshotFn = emitModSnapshot;
   daw::engine::ModlinkCommandDeps modlinkCommandDeps{
-      trackTable, buildTrackSnapshotFn, emitModErrorFn, emitModSnapshotFn,
-      historyAppendFn};
+      trackTable, buildTrackSnapshot, emitModError, emitModSnapshot,
+      historyAppend};
 
-  const std::function<void(uint32_t, uint16_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
-                           uint32_t, uint32_t)> emitPatcherGraphDeltaFn = emitPatcherGraphDelta;
-  const std::function<void(uint16_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
-                           uint32_t)> emitPatcherGraphErrorFn = emitPatcherGraphError;
-  const std::function<void(const daw::UiDiffPayload&)> emitUiDiffFn = emitUiDiff;
-  // snapshotTracksFn MOVED UP TO HERE from further down, rather than a second wrapper being made
+  // snapshotTracks MOVED UP TO HERE from further down, rather than a second wrapper being made
   // beside it. PatcherCommandDeps below takes the reassembly as a std::function, so its deps must
   // exist by then; snapshotTracks itself has existed since line ~1466 and only its wrapper was
   // late. A second wrapper would also have needed a second NAME, and deps_order_check reads the
   // name — it rejected snapshotTracksPaFn against member snapshotTracks, correctly.
   daw::engine::PatcherAssembleDeps patcherAssembleDeps{
-     engineState, snapshotTracksFn
+     engineState, snapshotTracks
   };
   auto reassemblePatcherFromDevices = [&] {
     return daw::engine::reassemblePatcherFromDevices(patcherAssembleDeps);
   };
-  const std::function<bool()> reassemblePatcherFromDevicesFn = reassemblePatcherFromDevices;
-  const std::function<void()> updatePatcherGraphSnapshotFn = updatePatcherGraphSnapshot;
   daw::engine::PatcherCommandDeps patcherCommandDeps{
-     engineState, buildTrackSnapshotFn, emitPatcherGraphDeltaFn, emitPatcherGraphErrorFn,
-      emitUiDiffFn, reassemblePatcherFromDevicesFn, updatePatcherGraphSnapshotFn
+     engineState, buildTrackSnapshot, emitPatcherGraphDelta, emitPatcherGraphError,
+      emitUiDiff, reassemblePatcherFromDevices, updatePatcherGraphSnapshot
   };
 
-  const std::function<bool(const std::string&, std::string*)> saveProjectToPathFn =
-      saveProjectToPath;
-  const std::function<bool(const std::string&, std::string*)> loadProjectFromPathFn =
-      loadProjectFromPath;
   daw::engine::ModuleCommandDeps moduleCommandDeps{
-      loadedProject, saveProjectToPathFn, loadProjectFromPathFn};
+      loadedProject, saveProjectToPath, loadProjectFromPath};
 
-  const std::function<void(uint16_t, uint32_t)> emitRoutingErrorFn = emitRoutingError;
-  const std::function<void(TrackRuntime&)> emitRoutingSnapshotFn = emitRoutingSnapshot;
 
   daw::engine::MarkerCommandDeps markerCommandDeps{
-      arrange, historyAppendFn
+      arrange, historyAppend
   };
 
   daw::engine::ProjectCommandDeps projectCommandDeps{
-      projectLoadOk, projectLoadSeq, saveProjectToPathFn, loadProjectFromPathFn};
+      projectLoadOk, projectLoadSeq, saveProjectToPath, loadProjectFromPath};
 
-  const std::function<void(uint16_t, uint32_t, uint32_t, uint32_t, uint32_t)> emitChainErrorFn =
-      emitChainError;
-  const std::function<void(TrackRuntime&)> emitChainSnapshotFn = emitChainSnapshot;
-  const std::function<void()> reconcileMasterHostFn = reconcileMasterHost;
   const std::function<void(TrackRuntime&)> refreshSamplerForTrackFn2 = refreshSamplerForTrack;
   daw::engine::ChainCommandDeps chainCommandDeps{
-     engineState, masterTrack, pluginCache, buildTrackSnapshotFn, emitChainErrorFn,
-      emitChainSnapshotFn, rebuildHostForChainFn, reconcileMasterHostFn,
+     engineState, masterTrack, pluginCache, buildTrackSnapshot, emitChainError,
+      emitChainSnapshot, rebuildHostForChain, reconcileMasterHost,
       refreshSamplerForTrackFn2
   };
 
-  const std::function<bool(uint32_t, uint32_t, daw::EventId, const daw::RowOpEdit&, bool,
-                           daw::UiClipRejectReason&)> applySetRowOpsFn = applySetRowOps;
-  daw::engine::RowopsCommandDeps rowopsCommandDeps{applySetRowOpsFn, emitClipRejectFn};
+  daw::engine::RowopsCommandDeps rowopsCommandDeps{applySetRowOps, emitClipReject};
 
-  const std::function<std::string(const std::string&)> resolveSourcePathFn = resolveSourcePath;
-  const std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)>
-      resolveDevicePluginPathFn = resolveDevicePluginPath;
   daw::engine::RequestCommandDeps requestCommandDeps{
-     engineState, uiShm, waveformStore, resolveSourcePathFn, resolveDevicePluginPathFn,
-      rebuildHostForChainFn, emitChainSnapshotFn
+     engineState, uiShm, waveformStore, resolveSourcePath, resolveDevicePluginPath,
+      rebuildHostForChain, emitChainSnapshot
   };
 
-  const std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&)>
-      rebuildFlatAndPublishFn = rebuildFlatAndPublish;
   daw::engine::ArrangeTimeCommandDeps arrangeTimeCommandDeps{
      engineState, automationVersion, buildTrackSnapshot, bumpClipVersionFor, clipDirty,
       harmonyTimeline, historyAppend, pushUndo, rebuildAudioRender, rebuildFlatAndPublish,
@@ -2023,19 +1974,13 @@ int main(int argc, char** argv) {
   };
   daw::engine::TrackpropsCommandDeps trackpropsCommandDeps{
       trackTable, masterTrack, quantizeVersion,
-      buildTrackSnapshotFn, rebuildFlatAndPublishFn};
+      buildTrackSnapshot, rebuildFlatAndPublish};
 
-  const std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint8_t, bool)>
-      applyLocalNoteEditFn = applyLocalNoteEdit;
-  const std::function<bool(uint32_t, uint64_t, uint16_t)> editIsLocalScopeFn = editIsLocalScope;
   const std::function<bool(uint32_t, uint64_t, uint8_t, uint16_t, bool)> applyRemoveNoteFn =
       [&](uint32_t trackId, uint64_t nanotick, uint8_t pitch, uint16_t flags, bool recordUndo) {
         return daw::engine::applyRemoveNote(clipEditDeps, trackId, nanotick, pitch, flags,
                                             recordUndo);
       };
-  const std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint8_t, uint8_t,
-                           uint8_t, uint32_t, uint16_t, uint16_t, bool, std::optional<uint32_t>)>
-      applyAddChordFn = applyAddChord;
   const std::function<bool(uint32_t, uint32_t, bool)> applyRemoveChordFn =
       [&](uint32_t trackId, uint32_t chordId, bool recordUndo) {
         return daw::engine::applyRemoveChord(clipEditDeps, trackId, chordId, recordUndo);
@@ -2045,60 +1990,35 @@ int main(int argc, char** argv) {
         return daw::engine::applyRemoveChordAt(clipEditDeps, trackId, nanotick, column,
                                                recordUndo);
       };
-  const std::function<bool(uint64_t, uint32_t, uint32_t, bool)> addOrUpdateHarmonyFn =
-      addOrUpdateHarmony;
-  const std::function<bool(uint64_t, bool)> removeHarmonyFn = removeHarmony;
-  const std::function<bool(uint32_t, daw::UiCommandType)> requireMatchingHarmonyVersionFn =
-      requireMatchingHarmonyVersion;
   daw::engine::NoteCommandDeps noteCommandDeps{
-      applyAddNoteFn, applyLocalNoteEditFn, editIsLocalScopeFn, applyRemoveNoteFn,
-      applyAddChordFn, applyRemoveChordFn, applyRemoveChordAtFn, addOrUpdateHarmonyFn,
-      removeHarmonyFn, requireMatchingClipVersionFn, requireMatchingHarmonyVersionFn};
+      applyAddNoteFn, applyLocalNoteEdit, editIsLocalScope, applyRemoveNoteFn,
+      applyAddChord, applyRemoveChordFn, applyRemoveChordAtFn, addOrUpdateHarmony,
+      removeHarmony, requireMatchingClipVersion, requireMatchingHarmonyVersion};
 
-  const std::function<bool(const daw::UndoEntry&, bool)> applyUndoEntryFn = applyUndoEntry;
-  const std::function<bool(const SongStoreState&)> restoreSongStoreFn = restoreSongStore;
-  const std::function<bool(uint32_t, const TrackStoreState&)> restoreTrackStoreFn =
-      restoreTrackStore;
   daw::engine::UndoCommandDeps undoCommandDeps{
-     engineState, applyUndoEntryFn, restoreSongStoreFn, restoreTrackStoreFn,
-      requireMatchingClipVersionFn
+     engineState, applyUndoEntry, restoreSongStore, restoreTrackStore,
+      requireMatchingClipVersion
   };
 
-  const std::function<TrackRuntime*(uint32_t, const std::string&)> ensureTrackFn = ensureTrack;
-  const std::function<std::optional<std::string>(uint32_t)> resolvePluginPathFn =
-      resolvePluginPath;
-  const std::function<void(TrackRuntime&, uint32_t)> updateTrackChainForInstrumentFn =
-      updateTrackChainForInstrument;
   daw::engine::DeviceCommandDeps deviceCommandDeps{
-     engineState, audioPlaybackBlockId, pluginPath, resolveDevicePluginPathFn,
-      rebuildHostForChainFn, emitChainSnapshotFn, ensureTrackFn, resolvePluginPathFn,
-      updateTrackChainForInstrumentFn
+     engineState, audioPlaybackBlockId, pluginPath, resolveDevicePluginPath,
+      rebuildHostForChain, emitChainSnapshot, ensureTrack, resolvePluginPath,
+      updateTrackChainForInstrument
   };
 
   // std::function wrappers so the Deps struct can hold references with a lifetime. A raw
   // lambda bound to a const std::function& would create a temporary that dies at the end of
   // the full expression, leaving the struct holding a dangling reference.
-  const std::function<bool(uint32_t, const std::function<bool(std::vector<daw::ProjectPlacement>&)>&)> applyPlacementEditFn = applyPlacementEdit;
-  const std::function<void(uint32_t, uint8_t, uint8_t, bool)> enqueuePreviewFn = enqueuePreview;
-  const std::function<void(const std::vector<uint8_t>&)> handleAssembledBulkFn = handleAssembledBulk;
-  const std::function<void(uint32_t, TrackStoreState, TrackStoreState)> pushStructuralUndoFn = pushStructuralUndo;
-  const std::function<void(EngineUndoEntry)> pushUndoFn = pushUndo;
-  const std::function<void()> recomputeSongEndFn = recomputeSongEnd;
-  const std::function<void(TrackRuntime&)> resetTrackContentFn = resetTrackContent;
-  const std::function<bool(TrackRuntime&, const std::vector<std::string>&)> restartTrackHostFn = restartTrackHost;
-  const std::function<std::unique_ptr<TrackRuntime>(uint32_t, const std::string&, bool, bool)> setupTrackRuntimeFn = setupTrackRuntime;
-  const std::function<SongStoreState()> snapshotSongStoreFn = snapshotSongStore;
-  const std::function<TrackStoreState(const TrackRuntime&)> snapshotTrackStoreFn = snapshotTrackStore;
 
   daw::engine::TrackCommandDeps trackCommandDeps{
-      buildTrackSnapshotFn, bumpClipVersionForFn, clipVersion, emitRoutingErrorFn,
-      emitRoutingSnapshotFn, liveTrackCount, rebuildAudioRenderFn, rebuildFlatAndPublishFn,
-      resetTrackContentFn, restartTrackHostFn, setupTrackRuntimeFn, trackTable};
+      buildTrackSnapshot, bumpClipVersionFor, clipVersion, emitRoutingError,
+      emitRoutingSnapshot, liveTrackCount, rebuildAudioRender, rebuildFlatAndPublish,
+      resetTrackContent, restartTrackHost, setupTrackRuntime, trackTable};
   daw::engine::PlacementCommandDeps placementCommandDeps{
-      applyPlacementEditFn, bumpClipVersionForFn, clipDirty, historyAppendFn, nextClipId,
-      nextPlacementId, pushStructuralUndoFn, pushUndoFn, rebuildAudioRenderFn,
-      rebuildFlatAndPublishFn, recomputeSongEndFn, requireMatchingClipVersionFn,
-      snapshotTrackStoreFn, trackTable};
+      applyPlacementEdit, bumpClipVersionFor, clipDirty, historyAppend, nextClipId,
+      nextPlacementId, pushStructuralUndo, pushUndo, rebuildAudioRender,
+      rebuildFlatAndPublish, recomputeSongEnd, requireMatchingClipVersion,
+      snapshotTrackStore, trackTable};
 
   daw::engine::TransportCommandDeps transportCommandDeps{
       engineState, masterTrack, panicPending, patternTicks,
@@ -2107,8 +2027,8 @@ int main(int argc, char** argv) {
 
   daw::engine::HandleUiEntryDeps handleUiEntryDeps{
       arrangeTimeCommandDeps, automationCommandDeps, bulkStreams, bulkTick,
-      chainCommandDeps, clipCommandDeps, deviceCommandDeps, enqueuePreviewFn,
-      handleAssembledBulkFn, historyAppendFn, markerCommandDeps, modlinkCommandDeps,
+      chainCommandDeps, clipCommandDeps, deviceCommandDeps, enqueuePreview,
+      handleAssembledBulk, historyAppend, markerCommandDeps, modlinkCommandDeps,
       moduleCommandDeps, noteCommandDeps, patcherCommandDeps, placementCommandDeps,
       projectCommandDeps, requestCommandDeps, rowopsCommandDeps, samplerCommandDeps,
       trackCommandDeps, trackpropsCommandDeps, transportCommandDeps, undoCommandDeps
@@ -2121,13 +2041,8 @@ int main(int argc, char** argv) {
   // The three ring accessors and uiDiffNowMs are lambdas; UiThreadDeps holds std::function
   // REFERENCES, so each needs a named object to bind to. A temporary would dangle the moment this
   // statement ended, and the thread reads them for the life of the process.
-  const std::function<daw::EventRingView()> getRingUiFn = getRingUi;
-  const std::function<daw::EventRingView()> getRingUiAgentFn = getRingUiAgent;
-  const std::function<daw::UiEditRingView()> getRingUiEditFn = getRingUiEdit;
-  const std::function<uint64_t()> uiDiffNowMsFn = uiDiffNowMs;
-  const std::function<void(const daw::EventEntry&)> handleUiEntryFn = handleUiEntry;
   daw::engine::UiThreadDeps uiThreadDeps{
-      running, getRingUiFn, getRingUiAgentFn, getRingUiEditFn, handleUiEntryFn, uiDiffNowMsFn};
+      running, getRingUi, getRingUiAgent, getRingUiEdit, handleUiEntry, uiDiffNowMs};
   std::thread uiThread([&] { daw::engine::runUiThread(uiThreadDeps); });
   daw::LogLine() << "UI: command thread launched" << std::endl;
 

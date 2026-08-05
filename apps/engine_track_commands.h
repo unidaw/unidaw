@@ -25,17 +25,17 @@
 namespace daw::engine {
 
 struct TrackCommandDeps {
-  const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>& buildTrackSnapshot;
-  const std::function<uint32_t(TrackRuntime*)>& bumpClipVersionFor;
+  std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)> buildTrackSnapshot;
+  std::function<uint32_t(TrackRuntime*)> bumpClipVersionFor;
   std::atomic<uint32_t>& clipVersion;
-  const std::function<void(uint16_t, uint32_t)>& emitRoutingError;
-  const std::function<void(TrackRuntime&)>& emitRoutingSnapshot;
+  std::function<void(uint16_t, uint32_t)> emitRoutingError;
+  std::function<void(TrackRuntime&)> emitRoutingSnapshot;
   std::atomic<uint32_t>& liveTrackCount;
-  const std::function<std::shared_ptr<const AudioRenderList>(const TrackRuntime&)>& rebuildAudioRender;
-  const std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&)>& rebuildFlatAndPublish;
-  const std::function<void(TrackRuntime&)>& resetTrackContent;
-  const std::function<bool(TrackRuntime&, const std::vector<std::string>&)>& restartTrackHost;
-  const std::function<std::unique_ptr<TrackRuntime>(uint32_t, const std::string&, bool, bool)>& setupTrackRuntime;
+  std::function<std::shared_ptr<const AudioRenderList>(const TrackRuntime&)> rebuildAudioRender;
+  std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&)> rebuildFlatAndPublish;
+  std::function<void(TrackRuntime&)> resetTrackContent;
+  std::function<bool(TrackRuntime&, const std::vector<std::string>&)> restartTrackHost;
+  std::function<std::unique_ptr<TrackRuntime>(uint32_t, const std::string&, bool, bool)> setupTrackRuntime;
   TrackTable& trackTable;
 };
 

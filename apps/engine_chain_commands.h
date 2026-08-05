@@ -32,12 +32,12 @@ struct ChainCommandDeps {
   EngineState& engineState;
   std::unique_ptr<TrackRuntime>& masterTrack;
   const daw::PluginCache& pluginCache;
-  const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>& buildTrackSnapshot;
-  const std::function<void(uint16_t, uint32_t, uint32_t, uint32_t, uint32_t)>& emitChainError;
-  const std::function<void(TrackRuntime&)>& emitChainSnapshot;
-  const std::function<void(TrackRuntime&)>& rebuildHostForChain;
-  const std::function<void()>& reconcileMasterHost;
-  const std::function<void(TrackRuntime&)>& refreshSamplerForTrack;
+  std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)> buildTrackSnapshot;
+  std::function<void(uint16_t, uint32_t, uint32_t, uint32_t, uint32_t)> emitChainError;
+  std::function<void(TrackRuntime&)> emitChainSnapshot;
+  std::function<void(TrackRuntime&)> rebuildHostForChain;
+  std::function<void()> reconcileMasterHost;
+  std::function<void(TrackRuntime&)> refreshSamplerForTrack;
 };
 
 void handleAddDevice(ChainCommandDeps& deps,

@@ -28,21 +28,21 @@
 namespace daw::engine {
 
 struct NoteCommandDeps {
-  const std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint16_t,
-                           bool, std::optional<daw::EventId>, uint16_t, uint16_t)>& applyAddNote;
-  const std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint8_t,
-                           bool)>& applyLocalNoteEdit;
-  const std::function<bool(uint32_t, uint64_t, uint16_t)>& editIsLocalScope;
-  const std::function<bool(uint32_t, uint64_t, uint8_t, uint16_t, bool)>& applyRemoveNote;
-  const std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint8_t,
+  std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint16_t,
+                           bool, std::optional<daw::EventId>, uint16_t, uint16_t)> applyAddNote;
+  std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint8_t,
+                           bool)> applyLocalNoteEdit;
+  std::function<bool(uint32_t, uint64_t, uint16_t)> editIsLocalScope;
+  std::function<bool(uint32_t, uint64_t, uint8_t, uint16_t, bool)> applyRemoveNote;
+  std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint8_t,
                            uint8_t, uint8_t, uint32_t, uint16_t, uint16_t, bool,
-                           std::optional<uint32_t>)>& applyAddChord;
-  const std::function<bool(uint32_t, uint32_t, bool)>& applyRemoveChord;
-  const std::function<bool(uint32_t, uint64_t, uint8_t, bool)>& applyRemoveChordAt;
-  const std::function<bool(uint64_t, uint32_t, uint32_t, bool)>& addOrUpdateHarmony;
-  const std::function<bool(uint64_t, bool)>& removeHarmony;
-  const std::function<bool(uint32_t, daw::UiCommandType, uint32_t)>& requireMatchingClipVersion;
-  const std::function<bool(uint32_t, daw::UiCommandType)>& requireMatchingHarmonyVersion;
+                           std::optional<uint32_t>)> applyAddChord;
+  std::function<bool(uint32_t, uint32_t, bool)> applyRemoveChord;
+  std::function<bool(uint32_t, uint64_t, uint8_t, bool)> applyRemoveChordAt;
+  std::function<bool(uint64_t, uint32_t, uint32_t, bool)> addOrUpdateHarmony;
+  std::function<bool(uint64_t, bool)> removeHarmony;
+  std::function<bool(uint32_t, daw::UiCommandType, uint32_t)> requireMatchingClipVersion;
+  std::function<bool(uint32_t, daw::UiCommandType)> requireMatchingHarmonyVersion;
 };
 
 void handleWriteNote(NoteCommandDeps& deps,

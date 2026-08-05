@@ -27,11 +27,11 @@ namespace daw::engine {
 
 struct ModlinkCommandDeps {
   TrackTable& trackTable;
-  const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>& buildTrackSnapshot;
-  const std::function<void(uint16_t, uint32_t, uint32_t)>& emitModError;
-  const std::function<void(TrackRuntime&)>& emitModSnapshot;
-  const std::function<void(const char*, const char*, uint32_t, uint32_t,
-                           const std::string&)>& historyAppend;
+  std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)> buildTrackSnapshot;
+  std::function<void(uint16_t, uint32_t, uint32_t)> emitModError;
+  std::function<void(TrackRuntime&)> emitModSnapshot;
+  std::function<void(const char*, const char*, uint32_t, uint32_t,
+                           const std::string&)> historyAppend;
 };
 
 void handleAddModLink(ModlinkCommandDeps& deps,

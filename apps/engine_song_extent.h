@@ -35,7 +35,7 @@ struct SongExtentDeps {
   // What stays as its own member is the plumbing: a std::function the caller owns, and a value
   // that is configuration rather than state. Those are not the engine.
   EngineState& engineState;
-  const std::function<std::vector<TrackRuntime*>()>& snapshotTracks;
+  std::function<std::vector<TrackRuntime*>()> snapshotTracks;
   // The arrangement's own loop length in ticks, taken by value: it is a configuration constant for
   // the life of the engine, not live state, and a reference would suggest otherwise.
   const uint64_t patternTicks;

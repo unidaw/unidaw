@@ -31,12 +31,12 @@ struct DeviceCommandDeps {
   EngineState& engineState;
   std::atomic<uint32_t>& audioPlaybackBlockId;
   const std::string& pluginPath;
-  const std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)>& resolveDevicePluginPath;
-  const std::function<void(TrackRuntime&)>& rebuildHostForChain;
-  const std::function<void(TrackRuntime&)>& emitChainSnapshot;
-  const std::function<TrackRuntime*(uint32_t, const std::string&)>& ensureTrack;
-  const std::function<std::optional<std::string>(uint32_t)>& resolvePluginPath;
-  const std::function<void(TrackRuntime&, uint32_t)>& updateTrackChainForInstrument;
+  std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)> resolveDevicePluginPath;
+  std::function<void(TrackRuntime&)> rebuildHostForChain;
+  std::function<void(TrackRuntime&)> emitChainSnapshot;
+  std::function<TrackRuntime*(uint32_t, const std::string&)> ensureTrack;
+  std::function<std::optional<std::string>(uint32_t)> resolvePluginPath;
+  std::function<void(TrackRuntime&, uint32_t)> updateTrackChainForInstrument;
 };
 
 void handleLoadPluginOnTrack(DeviceCommandDeps& deps,

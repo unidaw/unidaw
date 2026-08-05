@@ -29,11 +29,10 @@ struct ClipCommandDeps {
   TrackTable& trackTable;
   std::atomic<uint32_t>& clipVersion;
   UiShmState& uiShm;
-  const std::function<uint32_t(TrackRuntime*)>& bumpClipVersionFor;
-  const std::function<void()>& publishAudioClipTable;
-  const std::function<std::shared_ptr<const AudioRenderList>(const TrackRuntime&)>&
-      rebuildAudioRender;
-  const std::function<void(bool)>& writeUiClipExtents;
+  std::function<uint32_t(TrackRuntime*)> bumpClipVersionFor;
+  std::function<void()> publishAudioClipTable;
+  std::function<std::shared_ptr<const AudioRenderList>(const TrackRuntime&)> rebuildAudioRender;
+  std::function<void(bool)> writeUiClipExtents;
 };
 
 void handleSetClipGrid(ClipCommandDeps& deps,

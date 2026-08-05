@@ -24,10 +24,10 @@
 namespace daw::engine {
 
 struct RowopsCommandDeps {
-  const std::function<bool(uint32_t, uint32_t, daw::EventId, const daw::RowOpEdit&,
-                           bool, daw::UiClipRejectReason&)>& applySetRowOps;
-  const std::function<void(daw::UiClipRejectReason, uint32_t, uint32_t, uint32_t,
-                           daw::UiCommandType)>& emitClipReject;
+  std::function<bool(uint32_t, uint32_t, daw::EventId, const daw::RowOpEdit&,
+                           bool, daw::UiClipRejectReason&)> applySetRowOps;
+  std::function<void(daw::UiClipRejectReason, uint32_t, uint32_t, uint32_t,
+                           daw::UiCommandType)> emitClipReject;
 };
 
 void handleSetRowOps(RowopsCommandDeps& deps,

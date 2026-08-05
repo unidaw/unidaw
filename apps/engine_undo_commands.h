@@ -31,10 +31,10 @@ struct UndoCommandDeps {
   EngineState& engineState;
   // The two stacks and their lock are one thing: every push, undo and redo is a transaction
   // across BOTH vectors. See apps/engine_undo_stacks.h.
-  const std::function<bool(const daw::UndoEntry&, bool)>& applyUndoEntry;
-  const std::function<bool(const SongStoreState&)>& restoreSongStore;
-  const std::function<bool(uint32_t, const TrackStoreState&)>& restoreTrackStore;
-  const std::function<bool(uint32_t, daw::UiCommandType, uint32_t)>& requireMatchingClipVersion;
+  std::function<bool(const daw::UndoEntry&, bool)> applyUndoEntry;
+  std::function<bool(const SongStoreState&)> restoreSongStore;
+  std::function<bool(uint32_t, const TrackStoreState&)> restoreTrackStore;
+  std::function<bool(uint32_t, daw::UiCommandType, uint32_t)> requireMatchingClipVersion;
 };
 
 void handleUndo(UndoCommandDeps& deps,

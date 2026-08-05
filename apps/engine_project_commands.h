@@ -28,8 +28,8 @@ namespace daw::engine {
 struct ProjectCommandDeps {
   std::atomic<uint32_t>& projectLoadOk;
   std::atomic<uint32_t>& projectLoadSeq;
-  const std::function<bool(const std::string&, std::string*)>& saveProjectToPath;
-  const std::function<bool(const std::string&, std::string*)>& loadProjectFromPath;
+  std::function<bool(const std::string&, std::string*)> saveProjectToPath;
+  std::function<bool(const std::string&, std::string*)> loadProjectFromPath;
 };
 
 void handleSaveProject(ProjectCommandDeps& deps,

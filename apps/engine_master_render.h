@@ -28,7 +28,7 @@ struct MasterRenderDeps {
   std::atomic<bool>& masterFxActive;
   std::unique_ptr<TrackRuntime>& masterTrack;
   std::unique_ptr<EngineAudioCallback>& audioCallback;
-  const std::function<void(TrackRuntime&)>& scheduleHostRestart;
+  std::function<void(TrackRuntime&)> scheduleHostRestart;
 };
 
 void runMasterRenderThread(MasterRenderDeps& deps);

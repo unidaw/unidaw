@@ -41,10 +41,10 @@ struct RequestCommandDeps {
   // a type AND defining an object, which no search for a variable declaration can see.
   UiShmState& uiShm;
   daw::WaveformStore& waveformStore;
-  const std::function<std::string(const std::string&)>& resolveSourcePath;
-  const std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)>& resolveDevicePluginPath;
-  const std::function<void(TrackRuntime&)>& rebuildHostForChain;
-  const std::function<void(TrackRuntime&)>& emitChainSnapshot;
+  std::function<std::string(const std::string&)> resolveSourcePath;
+  std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)> resolveDevicePluginPath;
+  std::function<void(TrackRuntime&)> rebuildHostForChain;
+  std::function<void(TrackRuntime&)> emitChainSnapshot;
 };
 
 void handleRequestChainSnapshot(RequestCommandDeps& deps,
