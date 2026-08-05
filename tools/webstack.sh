@@ -212,6 +212,33 @@ say "building the sidecar…"
       --plugin-cache "$RUNDIR/plugin_cache.json" \
       > /tmp/side$SEG.log 2>&1 < /dev/null & echo $! >> "$PIDFILE" )
 sleep 2
+# WHETHER `ask` WILL WORK, said at startup rather than discovered mid-demo.
+#
+# The key is never required to run the DAW, only to talk to it — but the failure
+# arrives as a refusal in the console the first time somebody asks, which is a bad
+# moment to learn about it.
+#
+# THE SAME PLACES THE SIDECAR LOOKS, in the same order (ask.rs): DAW_ENV_FILE, then
+# .env / ../.env / ../../.env relative to the sidecar's cwd, which is $WEB/ui. The
+# first version of this line checked DAW_ENV_FILE alone and reported DISABLED while
+# the agent was working perfectly off $WEB/.env — a status line that lies about the
+# thing it exists to report is worse than none, and this one lied within an hour of
+# being written.
+#
+# Reports the PATH only. The key is not this script's to read.
+ask_key=""
+if [ -n "${DAW_ENV_FILE:-}" ] && [ -f "${DAW_ENV_FILE}" ]; then
+  ask_key="${DAW_ENV_FILE}"
+else
+  for c in "$WEB/ui/.env" "$WEB/.env" "$(dirname "$WEB")/.env"; do
+    [ -f "$c" ] && { ask_key="$c"; break; }
+  done
+fi
+if [ -n "$ask_key" ]; then
+  say "ask     enabled — key file $ask_key"
+else
+  say "ask     DISABLED — no key in DAW_ENV_FILE, $WEB/ui/.env, $WEB/.env or $(dirname "$WEB")/.env"
+fi
 # Resolved, not `$!` — see our_sidecar. Written back over the subshell's pid so
 # the file names the two processes a person would actually want to stop.
 SIDECAR_PID=$(our_sidecar)
