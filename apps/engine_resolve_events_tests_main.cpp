@@ -39,7 +39,6 @@ struct Fixture {
                                   [](const daw::UiHarmonyDiffPayload&) {},
                                   [](const daw::UndoEntry&) {}};
   std::atomic<uint64_t> lastOverflowTick{0};
-  daw::LatencyManager latencyMgr{};
   std::atomic<uint32_t> nextNoteId{1};
   PatcherGraphOwner patcherGraph{};
   bool patcherParallel = false;
@@ -61,7 +60,7 @@ struct Fixture {
   // control is what caught it. A fixture that cannot reach the code is not a cheap fixture, it is
   // a green test of nothing.
   RenderTrackDeps deps{
-      engineConfig, harmonyTimeline, lastOverflowTick, latencyMgr, nextNoteId,
+      engineConfig, harmonyTimeline, lastOverflowTick, nextNoteId,
       patcherGraph, patcherParallel, patcherPool, projectSeed, tempoProvider,
       traceNotes, transport, warnedEventOutsideBlock,
       [](uint64_t) -> std::optional<daw::HarmonyEvent> {

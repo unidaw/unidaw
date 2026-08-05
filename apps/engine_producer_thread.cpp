@@ -20,7 +20,6 @@ void runProducerThread(ProducerThreadDeps& deps) {
   auto& getScaleForHarmony = deps.getScaleForHarmony;
   auto& harmonyTimeline = deps.harmonyTimeline;
   auto& lastOverflowTick = deps.lastOverflowTick;
-  auto& latencyMgr = deps.latencyMgr;
   auto& nextBlockId = deps.nextBlockId;
   auto& nextNoteId = deps.nextNoteId;
   auto& offlineProducerArmed = deps.offlineProducerArmed;
@@ -123,7 +122,7 @@ void runProducerThread(ProducerThreadDeps& deps) {
       daw::engine::ProducerBlockDeps producerBlockDeps{
       renderPoolOwner, producerTelemetry, previewQueue, blockDuration, blockTicksFor, debugStall,
       engineConfig, getHarmonyAt, getRingCtrl, getRingStd, getScaleForHarmony, harmonyTimeline,
-      lastOverflowTick, latencyMgr, transport, songTiming, nextBlockId, nextNoteId,
+      lastOverflowTick, transport, songTiming, nextBlockId, nextNoteId,
       offlineRender, panicPending, patcherGraph, patcherParallel, patcherPool,
       producerBlockBudgetUs, projectSeed,
       publishedCallback, quantizePitch, resolveDevicePluginPath, tempoProvider,

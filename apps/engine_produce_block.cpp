@@ -50,7 +50,6 @@ void produceBlock(ProducerBlockDeps& deps,
   auto& getRingStd = deps.getRingStd;
   auto& getScaleForHarmony = deps.getScaleForHarmony;
   auto& lastOverflowTick = deps.lastOverflowTick;
-  auto& latencyMgr = deps.latencyMgr;
   auto& loopEndNanotick = deps.transport.loopEndNanotick;
   auto& loopStartNanotick = deps.transport.loopStartNanotick;
   auto& meterSnapshot = deps.songTiming.meterSnapshot;
@@ -150,7 +149,6 @@ void produceBlock(ProducerBlockDeps& deps,
           engineConfig,
           deps.harmonyTimeline,
           lastOverflowTick,
-          latencyMgr,
           nextNoteId,
           deps.patcherGraph,
           patcherParallel,

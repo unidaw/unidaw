@@ -50,7 +50,6 @@ struct RenderTrackDeps {
   const daw::HostConfig& engineConfig;
   HarmonyTimeline& harmonyTimeline;
   std::atomic<uint64_t>& lastOverflowTick;
-  daw::LatencyManager& latencyMgr;
   std::atomic<uint32_t>& nextNoteId;
   // TRUE when the live pool was assembled FROM DEVICES, i.e. every node in it belongs to exactly
   // one device on exactly one track. Without this the render path cannot tell that pool apart from

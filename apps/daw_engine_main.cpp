@@ -2137,7 +2137,7 @@ int main(int argc, char** argv) {
       renderPoolOwner, producerTelemetry, previewQueue, audioPlaybackBlockId, engineConfig,
       getHarmonyAt,
       getRingCtrl, getRingStd,
-      getScaleForHarmony, harmonyTimeline, lastOverflowTick, latencyMgr, nextBlockId,
+      getScaleForHarmony, harmonyTimeline, lastOverflowTick, nextBlockId,
       nextNoteId, offlineProducerArmed, offlineRender, panicPending, patcherGraph,
       patcherParallel, patcherPool, patternTicks,
       projectSeed, publishedCallback, quantizePitch, resetTimeline,

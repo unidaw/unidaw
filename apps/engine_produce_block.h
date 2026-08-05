@@ -74,7 +74,6 @@ struct ProducerBlockDeps {
   std::function<const daw::Scale*(const daw::HarmonyEvent&)> getScaleForHarmony;
   HarmonyTimeline& harmonyTimeline;
   std::atomic<uint64_t>& lastOverflowTick;
-  daw::LatencyManager& latencyMgr;
   TransportState& transport;
   SongTiming& songTiming;
   std::atomic<uint32_t>& nextBlockId;

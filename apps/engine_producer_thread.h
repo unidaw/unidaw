@@ -59,7 +59,6 @@ struct ProducerThreadDeps {
   std::function<const daw::Scale*(const daw::HarmonyEvent&)> getScaleForHarmony;
   HarmonyTimeline& harmonyTimeline;
   std::atomic<uint64_t>& lastOverflowTick;
-  daw::LatencyManager& latencyMgr;
   std::atomic<uint32_t>& nextBlockId;
   std::atomic<uint32_t>& nextNoteId;
   std::atomic<bool>& offlineProducerArmed;
