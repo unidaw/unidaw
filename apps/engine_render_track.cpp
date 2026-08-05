@@ -39,7 +39,7 @@ bool renderTrack(RenderTrackDeps& deps,
   auto& patcherPool = deps.patcherPool;
   auto& tempoProvider = deps.tempoProvider;
   const auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
-  const auto& wrapTick = deps.wrapTick;
+  const auto& wrapTick = deps.noteResolution.wrapTick;
   {
         // Movement 4 MIDI-per-bus: an aux child's notes are tagged with its bus's MIDI
         // channel and rendered into the PARENT's ring (the caller passes the parent's
@@ -402,7 +402,9 @@ bool renderTrack(RenderTrackDeps& deps,
         // ONE NODE, RUN — apps/engine_run_patcher_node.h. This was a 193-line lambda over twelve
         // implicit captures; eight of them were already reachable through `deps` and `runtime`.
         auto runNode = [&](uint32_t nodeIndex) {
-          runPatcherNode(deps, runtime, graphSnapshot, nodeIndex, nodeCount, useNodeFilter,
+          runPatcherNode(deps.engineConfig, deps.lastOverflowTick, deps.projectSeed,
+                         deps.tempoProvider, runtime, graphSnapshot, nodeIndex, nodeCount,
+                         useNodeFilter,
                          blockSampleStart, windowStartTicks, windowEndTicks, harmonySnapshot,
                          harmonyCount, patcherAudioWritten);
         };
@@ -532,7 +534,8 @@ bool renderTrack(RenderTrackDeps& deps,
         // seventeen implicit captures, the largest single thing inside renderTrack. The wrapper
         // stays so the loop-split call site below reads unchanged.
         auto emitNotes = [&](uint64_t rangeStart, uint64_t rangeEnd, uint64_t baseTickDelta) {
-          emitNotesInRange(deps, runtime, trackState, noteCutCtx, rangeStart, rangeEnd,
+          emitNotesInRange(deps.noteResolution, deps.engineConfig, deps.traceNotes,
+                           deps.transport, runtime, trackState, noteCutCtx, rangeStart, rangeEnd,
                            baseTickDelta, blockSampleStart, loopEndTicks, loopLen,
                            samplesPerTick, midiChannel, currentBlockId, paramTargetIndex);
         };
@@ -712,7 +715,9 @@ bool renderTrack(RenderTrackDeps& deps,
         // could not happen and did not travel at all.
         if (eventDirty) {
           scratchpadCount = resolveMusicalLogicAndSort(
-              deps, runtime, trackState, scratchpad, scratchpadCount, blockSampleStart,
+              deps.noteResolution, deps.engineConfig, deps.lastOverflowTick,
+              deps.warnedEventOutsideBlock, runtime, trackState, scratchpad, scratchpadCount,
+              blockSampleStart,
               windowStartTicks, windowEndTicks, samplesPerTick, midiChannel);
         }
 

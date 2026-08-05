@@ -14,7 +14,10 @@
 
 namespace daw::engine {
 
-uint32_t resolveMusicalLogicAndSort(RenderTrackDeps& deps,
+uint32_t resolveMusicalLogicAndSort(NoteResolution& noteResolution,
+                                    const daw::HostConfig& engineConfig,
+                                    std::atomic<uint64_t>& lastOverflowTick,
+                                    std::atomic<bool>& warnedEventOutsideBlock,
                                     TrackRuntime& runtime,
                                     const TrackStateSnapshot& trackState,
                                     std::vector<daw::EventEntry>& scratchpad,
@@ -24,15 +27,13 @@ uint32_t resolveMusicalLogicAndSort(RenderTrackDeps& deps,
                                     uint64_t windowEndTicks,
                                     long double samplesPerTick,
                                     uint16_t midiChannel) {
-  // The seven RenderTrackDeps members the lambda captured, bound under their original names so the
-  // body reads exactly as it did.
-  auto& engineConfig = deps.engineConfig;
-  const auto& getHarmonyAt = deps.getHarmonyAt;
-  const auto& getScaleForHarmony = deps.getScaleForHarmony;
-  const auto& wrapTick = deps.wrapTick;
-  auto& nextNoteId = deps.nextNoteId;
-  auto& lastOverflowTick = deps.lastOverflowTick;
-  auto& warnedEventOutsideBlock = deps.warnedEventOutsideBlock;
+  // FOUR ARGUMENTS INSTEAD OF AN EIGHTEEN-MEMBER STRUCT. This took RenderTrackDeps whole and used
+  // seven of it; the four that are one question now arrive as NoteResolution and the other three
+  // are named. Only the group's members need re-binding, so the body is untouched.
+  const auto& getHarmonyAt = noteResolution.getHarmonyAt;
+  const auto& getScaleForHarmony = noteResolution.getScaleForHarmony;
+  const auto& wrapTick = noteResolution.wrapTick;
+  auto& nextNoteId = noteResolution.nextNoteId;
   // The parent binds samplesPerTick into a one-argument shadow of the free function; the body
   // calls it that way, so the shadow travels rather than the body being rewritten.
   auto tickDeltaToSamples = [&](uint64_t tickDelta) -> uint64_t {

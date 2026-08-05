@@ -16,7 +16,10 @@
 
 namespace daw::engine {
 
-void emitNotesInRange(RenderTrackDeps& deps,
+void emitNotesInRange(NoteResolution& noteResolution,
+                      const daw::HostConfig& engineConfig,
+                      const bool& traceNotes,
+                      TransportState& transport,
                       TrackRuntime& runtime,
                       const TrackStateSnapshot& trackState,
                       NoteCutCtx& noteCutCtx,
@@ -30,15 +33,14 @@ void emitNotesInRange(RenderTrackDeps& deps,
                       uint8_t midiChannel,
                       uint32_t currentBlockId,
                       uint32_t paramTargetIndex) {
-  // The seven RenderTrackDeps members the lambda captured, under their original names.
-  auto& engineConfig = deps.engineConfig;
-  auto& nextNoteId = deps.nextNoteId;
-  auto& traceNotes = deps.traceNotes;
-  auto& transportElapsedNanotick = deps.transport.transportElapsedNanotick;
-  const auto& getHarmonyAt = deps.getHarmonyAt;
-  const auto& getScaleForHarmony = deps.getScaleForHarmony;
-  const auto& quantizePitch = deps.quantizePitch;
-  const auto& wrapTick = deps.wrapTick;
+  // FOUR ARGUMENTS INSTEAD OF AN EIGHTEEN-MEMBER STRUCT — see NoteResolution in
+  // apps/engine_render_track.h. This used eight of the eighteen; five of them are the group.
+  auto& transportElapsedNanotick = transport.transportElapsedNanotick;
+  auto& nextNoteId = noteResolution.nextNoteId;
+  const auto& getHarmonyAt = noteResolution.getHarmonyAt;
+  const auto& getScaleForHarmony = noteResolution.getScaleForHarmony;
+  const auto& quantizePitch = noteResolution.quantizePitch;
+  const auto& wrapTick = noteResolution.wrapTick;
   // And the two shadows the parent had bound: one closes over this block's rate, the other over
   // the scratchpad context. Both travel so the body below stays byte-identical.
   auto tickDeltaToSamples = [&](uint64_t tickDelta) -> uint64_t {

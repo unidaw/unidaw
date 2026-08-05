@@ -55,7 +55,10 @@ namespace daw::engine {
 // and a note-off — so two unguarded writes ran off the end of the vector while the third dropped
 // politely. A contract stated in a header and honoured at one site out of three is worse than no
 // contract, because it stops the next reader looking.
-uint32_t resolveMusicalLogicAndSort(RenderTrackDeps& deps,
+uint32_t resolveMusicalLogicAndSort(NoteResolution& noteResolution,
+                                    const daw::HostConfig& engineConfig,
+                                    std::atomic<uint64_t>& lastOverflowTick,
+                                    std::atomic<bool>& warnedEventOutsideBlock,
                                     TrackRuntime& runtime,
                                     const TrackStateSnapshot& trackState,
                                     std::vector<daw::EventEntry>& scratchpad,

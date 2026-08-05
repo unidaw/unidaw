@@ -145,11 +145,16 @@ void produceBlock(ProducerBlockDeps& deps,
                          tickConverter.nanoticksToSamplesAbsolute(blockStartTicks)));
       }
 
+      // The five that are one question, grouped — see NoteResolution in engine_render_track.h.
+      // Built here rather than held in ProduceBlockDeps because two of its members are per-block
+      // lambdas bound just above; a reference in a struct built once would dangle.
+      daw::engine::NoteResolution noteResolution{
+          getHarmonyAt, getScaleForHarmony, quantizePitch, wrapTick, nextNoteId};
       daw::engine::RenderTrackDeps renderTrackDeps{
+          noteResolution,
           engineConfig,
           deps.harmonyTimeline,
           lastOverflowTick,
-          nextNoteId,
           deps.patcherGraph,
           patcherParallel,
           patcherPool,
@@ -158,11 +163,7 @@ void produceBlock(ProducerBlockDeps& deps,
           traceNotes,
           deps.transport,
           warnedEventOutsideBlock,
-          getHarmonyAt,
-          getScaleForHarmony,
-          quantizePitch,
-          resolveDevicePluginPath,
-          wrapTick};
+          resolveDevicePluginPath};
       auto renderTrack = [&](TrackRuntime& runtime,
                              const TrackStateSnapshot& trackState,
                              uint64_t windowStartTicks,
