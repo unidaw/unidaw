@@ -525,6 +525,36 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "patcher_node",
+            description: "Add a node to a patcher device's graph, or link two of its nodes. A \
+                          patcher is an EVENT graph: it generates or transforms notes and the \
+                          track's instrument sounds them, so a patcher alone is silent. \
+                          `device` is the patcher device's id and is REQUIRED: without it the \
+                          edit lands in a shared pool that no project saves. You cannot \
+                          currently discover device ids yourself — ask the person which device \
+                          the patcher is, or work on one they have named. Guessing 0 is wrong \
+                          more often than not.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "device", "action"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "device": { "type": "integer", "minimum": 0,
+                                "description": "The patcher device's id, from the chain." },
+                    "action": { "type": "string", "enum": ["add", "link", "remove"] },
+                    "type": { "type": "string",
+                              "enum": ["kernel", "euclidean", "passthru", "audio", "lfo",
+                                       "random", "out", "slice"],
+                              "description": "For action=add. `euclidean` makes a rhythm, \
+                                              `random` picks degrees, `out` is where events \
+                                              leave the graph." },
+                    "src": { "type": "integer", "minimum": 0, "description": "For action=link." },
+                    "dst": { "type": "integer", "minimum": 0, "description": "For action=link." },
+                    "node": { "type": "integer", "minimum": 0, "description": "For action=remove." }
+                }
+            }),
+        },
+        ToolSpec {
             name: "remove_device",
             description: "Take a device out of a chain. NOT undoable, and the device's \
                           settings go with it.",
@@ -1054,6 +1084,84 @@ fn load_sample(handle: &EngineHandle, args: &Value) -> ToolResult {
     }
 }
 
+/// Edit ONE patcher device's graph.
+///
+/// THE DEVICE ID IS REQUIRED AND THAT IS THE POINT. The engine carries it in `flags` — bit 15
+/// says one is present, bits 0..14 are the id — and WITHOUT it every patcher command is
+/// pool-scoped: it lands in a shared graph owned by no device, which since patcher-is-a-device
+/// is not what a project renders or saves. The web UI shipped that way for a long time and it
+/// looked perfect: the nodes appeared in the published graph, a suite asserted they were there,
+/// and the device saved with `nodes: 0`.
+///
+/// So the tool refuses without it rather than defaulting to the pool. A tool whose default is
+/// the silently-wrong option is a tool that is usually wrong.
+fn patcher_node(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(track), Some(device)) = (arg_u64(args, "track"), arg_u64(args, "device")) else {
+        return ToolResult::err(
+            "patcher_node needs \"track\" and \"device\" — without the device id the edit lands \
+             in a shared pool that no project saves");
+    };
+    if device > 0x7FFF {
+        return ToolResult::err("a patcher device id must fit 15 bits");
+    }
+    let flags = 0x8000u16 | (device as u16);
+    let action = arg_str(args, "action").unwrap_or("add");
+
+    let mut p = daw_bridge::layout::UiPatcherGraphCommandPayload {
+        command_type: UiCommandType::None as u16,
+        flags,
+        track_id: track as u32,
+        base_version: 0,
+        node_id: 0,
+        node_type: 0,
+        src_node_id: 0,
+        dst_node_id: 0,
+        src_port_id: 0,
+        dst_port_id: 0,
+        edge_kind: 0,
+    };
+    match action {
+        "add" => {
+            p.command_type = UiCommandType::AddPatcherNode as u16;
+            p.node_type = match arg_str(args, "type").unwrap_or("euclidean") {
+                "kernel" => daw_bridge::layout::PATCHER_NODE_RUST_KERNEL,
+                "euclidean" => daw_bridge::layout::PATCHER_NODE_EUCLIDEAN,
+                "passthru" => daw_bridge::layout::PATCHER_NODE_PASSTHROUGH,
+                "audio" => daw_bridge::layout::PATCHER_NODE_AUDIO_PASSTHROUGH,
+                "lfo" => daw_bridge::layout::PATCHER_NODE_LFO,
+                "random" => daw_bridge::layout::PATCHER_NODE_RANDOM_DEGREE,
+                "out" => daw_bridge::layout::PATCHER_NODE_EVENT_OUT,
+                "slice" => daw_bridge::layout::PATCHER_NODE_SLICE_SELECT,
+                other => return ToolResult::err(format!(
+                    "unknown node type {other:?} — it is one of kernel, euclidean, passthru, \
+                     audio, lfo, random, out, slice")),
+            };
+        }
+        "link" => {
+            let (Some(src), Some(dst)) = (arg_u64(args, "src"), arg_u64(args, "dst")) else {
+                return ToolResult::err("a link needs \"src\" and \"dst\"");
+            };
+            p.command_type = UiCommandType::ConnectPatcherNodes as u16;
+            p.src_node_id = src as u32;
+            p.dst_node_id = dst as u32;
+        }
+        "remove" => {
+            let Some(node) = arg_u64(args, "node") else {
+                return ToolResult::err("a remove needs \"node\"");
+            };
+            p.command_type = UiCommandType::RemovePatcherNode as u16;
+            p.node_id = node as u32;
+        }
+        other => return ToolResult::err(format!("action must be add, link or remove (got {other})")),
+    }
+    match handle.send_patcher_graph(p) {
+        Ok(()) => ToolResult::ok(json!({
+            "sent": true, "track": track, "device": device, "action": action,
+        })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
 fn chain_edit(handle: &EngineHandle, args: &Value, cmd: UiCommandType) -> ToolResult {
     let (Some(track), Some(device)) = (arg_u64(args, "track"), arg_u64(args, "device")) else {
         return ToolResult::err("this needs \"track\" and \"device\"");
@@ -1464,6 +1572,7 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "device_params" => device_params(handle, &call.args),
         "add_device" => add_device(handle, &call.args),
         "load_sample" => load_sample(handle, &call.args),
+        "patcher_node" => patcher_node(handle, &call.args),
         "remove_device" => chain_edit(handle, &call.args, UiCommandType::RemoveDevice),
         "move_device" => move_device(handle, &call.args),
         "set_bypass" => set_bypass(handle, &call.args),

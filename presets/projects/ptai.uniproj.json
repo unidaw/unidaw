@@ -1,0 +1,138 @@
+{
+  "schema_version": 4,
+  "meta": {
+    "name": "ptai",
+    "created_utc": "",
+    "modified_utc": ""
+  },
+  "seed": 0,
+  "timebase": {
+    "nanoticks_per_quarter": 960000,
+    "time_sig_numerator": 4,
+    "time_sig_denominator": 4
+  },
+  "tempo_map": [
+    {
+      "nanotick": 0,
+      "bpm": 120
+    }
+  ],
+  "harmony_timeline": [],
+  "clips": [],
+  "tracks": [
+    {
+      "track_id": 0,
+      "name": "Track 1",
+      "parent_id": 0,
+      "collapsed": false,
+      "harmony_quantize": false,
+      "sound_addressed_only": false,
+      "allow_note_overlap": false,
+      "lines_per_beat": 4,
+      "quantize": {
+        "grid_nanoticks": 0,
+        "strength_milli": 0,
+        "swing_milli": 0
+      },
+      "mixer": {
+        "gain_db": 0,
+        "pan": 0,
+        "mute": false,
+        "solo": false
+      },
+      "routing": {
+        "midi_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "midi_out": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_out": {
+          "kind": "master",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "sidechain": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "pre_fader_send": true
+      },
+      "device_chain": [
+        {
+          "device_id": 1,
+          "kind": "patcher_event",
+          "capability_mask": 2,
+          "patcher_node_id": 0,
+          "host_slot_index": 0,
+          "bypass": false
+        }
+      ],
+      "mod_links": [],
+      "placements": []
+    },
+    {
+      "track_id": 4294901760,
+      "name": "Master",
+      "is_master": true,
+      "parent_id": 0,
+      "collapsed": false,
+      "harmony_quantize": false,
+      "sound_addressed_only": false,
+      "allow_note_overlap": false,
+      "lines_per_beat": 4,
+      "quantize": {
+        "grid_nanoticks": 0,
+        "strength_milli": 0,
+        "swing_milli": 0
+      },
+      "mixer": {
+        "gain_db": 0,
+        "pan": 0,
+        "mute": false,
+        "solo": false
+      },
+      "routing": {
+        "midi_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "midi_out": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_out": {
+          "kind": "master",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "sidechain": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "pre_fader_send": true
+      },
+      "device_chain": [],
+      "mod_links": [],
+      "placements": []
+    }
+  ]
+}

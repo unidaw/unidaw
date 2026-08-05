@@ -2254,9 +2254,11 @@ const OP_REGISTRY = {
   transpose: { cli: null, agent: null, why: 'gap' },
   loop:      { cli: null, agent: null, why: 'gap' },
   seek:      { cli: null, agent: null, why: 'gap' },
-  addnode:   { cli: null, agent: null, why: 'gap' },
-  delnode:   { cli: null, agent: null, why: 'gap' },
-  link:      { cli: null, agent: null, why: 'gap' },
+  // One tool, three actions — add, link and remove all address ONE patcher device,
+  // which is the thing that makes them land in the graph a project saves.
+  addnode:   { cli: null, agent: 'patcher_node', why: 'gap' },
+  delnode:   { cli: null, agent: 'patcher_node', why: 'gap' },
+  link:      { cli: null, agent: 'patcher_node', why: 'gap' },
   patch:     { cli: null, agent: null, why: 'gap' },
   // View state. An agent has no viewport to address.
   // Edit mode is a property of the KEYBOARD, and an agent has no keyboard — it
@@ -2459,9 +2461,9 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
  * `mods` is its own case and is explained on its registry row: the read is structurally
  * unavailable to a tool, not merely unwritten.
  */
-const AGENT_GAP = ['addnode', 'clear', 'columns', 'copy', 'cut',
-                   'del', 'delchord', 'delharmony', 'delnode', 'editor',
-                   'gain', 'link', 'loop', 'mute', 'new', 'paste', 'patch',
+const AGENT_GAP = ['clear', 'columns', 'copy', 'cut',
+                   'del', 'delchord', 'delharmony', 'editor',
+                   'gain', 'loop', 'mute', 'new', 'paste', 'patch',
                    'seek', 'solo', 'tempo', 'transpose', 'mods', 'ops',
                    // With the other sampler verbs: the agent has no sampler tooling at all.
                    'filter', 'env', 'slot', 'soundaddr', 'bank', 'emit',
