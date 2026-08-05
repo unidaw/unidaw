@@ -8,8 +8,8 @@
 namespace daw::engine {
 
 SongStoreState snapshotSongStore(SongStoreDeps& deps) {
-  auto& arrange = deps.arrange;
-  auto& songTiming = deps.songTiming;
+  auto& arrange = deps.engineState.arrange;
+  auto& songTiming = deps.engineState.songTiming;
   auto& snapshotTracks = deps.snapshotTracks;
   auto& harmonyMutex = deps.harmonyTimeline.harmonyMutex;
   auto& harmonyEvents = deps.harmonyTimeline.harmonyEvents;
@@ -45,8 +45,8 @@ bool restoreTrackStore(SongStoreDeps& deps, uint32_t trackId,
   auto& ensurePlacementIds = deps.ensurePlacementIds;
   auto& rebuildAudioRender = deps.rebuildAudioRender;
   auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
   auto& emitClipResync = deps.emitClipResync;
 
 
@@ -78,9 +78,9 @@ bool restoreTrackStore(SongStoreDeps& deps, uint32_t trackId,
 }
 
 bool restoreSongStore(SongStoreDeps& deps, const SongStoreState& state) {
-  auto& arrange = deps.arrange;
+  auto& arrange = deps.engineState.arrange;
   auto& automationVersion = deps.automationVersion;
-  auto& songTiming = deps.songTiming;
+  auto& songTiming = deps.engineState.songTiming;
   auto& tempoProvider = deps.tempoProvider;
   auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   auto& recomputeSongEnd = deps.recomputeSongEnd;
@@ -88,8 +88,8 @@ bool restoreSongStore(SongStoreDeps& deps, const SongStoreState& state) {
   auto& harmonyVersion = deps.harmonyTimeline.harmonyVersion;
   auto& harmonyMutex = deps.harmonyTimeline.harmonyMutex;
   auto& harmonyEvents = deps.harmonyTimeline.harmonyEvents;
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
   auto restoreTrackStore = [&](uint32_t t, const TrackStoreState& st) {
     return daw::engine::restoreTrackStore(deps, t, st);
   };

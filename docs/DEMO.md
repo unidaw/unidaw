@@ -166,10 +166,11 @@ DAW_PROJECT_DIR=<the project dir> ./daw_engine --project <name> --render take --
 ## Known rough edges, in the order you might hit them
 
 1. **A plugin inserted while playing silences the output.** Stop → Play recovers. See THE ONE RULE.
-2. **A note at tick 0 may not render.** A song whose only material is on the downbeat can render
-   silent under `--render`. Under investigation with backend — the trigger looks like a
-   zero-length clip/placement, which is what `new` plus one note produces. Put the first note a
-   beat in and it does not arise. **Not established for live playback**, only for `--render`.
+2. **`waveform_probe.wav` is silent for its first second.** It is the peak-pyramid probe asset —
+   stepped level regions for testing the waveform display, not a musical sample — so a note that
+   starts on the downbeat plays and cannot be heard for a second. Nothing is wrong; if you are
+   demonstrating the sampler with that file, start a beat in, or load something musical.
+   (I reported this as an engine bug — "a note at tick 0 is dropped" — and it was not one.)
 3. **`goto` counts displayed rows**, and how much time a row spans depends on the zoom. If you
    navigate by row and something lands somewhere surprising, that is why.
 4. The AI takes 5–25 seconds to answer. It streams; wait for it to stop before typing again.

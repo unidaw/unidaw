@@ -20,8 +20,8 @@ namespace {
 
 void writeUiClipWindowSnapshotTo(UiWriterDeps& deps, const std::vector<TrackRuntime*>& trackSnapshot) {
   auto& clipVersion = deps.clipVersion;
-  auto& clipWindowMutex = deps.clipWindow.clipWindowMutex;
-  auto& clipWindowPending = deps.clipWindow.clipWindowPending;
+  auto& clipWindowMutex = deps.engineState.clipWindow.clipWindowMutex;
+  auto& clipWindowPending = deps.engineState.clipWindow.clipWindowPending;
   auto& laneQuantizeOf = deps.laneQuantizeOf;
   auto& uiShm = deps.uiShm;
 
@@ -75,8 +75,8 @@ void writeUiClipWindowSnapshotTo(UiWriterDeps& deps, const std::vector<TrackRunt
 void writeUiClipAllSnapshotTo(UiWriterDeps& deps, bool force) {
   auto& clipVersion = deps.clipVersion;
   auto& laneQuantizeOf = deps.laneQuantizeOf;
-  auto& lastClipAllQuantizeVersion = deps.publishGates.lastClipAllQuantizeVersion;
-  auto& lastClipAllVersion = deps.publishGates.lastClipAllVersion;
+  auto& lastClipAllQuantizeVersion = deps.engineState.publishGates.lastClipAllQuantizeVersion;
+  auto& lastClipAllVersion = deps.engineState.publishGates.lastClipAllVersion;
   auto& quantizeVersion = deps.quantizeVersion;
   auto& snapshotTracks = deps.snapshotTracks;
   auto& uiShm = deps.uiShm;
@@ -141,9 +141,9 @@ void writeUiClipAllSnapshotTo(UiWriterDeps& deps, bool force) {
 }
 
 void writeUiAutomationLanesTo(UiWriterDeps& deps, bool force) {
-  auto& automationGeneration = deps.publishGates.automationGeneration;
+  auto& automationGeneration = deps.engineState.publishGates.automationGeneration;
   auto& automationVersion = deps.automationVersion;
-  auto& lastAutomationVersion = deps.publishGates.lastAutomationVersion;
+  auto& lastAutomationVersion = deps.engineState.publishGates.lastAutomationVersion;
   auto& snapshotTracks = deps.snapshotTracks;
   auto& trackIsPersisted = deps.trackIsPersisted;
   auto& uiShm = deps.uiShm;
@@ -211,14 +211,14 @@ void writeUiAutomationLanesTo(UiWriterDeps& deps, bool force) {
 }
 
 void writeUiArrangeSummaryTo(UiWriterDeps& deps, bool force) {
-  auto& arrangeGeneration = deps.publishGates.arrangeGeneration;
-  auto& arrangeMutex = deps.arrange.arrangeMutex;
-  auto& arrangeVersion = deps.arrange.arrangeVersion;
-  auto& lastArrangeSongEnd = deps.publishGates.lastArrangeSongEnd;
-  auto& lastArrangeVersion = deps.publishGates.lastArrangeVersion;
-  auto& markerList = deps.arrange.markerList;
-  auto& songEndNanotick = deps.songTiming.songEndNanotick;
-  auto& songMeter = deps.arrange.songMeter;
+  auto& arrangeGeneration = deps.engineState.publishGates.arrangeGeneration;
+  auto& arrangeMutex = deps.engineState.arrange.arrangeMutex;
+  auto& arrangeVersion = deps.engineState.arrange.arrangeVersion;
+  auto& lastArrangeSongEnd = deps.engineState.publishGates.lastArrangeSongEnd;
+  auto& lastArrangeVersion = deps.engineState.publishGates.lastArrangeVersion;
+  auto& markerList = deps.engineState.arrange.markerList;
+  auto& songEndNanotick = deps.engineState.songTiming.songEndNanotick;
+  auto& songMeter = deps.engineState.arrange.songMeter;
   auto& uiShm = deps.uiShm;
 
     if (!uiShm.header || uiShm.header->uiArrangeOffset == 0) {
@@ -310,11 +310,11 @@ void writeUiArrangeSummaryTo(UiWriterDeps& deps, bool force) {
 }
 
 void writeUiPatcherTo(UiWriterDeps& deps, bool force) {
-  auto& lastPatcherVersion = deps.publishGates.lastPatcherVersion;
-  auto& patcherGraphSnapshot = deps.patcherGraph.patcherGraphSnapshot;
-  auto& patcherGraphState = deps.patcherGraph.patcherGraphState;
+  auto& lastPatcherVersion = deps.engineState.publishGates.lastPatcherVersion;
+  auto& patcherGraphSnapshot = deps.engineState.patcherGraph.patcherGraphSnapshot;
+  auto& patcherGraphState = deps.engineState.patcherGraph.patcherGraphState;
   auto& uiShm = deps.uiShm;
-  auto& warnedPatcherOwnerTooWide = deps.publishGates.warnedPatcherOwnerTooWide;
+  auto& warnedPatcherOwnerTooWide = deps.engineState.publishGates.warnedPatcherOwnerTooWide;
 
     if (!uiShm.header || uiShm.header->uiPatcherOffset == 0) {
       return;
@@ -422,8 +422,8 @@ void writeUiHarmonySnapshotTo(UiWriterDeps& deps) {
 
 void runConsumerThread(ConsumerDeps& deps) {
   auto& audioPlaybackBlockId = deps.audioPlaybackBlockId;
-  auto& auxChildOverlayMutex = deps.auxChildOverlays.auxChildOverlayMutex;
-  auto& auxChildOverlays = deps.auxChildOverlays.auxChildOverlays;
+  auto& auxChildOverlayMutex = deps.engineState.auxChildOverlays.auxChildOverlayMutex;
+  auto& auxChildOverlays = deps.engineState.auxChildOverlays.auxChildOverlays;
   auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   auto& clipVersion = deps.clipVersion;
   auto& engineConfig = deps.engineConfig;
@@ -434,12 +434,12 @@ void runConsumerThread(ConsumerDeps& deps) {
   auto& latencyMgr = deps.latencyMgr;
   auto& liveTrackCount = deps.liveTrackCount;
   auto& loadInProgress = deps.loadInProgress;
-  auto& loopEndNanotick = deps.transport.loopEndNanotick;
-  auto& loopStartNanotick = deps.transport.loopStartNanotick;
+  auto& loopEndNanotick = deps.engineState.transport.loopEndNanotick;
+  auto& loopStartNanotick = deps.engineState.transport.loopStartNanotick;
   auto& masterTrack = deps.masterTrack;
   auto& maxUiTracks = deps.maxUiTracks;
   auto& pdcDisabled = deps.pdcDisabled;
-  auto& playing = deps.transport.playing;
+  auto& playing = deps.engineState.transport.playing;
   auto& projectLoadOk = deps.projectLoadOk;
   auto& projectLoadSeq = deps.projectLoadSeq;
   auto& publishedCallback = deps.publishedCallback;
@@ -451,11 +451,11 @@ void runConsumerThread(ConsumerDeps& deps) {
   auto& samplerKitVersion = deps.samplerKitVersion;
   auto& scheduleHostRestart = deps.scheduleHostRestart;
   auto& snapshotTracks = deps.snapshotTracks;
-  auto& songEndNanotick = deps.songTiming.songEndNanotick;
-  auto& songTimeSigDen = deps.songTiming.songTimeSigDen;
-  auto& songTimeSigNum = deps.songTiming.songTimeSigNum;
+  auto& songEndNanotick = deps.engineState.songTiming.songEndNanotick;
+  auto& songTimeSigDen = deps.engineState.songTiming.songTimeSigDen;
+  auto& songTimeSigNum = deps.engineState.songTiming.songTimeSigNum;
   auto& tempoProvider = deps.tempoProvider;
-  auto& transportNanotick = deps.transport.transportNanotick;
+  auto& transportNanotick = deps.engineState.transport.transportNanotick;
   auto& uiShm = deps.uiShm;
 
   auto writeUiClipWindowSnapshot = [&](const std::vector<TrackRuntime*>& trackSnapshot) {
@@ -640,6 +640,7 @@ void runConsumerThread(ConsumerDeps& deps) {
                 info.pan = &runtime->mixPan;
                 info.mute = &runtime->mixMute;
                 info.solo = &runtime->mixSolo;
+                info.routesToMaster = &runtime->routesToMaster;
                 info.shmSize = shmView->size;
                 info.trackId = trackId;
                 info.uiSlot = trackId;  // == this track's published slot

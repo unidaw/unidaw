@@ -197,6 +197,62 @@ daw::SamplerEvent samplerNoteOnFor(uint32_t offsetInBlock, uint8_t pitch, uint8_
                                    uint8_t column, uint16_t sound, uint16_t offsetFrac,
                                    bool soundAddressedOnly, uint32_t noteId);
 
+// THE PRODUCER'S BACK-PRESSURE MINIMUM: which hosts count, and what the minimum is.
+//
+// The producer may run at most numBlocks ahead of the SLOWEST host that is actually producing.
+// Deciding which hosts those are is the whole rule, and getting it wrong deadlocked the engine:
+// a host stores 0 into completedBlockId every time it attaches its shared memory
+// (juce_host_process_main.cpp), which a chain reconcile and a UI reattach both do to a LIVE host.
+// `active` is a latch, so the track stayed in the minimum with a completed of 0 while nextBlockId
+// was deep into the session — inFlight was then permanently >= numBlocks and THE TRANSPORT
+// STOPPED FOR EVERY TRACK. The producer would not send a block until the host reported progress,
+// and the host could not report progress until it was sent a block.
+//
+// A completed of 0 means "nothing finished since this host attached", which is precisely the
+// not-yet-producing state, so it is excluded exactly like an inactive track and rejoins the
+// moment it finishes its first block.
+//
+// THE SAME DEADLOCK CAME BACK BY THE OTHER DOOR, and this is the second half of the rule.
+// Excluding `completed == 0` catches a host that has just attached. It does NOT catch one that
+// was producing happily, was SKIPPED for dispatch, and then rejoined carrying a STALE NON-ZERO
+// id — which is what instantiating a VST does: engine_chain_host.cpp takes the track's
+// controllerMutex and makes a blocking round-trip the host cannot answer until the plugin has
+// loaded, and for those 4-7 blocks engine_produce_block.cpp try_locks that same mutex, fails,
+// and returns without sending. The host is then permanently behind by more than numBlocks
+// through no fault of its own, the gate closes, and the gate is precisely what prevents the
+// dispatch that would let it catch up. Measured: next=54 minCompleted=49 playback=1638,
+// hosts=[0:49,1:53,2:53,3:53,4:53,5:53] — the audio callback ran 1732 times through twenty
+// seconds of digital silence, and all six host control threads sat in read() on empty sockets.
+//
+// So back-pressure is asked as "DO YOU STILL OWE ME WORK", not "how far along are you". A host
+// that has completed everything DISPATCHED to it is idle, not slow: it cannot advance without
+// being sent something, so counting it can only ever deadlock. A genuinely slow host still has
+// completed < lastDispatched and still throttles the producer exactly as before.
+//
+// This is also why SIGSTOPping a host never reproduced the failure (tools/host_stall_check.sh):
+// a stopped host still OWES its dispatched blocks, which is the one case where holding the gate
+// shut is the correct answer.
+struct HostProgress {
+  bool active = false;          // has this track ever produced (the engine's latch)
+  uint32_t completedBlockId = 0;
+  // The last block the producer actually handed to this host.
+  //
+  // ZERO MEANS "NO DISPATCH RECORDED", NOT "BLOCK ZERO", and the difference is load-bearing: on
+  // this field absent has to behave like the old rule, or a caller that does not set it has
+  // every host silently excluded and the producer loses its back-pressure entirely. In the
+  // engine only the producer builds these, and it always fills this in; the value can only be 0
+  // before the first dispatch, when completedBlockId is 0 too and the arm above has already
+  // excluded the host.
+  uint32_t lastDispatchedBlockId = 0;
+};
+struct CompletedMinimum {
+  bool anyContributing = false;  // false when no host is producing yet
+  uint32_t minCompleted = 0;
+};
+// `nextBlockId` supplies the fallback used when nothing is contributing: the producer must not
+// gate itself on hosts that do not exist, or an all-sampler project would never play.
+CompletedMinimum completedMinimum(const std::vector<HostProgress>& hosts, uint32_t nextBlockId);
+
 // WHERE AN EVENT LANDS IN THIS BLOCK, or nothing if it falls outside it.
 //
 // SEVEN sites computed this identically: convert the tick delta to samples, add the block start,

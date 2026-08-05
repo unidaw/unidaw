@@ -39,18 +39,18 @@
 #include "engine_preview_queue.h"
 #include "engine_producer_telemetry.h"
 #include "engine_render_pool_owner.h"
+#include "engine_state.h"
 #include "engine_types.h"
 
 namespace daw::engine {
 
 struct ProducerThreadDeps {
+  // The engine's state rather than 6 of its groups by name — apps/engine_state.h.
+  EngineState& engineState;
   // The pool and the three variables that decide whether to use it: see
   // apps/engine_render_pool_owner.h.
-  RenderPoolOwner& renderPoolOwner;
   // Six counters in one: see apps/engine_producer_telemetry.h.
-  ProducerTelemetry& producerTelemetry;
   // Three members and a std::function became one: see apps/engine_preview_queue.h.
-  PreviewQueue& previewQueue;
   std::atomic<uint32_t>& audioPlaybackBlockId;
   const daw::HostConfig& engineConfig;
   std::function<std::optional<daw::HarmonyEvent>(uint64_t)> getHarmonyAt;
@@ -59,13 +59,11 @@ struct ProducerThreadDeps {
   std::function<const daw::Scale*(const daw::HarmonyEvent&)> getScaleForHarmony;
   HarmonyTimeline& harmonyTimeline;
   std::atomic<uint64_t>& lastOverflowTick;
-  daw::LatencyManager& latencyMgr;
   std::atomic<uint32_t>& nextBlockId;
   std::atomic<uint32_t>& nextNoteId;
   std::atomic<bool>& offlineProducerArmed;
   const bool offlineRender;
   std::atomic<bool>& panicPending;
-  PatcherGraphOwner& patcherGraph;
   bool& patcherParallel;
   std::unique_ptr<daw::engine::WorkerPool>& patcherPool;
   const uint64_t patternTicks;
@@ -76,12 +74,10 @@ struct ProducerThreadDeps {
   std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)> resolveDevicePluginPath;
   std::atomic<bool>& running;
   std::function<std::vector<TrackRuntime*>()> snapshotTracks;
-  SongTiming& songTiming;
   daw::TempoMapProvider& tempoProvider;
   const int testThrottleMs;
   daw::NanotickConverter& tickConverter;
   const bool traceNotes;
-  TransportState& transport;
   std::atomic<bool>& warnedEventOutsideBlock;
   std::function<void(TrackRuntime&, const TrackStateSnapshot&, uint64_t)> writeMirrorParams;
 };

@@ -118,15 +118,18 @@ if (kit) {
 }
 
 // ---------------------------------------------------------------------------
-// NOW THE ONLY QUESTION THAT MATTERS. Notes clear of tick 0, which the render
-// drops (reported to backend), so this measures the fix and not that bug.
+// NOW THE ONLY QUESTION THAT MATTERS. Notes placed where the sample actually makes
+// sound, so this measures the key mapping and not the asset's silent opening.
 // ---------------------------------------------------------------------------
 /*
  * SPACED IN TICKS, NOT IN ROWS. `goto` counts DISPLAYED rows and how many nanoticks a row
  * spans depends on the ZOOM, so "rows 2, 4, 6" is a different stretch of time at every zoom
- * level — at a fine one all three land inside the first second, which the render drops.
- * Written far enough out to survive that, and the ticks are asserted below rather than
- * assumed.
+ * level. The ticks are asserted below rather than assumed.
+ *
+ * And they are placed past the first second because `waveform_probe.wav` is SILENT for its
+ * first second by construction — it is the peak-pyramid probe asset, stepped level regions,
+ * not a musical sample. A note there plays and cannot be heard, which reads exactly like a
+ * note that did not play. That cost a wrong bug report; see harmony-quantize.mjs.
  */
 for (const row of [4, 8, 12, 16]) {
   await run(`goto ${row} 0`);

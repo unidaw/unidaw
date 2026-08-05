@@ -1,5 +1,8 @@
 #include "apps/device_chain.h"
 
+#include <filesystem>
+#include <system_error>
+
 namespace daw {
 
 TrackChain defaultTrackChain() {
@@ -8,8 +11,23 @@ TrackChain defaultTrackChain() {
 
 namespace {
 
+// ONE INSTRUMENT PER TRACK, and a SAMPLER IS ONE. Jaakko's ruling: "it doesn't make sense to
+// add two VST instruments or a vsti and sampler".
+//
+// The engine could not express that. Sampler was missing from this list, so a chain could hold a
+// sampler next to a VST instrument, or two samplers — and TrackRuntime has a SINGLE
+// samplerDeviceId (engine_types.h:399), with refreshSamplerForTrack taking the first sampler it
+// finds and stopping: "one sampler per track for now: it is a head-of-chain instrument". A second
+// sampler was therefore a device visible in the rack that nothing could ever address, the same
+// shape as a vst_instrument with an empty vstRef. Found from the outside by the web-UI agent,
+// which mirrors this function.
+//
+// THE GUARD IS ON addDevice ONLY, so a project already holding two instruments still LOADS —
+// existing work is not invalidated, the engine just will not help you make more of it.
 bool isInstrumentKind(DeviceKind kind) {
-  return kind == DeviceKind::VstInstrument || kind == DeviceKind::PatcherInstrument;
+  return kind == DeviceKind::VstInstrument ||
+         kind == DeviceKind::PatcherInstrument ||
+         kind == DeviceKind::Sampler;
 }
 
 bool hasInstrument(const TrackChain& chain) {
@@ -177,6 +195,35 @@ Device makeVstInstrumentDevice(uint32_t hostSlotIndex) {
   instrument.capabilityMask = capabilityMaskForKind(DeviceKind::VstInstrument);
   instrument.hostSlotIndex = hostSlotIndex;
   return instrument;
+}
+
+VstResolution resolveDeviceSlot(const PluginCache& cache, Device& device) {
+  VstResolution resolution;
+  if (device.kind != DeviceKind::VstInstrument &&
+      device.kind != DeviceKind::VstEffect) {
+    return resolution;
+  }
+  if (device.vstRef.empty()) {
+    return resolution;
+  }
+  resolution = resolveVstRef(cache, device.vstRef.uid16, device.vstRef.path,
+                             device.vstRef.vendor, device.vstRef.name);
+  if (resolution.match != VstMatch::None) {
+    device.hostSlotIndex = static_cast<uint32_t>(resolution.index);
+    return resolution;
+  }
+  // exists() and not is_regular_file(): a VST3 bundle is a DIRECTORY on macOS, and the first
+  // draft of this rule tested for a file and therefore never fired on the platform it was
+  // written for.
+  std::error_code ec;
+  const bool onDisk = !device.vstRef.path.empty() &&
+                      std::filesystem::exists(device.vstRef.path, ec);
+  if (onDisk) {
+    device.hostSlotIndex = kHostSlotIndexDirect;
+  } else if (device.hostSlotIndex != kHostSlotIndexDirect) {
+    device.hostSlotIndex = kHostSlotIndexUnresolved;
+  }
+  return resolution;
 }
 
 }  // namespace daw

@@ -45,8 +45,8 @@ uint64_t trackWindowEnd(SongExtentDeps& deps, const TrackRuntime& rt) {
 }
 
 void recomputeSongEnd(SongExtentDeps& deps) {
-  auto& transport = deps.transport;
-  auto& songTiming = deps.songTiming;
+  auto& transport = deps.engineState.transport;
+  auto& songTiming = deps.engineState.songTiming;
   auto& snapshotTracks = deps.snapshotTracks;
   auto& patternTicks = deps.patternTicks;
 

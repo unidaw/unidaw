@@ -16,8 +16,8 @@ namespace daw::engine {
 void handleRequestChainSnapshot(RequestCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
   const auto& emitChainSnapshot = deps.emitChainSnapshot;
   {
   // A UI that attached after the engine started has never seen a chain
@@ -47,8 +47,8 @@ void handleRequestDeviceParams(RequestCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
   auto& uiShm = deps.uiShm;
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
   const auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
   {
   // Publish one device's parameters into UiDeviceParamsRegion so the rack can
@@ -177,8 +177,8 @@ void handleRequestWaveform(RequestCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
   auto& uiShm = deps.uiShm;
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
   auto& waveformStore = deps.waveformStore;
   const auto& resolveSourcePath = deps.resolveSourcePath;
   {
@@ -322,8 +322,8 @@ void handleRequestWaveform(RequestCommandDeps& deps,
 void handleRequestClipWindow(RequestCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& clipWindowMutex = deps.clipWindow.clipWindowMutex;
-  auto& clipWindowPending = deps.clipWindow.clipWindowPending;
+  auto& clipWindowMutex = deps.engineState.clipWindow.clipWindowMutex;
+  auto& clipWindowPending = deps.engineState.clipWindow.clipWindowPending;
   {
   daw::UiClipWindowCommandPayload windowPayload{};
   std::memcpy(&windowPayload, entry.payload, sizeof(windowPayload));

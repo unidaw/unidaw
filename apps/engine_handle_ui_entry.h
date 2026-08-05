@@ -64,9 +64,9 @@ struct HandleUiEntryDeps {
   ChainCommandDeps& chainCommandDeps;
   ClipCommandDeps& clipCommandDeps;
   DeviceCommandDeps& deviceCommandDeps;
-  const std::function<void(uint32_t, uint8_t, uint8_t, bool)>& enqueuePreview;
-  const std::function<void(const std::vector<uint8_t>&)>& handleAssembledBulk;
-  const std::function<void(const char*, const char*, uint32_t, uint32_t, const std::string&)>& historyAppend;
+  std::function<void(uint32_t, uint8_t, uint8_t, bool)> enqueuePreview;
+  std::function<void(const std::vector<uint8_t>&)> handleAssembledBulk;
+  std::function<void(const char*, const char*, uint32_t, uint32_t, const std::string&)> historyAppend;
   MarkerCommandDeps& markerCommandDeps;
   ModlinkCommandDeps& modlinkCommandDeps;
   ModuleCommandDeps& moduleCommandDeps;

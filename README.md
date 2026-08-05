@@ -3,7 +3,7 @@
 A digital audio workstation. A C++ engine hosts VST3 plugins out of process, has its own sampler,
 plays a tracker-style note model over a harmony timeline, and renders offline deterministically.
 The interfaces are a browser UI and a command-line client, both over shared memory. A personal
-tool, built by one person with AI agents. No releases.
+tool. No releases.
 
 ---
 
@@ -162,8 +162,7 @@ faster than real time, and cannot drop out.
 
 **It does not need a working audio device to RUN, but it takes its sample rate from the default
 output device unless you say otherwise.** Connect Bluetooth headphones and a bounce that was
-44.1 kHz becomes 48 kHz, with nothing in the command to say so — which once failed a check that
-had passed for weeks, on an engine that was entirely correct. Pass `--sample-rate` for a render
+44.1 kHz becomes 48 kHz, with nothing in the command to say so. Pass `--sample-rate` for a render
 that means the same thing on any machine.
 
 ```sh
@@ -232,7 +231,7 @@ plugins/identity/     a VST3 built in-repo, used as a test fixture
 ui/daw-bridge/        the Rust mirror of the shared-memory contract
 ui/daw-cli/           the command-line client
 ui/daw-sidecar/       SHM to WebSocket, and the server for the web UI
-ui/daw-agent/         perception + tool substrate over the engine, model-agnostic
+ui/daw-agent/         a scripting/tool surface over the engine
 ui-web/               the web UI (no framework, no build step) and its test suites
 tools/                the end-to-end checks, the shared wait library, perceptual.py
 presets/              fixture projects, patcher presets and audio
@@ -247,8 +246,7 @@ Key files:
 - `apps/project_file.cpp` — the project format, schema version 4.
 - `apps/placement_flatten.h` — the one definition that derives the flat clip.
 - `tools/lib/engine_wait.sh` — the boot/load wait library most of the shell checks share, with
-  its own self-test. (It said "36 checks" here until that count had quietly doubled; a number
-  nothing recomputes is a number that drifts.)
+  its own self-test.
 
 ---
 
@@ -348,10 +346,8 @@ Sample headers: `tools/sampler_filter_check.sh`, `tools/lint_check.sh`,
 
 ## Documents
 
-`AGENTS.md` is the working agreement for agents in this repo. Parts of its lower half predate the
-web UI; the environment section at the top is maintained. This paragraph used to name two stale
-claims in it, and one of them had since been fixed — so the warning about staleness had itself
-gone stale. It no longer enumerates them.
+`AGENTS.md` is the repo's working agreement. Parts of its lower half predate the web UI; the
+environment section at the top is maintained.
 
 | Document | What it is |
 |---|---|

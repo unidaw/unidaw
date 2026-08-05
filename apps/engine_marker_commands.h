@@ -26,8 +26,8 @@ namespace daw::engine {
 
 struct MarkerCommandDeps {
   ArrangeRail& arrange;
-  const std::function<void(const char*, const char*, uint32_t, uint32_t,
-                           const std::string&)>& historyAppend;
+  std::function<void(const char*, const char*, uint32_t, uint32_t,
+                           const std::string&)> historyAppend;
 };
 
 void handleAddMarker(MarkerCommandDeps& deps,

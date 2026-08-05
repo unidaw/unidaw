@@ -33,19 +33,19 @@
 namespace daw::engine {
 
 struct PlacementCommandDeps {
-  const std::function<bool(uint32_t, const std::function<bool(std::vector<daw::ProjectPlacement>&)>&)>& applyPlacementEdit;
-  const std::function<uint32_t(TrackRuntime*)>& bumpClipVersionFor;
+  std::function<bool(uint32_t, const std::function<bool(std::vector<daw::ProjectPlacement>&)>&)> applyPlacementEdit;
+  std::function<uint32_t(TrackRuntime*)> bumpClipVersionFor;
   std::atomic<bool>& clipDirty;
-  const std::function<void(const char*, const char*, uint32_t, uint32_t, const std::string&)>& historyAppend;
+  std::function<void(const char*, const char*, uint32_t, uint32_t, const std::string&)> historyAppend;
   std::atomic<uint32_t>& nextClipId;
   std::atomic<uint32_t>& nextPlacementId;
-  const std::function<void(uint32_t, TrackStoreState, TrackStoreState)>& pushStructuralUndo;
-  const std::function<void(EngineUndoEntry)>& pushUndo;
-  const std::function<std::shared_ptr<const AudioRenderList>(const TrackRuntime&)>& rebuildAudioRender;
-  const std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&)>& rebuildFlatAndPublish;
-  const std::function<void()>& recomputeSongEnd;
-  const std::function<bool(uint32_t, daw::UiCommandType, uint32_t)>& requireMatchingClipVersion;
-  const std::function<TrackStoreState(const TrackRuntime&)>& snapshotTrackStore;
+  std::function<void(uint32_t, TrackStoreState, TrackStoreState)> pushStructuralUndo;
+  std::function<void(EngineUndoEntry)> pushUndo;
+  std::function<std::shared_ptr<const AudioRenderList>(const TrackRuntime&)> rebuildAudioRender;
+  std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&)> rebuildFlatAndPublish;
+  std::function<void()> recomputeSongEnd;
+  std::function<bool(uint32_t, daw::UiCommandType, uint32_t)> requireMatchingClipVersion;
+  std::function<TrackStoreState(const TrackRuntime&)> snapshotTrackStore;
   TrackTable& trackTable;
 };
 

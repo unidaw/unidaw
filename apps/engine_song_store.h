@@ -23,6 +23,7 @@
 #include "engine_harmony_timeline.h"
 #include "engine_song_timing.h"
 #include "engine_track_table.h"
+#include "engine_state.h"
 #include "engine_types.h"
 
 namespace daw::engine {
@@ -31,16 +32,15 @@ namespace daw::engine {
 // main() passes bare lambdas, and a const reference member would bind to a temporary that dies at
 // the end of the initialising statement.
 struct SongStoreDeps {
-  ArrangeRail& arrange;
+  // The engine's state rather than 3 of its groups by name — apps/engine_state.h.
+  EngineState& engineState;
   std::atomic<uint32_t>& automationVersion;
   ClipEditDeps& clipEditDeps;
   std::atomic<bool>& clipDirty;
   // Six former captures in one: harmonyEvents, harmonyMutex, harmonyVersion, harmonyDirty,
   // addOrUpdateHarmony and removeHarmony are all its members.
   HarmonyTimeline& harmonyTimeline;
-  SongTiming& songTiming;
   daw::TempoMapProvider& tempoProvider;
-  TrackTable& trackTable;
 
   // applyAddNote and applyAddChord are NOT members. main() held them as lambdas that forward to
   // daw::engine::applyAddNote/applyAddChord with clipEditDeps — and clipEditDeps is already a

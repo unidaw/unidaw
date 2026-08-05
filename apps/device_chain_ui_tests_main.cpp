@@ -1,4 +1,5 @@
 #include <cassert>
+#include <csignal>
 #include <chrono>
 #include <cstring>
 #include <set>
@@ -30,8 +31,28 @@ std::string makeName(const char* prefix, pid_t pid) {
 
 // Waits for the segment to EXIST and be mappable. That is NOT the same as the engine having
 // finished writing it — see waitForUiRing below, which is the part this used to be missing.
-bool waitForShm(const std::string& name, int& fd, size_t& size, void*& base) {
-  for (int attempt = 0; attempt < 200; ++attempt) {
+// WAITS FOR THE SHM, AND NOTICES WHEN THE ENGINE DIED INSTEAD OF WAITING OUT A CORPSE.
+//
+// This polled 200 x 10ms = EXACTLY TWO SECONDS while the engine was launched with
+// `--run-seconds 2` — the whole budget to observe the segment was the whole lifetime of the
+// process creating it, and that engine also forks a plugin host and waits on a socket. Under a
+// parallel ctest it lost: `Assertion failed: (mapped)`, a bare abort with no statement of what
+// had happened. Same disease as the 29 shell launches whose wait budget exceeded the engine's
+// life, one layer along.
+//
+// Taking the child pid lets it distinguish "not yet" from "never": a reaped child means nothing
+// more will ever appear, so there is no reason to keep polling and every reason to say so.
+bool waitForShm(const std::string& name, int& fd, size_t& size, void*& base, pid_t child) {
+  for (int attempt = 0; attempt < 1500; ++attempt) {
+    if (child > 0) {
+      int st = 0;
+      if (::waitpid(child, &st, WNOHANG) == child) {
+        std::cerr << "the engine exited before its shared segment appeared (after "
+                  << attempt * 10 << "ms). Nothing it will ever write is still coming."
+                  << std::endl;
+        return false;
+      }
+    }
     fd = ::shm_open(name.c_str(), O_RDWR, 0600);
     if (fd >= 0) {
       struct stat st{};
@@ -189,7 +210,9 @@ int main() {
     const char* exe = "./daw_engine";
     const char* arg0 = "daw_engine";
     const char* arg1 = "--run-seconds";
-    const char* arg2 = "2";
+    // LONG ENOUGH TO OUTLIVE THE SETUP, not exactly as long as it. The test ends the engine
+    // itself below, so this is a ceiling rather than a schedule.
+    const char* arg2 = "30";
     ::execl(exe, arg0, arg1, arg2, nullptr);
     _exit(1);
   }
@@ -197,8 +220,13 @@ int main() {
   int fd = -1;
   size_t size = 0;
   void* base = nullptr;
-  bool mapped = waitForShm(uiShmName, fd, size, base);
-  assert(mapped);
+  bool mapped = waitForShm(uiShmName, fd, size, base, child);
+  if (!mapped) {
+    std::cerr << "device_chain_ui_tests_main: the UI shared segment never appeared, so nothing"
+              << " below would be a statement about the chain UI. This is the harness, not the"
+              << " product." << std::endl;
+    return 1;
+  }
 
   auto* header = reinterpret_cast<daw::ShmHeader*>(base);
   daw::EventRingView ringUi{};
@@ -455,10 +483,20 @@ int main() {
          static_cast<uint16_t>(daw::UiCommandType::WriteNote));
   assert(waitForPlayheadAdvance(header, std::chrono::milliseconds(500)));
 
+  // END THE ENGINE RATHER THAN WAITING OUT ITS CLOCK. It used to self-terminate after two
+  // seconds and this waited for that, which is what tied the setup budget to the lifetime.
+  //
+  // The property being asserted is unchanged in substance — the engine did not CRASH — so a
+  // clean exit and our own SIGTERM are both acceptable, and a segfault or an abort still fails.
+  ::kill(child, SIGTERM);
   int status = 0;
   ::waitpid(child, &status, 0);
-  assert(WIFEXITED(status));
-  assert(WEXITSTATUS(status) == 0);
+  const bool cleanExit = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+  const bool weStoppedIt = WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM;
+  if (!cleanExit && !weStoppedIt) {
+    std::cerr << "the engine did not end cleanly: status " << status << std::endl;
+  }
+  assert(cleanExit || weStoppedIt);
 
   if (base && base != MAP_FAILED) {
     ::munmap(base, size);

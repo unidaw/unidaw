@@ -39,7 +39,10 @@ namespace daw::engine {
 // rejects it. That is not tidiness: the caller's merge walks every node in topoOrder regardless,
 // so a buffer this function declines to zero is re-emitted at last block's sampleTime. The comment
 // at the call site says the same thing from the other side, and both are load-bearing.
-void runPatcherNode(RenderTrackDeps& deps,
+void runPatcherNode(const daw::HostConfig& engineConfig,
+                    std::atomic<uint64_t>& lastOverflowTick,
+                    std::atomic<uint64_t>& projectSeed,
+                    daw::TempoMapProvider& tempoProvider,
                     TrackRuntime& runtime,
                     const daw::PatcherGraph& graphSnapshot,
                     uint32_t nodeIndex,

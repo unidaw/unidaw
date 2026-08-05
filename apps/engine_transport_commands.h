@@ -27,6 +27,7 @@
 #include "engine_transport_state.h"
 #include "engine_pure.h"
 #include "engine_preview_queue.h"
+#include "engine_state.h"
 #include "engine_types.h"
 #include "event_payloads.h"
 #include "event_ring.h"
@@ -34,10 +35,9 @@
 namespace daw::engine {
 
 struct TransportCommandDeps {
+  // The engine's state rather than 4 of its groups by name — apps/engine_state.h.
+  EngineState& engineState;
   // Three members and a std::function became one: see apps/engine_preview_queue.h.
-  PreviewQueue& previewQueue;
-  SongTiming& songTiming;
-  TransportState& transport;
   std::unique_ptr<TrackRuntime>& masterTrack;
   std::atomic<bool>& panicPending;
   const uint64_t patternTicks;
@@ -45,7 +45,6 @@ struct TransportCommandDeps {
   std::condition_variable& restartCv;
   std::atomic<bool>& running;
   daw::TempoMapProvider& tempoProvider;
-  TrackTable& trackTable;
 };
 
 void handleSetLoopRange(TransportCommandDeps& deps,

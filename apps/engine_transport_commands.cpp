@@ -11,10 +11,10 @@ namespace daw::engine {
 void handleSetLoopRange(TransportCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& loopEndNanotick = deps.transport.loopEndNanotick;
-  auto& loopStartNanotick = deps.transport.loopStartNanotick;
-  auto& loopUserSet = deps.transport.loopUserSet;
-  auto& transportNanotick = deps.transport.transportNanotick;
+  auto& loopEndNanotick = deps.engineState.transport.loopEndNanotick;
+  auto& loopStartNanotick = deps.engineState.transport.loopStartNanotick;
+  auto& loopUserSet = deps.engineState.transport.loopUserSet;
+  auto& transportNanotick = deps.engineState.transport.transportNanotick;
 
       const uint64_t start =
           (static_cast<uint64_t>(payload.noteNanotickHi) << 32) |
@@ -44,14 +44,14 @@ void handleSetLoopRange(TransportCommandDeps& deps,
 void handlePanic(TransportCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& heldPreview = deps.previewQueue.heldPreview;
+  auto& heldPreview = deps.engineState.previewQueue.heldPreview;
   auto& masterTrack = deps.masterTrack;
   auto& panicPending = deps.panicPending;
-  auto& pendingPreviewNotes = deps.previewQueue.pendingPreviewNotes;
-  auto& playing = deps.transport.playing;
-  auto& previewMutex = deps.previewQueue.previewMutex;
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& pendingPreviewNotes = deps.engineState.previewQueue.pendingPreviewNotes;
+  auto& playing = deps.engineState.transport.playing;
+  auto& previewMutex = deps.engineState.previewQueue.previewMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
 
       // PANIC: cut everything. Stop halts and flushes held KEYJAZZ notes, which is right
       // but is not a panic — it cannot reach a plugin's own ringing voices, a sequencer
@@ -106,7 +106,7 @@ void handlePanic(TransportCommandDeps& deps,
 void handleSetTempo(TransportCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& loadedTempoMap = deps.songTiming.loadedTempoMap;
+  auto& loadedTempoMap = deps.engineState.songTiming.loadedTempoMap;
   auto& tempoProvider = deps.tempoProvider;
 
       // value0 = milli-BPM. flags: 1 = flatten the map to this single tempo (a
@@ -156,10 +156,10 @@ void handleSetTempo(TransportCommandDeps& deps,
 void handleStop(TransportCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& heldPreview = deps.previewQueue.heldPreview;
-  auto& pendingPreviewNotes = deps.previewQueue.pendingPreviewNotes;
-  auto& playing = deps.transport.playing;
-  auto& previewMutex = deps.previewQueue.previewMutex;
+  auto& heldPreview = deps.engineState.previewQueue.heldPreview;
+  auto& pendingPreviewNotes = deps.engineState.previewQueue.pendingPreviewNotes;
+  auto& playing = deps.engineState.transport.playing;
+  auto& previewMutex = deps.engineState.previewQueue.previewMutex;
   auto& resetTimeline = deps.resetTimeline;
 
       // Halt and rewind to the loop start. resetTimeline is drained by the
@@ -184,11 +184,11 @@ void handleStop(TransportCommandDeps& deps,
 void handleSetPosition(TransportCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& loopEndNanotick = deps.transport.loopEndNanotick;
-  auto& loopStartNanotick = deps.transport.loopStartNanotick;
+  auto& loopEndNanotick = deps.engineState.transport.loopEndNanotick;
+  auto& loopStartNanotick = deps.engineState.transport.loopStartNanotick;
   auto& patternTicks = deps.patternTicks;
-  auto& transportElapsedNanotick = deps.transport.transportElapsedNanotick;
-  auto& transportNanotick = deps.transport.transportNanotick;
+  auto& transportElapsedNanotick = deps.engineState.transport.transportElapsedNanotick;
+  auto& transportNanotick = deps.engineState.transport.transportNanotick;
 
       const uint64_t target =
           static_cast<uint64_t>(payload.noteNanotickLo) |
@@ -210,7 +210,7 @@ void handleSetPosition(TransportCommandDeps& deps,
 void handleQuit(TransportCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& playing = deps.transport.playing;
+  auto& playing = deps.engineState.transport.playing;
   auto& restartCv = deps.restartCv;
   auto& running = deps.running;
 
@@ -228,7 +228,7 @@ void handleQuit(TransportCommandDeps& deps,
 void handleTogglePlay(TransportCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& playing = deps.transport.playing;
+  auto& playing = deps.engineState.transport.playing;
 
       const bool next = !playing.load(std::memory_order_acquire);
       playing.store(next, std::memory_order_release);

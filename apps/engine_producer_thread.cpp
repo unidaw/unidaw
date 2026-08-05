@@ -9,9 +9,7 @@
 namespace daw::engine {
 
 void runProducerThread(ProducerThreadDeps& deps) {
-  auto& renderPoolOwner = deps.renderPoolOwner;
-  auto& producerTelemetry = deps.producerTelemetry;
-  auto& previewQueue = deps.previewQueue;
+  auto& engineState = deps.engineState;
   auto& audioPlaybackBlockId = deps.audioPlaybackBlockId;
   auto& engineConfig = deps.engineConfig;
   auto& getHarmonyAt = deps.getHarmonyAt;
@@ -20,13 +18,11 @@ void runProducerThread(ProducerThreadDeps& deps) {
   auto& getScaleForHarmony = deps.getScaleForHarmony;
   auto& harmonyTimeline = deps.harmonyTimeline;
   auto& lastOverflowTick = deps.lastOverflowTick;
-  auto& latencyMgr = deps.latencyMgr;
   auto& nextBlockId = deps.nextBlockId;
   auto& nextNoteId = deps.nextNoteId;
   auto& offlineProducerArmed = deps.offlineProducerArmed;
   auto& offlineRender = deps.offlineRender;
   auto& panicPending = deps.panicPending;
-  auto& patcherGraph = deps.patcherGraph;
   auto& patcherParallel = deps.patcherParallel;
   auto& patcherPool = deps.patcherPool;
   auto& patternTicks = deps.patternTicks;
@@ -37,12 +33,11 @@ void runProducerThread(ProducerThreadDeps& deps) {
   auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
   auto& running = deps.running;
   auto& snapshotTracks = deps.snapshotTracks;
-  auto& songTiming = deps.songTiming;
   auto& tempoProvider = deps.tempoProvider;
   auto& testThrottleMs = deps.testThrottleMs;
   auto& tickConverter = deps.tickConverter;
   auto& traceNotes = deps.traceNotes;
-  auto& transport = deps.transport;
+  auto& transport = deps.engineState.transport;
   auto& warnedEventOutsideBlock = deps.warnedEventOutsideBlock;
   auto& writeMirrorParams = deps.writeMirrorParams;
 
@@ -68,6 +63,7 @@ void runProducerThread(ProducerThreadDeps& deps) {
     const auto stallStart = std::chrono::steady_clock::now();
     uint64_t stallLogMs = 0;
     uint32_t lastPlaybackBlock = 0;
+    std::string stallHosts;
     auto lastPlaybackAdvance = std::chrono::steady_clock::now();
     const auto playbackStallLimit = std::chrono::milliseconds(100);
     auto stallNowMs = [&]() -> uint64_t {
@@ -93,7 +89,8 @@ void runProducerThread(ProducerThreadDeps& deps) {
                 << ") next=" << nextId
                 << " minCompleted=" << minCompleted
                 << " playback=" << currentPlayback
-                << " extra=" << extra << std::endl;
+                << " extra=" << extra
+                << " hosts=[" << stallHosts << "]" << std::endl;
     };
     // THE TRANSPORT ADVANCES BY A CARRIED FRACTION, not by a rounded tick.
     //
@@ -121,14 +118,18 @@ void runProducerThread(ProducerThreadDeps& deps) {
       // Built once per producer thread, immediately before the loop: every member is a
       // reference to something that outlives it, so the per-block call adds no work.
       daw::engine::ProducerBlockDeps producerBlockDeps{
-      renderPoolOwner, producerTelemetry, previewQueue, blockDuration, blockTicksFor, debugStall,
+      engineState, blockDuration, blockTicksFor, debugStall,
       engineConfig, getHarmonyAt, getRingCtrl, getRingStd, getScaleForHarmony, harmonyTimeline,
-      lastOverflowTick, latencyMgr, transport, songTiming, nextBlockId, nextNoteId,
-      offlineRender, panicPending, patcherGraph, patcherParallel, patcherPool,
+      lastOverflowTick, nextBlockId, nextNoteId,
+      offlineRender, panicPending, patcherParallel, patcherPool,
       producerBlockBudgetUs, projectSeed,
       publishedCallback, quantizePitch, resolveDevicePluginPath, tempoProvider,
       tickConverter, traceNotes, patternTicks, warnedEventOutsideBlock, writeMirrorParams
   };
+
+    // Held across iterations so collecting host progress costs no allocation on the RT path.
+    std::vector<daw::engine::HostProgress> hostProgress;
+    hostProgress.reserve(daw::kUiMaxTracks);
 
     while (running.load()) {
       // Offline: produce nothing until the pump says the transport is at a known start. See
@@ -218,6 +219,8 @@ void runProducerThread(ProducerThreadDeps& deps) {
       }
 
       uint32_t minCompleted = std::numeric_limits<uint32_t>::max();
+      // Reused across iterations: the producer path must not allocate per block.
+      hostProgress.clear();
       bool anyActive = false;
       for (auto* runtime : trackSnapshot) {
         if (!runtime->hostReady.load(std::memory_order_acquire)) {
@@ -238,23 +241,39 @@ void runProducerThread(ProducerThreadDeps& deps) {
         if (completed > 0) {
           runtime->active.store(true, std::memory_order_release);
         }
-        if (!runtime->active.load(std::memory_order_acquire)) {
-          continue;
+        // COLLECTED, NOT ACCUMULATED. The rule for which hosts count toward the back-pressure
+        // minimum is daw::engine::completedMinimum in apps/engine_rt_helpers.h, where it can be
+        // asked a question without booting an engine — which matters because getting it wrong
+        // froze the transport for every track and took a live stack sample to find. See the
+        // header for the deadlock it now excludes.
+        hostProgress.push_back(
+            {true, completed,
+             runtime->lastDispatchedBlockId.load(std::memory_order_acquire)});
+      }
+      // THE RULE, applied where it can be tested: apps/engine_rt_helpers.h.
+      const auto progress = daw::engine::completedMinimum(
+          hostProgress, nextBlockId.load(std::memory_order_relaxed));
+      // WHICH host is holding the minimum, and what every host reported. "the hosts are behind"
+      // is as far as anyone can get from the numbers above, and with six hosted plugins that is
+      // not far enough to act on: one stuck host and six evenly-behind hosts are different bugs.
+      // Built only when the stall log is armed, so it costs nothing in a normal run.
+      if (debugStall) {
+        std::string perHost;
+        for (size_t i = 0; i < hostProgress.size(); ++i) {
+          perHost += (i ? "," : "");
+          perHost += std::to_string(i);
+          perHost += hostProgress[i].active ? ":" : ":inactive@";
+          perHost += std::to_string(hostProgress[i].completedBlockId);
         }
-        anyActive = true;
-        minCompleted = std::min(minCompleted, completed);
+        stallHosts = perHost;
       }
+      anyActive = progress.anyContributing;
+      minCompleted = progress.minCompleted;
       const bool throttleInactive = !anyActive;
-      if (!anyActive) {
-        const uint32_t fallback =
-            nextBlockId.load(std::memory_order_relaxed) > 0
-                ? nextBlockId.load(std::memory_order_relaxed) - 1
-                : 0;
-        minCompleted = fallback;
-      }
       if (minCompleted == std::numeric_limits<uint32_t>::max()) {
         if (isPlaying) {
-          logStall("minCompleted", nextBlockId.load(std::memory_order_relaxed), 0, 0, 0);
+          logStall("minCompleted", nextBlockId.load(std::memory_order_relaxed), 0,
+                   audioPlaybackBlockId.load(std::memory_order_acquire), 0);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         continue;
@@ -263,7 +282,8 @@ void runProducerThread(ProducerThreadDeps& deps) {
       const uint32_t inFlight = nextBlockId.load() - minCompleted;
       if (inFlight >= engineConfig.numBlocks) {
         if (isPlaying) {
-          logStall("inFlight", nextBlockId.load(std::memory_order_relaxed), minCompleted, 0, inFlight);
+          logStall("inFlight", nextBlockId.load(std::memory_order_relaxed), minCompleted,
+                   audioPlaybackBlockId.load(std::memory_order_acquire), inFlight);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         continue;

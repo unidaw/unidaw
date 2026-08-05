@@ -25,6 +25,7 @@
 #include "project_file.h"
 #include "time_base.h"
 #include "waveform_store.h"
+#include "apps/engine_state.h"
 
 namespace daw::engine {
 
@@ -37,11 +38,10 @@ struct ClipExtentsDeps {
 };
 
 struct AudioClipTableDeps {
-  // What a load left behind: see apps/engine_loaded_project.h.
-  LoadedProject& loadedProject;
+  // The engine's state rather than loadedProject and trackTable by name — apps/engine_state.h.
+  EngineState& engineState;
   std::function<std::string(const std::string&)> resolveSourcePath;
   daw::TempoMapProvider& tempoProvider;
-  TrackTable& trackTable;
   UiShmState& uiShm;
   daw::WaveformStore& waveformStore;
 };

@@ -44,6 +44,9 @@ public:
     const std::atomic<float>* pan = nullptr;
     const std::atomic<bool>* mute = nullptr;
     const std::atomic<bool>* solo = nullptr;
+    // routing.audioOut != None. Nothing read that before, so setting a track's output to "none"
+    // silenced nothing — see contributesToMix.
+    const std::atomic<bool>* routesToMaster = nullptr;
     size_t shmSize = 0;
     uint32_t trackId = 0;
     // Which published slot (uiTrackPeakRms[uiSlot]) this track's level goes to —
@@ -99,6 +102,17 @@ public:
   // Whether the mixer will read this track this block. Muted is out; if anything is soloed,
   // everything not soloed is out.
   static bool contributesToMix(const TrackInfo& track, bool anySolo) {
+    // ROUTED AWAY IS OUT OF THE MIX. routing.audioOut is settable, validated, persisted and
+    // published, and until this line nothing in the mixer read it: TrackInfo carried mute and
+    // solo and no routing at all, so the master summed every track that was not muted or soloed
+    // out, whatever its output said. "none" means no output, and needed no ruling to fix.
+    //
+    // "track:N" is deliberately NOT handled here. That route is currently ADDITIVE — the master
+    // sums the source as well as the destination — which is a real question about whether
+    // routing is a router or a send, and it is the owner's to answer rather than mine to patch.
+    if (track.routesToMaster && !track.routesToMaster->load(std::memory_order_relaxed)) {
+      return false;
+    }
     if (track.mute && track.mute->load(std::memory_order_relaxed)) {
       return false;
     }

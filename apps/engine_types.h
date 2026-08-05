@@ -239,6 +239,15 @@ struct TrackRuntime {
   // Read by the audio thread every block; written by the UI thread.
   std::atomic<float> mixGainLinear{1.0f};
   std::atomic<float> mixPan{0.0f};
+  // WHETHER THIS TRACK'S AUDIO REACHES THE MASTER, mirrored as an atomic for the same reason
+  // mixMute and mixSolo are: the audio callback asks the question every block and must not take
+  // a lock or read the model to answer it. routing.audioOut is the authority; this follows it at
+  // the three sites that assign routing.
+  //
+  // Default TRUE, which is the fail-safe direction: TrackRouting::audioOut itself defaults to
+  // Master, and a track that somehow never had this set should be audible rather than silently
+  // missing from the mix.
+  std::atomic<bool> routesToMaster{true};
   std::atomic<bool> mixMute{false};
   std::atomic<bool> mixSolo{false};
   // Per-lane tracker subdivision (Mock B grids); published so the UI builds a
@@ -351,6 +360,12 @@ struct TrackRuntime {
   std::mutex paramMirrorMutex;
   std::mutex controllerMutex;
   std::atomic<bool> active{false};
+  // THE LAST BLOCK THIS HOST WAS ACTUALLY SENT. Written by the producer right after a
+  // successful sendProcessBlock, read by the back-pressure minimum. Without it the producer
+  // cannot tell a host that is SLOW from one it SKIPPED — engine_produce_block try_locks
+  // controllerMutex and returns when a VST load holds it — and gating on the second deadlocks
+  // the transport for every track. See daw::engine::completedMinimum in engine_rt_helpers.h.
+  std::atomic<uint32_t> lastDispatchedBlockId{0};
   // v22 add/remove track: a tombstoned slot — the track was removed but its slot is kept
   // so neighbours' ids don't renumber. Published with kUiTrackFlagAbsent, skipped by save
   // and the mix, refillable by AddTrack. A live track has this false.

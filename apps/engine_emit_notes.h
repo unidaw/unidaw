@@ -33,7 +33,10 @@ namespace daw::engine {
 // Emits every note the track's clip places in [rangeStart, rangeEnd) into this block, at
 // baseTickDelta + (onTick - rangeStart) ticks from the block's start. Note-offs that land inside
 // the block go in with them; the rest are registered on the runtime for a later block to drain.
-void emitNotesInRange(RenderTrackDeps& deps,
+void emitNotesInRange(NoteResolution& noteResolution,
+                      const daw::HostConfig& engineConfig,
+                      const bool& traceNotes,
+                      TransportState& transport,
                       TrackRuntime& runtime,
                       const TrackStateSnapshot& trackState,
                       NoteCutCtx& noteCutCtx,

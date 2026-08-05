@@ -33,6 +33,7 @@
 #include "engine_song_timing.h"
 #include "engine_transport_state.h"
 #include "engine_harmony_timeline.h"
+#include "engine_state.h"
 #include "engine_types.h"
 #include "markers.h"
 #include "patcher_graph.h"
@@ -45,12 +46,14 @@
 namespace daw::engine {
 
 struct LoadProjectDeps {
+  // THE ENGINE'S STATE, instead of seven of its groups named one by one. auxChildOverlays,
+  // loadedProject, arrange, songTiming, transport, patcherGraph and trackTable were seven
+  // members here and seven arguments at the construction, in an order nothing but
+  // tools/deps_order_check.sh was checking. See apps/engine_state.h.
+  EngineState& engineState;
   // A loaded child track\'s material, held until its bus exists: see
   // apps/engine_aux_child_overlays.h.
-  AuxChildOverlays& auxChildOverlays;
   // What a load left behind: see apps/engine_loaded_project.h.
-  LoadedProject& loadedProject;
-  ArrangeRail& arrange;
   std::atomic<uint32_t>& automationVersion;
   std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)> buildTrackSnapshot;
   std::function<void()> bumpAllTrackClipVersions;
@@ -65,11 +68,8 @@ struct LoadProjectDeps {
   HarmonyTimeline& harmonyTimeline;
   std::atomic<uint32_t>& liveTrackCount;
   std::atomic<bool>& loadInProgress;
-  SongTiming& songTiming;
-  TransportState& transport;
   std::unique_ptr<TrackRuntime>& masterTrack;
   std::atomic<uint32_t>& nextClipId;
-  PatcherGraphOwner& patcherGraph;
   const uint64_t patternTicks;
   const daw::PluginCache& pluginCache;
   std::atomic<uint64_t>& projectSeed;
@@ -81,7 +81,6 @@ struct LoadProjectDeps {
   std::function<void(TrackRuntime&)> refreshSamplerForTrack;
   std::function<void(TrackRuntime&)> resetTrackContent;
   daw::TempoMapProvider& tempoProvider;
-  TrackTable& trackTable;
   std::function<void()> updatePatcherGraphSnapshot;
   daw::WaveformStore& waveformStore;
 };

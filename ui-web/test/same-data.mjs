@@ -57,9 +57,9 @@ await settle(1300);
 // ---------------------------------------------------------------------------
 // 1 & 2 — the same note, seen from three places.
 //
-// Written in the TRACKER, which is where a person types. Not at tick 0: a note there is
-// dropped by the render (reported), and while that does not affect this file it makes the
-// fixture useless for anything that later wants to hear it.
+// Written in the TRACKER, which is where a person types. Placed past tick 0 so the fixture
+// stays useful to anything that later wants to HEAR it: waveform_probe.wav is silent for its
+// first second by construction, so a note on the downbeat plays and cannot be heard.
 // ---------------------------------------------------------------------------
 await run('goto 4 0');
 await run('note 60');

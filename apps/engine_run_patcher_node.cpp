@@ -12,7 +12,10 @@
 
 namespace daw::engine {
 
-void runPatcherNode(RenderTrackDeps& deps,
+void runPatcherNode(const daw::HostConfig& engineConfig,
+                    std::atomic<uint64_t>& lastOverflowTick,
+                    std::atomic<uint64_t>& projectSeed,
+                    daw::TempoMapProvider& tempoProvider,
                     TrackRuntime& runtime,
                     const daw::PatcherGraph& graphSnapshot,
                     uint32_t nodeIndex,
@@ -24,12 +27,10 @@ void runPatcherNode(RenderTrackDeps& deps,
                     const std::array<daw::HarmonyEvent, daw::kUiMaxHarmonyEvents>& harmonySnapshot,
                     uint32_t harmonyCount,
                     std::atomic<bool>& patcherAudioWritten) {
-  // The four RenderTrackDeps members and the four TrackRuntime members the lambda captured, bound
-  // under their original names so the body reads exactly as it did.
-  auto& engineConfig = deps.engineConfig;
-  auto& lastOverflowTick = deps.lastOverflowTick;
-  auto& projectSeed = deps.projectSeed;
-  auto& tempoProvider = deps.tempoProvider;
+  // FOUR ARGUMENTS INSTEAD OF AN EIGHTEEN-MEMBER STRUCT. It used four of the eighteen and they
+  // are not a group — a node needs the block's config, the seed it hashes against, the tempo and
+  // somewhere to report an overflow — so they are named individually. The four TrackRuntime
+  // members below are still bound, so the body reads exactly as it did.
   auto& nodeBuffers = runtime.patcherNodeBuffers;
   auto& nodeAllowed = runtime.patcherNodeAllowed;
   auto& nodeModOutputs = runtime.patcherNodeModOutputs;

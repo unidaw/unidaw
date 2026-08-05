@@ -80,6 +80,9 @@ std::unique_ptr<TrackRuntime> setupTrackRuntime(TrackSetupDeps& deps, uint32_t t
       }
     }
     runtime->track.routing = daw::defaultTrackRouting();
+    runtime->routesToMaster.store(
+        runtime->track.routing.audioOut.kind != daw::TrackRouteKind::None,
+        std::memory_order_relaxed);
     runtime->clipSnapshot = std::make_shared<ClipSnapshot>();
     runtime->trackSnapshot = buildTrackSnapshot(runtime->track);
 

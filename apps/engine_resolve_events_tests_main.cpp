@@ -35,35 +35,27 @@ namespace {
 // Everything RenderTrackDeps refers to, owned here so the deps struct's references stay valid.
 struct Fixture {
   daw::HostConfig engineConfig{};
-  HarmonyTimeline harmonyTimeline{daw::ScaleRegistry::instance(),
-                                  [](const daw::UiHarmonyDiffPayload&) {},
-                                  [](const daw::UndoEntry&) {}};
   std::atomic<uint64_t> lastOverflowTick{0};
-  daw::LatencyManager latencyMgr{};
   std::atomic<uint32_t> nextNoteId{1};
-  PatcherGraphOwner patcherGraph{};
-  bool patcherParallel = false;
-  std::unique_ptr<WorkerPool> patcherPool;
-  std::atomic<uint64_t> projectSeed{0};
-  daw::TempoMapProvider tempoProvider{120.0};
-  bool traceNotes = false;
-  TransportState transport{};
   std::atomic<bool> warnedEventOutsideBlock{false};
 
   TrackRuntime runtime;
   TrackStateSnapshot trackState{};
   std::vector<daw::EventEntry> scratchpad;
 
-  // getHarmonyAt AND getScaleForHarmony MUST RESOLVE. The first draft of this fixture returned
-  // nullopt/nullptr for them, and every MusicalLogic entry then hit `if (!harmony) continue;` and
-  // was dropped before it reached anything worth asserting — so the gate test below passed with
-  // the gate check DELETED, and the degree test could not have been written at all. Its negative
-  // control is what caught it. A fixture that cannot reach the code is not a cheap fixture, it is
-  // a green test of nothing.
-  RenderTrackDeps deps{
-      engineConfig, harmonyTimeline, lastOverflowTick, latencyMgr, nextNoteId,
-      patcherGraph, patcherParallel, patcherPool, projectSeed, tempoProvider,
-      traceNotes, transport, warnedEventOutsideBlock,
+  // THE FIXTURE SHRANK WITH THE SIGNATURE. It used to build a whole eighteen-member
+  // RenderTrackDeps — a TempoMapProvider, a WorkerPool pointer, a PatcherGraphOwner, a
+  // TransportState — none of which this function touches. It now needs the four things it
+  // actually reads. That is the test-side evidence that the narrowing was real coupling removed
+  // and not bookkeeping: a fixture cannot be smaller than the thing it constructs.
+  //
+  // getHarmonyAt AND getScaleForHarmony MUST RESOLVE. The first draft returned nullopt/nullptr
+  // for them, and every MusicalLogic entry then hit `if (!harmony) continue;` and was dropped
+  // before it reached anything worth asserting — so the gate test below passed with the gate
+  // check DELETED, and the degree test could not have been written at all. Its negative control
+  // is what caught it. A fixture that cannot reach the code is not a cheap fixture, it is a green
+  // test of nothing.
+  NoteResolution noteResolution{
       [](uint64_t) -> std::optional<daw::HarmonyEvent> {
         return daw::HarmonyEvent{0, 0, 1, 0};
       },
@@ -73,8 +65,8 @@ struct Fixture {
       [](uint8_t pitch, const daw::HarmonyEvent&) -> daw::ResolvedPitch {
         return daw::ResolvedPitch{pitch, 0.0f, static_cast<double>(pitch) * 100.0};
       },
-      [](const TrackRuntime&, uint32_t) -> std::optional<std::string> { return std::nullopt; },
-      [](uint64_t tick) -> uint64_t { return tick; }};
+      [](uint64_t tick) -> uint64_t { return tick; },
+      nextNoteId};
 
   Fixture() {
     engineConfig.blockSize = 512;
@@ -83,7 +75,9 @@ struct Fixture {
   }
 
   uint32_t run(uint32_t count) {
-    return resolveMusicalLogicAndSort(deps, runtime, trackState, scratchpad, count,
+    return resolveMusicalLogicAndSort(noteResolution, engineConfig, lastOverflowTick,
+                                      warnedEventOutsideBlock, runtime, trackState, scratchpad,
+                                      count,
                                       /*blockSampleStart=*/0, /*windowStartTicks=*/0,
                                       /*windowEndTicks=*/1000000,
                                       /*samplesPerTick=*/1.0L, /*midiChannel=*/0);

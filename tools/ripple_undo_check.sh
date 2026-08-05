@@ -197,25 +197,110 @@ AFTER="$(state after)"
 [ "$AFTER" != "$BEFORE" ] || fail "the ripple changed nothing, so the undo proves nothing"
 echo "  rippled: $AFTER"
 
+# ---- AND IT MOVED EVERYTHING BY THE RIGHT AMOUNT, which nothing here used to ask.
+#
+# "It changed, and undo put it back" passes for ANY delta. Measured: reverting the meter-probe
+# rule below (taking the signature AT the edit point instead of just before it) moved all six
+# kinds by 13,440,000 instead of 15,360,000, and this check printed the wrong numbers and said
+# PASS. A round trip is symmetric, so it cannot see an error that is applied and then undone.
+#
+# THE EXPECTED DELTA IS THIS FIXTURE'S OWN ARITHMETIC, not a second copy of the engine's rule.
+# The fixture authors 4/4 at tick 0 and asks for 4 bars at 4*BAR; the bars being inserted are
+# therefore 4/4 bars, so the delta is 4*BAR. What the ENGINE has to get right is which signature
+# to measure — and stating the answer here is exactly how this check gets to disagree with it.
+EXPECTED="$(AT=15360000 DELTA=15360000 python3 - "$BEFORE" <<'PYE'
+import os, re, sys
+at, delta = int(os.environ["AT"]), int(os.environ["DELTA"])
+# Every number in the state line is either a TICK or a small scalar — an id, a bpm, a scale
+# degree, a meter numerator. The smallest tick in play is 3,840,000 and the largest scalar is
+# 140, so a threshold at `at` (15,360,000) cannot confuse them. Asserted below by requiring the
+# transform to actually change something.
+def bump(m):
+    v = int(m.group(0))
+    return str(v + delta) if v >= at else str(v)
+print(re.sub(r"\d+", bump, sys.argv[1]))
+PYE
+)"
+[ "$EXPECTED" != "$BEFORE" ] || \
+  fail "the expected-after string came out identical to the before string, so this assertion
+        would pass without the ripple having done anything. The fixture's ticks must straddle
+        the edit point."
+if [ "$AFTER" != "$EXPECTED" ]; then
+  echo
+  fail "the ripple moved things, but not by 4 bars of the meter that PRECEDES the edit point.
+
+        expected: $EXPECTED
+        actual  : $AFTER
+
+        Every tick at or after 15360000 must move by exactly 15360000 and nothing before it may
+        move at all. A meter point sitting exactly AT the edit point moves with the edit, so the
+        bars being inserted belong to the meter that was already running — see the probe in
+        apps/engine_arrangetime_commands.cpp. Taking the meter at the point instead makes the
+        delta 4 * 3.5 quarters, which moves everything a little short and leaves the 7/8 change
+        off the bar grid, where setMap snaps it forward and parts it from the marker that moved
+        with it."
+fi
+echo "  placed exactly: every tick at or after the edit point moved by 15360000, and none before it"
+
 # ---- AND THE SONG IS STILL ON ITS OWN BAR GRID. The insert point is where a 7/8 change begins,
 # and that point MOVES with the edit — so the bars being inserted are in the PRECEDING meter, not
 # the one that used to start there. Taking the meter AT the point instead moved everything by
 # 4 * 3.5 quarters while the inserted span was still 4/4, landing the 7/8 change at 7.5 bars;
 # TimeSignatureMap then snapped it forward to bar 8, silently parting it from the marker that had
 # moved with it. Measured, not theorised.
-GRID="$(python3 - "$TMP/after.uniproj.json" "$BAR" <<'PYG'
+# ON A BAR LINE IS NOT ENOUGH — it has to be the RIGHT one. This asked `nanotick % BAR == 0`, and
+# the snapped result satisfies that by construction, so it could not fail for anything.
+#
+# NAMING THE TICK STILL DOES NOT CATCH THE SHORT DELTA, and that is worth knowing rather than
+# assuming: measured with the probe reverted, the 7/8 change lands at 7.5 bars and setMap snaps it
+# forward to 30720000 — which IS the right answer. This assertion passed. What it does catch is a
+# meter point that ends up somewhere else entirely, or one that stops being written at all; the
+# short delta is caught by the exact state comparison above and by the co-location invariant below.
+# Three assertions, three different failures, and each was verified to fire with the other two
+# muted.
+GRID="$(python3 - "$TMP/after.uniproj.json" 30720000 <<'PYG'
 import json, sys
-doc = json.load(open(sys.argv[1])); BAR = int(sys.argv[2])
+doc = json.load(open(sys.argv[1])); want = int(sys.argv[2])
 pts = doc.get("time_sig_map", [])
 late = [p for p in pts if p["nanotick"] > 0]
-print("NOPOINT" if not late else ("ON" if late[0]["nanotick"] % BAR == 0 else
-      "OFF:%d" % late[0]["nanotick"]))
+print("NOPOINT" if not late else
+      ("OK" if late[0]["nanotick"] == want else "AT:%d" % late[0]["nanotick"]))
 PYG
 )"
-[ "$GRID" = "ON" ] ||   fail "after inserting 4 bars, the meter change is not on a bar line ($GRID). The inserted span
-        must be whole bars of the meter PRECEDING the edit point — the meter at the point is the
-        one that moves away"
-echo "  on the grid: the 7/8 change still lands on a bar line after the insert"
+[ "$GRID" = "OK" ] ||   fail "the saved 7/8 change is not at 30720000, it is $GRID.
+
+        It was authored at 15360000 and 4 bars of 4/4 were inserted at that point, so it belongs
+        at 15360000 + 4*3840000. Being on SOME bar line is not the property: a delta that is short
+        by less than a bar lands off the grid and setMap snaps it forward onto one, which is
+        indistinguishable from correct unless the tick itself is named."
+echo "  saved where it belongs: the 7/8 change is at 30720000, not merely on some bar line"
+
+# ---- THE MARKER AND THE METER CHANGE WERE AUTHORED AT THE SAME TICK AND MUST STILL SHARE ONE.
+#
+# This is the invariant the failure actually violates, and it is worth stating separately from the
+# arithmetic above because it needs no expected number at all: whatever the delta turns out to be,
+# two things that started together end together. Under the short delta the marker moved to
+# 28800000 while the meter point was snapped forward to 30720000 — and note that the snapped value
+# is the CORRECT tick, so both the exact meter assertion above and the older "on a bar line" one
+# are satisfied by it. The parting is the only local evidence.
+#
+# It also survives edits to the fixture that the two exact assertions would not.
+python3 - "$AFTER" <<'PYI' || fail "the marker and the meter change were authored at the same tick
+        and no longer share one. A meter point that is snapped onto a bar line while the marker
+        beside it moves by the raw delta is how a song silently stops agreeing with itself — and
+        the snapped tick can be the RIGHT one, so neither exact assertion above can see this."
+import re, sys
+s = sys.argv[1]
+mark = re.search(r"MARK\[[^\]]*?2@(\d+)", s)
+meter = re.search(r"METER\[[^\]]*?,(\d+):", s)
+if not mark or not meter:
+    print("  could not read the marker or the meter point out of: %s" % s)
+    sys.exit(1)
+if mark.group(1) != meter.group(1):
+    print("  marker 2 is at %s, the meter change at %s" % (mark.group(1), meter.group(1)))
+    sys.exit(1)
+print("  together still: marker 2 and the 7/8 change share tick %s" % mark.group(1))
+PYI
 
 # ---- UNDO. Every one of the five back.
 after_command "$TMP" cli do undo || true

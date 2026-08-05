@@ -49,8 +49,8 @@ namespace daw::engine {
 struct SamplerRefreshDeps {
   const daw::HostConfig& engineConfig;
   std::atomic<uint32_t>& samplerKitVersion;
-  const std::function<std::shared_ptr<const daw::SamplerRender>(
-      const daw::SamplerState&, uint32_t, uint32_t)>& rebuildSamplerRender;
+  std::function<std::shared_ptr<const daw::SamplerRender>(
+      const daw::SamplerState&, uint32_t, uint32_t)> rebuildSamplerRender;
 };
 
 struct SamplerCommandDeps {
@@ -67,12 +67,12 @@ struct SamplerCommandDeps {
   // the indirection is gone rather than relocated. What it needs arrives as SamplerRefreshDeps.
   SamplerRefreshDeps& samplerRefreshDeps;
 
-  const std::function<void(daw::UiCommandType, daw::UiSamplerRejectReason,
-                           uint32_t, uint32_t, uint16_t)>& reportSamplerReject;
-  const std::function<std::shared_ptr<const daw::SamplerRender>(
-      const daw::SamplerState&, uint32_t, uint32_t)>& rebuildSamplerRender;
-  const std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint16_t, bool,
-                           std::optional<daw::EventId>, uint16_t, uint16_t)>& applyAddNote;
+  std::function<void(daw::UiCommandType, daw::UiSamplerRejectReason,
+                           uint32_t, uint32_t, uint16_t)> reportSamplerReject;
+  std::function<std::shared_ptr<const daw::SamplerRender>(
+      const daw::SamplerState&, uint32_t, uint32_t)> rebuildSamplerRender;
+  std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint16_t, bool,
+                           std::optional<daw::EventId>, uint16_t, uint16_t)> applyAddNote;
 };
 
 void handleSamplerEmitRows(SamplerCommandDeps& deps,

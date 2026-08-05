@@ -53,8 +53,9 @@ namespace {
 // they are left default-constructed std::functions — calling one would throw, which is a louder
 // failure than a stub that quietly returns nothing.
 struct Fixture {
-  TrackTable trackTable;
-  TransportState transport;
+  daw::engine::EngineState engineState;
+  TrackTable& trackTable = engineState.trackTable;
+  TransportState& transport = engineState.transport;
   std::atomic<bool> clipDirty{false};
   std::atomic<uint32_t> clipVersion{0};
   std::atomic<uint32_t> nextPlacementId{1};
@@ -68,11 +69,23 @@ struct Fixture {
       historyAppend = [](const char*, const char*, uint32_t, uint32_t, const std::string&) {};
 
   ClipEditDeps deps() {
-    return ClipEditDeps{{},          clipDirty,   clipVersion,     nextPlacementId,
-                        {},          {},          {},              {},
-                        transport,   nextChordId, nextClipId,      0,
-                        {},          {},          {},              trackTable,
-                        emitClipReject, historyAppend};
+    return ClipEditDeps{engineState,      // engineState
+                        {},               // barEndTick
+                        clipDirty,        // clipDirty
+                        clipVersion,      // clipVersion
+                        nextPlacementId,  // nextPlacementId
+                        {},               // commitStructuralEdit
+                        {},               // emitChordDiff
+                        {},               // emitUiDiff
+                        {},               // locateEditTarget
+                        nextChordId,      // nextChordId
+                        nextClipId,       // nextClipId
+                        0,                // patternTicks
+                        {},               // pushStructuralUndo
+                        {},               // rebuildFlatAndPublish
+                        {},               // snapshotTrackStore
+                        emitClipReject,   // emitClipReject
+                        historyAppend};   // historyAppend
   }
 
   // A TRACK ID IS ITS INDEX. trackAt() returns tracks[trackId], so a fixture that merely

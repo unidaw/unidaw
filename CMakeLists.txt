@@ -759,6 +759,10 @@ target_link_libraries(audio_io_tests PRIVATE platform_juce)
 add_executable(device_chain_tests
   apps/device_chain_tests_main.cpp
   apps/device_chain.cpp
+  # device_chain now owns resolveDeviceSlot, which is the one place that turns a saved vst_ref
+  # into a slot the host can act on — so it calls resolveVstRef and needs the cache with it.
+  # The other two device_chain_* test targets already compiled this.
+  apps/plugin_cache.cpp
 )
 
 target_include_directories(device_chain_tests PRIVATE
@@ -1151,6 +1155,79 @@ add_test(NAME clip_grid_check
 )
 set_tests_properties(clip_grid_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# A clip with more notes than one window PAGE comes back whole. The window protocol is paginated
+# (nextEventIndex + kUiClipWindowFlagComplete) and the engine has honoured the cursor since it was
+# written, while every client sent cursor 0 and read one answer — so `get clip` on a dense clip
+# printed 4096 notes and exited 0, which a caller cannot tell from a clip that short.
+add_test(NAME clip_window_paging_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/clip_window_paging_check.sh
+)
+set_tests_properties(clip_window_paging_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+# THE RUST TEST BINARIES COMPILE. ctest has always built C++ and shell and never the Rust tests,
+# so when a struct gained a field and one test's initialiser was not updated, daw-sidecar's test
+# binary stopped compiling and 75 tests went absent from every run — including the two that guard
+# the sidecar's wire offsets, which had by then drifted 48 bytes from what the page reads.
+# `cargo build` cannot see a test-only compile error. This can.
+add_test(NAME rust_tests_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/rust_tests_check.sh
+)
+set_tests_properties(rust_tests_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 900)
+
+# A PLUGIN NAMED BY PATH LOADS FROM THAT PATH. When a project's vst_ref does not resolve against
+# the current scan but its path is on disk, the loader used to keep the file's host_slot_index —
+# an index into the machine the project was SAVED on — and the host then instantiated whatever sat
+# at that number. A project naming Zebralette inside the Zebra2 bundle loaded Identity.
+add_test(NAME plugin_path_load_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/plugin_path_load_check.sh
+)
+set_tests_properties(plugin_path_load_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+# A DEPS STRUCT NAMES AT MOST ONE OF THE ENGINE'S STATE GROUPS. Two or more and it should take
+# EngineState& instead — the rule that took main()'s wiring from 536 positional arguments to 473.
+# ONE group stays legal on purpose: a function needing only TrackTable& says what it needs, and
+# widening it to the whole engine would lose that.
+add_test(NAME deps_state_group_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/deps_state_group_check.sh
+)
+set_tests_properties(deps_state_group_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120)
+
+# A FROZEN PLUGIN HOST MUST NOT HALT THE TRANSPORT. Property test, not a regression guard for a
+# fix — the property holds today and this keeps it that way. See the header for why it is not
+# evidence that the reported plugin-silence is fixed (it is not).
+add_test(NAME host_stall_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/host_stall_check.sh
+)
+set_tests_properties(host_stall_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+# ASKING THE MODEL TO EDIT THE SONG MUST EDIT THE SONG. The headline feature had no coverage at
+# all until this. Verdict is the engine's track count after the exchange, not the model's reply —
+# "say/did/done all arrive while nothing reaches the engine" is the failure worth catching.
+# SKIPS with no API key and on transport failures; FAILS on an API refusal (bad key, dead model).
+# Costs one small API call per run.
+add_test(NAME ask_path_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/ask_path_check.sh
+)
+# RUN_SERIAL because this boots an ENGINE, which opens the default audio output device. Run
+# alongside a timing-sensitive audio check under `ctest -j`, it starves the other one's producer:
+# adding it made `panic` fail with "the PRODUCER had no block ready for 509 of 1469 callbacks",
+# and panic then passed 3/3 on its own. The contention is not new — nothing in this suite
+# declares a lock on the audio device, so the engine-booting checks have always been able to
+# collide — but a check that also waits on a network round trip holds the device far longer than
+# most, so it is the one that has to stand aside.
+set_tests_properties(ask_path_check PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 420 RUN_SERIAL TRUE)
+
+# tools/plugin_insert_stall_repro.sh is DELIBERATELY NOT REGISTERED. It was written to be the
+# live half of the completedMinimum fix and it does not reproduce the bug: with the fix disabled
+# and the pipeline shortened to 2 blocks it still reported zero stalls after the insert, because
+# the in-tree Identity plugin loads far too fast to hold a track's controllerMutex past the
+# window. A check that is green with the fix reverted guards nothing, and the suite already has
+# one honest non-reproducing property test (host_stall_check) — a second would be clutter that
+# reads like coverage. The rule itself IS pinned, by testCompletedMinimum in
+# apps/engine_rt_helpers_tests_main.cpp, whose control fails precisely the frozen-state
+# assertions. See the script's header for what a real live reproduction would need.
+
 # An AUDIO clip's in-point, gain and fades (opcode 95). Three layers have to move together and the
 # check asserts each one separately: the descriptor table (which was a load-time snapshot until
 # this command existed), the baked audio render (which the table cannot see), and the saved file.
@@ -1330,6 +1407,27 @@ add_test(NAME opcode_mirror
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/opcode_mirror_check.sh
 )
 set_tests_properties(opcode_mirror PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
+
+# EVERY event placed in a block goes through placeInBlock. The RULE is pinned by behaviour
+# elsewhere (block_edge_note, note_off_edge, and placeInBlock's unit tests); what those cannot see
+# is a NEW SITE doing the conversion by hand, which is exactly how this defect kept returning —
+# seven sites computed it, three note-offs kept the old arithmetic for a day, and the chord
+# column-cut for longer still.
+# routing.audio_out is settable, validated, persisted and published — and the mixer never read
+# it, so "none" silenced nothing. The assertion is a COMPARISON: "none" and "muted" both mean
+# this track contributes nothing, so the two renders must be byte-identical, with a third
+# audible render proving the comparison can tell them apart.
+add_test(NAME audio_out_none
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/audio_out_none_check.sh
+)
+set_tests_properties(audio_out_none PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME block_placement_rule
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/block_placement_rule_check.sh
+)
+set_tests_properties(block_placement_rule PROPERTIES
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
 
 add_test(NAME note_off_edge

@@ -204,6 +204,34 @@ say "building the sidecar…"
 ( cd "$WEB/ui" && cargo build --release -p daw-sidecar ) > /tmp/side-build.log 2>&1 \
   || { say "sidecar build failed:"; tail -20 /tmp/side-build.log; exit 1; }
 
+# WILL `ask` WORK? SAY SO NOW, NOT WHEN SOMEBODY ASKS.
+#
+# The key lives in an UNTRACKED, gitignored file ($WEB/.env). Nothing recreates it: a fresh
+# clone, a stray `git clean`, or working from a different checkout all leave a stack that boots
+# perfectly, plays audio, and only reveals it cannot reach the model at the moment someone types
+# into the box. That is a discovery to make at startup, in your own time.
+#
+# This repeats the sidecar's own search (ask.rs api_key: env, then DAW_ENV_FILE, then .env
+# upwards from its working directory) and reports only WHETHER one resolves — never the value.
+ask_key_resolves() {
+  [ -n "${ANTHROPIC_API_KEY:-}" ] && return 0
+  local f
+  for f in "${DAW_ENV_FILE:-}" "$WEB/ui/.env" "$WEB/.env" "$(dirname "$WEB")/.env"; do
+    [ -n "$f" ] && [ -f "$f" ] || continue
+    grep -qE '^[[:space:]]*ANTHROPIC_API_KEY[[:space:]]*=[[:space:]]*[^[:space:]"'"'"']' "$f" \
+      && return 0
+  done
+  return 1
+}
+if ask_key_resolves; then
+  say "ask: an ANTHROPIC_API_KEY resolves — the AI box should work"
+else
+  say "ask: NO ANTHROPIC_API_KEY RESOLVES. The DAW will run and play; only the AI box will not,"
+  say "     and it will not say so until you type into it. Fix with either:"
+  say "       echo 'ANTHROPIC_API_KEY=...' >> $WEB/.env      (untracked, what we use today)"
+  say "       DAW_ENV_FILE=/path/to/env ./tools/webstack.sh  (a file anywhere else)"
+fi
+
 # DAW_ENV_FILE, if the caller set one, so the console's `ask` can find an API key
 # that does not live in this repo. Absent it, asking says so rather than failing
 # quietly — the key is never required to run the DAW, only to talk to it.

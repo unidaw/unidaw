@@ -39,6 +39,7 @@
 #include "engine_preview_queue.h"
 #include "engine_producer_telemetry.h"
 #include "engine_render_pool_owner.h"
+#include "engine_state.h"
 #include "engine_types.h"
 #include "event_ring.h"
 #include "harmony_timeline.h"
@@ -57,13 +58,12 @@ namespace daw::engine {
 class EngineAudioCallback;
 
 struct ProducerBlockDeps {
+  // The engine's state rather than 6 of its groups by name — apps/engine_state.h.
+  EngineState& engineState;
   // The pool and the three variables that decide whether to use it: see
   // apps/engine_render_pool_owner.h.
-  RenderPoolOwner& renderPoolOwner;
   // Six counters in one: see apps/engine_producer_telemetry.h.
-  ProducerTelemetry& producerTelemetry;
   // Three members and a std::function became one: see apps/engine_preview_queue.h.
-  PreviewQueue& previewQueue;
   const std::chrono::duration<double>& blockDuration;
   std::function<uint64_t(uint64_t)> blockTicksFor;
   const bool debugStall;
@@ -74,14 +74,10 @@ struct ProducerBlockDeps {
   std::function<const daw::Scale*(const daw::HarmonyEvent&)> getScaleForHarmony;
   HarmonyTimeline& harmonyTimeline;
   std::atomic<uint64_t>& lastOverflowTick;
-  daw::LatencyManager& latencyMgr;
-  TransportState& transport;
-  SongTiming& songTiming;
   std::atomic<uint32_t>& nextBlockId;
   std::atomic<uint32_t>& nextNoteId;
   const bool offlineRender;
   std::atomic<bool>& panicPending;
-  PatcherGraphOwner& patcherGraph;
   bool& patcherParallel;
   std::unique_ptr<daw::engine::WorkerPool>& patcherPool;
   const uint64_t producerBlockBudgetUs;

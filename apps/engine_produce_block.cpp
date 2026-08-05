@@ -43,49 +43,46 @@ void produceBlock(ProducerBlockDeps& deps,
   auto& debugStall = deps.debugStall;
   auto& engineConfig = deps.engineConfig;
   auto enqueuePreview = [&](uint32_t t_, uint8_t p_, uint8_t v_, bool on_) {
-    deps.previewQueue.enqueuePreview(t_, p_, v_, on_);
+    deps.engineState.previewQueue.enqueuePreview(t_, p_, v_, on_);
   };
   auto& getHarmonyAt = deps.getHarmonyAt;
   auto& getRingCtrl = deps.getRingCtrl;
   auto& getRingStd = deps.getRingStd;
   auto& getScaleForHarmony = deps.getScaleForHarmony;
   auto& lastOverflowTick = deps.lastOverflowTick;
-  auto& latencyMgr = deps.latencyMgr;
-  auto& loopEndNanotick = deps.transport.loopEndNanotick;
-  auto& loopStartNanotick = deps.transport.loopStartNanotick;
-  auto& meterSnapshot = deps.songTiming.meterSnapshot;
+  auto& loopEndNanotick = deps.engineState.transport.loopEndNanotick;
+  auto& loopStartNanotick = deps.engineState.transport.loopStartNanotick;
+  auto& meterSnapshot = deps.engineState.songTiming.meterSnapshot;
   auto& nextBlockId = deps.nextBlockId;
   auto& nextNoteId = deps.nextNoteId;
   auto& offlineRender = deps.offlineRender;
   auto& panicPending = deps.panicPending;
-  auto& patcherGraphSnapshot = deps.patcherGraph.patcherGraphSnapshot;
+  auto& patcherGraphSnapshot = deps.engineState.patcherGraph.patcherGraphSnapshot;
   auto& patcherParallel = deps.patcherParallel;
   auto& patcherPool = deps.patcherPool;
-  auto& pendingPreviewNotes = deps.previewQueue.pendingPreviewNotes;
-  auto& playing = deps.transport.playing;
-  auto& poolAlwaysOn = deps.renderPoolOwner.poolAlwaysOn;
-  auto& poolEngaged = deps.renderPoolOwner.poolEngaged;
-  auto& poolWorkEwmaUs = deps.renderPoolOwner.poolWorkEwmaUs;
-  auto& previewMutex = deps.previewQueue.previewMutex;
+  auto& pendingPreviewNotes = deps.engineState.previewQueue.pendingPreviewNotes;
+  auto& playing = deps.engineState.transport.playing;
+  auto& poolAlwaysOn = deps.engineState.renderPoolOwner.poolAlwaysOn;
+  auto& poolEngaged = deps.engineState.renderPoolOwner.poolEngaged;
+  auto& poolWorkEwmaUs = deps.engineState.renderPoolOwner.poolWorkEwmaUs;
+  auto& previewMutex = deps.engineState.previewQueue.previewMutex;
   auto& producerBlockBudgetUs = deps.producerBlockBudgetUs;
-  auto& producerBlockUsMax = deps.producerTelemetry.producerBlockUsMax;
-  auto& producerBlockUsTotal = deps.producerTelemetry.producerBlockUsTotal;
-  auto& producerBlocksOverBudget = deps.producerTelemetry.producerBlocksOverBudget;
-  auto& producerBlocksTimed = deps.producerTelemetry.producerBlocksTimed;
-  auto& producerSamplerUsMax = deps.producerTelemetry.producerSamplerUsMax;
-  auto& producerSamplerUsTotal = deps.producerTelemetry.producerSamplerUsTotal;
+  auto& producerBlockUsMax = deps.engineState.producerTelemetry.producerBlockUsMax;
+  auto& producerBlockUsTotal = deps.engineState.producerTelemetry.producerBlockUsTotal;
+  auto& producerBlocksOverBudget = deps.engineState.producerTelemetry.producerBlocksOverBudget;
+  auto& producerBlocksTimed = deps.engineState.producerTelemetry.producerBlocksTimed;
+  auto& producerSamplerUsMax = deps.engineState.producerTelemetry.producerSamplerUsMax;
+  auto& producerSamplerUsTotal = deps.engineState.producerTelemetry.producerSamplerUsTotal;
   auto& projectSeed = deps.projectSeed;
   auto& publishedCallback = deps.publishedCallback;
   auto& quantizePitch = deps.quantizePitch;
-  auto& renderPool = deps.renderPoolOwner.renderPool;
+  auto& renderPool = deps.engineState.renderPoolOwner.renderPool;
   auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
-  auto& songTimeSigDen = deps.songTiming.songTimeSigDen;
-  auto& songTimeSigNum = deps.songTiming.songTimeSigNum;
   auto& tempoProvider = deps.tempoProvider;
   auto& tickConverter = deps.tickConverter;
   auto& traceNotes = deps.traceNotes;
-  auto& transportElapsedNanotick = deps.transport.transportElapsedNanotick;
-  auto& transportNanotick = deps.transport.transportNanotick;
+  auto& transportElapsedNanotick = deps.engineState.transport.transportElapsedNanotick;
+  auto& transportNanotick = deps.engineState.transport.transportNanotick;
   auto& patternTicks = deps.patternTicks;
   auto& warnedEventOutsideBlock = deps.warnedEventOutsideBlock;
   auto& writeMirrorParams = deps.writeMirrorParams;
@@ -146,25 +143,24 @@ void produceBlock(ProducerBlockDeps& deps,
                          tickConverter.nanoticksToSamplesAbsolute(blockStartTicks)));
       }
 
+      // The five that are one question, grouped — see NoteResolution in engine_render_track.h.
+      // Built here rather than held in ProduceBlockDeps because two of its members are per-block
+      // lambdas bound just above; a reference in a struct built once would dangle.
+      daw::engine::NoteResolution noteResolution{
+          getHarmonyAt, getScaleForHarmony, quantizePitch, wrapTick, nextNoteId};
       daw::engine::RenderTrackDeps renderTrackDeps{
+          deps.engineState,
+          noteResolution,
           engineConfig,
           deps.harmonyTimeline,
           lastOverflowTick,
-          latencyMgr,
-          nextNoteId,
-          deps.patcherGraph,
           patcherParallel,
           patcherPool,
           projectSeed,
           tempoProvider,
           traceNotes,
-          deps.transport,
           warnedEventOutsideBlock,
-          getHarmonyAt,
-          getScaleForHarmony,
-          quantizePitch,
-          resolveDevicePluginPath,
-          wrapTick};
+          resolveDevicePluginPath};
       auto renderTrack = [&](TrackRuntime& runtime,
                              const TrackStateSnapshot& trackState,
                              uint64_t windowStartTicks,
@@ -435,20 +431,21 @@ void produceBlock(ProducerBlockDeps& deps,
           }
         }
 
-        daw::EventEntry transportEntry;
-        transportEntry.sampleTime = pluginSampleStart;
-        transportEntry.blockId = blockId;
-        transportEntry.type = static_cast<uint16_t>(daw::EventType::Transport);
-        transportEntry.size = sizeof(daw::TransportPayload);
-        daw::TransportPayload transportPayload;
-        // Current-position tempo (not the initial one) so a tempo-synced plugin
-        // follows tempo_map changes, matching the ProcessBlockRequest play head.
-        transportPayload.tempoBpm = tempoProvider.bpmAtNanotick(blockStartTicks);
-        transportPayload.timeSigNum = songTimeSigNum.load(std::memory_order_relaxed);
-        transportPayload.timeSigDen = songTimeSigDen.load(std::memory_order_relaxed);
-        transportPayload.playState = isPlaying ? 1 : 0;
-        std::memcpy(transportEntry.payload, &transportPayload, sizeof(transportPayload));
-        daw::ringWrite(ringCtrl, transportEntry);
+        // NO TRANSPORT EVENT IS WRITTEN HERE, and the one that used to be was read by nobody.
+        //
+        // It built a TransportPayload every block for every track and ringWrite'd it into
+        // ringCtrl, under a comment saying it was "so a tempo-synced plugin follows tempo_map
+        // changes". The host SKIPS it — `if (event.type == Transport) continue;` at
+        // juce_host_process_main.cpp:773, and again at :117 — and the tempo a plugin actually
+        // sees travels in ProcessBlockRequest, whose own field says so: "without these every
+        // tempo-synced effect free-runs" (ipc_protocol.h:242). The comment described the
+        // intention; the request delivered it.
+        //
+        // Removing it costs nothing and buys two things on the RT path: one less payload built
+        // and copied per block per track, and — the part that could actually bite — one less
+        // entry consuming ring capacity that real MIDI needs when the ring is under pressure.
+        // Proven inert by byte-identical offline renders of the generator and maximal presets
+        // before and after. EventType::Transport itself stays: the patcher path uses it.
 
         // Inject this track's queued keyjazz auditions at the block boundary. Out of band:
         // these come straight from the keyboard, never the clip store, so they play (and
@@ -1102,6 +1099,13 @@ void produceBlock(ProducerBlockDeps& deps,
             runtime->needsRestart.store(true, std::memory_order_release);
             break;
           }
+          // THIS HOST NOW OWES US THIS BLOCK. Recorded here, at the only place a block is
+          // actually handed over, so the back-pressure minimum can tell a host that is behind
+          // because it is SLOW from one that is behind because it was SKIPPED — the early
+          // `return` on a failed try_lock above, which a VST load causes for 4-7 blocks. Gating
+          // on the second is a deadlock: it can never advance without a dispatch, and the gate
+          // is what stops the dispatch. See daw::engine::completedMinimum.
+          runtime->lastDispatchedBlockId.store(blockId, std::memory_order_release);
           patcherAudioValid = false;
           if (!segment.audioNodeIds.empty()) {
             for (uint32_t ch = 0; ch < engineConfig.numChannelsOut; ++ch) {

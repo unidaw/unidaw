@@ -35,24 +35,25 @@
 #include "apps/event_ring.h"
 #include "apps/markers.h"
 #include "apps/time_signature_map.h"
+#include "apps/engine_state.h"
 
 namespace daw::engine {
 
 struct ArrangeTimeCommandDeps {
-  ArrangeRail& arrange;
+  // The engine's state rather than 2 of its groups by name — apps/engine_state.h.
+  EngineState& engineState;
   std::atomic<uint32_t>& automationVersion;
-  const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>& buildTrackSnapshot;
-  const std::function<uint32_t(TrackRuntime*)>& bumpClipVersionFor;
+  std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)> buildTrackSnapshot;
+  std::function<uint32_t(TrackRuntime*)> bumpClipVersionFor;
   std::atomic<bool>& clipDirty;
   HarmonyTimeline& harmonyTimeline;
-  const std::function<void(const char*, const char*, uint32_t, uint32_t, const std::string&)>& historyAppend;
-  SongTiming& songTiming;
-  const std::function<void(EngineUndoEntry)>& pushUndo;
-  const std::function<std::shared_ptr<const AudioRenderList>(const TrackRuntime&)>& rebuildAudioRender;
-  const std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&)>& rebuildFlatAndPublish;
-  const std::function<void()>& recomputeSongEnd;
-  const std::function<SongStoreState()>& snapshotSongStore;
-  const std::function<std::vector<TrackRuntime*>()>& snapshotTracks;
+  std::function<void(const char*, const char*, uint32_t, uint32_t, const std::string&)> historyAppend;
+  std::function<void(EngineUndoEntry)> pushUndo;
+  std::function<std::shared_ptr<const AudioRenderList>(const TrackRuntime&)> rebuildAudioRender;
+  std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&)> rebuildFlatAndPublish;
+  std::function<void()> recomputeSongEnd;
+  std::function<SongStoreState()> snapshotSongStore;
+  std::function<std::vector<TrackRuntime*>()> snapshotTracks;
   daw::TempoMapProvider& tempoProvider;
 };
 

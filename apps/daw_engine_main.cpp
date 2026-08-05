@@ -57,6 +57,7 @@
 #include "apps/engine_clip_edit.h"
 #include "apps/engine_track_setup.h"
 #include "apps/engine_arrange_rail.h"
+#include "apps/engine_state.h"
 #include "apps/engine_track_table.h"
 #include "apps/engine_patcher_graph_owner.h"
 #include "apps/engine_song_extent.h"
@@ -339,7 +340,10 @@ int main(int argc, char** argv) {
                                           allowConnect, startHost);
   };
 
-  daw::engine::TrackTable trackTable;
+  // The engine's state, in one object; the bindings below keep every body unchanged. Why it
+  // exists and what may go in it: apps/engine_state.h.
+  daw::engine::EngineState engineState;
+  auto& trackTable = engineState.trackTable;
   auto& tracks = trackTable.tracks;
   tracks.reserve(daw::kUiMaxTracks);
   auto& tracksMutex = trackTable.tracksMutex;
@@ -408,7 +412,6 @@ int main(int argc, char** argv) {
   };
 
   // The map and its lock in one object: apps/engine_aux_child_overlays.h.
-  daw::engine::AuxChildOverlays auxChildOverlays;
   TrackRuntime* uiTrack = nullptr;
   {
     auto runtime = setupTrackRuntime(0, pluginPath, !spawnHost, true);
@@ -491,7 +494,6 @@ int main(int argc, char** argv) {
   // Six counters in one object: see apps/engine_producer_telemetry.h. They were passed
   // individually into ProducerBlockDeps, ProducerThreadDeps and ShutdownDeps — eighteen member
   // slots for one measurement, and nothing has ever read one of them without the others.
-  daw::engine::ProducerTelemetry producerTelemetry;
 
   // The pool the per-track work runs on. Sized to leave the audio callback, the master render
   // thread and the OS room to breathe rather than claiming every core — a producer that
@@ -499,7 +501,7 @@ int main(int argc, char** argv) {
   // worse. DAW_ENGINE_RENDER_THREADS overrides; 0 or 1 keeps everything on the producer thread,
   // which is also the reference the parallel path is checked for bit-identical output against.
   // The pool and its three decision variables in one object: apps/engine_render_pool_owner.h.
-  daw::engine::RenderPoolOwner renderPoolOwner;
+  auto& renderPoolOwner = engineState.renderPoolOwner;
   // WHETHER TO USE IT THIS BLOCK, and it is not "always". Measured on a real device: at 8 sampler
   // tracks one thread spends 0.18x of the block budget and has room to spare, and waking seven
   // workers every block to help costs MORE than it saves — across four runs the pool dropped
@@ -563,7 +565,7 @@ int main(int argc, char** argv) {
   // No test notes - wait for user input from the tracker
   std::cout << "Engine: Ready for tracker input" << std::endl;
 
-  daw::engine::PatcherGraphOwner patcherGraph;
+  auto& patcherGraph = engineState.patcherGraph;
   // Has anyone actually EDITED the shared pool this session?
   //
   // The save's legacy branch parks the pool on the first instrument so the one global graph
@@ -636,7 +638,7 @@ int main(int argc, char** argv) {
   };
   updatePatcherGraphSnapshot();
 
-  daw::engine::TransportState transport;
+  auto& transport = engineState.transport;
   // TICKS PLAYED SINCE THE TRANSPORT LAST STARTED FROM THE LOOP START, never wrapped.
   //
   // transportNanotick is a POSITION and wraps at the loop end, so nothing in the engine knew
@@ -679,7 +681,7 @@ int main(int argc, char** argv) {
   // placement past the end left the loop where it was and the new material NEVER PLAYED:
   // you would add a section at bar 4, press play, and hear nothing, with no explanation
   // anywhere. Recomputed whenever a placement edit changes the arrangement.
-  daw::engine::SongTiming songTiming;
+  auto& songTiming = engineState.songTiming;
   // v29: THE ARRANGEMENT — named positions and the song's meter. Its own version counter,
   // deliberately NOT clipVersion: renaming a marker moves no note, so it must not invalidate
   // anyone's in-flight edit — the same separation quantizeVersion has.
@@ -692,7 +694,7 @@ int main(int argc, char** argv) {
   // and would have wedged the engine mid-edit with no diagnostic. Moving the meter onto the
   // section deleted one of the two; deleting the section deletes the derivation itself, so a
   // marker's bar is a lookup in the map and there is no pair left to invert.
-  daw::engine::ArrangeRail arrange;
+  auto& arrange = engineState.arrange;
   // AN RT-SAFE COPY OF THE METER, for the audio/host thread. The play head has to report the
   // signature at the PLAYHEAD, not the song default — that is the whole point of an authoritative
   // meter map, and reporting the default is the bug this replaces. The RT cannot take arrangeMutex,
@@ -766,7 +768,7 @@ int main(int argc, char** argv) {
   // Nine publish gates and a warning latch in one object: see apps/engine_publish_gates.h. They
   // are touched only by the consumer thread and were nine loose locals here, threaded through
   // ConsumerDeps and PublishClipsDeps by hand.
-  daw::engine::PublishGates publishGates;
+  auto& publishGates = engineState.publishGates;
   std::atomic<uint32_t> chainVersion{0};
   std::atomic<uint32_t> routingVersion{0};
   std::atomic<uint32_t> modVersion{0};
@@ -781,7 +783,7 @@ int main(int argc, char** argv) {
   // store (load, restore, single-note creation).
   // Three locals and their lambda became one object: see apps/engine_preview_queue.h. They were
   // passed individually into three different Deps structs — seven member slots for one idea.
-  daw::engine::PreviewQueue previewQueue;
+  auto& previewQueue = engineState.previewQueue;
   // Enqueue an audition and update the held-pitch set. Caller holds nothing; this locks.
   auto enqueuePreview = [&](uint32_t trackId, uint8_t pitch, uint8_t velocity, bool on) {
     previewQueue.enqueuePreview(trackId, pitch, velocity, on);
@@ -805,14 +807,14 @@ int main(int argc, char** argv) {
   // retained one. Bumped when a track creates a clip or COW-forks a loaded one.
   std::atomic<uint32_t> nextClipId{1};
   // The two stacks and their lock in one object: apps/engine_undo_stacks.h.
-  daw::engine::UndoStacks undoStacks;
+  auto& undoStacks = engineState.undoStacks;
 
   // Project-level clip definitions retained from load. Placements (per-track,
   // on TrackRuntime::sourcePlacements) reference these by id. Save re-emits the
   // ones still referenced by a clean track so the arrangement's structure
   // survives a load->save round-trip. Guarded by loadedClipsMutex.
   // What a load left behind, in one object: see apps/engine_loaded_project.h.
-  daw::engine::LoadedProject loadedProject;
+  auto& loadedProject = engineState.loadedProject;
 
   // Project tempo map retained from load so a save re-emits the FULL map (any tempo
   // changes included), rather than collapsing it to the current single tempo. Only
@@ -878,8 +880,6 @@ int main(int argc, char** argv) {
       }
       return daw::makeEventRing(uiShm.base, uiShm.header->ringUiOutOffset);
   };
-  const std::function<void(const char*, const char*, uint32_t, uint32_t,
-                          const std::string&)> historyAppendFn = historyAppend;
   // MOVED UP TO HERE from beside the diff emitters, because UiPublishDeps now holds them and a
   // struct of references cannot be built before its members exist. They are four independent
   // declarations with nothing above them, so moving them is a move and not a reordering of work.
@@ -889,7 +889,7 @@ int main(int argc, char** argv) {
   const auto uiDiffStart = std::chrono::steady_clock::now();
   daw::engine::UiPublishDeps uiPublishDeps{modVersion,          getRingStd,   getRingUiOut,
                                            routingVersion,      patcherGraphVersion,
-                                           historyAppendFn,     uiDiffSent,   uiDiffDropped,
+                                           historyAppend,     uiDiffSent,   uiDiffDropped,
                                            uiDiffDropLogMs,     uiDiffStart};
   // The eight diff/error emitters are functions in engine_ui_publish now. main() keeps forwarders
   // because callers all through the file still use them by name.
@@ -969,9 +969,8 @@ int main(int argc, char** argv) {
   };
 
   // Below snapshotTracks, which it takes: a struct of references cannot be built before its
-  // members exist, and snapshotTracksFn is the wrapper for the lambda just above.
-  const std::function<std::vector<TrackRuntime*>()> snapshotTracksFn = snapshotTracks;
-  daw::engine::SongExtentDeps songExtentDeps{transport, songTiming, snapshotTracksFn, patternTicks};
+  // members exist, and snapshotTracks is the wrapper for the lambda just above.
+  daw::engine::SongExtentDeps songExtentDeps{engineState, snapshotTracks, patternTicks};
   auto trackWindowEnd = [&](const TrackRuntime& rt) {
     return daw::engine::trackWindowEnd(songExtentDeps, rt);
   };
@@ -993,7 +992,6 @@ int main(int argc, char** argv) {
   // not build is REPORTED and the previous one is left running — a bad edge in one device must not
   // silently take down every other device's graph.
   // The request slot and its lock in one object: apps/engine_clip_window.h.
-  daw::engine::ClipWindow clipWindow;
 
 
   // v9: publish every track's clip in one region so read-only observers see
@@ -1202,11 +1200,9 @@ int main(int argc, char** argv) {
   // BUILT HERE, not beside trackSetupDeps at the top: rebuildHostForChain and scheduleHostRestart
   // are declared just above, and a struct of references cannot be built before its members exist.
   // See TrackLifecycleDeps for why that forces two structs rather than one.
-  const std::function<void(TrackRuntime&)> rebuildHostForChainFn = rebuildHostForChain;
-  const std::function<void(TrackRuntime&)> scheduleHostRestartFn = scheduleHostRestart;
   daw::engine::TrackLifecycleDeps trackLifecycleDeps{
       trackSetupDeps, trackTable, masterTrack, liveTrackCount, masterFxActive,
-      rebuildHostForChainFn, scheduleHostRestartFn};
+      rebuildHostForChain, scheduleHostRestart};
   auto ensureTrack = [&](uint32_t trackId, const std::string& pluginPath) {
     return daw::engine::ensureTrack(trackLifecycleDeps, trackId, pluginPath);
   };
@@ -1221,7 +1217,7 @@ int main(int argc, char** argv) {
   // in the inner block and ALSO shadowed the outer std::thread with a local one — the thread never
   // started, and what did start read a destroyed struct. 100 checks failed.
   daw::engine::MasterRenderDeps masterRenderDeps{
-      running, transport, masterFxActive, masterTrack, audioCallback, scheduleHostRestartFn
+      running, transport, masterFxActive, masterTrack, audioCallback, scheduleHostRestart
   };
   // 4b: bring the MASTER host in line with its chain. The master is not in the `tracks`
   // vector, so the per-track consumer never drives its host lifecycle — do it here,
@@ -1286,8 +1282,6 @@ int main(int argc, char** argv) {
   // A refusal, on the outbound ring, with the numbers that settle it. Everything the
   // caller needs to recover is here: which track the version was compared against, what
   // it sent, and what to retry with.
-  const std::function<void(daw::UiClipRejectReason, uint32_t, uint32_t, uint32_t,
-                           daw::UiCommandType)> emitClipRejectFn = emitClipReject;
 
   daw::engine::ChainSnapshotDeps chainSnapshotDeps{
       uiPublishDeps, chainVersion, getRingUiOut, resolveDevicePluginPath};
@@ -1508,11 +1502,8 @@ int main(int argc, char** argv) {
     return out;
   };
 
-  const std::function<std::shared_ptr<const daw::SamplerRender>(
-      const daw::SamplerState&, uint32_t, uint32_t)> rebuildSamplerRenderFn =
-      rebuildSamplerRender;
   daw::engine::SamplerRefreshDeps samplerRefreshDeps{
-      engineConfig, samplerKitVersion, rebuildSamplerRenderFn};
+      engineConfig, samplerKitVersion, rebuildSamplerRender};
   auto refreshSamplerForTrack = [&](TrackRuntime& rt) {
     daw::engine::refreshSamplerForTrack(samplerRefreshDeps, rt);
   };
@@ -1562,8 +1553,7 @@ int main(int argc, char** argv) {
   // LOCK ORDER is tracksMutex -> trackMutex, taken as a pointer snapshot under tracksMutex and
   // then released, matching every other command-thread walk over all tracks.
   daw::engine::AudioClipTableDeps audioClipTableDeps{
-      loadedProject, resolveSourcePath, tempoProvider, trackTable, uiShm,
-      waveformStore};
+      engineState, resolveSourcePath, tempoProvider, uiShm, waveformStore};
 
   auto publishAudioClipTable = [&]() {
     daw::engine::publishAudioClipTable(audioClipTableDeps);
@@ -1661,9 +1651,8 @@ int main(int argc, char** argv) {
   // track is copied under its own mutex so the document is consistent per
   // track without stalling audio behind one global lock.
   daw::engine::SaveProjectDeps saveProjectDeps{
-      loadedProject, arrange, harmonyTimeline, liveTrackCount, songTiming,
-      masterTrack, patcherGraph, pluginCache, projectSeed, trackTable, songBarGrid,
-      trackIsPersisted
+      engineState, harmonyTimeline, liveTrackCount, masterTrack, pluginCache,
+      projectSeed, songBarGrid, trackIsPersisted
   };
   auto saveProjectToPath = [&](const std::string& path,
                                  std::string* error) -> bool {
@@ -1671,11 +1660,10 @@ int main(int argc, char** argv) {
   };
 
   daw::engine::ClipEditDeps clipEditDeps{
-      barEndTick, clipDirty, clipVersion, nextPlacementId, commitStructuralEdit,
-      emitChordDiff, emitUiDiff,
-      locateEditTarget, transport, nextChordId,
-      nextClipId, patternTicks, pushStructuralUndo, rebuildFlatAndPublish,
-      snapshotTrackStore, trackTable, emitClipRejectFn, historyAppendFn
+     engineState, barEndTick, clipDirty, clipVersion, nextPlacementId, commitStructuralEdit,
+      emitChordDiff, emitUiDiff, locateEditTarget, nextChordId, nextClipId, patternTicks,
+      pushStructuralUndo, rebuildFlatAndPublish, snapshotTrackStore, emitClipReject,
+      historyAppend
   };
   // Six helpers that used to be lambdas here are functions in engine_clip_edit now — three of
   // them were MEMBERS of the struct above, so it lost three std::functions and gained one
@@ -1698,14 +1686,14 @@ int main(int argc, char** argv) {
   // here — that needs host restarts and the vst_state blobs described in
   // PROJECT_PERSISTENCE.md, which this version does not yet write.
   daw::engine::LoadProjectDeps loadProjectDeps{
-      auxChildOverlays, loadedProject, arrange, automationVersion,
+      engineState, automationVersion,
       buildTrackSnapshot, bumpAllTrackClipVersions, clipDirty, clipVersion,
       emitChainSnapshot, emitModSnapshot, emitRoutingSnapshot, emitUiDiff,
       ensurePlacementIds, ensureTrack, harmonyTimeline, liveTrackCount, loadInProgress,
-      songTiming, transport, masterTrack,
-      nextClipId, patcherGraph, patternTicks, pluginCache, projectSeed,
+      masterTrack, nextClipId, patternTicks, pluginCache, projectSeed,
       publishAudioClipTable, rebuildAudioRender, rebuildFlatAndPublish, rebuildHostForChain,
-      reconcileMasterHost, refreshSamplerForTrack, resetTrackContent, tempoProvider, trackTable, updatePatcherGraphSnapshot, waveformStore
+      reconcileMasterHost, refreshSamplerForTrack, resetTrackContent, tempoProvider,
+      updatePatcherGraphSnapshot, waveformStore
   };
 
   auto loadProjectFromPath = [&](const std::string& path, std::string* error) -> bool {
@@ -1866,8 +1854,8 @@ int main(int argc, char** argv) {
   // apps/engine_song_store.h for why the interface is 17 members rather than the 24 captures the
   // measurement reports — HarmonyTimeline absorbs six of them and TrackTable two.
   daw::engine::SongStoreDeps songStoreDeps{
-      arrange, automationVersion, clipEditDeps, clipDirty, harmonyTimeline, songTiming,
-      tempoProvider, trackTable, buildTrackSnapshot, bumpClipVersionFor, ensurePlacementIds,
+      engineState, automationVersion, clipEditDeps, clipDirty, harmonyTimeline,
+      tempoProvider, buildTrackSnapshot, bumpClipVersionFor, ensurePlacementIds,
       rebuildAudioRender, rebuildFlatAndPublish, recomputeSongEnd, snapshotTracks,
       emitClipResync};
   auto snapshotSongStore = [&]() { return daw::engine::snapshotSongStore(songStoreDeps); };
@@ -1914,9 +1902,6 @@ int main(int argc, char** argv) {
   // These std::function objects wrap lambdas that are still defined above and still capture by
   // reference; the struct holds references to THESE, so all of it lives exactly as long as main's
   // scope. Command-thread only, so the indirection costs nothing that matters here.
-  const std::function<void(daw::UiCommandType, daw::UiSamplerRejectReason,
-                           uint32_t, uint32_t, uint16_t)> reportSamplerRejectFn =
-      reportSamplerReject;
   const std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint16_t, bool,
                            std::optional<daw::EventId>, uint16_t, uint16_t)> applyAddNoteFn =
       [&](uint32_t t, uint64_t n, uint64_t d, uint8_t p, uint8_t v, uint16_t f, bool u,
@@ -1925,119 +1910,77 @@ int main(int argc, char** argv) {
       };
   daw::engine::SamplerCommandDeps samplerCommandDeps{
       uiShm, trackTable, tempoProvider, samplerRefreshDeps,
-      reportSamplerRejectFn, rebuildSamplerRenderFn, applyAddNoteFn};
+      reportSamplerReject, rebuildSamplerRender, applyAddNoteFn};
 
   // The automation and clip-field commands moved out too; same shape as the sampler family.
-  const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>
-      buildTrackSnapshotFn = buildTrackSnapshot;
-  const std::function<bool(const TrackRuntime&)> trackIsPersistedFn = trackIsPersisted;
-  const std::function<bool(uint32_t, daw::UiCommandType, uint32_t)>
-      requireMatchingClipVersionFn = requireMatchingClipVersion;
   daw::engine::AutomationCommandDeps automationCommandDeps{
       trackTable, automationVersion, uiShm,
-      buildTrackSnapshotFn, historyAppendFn, trackIsPersistedFn,
-      requireMatchingClipVersionFn};
+      buildTrackSnapshot, historyAppend, trackIsPersisted,
+      requireMatchingClipVersion};
 
-  const std::function<uint32_t(TrackRuntime*)> bumpClipVersionForFn = bumpClipVersionFor;
-  const std::function<void()> publishAudioClipTableFn = publishAudioClipTable;
-  const std::function<std::shared_ptr<const AudioRenderList>(const TrackRuntime&)>
-      rebuildAudioRenderFn = rebuildAudioRender;
-  const std::function<void(bool)> writeUiClipExtentsFn = writeUiClipExtents;
   daw::engine::ClipCommandDeps clipCommandDeps{
       trackTable, clipVersion, uiShm,
-      bumpClipVersionForFn, publishAudioClipTableFn, rebuildAudioRenderFn, writeUiClipExtentsFn};
+      bumpClipVersionFor, publishAudioClipTable, rebuildAudioRender, writeUiClipExtents};
 
-  const std::function<void(uint16_t, uint32_t, uint32_t)> emitModErrorFn = emitModError;
-  const std::function<void(TrackRuntime&)> emitModSnapshotFn = emitModSnapshot;
   daw::engine::ModlinkCommandDeps modlinkCommandDeps{
-      trackTable, buildTrackSnapshotFn, emitModErrorFn, emitModSnapshotFn,
-      historyAppendFn};
+      trackTable, buildTrackSnapshot, emitModError, emitModSnapshot,
+      historyAppend};
 
-  const std::function<void(uint32_t, uint16_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
-                           uint32_t, uint32_t)> emitPatcherGraphDeltaFn = emitPatcherGraphDelta;
-  const std::function<void(uint16_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
-                           uint32_t)> emitPatcherGraphErrorFn = emitPatcherGraphError;
-  const std::function<void(const daw::UiDiffPayload&)> emitUiDiffFn = emitUiDiff;
-  // snapshotTracksFn MOVED UP TO HERE from further down, rather than a second wrapper being made
+  // snapshotTracks MOVED UP TO HERE from further down, rather than a second wrapper being made
   // beside it. PatcherCommandDeps below takes the reassembly as a std::function, so its deps must
   // exist by then; snapshotTracks itself has existed since line ~1466 and only its wrapper was
   // late. A second wrapper would also have needed a second NAME, and deps_order_check reads the
   // name — it rejected snapshotTracksPaFn against member snapshotTracks, correctly.
-  daw::engine::PatcherAssembleDeps patcherAssembleDeps{patcherGraph, trackTable, snapshotTracksFn};
+  daw::engine::PatcherAssembleDeps patcherAssembleDeps{
+     engineState, snapshotTracks
+  };
   auto reassemblePatcherFromDevices = [&] {
     return daw::engine::reassemblePatcherFromDevices(patcherAssembleDeps);
   };
-  const std::function<bool()> reassemblePatcherFromDevicesFn = reassemblePatcherFromDevices;
-  const std::function<void()> updatePatcherGraphSnapshotFn = updatePatcherGraphSnapshot;
   daw::engine::PatcherCommandDeps patcherCommandDeps{
-      trackTable, patcherGraph, buildTrackSnapshotFn, emitPatcherGraphDeltaFn,
-      emitPatcherGraphErrorFn, emitUiDiffFn, reassemblePatcherFromDevicesFn,
-      updatePatcherGraphSnapshotFn
+     engineState, buildTrackSnapshot, emitPatcherGraphDelta, emitPatcherGraphError,
+      emitUiDiff, reassemblePatcherFromDevices, updatePatcherGraphSnapshot
   };
 
-  const std::function<bool(const std::string&, std::string*)> saveProjectToPathFn =
-      saveProjectToPath;
-  const std::function<bool(const std::string&, std::string*)> loadProjectFromPathFn =
-      loadProjectFromPath;
   daw::engine::ModuleCommandDeps moduleCommandDeps{
-      loadedProject, saveProjectToPathFn, loadProjectFromPathFn};
+      loadedProject, saveProjectToPath, loadProjectFromPath};
 
-  const std::function<void(uint16_t, uint32_t)> emitRoutingErrorFn = emitRoutingError;
-  const std::function<void(TrackRuntime&)> emitRoutingSnapshotFn = emitRoutingSnapshot;
 
   daw::engine::MarkerCommandDeps markerCommandDeps{
-      arrange, historyAppendFn
+      arrange, historyAppend
   };
 
   daw::engine::ProjectCommandDeps projectCommandDeps{
-      projectLoadOk, projectLoadSeq, saveProjectToPathFn, loadProjectFromPathFn};
+      projectLoadOk, projectLoadSeq, saveProjectToPath, loadProjectFromPath};
 
-  const std::function<void(uint16_t, uint32_t, uint32_t, uint32_t, uint32_t)> emitChainErrorFn =
-      emitChainError;
-  const std::function<void(TrackRuntime&)> emitChainSnapshotFn = emitChainSnapshot;
-  const std::function<void()> reconcileMasterHostFn = reconcileMasterHost;
   const std::function<void(TrackRuntime&)> refreshSamplerForTrackFn2 = refreshSamplerForTrack;
   daw::engine::ChainCommandDeps chainCommandDeps{
-      trackTable, masterTrack, transport, pluginCache, buildTrackSnapshotFn,
-      emitChainErrorFn, emitChainSnapshotFn, rebuildHostForChainFn, reconcileMasterHostFn,
+     engineState, masterTrack, pluginCache, buildTrackSnapshot, emitChainError,
+      emitChainSnapshot, rebuildHostForChain, reconcileMasterHost,
       refreshSamplerForTrackFn2
   };
 
-  const std::function<bool(uint32_t, uint32_t, daw::EventId, const daw::RowOpEdit&, bool,
-                           daw::UiClipRejectReason&)> applySetRowOpsFn = applySetRowOps;
-  daw::engine::RowopsCommandDeps rowopsCommandDeps{applySetRowOpsFn, emitClipRejectFn};
+  daw::engine::RowopsCommandDeps rowopsCommandDeps{applySetRowOps, emitClipReject};
 
-  const std::function<std::string(const std::string&)> resolveSourcePathFn = resolveSourcePath;
-  const std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)>
-      resolveDevicePluginPathFn = resolveDevicePluginPath;
   daw::engine::RequestCommandDeps requestCommandDeps{
-      clipWindow, uiShm, trackTable, waveformStore,
-      resolveSourcePathFn, resolveDevicePluginPathFn, rebuildHostForChainFn,
-      emitChainSnapshotFn};
+     engineState, uiShm, waveformStore, resolveSourcePath, resolveDevicePluginPath,
+      rebuildHostForChain, emitChainSnapshot
+  };
 
-  const std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&)>
-      rebuildFlatAndPublishFn = rebuildFlatAndPublish;
   daw::engine::ArrangeTimeCommandDeps arrangeTimeCommandDeps{
-      arrange, automationVersion, buildTrackSnapshot, bumpClipVersionFor, clipDirty,
-      harmonyTimeline, historyAppend, songTiming, pushUndo, rebuildAudioRender,
-      rebuildFlatAndPublish, recomputeSongEnd, snapshotSongStore, snapshotTracks,
-      tempoProvider
+     engineState, automationVersion, buildTrackSnapshot, bumpClipVersionFor, clipDirty,
+      harmonyTimeline, historyAppend, pushUndo, rebuildAudioRender, rebuildFlatAndPublish,
+      recomputeSongEnd, snapshotSongStore, snapshotTracks, tempoProvider
   };
   daw::engine::TrackpropsCommandDeps trackpropsCommandDeps{
       trackTable, masterTrack, quantizeVersion,
-      buildTrackSnapshotFn, rebuildFlatAndPublishFn};
+      buildTrackSnapshot, rebuildFlatAndPublish};
 
-  const std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint8_t, bool)>
-      applyLocalNoteEditFn = applyLocalNoteEdit;
-  const std::function<bool(uint32_t, uint64_t, uint16_t)> editIsLocalScopeFn = editIsLocalScope;
   const std::function<bool(uint32_t, uint64_t, uint8_t, uint16_t, bool)> applyRemoveNoteFn =
       [&](uint32_t trackId, uint64_t nanotick, uint8_t pitch, uint16_t flags, bool recordUndo) {
         return daw::engine::applyRemoveNote(clipEditDeps, trackId, nanotick, pitch, flags,
                                             recordUndo);
       };
-  const std::function<bool(uint32_t, uint64_t, uint64_t, uint8_t, uint8_t, uint8_t, uint8_t,
-                           uint8_t, uint32_t, uint16_t, uint16_t, bool, std::optional<uint32_t>)>
-      applyAddChordFn = applyAddChord;
   const std::function<bool(uint32_t, uint32_t, bool)> applyRemoveChordFn =
       [&](uint32_t trackId, uint32_t chordId, bool recordUndo) {
         return daw::engine::applyRemoveChord(clipEditDeps, trackId, chordId, recordUndo);
@@ -2047,70 +1990,45 @@ int main(int argc, char** argv) {
         return daw::engine::applyRemoveChordAt(clipEditDeps, trackId, nanotick, column,
                                                recordUndo);
       };
-  const std::function<bool(uint64_t, uint32_t, uint32_t, bool)> addOrUpdateHarmonyFn =
-      addOrUpdateHarmony;
-  const std::function<bool(uint64_t, bool)> removeHarmonyFn = removeHarmony;
-  const std::function<bool(uint32_t, daw::UiCommandType)> requireMatchingHarmonyVersionFn =
-      requireMatchingHarmonyVersion;
   daw::engine::NoteCommandDeps noteCommandDeps{
-      applyAddNoteFn, applyLocalNoteEditFn, editIsLocalScopeFn, applyRemoveNoteFn,
-      applyAddChordFn, applyRemoveChordFn, applyRemoveChordAtFn, addOrUpdateHarmonyFn,
-      removeHarmonyFn, requireMatchingClipVersionFn, requireMatchingHarmonyVersionFn};
+      applyAddNoteFn, applyLocalNoteEdit, editIsLocalScope, applyRemoveNoteFn,
+      applyAddChord, applyRemoveChordFn, applyRemoveChordAtFn, addOrUpdateHarmony,
+      removeHarmony, requireMatchingClipVersion, requireMatchingHarmonyVersion};
 
-  const std::function<bool(const daw::UndoEntry&, bool)> applyUndoEntryFn = applyUndoEntry;
-  const std::function<bool(const SongStoreState&)> restoreSongStoreFn = restoreSongStore;
-  const std::function<bool(uint32_t, const TrackStoreState&)> restoreTrackStoreFn =
-      restoreTrackStore;
   daw::engine::UndoCommandDeps undoCommandDeps{
-      trackTable, undoStacks,
-      applyUndoEntryFn, restoreSongStoreFn, restoreTrackStoreFn, requireMatchingClipVersionFn};
+     engineState, applyUndoEntry, restoreSongStore, restoreTrackStore,
+      requireMatchingClipVersion
+  };
 
-  const std::function<TrackRuntime*(uint32_t, const std::string&)> ensureTrackFn = ensureTrack;
-  const std::function<std::optional<std::string>(uint32_t)> resolvePluginPathFn =
-      resolvePluginPath;
-  const std::function<void(TrackRuntime&, uint32_t)> updateTrackChainForInstrumentFn =
-      updateTrackChainForInstrument;
   daw::engine::DeviceCommandDeps deviceCommandDeps{
-      trackTable, transport, audioPlaybackBlockId, pluginPath,
-      resolveDevicePluginPathFn, rebuildHostForChainFn, emitChainSnapshotFn, ensureTrackFn,
-      resolvePluginPathFn, updateTrackChainForInstrumentFn
+     engineState, audioPlaybackBlockId, pluginPath, resolveDevicePluginPath,
+      rebuildHostForChain, emitChainSnapshot, ensureTrack, resolvePluginPath,
+      updateTrackChainForInstrument
   };
 
   // std::function wrappers so the Deps struct can hold references with a lifetime. A raw
   // lambda bound to a const std::function& would create a temporary that dies at the end of
   // the full expression, leaving the struct holding a dangling reference.
-  const std::function<bool(uint32_t, const std::function<bool(std::vector<daw::ProjectPlacement>&)>&)> applyPlacementEditFn = applyPlacementEdit;
-  const std::function<void(uint32_t, uint8_t, uint8_t, bool)> enqueuePreviewFn = enqueuePreview;
-  const std::function<void(const std::vector<uint8_t>&)> handleAssembledBulkFn = handleAssembledBulk;
-  const std::function<void(uint32_t, TrackStoreState, TrackStoreState)> pushStructuralUndoFn = pushStructuralUndo;
-  const std::function<void(EngineUndoEntry)> pushUndoFn = pushUndo;
-  const std::function<void()> recomputeSongEndFn = recomputeSongEnd;
-  const std::function<void(TrackRuntime&)> resetTrackContentFn = resetTrackContent;
-  const std::function<bool(TrackRuntime&, const std::vector<std::string>&)> restartTrackHostFn = restartTrackHost;
-  const std::function<std::unique_ptr<TrackRuntime>(uint32_t, const std::string&, bool, bool)> setupTrackRuntimeFn = setupTrackRuntime;
-  const std::function<SongStoreState()> snapshotSongStoreFn = snapshotSongStore;
-  const std::function<TrackStoreState(const TrackRuntime&)> snapshotTrackStoreFn = snapshotTrackStore;
 
   daw::engine::TrackCommandDeps trackCommandDeps{
-      buildTrackSnapshotFn, bumpClipVersionForFn, clipVersion, emitRoutingErrorFn,
-      emitRoutingSnapshotFn, liveTrackCount, rebuildAudioRenderFn, rebuildFlatAndPublishFn,
-      resetTrackContentFn, restartTrackHostFn, setupTrackRuntimeFn, trackTable};
+      buildTrackSnapshot, bumpClipVersionFor, clipVersion, emitRoutingError,
+      emitRoutingSnapshot, liveTrackCount, rebuildAudioRender, rebuildFlatAndPublish,
+      resetTrackContent, restartTrackHost, setupTrackRuntime, trackTable};
   daw::engine::PlacementCommandDeps placementCommandDeps{
-      applyPlacementEditFn, bumpClipVersionForFn, clipDirty, historyAppendFn, nextClipId,
-      nextPlacementId, pushStructuralUndoFn, pushUndoFn, rebuildAudioRenderFn,
-      rebuildFlatAndPublishFn, recomputeSongEndFn, requireMatchingClipVersionFn,
-      snapshotTrackStoreFn, trackTable};
+      applyPlacementEdit, bumpClipVersionFor, clipDirty, historyAppend, nextClipId,
+      nextPlacementId, pushStructuralUndo, pushUndo, rebuildAudioRender,
+      rebuildFlatAndPublish, recomputeSongEnd, requireMatchingClipVersion,
+      snapshotTrackStore, trackTable};
 
   daw::engine::TransportCommandDeps transportCommandDeps{
-      previewQueue, songTiming, transport, masterTrack, panicPending, patternTicks,
-      resetTimeline, restartCv, running, tempoProvider,
-      trackTable
+      engineState, masterTrack, panicPending, patternTicks,
+      resetTimeline, restartCv, running, tempoProvider
   };
 
   daw::engine::HandleUiEntryDeps handleUiEntryDeps{
       arrangeTimeCommandDeps, automationCommandDeps, bulkStreams, bulkTick,
-      chainCommandDeps, clipCommandDeps, deviceCommandDeps, enqueuePreviewFn,
-      handleAssembledBulkFn, historyAppendFn, markerCommandDeps, modlinkCommandDeps,
+      chainCommandDeps, clipCommandDeps, deviceCommandDeps, enqueuePreview,
+      handleAssembledBulk, historyAppend, markerCommandDeps, modlinkCommandDeps,
       moduleCommandDeps, noteCommandDeps, patcherCommandDeps, placementCommandDeps,
       projectCommandDeps, requestCommandDeps, rowopsCommandDeps, samplerCommandDeps,
       trackCommandDeps, trackpropsCommandDeps, transportCommandDeps, undoCommandDeps
@@ -2123,42 +2041,36 @@ int main(int argc, char** argv) {
   // The three ring accessors and uiDiffNowMs are lambdas; UiThreadDeps holds std::function
   // REFERENCES, so each needs a named object to bind to. A temporary would dangle the moment this
   // statement ended, and the thread reads them for the life of the process.
-  const std::function<daw::EventRingView()> getRingUiFn = getRingUi;
-  const std::function<daw::EventRingView()> getRingUiAgentFn = getRingUiAgent;
-  const std::function<daw::UiEditRingView()> getRingUiEditFn = getRingUiEdit;
-  const std::function<uint64_t()> uiDiffNowMsFn = uiDiffNowMs;
-  const std::function<void(const daw::EventEntry&)> handleUiEntryFn = handleUiEntry;
   daw::engine::UiThreadDeps uiThreadDeps{
-      running, getRingUiFn, getRingUiAgentFn, getRingUiEditFn, handleUiEntryFn, uiDiffNowMsFn};
+      running, getRingUi, getRingUiAgent, getRingUiEdit, handleUiEntry, uiDiffNowMs};
   std::thread uiThread([&] { daw::engine::runUiThread(uiThreadDeps); });
   daw::LogLine() << "UI: command thread launched" << std::endl;
 
   daw::engine::ProducerThreadDeps producerThreadDeps{
-      renderPoolOwner, producerTelemetry, previewQueue, audioPlaybackBlockId, engineConfig,
+      engineState, audioPlaybackBlockId, engineConfig,
       getHarmonyAt,
       getRingCtrl, getRingStd,
-      getScaleForHarmony, harmonyTimeline, lastOverflowTick, latencyMgr, nextBlockId,
-      nextNoteId, offlineProducerArmed, offlineRender, panicPending, patcherGraph,
+      getScaleForHarmony, harmonyTimeline, lastOverflowTick, nextBlockId,
+      nextNoteId, offlineProducerArmed, offlineRender, panicPending,
       patcherParallel, patcherPool, patternTicks,
       projectSeed, publishedCallback, quantizePitch, resetTimeline,
-      resolveDevicePluginPath, running, snapshotTracks, songTiming, tempoProvider,
-      testThrottleMs, tickConverter, traceNotes, transport, warnedEventOutsideBlock,
+      resolveDevicePluginPath, running, snapshotTracks, tempoProvider,
+      testThrottleMs, tickConverter, traceNotes, warnedEventOutsideBlock,
       writeMirrorParams};
   std::thread producer([&] { daw::engine::runProducerThread(producerThreadDeps); });
 
   daw::engine::UiWriterDeps uiWriterDeps{
-      clipWindow, publishGates, arrange, automationVersion, clipVersion,
-      harmonyTimeline, laneQuantizeOf, patcherGraph,
-      quantizeVersion, snapshotTracks, songTiming, trackIsPersisted, uiShm
+      engineState, automationVersion, clipVersion, harmonyTimeline, laneQuantizeOf,
+      quantizeVersion, snapshotTracks, trackIsPersisted, uiShm
   };
 
   daw::engine::ConsumerDeps consumerDeps{
-      auxChildOverlays, audioPlaybackBlockId, buildTrackSnapshot,
+      engineState, audioPlaybackBlockId, buildTrackSnapshot,
       clipVersion, engineConfig, ensurePlacementIds, harmonyTimeline, lastOverflowTick,
-      latencyMgr, liveTrackCount, loadInProgress, transport, masterTrack, maxUiTracks,
+      latencyMgr, liveTrackCount, loadInProgress, masterTrack, maxUiTracks,
       pdcDisabled, projectLoadOk, projectLoadSeq, publishedCallback, quantizeVersion,
       rebuildAudioRender, rebuildFlatAndPublish, reconcileChildTracks, running,
-      samplerKitVersion, scheduleHostRestart, snapshotTracks, songTiming, tempoProvider,
+      samplerKitVersion, scheduleHostRestart, snapshotTracks, tempoProvider,
       uiShm, uiWriterDeps, writeUiClipExtents
   };
 
@@ -2252,9 +2164,10 @@ int main(int argc, char** argv) {
     running.store(false);
   } else if (offlineRender && audioCallback) {
     daw::engine::OfflineRenderDeps offlineRenderDeps{
-        audioCallback.get(), effBlockSize, effSampleRate, offlineChannels,
-        offlineProducerArmed, renderFailed, renderName, resetTimeline, runSeconds,
-        running, songTiming, tempoProvider, transport};
+     engineState, audioCallback.get(), effBlockSize, effSampleRate, offlineChannels,
+      offlineProducerArmed, renderFailed, renderName, resetTimeline, runSeconds, running,
+      tempoProvider
+  };
     daw::engine::runOfflinePump(offlineRenderDeps);
   } else if (runSeconds >= 0) {
     std::this_thread::sleep_for(std::chrono::seconds(runSeconds));
@@ -2262,9 +2175,10 @@ int main(int argc, char** argv) {
   }
   restartCv.notify_all();
   daw::engine::ShutdownDeps shutdownDeps{
-      producerTelemetry, audioBackend, audioCallback, consumer, engineConfig, masterFxActive,
-      masterRenderThread, observedPipelineBlocks, producer, restartWorker, trackTable,
-      uiThread, uiShm, xrunReporter};
+     engineState, audioBackend, audioCallback, consumer, engineConfig, masterFxActive,
+      masterRenderThread, observedPipelineBlocks, producer, restartWorker, uiThread, uiShm,
+      xrunReporter
+  };
   daw::engine::shutdownEngine(shutdownDeps);
 
   // A render that stalled or had nothing to render exits NON-ZERO. A shell check that reads

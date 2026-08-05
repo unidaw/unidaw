@@ -118,18 +118,22 @@ check(!!zone && zone.hi > zone.lo,
 // AN OUT-OF-KEY NOTE. C# against C major.
 // ---------------------------------------------------------------------------
 /*
- * NOT AT TICK 0, AND THAT IS NOT A STYLE CHOICE.
+ * THE FIXTURE'S SAMPLE IS SILENT FOR ITS FIRST SECOND, and that is not a bug.
  *
- * A note at nanotick 0 is DROPPED from the offline render — measured: a song whose only
- * material is one note at tick 0 renders peak 0.00000 while the engine reports the sampler
- * decoded and consuming 41% of its producer budget, and five notes at 0/1/2/3/4s produce
- * onsets at exactly 1/2/3/4s. Reported to backend.
+ * `waveform_probe.wav` is the WAVEFORM PEAKS probe asset — stepped level regions for testing
+ * the peak pyramid, not a musical sample — and its first second is digital silence by
+ * construction. So a note that starts at tick 0 is inaudible until a second after it starts,
+ * and a window measured over the opening of a render reads 0 for a note that played perfectly.
  *
- * So a suite that puts its only note on the downbeat renders silence and then blames
- * whatever it was actually testing — which is what happened here: the first three
- * hypotheses were the slot key range, pitchtrack, and a failed decode, and all three were
- * wrong. Several notes, none of them first, so the measurement survives that bug and will
- * go on meaning the same thing after it is fixed.
+ * I reported this as "a note at tick 0 is dropped from the render" after measuring five notes
+ * at 0/1/2/3/4s and finding onsets at 1/2/3/4. Backend rendered the same file and took it
+ * apart: deleting the tick-0 note made the note at 1.0s vanish instead, and moving every note
+ * +0.25s moved the silence with them. It was never tick 0 and never the clip length — it was
+ * always the first note, because the first second of every note is silent.
+ *
+ * The notes here are therefore spaced far enough apart to clear that second. Not a workaround
+ * for an engine defect: a fixture whose asset is silent at the start needs its measurements
+ * placed where the asset makes sound.
  */
 for (const row of [2, 4, 6]) {
   await run(`goto ${row} 0`);

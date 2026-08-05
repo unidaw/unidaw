@@ -149,5 +149,51 @@ print(f"  the change sits {bars:.0f} whole bar(s) after the previous point — t
 print( "    where it takes effect, not where it was asked for")
 PY
 
-echo "meter_publish_check: PASS — a published meter change lands on a bar line of the meter" \
-     "before it; the inverted block retired 2026-08-05"
+# ---- AND THE SAME IS TRUE OF WHAT GETS SAVED, which nothing asked until now.
+#
+# points() being rebuilt from segments_ fixed the PUBLISH path and the SAVE path in one move,
+# because the project writer reads the same points(). Only the publish half was covered, so half
+# the fix was unpinned: a regression that reverted points() to the raw requested ticks would keep
+# this check green through the wire assertions above while quietly writing 4800000 back to disk —
+# and the file is the durable copy, so that half is the one that outlives the session.
+#
+# THE FIXTURE ALREADY HAD WHAT THIS NEEDS. Its second point is authored at 5*Q, which is 1.25 4/4
+# bars — deliberately OFF the bar grid, so the authored tick and the effective tick are different
+# numbers and the assertion can tell them apart. Every other round-trip fixture in the suite
+# authors meter points already on bar lines, where the two coincide and nothing can be observed.
+SAVED="$TMP/meterpub_saved.uniproj.json"
+DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" do save meterpub_saved --force \
+  >/dev/null 2>&1 || true
+wait_until 20 test -s "$SAVED" || fail "the save wrote no project file at $SAVED"
+
+python3 - "$SAVED" "$Q" <<'PY' || exit 1
+import json, sys
+Q = int(sys.argv[2])
+doc = json.load(open(sys.argv[1]))
+pts = doc.get("time_sig_map", [])
+if len(pts) != 2:
+    print(f"  FAIL: the saved project holds {len(pts)} meter point(s), expected 2 ({pts}).")
+    raise SystemExit(1)
+# Authored at 5*Q = 1.25 bars of 4/4, so setMap snaps it forward to the 2nd bar line.
+authored = 5 * Q
+effective = 2 * (4 * Q)
+got = pts[1]["nanotick"]
+if got == authored:
+    print(f"  FAIL: the saved meter change is at {got}, the tick it was REQUESTED at.")
+    print( "")
+    print( "        TimeSignatureMap snaps a change forward to the next bar line of the preceding")
+    print(f"        signature, so this one takes effect at {effective}. Saving the request means")
+    print( "        the file disagrees with the engine that wrote it: reloading moves the change,")
+    print( "        and every bar number after it, without anyone having edited anything.")
+    print( "        points() must be rebuilt from segments_ — the same fix the wire assertions")
+    print( "        above cover, on the half that persists.")
+    raise SystemExit(1)
+if got != effective:
+    print(f"  FAIL: the saved meter change is at {got}; it was authored at {authored} and takes")
+    print(f"        effect at {effective}, so it is neither.")
+    raise SystemExit(1)
+print(f"  saved as it acts: authored at {authored}, written at {effective}")
+PY
+
+echo "meter_publish_check: PASS — a meter change is published AND SAVED where it takes effect," \
+     "not where it was asked for; the inverted block retired 2026-08-05"

@@ -1737,65 +1737,157 @@ fn get_clip(handle: &EngineHandle, args: &[String]) -> i32 {
     // its write was lost. Mixing the pid with the clock also stops two concurrent
     // requesters from taking delivery of each other's answers, which matters now that
     // `do` no longer needs --force.
-    let request_id = {
+    // Mixes the PAGE in as well as the clock, because the pages of one pagination run are issued
+    // back to back and two of them landing on the same id is the stale-read bug above one level
+    // down: page 2 would take delivery of page 1's answer and the loop would never advance.
+    let request_id_for = |page: u32| {
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.subsec_nanos())
             .unwrap_or(0);
-        let id = pid.rotate_left(11) ^ nanos;
+        let id = pid.rotate_left(11) ^ nanos ^ page.rotate_left(3);
         if id == 0 { 1 } else { id }
     };
 
-    let request = UiClipWindowCommandPayload {
-        command_type: UiCommandType::RequestClipWindow as u16,
-        flags: 0,
-        track_id: track,
-        request_id,
-        window_start_lo: 0,
-        window_start_hi: 0,
-        window_end_lo: (window_end & 0xffff_ffff) as u32,
-        window_end_hi: (window_end >> 32) as u32,
-        cursor_event_index: 0,
-        reserved: 0,
-        reserved2: 0,
-    };
-    if let Err(err) = handle.send_clip_window_request(request) {
-        eprintln!("daw-cli: {err}");
-        return 1;
-    }
+    // THE WINDOW IS PAGINATED AND THIS USED TO READ ONE PAGE. An answer carries at most
+    // K_UI_MAX_CLIP_NOTES (4096) notes; past that the engine stops early, reports where it
+    // stopped in next_event_index and WITHHOLDS UI_CLIP_WINDOW_FLAG_COMPLETE. Both fields have
+    // been published since the protocol was written and no client has ever read either, so
+    // `get clip` printed the first page and exited 0 — a clip with more notes than that in the
+    // window was reported as a shorter clip, with nothing on stderr. That is indistinguishable
+    // from a clip that really is short, which is what makes it worth a loop rather than a
+    // warning: the caller cannot tell the two apart afterwards.
+    //
+    // The chord array has its own smaller cap and breaks the same loop, so a chord-dense window
+    // paginates too even when its note count is nowhere near 4096.
+    const MAX_PAGES: u32 = 1024; // 4M notes; a backstop against a cursor that never completes.
+    let mut attempt: u32 = 0;
+    let (notes, chords, head_track, head_version, head_window_end) = loop {
+        attempt += 1;
+        let mut notes: Vec<daw_bridge::layout::UiClipNote> = Vec::new();
+        let mut chords: Vec<daw_bridge::layout::UiClipChord> = Vec::new();
+        let mut head: Option<(u32, u32, u64)> = None;
+        let mut cursor: u32 = 0;
+        let mut page: u32 = 0;
+        let mut torn = false;
+        loop {
+            let request_id = request_id_for(page);
+            let request = UiClipWindowCommandPayload {
+                command_type: UiCommandType::RequestClipWindow as u16,
+                flags: 0,
+                track_id: track,
+                request_id,
+                window_start_lo: 0,
+                window_start_hi: 0,
+                window_end_lo: (window_end & 0xffff_ffff) as u32,
+                window_end_hi: (window_end >> 32) as u32,
+                cursor_event_index: cursor,
+                reserved: 0,
+                reserved2: 0,
+            };
+            if let Err(err) = handle.send_clip_window_request(request) {
+                eprintln!("daw-cli: {err}");
+                return 1;
+            }
 
-    let deadline = Instant::now() + Duration::from_secs(3);
-    let mut snapshot = None;
-    while Instant::now() < deadline {
-        if let Some(candidate) = handle.read_clip_window() {
-            if candidate.request_id == request_id && candidate.track_id == track {
-                snapshot = Some(candidate);
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut snapshot = None;
+            while Instant::now() < deadline {
+                if let Some(candidate) = handle.read_clip_window() {
+                    if candidate.request_id == request_id && candidate.track_id == track {
+                        snapshot = Some(candidate);
+                        break;
+                    }
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            let Some(snapshot) = snapshot else {
+                eprintln!(
+                    "daw-cli: timed out waiting for a clip window for track {track} \
+                     (page {page}, cursor {cursor})"
+                );
+                return 1;
+            };
+
+            // A clip edited between two pages makes them describe two different clips, and
+            // concatenating those invents a clip that never existed. clip_version is the
+            // engine's own answer to "is this still the same clip", so start over rather than
+            // splice.
+            match head {
+                Some((_, version, _)) if version != snapshot.clip_version => {
+                    torn = true;
+                    break;
+                }
+                None => {
+                    head = Some((
+                        snapshot.track_id,
+                        snapshot.clip_version,
+                        snapshot.window_end_nanotick,
+                    ));
+                }
+                _ => {}
+            }
+
+            let note_count = (snapshot.note_count as usize).min(snapshot.notes.len());
+            let chord_count = (snapshot.chord_count as usize).min(snapshot.chords.len());
+            notes.extend_from_slice(&snapshot.notes[..note_count]);
+            chords.extend_from_slice(&snapshot.chords[..chord_count]);
+
+            if snapshot.flags & daw_bridge::layout::UI_CLIP_WINDOW_FLAG_COMPLETE != 0 {
+                break;
+            }
+            // An incomplete answer that did not advance the cursor would loop forever asking the
+            // same question. Say so instead of hanging, and keep what was read.
+            if snapshot.next_event_index <= cursor {
+                eprintln!(
+                    "daw-cli: the engine reported the clip window incomplete but did not advance \
+                     the cursor (page {page}, cursor {cursor}, next {}); reporting the {} note(s) \
+                     read so far rather than looping",
+                    snapshot.next_event_index,
+                    notes.len()
+                );
+                break;
+            }
+            cursor = snapshot.next_event_index;
+            page += 1;
+            if page >= MAX_PAGES {
+                eprintln!(
+                    "daw-cli: the clip window is still incomplete after {MAX_PAGES} pages \
+                     ({} notes); reporting what was read",
+                    notes.len()
+                );
                 break;
             }
         }
-        thread::sleep(Duration::from_millis(20));
-    }
-    let Some(snapshot) = snapshot else {
-        eprintln!("daw-cli: timed out waiting for a clip window for track {track}");
-        return 1;
+        if !torn {
+            let (t, v, w) = head.expect("the first page always sets the header");
+            break (notes, chords, t, v, w);
+        }
+        if attempt >= 3 {
+            eprintln!(
+                "daw-cli: the clip kept changing while it was being read ({attempt} attempts); \
+                 stop editing track {track} and try again"
+            );
+            return 1;
+        }
     };
 
-    let note_count = (snapshot.note_count as usize).min(snapshot.notes.len());
-    let chord_count = (snapshot.chord_count as usize).min(snapshot.chords.len());
+    let note_count = notes.len();
+    let chord_count = chords.len();
 
     if args.iter().any(|a| a == "--grid") {
-        print_grid(&snapshot, note_count, chord_count, bars);
+        print_grid(head_track, head_version, &notes, &chords, bars);
         return 0;
     }
 
     println!("{{");
-    println!("  \"track_id\": {},", snapshot.track_id);
-    println!("  \"clip_version\": {},", snapshot.clip_version);
-    println!("  \"window_end_nanotick\": {},", snapshot.window_end_nanotick);
+    println!("  \"track_id\": {head_track},");
+    println!("  \"clip_version\": {head_version},");
+    println!("  \"window_end_nanotick\": {head_window_end},");
     println!("  \"notes\": [");
     for index in 0..note_count {
-        let note = snapshot.notes[index];
+        let note = notes[index];
         let comma = if index + 1 == note_count { "" } else { "," };
         println!(
             "    {{ \"nanotick\": {}, \"duration\": {}, \"pitch\": {}, \"name\": \"{}\", \
@@ -1812,7 +1904,7 @@ fn get_clip(handle: &EngineHandle, args: &[String]) -> i32 {
     println!("  ],");
     println!("  \"chords\": [");
     for index in 0..chord_count {
-        let chord = snapshot.chords[index];
+        let chord = chords[index];
         let comma = if index + 1 == chord_count { "" } else { "," };
         println!(
             "    {{ \"nanotick\": {}, \"degree\": {}, \"quality\": {}, \"inversion\": {}, \
@@ -1827,33 +1919,34 @@ fn get_clip(handle: &EngineHandle, args: &[String]) -> i32 {
 
 /// A tracker-style text grid of the window. Not the UI's view — no cursor, no
 /// pending edits — but the same shape, and readable in a terminal or a diff.
+/// Takes the notes and chords as slices rather than the snapshot, because a window wider than
+/// one page is assembled from several snapshots and no single one of them holds the clip.
 fn print_grid(
-    snapshot: &daw_bridge::layout::UiClipWindowSnapshot,
-    note_count: usize,
-    chord_count: usize,
+    track_id: u32,
+    clip_version: u32,
+    notes: &[daw_bridge::layout::UiClipNote],
+    chords: &[daw_bridge::layout::UiClipChord],
     bars: u64,
 ) {
     let row = NANOTICKS_PER_QUARTER / 4; // 16th notes
     let rows = (bars * 16) as usize;
     let mut cells: Vec<Vec<String>> = vec![vec![".".to_string(); 4]; rows];
 
-    for index in 0..note_count {
-        let note = snapshot.notes[index];
+    for note in notes {
         let r = (note.t_on / row) as usize;
         let c = (note.column as usize).min(3);
         if r < rows {
             cells[r][c] = pitch_name(note.pitch);
         }
     }
-    for index in 0..chord_count {
-        let chord = snapshot.chords[index];
+    for chord in chords {
         let r = (chord.nanotick / row) as usize;
         if r < rows {
             cells[r][3] = format!("~{}", chord.degree);
         }
     }
 
-    println!("track {}  clip_version {}", snapshot.track_id, snapshot.clip_version);
+    println!("track {track_id}  clip_version {clip_version}");
     println!("row |  bar.beat | c0     c1     c2     | chord");
     println!("{}", "-".repeat(52));
     for (index, cell) in cells.iter().enumerate() {

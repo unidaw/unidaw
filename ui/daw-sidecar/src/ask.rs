@@ -21,6 +21,7 @@
 
 use std::collections::VecDeque;
 use std::sync::mpsc::Sender;
+use std::time::Duration;
 
 use daw_agent::{AgentSession, ToolCall};
 use serde_json::{json, Value};
@@ -134,6 +135,20 @@ const MODEL: &str = "claude-sonnet-4-5";
 /// than one that stops and says so.
 const MAX_TURNS: usize = 12;
 const MAX_TOKENS: u32 = 4096;
+/// HOW LONG ONE API CALL MAY TAKE BEFORE IT IS A FAILURE RATHER THAN A WAIT.
+///
+/// ureq applies no timeout by default, which means a request that never answers
+/// hangs the ask thread for ever. Nothing downstream recovers from that: the
+/// `asking` flag stays set, so every later prompt is refused with "still working
+/// on the last one", and the box is dead until the sidecar is restarted. In
+/// front of an audience that is indistinguishable from the DAW ignoring you.
+///
+/// The read bound is generous on purpose — a full 4096-token answer with tool
+/// calls legitimately takes tens of seconds, and cutting off a working request
+/// would be a worse bug than the one being fixed. Connecting is a different
+/// matter: if the socket has not opened in fifteen seconds it is not going to.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const READ_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// The key, from the environment or the repo's .env.
 ///
@@ -311,6 +326,13 @@ pub fn run(
     // ask, so it is worth a breakpoint of its own.
     if let Some(last) = prefix.last_mut() { mark_cacheable(last); }
 
+    // One agent for every turn of the loop below, so the timeouts apply to each
+    // call and the connection is reused across tool rounds.
+    let http = ureq::AgentBuilder::new()
+        .timeout_connect(CONNECT_TIMEOUT)
+        .timeout_read(READ_TIMEOUT)
+        .build();
+
     let tools = tools_json(session);
     let system = json!([
         { "type": "text", "text": INSTRUCTIONS, "cache_control": { "type": "ephemeral" } },
@@ -333,7 +355,7 @@ pub fn run(
             "messages": messages,
         });
 
-        let resp = ureq::post(API_URL)
+        let resp = http.post(API_URL)
             .set("x-api-key", &key)
             .set("anthropic-version", API_VERSION)
             .set("content-type", "application/json")

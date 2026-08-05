@@ -43,32 +43,52 @@
 #include "apps/shared_memory.h"
 #include "apps/time_base.h"
 #include "apps/worker_pool.h"
+#include "apps/engine_state.h"
 
 namespace daw::engine {
 
+// HOW A NOTE'S PITCH AND POSITION ARE RESOLVED, grouped because these five always travel
+// together and never travel alone.
+//
+// MEASURED, not guessed. A usage matrix over the four consumers of RenderTrackDeps —
+// renderTrack itself and the three functions cut out of it — shows getHarmonyAt,
+// getScaleForHarmony and nextNoteId used by resolveMusicalLogicAndSort and emitNotesInRange and
+// by NEITHER of the other two; quantizePitch by emitNotesInRange alone; wrapTick by three of the
+// four. They are one question — "what note is this, and where" — asked at whatever point in the
+// block a note is being made.
+//
+// WHY A GROUP RATHER THAN MORE PARAMETERS. The two note functions were taking the whole
+// eighteen-member struct and using seven and eight of it, which a structure judge named as the
+// god-struct now serving four call sites instead of one. Giving each its own *Deps struct would
+// have narrowed the call sites and RAISED the total member count, which is the trade a
+// change-cost judge measured going the wrong way. Grouping does both at once: each callee takes
+// what it uses, and the total falls because the five stop being listed separately.
+struct NoteResolution {
+  std::function<std::optional<daw::HarmonyEvent>(uint64_t)> getHarmonyAt;
+  std::function<const daw::Scale*(const daw::HarmonyEvent&)> getScaleForHarmony;
+  std::function<daw::ResolvedPitch(uint8_t, const daw::HarmonyEvent&)> quantizePitch;
+  std::function<uint64_t(uint64_t)> wrapTick;
+  std::atomic<uint32_t>& nextNoteId;
+};
+
 struct RenderTrackDeps {
+  // The engine's state rather than 2 of its groups by name — apps/engine_state.h.
+  EngineState& engineState;
+  NoteResolution& noteResolution;
   const daw::HostConfig& engineConfig;
   HarmonyTimeline& harmonyTimeline;
   std::atomic<uint64_t>& lastOverflowTick;
-  daw::LatencyManager& latencyMgr;
-  std::atomic<uint32_t>& nextNoteId;
   // TRUE when the live pool was assembled FROM DEVICES, i.e. every node in it belongs to exactly
   // one device on exactly one track. Without this the render path cannot tell that pool apart from
   // a legacy whole-project graph, and it has to guess — which it did, by asking only whether THIS
   // track carries a patcher device. A track that carried none then ran every OTHER track's nodes.
-  PatcherGraphOwner& patcherGraph;
   bool& patcherParallel;
   std::unique_ptr<WorkerPool>& patcherPool;
   std::atomic<uint64_t>& projectSeed;
   daw::TempoMapProvider& tempoProvider;
   const bool& traceNotes;
-  TransportState& transport;
   std::atomic<bool>& warnedEventOutsideBlock;
-  std::function<std::optional<daw::HarmonyEvent>(uint64_t)> getHarmonyAt;
-  std::function<const daw::Scale*(const daw::HarmonyEvent&)> getScaleForHarmony;
-  std::function<daw::ResolvedPitch(uint8_t, const daw::HarmonyEvent&)> quantizePitch;
   std::function<std::optional<std::string>(const TrackRuntime&, uint32_t)> resolveDevicePluginPath;
-  std::function<uint64_t(uint64_t)> wrapTick;
 };
 
 // Renders one track's block: resolves its notes, runs its patcher graph, and writes the events

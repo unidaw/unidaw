@@ -192,7 +192,10 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             name: "add_track",
             description: "Append an empty track to the song. It arrives at the end with no \
                           instrument on it; load one with a device command, or write notes \
-                          to it straight away.",
+                          to it straight away. RETURNS THE NEW TRACK'S id as `track` — use \
+                          that, do not assume it is the highest number you have seen, because \
+                          the master track sits after the real ones and the new track takes \
+                          the index the master used to have.",
             params: json!({ "type": "object", "properties": {} }),
         },
         ToolSpec {
@@ -487,9 +490,10 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
         ToolSpec {
             name: "add_device",
             description: "Insert a device into a track's chain at a position (0 is first). \
-                          `sampler` is the built-in sampler — give it a file with load_sample. \
-                          The patcher kinds are event/instrument/audio graphs. A VST needs \
-                          `plugin`, the name as the plugin catalogue reports it.",
+                          kind: sampler, vst_effect, vst_instrument, or one of the three \
+                          patcher graphs. `sampler` is the engine's own instrument and needs \
+                          nothing else — give it a file with load_sample; a VST needs `plugin`, \
+                          the name as the plugin catalogue reports it.",
             params: json!({
                 "type": "object",
                 "required": ["track"],
@@ -1010,21 +1014,9 @@ fn add_device(handle: &EngineHandle, args: &Value) -> ToolResult {
     // snapshot's `kind`. Named here rather than passed as a number, for the reason the
     // sidecar's mod kinds are named: a literal that means something else after the next enum
     // change is the kind that outlives its meaning.
-    // The engine's six DeviceKinds. This listed THREE — the sampler and two of the patcher
-    // kinds were simply absent, so the agent could not make the one device this app implements
-    // itself. Same one-entry-short drift the sidecar's DEVICE_KINDS and the page's own table
-    // each had once; it is the third time this enum has been mirrored incompletely, which is an
-    // argument about the mirror rather than about anyone's carefulness.
-    let kind = match arg_str(args, "kind").unwrap_or("vst_effect") {
-        "patcher" | "patcher_event" => 0u32,
-        "patcher_instrument" => 1,
-        "patcher_audio" => 2,
-        "vst_instrument" => 3,
-        "vst_effect" => 4,
-        "sampler" => 5,
-        other => return ToolResult::err(format!(
-            "unknown device kind {other:?} — it is one of sampler, vst_instrument, vst_effect, \
-             patcher, patcher_instrument, patcher_audio")),
+    let name = arg_str(args, "kind").unwrap_or("vst_effect");
+    let Some(kind) = device_kind_code(name) else {
+        return ToolResult::err(format!("unknown device kind {name:?}"));
     };
     let mut p = chain_blank(UiCommandType::AddDevice, track as u32);
     p.device_kind = kind;
@@ -1838,56 +1830,78 @@ fn delete_note(handle: &EngineHandle, args: &Value) -> ToolResult {
 
 /// Append a track. No arguments: v1 of AddTrack always appends, because
 /// inserting needs a display-order field the engine does not have yet.
-/// Append a track, and TELL THE CALLER WHICH ONE IT IS.
+/// A device-kind name from the manifest, as the engine's `DeviceKind` number.
 ///
-/// This used to answer `{"added": true}` and nothing else, so a model that had just made a
-/// track had to work out its id by counting the ones it could see — and the shape it counts
-/// included the master's published slot, so it counted one too many and addressed the next
-/// edit at a track that does not exist:
+/// Mirrored from `apps/device_chain.h` through the chain snapshot's `kind`, and named rather
+/// than passed as a number for the reason the sidecar's mod kinds are: a literal that means
+/// something else after the next enum change is the kind that outlives its meaning.
 ///
-///     add_notes {"pitches":[36 x16],"track":2} -> {"applied":false,"sent":16}
-///     engine: track 2 does not exist — that edit went nowhere
+/// A FUNCTION, not an inline match, so a test can ask it what it accepts. The names it accepts
+/// and the names `add_device`'s schema ADVERTISES have to be the same set — a name in the schema
+/// that this rejects is a capability the model will try and be refused for, and a name this
+/// accepts that the schema omits is one it will never think to try. `add_device` has already
+/// been on the wrong side of that: its description promises a `plugin` argument that the schema
+/// never declares and the executor never reads.
+fn device_kind_code(name: &str) -> Option<u32> {
+    match name {
+        "patcher" | "patcher_event" => Some(0),
+        // The other two patcher graphs. The manifest offers all three, so the mapper has to
+        // accept all three — an enum that promises a name this function refuses is a tool that
+        // fails on its own documentation.
+        "patcher_instrument" => Some(1),
+        "patcher_audio" => Some(2),
+        "vst_instrument" => Some(3),
+        "vst_effect" => Some(4),
+        // The engine's OWN instrument, and the only one needing no plugin installed. Its absence
+        // meant "put a sampler on that track" — a thing the DAW does, the UI offers, and the
+        // engine's AddDevice has handled all along — came back as "unknown device kind". The
+        // manifest is the agent's entire reach: a capability missing from it does not exist as
+        // far as anyone asking is concerned.
+        "sampler" => Some(5),
+        _ => None,
+    }
+}
+
+/// Add a track and TELL THE CALLER WHICH ONE IT IS.
 ///
-/// The master is out of the observation now, which fixes the counting. This fixes the need to
-/// count at all: a tool that creates something should return its name for it. Guessing an id
-/// is the caller doing the tool's job, and the failure is silent — the edit goes nowhere and
-/// the model reports success.
+/// It used to answer `{"added": true}` and nothing else, which made the very first thing anyone
+/// asks for — "add a track called Bass" — fail in a way that reads like the DAW ignoring you.
+/// With no id in the reply the model has to guess the new track's index, and the guess is wrong:
+/// tracks are dense indices with the MASTER LAST, so adding one puts the new track at the index
+/// the master used to occupy and shifts the master up. Measured: the model added a track, said
+/// "I've added a new track named Bass (track 2)", renamed track 2 — the master — and every later
+/// instruction that referred to "Bass" then failed with "I don't see a track named Bass".
 ///
-/// Waits for the engine to publish rather than reporting the id it expects, for the same
-/// reason: an id we predicted is a guess with better manners.
+/// Waiting for the count to grow also makes this tool HONEST. `send_now` returns Ok when the
+/// command is enqueued, not when it is accepted, so the old version reported success for an add
+/// that never happened.
 fn add_track(handle: &EngineHandle) -> ToolResult {
-    let before = handle.snapshot().map(|s| s.ui_track_count).unwrap_or(0);
+    let before = handle.read_track_names();
     if let Err(e) = handle.send_command(blank(UiCommandType::AddTrack)) {
         return ToolResult::err(e);
     }
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
-    loop {
-        let snap = handle.snapshot();
-        let count = snap.as_ref().map(|s| s.ui_track_count).unwrap_or(before);
-        if count > before {
-            // The highest NON-MASTER slot: the engine appends, and the master sits in a slot
-            // of its own that is not a track anyone can write to.
-            let flags = snap.as_ref().map(|s| s.ui_track_flags);
-            let mut id = None;
-            for t in 0..count {
-                let master = flags
-                    .as_ref()
-                    .and_then(|f| f.get(t as usize).copied())
-                    .map_or(false, |b| b & daw_bridge::layout::UI_TRACK_FLAG_MASTER != 0);
-                if !master { id = Some(t); }
-            }
-            return ToolResult::ok(json!({ "added": true, "track": id.unwrap_or(count - 1) }));
+    // Bounded: the engine drains the ring on its command thread, so this is milliseconds in the
+    // normal case. A budget rather than a fixed sleep, because the answer is "the count grew",
+    // not "some time passed".
+    for _ in 0..80 {
+        let after = handle.read_track_names();
+        if after.len() > before.len() {
+            // The first index where the two lists disagree IS the new track: the insert shifts
+            // the master (and anything after it) up by one. Falling back to the last real slot
+            // keeps a sane answer if the names happen to be identical.
+            let track = before
+                .iter()
+                .zip(after.iter())
+                .position(|(a, b)| a != b)
+                .unwrap_or(after.len().saturating_sub(1));
+            return ToolResult::ok(json!({ "added": true, "track": track }));
         }
-        if std::time::Instant::now() >= deadline {
-            // Sent, and we could not confirm. Said plainly rather than inventing an id: a
-            // wrong id here is exactly the failure this function exists to remove.
-            return ToolResult::ok(json!({
-                "added": true,
-                "note": "the engine did not publish the new track in time; call observe for its id",
-            }));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::thread::sleep(std::time::Duration::from_millis(25));
     }
+    ToolResult::err(
+        "the engine did not add a track (the command was sent but the published track count \
+         never grew)",
+    )
 }
 
 /// Remove a track by its STABLE id.
@@ -2246,11 +2260,39 @@ fn set_track_name(handle: &EngineHandle, args: &Value) -> ToolResult {
         base_version: 0,
         name: bytes,
     };
-    let as_ui: UiCommandPayload = unsafe { std::mem::transmute(preset) };
-    match handle.send_command(as_ui) {
-        Ok(()) => ToolResult::ok(json!({ "track": track, "name": name })),
-        Err(e) => ToolResult::err(e),
+    // REFUSE A TRACK THAT DOES NOT EXIST, rather than reporting a rename of it.
+    //
+    // Naming a slot the engine has no track for is silently dropped there, and this used to
+    // answer {"track": n, "name": "..."} regardless — so the model said "I've added a new track
+    // named Bass" about a track that was still called Track 2, and every later instruction that
+    // referred to Bass failed. Cheap to catch: the published name list IS the set of valid ids.
+    let names = handle.read_track_names();
+    if track as usize >= names.len() {
+        return ToolResult::err(format!(
+            "there is no track {track} — the song has {} (ids 0..{}). Use the id add_track \
+             returned, or observe first; note the master sits after the real tracks.",
+            names.len(),
+            names.len().saturating_sub(1)
+        ));
     }
+    let as_ui: UiCommandPayload = unsafe { std::mem::transmute(preset) };
+    if let Err(e) = handle.send_command(as_ui) {
+        return ToolResult::err(e);
+    }
+    // And confirm the name actually took. Same reason add_track waits for the count: send_command
+    // returns Ok when the command is ENQUEUED, not when it is accepted.
+    let want = &name[..name.len().min(24)];
+    for _ in 0..80 {
+        let now = handle.read_track_names();
+        if now.get(track as usize).map(|n| n.as_str()) == Some(want) {
+            return ToolResult::ok(json!({ "track": track, "name": name }));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    ToolResult::err(format!(
+        "the engine did not rename track {track} (the command was sent but the published name \
+         never changed)"
+    ))
 }
 
 fn named(handle: &EngineHandle, command: UiCommandType, args: &Value, verb: &str) -> ToolResult {
@@ -2325,6 +2367,46 @@ mod tests {
             assert!(arms.contains(&spec.name),
                     "manifest tool {:?} has no dispatch arm in execute()", spec.name);
         }
+    }
+
+    /// WHAT add_device ADVERTISES AND WHAT IT ACCEPTS MUST BE THE SAME SET.
+    ///
+    /// Not a tautology — the two live in different places and have already drifted apart in this
+    /// very tool. `sampler` was accepted by the engine and offered by the UI but appeared in
+    /// neither the schema nor the executor, so asking for one answered "unknown device kind";
+    /// meanwhile the description still promises a `plugin` argument that the schema does not
+    /// declare and the executor does not read. This compares the two lists by BEHAVIOUR — it
+    /// asks the mapping — so it cannot be satisfied by editing a comment.
+    #[test]
+    fn advertised_device_kinds_are_exactly_the_accepted_ones() {
+        let spec = tool_manifest()
+            .into_iter()
+            .find(|s| s.name == "add_device")
+            .expect("add_device is in the manifest");
+        let advertised: Vec<String> = spec.params["properties"]["kind"]["enum"]
+            .as_array()
+            .expect("add_device declares a kind enum")
+            .iter()
+            .map(|v| v.as_str().expect("enum entries are strings").to_string())
+            .collect();
+        assert!(!advertised.is_empty(), "add_device advertises no kinds at all");
+
+        for name in &advertised {
+            assert!(device_kind_code(name).is_some(),
+                    "add_device ADVERTISES kind {name:?} but the executor rejects it — the model \
+                     will ask for it and be refused");
+        }
+        // And the other direction: anything the executor accepts should be offered, or nobody
+        // will ever ask for it. `patcher_event` is the documented alias for `patcher`, so it is
+        // allowed to be accepted without being advertised twice.
+        for name in ["patcher", "vst_instrument", "vst_effect", "sampler"] {
+            assert!(advertised.iter().any(|a| a == name),
+                    "the executor accepts {name:?} but add_device does not advertise it, so the \
+                     model has no way to know the capability exists");
+        }
+        assert_eq!(device_kind_code("sampler"), Some(5),
+                   "the sampler is DeviceKind 5 in apps/device_chain.h");
+        assert_eq!(device_kind_code("no_such_kind"), None);
     }
 
     #[test]

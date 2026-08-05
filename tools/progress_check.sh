@@ -81,10 +81,16 @@ if [ "$GIT_OK" = "1" ]; then
     if [ "$DRIFT" -gt "$MAX_DRIFT" ]; then
       echo "  FAIL: $DOC is $DRIFT commits behind HEAD (limit $MAX_DRIFT)."
       echo "        This is the rule that stops 'I will update it later' from becoming never."
+      # READ FROM THE COMMIT, NOT THE WORKING TREE. These numbers are checked against the tree of
+      # `as-of-commit` a few lines below, so suggesting the working tree's values hands you a set
+      # that this same check then rejects — which is exactly what happened the first time anyone
+      # followed this advice: it said 195, the commit had 194, and the fix looked like a fresh
+      # failure rather than a typo in the hint.
+      NEW_AS_OF="$(git rev-parse --short HEAD)"
       echo "        Bring it up to date and set:"
-      echo "          - as-of-commit: $(git rev-parse --short HEAD)"
-      echo "          - main-cpp-lines: $(wc -l < apps/daw_engine_main.cpp | tr -d ' ')"
-      echo "          - ctest-entries: $(grep -c '^add_test(NAME' CMakeLists.txt)"
+      echo "          - as-of-commit: $NEW_AS_OF"
+      echo "          - main-cpp-lines: $(git show "$NEW_AS_OF:apps/daw_engine_main.cpp" | wc -l | tr -d ' ')"
+      echo "          - ctest-entries: $(git show "$NEW_AS_OF:CMakeLists.txt" | grep -c '^add_test(NAME')"
       ok=0
     fi
 

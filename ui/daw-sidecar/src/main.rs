@@ -680,43 +680,80 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     out.extend_from_slice(&(f.notes.len() as u32).to_le_bytes()); // 48
     out.extend_from_slice(&f.agg_rows.to_le_bytes());             // 52
     debug_assert_eq!(out.len(), HEADER_BYTES);
+    /*
+     * EVERY FIELD BELOW ASSERTS WHERE IT LANDS, instead of carrying a trailing `// 76`
+     * saying so.
+     *
+     * The comments were a map, and a map cannot be verified. This one was wrong TWICE.
+     * The `lpb` block went 8 -> 16 -> 64 bytes, moving every offset after it first by 8
+     * and then by 48, and both times the numbers stayed put: the song meter was written
+     * at 180 under a comment reading 132, and one line had already been hand-corrected to
+     * 228 while the prose above it still said 180. The page had the right numbers the
+     * whole time — wire.js spells its offsets out, so only THIS side could be wrong, and
+     * only this side had no way to find out.
+     *
+     * The three checkpoint assertions that were here could not catch it either: they
+     * named the same stale numbers, and they only ran in a test binary that had not
+     * compiled since `sampler_addr` was added to WaveformSlotView, so 75 sidecar tests
+     * had been silently absent from every run. See tools/rust_tests_check.sh, which is
+     * now what stops that recurring.
+     *
+     * `debug_assert_eq!` is compiled out of release entirely, so a 120 Hz encode pays
+     * nothing for a per-field check. Two ADJACENT FIELDS SWAPPED — the failure a total
+     * length can never see — now fails on the first frame a dev build encodes.
+     */
+    macro_rules! at {
+        ($n:expr, $what:expr) => { debug_assert_eq!(out.len(), $n, $what); };
+    }
+    at!(56, "agg tracks");
     out.extend_from_slice(&f.agg_tracks.to_le_bytes());
+    at!(58, "extent count");
     out.extend_from_slice(&(f.extents.len() as u16).to_le_bytes());
+    // 64 bytes, one per lane — the width the engine publishes and the page reads. It was
+    // 8, then 16; assuming either is what moved everything below.
+    at!(60, "lines per beat");
     out.extend_from_slice(&f.lpb);
-    // lpb is 16 bytes now, not 8 (kShmVersion 21 widened the engine's array to 64
-    // and the page draws 16 lanes), so every offset from here on moved by 8.
-    out.extend_from_slice(&f.mixer_version.to_le_bytes());           // 76
-    out.extend_from_slice(&(f.mixer.len() as u16).to_le_bytes());    // 80
-    // 82 was a pad; the harmony count took it rather than being appended after
-    // it, which is what a two-byte shift of everything downstream looks like
-    // when you get it wrong — names decode empty and every pitch reads 0.
-    out.extend_from_slice(&(f.harmony.len() as u16).to_le_bytes());  // 82
-    out.extend_from_slice(&(f.names.len() as u16).to_le_bytes());    // 84
-    out.extend_from_slice(&f.patcher_version.to_le_bytes());         // 86
-    out.extend_from_slice(&f.patcher_device.to_le_bytes());          // 90
-    out.extend_from_slice(&(f.patcher_nodes.len() as u16).to_le_bytes());  // 94
-    out.extend_from_slice(&(f.patcher_edges.len() as u16).to_le_bytes());  // 96
-    // 98 was a pad. It holds the CHORD COUNT now — a count is exactly what a
-    // spare two bytes in a header is for, and taking it moves nothing.
-    out.extend_from_slice(&(f.chords.len() as u16).to_le_bytes());   // 98
-    // Checkpoints, not just a total. The trailing comments are the map and a map
-    // cannot be verified — when the lpb block widened from 8 to 16 every offset
-    // after it moved, and a careless renumber left the COMMENTS scrambled
-    // (loop_start said 132, load_ok said 128) while the writes stayed correct.
-    // Nothing caught it: the final length still came to 136 and the drift test
-    // compares two totals. Two fields SWAPPED would survive both the same way, and
-    // the page would read them swapped with no error anywhere.
-    debug_assert_eq!(out.len(), 100, "loop range starts at 100");
-    out.extend_from_slice(&f.loop_start.to_le_bytes());              // 100
-    out.extend_from_slice(&f.loop_end.to_le_bytes());                // 108
-    out.extend_from_slice(&f.load_seq.to_le_bytes());                // 116
-    out.extend_from_slice(&f.load_ok.to_le_bytes());                 // 120
-    debug_assert_eq!(out.len(), 124, "tempo starts at 124");
-    out.extend_from_slice(&f.tempo_milli_bpm.to_le_bytes());         // 124
-    out.extend_from_slice(&f.tempo_point_count.to_le_bytes());       // 128
-    debug_assert_eq!(out.len(), 132, "the song meter starts at 132");
-    out.extend_from_slice(&f.song_time_sig_num.to_le_bytes());       // 132
-    out.extend_from_slice(&f.song_time_sig_den.to_le_bytes());       // 134
+    at!(124, "mixer version");
+    out.extend_from_slice(&f.mixer_version.to_le_bytes());
+    at!(128, "mixer count");
+    out.extend_from_slice(&(f.mixer.len() as u16).to_le_bytes());
+    // This pair took two bytes that used to be a pad, rather than being appended after
+    // it — which is what a two-byte shift of everything downstream looks like when you
+    // get it wrong: names decode empty and every pitch reads 0.
+    at!(130, "harmony count");
+    out.extend_from_slice(&(f.harmony.len() as u16).to_le_bytes());
+    at!(132, "name count");
+    out.extend_from_slice(&(f.names.len() as u16).to_le_bytes());
+    at!(134, "patcher version");
+    out.extend_from_slice(&f.patcher_version.to_le_bytes());
+    at!(138, "patcher device");
+    out.extend_from_slice(&f.patcher_device.to_le_bytes());
+    at!(142, "patcher node count");
+    out.extend_from_slice(&(f.patcher_nodes.len() as u16).to_le_bytes());
+    at!(144, "patcher edge count");
+    out.extend_from_slice(&(f.patcher_edges.len() as u16).to_le_bytes());
+    // Another former pad, holding the CHORD COUNT — a count is exactly what a spare two
+    // bytes in a header is for, and taking it moves nothing.
+    at!(146, "chord count");
+    out.extend_from_slice(&(f.chords.len() as u16).to_le_bytes());
+    at!(148, "loop start");
+    out.extend_from_slice(&f.loop_start.to_le_bytes());
+    at!(156, "loop end");
+    out.extend_from_slice(&f.loop_end.to_le_bytes());
+    // The swap these exist for: same width, adjacent, and indistinguishable to every
+    // length check in the file.
+    at!(164, "load seq");
+    out.extend_from_slice(&f.load_seq.to_le_bytes());
+    at!(168, "load ok");
+    out.extend_from_slice(&f.load_ok.to_le_bytes());
+    at!(172, "tempo");
+    out.extend_from_slice(&f.tempo_milli_bpm.to_le_bytes());
+    at!(176, "tempo point count");
+    out.extend_from_slice(&f.tempo_point_count.to_le_bytes());
+    at!(180, "song meter numerator");
+    out.extend_from_slice(&f.song_time_sig_num.to_le_bytes());
+    at!(182, "song meter denominator");
+    out.extend_from_slice(&f.song_time_sig_den.to_le_bytes());
     /*
      * v24 PER-INSERT METERS (wire 16). A count and a pad, appended rather than
      * taking one of the header's spare bytes, because there were none left — 98
@@ -726,17 +763,20 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
      * 64 tracks x 16 inserts and almost all of it is "no device"; publishing the
      * whole grid at 120 Hz would be 12 KB a frame to say nothing.
      */
-    out.extend_from_slice(&(f.meters.len() as u16).to_le_bytes());   // 136
-    out.extend_from_slice(&0u16.to_le_bytes());                      // 138
+    at!(184, "insert meter count");
+    out.extend_from_slice(&(f.meters.len() as u16).to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
     /*
      * v26 LANE QUANTIZE (wire 17). Its own version, because it moves when a lane's
      * setting changes and NOT when notes do — the page caches the deviation layer
      * on it, and keying that on the clip version would rebuild it on every
      * keystroke while missing the one change it cares about.
      */
-    out.extend_from_slice(&f.quantize_version.to_le_bytes());        // 140
-    out.extend_from_slice(&(f.quantize.len() as u16).to_le_bytes()); // 144
-    out.extend_from_slice(&0u16.to_le_bytes());                      // 146
+    at!(188, "quantize version");
+    out.extend_from_slice(&f.quantize_version.to_le_bytes());
+    at!(192, "quantize count");
+    out.extend_from_slice(&(f.quantize.len() as u16).to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
     /*
      * v27 ARRANGEMENT SPINE (wire 19). Count, truncation, the region's own generation,
      * and the song end.
@@ -750,10 +790,14 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
      * TRUNCATION travels too. A short list that says nothing reads as a complete one,
      * which turns "the arrangement is missing sections" into a bug report about the view.
      */
-    out.extend_from_slice(&(f.markers.len() as u16).to_le_bytes()); // 148
-    out.extend_from_slice(&(f.markers_truncated.min(0xffff) as u16).to_le_bytes()); // 150
-    out.extend_from_slice(&f.arrange_version.to_le_bytes());         // 152
-    out.extend_from_slice(&f.song_end_tick.to_le_bytes());           // 156, to 164
+    at!(196, "marker count");
+    out.extend_from_slice(&(f.markers.len() as u16).to_le_bytes());
+    at!(198, "markers truncated");
+    out.extend_from_slice(&(f.markers_truncated.min(0xffff) as u16).to_le_bytes());
+    at!(200, "arrange version");
+    out.extend_from_slice(&f.arrange_version.to_le_bytes());
+    at!(204, "song end tick");
+    out.extend_from_slice(&f.song_end_tick.to_le_bytes());
     /*
      * THE AUDIO DEVICE'S BLOCK AND RATE, so the chrome can say what the latency IS.
      *
@@ -766,8 +810,10 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
      * practice; four bytes of float precision on a value that is always an integer would
      * cost the same and invite a readout that says 47999.9.
      */
-    out.extend_from_slice(&f.block_size.to_le_bytes());               // 164
-    out.extend_from_slice(&f.sample_rate_hz.to_le_bytes());           // 168
+    at!(212, "block size");
+    out.extend_from_slice(&f.block_size.to_le_bytes());
+    at!(216, "sample rate");
+    out.extend_from_slice(&f.sample_rate_hz.to_le_bytes());
     /*
      * WHICH PARAMETERS ARE AUTOMATED. The LIST, not the curves.
      *
@@ -779,20 +825,24 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
      * Its own version, from the engine, so a client caches on automation changing rather than
      * on anything else moving.
      */
-    out.extend_from_slice(&(f.automation.len() as u16).to_le_bytes());   // 172
-    out.extend_from_slice(&(f.automation_truncated.min(0xffff) as u16).to_le_bytes()); // 174
-    out.extend_from_slice(&f.automation_version.to_le_bytes());       // 176, to 180
-    // 180..184. Same bargain as every field before it: both sides move together and
-    // WIRE_VERSION goes with them, so a page reading 180 where this writes 184 rejects the
-    // frame rather than decoding a harmony tick out of the middle of a counter.
-    out.extend_from_slice(&f.sampler_kit_version.to_le_bytes());      // 228, to 232
+    at!(220, "automation count");
+    out.extend_from_slice(&(f.automation.len() as u16).to_le_bytes());
+    at!(222, "automation truncated");
+    out.extend_from_slice(&(f.automation_truncated.min(0xffff) as u16).to_le_bytes());
+    at!(224, "automation version");
+    out.extend_from_slice(&f.automation_version.to_le_bytes());
+    // Same bargain as every field before it: both sides move together and WIRE_VERSION goes
+    // with them, so a page reading 228 where this writes 232 rejects the frame rather than
+    // decoding a harmony tick out of the middle of a counter.
+    at!(228, "sampler kit version");
+    out.extend_from_slice(&f.sampler_kit_version.to_le_bytes());
     /*
-     * 232..296 — the per-track op-column width, one byte per lane, appended at the END of the
-     * header rather than parked next to `lpb` where it belongs by kind. Inserting it there
-     * would have moved sixteen downstream offsets, and the offsets in these comments have
-     * already drifted once (they read 180 where the writer is at 228), so the smallest edit
-     * that cannot go wrong wins over the tidiest one.
+     * The per-track op-column width, one byte per lane, appended at the END of the header
+     * rather than parked next to `lpb` where it belongs by kind. Inserting it there would
+     * have moved sixteen downstream offsets — and when `lpb` itself widened, that is exactly
+     * what happened and went unnoticed for two generations.
      */
+    at!(232, "ops width");
     out.extend_from_slice(&f.ops_width);
     // The WHOLE header, not just the first 56 bytes. The old assertion stopped
     // before every field added since, so a mislaid u16 shifted the entire
@@ -7968,6 +8018,9 @@ mod tests {
             request_seq: 7, source_id: 2, content_key: 0x1122_3344_5566_7788,
             decimation: 64, columns: 3, channels: 2,
             first_frame: 0x1_0000_0000, frame_count: 192, status: 1, flags: 1,
+            // Not a sampler answer (flags has no UI_WAVEFORM_FLAG_SAMPLER_SOURCE), so the
+            // address is the zero it is required to be when the flag is clear.
+            sampler_addr: 0,
             pairs: vec![-32767, 32767, 0, 0, 5, -5, 1, 2, 3, 4, 5, 6],
         };
         let mut out = Vec::new();
@@ -8114,7 +8167,9 @@ mod tests {
         f.song_time_sig_num = 7;
         f.song_time_sig_den = 8;
         f.lpb[0] = 3;
-        f.lpb[15] = 12;
+        // The LAST lane, not the sixteenth: a block written narrower than it is declared
+        // still gets its first bytes right, so only the far end can tell the width.
+        f.lpb[WIRE_LANES - 1] = 12;
 
         let mut out = Vec::new();
         encode(&f, &mut out);
@@ -8138,21 +8193,57 @@ mod tests {
         assert_eq!(u32at(52), f.agg_rows, "agg rows @52");
         // The lines-per-beat block: 16 wide since v21, and its FIRST and LAST bytes
         // are checked, because a width mistake moves only the far end.
+        // THE LPB BLOCK IS 64 WIDE and its far end is what proves it. This asserted
+        // `lpb[15] @75 — the block is 16 wide, not 8` while WIRE_LANES was already 64,
+        // so every offset below it was 48 bytes low — and the test could not say so
+        // because it had not compiled since `sampler_addr` was added to
+        // WaveformSlotView. A width mistake moves only the far end, which is why both
+        // ends are checked.
         assert_eq!(out[60], 3, "lpb[0] @60");
-        assert_eq!(out[75], 12, "lpb[15] @75 — the block is 16 wide, not 8");
-        assert_eq!(u32at(76), f.mixer_version, "mixer version @76");
-        assert_eq!(u32at(86), f.patcher_version, "patcher version @86");
-        assert_eq!(u32at(90), f.patcher_device, "patcher device @90");
-        assert_eq!(u64at(100), f.loop_start, "loop start @100");
-        assert_eq!(u64at(108), f.loop_end, "loop end @108");
+        assert_eq!(out[123], 12, "lpb[63] @123 — the block is 64 wide");
+
+        // EVERY OFFSET BELOW COMES OUT OF wire.js, not out of this file.
+        //
+        // The test is named for the page, so the page is where the numbers come from.
+        // Hardcoding them here made this a second copy of the map, and a second copy is
+        // what drifted: the page read the song meter at 180 for two generations while
+        // this file asserted 132 and the encoder's comments agreed with the test. Now a
+        // number can only be wrong in one place, and being wrong there fails here.
+        let page = std::fs::read_to_string(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../ui-web/src/wire.js"))
+            .expect("wire.js is the authority on these offsets and must be readable");
+        // `<name> = v.getT(<offset>` — the shape every scalar read in wire.js has.
+        let off = |decl: &str| -> usize {
+            let at = page.find(decl).unwrap_or_else(|| panic!(
+                "wire.js no longer reads `{decl}` — this test cannot check an offset the \
+                 page does not spell out. Repoint it rather than deleting the assertion."));
+            let rest = &page[at + decl.len()..];
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            digits.parse().unwrap_or_else(|_| panic!("`{decl}` is not followed by an offset"))
+        };
+
+        assert_eq!(u32at(off("const mixerVersion = v.getUint32(")), f.mixer_version,
+                   "mixer version");
+        assert_eq!(u32at(off("const patcherVersion = v.getUint32(")), f.patcher_version,
+                   "patcher version");
+        assert_eq!(u32at(off("const patcherDevice = v.getUint32(")), f.patcher_device,
+                   "patcher device");
+        assert_eq!(u64at(off("store.loopStart = Number(v.getBigUint64(")), f.loop_start,
+                   "loop start");
+        assert_eq!(u64at(off("store.loopEnd = Number(v.getBigUint64(")), f.loop_end,
+                   "loop end");
         // These two are the swap this test exists for: same width, adjacent, and
         // indistinguishable to every length check in the file.
-        assert_eq!(u32at(116), f.load_seq, "load seq @116");
-        assert_eq!(u32at(120), f.load_ok, "load ok @120");
-        assert_eq!(u32at(124), f.tempo_milli_bpm, "tempo @124");
-        assert_eq!(u32at(128), f.tempo_point_count, "tempo points @128");
-        assert_eq!(u16at(132), f.song_time_sig_num, "song meter numerator @132");
-        assert_eq!(u16at(134), f.song_time_sig_den, "song meter denominator @134");
+        assert_eq!(u32at(off("store.loadSeq = v.getUint32(")), f.load_seq, "load seq");
+        assert_eq!(u32at(off("store.loadOk = v.getUint32(")), f.load_ok, "load ok");
+        assert_eq!(u32at(off("store.tempoMilliBpm = v.getUint32(")), f.tempo_milli_bpm,
+                   "tempo");
+        assert_eq!(u32at(off("store.tempoPointCount = v.getUint32(")), f.tempo_point_count,
+                   "tempo points");
+        assert_eq!(u16at(off("store.songTimeSigNum = v.getUint16(")), f.song_time_sig_num,
+                   "song meter numerator");
+        assert_eq!(u16at(off("store.songTimeSigDen = v.getUint16(")), f.song_time_sig_den,
+                   "song meter denominator");
     }
 
     #[test]

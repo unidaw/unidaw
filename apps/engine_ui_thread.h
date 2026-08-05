@@ -23,11 +23,11 @@ namespace daw::engine {
 
 struct UiThreadDeps {
   std::atomic<bool>& running;
-  const std::function<daw::EventRingView()>& getRingUi;
-  const std::function<daw::EventRingView()>& getRingUiAgent;
-  const std::function<daw::UiEditRingView()>& getRingUiEdit;
-  const std::function<void(const daw::EventEntry&)>& handleUiEntry;
-  const std::function<uint64_t()>& uiDiffNowMs;
+  std::function<daw::EventRingView()> getRingUi;
+  std::function<daw::EventRingView()> getRingUiAgent;
+  std::function<daw::UiEditRingView()> getRingUiEdit;
+  std::function<void(const daw::EventEntry&)> handleUiEntry;
+  std::function<uint64_t()> uiDiffNowMs;
 };
 
 void runUiThread(UiThreadDeps& deps);

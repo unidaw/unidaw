@@ -20,6 +20,8 @@
 #include <memory>
 #include <mutex>
 #include <string>
+
+#include "engine_state.h"
 #include <vector>
 
 #include "engine_loaded_project.h"
@@ -39,17 +41,14 @@
 namespace daw::engine {
 
 struct SaveProjectDeps {
+  // The engine's state rather than five of its groups by name — apps/engine_state.h.
+  EngineState& engineState;
   // What a load left behind: see apps/engine_loaded_project.h.
-  LoadedProject& loadedProject;
-  ArrangeRail& arrange;
   HarmonyTimeline& harmonyTimeline;
   std::atomic<uint32_t>& liveTrackCount;
-  SongTiming& songTiming;
   std::unique_ptr<TrackRuntime>& masterTrack;
-  PatcherGraphOwner& patcherGraph;
   const daw::PluginCache& pluginCache;
   std::atomic<uint64_t>& projectSeed;
-  TrackTable& trackTable;
   std::function<daw::BarGrid()> songBarGrid;
   std::function<bool(const TrackRuntime&)> trackIsPersisted;
 };

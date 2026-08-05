@@ -64,8 +64,8 @@ struct TrackLifecycleDeps {
   std::unique_ptr<TrackRuntime>& masterTrack;
   std::atomic<uint32_t>& liveTrackCount;
   std::atomic<bool>& masterFxActive;
-  const std::function<void(TrackRuntime&)>& rebuildHostForChain;
-  const std::function<void(TrackRuntime&)>& scheduleHostRestart;
+  std::function<void(TrackRuntime&)> rebuildHostForChain;
+  std::function<void(TrackRuntime&)> scheduleHostRestart;
 };
 
 // FINDS OR CREATES a track by id, returning nullptr if the table is full. The engine's single

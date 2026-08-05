@@ -82,6 +82,29 @@ int main() {
     CHECK(p128.outcome == ClipGridOutcome::Ok);
   }
 
+
+  // BOTH OVER THE MAXIMUM AT ONCE, which used to corrupt the denominator.
+  //
+  // The two clamps were an if/ELSE-IF, so with both over only lpb was clamped and the untouched
+  // numerator was shifted into bits it does not own — carrying into the denominator exponent next
+  // door. Asking for lpb=40 num=40 den=4 stored a grid that unpacked as lpb=31 num=8 DEN=8. Rule
+  // (c) says a meter must never quietly become a different one, and this reached that outcome
+  // through rule (b) instead, so the denominator's own guard never saw it.
+  //
+  // Unreachable from a command — those validate first — but reachable from a PROJECT FILE, whose
+  // only guard is against zero.
+  {
+    const auto both = packClipGrid(40, 40, 4);
+    CHECK(both.outcome == ClipGridOutcome::ClampedBoth);
+    uint32_t l = 0, n = 0, d = 0;
+    CHECK(unpackClipGrid(both.bits, l, n, d));
+    CHECK(l == kUiClipGridLpbMax);
+    CHECK(n == kUiClipGridNumMax);
+    // THE ASSERTION THAT MATTERS: the denominator is the one thing that was never asked to
+    // change, and it must come back exactly as given.
+    CHECK(d == 4);
+  }
+
   if (g_fail == 0) std::printf("clip_grid: all assertions passed\n");
   return g_fail == 0 ? 0 : 1;
 }

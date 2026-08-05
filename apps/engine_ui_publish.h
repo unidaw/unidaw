@@ -45,16 +45,16 @@ struct UiPublishDeps {
   // Bumped whenever the mod graph changes, so a reader can tell a stale snapshot from a current
   // one without diffing it.
   std::atomic<uint32_t>& modVersion;
-  const std::function<daw::EventRingView(TrackRuntime&)>& getRingStd;
-  const std::function<daw::EventRingView()>& getRingUiOut;
+  std::function<daw::EventRingView(TrackRuntime&)> getRingStd;
+  std::function<daw::EventRingView()> getRingUiOut;
   // One version counter per kind of update, all read the same way: bump, then publish, so a reader
   // that sees a new number knows the payload behind it is already there.
   std::atomic<uint32_t>& routingVersion;
   std::atomic<uint32_t>& patcherGraphVersion;
   // THE ERROR EMITTERS ALSO JOURNAL. A refusal the UI can see and a refusal the journal records are
   // the same event, and a caller that gets one without the other has to guess which half happened.
-  const std::function<void(const char*, const char*, uint32_t, uint32_t,
-                           const std::string&)>& historyAppend;
+  std::function<void(const char*, const char*, uint32_t, uint32_t,
+                           const std::string&)> historyAppend;
 
   // THE DIFF PATH'S OWN THREE COUNTERS, added with sendUiDiff. A diff that does not fit the ring
   // is DROPPED, not blocked — the writer is on the command thread and must never wait on a UI that

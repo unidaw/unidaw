@@ -14,11 +14,11 @@ namespace daw::engine {
 
 void loadPatcherGraphsFromDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
                                    size_t deviceGraphCount) {
-  auto& patcherAssembledFromDevices = deps.patcherGraph.patcherAssembledFromDevices;
-  auto& patcherGraphState = deps.patcherGraph.patcherGraphState;
+  auto& patcherAssembledFromDevices = deps.engineState.patcherGraph.patcherAssembledFromDevices;
+  auto& patcherGraphState = deps.engineState.patcherGraph.patcherGraphState;
   auto& updatePatcherGraphSnapshot = deps.updatePatcherGraphSnapshot;
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
 
     if (deviceGraphCount >= 1) {
       daw::PatcherGraph pool;

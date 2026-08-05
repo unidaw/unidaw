@@ -18,9 +18,9 @@ void updatePatcherGraphSnapshot(PatcherGraphOwner& patcherGraph) {
 }
 
 bool reassemblePatcherFromDevices(PatcherAssembleDeps& deps) {
-  auto& patcherGraph = deps.patcherGraph;
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& patcherGraph = deps.engineState.patcherGraph;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
   auto& snapshotTracks = deps.snapshotTracks;
 
     daw::PatcherGraph pool;
@@ -73,7 +73,7 @@ bool reassemblePatcherFromDevices(PatcherAssembleDeps& deps) {
       patcherGraph.patcherGraphState.nextNodeId = base;
     }
     patcherGraph.patcherGraphState.version.fetch_add(1, std::memory_order_acq_rel);
-    updatePatcherGraphSnapshot(deps.patcherGraph);
+    updatePatcherGraphSnapshot(deps.engineState.patcherGraph);
     // Repoint each device at its output node in the new pool, so the RT DFS seeds from the right
     // node and the published patcherNodeId names a real pool node. Skipping this is invisible for
     // the FIRST contributing device (its block starts at offset 0, so authored == pooled) and

@@ -30,8 +30,8 @@ struct TrackpropsCommandDeps {
   TrackTable& trackTable;
   std::unique_ptr<TrackRuntime>& masterTrack;
   std::atomic<uint32_t>& quantizeVersion;
-  const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>& buildTrackSnapshot;
-  const std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&)>& rebuildFlatAndPublish;
+  std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)> buildTrackSnapshot;
+  std::function<std::shared_ptr<const ClipSnapshot>(TrackRuntime&)> rebuildFlatAndPublish;
 };
 
 void handleSetTrackMixer(TrackpropsCommandDeps& deps,

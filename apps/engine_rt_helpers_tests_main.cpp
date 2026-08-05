@@ -993,9 +993,114 @@ void testVisualPlayheadSample() {
   CHECK(shallow.visualPlayheadSample(7) == 7);
 }
 
+
+// ---------------------------------------------- the gate that froze the whole engine
+// A host stores 0 into completedBlockId every time it attaches its shared memory, and a chain
+// reconcile or a UI reattach does that to a LIVE host mid-session. `active` is a latch, so the
+// track stayed in the minimum with completed == 0 while nextBlockId was deep into the session:
+// inFlight was permanently >= numBlocks, the producer slept 1ms forever, and THE TRANSPORT
+// STOPPED FOR EVERY TRACK. Measured on the live stack — playhead frozen 34s at one tick while
+// ui_version kept climbing, 2477 of 2503 producer samples parked at that gate.
+void testCompletedMinimum() {
+  // THE DEADLOCK, stated as the assertion that would have caught it. One healthy host deep into
+  // the session, one that has just re-attached and reports 0. The minimum must be the healthy
+  // one's — NOT zero, which would gate the producer against a host that has finished nothing.
+  {
+    const auto m = completedMinimum({{true, 500000}, {true, 0}}, 500003);
+    CHECK(m.anyContributing);
+    CHECK(m.minCompleted == 500000);
+  }
+  // The ordinary case is unchanged: the slowest producing host sets the pace.
+  {
+    const auto m = completedMinimum({{true, 900}, {true, 880}, {true, 1000}}, 902);
+    CHECK(m.anyContributing);
+    CHECK(m.minCompleted == 880);
+  }
+  // An inactive track is ignored, as it always was.
+  {
+    const auto m = completedMinimum({{false, 5}, {true, 700}}, 702);
+    CHECK(m.anyContributing);
+    CHECK(m.minCompleted == 700);
+  }
+  // NOTHING PRODUCING IS NOT THE SAME AS EVERYONE BEING BEHIND. An all-sampler project has no
+  // hosts at all; gating it on a minimum of zero would mean it never played. The fallback keeps
+  // the producer exactly one block ahead of itself.
+  {
+    const auto m = completedMinimum({}, 4242);
+    CHECK(!m.anyContributing);
+    CHECK(m.minCompleted == 4241);
+  }
+  {
+    const auto m = completedMinimum({{true, 0}, {false, 0}}, 4242);
+    CHECK(!m.anyContributing);   // a re-attached host alone does not count as producing
+    CHECK(m.minCompleted == 4241);
+  }
+  // And block 0 must not underflow the fallback.
+  {
+    const auto m = completedMinimum({}, 0);
+    CHECK(m.minCompleted == 0);
+  }
+
+  // ==== THE SAME DEADLOCK BY THE OTHER DOOR: A STALE NON-ZERO ID ====
+  //
+  // THE MEASURED FROZEN STATE, stated as the assertion that would have caught it. Six hosted
+  // plugins; one was skipped for dispatch while its controllerMutex was held for a VST load, so
+  // it sits at 49 having been SENT nothing since 49, while the other five were dispatched 53 and
+  // finished 53. The old rule took the minimum over all of them — 49 — so inFlight was 54-49=5,
+  // past a numBlocks of 3, and the producer stopped dispatching to ANYONE. Nothing could ever
+  // move again: host 0 was waiting for blocks 50-53 that the closed gate is what prevents being
+  // sent. The real log line was
+  //   next=54 minCompleted=49 playback=1638 hosts=[0:49,1:53,2:53,3:53,4:53,5:53]
+  // with the audio callback 1732 blocks along and twenty seconds of digital silence captured.
+  {
+    const auto m = completedMinimum({{true, 49, 49},    // skipped for dispatch: owes nothing
+                                     {true, 53, 53},
+                                     {true, 53, 53},
+                                     {true, 53, 53},
+                                     {true, 53, 53},
+                                     {true, 53, 53}}, 54);
+    // Every host has finished everything it was given, so none of them may hold the gate shut.
+    CHECK(m.minCompleted == 53);          // the fallback: one behind nextBlockId
+    CHECK(54u - m.minCompleted == 1u);    // inFlight of 1 — the producer is free to continue
+    // AND THEY STILL COUNT AS PRODUCING. This assertion is here because getting it wrong was a
+    // far worse bug than the one being fixed: anyContributing false becomes throttleInactive in
+    // the caller, which makes produceBlock sleep a whole block EVERY iteration. A first version
+    // of this fix excluded owes-nothing hosts from this flag too, and `panic` went from "the
+    // producer had no block ready for 509 of 1469 callbacks" to 1463 of 1468 — near-total
+    // silence, in ordinary steady state, on every fixture with a host in it.
+    CHECK(m.anyContributing);
+  }
+  // BACK-PRESSURE IS NOT WEAKENED, which is the other half of the claim. A host that is genuinely
+  // SLOW still owes the blocks it was handed, and must still throttle the producer exactly as
+  // before: dispatched 53, finished only 50.
+  {
+    const auto m = completedMinimum({{true, 50, 53}, {true, 53, 53}}, 54);
+    CHECK(m.anyContributing);
+    CHECK(m.minCompleted == 50);
+    CHECK(54u - m.minCompleted == 4u);    // inFlight of 4 — past numBlocks 3, so it waits
+  }
+  // A MIXTURE: one slow host and one that was skipped. Only the slow one counts, and it sets the
+  // pace on its own — the skipped one must not drag the minimum below it.
+  {
+    const auto m = completedMinimum({{true, 49, 49}, {true, 51, 53}}, 54);
+    CHECK(m.anyContributing);
+    CHECK(m.minCompleted == 51);
+  }
+  // ABSENT IS NOT ZERO. A caller that does not fill lastDispatchedBlockId in gets the OLD rule,
+  // because the alternative — treating "no information" as "dispatched block 0" — excludes every
+  // host and silently removes back-pressure altogether. This is the two-field shape every case
+  // above uses, asserted deliberately rather than relied on by accident.
+  {
+    const auto m = completedMinimum({{true, 900}, {true, 880}}, 902);
+    CHECK(m.anyContributing);
+    CHECK(m.minCompleted == 880);
+  }
+}
+
 }  // namespace
 
 int main() {
+  testCompletedMinimum();
   testHarmonyAtOrDefault();
   testQuantizePitchFallback();
   testEnqueueMirrorReplaySkipsAuxChild();
