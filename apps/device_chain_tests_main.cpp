@@ -1,5 +1,8 @@
 #include <cassert>
+#include <filesystem>
 #include <iostream>
+#include <string>
+#include <system_error>
 
 #include "apps/device_chain.h"
 
@@ -264,6 +267,109 @@ int main() {
     if (!require(daw::addDevice(vstFirst, fx, daw::kDeviceIdAuto),
                  "an effect must still be accepted next to an instrument")) {
       return 1;
+    }
+  }
+
+  // WHICH PLUGIN A SAVED DEVICE LOADS — daw::resolveDeviceSlot.
+  //
+  // Four cases, because the rule has four outcomes and three of them used to be spelled out by
+  // hand in two different files that disagreed. The fourth is the one that cost a suite run: a
+  // slot that is ALREADY Direct is an intentional value, and overwriting it made seven audio
+  // checks render silence at once.
+  {
+    daw::PluginCache cache;
+    daw::PluginCacheEntry entry;
+    entry.path = "/nowhere/Installed.vst3";
+    entry.name = "Installed";
+    entry.vendor = "acme";
+    entry.pluginUid16 = "00112233445566778899aabbccddeeff";
+    cache.entries.push_back(entry);
+
+    auto vstNamed = [](const std::string& vendor, const std::string& name,
+                       const std::string& path, uint32_t slot) {
+      daw::Device d;
+      d.id = 1;
+      d.kind = daw::DeviceKind::VstInstrument;
+      d.hostSlotIndex = slot;
+      d.vstRef.vendor = vendor;
+      d.vstRef.name = name;
+      d.vstRef.path = path;
+      return d;
+    };
+
+    // 1. THE SCAN KNOWS IT -> its CURRENT index, whatever the file said. The file's 9 is an index
+    //    into another machine and must not survive.
+    {
+      daw::Device d = vstNamed("acme", "Installed", "/nowhere/Installed.vst3", 9);
+      const auto r = daw::resolveDeviceSlot(cache, d);
+      if (!require(r.match != daw::VstMatch::None, "an installed plugin must resolve") ||
+          !require(d.hostSlotIndex == 0,
+                   "a resolved device takes the cache's index, not the file's")) {
+        return 1;
+      }
+    }
+
+    // 2. THE SCAN DOES NOT, BUT THE PATH IS THERE -> Direct, which is the ONLY value that makes
+    //    the host read vstRef.path (apps/engine_chain_host.cpp). Leaving the file's index here is
+    //    what made a project naming Zebralette load Identity.
+    //
+    //    The path has to genuinely exist for the claim to mean anything, so the test makes one
+    //    rather than naming somewhere it hopes is there. A DIRECTORY, because a VST3 bundle is a
+    //    directory on macOS.
+    {
+      const auto dir = std::filesystem::temp_directory_path() /
+                       "daw_device_chain_slot_probe.vst3";
+      std::error_code ec;
+      std::filesystem::create_directories(dir, ec);
+      if (!require(std::filesystem::exists(dir),
+                   "the fixture must actually create the bundle it claims is on disk")) {
+        return 1;
+      }
+      daw::Device d = vstNamed("u-he", "Zebralette", dir.string(), 0);
+      const auto r = daw::resolveDeviceSlot(cache, d);
+      const bool ok =
+          require(r.match == daw::VstMatch::None, "an unscanned plugin must not resolve") &&
+          require(d.hostSlotIndex == daw::kHostSlotIndexDirect,
+                  "a path that exists must set Direct, or the host looks the slot up by index");
+      std::filesystem::remove_all(dir, ec);
+      if (!ok) {
+        return 1;
+      }
+    }
+
+    // 3. NEITHER -> Unresolved, so it loads NOTHING and stays visibly inert. Loading something
+    //    else is worse than loading nothing: every structural check still passes.
+    {
+      daw::Device d = vstNamed("u-he", "Zebralette", "/no/such/path/Missing.vst3", 3);
+      daw::resolveDeviceSlot(cache, d);
+      if (!require(d.hostSlotIndex == daw::kHostSlotIndexUnresolved,
+                   "a missing plugin must not keep the file's slot index")) {
+        return 1;
+      }
+    }
+
+    // 4. ...UNLESS THE SLOT WAS ALREADY DIRECT. Not a stale index — the engine's default plugin,
+    //    which every test fixture and the fake instrument rely on.
+    {
+      daw::Device d = vstNamed("", "identity", "", daw::kHostSlotIndexDirect);
+      daw::resolveDeviceSlot(cache, d);
+      if (!require(d.hostSlotIndex == daw::kHostSlotIndexDirect,
+                   "Direct is intentional and must survive a failed resolve")) {
+        return 1;
+      }
+    }
+
+    // A NON-VST DEVICE IS LEFT ALONE. Without this, a sampler's slot would be rewritten to
+    // Unresolved by a rule that has nothing to do with it.
+    {
+      daw::Device d;
+      d.id = 2;
+      d.kind = daw::DeviceKind::Sampler;
+      d.hostSlotIndex = 7;
+      daw::resolveDeviceSlot(cache, d);
+      if (!require(d.hostSlotIndex == 7, "a non-VST device's slot must not be touched")) {
+        return 1;
+      }
     }
   }
 

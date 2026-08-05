@@ -1,5 +1,8 @@
 #include "apps/device_chain.h"
 
+#include <filesystem>
+#include <system_error>
+
 namespace daw {
 
 TrackChain defaultTrackChain() {
@@ -192,6 +195,35 @@ Device makeVstInstrumentDevice(uint32_t hostSlotIndex) {
   instrument.capabilityMask = capabilityMaskForKind(DeviceKind::VstInstrument);
   instrument.hostSlotIndex = hostSlotIndex;
   return instrument;
+}
+
+VstResolution resolveDeviceSlot(const PluginCache& cache, Device& device) {
+  VstResolution resolution;
+  if (device.kind != DeviceKind::VstInstrument &&
+      device.kind != DeviceKind::VstEffect) {
+    return resolution;
+  }
+  if (device.vstRef.empty()) {
+    return resolution;
+  }
+  resolution = resolveVstRef(cache, device.vstRef.uid16, device.vstRef.path,
+                             device.vstRef.vendor, device.vstRef.name);
+  if (resolution.match != VstMatch::None) {
+    device.hostSlotIndex = static_cast<uint32_t>(resolution.index);
+    return resolution;
+  }
+  // exists() and not is_regular_file(): a VST3 bundle is a DIRECTORY on macOS, and the first
+  // draft of this rule tested for a file and therefore never fired on the platform it was
+  // written for.
+  std::error_code ec;
+  const bool onDisk = !device.vstRef.path.empty() &&
+                      std::filesystem::exists(device.vstRef.path, ec);
+  if (onDisk) {
+    device.hostSlotIndex = kHostSlotIndexDirect;
+  } else if (device.hostSlotIndex != kHostSlotIndexDirect) {
+    device.hostSlotIndex = kHostSlotIndexUnresolved;
+  }
+  return resolution;
 }
 
 }  // namespace daw

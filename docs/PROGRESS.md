@@ -11,10 +11,10 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: 8812b11
+- as-of-commit: da2a674
 - main-cpp-lines: 2277
 - main-function-lines: 2072
-- ctest-entries: 189
+- ctest-entries: 194
 - main-function-ceiling: 2072
 
 ## Why this file cannot quietly go stale
@@ -46,6 +46,57 @@ The reason it is built this way: every stale claim found in this repo was in a f
 *intended* to keep current. `tools/meter_bar_check.sh` carried "THE ANCHOR IS NOT FIXED" for months
 after it was fixed — stale in the direction that gets work done twice, by someone with no reason to
 suspect the first attempt exists.
+
+## 2026-08-05 — three protocols that were published, complete, and read by nobody
+
+A run of defects with one shape: the engine held up its end, the value travelled, and the reader
+never looked. None of them could be found by reading the producing side, because that side is
+correct in each case.
+
+**`daw-cli get clip` returned one page of a paginated protocol.** The clip window carries at most
+`kUiMaxClipNotes` notes; past that the engine stops early, reports where it stopped in
+`nextEventIndex` and withholds `kUiClipWindowFlagComplete`. It has honoured the cursor since the
+protocol was written. Every client sent cursor 0 and read one answer, so a dense clip came back
+truncated with exit code 0 and nothing on stderr — **indistinguishable at the call site from a clip
+that really is that short**, which is what makes it worth a loop rather than a warning. The fixture
+in `tools/clip_window_paging_check.sh` needs THREE pages, because a client that learned to fetch a
+second page and stop would pass a two-page one.
+
+**The sidecar's header offsets were 48 bytes stale, and the page was right the whole time.** The
+`lpb` block went 8 → 16 → 64 bytes; the trailing offset comments in `encode()`, its three
+checkpoint assertions, and the offset test's literals all still named the 16-wide numbers. So the
+encoder asserted that the song meter starts at 132 while writing it at 180: **any debug build of
+the sidecar panicked on its first frame**, and release was fine because `debug_assert` compiles
+out. Note the asymmetry that made it undetectable — `ui-web/src/wire.js` has to spell offsets out
+and the encoder just writes in order, so only the Rust side could be wrong and only the Rust side
+had no way to find out. The offsets are now `debug_assert_eq!` per field (free in release, and it
+catches two adjacent same-width fields swapped, which no total length can), and the test reads its
+numbers out of `wire.js` instead of keeping a second copy.
+
+**Nobody had built the Rust test binaries.** That is why the above survived: `WaveformSlotView`
+gained a field, one test's initialiser was not updated, and `cargo test -p daw-sidecar` stopped
+COMPILING — 75 tests absent from every run while `cargo build` stayed green. `check_registry_check`
+asks whether every `*_check.sh` is registered; it cannot ask whether a whole language's suite
+exists. `tools/rust_tests_check.sh` now runs `cargo test --workspace --no-run` in ctest, which is
+the assertion that would have caught it on the commit that introduced it.
+
+**A project naming a plugin by path loaded a different plugin.** A saved device carries a durable
+`vst_ref` and a `host_slot_index` — an index into the scan of the machine it was saved on. When the
+ref did not resolve but the path was on disk, the loader kept that index, and the host, which only
+consults `vst_ref.path` when the slot is the Direct sentinel, looked up someone else's number.
+Measured rather than argued: a device naming `Zebralette` logged `plugin_resolved
+match:"direct_path"` and then instantiated `Identity`. "Load it by path" is not something the
+loader can express by doing nothing.
+
+That rule had **three copies**. The master track's had only the cache-hit half — neither the
+on-disk case nor the unresolved one — sitting directly beneath a comment describing exactly the
+failure it permitted, on the one track everything else is summed into. All three now go through
+`daw::resolveDeviceSlot`, with the four outcomes unit-tested including *"the slot was already
+Direct, leave it"* — the case whose absence once made seven audio checks render silence.
+
+The through-line: **a published field with no reader is not a feature, and nothing in this repo
+was measuring readership.** Three of the four were found by following a value forwards from the
+code that writes it, and the fourth by running a test suite that had not been run.
 
 ## 2026-08-02/03 — engine refactor and the bugs it surfaced
 

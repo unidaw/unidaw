@@ -759,6 +759,10 @@ target_link_libraries(audio_io_tests PRIVATE platform_juce)
 add_executable(device_chain_tests
   apps/device_chain_tests_main.cpp
   apps/device_chain.cpp
+  # device_chain now owns resolveDeviceSlot, which is the one place that turns a saved vst_ref
+  # into a slot the host can act on — so it calls resolveVstRef and needs the cache with it.
+  # The other two device_chain_* test targets already compiled this.
+  apps/plugin_cache.cpp
 )
 
 target_include_directories(device_chain_tests PRIVATE
@@ -1169,6 +1173,15 @@ add_test(NAME rust_tests_check
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/rust_tests_check.sh
 )
 set_tests_properties(rust_tests_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 900)
+
+# A PLUGIN NAMED BY PATH LOADS FROM THAT PATH. When a project's vst_ref does not resolve against
+# the current scan but its path is on disk, the loader used to keep the file's host_slot_index —
+# an index into the machine the project was SAVED on — and the host then instantiated whatever sat
+# at that number. A project naming Zebralette inside the Zebra2 bundle loaded Identity.
+add_test(NAME plugin_path_load_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/plugin_path_load_check.sh
+)
+set_tests_properties(plugin_path_load_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # An AUDIO clip's in-point, gain and fades (opcode 95). Three layers have to move together and the
 # check asserts each one separately: the descriptor table (which was a load-time snapshot until

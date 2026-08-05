@@ -473,12 +473,13 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
           if (device.vstRef.empty()) {
             continue;
           }
-          const auto resolution = daw::resolveVstRef(
-              pluginCache, device.vstRef.uid16, device.vstRef.path,
-              device.vstRef.vendor, device.vstRef.name);
-          if (resolution.match != daw::VstMatch::None) {
-            device.hostSlotIndex = static_cast<uint32_t>(resolution.index);
-          }
+          // THE SAME RULE AS A TRACK'S — daw::resolveDeviceSlot. This loop used to carry only the
+          // cache-hit half of it, so when the ref did NOT resolve the device kept the file's
+          // host_slot_index and the host loaded whatever sat at that number: exactly the failure
+          // the comment above this block describes, on the one track whose output everything else
+          // passes through. It also had no on-disk case, so a master effect named by a path the
+          // scan has not seen could not load at all.
+          const auto resolution = daw::resolveDeviceSlot(pluginCache, device);
           DAW_EVENT("master.plugin_resolved")
               .field("device", device.id)
               .field("name", device.vstRef.name)

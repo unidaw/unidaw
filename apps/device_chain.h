@@ -7,6 +7,7 @@
 
 #include "apps/patcher_abi.h"
 #include "apps/patcher_graph.h"
+#include "apps/plugin_cache.h"
 #include "apps/sampler_state.h"
 
 namespace daw {
@@ -116,5 +117,35 @@ uint8_t capabilityMaskForKind(DeviceKind kind);
 // an instrument that does not declare ConsumesMidi still renders, still shows in the chain, and
 // silently receives no notes.
 Device makeVstInstrumentDevice(uint32_t hostSlotIndex);
+
+// POINT ONE DEVICE AT THE PLUGIN IT SHOULD LOAD, in place, and report what matched.
+//
+// A saved device carries two things: a DURABLE vst_ref (uid16, path, vendor, name) and the
+// host_slot_index it had when it was written — an index into the plugin scan OF THE MACHINE IT
+// WAS SAVED ON, which means nothing anywhere else. Turning the first into something the host can
+// act on is one rule, and it was written out THREE times:
+//
+//   * the per-track loader had all of it;
+//   * the MASTER track's loader had only the cache-hit half, so a master plugin that did not
+//     resolve kept the file's index and loaded whatever sat there — directly beneath a comment
+//     describing that exact failure;
+//   * the host reads the result, and only consults vst_ref.path when the slot is Direct.
+//
+// That third fact is why "load it by path" cannot be expressed by leaving the slot alone, and why
+// the on-disk case must SET the sentinel rather than skip the assignment. A project naming
+// Zebralette inside the Zebra2 bundle resolved correctly and then instantiated Identity, because
+// the loader's on-disk exemption did nothing where it needed to do something.
+//
+// The order is strongest identity first, and each step answers a different question:
+//   1. the scan knows this plugin  -> its current index, whatever the file said
+//   2. the scan does not, but the PATH IS THERE -> Direct, which is what makes the host load the
+//      path. A plugin loaded by path need not appear in a scan at all
+//   3. neither -> Unresolved, so it loads NOTHING and stays visibly inert...
+//   4. ...unless the slot was ALREADY Direct, which is an intentional value (the engine's default
+//      plugin) and not a stale index. Overwriting it once made seven audio checks render silence,
+//      because every test fixture and the fake instrument rely on it.
+//
+// A non-VST device, or one with an empty ref, is left exactly as it is.
+VstResolution resolveDeviceSlot(const PluginCache& cache, Device& device);
 
 }  // namespace daw

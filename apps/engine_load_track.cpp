@@ -87,44 +87,13 @@ void loadTrackFromDocument(LoadProjectDeps& deps,
         // loaded by an unstable index.
         daw::TrackChain loadedChain = source.chain;
         for (auto& device : loadedChain.devices) {
-          if (device.kind != daw::DeviceKind::VstInstrument &&
-              device.kind != daw::DeviceKind::VstEffect) {
-            continue;
-          }
-          if (device.vstRef.empty()) {
-            continue;
-          }
-          const auto resolution = daw::resolveVstRef(
-              pluginCache, device.vstRef.uid16, device.vstRef.path,
-              device.vstRef.vendor, device.vstRef.name);
-          if (resolution.match != daw::VstMatch::None) {
-            device.hostSlotIndex = static_cast<uint32_t>(resolution.index);
-          } else {
-            // A NAMED PLUGIN THAT IS NOT HERE LOADS NOTHING. The file's own host_slot_index is an
-            // index into the machine it was SAVED on, so using it when the ref fails to resolve
-            // loads whatever now sits at that number: rack.uniproj.json asks for Identity and got
-            // an Analog Heat. The device stays in the chain and stays inert, which is visible;
-            // project.plugin_missing above already says which one and why.
-            //
-            // TWO EXEMPTIONS, and the second one cost a suite run to find:
-            //
-            //   * the path is right there on disk — a plugin loaded by path need not appear in
-            //     the scan at all, which is the same exemption the report above makes.
-            //   * the slot is the DIRECT SENTINEL. Direct means "the engine's default plugin",
-            //     which is an intentional value, not a stale index into someone else's machine —
-            //     it is what every test fixture and the fake instrument use, with a name like
-            //     "identity" that resolves to nothing in the cache. Overwriting it made seven
-            //     audio checks render silence at once, which is how I know the first version of
-            //     this was too broad: my own negative control used a real slot index, so it
-            //     never exercised the case that actually mattered.
-            std::error_code pathEc;
-            const bool onDisk = !device.vstRef.path.empty() &&
-                                std::filesystem::exists(device.vstRef.path, pathEc);
-            const bool direct = device.hostSlotIndex == daw::kHostSlotIndexDirect;
-            if (!onDisk && !direct) {
-              device.hostSlotIndex = daw::kHostSlotIndexUnresolved;
-            }
-          }
+          // ONE RULE, IN ONE PLACE — daw::resolveDeviceSlot in apps/device_chain.h, which is where
+          // the long explanation of the four cases now lives. This loop and the MASTER track's
+          // loop were two hand-written copies of it that agreed on the cache-hit case and
+          // disagreed on every other one; the master's copy had neither the on-disk rule nor the
+          // unresolved rule, so a master plugin that did not resolve loaded whatever sat at the
+          // index the file happened to carry.
+          daw::resolveDeviceSlot(pluginCache, device);
         }
         runtime->track.chain = std::move(loadedChain);
         refreshSamplerForTrack(*runtime);
