@@ -166,6 +166,7 @@ add_library(engine_commands STATIC
   apps/engine_run_patcher_node.cpp
   apps/engine_emit_notes.cpp
   apps/engine_load_track.cpp
+  apps/engine_load_patcher_pool.cpp
   apps/engine_handle_ui_entry.cpp
   apps/engine_load_project.cpp
   apps/engine_bulk_edit.cpp
