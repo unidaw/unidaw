@@ -135,14 +135,21 @@ void runOfflinePump(OfflineRenderDeps& deps) {
     resetTimeline.store(true, std::memory_order_release);
     transport.playing.store(true, std::memory_order_release);
     offlineProducerArmed.store(true, std::memory_order_release);
-    // Now that production is running, wait for a track to be genuinely PRODUCING before the
-    // first block is mixed — otherwise block 1 is mixed while every track is still inactive,
-    // which writes one block of silence at the head of every render.
+    // Now that production is running, wait for EVERY unmuted track to be genuinely PRODUCING
+    // before the first block is mixed. ANY is not enough and that was task #16: a project whose
+    // track 0 needs no plugin and whose track 1 hosts an instrument satisfied "any ready track"
+    // the moment track 0 came up, so block 1 was produced while track 1's host was still
+    // launching. Its note at tick 0 reached no instrument and reappeared one whole loop later —
+    // which is why the symptom reads as "nothing sounded on the note side at the head".
+    //
+    // Offline has no deadline to miss, so waiting for all of them costs nothing but the launch
+    // time that was going to be spent anyway.
+    uint32_t lateTrack = 0;
     if (haveSomethingToRender &&
-        !audioCallback->awaitAnyReadyTrack(15000, /*requireActive=*/true)) {
-      daw::LogLine() << "Offline render abandoned: production never started (no track became active "
-                   "within 15s of the transport starting)" << std::endl;
-      DAW_EVENT("render.production_never_started");
+        !audioCallback->awaitAllReadyTracks(15000, /*requireActive=*/true, &lateTrack)) {
+      daw::LogLine() << "Offline render abandoned: track " << lateTrack
+                   << " was still not producing 15s after the transport started" << std::endl;
+      DAW_EVENT("render.production_never_started").field("late_track", lateTrack);
       renderFailed = true;
       haveSomethingToRender = false;
     }

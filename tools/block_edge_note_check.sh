@@ -22,11 +22,25 @@
 # the two readings task #16 could not separate ("the head note was dropped" versus "the note stream
 # is one loop late") are the SAME event seen from either end, and this is it.
 #
-# WHY IT SURVIVED. It bites only for ticks in the last ~0.09% of a block window (21 of 22291), and
-# WHICH ticks depends on the buffer size — so it needs a note written to an unquantised position to
-# show at all, and no fixture had one. Everything in the suite puts notes on beats, where tickDelta
-# is 0 and the rounding is exact. That is why the boundary needed a fixture of its own rather than
-# more runs of an existing one.
+# THE RATE IS EXACTLY 0.5/blockSize, and it is worth stating because it is not small where it
+# matters. The drop band is half a sample wide in ticks (0.5/samplesPerTick) and a block spans
+# blockSize/samplesPerTick ticks, so samplesPerTick cancels: the probability that any given event
+# lands in it depends on the BUFFER SIZE ALONE — not on tempo and not on sample rate. Measured
+# across 90/120/174 bpm and 44.1/48 kHz, every combination agrees with the formula:
+#
+#     block 1024 -> 0.049%      block  256 -> 0.195%
+#     block  512 -> 0.098%      block   64 -> 0.781%
+#
+# At 64 frames that is roughly one note in 128 displaced by a whole loop, which is not a curiosity
+# for someone tracking at low latency. THAT is why this check renders at two buffer sizes: the
+# small one is where a user would actually meet it, and it is eight times likelier to catch a
+# regression than the large one.
+#
+# WHY IT SURVIVED. It needs a note at an UNQUANTISED position to show at all, and no fixture had
+# one — everything in the suite puts notes on beats, where tickDelta is 0 and the conversion is
+# exact. That is why it needed a fixture of its own rather than more runs of an existing one, and
+# it is the answer to "why did repeated runs under load never reproduce it": no run of those
+# fixtures ever could.
 #
 # Needs the engine built. Renders offline: no device, no wall clock, byte-deterministic.
 #   tools/block_edge_note_check.sh
@@ -55,9 +69,9 @@ fail() { echo "  FAIL: $*"; exit 1; }
 # THE TICK IS COMPUTED, NOT COPIED. If the block size or the tempo in this file ever change, a
 # hard-coded 22275 would quietly stop being a boundary tick and the check would pass by testing an
 # ordinary position — green, and measuring nothing.
-BLOCK=512
 SR=44100
 BPM=120
+for BLOCK in 512 64; do
 EDGE="$(python3 - "$Q" "$BPM" "$SR" "$BLOCK" <<'PY'
 import sys
 Q, bpm, sr, block = int(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3]), int(sys.argv[4])
@@ -171,4 +185,8 @@ if [ "${ONSET:-999999}" -gt "$LIMIT" ]; then
         boundary — which is why the two are separate questions."
 fi
 
-echo "block_edge_note_check: PASS — a note on a boundary tick sounds at sample $ONSET, not a loop late"
+  echo "  block $BLOCK: onset $ONSET, within $LIMIT — not a loop late"
+done
+
+echo "block_edge_note_check: PASS — a boundary note sounds where it is written at 512 and at 64," \
+     "where the defect is eight times likelier (the rate is 0.5/blockSize)"

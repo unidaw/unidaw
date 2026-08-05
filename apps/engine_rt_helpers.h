@@ -215,6 +215,11 @@ daw::SamplerEvent samplerNoteOnFor(uint32_t offsetInBlock, uint8_t pitch, uint8_
 // Deciding on floor() keeps genuinely-later events rejected — clamping those would bunch every
 // future event onto the boundary — while an in-window overshoot lands on the block's last sample.
 // See the tests: both halves are pinned, because reinstating either failure is a one-line edit.
+//
+// THE RATE IS 0.5/blockSize, INDEPENDENT OF TEMPO AND SAMPLE RATE. The band is half a sample wide
+// in ticks and a block spans blockSize/samplesPerTick ticks, so samplesPerTick cancels — 0.049% at
+// 1024 frames, 0.781% at 64. Roughly one note in 128 at a tracking buffer size, each displaced by
+// a whole loop pass rather than by a sample. tools/block_edge_note_check.sh renders at both.
 struct BlockPlacement {
   uint64_t sampleTime;      // absolute, for the event entry
   uint32_t offsetInBlock;   // relative, for the sampler tee

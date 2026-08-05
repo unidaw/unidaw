@@ -772,6 +772,66 @@ public:
     }
   }
 
+  // OFFLINE ONLY. EVERY unmuted track's host must be up before the first block is produced.
+  //
+  // awaitAnyReadyTrack answers "is the pipeline alive at all", which is the right question for
+  // deciding whether there is anything to render — and the WRONG one for deciding when to start.
+  // It returns on the FIRST ready track, so a project whose track 0 needs no plugin and whose
+  // track 1 hosts an instrument starts rendering as soon as track 0 is up. Block 1 is then
+  // produced while track 1's host is still launching, the note at tick 0 never reaches an
+  // instrument, and it reappears a whole loop later. That is task #16, and it is timing-dependent
+  // purely because a host launch is a socket, a Hello and a plugin load.
+  //
+  // THE FUNCTION ABOVE ALREADY FOUND THIS ONE CASE OVER. Its own comment describes "one muted
+  // track already up and an unmuted one still launching" satisfying "any ready track" and the
+  // render starting — "writing silence over the head of the track it should have waited for". The
+  // fix there was to stop muted tracks from answering for unmuted ones. This is the same hazard
+  // between two UNMUTED tracks, where one is simply slower to come up.
+  //
+  // WAITING IS FREE HERE and dropping is not, which is the argument awaitNextBlock makes below in
+  // as many words: offline, the deadline belongs to nobody. The wait is still BOUNDED and names
+  // the track that was late, so a wedged host fails the render loudly rather than hanging it.
+  bool awaitAllReadyTracks(uint32_t timeoutMs, bool requireActive, uint32_t* lateTrackOut) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    for (;;) {
+      std::vector<TrackInfo>* tracks = acquireTracks();
+      bool allReady = true;
+      uint32_t late = 0;
+      if (tracks) {
+        for (const auto& track : *tracks) {
+          // A MUTED TRACK IS NOT WAITED FOR. It contributes nothing to the mix, and an all-muted
+          // project is a legitimate render of silence — the same reasoning the any-variant spells
+          // out, and the reason waiting on one could deadlock a render that is correct.
+          if (track.mute && track.mute->load(std::memory_order_relaxed)) {
+            continue;
+          }
+          if (track.hostReady && !track.hostReady->load(std::memory_order_acquire)) {
+            allReady = false;
+            late = track.trackId;
+            break;
+          }
+          if (requireActive && track.active &&
+              !track.active->load(std::memory_order_acquire)) {
+            allReady = false;
+            late = track.trackId;
+            break;
+          }
+        }
+      }
+      if (allReady) {
+        return true;
+      }
+      if (std::chrono::steady_clock::now() >= deadline) {
+        if (lateTrackOut) {
+          *lateTrackOut = late;
+        }
+        return false;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+  }
+
   // OFFLINE ONLY. Block until every track that will contribute to the next block has
   // rendered it, so the following process() cannot starve. Returns true when ready; on
   // timeout returns false and reports which track was behind and by how much.
