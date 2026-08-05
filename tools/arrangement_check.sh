@@ -126,13 +126,34 @@ try:
     d = json.load(sys.stdin)
 except Exception:
     raise SystemExit(1)
-raise SystemExit(0 if d.get("markers") else 1)'
+raise SystemExit(0 if len(d.get("markers") or []) >= 3 else 1)'
 }
 wait_until 20 arr_ready || true
 
 # Read the published arrangement through python rather than grepping it: a grep that matches the
 # wrong line is how a check passes with the bug present.
 arr() { cli get arrangement 2>/dev/null; }
+# WAIT FOR A PUBLISHED FIELD TO REACH ITS EXPECTED VALUE, THEN ASSERT ON IT UNCHANGED.
+#
+# EVERY ASSERTION BELOW READS PUBLISHED STATE, and the fixed sleeps this replaces were covering TWO
+# waits at once: the command thread acting, and the consumer publishing on its own later tick.
+# after_command — which waits for the journal — is the WRONG primitive here for exactly that
+# reason, and converting these sites to it moved the race instead of removing it: twice, and both
+# times only under ctest's parallel load while passing standalone.
+#
+# The wait is the assertion's own value, so a wrong expectation cannot be papered over: it times out
+# and the assertion below still fails with its own message. `|| true` on every call is deliberate —
+# this removes the race, it does not replace the check.
+wait_field() {  # wait_field <secs> <field-expr> <want>
+  local secs="$1" expr="$2" want="$3" i=0
+  while [ "$i" -lt $((secs * 4)) ]; do
+    [ "$(arr | field "$expr")" = "$want" ] && return 0
+    sleep 0.25
+    i=$((i + 1))
+  done
+  return 1
+}
+
 field() {  # field <jq-ish path expr>, JSON on stdin
   python3 -c "
 import json, sys
@@ -159,11 +180,12 @@ echo "  resolved: bars are published, one-based, prefix-summed ($BARS)"
 
 # ---- AUTHORABLE MID-SONG METER, which is the capability the spine never had. 7/8 from bar 5.
 cli do time-sig --sig 7/8 --nanotick $((4 * BAR)) >/dev/null 2>&1 || true
-sleep 1.2
+METER_EXPR='",".join("%d:%s/%s" % (p["nanotick"], *p["sig"].split("/")) for p in d["time_sig"])'
+wait_field 20 "$METER_EXPR" "0:4/4,$((4 * BAR)):7/8" || true
 grep -q '"event":"time_sig.set"' "$TMP/eng.log" || \
   fail "SetTimeSignature did not apply. A Section's meter was reachable from no command at all,
         so this is the whole point of the replacement: $(grep -o '"event":"time_sig[a-z._]*"[^}]*' "$TMP/eng.log" | tail -1)"
-METER="$(arr | field '",".join("%d:%s/%s" % (p["nanotick"], *p["sig"].split("/")) for p in d["time_sig"])')"
+METER="$(arr | field "$METER_EXPR")"
 [ "$METER" = "0:4/4,$((4 * BAR)):7/8" ] || \
   fail "the meter map reads [$METER], expected 0:4/4,$((4 * BAR)):7/8"
 echo "  authorable: a mid-song 7/8 was set by command and published"
@@ -178,8 +200,9 @@ echo "  authorable: a mid-song 7/8 was set by command and published"
 # fixture would not discriminate. Ask for a tick that DOES: 4*BAR + 2 * 3360000 is bar 7 under
 # the real map and bar 6 under the naive one.
 cli do marker add --nanotick $((4 * BAR + 2 * 3360000)) --name probe >/dev/null 2>&1 || true
-sleep 1.2
-PROBE="$(arr | field 'next(str(m["bar"]) for m in d["markers"] if m["name"] == "probe")')"
+PROBE_EXPR='next(str(m["bar"]) for m in d["markers"] if m["name"] == "probe")'
+wait_field 20 "$PROBE_EXPR" 7 || true
+PROBE="$(arr | field "$PROBE_EXPR")"
 [ "$PROBE" = "7" ] || \
   fail "a marker two 7/8 bars past the meter change published bar $PROBE, expected 7. Bar 6 means
         the bar number is tick / barLength at ONE signature — the prefix sum across the change is
@@ -190,7 +213,12 @@ echo "  follows the meter: a marker two 7/8 bars past the change is bar 7, not 6
 # ---- AN INVALID SIGNATURE IS REFUSED, not clamped. Silently turning 4/5 into 4/4 puts the ruler
 # somewhere the caller never asked for.
 cli do time-sig --sig 4/5 --nanotick $((8 * BAR)) >/dev/null 2>&1 || true
-sleep 1.1
+# A REFUSAL PUBLISHES NOTHING, so there is no published value to wait for — waiting for "the map
+# still has two points" would be waiting for something that was already true before the command was
+# even read. The log line is the only evidence the engine has considered it, which is why this one
+# site waits on the log and the others do not.
+rejected() { grep -q '"event":"time_sig.rejected"' "$TMP/eng.log"; }
+wait_until 20 rejected || true
 grep '"event":"time_sig.rejected"' "$TMP/eng.log" | grep -q '"reason":"invalid_signature"' || \
   fail "4/5 was accepted. A denominator must be a power of two; clamping a typo to 4/4 would put
         the ruler somewhere nobody asked for"
@@ -202,7 +230,8 @@ echo "  refuses: 4/5 is refused by name and changes nothing"
 # change, so the change and every later marker must move, and 'intro' at tick 0 must not.
 BEFORE_M="$(arr | field '",".join("%s@%d" % (m["name"], m["nanotick"]) for m in d["markers"])')"
 cli do time insert --nanotick $((2 * BAR)) --bars 2 >/dev/null 2>&1 || true
-sleep 1.4
+VERSE_EXPR='next(str(m["nanotick"]) for m in d["markers"] if m["name"] == "verse")'
+wait_field 20 "$VERSE_EXPR" "$((6 * BAR))" || true
 grep -q '"event":"time.edited"' "$TMP/eng.log" || \
   fail "the time edit was not applied: $(grep -o '"event":"time[a-z._]*"[^}]*' "$TMP/eng.log" | tail -1)"
 grep '"event":"time.edited"' "$TMP/eng.log" | tail -1 | grep -q '"meter_points_moved":1' || \
@@ -212,7 +241,7 @@ AFTER_M="$(arr | field '",".join("%s@%d" % (m["name"], m["nanotick"]) for m in d
 [ "$AFTER_M" != "$BEFORE_M" ] || fail "the time edit moved no markers at all"
 INTRO="$(arr | field 'next(str(m["nanotick"]) for m in d["markers"] if m["name"] == "intro")')"
 [ "$INTRO" = "0" ] || fail "'intro' is before the edit point and must not have moved (at $INTRO)"
-VERSE="$(arr | field 'next(str(m["nanotick"]) for m in d["markers"] if m["name"] == "verse")')"
+VERSE="$(arr | field "$VERSE_EXPR")"
 [ "$VERSE" = "$((6 * BAR))" ] || \
   fail "'verse' was at 4 bars; inserting 2 bars before it should put it at 6 bars
         ($((6 * BAR))), got $VERSE"
@@ -232,8 +261,10 @@ echo "  on the grid: the meter change is still bar-aligned, and still with its m
 # ---- IT SURVIVES A SAVE AND A RELOAD IN A FRESH ENGINE. The meter map is authoritative now, so
 # the save writes it as it is — it used to be derived from the spine, which destroyed a real
 # multi-point map on any project that had one.
-cli do save arout --force >/dev/null 2>&1 || true
-sleep 1.8
+# THE SAVE IS THE ONE COMMAND WHOSE RESULT IS A FILE, so the journal is exactly right here: it says
+# the command thread is done, and the file is written on that thread. The engine is killed on the
+# next line, and a save that had not finished would leave a truncated project for the reload below.
+after_command "$TMP" cli do save arout --force || true
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 
 SHM2="/archk2_$$"
