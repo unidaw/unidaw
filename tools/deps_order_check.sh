@@ -77,6 +77,22 @@ def struct_members(text, name):
     return out
 
 def split_top_level(s):
+    # ARROWS AND COMPARISONS ARE NOT BRACKETS. The depth walk below treats '>' as a closer, so a
+    # lambda written with a trailing return type — `[](uint64_t) -> std::optional<X> { ... }` —
+    # drove depth NEGATIVE on its '->' and then stopped splitting at the commas that followed,
+    # silently merging arguments into one. The check reported "built with 14 arguments but
+    # declares 18" against a call site that was completely correct.
+    #
+    # That is the worst failure mode a ratchet can have: a false FAIL on legal code teaches the
+    # next person to distrust it. Blanked here rather than parsed, because none of these can
+    # legally nest anything: '->', '<=', '>=' and '<<'.
+    #
+    # '>>' IS DELIBERATELY NOT IN THAT LIST. In C++ it is overwhelmingly the close of a nested
+    # template — vector<vector<int>> — where the walk below is already right to count it as TWO
+    # closers. Blanking it to catch the rarer right-shift would break the common case, which is
+    # the trade the original code got right.
+    for op in ('->', '<=', '>=', '<<'):
+        s = s.replace(op, '@@')
     out, cur, depth = [], '', 0
     for ch in s:
         if ch in '<({[':

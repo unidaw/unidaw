@@ -162,6 +162,7 @@ add_library(engine_commands STATIC
   apps/engine_pure.cpp
   apps/engine_rt_helpers.cpp
   apps/engine_render_track.cpp
+  apps/engine_resolve_events.cpp
   apps/engine_handle_ui_entry.cpp
   apps/engine_load_project.cpp
   apps/engine_bulk_edit.cpp
@@ -709,6 +710,21 @@ target_include_directories(engine_rt_helpers_tests PRIVATE
   ${Boost_INCLUDE_DIRS}
 )
 target_link_libraries(engine_rt_helpers_tests PRIVATE engine_commands)
+
+# The first unit tests for a piece of the RENDER path. See the file header: this is what a rule
+# extracted out of renderTrack costs to ask, and it is a vector rather than a rendered project.
+add_executable(engine_resolve_events_tests
+  apps/engine_resolve_events_tests_main.cpp
+)
+target_include_directories(engine_resolve_events_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(engine_resolve_events_tests PRIVATE engine_commands)
+
+add_test(NAME engine_resolve_events COMMAND engine_resolve_events_tests)
+set_tests_properties(engine_resolve_events PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
 
 # Header-only tests for the per-clip grid packed into UiClipExtent.flags.
 add_executable(clip_grid_tests
