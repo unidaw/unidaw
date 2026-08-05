@@ -5,7 +5,7 @@ this machine. Each rule carries the number that justifies it, so a future change
 can argue with the evidence rather than with the rule.
 
 Measurements were taken in real Chrome with a real window on a 59.997 Hz display,
-against Jaakko's own profile with extensions live, at 3008×1580 DPR 2.
+against a real browser profile with extensions live, at 3008×1580 DPR 2.
 
 ---
 

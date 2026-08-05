@@ -9,7 +9,7 @@
  * project that has an instrument, press play, press stop — and then reads the
  * engine's captured master output and looks at the envelope.
  *
- * It exists because of a real afternoon: Jaakko reported notes he could hear and
+ * It exists because of a real afternoon: notes were reported as audible and
  * could not see, and I twice concluded from reasoning that nothing was wrong.
  * What settled it was a capture. Reasoning about a signal path is not evidence
  * about a signal; the waveform is.
@@ -295,7 +295,7 @@ if (!existsSync(WAV)) {
    *
    * The transport ran for six of roughly twenty-six seconds. If nearly the whole
    * capture is above the floor then the song never stopped sounding — which is
-   * exactly the shape of the note-off bug Jaakko heard: a 0.125s note that rings
+   * exactly the shape of the note-off bug that was heard: a 0.125s note that rings
    * for seven seconds does not fail an "is there sound" check, it fails a
    * "does the sound END" check.
    */
@@ -336,7 +336,7 @@ if (!existsSync(WAV)) {
    * The transport was stopped six seconds before the capture ends, and a release
    * tail is over long before that. So the last stretch of the file must be quiet,
    * and if it is not, notes are still sounding with nothing playing them — which
-   * is precisely what Jaakko heard and reported as phantom notes.
+   * is precisely what was heard and reported as phantom notes.
    *
    * This is BLOCKED, not failed: the cause is in the engine, not here. One
    * 0.125-second note produces seven seconds of sound and changing its duration

@@ -3,7 +3,7 @@
  *
  * THE BUG THIS EXISTS FOR is not a crash. Two placements of one clip drew as two rails with the
  * same name, which is indistinguishable from two different clips that happen to share a name —
- * so an edit inside one silently changed the others, and nothing anywhere said it would. Jaakko
+ * so an edit inside one silently changed the others, and nothing anywhere said it would. It
  * asked how a person is supposed to know; the answer was that they could not.
  *
  * SO THE FIRST CHECK IS THAT THE DANGER IS REAL, before any check that the app reports it. A

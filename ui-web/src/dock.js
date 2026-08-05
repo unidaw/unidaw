@@ -597,7 +597,7 @@ export function createCommands(api) {
     /*
      * THE BANK'S OWN SETTINGS — the per-kit defaults, not a slot's.
      *
-     * `bank <track> <device> default-gate 1` is Jaakko's "ignore note-offs" as a per-bank
+     * `bank <track> <device> default-gate 1` is the requested "ignore note-offs" as a per-bank
      * setting: it SEEDS every slot `load-sample` and `slice` mint from then on, and leaves the
      * slots already there alone. A chop made after it respects note-off without anything
      * consulting a second fact on every note.
@@ -624,7 +624,7 @@ export function createCommands(api) {
      * Twenty-seven settings the engine has always had and no surface could reach — gate, loop
      * mode, reverse, tuning, key and velocity ranges, trim points. The one that prompted this is
      * `gate`: 0 is a one-shot that IGNORES note-off, so a sampled note plays its whole extent
-     * however short it is written, and Jaakko's ruling is that a note-off has to be able to cut
+     * however short it is written, and the ruling is that a note-off has to be able to cut
      * it. `slot <track> <device> <slot> gate 1` makes THAT slot respect note-off, one slot at a
      * time — this line used to say `0` and "every slot on the sampler", which is not a thing the
      * engine does; `bank <track> <device> default-gate 1` is the kit-wide half, and it seeds new
@@ -1390,7 +1390,7 @@ export class Dock {
     /**
      * A header, so the pane says what it is.
      *
-     * Jaakko, looking at the right-hand side: "is that supposed to be the agent
+     * Owner feedback, looking at the right-hand side: "is that supposed to be the agent
      * pane?" It was, and nothing on it said so — a console with an unlabelled
      * log and a bare `>` is indistinguishable from a status readout until you
      * type into it. The design names this pane; the build had not.

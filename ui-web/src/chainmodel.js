@@ -1031,7 +1031,7 @@ export function buildChainModel(opts, buf) {
       /**
        * SAY WHEN A DEVICE IS MAKING ITS OWN NOTES.
        *
-       * Jaakko spent an evening hearing notes that were not in his clip, and I
+       * An evening went into hearing notes that were not in the clip, and I
        * spent it blaming note-off and then MIDI routing. They were a euclidean
        * generator and a random_degree node in this device's patcher graph,
        * playing alongside the sequencer. Everything was working; nothing said it

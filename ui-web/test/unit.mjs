@@ -63,7 +63,7 @@ test('zoom 0 can represent every lane grid the domain allows', () => {
 });
 
 test('the piano keymap is two octaves and has no note on `a`', () => {
-  // Jaakko's spec, verbatim: "z=C-3 while q=C-4, b=G-3, u=B-4, i=C-5, m=B-3",
+  // The spec, verbatim: "z=C-3 while q=C-4, b=G-3, u=B-4, i=C-5, m=B-3",
   // all at octave 4. The lower row is an octave below the upper one.
   assert.equal(pitchToToken(pitchOf('z', 4)), 'C-3');
   assert.equal(pitchToToken(pitchOf('q', 4)), 'C-4');
@@ -1233,7 +1233,7 @@ test('every icon the app names exists in the bundled set', () => {
   // A misnamed icon class is not an error anywhere: the <i> renders, the button
   // has a real bounding box and reports a real rect to a probe, and nothing is
   // drawn inside it. That is exactly how the device-chain Open button shipped
-  // invisible — I probed it, got a rect back, and told Jaakko it was there.
+  // invisible — I probed it, got a rect back, and reported it was there.
   // I then reached for `ph-rows-minus`, which does not exist either.
   //
   // The set is a vendored CSS file, so this is a cheap, total check.
@@ -2697,7 +2697,7 @@ const ENGINE_UNUSED = {
    * reason it stopped being deferrable is `gate`: field 2, 0 = a one-shot that IGNORES note-off.
    * The engine has had both settings since the sampler shipped and no surface could reach
    * either, so a sampled note played its whole extent however short it was written — and
-   * Jaakko's ruling is that a note-off has to be able to cut it.
+   * The ruling is that a note-off has to be able to cut it.
    */
   SamplerMarker: 'gap — with SamplerSlice',
   /*
@@ -2994,7 +2994,7 @@ test('the canonical text form round-trips what the engine published', () => {
    */
   assert.equal(opsText({ soundOffset: 32768, retrigger: 3, sound: 5 }), 'ret3 s5 o128');
   /*
-   * `s9` AND `s09` ARE THE SAME THING — Jaakko's ruling, and the half that matters.
+   * `s9` AND `s09` ARE THE SAME THING — the ruling, and the half that matters.
    *
    * The written form went padded and then back again (SAMPLER_DESIGN section 8 Q1 argued for
    * `s07` to keep a fixed-width column's vertical rhythm; that lost to "the canonical form should

@@ -91,7 +91,7 @@ export const ROW_OPS = [
     summary: 'play sampler slot N (blank = pitch picks it)',
     example: 's7',
     /*
-     * NOT ZERO-PADDED — Jaakko, 2026-07-31: "s9 and s09 should be the same thing. feel free to
+     * NOT ZERO-PADDED — owner feedback, 2026-07-31: "s9 and s09 should be the same thing. feel free to
      * change it to not-zero-padded."
      *
      * This revises SAMPLER_DESIGN section 8 Q1, which had ruled for `s07` so a fixed-width grid

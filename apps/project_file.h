@@ -91,7 +91,7 @@ struct ProjectPlacement {
   uint64_t lengthNanoticks = 0;
   std::vector<MusicalEvent> adds;
   std::vector<EventId> mutes;
-  // EDIT SCOPE FOR THIS APPEARANCE (Jaakko's call). When set, a note edit landing in this
+  // EDIT SCOPE FOR THIS APPEARANCE (owner's call). When set, a note edit landing in this
   // placement is recorded as an override on IT rather than written to the clip — without the
   // caller having to say so each time.
   //

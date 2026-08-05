@@ -6,7 +6,7 @@
  * called `new Splitter`. So the rail, the right dock, the chain strip and the
  * dock's own cells were all fixed at whatever shell.css said, and the pending
  * card sat at 83px with its text clipped while 300px of empty log went spare
- * directly underneath it. Jaakko: "I can't read what's in the second one."
+ * directly underneath it. Reported as: "I can't read what's in the second one."
  *
  * That is the third time this session: a capability, a surface, and nothing
  * joining them. It does not show up as a bug because nothing is broken — the

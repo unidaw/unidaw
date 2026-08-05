@@ -2,7 +2,7 @@
 /**
  * DOES A NOTE-OFF CUT A SAMPLED NOTE SHORT?
  *
- * Jaakko's ruling, after I recorded the opposite as defensible: "should be able to cut it off
+ * The ruling, after I recorded the opposite as defensible: "should be able to cut it off
  * with note off". The engine agrees and always has — `sampler_engine.h`'s noteOff() releases a
  * voice unless its slot has `gate == 0`, and the comment there calls that "the difference
  * between a drum and a pad". What was missing is that NO SURFACE COULD SET IT: gate is field 2
@@ -192,7 +192,7 @@ await page.waitForTimeout(1500);
 /*
  * THE BANK DEFAULT GOES FIRST, because it SEEDS A SLOT AT MINT and does nothing afterwards.
  *
- * This is the gesture Jaakko asked for — "could that be a setting per bank, ignore note-offs" —
+ * This is the gesture asked for — "could that be a setting per bank, ignore note-offs" —
  * and setting it before the load is not a trick to make the test pass, it is the only order in
  * which it means anything: `load-sample` stamps the slot it creates, and a default set later
  * leaves that slot exactly as it was. Which is the property that keeps this ONE fact rather than

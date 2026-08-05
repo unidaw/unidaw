@@ -1786,6 +1786,55 @@ fn list_projects(dir: &str) -> String {
     out
 }
 
+/// The extensions a `samplerload` can name. JUCE's readers, conservatively.
+const SAMPLE_EXTS: [&str; 6] = ["wav", "aif", "aiff", "flac", "ogg", "mp3"];
+
+/// The audio files the engine could actually resolve, in the order it searches.
+///
+/// WHY THIS EXISTS. `loadSample` was reachable only from the console, and the rail's
+/// SAMPLES chip had been `live: false` since it was drawn. So a sampler added from the
+/// UI could never be given a file from the UI: the card sat empty, drew no kit and no
+/// waveform, and read as "the sampler device has no UI" — which is what it was called.
+///
+/// THE TWO DIRECTORIES ARE THE ENGINE'S, NOT A GUESS. `resolveSourcePath` tries
+/// `<projectDir>/<name>` and then, only as a fallback, `<projectDir>/../audio/<name>`.
+/// This lists both in that same order, and says which is which, because the order is how
+/// an ambiguous name is settled and a person choosing from a list should be able to see
+/// that two files share a name.
+///
+/// `tooLong` is carried rather than filtered. The load command has 24 bytes for a name,
+/// so a longer file cannot be named by it at all — and a rail that silently omitted those
+/// would answer "why is my sample not in the list" with nothing. It is listed, marked, and
+/// the row says why, the same way a plugin that failed to scan keeps its row.
+fn list_samples(projects: &str) -> String {
+    let mut items: Vec<(String, &str, u64)> = Vec::new();
+    let base = std::path::Path::new(projects);
+    let audio = base.parent().map(|p| p.join("audio"));
+    let mut scan = |dir: &std::path::Path, which: &'static str, out: &mut Vec<(String, &str, u64)>| {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+            if !SAMPLE_EXTS.contains(&ext.as_str()) { continue; }
+            let bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            out.push((name, which, bytes));
+        }
+    };
+    scan(base, "project", &mut items);
+    if let Some(a) = audio.as_ref() { scan(a, "audio", &mut items); }
+    items.sort_by(|a, b| a.0.to_ascii_lowercase().cmp(&b.0.to_ascii_lowercase()));
+
+    let mut out = String::from("{\"ok\":true,\"samples\":[");
+    for (i, (name, which, bytes)) in items.iter().enumerate() {
+        if i > 0 { out.push(','); }
+        out.push_str(&format!(
+            "{{\"name\":\"{}\",\"dir\":\"{}\",\"bytes\":{},\"tooLong\":{}}}",
+            json_escape(name), which, bytes, name.len() > 24));
+    }
+    out.push_str("]}");
+    out
+}
+
 /// A nul-padded C string out of a fixed byte array.
 ///
 /// `from_utf8_lossy` rather than a strict decode: the array is whatever the engine put there, and
@@ -4329,6 +4378,12 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                         }
                         if is_type(&t, "list") {
                             let reply = list_projects(&projects);
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+                        // The audio files a sampler can be given. See list_samples.
+                        if is_type(&t, "samples") {
+                            let reply = list_samples(&projects);
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;
                         }
@@ -7536,7 +7591,7 @@ mod tests {
         // and answered "waveform needs the id of the source to read". The load
         // never reached the engine, and the reply named a concept the caller had
         // not mentioned. Every verb dispatched here had the same hole.
-        for verb in ["waveform", "setparam", "settempo", "list", "plugins",
+        for verb in ["waveform", "setparam", "settempo", "list", "plugins", "samples",
                      "note", "chord", "loop", "seek", "adddevice",
                      // Added with the builders below them: a verb absent from this
                      // list is a builder nothing protects.

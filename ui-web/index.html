@@ -119,7 +119,7 @@ import { buildMixerModel, createMixerBuffer, createMixerState, reconcileMixer,
 import { Piano } from './src/piano.js';
 import { buildPianoModel, createPianoBuffer, PIANO_ZOOM, fitLowPitch,
          notesInRect, noteKey, transposedKey } from './src/pianomodel.js';
-import { Browser, KIND_PLUGIN, KIND_DEVICE } from './src/browser.js';
+import { Browser, KIND_PLUGIN, KIND_DEVICE, KIND_SAMPLE } from './src/browser.js';
 import { Dock, quantizeGridName, quantizeGridTicks, QUANTIZE_CYCLE } from './src/dock.js';
 import { createPanes } from './src/panes.js';
 import { createHelp, GLOBAL_KEYS, SURFACE_KEYS } from './src/help.js';
@@ -2154,6 +2154,10 @@ const PLUGIN_NO_SLOT = 'that plugin has no place in the engine\'s scan, so it ca
  */
 const KIND_PATCHER_INSTRUMENT = 1;
 const KIND_VST_INSTRUMENT = 3;
+/* The built-in sampler. NOT an instrument kind by the engine's rule — see
+   device_chain.cpp isInstrumentKind, which lists the two above and not this one — so it
+   is declared here for addressing a load, not for the instrument test below. */
+const KIND_SAMPLER = 5;
 function chainHasInstrument(track) {
   const here = chains[track];
   const devices = here && here.devices;
@@ -2223,6 +2227,7 @@ const browser = new Browser(browserHost, {
     if (!row) return;
     if (row.kind === KIND_PLUGIN) { insertPlugin(row); return; }
     if (row.kind === KIND_DEVICE) { insertBuiltinDevice(row); return; }
+    if (row.kind === KIND_SAMPLE) { loadSampleIntoTrack(row); return; }
     const name = row.name;
     forgetPatcherGraph();
     forgetChains();
@@ -2235,9 +2240,44 @@ const browser = new Browser(browserHost, {
 });
 
 /**
+ * Give the cursor track's sampler a file.
+ *
+ * THE LAST LINK IN A CHAIN THAT WAS BROKEN AT EVERY JOINT. A sampler could not be
+ * added from the UI (fixed: the DEVICES category), and once added it could not be given
+ * a sample from the UI — `loadSample` was a console verb and the rail's SAMPLES chip had
+ * been drawn unavailable since it was drawn at all. So the card had no kit and no
+ * waveform to draw and read as a device with no interface: "the sampler device has no
+ * UI?" It had one. It had nothing to show.
+ *
+ * ADDRESSED TO THE SAMPLER, NOT TO DEVICE 0. The load command names a device id, and the
+ * sampler is rarely the first thing in a chain — a track with a patcher in front of it
+ * would have loaded the file into the patcher, which the engine answers by doing nothing
+ * anyone can see. Found by id from the chain in hand, and refused in words when there is
+ * no sampler to address, because "nothing happened" is the failure this whole app keeps
+ * producing.
+ */
+function loadSampleIntoTrack(row) {
+  if (!row.ok) { state.reject = row.meta; schedule(); return; }
+  const track = state.cursor.track;
+  const here = chains[track];
+  const devices = (here && here.devices) || [];
+  const sampler = devices.find((d) => d.kind === KIND_SAMPLER);
+  if (!sampler) {
+    state.reject = 'track ' + (track + 1) + ' has no sampler — add one from DEVICES first';
+    schedule();
+    return;
+  }
+  // The same function the console's `sampler-load` verb calls, so the two surfaces
+  // cannot come to mean different things by "load a sample".
+  if (!dockApi.loadSample(track, sampler.id, row.name)) return;   // it set its own reason
+  state.browserOpen = false;
+  schedule();
+}
+
+/**
  * Put one of the engine's BUILT-IN devices into the cursor's track.
  *
- * Jaakko, with a sampler he could not make: "how do I add the built-in Sampler to a
+ * Asked with a sampler that could not be made: "how do I add the built-in Sampler to a
  * track's device chain?" You could not. Six kinds exist; the rack's "+" sent a fixed
  * `patcher event` and the rail listed only projects and plugins, so the sampler — the
  * one device this app implements itself — was reachable from the console and from
@@ -2676,6 +2716,15 @@ let pluginsAsked = false;
 let pluginsPending = false;
 let pluginCache = null;
 let pluginError = '';
+/**
+ * The audio files the sidecar found, or null before it has answered.
+ *
+ * One flag rather than two, unlike plugins: the samples reply carries no error shape.
+ * A directory that does not exist lists as nothing, which is a true answer — "this
+ * machine has no samples" — and not a condition anyone can act on.
+ */
+let samplesAsked = false;
+let sampleCache = null;
 /** The engine's scale registry: [{id, name, octaveCents, stepCents[]}]. */
 let scales = null;
 /**
@@ -4606,7 +4655,7 @@ function buildHead() {
   /*
    * ...AND ADD ONE, at the end of the row — which is literally where the next track appears.
    *
-   * Jaakko asked for the track controls to sit "closer to the actual tracks" than the chrome,
+   * The track controls were asked to sit "closer to the actual tracks" than the chrome,
    * and this is as close as it gets: the `+` is in the position the new lane will occupy. The
    * chrome's pair stays, because the arrangement and the mixer have no header row and removing
    * the global path would make adding a track pointer-unreachable in two of five surfaces.
@@ -5695,7 +5744,7 @@ function forgetPatcherGraph() {
  * What is making notes ON THE TRACK YOU ARE LOOKING AT, or ''.
  *
  * WHY THIS EXISTS. A generator node emits notes nobody wrote. The first three
- * times Jaakko reported "phantom notes" the app had no way to say where they came
+ * times "phantom notes" were reported, the app had no way to say where they came
  * from, and this line is the answer to "why am I hearing something I did not
  * type".
  *
@@ -7464,7 +7513,7 @@ addEventListener('keydown', (e) => {
    *
    * On a note field that is a chord or a degree, seeded with the `@` itself. On the OPS field it
    * is the row-op string, seeded WITH WHAT THE NOTE HAS — `ret3 p60 d1/6` — so editing one op
-   * means changing one word rather than retyping the set. That is the gesture Jaakko described:
+   * means changing one word rather than retyping the set. That is the gesture described:
    * "I can edit the cell to edit an individual op."
    *
    * One key rather than two, because it already means exactly this: open the text buffer for
@@ -8002,6 +8051,18 @@ conn = WANTS_ENGINE ? connectEngine({
       claimed = true;
       applyPluginReply(msg);
     }
+    // The samples listing. Claimed on the KEY the reply carries rather than on an
+    // outstanding-request flag, because that key appears in no other message on this
+    // channel and a flag would mis-claim a late duplicate.
+    if (!claimed && typeof msg === 'string' && msg.indexOf('"samples"') >= 0) {
+      claimed = true;
+      let parsed = null;
+      try { parsed = JSON.parse(msg); } catch (e) { /* reported below */ }
+      const list = parsed && parsed.samples;
+      sampleCache = Array.isArray(list) ? list : null;
+      browser.setSamples(sampleCache);
+      schedule();
+    }
     // The sidecar refuses with {"error":"..."} and those messages are written to
     // be read — "those two node types have no compatible ports" is the answer to
     // the question the user just asked. They were being logged to a dock that is
@@ -8105,6 +8166,11 @@ conn = WANTS_ENGINE ? connectEngine({
     // sixty times a second to be told the same thing.
     if (!pluginsAsked && conn && conn.canSend()) {
       pluginsAsked = pluginsPending = conn.send({ type: 'plugins' });
+    }
+    // And the audio files a sampler can be given, once, for the same reason: it is
+    // a directory listing, not a stream.
+    if (!samplesAsked && conn && conn.canSend()) {
+      samplesAsked = conn.send({ type: 'samples' });
     }
     // A load result. The engine used to accept a malformed project, change
     // nothing, and ack ok — indistinguishable from a load that worked and

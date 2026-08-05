@@ -6,8 +6,10 @@
 //
 // Neither list comes from the engine. The engine publishes no index and a
 // browser cannot read a filesystem, so the sidecar answers `{"type":"list"}`
-// with project names and `{"type":"plugins"}` with the catalogue the engine's
-// scanner already wrote to disk. Names, not paths, for projects: handing the
+// with project names, `{"type":"plugins"}` with the catalogue the engine's
+// scanner already wrote to disk, and `{"type":"samples"}` with the audio files
+// in the two directories the engine's own resolveSourcePath searches. DEVICES
+// needs no feed at all: it is the engine's device enum, known at load. Names, not paths, for projects: handing the
 // client a path invites it to send one back, and the engine resolves names
 // against its own project directory. Plugins are the other way round — a plugin
 // IS its path, vendor, name and uid16 together, and that quadruple is the
@@ -84,7 +86,8 @@ const KINDS = [
   /*
    * THE DEVICES THE ENGINE HAS BUILT IN, and the reason this category exists.
    *
-   * Jaakko: "how do I add the built-in Sampler to a track's device chain?" The answer
+   * The question that prompted it: "how do I add the built-in Sampler to a track's device
+   * chain?" The answer
    * was that you could not. Six device kinds exist; the rack's "+" was hard-coded to
    * `patcher event`, and this rail listed only projects and plugins — so five of the
    * six, the sampler among them, were reachable from the console and from nowhere on
@@ -98,7 +101,13 @@ const KINDS = [
    */
   { key: 'devs', label: 'DEVICES',  badge: 'DEV',  live: true,  feed: '' },
   { key: 'pset', label: 'PRESETS',  badge: 'PSET', live: false, feed: '' },
-  { key: 'smpl', label: 'SAMPLES',  badge: 'SMPL', live: false, feed: '' },
+  /*
+   * The audio files a sampler can be given. Live since the sidecar grew a `samples`
+   * feed — before that a sampler added from the UI could never be given a file from
+   * the UI, so its card drew no kit and no waveform and read as a device with no
+   * interface at all.
+   */
+  { key: 'smpl', label: 'SAMPLES',  badge: 'SMPL', live: false, feed: 'smpl' },
   { key: 'clip', label: 'CLIPS',    badge: 'CLIP', live: false, feed: '' },
   { key: 'ptch', label: 'PATCHES',  badge: 'PTCH', live: false, feed: '' },
   { key: 'scal', label: 'TUNINGS',  badge: 'SCAL', live: false, feed: '' },
@@ -108,11 +117,13 @@ const KINDS = [
 /** Which chip the catalogue lights up. Found once; it is a constant table. */
 const PLUG_CHIP = KINDS.findIndex((k) => k.feed === 'plug');
 
-/** A row is one of three things, and which one decides everything about it. */
+/** A row is one of four things, and which one decides everything about it. */
 export const KIND_PROJECT = 'project';
 export const KIND_PLUGIN = 'plugin';
 /** A device kind the engine has built in — added by NAME, not by a scan index. */
 export const KIND_DEVICE = 'device';
+/** An audio file the engine can resolve, loaded into the track's sampler. */
+export const KIND_SAMPLE = 'sample';
 
 /** Where the catalogue stands. Not a boolean: "not yet" is not "none". */
 export const PLUG_PENDING = 'pending';
@@ -135,6 +146,7 @@ const MARK_FAILED = '!';
 const BADGE_PROJECT = 'PROJ';
 const BADGE_PLUGIN = 'PLUG';
 const BADGE_DEVICE = 'DEV';
+const BADGE_SAMPLE = 'SMPL';
 /*
  * What each built-in kind IS, in the one line the rail has room for. The engine's enum
  * names them ("patcher event", "sampler"); it does not say what they do, and a list of
@@ -190,6 +202,8 @@ const FOOT_NOTE_PLUGINS = 'no presets, samples, clips, patches or tunings cross 
                 + 'the wire yet — those chips are unavailable, not empty';
 
 const TITLE_PLUG_LIVE = 'PLUGINS from the engine\'s own scan';
+const TITLE_SMPL_LIVE = 'audio files the engine can resolve, from the project and audio directories';
+const TITLE_SMPL_PENDING = 'the sample listing has not arrived yet';
 const TITLE_PLUG_PENDING = 'the plugin catalogue has not arrived yet';
 
 /** A pooled row record. Grown once per shape change, mutated in place after. */
@@ -215,7 +229,7 @@ export function makeRow() {
  *
  * NOT all six. `vst instrument` and `vst effect` are deliberately absent: adding one
  * without naming a plugin makes a device with an empty vstRef, which is precisely the
- * card Jaakko asked about — "what's the VST instrument on track 1/Bass that doesn't
+ * card asked about minutes earlier — "what's the VST instrument on track 1/Bass that doesn't
  * have anything loaded". The engine keeps it in the chain, nothing can load into it,
  * and the rack draws a box with a kind name and no plugin.
  *
@@ -224,6 +238,45 @@ export function makeRow() {
  * be a control whose only outcome is a broken device.
  */
 const ADDABLE_DEVICE_KINDS = [0, 1, 2, 5];
+
+/**
+ * Fill `row` from one entry of the sidecar's `samples` reply.
+ *
+ * `tooLong` becomes a FAILED row rather than a hidden one, the same way a plugin that
+ * did not scan keeps its row and wears the reason. The load command carries 24 bytes for
+ * a name; a longer file cannot be named by it at all, and a rail that silently omitted
+ * those answers "why is my sample not in the list" with nothing.
+ */
+export function setSampleRow(row, e) {
+  const s = e || {};
+  const name = s.name || '(unnamed)';
+  const ok = !s.tooLong;
+  row.kind = KIND_SAMPLE;
+  row.badge = BADGE_SAMPLE;
+  row.name = name;
+  row.ok = ok;
+  row.recent = false;
+  row.instrument = false;
+  row.plugin = null;
+  row.pluginIndex = -1;
+  row.deviceKind = -1;
+  // Where the engine will find it, and how big it is. `dir` matters: resolveSourcePath
+  // tries the project directory BEFORE the sibling audio/, so two files with one name
+  // are settled by order and a person choosing should be able to see both.
+  row.meta = ok ? (s.dir === 'audio' ? 'audio/' : 'project/') + SEP + kb(s.bytes)
+                : 'the name is longer than the 24 bytes the load command carries';
+  row.mark = ok ? MARK_NONE : MARK_FAILED;
+  row.lower = (name + ' ' + (s.dir || '')).toLowerCase();
+  return row;
+}
+
+/** Bytes as something readable. Built per reply, never per frame. */
+function kb(n) {
+  const b = Number(n) || 0;
+  if (b < 1024) return b + ' B';
+  if (b < 1024 * 1024) return Math.round(b / 1024) + ' kB';
+  return (b / (1024 * 1024)).toFixed(1) + ' MB';
+}
 
 /** Fill `row` from a DeviceKind number. The list is a constant, so this runs once. */
 export function setDeviceRow(row, kind) {
@@ -413,7 +466,7 @@ export class Browser {
       this.chips.push(el);
     }
     this._cat = null;
-    this._plugChip = null;
+    this._feedKey = '';
 
     this.listEl = div('br-list', host);
     this.emptyEl = div('br-empty', host);
@@ -462,6 +515,12 @@ export class Browser {
      */
     this.devRows = ADDABLE_DEVICE_KINDS.map((k) => setDeviceRow(makeRow(), k));
     this.devCount = this.devRows.length;
+    /** Pooled records, one per audio file the sidecar listed. */
+    this.sampRows = [];
+    this.sampCount = 0;
+    /** The samples array as last adopted; identity is the key, as with plugins. */
+    this.sampSrc = null;
+    this.sampState = PLUG_PENDING;
     /** All feeds in display order: projects, plugins, devices. References only. */
     this.rows = [];
     /** The project names as last adopted, so a rename is caught by content. */
@@ -620,6 +679,9 @@ export class Browser {
       const k = KINDS[i];
       if (k.key !== key) continue;
       if (k.feed === 'plug') return this.plugState === PLUG_OK;
+      // Same question for samples: the wire can carry them and this machine may have
+      // none, and "unavailable" and "empty" must not look the same.
+      if (k.feed === 'smpl') return this.sampState === PLUG_OK;
       return k.live;
     }
     return false;
@@ -671,6 +733,20 @@ export class Browser {
     this._rebuild();
   }
 
+  /**
+   * Adopt the sidecar's `samples` reply. Same contract as setPlugins: identity is the
+   * key, so re-listing costs a comparison rather than rebuilding every row's strings.
+   */
+  setSamples(list) {
+    const src = list || null;
+    if (src === this.sampSrc) return;
+    this.sampSrc = src;
+    this.sampState = src ? PLUG_OK : PLUG_PENDING;
+    this.sampCount = fillRows(this.sampRows, src, setSampleRow);
+    if (!this.available(this.category)) { this.category = 'all'; this.selected = 0; }
+    this._rebuild();
+  }
+
   _sameProjects(names) {
     const n = names ? names.length : 0;
     if (n !== this.projects.length) return false;
@@ -696,6 +772,7 @@ export class Browser {
     for (let i = 0; i < this.projCount; i++) rows.push(this.projRows[i]);
     for (let i = 0; i < this.plugCount; i++) rows.push(this.plugRows[i]);
     for (let i = 0; i < this.devCount; i++) rows.push(this.devRows[i]);
+    for (let i = 0; i < this.sampCount; i++) rows.push(this.sampRows[i]);
     this._refilter();
   }
 
@@ -714,6 +791,7 @@ export class Browser {
       if (cat === 'proj' && r.kind !== KIND_PROJECT) continue;
       if (cat === 'plug' && r.kind !== KIND_PLUGIN) continue;
       if (cat === 'devs' && r.kind !== KIND_DEVICE) continue;
+      if (cat === 'smpl' && r.kind !== KIND_SAMPLE) continue;
       if (q && r.lower.indexOf(q) < 0) continue;
       v.push(i);
     }
@@ -845,18 +923,40 @@ export class Browser {
         this.chips[i].classList.toggle('on', KINDS[i].key === this.category);
       }
     }
-    // The one chip whose availability is not a constant. Guarded on the state
-    // rather than on the boolean, so the title follows the REASON: "not read
-    // yet" and "the engine could not read it" are different sentences and the
-    // chip is where a pointer asks the question.
-    if (this._plugChip !== this.plugState && PLUG_CHIP >= 0) {
-      this._plugChip = this.plugState;
-      const live = this.plugState === PLUG_OK;
-      const chip = this.chips[PLUG_CHIP];
-      chip.disabled = !live;
-      chip.classList.toggle('off', !live);
-      chip.title = live ? TITLE_PLUG_LIVE
-                        : (this.plugState === PLUG_ERROR ? this.plugError : TITLE_PLUG_PENDING);
+    /*
+     * THE CHIPS WHOSE AVAILABILITY IS NOT A CONSTANT — one per FEED, not one named chip.
+     *
+     * This was a special case for PLUGINS, written when PLUGINS was the only feed, and its
+     * comment said so: "the one chip whose availability is not a constant". SAMPLES then
+     * arrived, was declared `live: false` like every unbuilt category, and inherited a chip
+     * NOTHING COULD EVER ENABLE — the feed arrived, the rows were built, the category
+     * answered `available()` true, and the button stayed grey and refused the pointer.
+     *
+     * The sidecar was answering correctly the whole time. Watching the socket showed the
+     * request going out and `{"ok":true,"samples":[...]}` coming back on every run, which is
+     * the most misleading possible evidence: every layer worked except the one that decides
+     * whether you may click.
+     *
+     * A rule that names one member of a set stops being a rule the moment the set grows.
+     * Keyed on the feed states together, so the pass runs when any of them moves and never
+     * per frame; the title still follows the REASON, because "not read yet" and "the engine
+     * could not read it" are different sentences.
+     */
+    const feedKey = this.plugState + '|' + this.sampState;
+    if (this._feedKey !== feedKey) {
+      this._feedKey = feedKey;
+      for (let i = 0; i < KINDS.length; i++) {
+        const k = KINDS[i];
+        if (!k.feed) continue;
+        const live = this.available(k.key);
+        const chip = this.chips[i];
+        chip.disabled = !live;
+        chip.classList.toggle('off', !live);
+        chip.title = k.feed === 'plug'
+          ? (live ? TITLE_PLUG_LIVE
+                  : (this.plugState === PLUG_ERROR ? this.plugError : TITLE_PLUG_PENDING))
+          : (live ? TITLE_SMPL_LIVE : TITLE_SMPL_PENDING);
+      }
     }
 
     const total = this._total();

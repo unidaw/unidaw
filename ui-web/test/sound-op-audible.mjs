@@ -343,7 +343,7 @@ if (chopped && chopped.length === 8) {
     opsText.push(await page.evaluate(() => window.__uni.opsTextAtCursor()));
   }
   /*
-   * `s9`, unpadded — Jaakko's ruling that `s9` and `s09` are the same thing and the canonical
+   * `s9`, unpadded — the ruling that `s9` and `s09` are the same thing and the canonical
    * form should be the one a person types. Written out rather than compared loosely, so this
    * still fails if the two sides ever disagree about the spelling again.
    */

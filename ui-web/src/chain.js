@@ -395,7 +395,7 @@ export class Chain {
        * The rack could add a device and could not remove one. `delDevice` existed
        * as a __uni hook the whole time, with no button, no key and no dock
        * command behind it — reachable from a test and from nowhere a person can
-       * point at. Jaakko asked "how do I delete a device from the device chain"
+       * point at. The question that prompted it: "how do I delete a device from the device chain"
        * and the honest answer was "you cannot".
        *
        * The op-registry test knew: it had `deldevice` recorded as a gap. Recording
@@ -449,7 +449,7 @@ export class Chain {
       /*
        * THE BANK'S NOTE-OFF DEFAULT, as a two-state button beside the filter.
        *
-       * Jaakko asked for this as "a setting per bank: ignore note-offs", and it is the setting
+       * Asked for as "a setting per bank: ignore note-offs", and it is the setting
        * rather than the mechanism — it SEEDS every slot the kit mints from then on and leaves
        * the ones already there alone. So the label says what NEW pads will do, which is why it
        * reads "1shot"/"gate" rather than describing the kit as a whole.

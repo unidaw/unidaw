@@ -147,7 +147,7 @@ pub fn api_key() -> Option<String> {
         }
     }
     // A named file, then the usual places. `DAW_ENV_FILE` exists because the key
-    // does not have to live in this repo — Jaakko's is in a sibling checkout, and
+    // does not have to live in this repo — the real one is in a sibling checkout, and
     // a search that walks up from the working directory can never find that. An
     // explicit path is better than a longer guess.
     //

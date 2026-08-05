@@ -86,7 +86,7 @@ Split item 4 along the fork:
    (one-block-latency master host, PDC-compensated). Separate, larger increment;
    land after 4a and after an explicit latency sign-off.
 
-## Decision needed (frontend / Jaakko)
+## Decision needed (frontend / owner)
 
 - Is the immediate need **(A)** a home for a global patcher, **(B)** audio FX on the
   master sum, or both?
@@ -98,7 +98,7 @@ Split item 4 along the fork:
 Implementation is a clear, mechanical follow-up once these are answered; nothing
 here is blocked on engine capability, only on the intended behaviour.
 
-## DECISION (Jaakko, 2026-07-29): build BOTH A and B.
+## DECISION (owner, 2026-07-29): build BOTH A and B.
 
 **A (a home for a global patcher) is DONE end-to-end.** The master is a complete,
 usable strip:
@@ -112,7 +112,7 @@ usable strip:
 All verified by `tools/master_track_check.sh` (addressable + takes edits + persists).
 A patcher device on the master runs in the existing per-track patcher model.
 
-**B (audio FX on the sum) is DONE too** — Jaakko chose **B2** (one block behind), and it
+**B (audio FX on the sum) is DONE too** — the owner chose **B2** (one block behind), and it
 shipped in commits 175f845 + d47bb15. The whole mix now runs through an out-of-process
 VST effect without the RT callback ever blocking on a plugin. Verified by instrumenting
 the whole chain: mix `0.302911` → callback hand-off `0.302911` → render thread
@@ -168,7 +168,7 @@ This is the next focused increment — deliberately not rushed into the RT callb
 the same pass as 4a, since a wrong handshake there reintroduces the dropouts the
 low-latency work removed.
 
-## 4b — CONFIRMED B2 (Jaakko, 2026-07-29). Concrete build plan + a scoping finding.
+## 4b — CONFIRMED B2 (owner, 2026-07-29). Concrete build plan + a scoping finding.
 
 **Finding that sets the scope:** the master is a SEPARATE runtime, not in the `tracks`
 vector (4a chose this so it never collides with AddTrack/aux-child slot logic). So it

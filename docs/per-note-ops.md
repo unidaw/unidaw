@@ -1,6 +1,6 @@
 # Per-note ops: the sound slot, the sample offset, and the dense row
 
-Ruling on three questions Jaakko asked in one breath: how to represent `S04`, how to get more
+Ruling on three questions asked in one breath: how to represent `S04`, how to get more
 fidelity than `941` gives, and what happens when sample selection, offset, probability,
 panning, retrigs, delays and automation are all going on at once.
 
@@ -73,7 +73,7 @@ that turned out wrong are marked rather than quietly deleted.
 - **`rv` draws as `v`, not `r`.** `ret` owns 'r', and in a collapsed run the glyph is the only
   thing saying which op a character is — position cannot, since an op appears wherever it
   appears. The distinct-glyph ratchet caught it.
-- **The sound address is NOT zero-padded.** It was, briefly, mirroring `format_row_ops`. Jaakko
+- **The sound address is NOT zero-padded.** It was, briefly, mirroring `format_row_ops`. The owner
   revised it: "s9 and s09 should be the same thing." The EQUIVALENCE is what is pinned now —
   `s9`, `s09` and `s009` all address slot 9 — because that is what a formatting opinion breaks
   by accident, and the general rule that came out of it is worth more than the case: pad with
@@ -200,7 +200,7 @@ A flam is audible from about 5 ms; below 1 ms it stops being a flam and becomes 
 (a displacement `d` puts the first null at `1/2d`); one frame at 48 k puts that null above
 Nyquist, i.e. inaudible by construction.
 
-**8 bits on a five-second break is 19.5 ms — four times the flam threshold.** That is Jaakko's
+**8 bits on a five-second break is 19.5 ms — four times the flam threshold.** That is the owner's
 instinct, confirmed with a number. 16 bits is 0.076 ms, which is surgical. A typed rational
 with `M ≤ 65535` reaches that resolution and is *exact* rather than quantised, because it is
 not a fixed-point sample of a continuum — `o1/3` is one third, not the nearest representable
@@ -250,7 +250,7 @@ field the cursor is in.
 
 ## 2b. SO HOW DO YOU EXPRESS ALL SIX? THREE SURFACES, AND THE LIMIT IS NOT PIXELS
 
-Jaakko, correctly: *"we can have any number of tracks and horizontal scroll. so a single
+The owner, correctly: *"we can have any number of tracks and horizontal scroll. so a single
 track's width isn't constrained by anything physical."*
 
 Right, and it invalidates the pixel-budget framing this document had twice. The strip already
@@ -305,7 +305,7 @@ writes. One grammar, one editor, no second notation to keep in step.
 
 **READING AT A GLANCE — the mask: one character per family THAT TRACK USES.**
 
-Not fixed global slots. That was my proposal and Jaakko replaced it with a better one: *"what
+Not fixed global slots. That was my proposal and the owner replaced it with a better one: *"what
 if we didn't have fixed slots, just mask whatever effects are in the column? Renoise has a lot
 of pattern effects."*
 
@@ -314,7 +314,7 @@ straining under it. The Renoise survey turns up two failures that come straight 
 column set:
 
 - *"Instrument — 2 chars. CANNOT be hidden either (a standing user request)."* Renoise users
-  are asking for exactly what Jaakko is worried about and cannot get it.
+  are asking for exactly what the owner is worried about and cannot get it.
 - The volume sub-column is **overloaded** with ten commands (`Ix Ox Ux Dx Gx Cx Bx Qx Yx Rx`),
   and panning hosts most of them again. So a Renoise note cannot carry volume *and*
   probability in the same note column — one slot, and they fight for it. That is the same
@@ -362,7 +362,7 @@ defined — and no way for the two to disagree, because there are not two of the
 
 ### A COLUMN HOLDS ANY OP — the op space stays open
 
-Jaakko, closing the design out: *"I don't want a table, because the column hardcodes which ops
+The owner, closing the design out: *"I don't want a table, because the column hardcodes which ops
 we can have. I want to keep the op space flexible, and be able to show whatever ops there. so
 each op column must be able to be any op — so more than '6 families', any number of ops per row
 from say 200 ops in the system."*
@@ -439,7 +439,7 @@ screen.)
 
 ### SHIP AN OP-GLYPH FONT
 
-Jaakko: *"we can also switch up the font if you want more glyphs."* Yes — but the reason is
+The owner: *"we can also switch up the font if you want more glyphs."* Yes — but the reason is
 stronger than wanting more. **We currently ship none of them.**
 
 The right form is not a bigger general-purpose font but a purpose-built subset, and there is
@@ -573,5 +573,5 @@ which a grep of one file cannot support.
    hard is more predictable.
 
 3. **Where does automation live?** It is an arrangement lane here, and a pattern effect column
-   in every tracker. Jaakko listed it among the simultaneous things, which suggests it is wanted
+   in every tracker. The owner listed it among the simultaneous things, which suggests it is wanted
    in the pattern too — but that is a second address space in the same cell.

@@ -445,7 +445,7 @@ const ask = async (track, device) => {
 // ---------------------------------------------------------------------------
 // THE WHOLE CHOP, FROM THE UI ALONE. No daw-cli anywhere in this block.
 //
-// This is the workflow the entire per-note-op design was drawn around — Jaakko's amen break,
+// This is the workflow the entire per-note-op design was drawn around — the amen break,
 // one snare at five pitches, a row addressing a hit by `s04`. Every piece of it existed and none
 // of it was reachable: `add-device --kind sampler`, `sampler-load` and `sampler-slice` were
 // daw-cli verbs, so the surface could draw a chop that only a command line could make.
@@ -728,7 +728,7 @@ const ask = async (track, device) => {
   /*
    * THE BANK'S NOTE-OFF DEFAULT, FROM THE POINTER.
    *
-   * Jaakko asked for "ignore note-offs" as a per-bank setting and it is one — engine-side as
+   * "ignore note-offs" was asked for as a per-bank setting and it is one — engine-side as
    * SamplerSetDevice field 1, and on the console as `bank <track> <device> default-gate 1`. This
    * is the other half of the rule that a console verb alone does not count: the card carries a
    * two-state button and it calls the SAME function the verb calls.

@@ -361,7 +361,7 @@ HARMONY = {
     "scale_id":             "WriteHarmony",
     "flags":                "EXEMPT:legacy — persisted and round-tripped, written by no command "
                             "and READ BY NOTHING. Removing it is a project-format change and "
-                            "therefore Jaakko's call, so it stays and is declared",
+                            "therefore the owner's call, so it stays and is declared",
 }
 
 # ------------------------------------------------------------------------ the AUTOMATION scope.

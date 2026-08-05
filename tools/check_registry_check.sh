@@ -40,7 +40,7 @@ cmake = (root / "CMakeLists.txt").read_text()
 #      (`afplay -v 0` fails with AudioQueueStart -66681, coreaudiod up 85+ days).
 #
 # So this list does NOT shrink when audio is fixed here — that only makes them RUNNABLE, not
-# registered. Registering them is a suite-policy call for Jaakko, and it is not free: three
+# registered. Registering them is a suite-policy call for the owner, and it is not free: three
 # live-capture checks (sampler_default_sound, sound_addressed, realtime_pool) already ARE
 # registered and red on every single run, and a permanently red suite is how a suite becomes
 # furniture. The inconsistency between those three and these six is real and is flagged, not
@@ -56,7 +56,7 @@ DECLARED_UNREGISTERED = {
     # runs its playback callback. This machine's did not for days: coreaudiod had been up 85 days
     # and the device opened, reported its rate, answered isPlaying() TRUE and never called back.
     #
-    # Jaakko restarted coreaudiod on 2026-08-02, all six passed, and they are registered in ctest.
+    # coreaudiod was restarted on 2026-08-02, all six passed, and they are registered in ctest.
     # The list was built to SHRINK and not to grow silently, and this is it shrinking to nothing.
     #
     # Keep the mechanism. The next check that cannot run needs a reason here rather than a quiet

@@ -2,7 +2,7 @@
  * A disposable engine + sidecar + page server, for tests that edit documents.
  *
  * The e2e suite used to run against whatever stack happened to be up — which in
- * practice was Jaakko's, the one he was using. Every run added devices, wrote
+ * practice was the owner's, the one in use at the time. Every run added devices, wrote
  * notes and loaded projects into a long-lived engine, so runs were not
  * independent: the first pass was green, the third failed twelve checks, and the
  * fourth crashed. I started diagnosing a patcher bug that did not exist. The
@@ -14,7 +14,7 @@
  * using, and every run begins from the same bytes.
  *
  * Ports are FOUND, not fixed, so two runs can coexist — CI, or me running the
- * suite while Jaakko has the app open, or the several `tools/webstack.sh`
+ * suite while the app is open in front of someone, or the several `tools/webstack.sh`
  * instances other agents keep alive in this repo. See findFreeBase.
  */
 

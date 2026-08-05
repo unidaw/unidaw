@@ -40,7 +40,7 @@ import { join } from 'node:path';
  * tears them down again.
  *
  * It used to attach to whatever was already running, which in practice meant the
- * stack Jaakko was working in. Every run added devices, wrote notes and loaded
+ * stack someone was working in. Every run added devices, wrote notes and loaded
  * projects into an engine that outlived it, so the runs were not independent:
  * green, then twelve failures, then a crash, with nothing in the suite changed
  * between them. A test that edits state has to own the state it edits.
@@ -2078,7 +2078,7 @@ section('the console can ask the agent');
 section('a device that makes its own notes says so');
 {
   /**
-   * The evening this exists for: Jaakko heard notes that were not in his clip,
+   * The evening this exists for: notes were heard that were not in the clip,
    * and the cause was a euclidean generator and a random_degree node in the
    * device's patcher graph, playing alongside the sequencer. Everything worked.
    * Nothing said it was happening — the graph was reachable by pressing F3, if

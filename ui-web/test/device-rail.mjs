@@ -2,7 +2,7 @@
 /**
  * CAN YOU ADD A BUILT-IN DEVICE WITHOUT TYPING A COMMAND?
  *
- * Jaakko, with the app open: "how do I add the built-in Sampler to a track's device chain?"
+ * Asked with the app open: "how do I add the built-in Sampler to a track's device chain?"
  * The answer was that you could not. Six device kinds exist in the engine's enum; the rack's
  * "+" card sent a hard-coded `patcher event`, and the browser rail carried exactly two row
  * kinds — projects and plugins. So five of the six, the sampler among them, were reachable
@@ -19,7 +19,7 @@
  *
  * The rail offers FOUR kinds, not six. `vst instrument` and `vst effect` are deliberately
  * absent, because adding one without naming a plugin produces a device with an empty vstRef
- * — which is exactly the card Jaakko asked about ten minutes earlier: "what's the VST
+ * — which is exactly the card asked about ten minutes earlier: "what's the VST
  * instrument on track 1/Bass that doesn't have anything loaded". The engine keeps it in the
  * chain, nothing can ever load into it, and the rack draws a box with a kind name and no
  * plugin. A control whose only possible outcome is a broken device is worse than no control,

@@ -236,7 +236,7 @@ if (!grid) {
   const s1 = await st();
   ok(s1.focus === 'centre', 'clicking the grid focuses the tracker', s1.focus);
 
-  // Edit mode has to be ON for keys to write notes; that is the toggle Jaakko
+  // Edit mode has to be ON for keys to write notes; that is the toggle the owner
   // asked for, so a person turns it on the same way.
   if (!s1.editMode) {
     await page.keyboard.press('Meta+e');
@@ -654,7 +654,7 @@ if (!delTrackHit) {
 // ---------------------------------------------------------------------------
 step('17. two notes on one row, in two cells');
 {
-  // Jaakko: "there should only ever be one event per cell". The engine has
+  // The rule as stated: "there should only ever be one event per cell". The engine has
   // carried a per-note column since before this UI existed and the page never
   // sent one, so every note it wrote went to column 0 and a chord collapsed into
   // a cell reading "2 evts" that could not be opened, read or edited.

@@ -296,7 +296,7 @@ BASE_LEFT="$(count_pitch 1 42)"
         overrides"
 echo "  revert: the added hat is gone, the clip's own 4 hats are untouched"
 
-# ---- THE PLACEMENT'S OWN EDIT SCOPE (Jaakko's call): mark ONE appearance, then type NORMALLY.
+# ---- THE PLACEMENT'S OWN EDIT SCOPE (owner's call): mark ONE appearance, then type NORMALLY.
 #
 # Everything above passes --local per edit. That works and is what daw-cli does, but it is not an
 # interface: something has to decide, per keystroke, which scope was meant. The answer chosen is a

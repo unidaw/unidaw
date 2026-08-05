@@ -22,7 +22,7 @@
  * a receipt for a message, not for an outcome. And every state is checked in the STRIP as well,
  * from the DOM, because the decode being right and the picture being right are different claims.
  *
- * BOTH SURFACES for each operation, per Jaakko's rule that the console and the UI have all the
+ * BOTH SURFACES for each operation, per the standing rule that the console and the UI have all the
  * functionality: a pointer-only capability and a console-only one are the same defect.
  */
 
