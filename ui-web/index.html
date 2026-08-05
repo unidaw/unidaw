@@ -3872,6 +3872,21 @@ const dockApi = {
   cut: () => copySelection() && deleteSelection(),
 };
 const dock = new Dock(dockHost, dockApi);
+/*
+ * CLICKING THE CONSOLE COUNTS AS FOCUSING IT.
+ *
+ * The render blurs the dock on every frame that `state.focus` is not 'dock', which is
+ * right — but it made the console reachable ONLY by the key that sets that state. A
+ * click focused the input and the next frame blurred it, so the console could not be
+ * typed into at all. Clicking the tracker grid already does the mirror of this
+ * (`state.focus = 'centre'`); this is the same rule for the other pane.
+ */
+dock.onFocus = () => {
+  if (state.focus === 'dock') return;      // already ours: nothing to say, nothing to redraw
+  state.dockOpen = true;
+  state.focus = 'dock';
+  schedule();
+};
 
 /**
  * Make the shell's regions resizable and its dock cells collapsible.

@@ -2177,6 +2177,50 @@ fn build_lines_per_beat(body: &str) -> Option<Result<UiCommandPayload, &'static 
     }))
 }
 
+/// Open a plugin's own editor window.
+///
+/// A PLAIN `UiCommandPayload`, AND THAT IS THE WHOLE BUG THIS FIXES.
+///
+/// This used to be built alongside adddevice/deldevice/bypass/movedevice as a
+/// `UiChainCommandPayload`, because it reads like a chain command. The engine does not
+/// treat it as one: `handleOpenPluginEditor` takes a `UiCommandPayload` and reads the
+/// device from `value0`. The two structs are BOTH 40 bytes, so the engine's size check
+/// passed and the memcpy succeeded — it simply read a different field.
+///
+///     offset 12   UiChainCommandPayload::deviceId    <- where the id was written
+///     offset 16   UiCommandPayload::value0           <- where the engine read it
+///
+/// Offset 16 of a chain payload is `deviceKind`, which openeditor never set, so the
+/// engine read 0 every time and answered "OpenPluginEditor failed - device 0 not found"
+/// for every device on every track. The button had never worked, for anyone, once.
+///
+/// Nothing pointed at it: the UI's own test asserts only that the REQUEST went out
+/// (index.html says so in as many words — "the engine owns the plugin window, so nothing
+/// on this side can observe one opening"), and the engine's refusal goes to its log. A
+/// wire mismatch between two same-sized structs is invisible from both ends at once,
+/// which is the argument for checking the ANSWER and not the request.
+fn build_open_editor(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
+    if !is_type(body, "openeditor") { return None; }
+    let Some(id) = parse_num(body, "\"device\"").filter(|id| *id >= 0) else {
+        return Some(Err("openeditor needs the device id"));
+    };
+    Some(Ok(UiCommandPayload {
+        command_type: UiCommandType::OpenPluginEditor as u16,
+        flags: 0,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        plugin_index: 0,
+        note_pitch: 0,
+        // The field the engine reads. Named value0 rather than deviceId because this
+        // struct is the generic one; `handleOpenPluginEditor` is what gives it meaning.
+        value0: id as u32,
+        note_nanotick_lo: 0,
+        note_nanotick_hi: 0,
+        note_duration_lo: 0,
+        note_duration_hi: 0,
+        base_version: 0,
+    }))
+}
+
 fn build_harmony_quantize(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
     if !is_type(body, "harmonyquantize") { return None; }
     Some(Ok(UiCommandPayload {
@@ -2681,10 +2725,14 @@ fn build_chain_edit(body: &str) -> Option<Result<UiChainCommandPayload, &'static
     // verbs, which is silent when it fires.
     let add = is_type(body, "adddevice");
     let del = is_type(body, "deldevice");
-    // Open a plugin's own editor window. The engine has accepted this since
-    // before the web UI existed and nothing ever sent it: "how do I open the
-    // plugin UI" had the answer "you can't", for a command that was already there.
-    let open = is_type(body, "openeditor");
+    /*
+     * `openeditor` USED TO BE HANDLED HERE and is not a chain command. It is built by
+     * `build_open_editor` as a plain `UiCommandPayload`, because that is the struct the
+     * engine reads it as — see the comment there for the offset collision that made the
+     * button silently dead. Left as a note rather than deleted outright: "it looks like a
+     * chain command" is exactly the reasoning that put it here, and it will look that way
+     * to the next person too.
+     */
     // Bypass an insert. The chain snapshot has carried each device's bypass state
     // since v20 and the rack has drawn it as a dimmed card the whole time — with
     // no way to set it. A state you can see and cannot change is worse than one
@@ -2696,7 +2744,7 @@ fn build_chain_edit(body: &str) -> Option<Result<UiChainCommandPayload, &'static
      * rack could add a device and remove one and not change where it sat.
      */
     let mv = is_type(body, "movedevice");
-    if !(add || del || open || byp || mv) { return None; }
+    if !(add || del || byp || mv) { return None; }
     let mut p = UiChainCommandPayload {
         command_type: UiCommandType::None as u16,
         flags: 0,
@@ -2714,14 +2762,6 @@ fn build_chain_edit(body: &str) -> Option<Result<UiChainCommandPayload, &'static
         bypass: 0,
         reserved: [0; 4],
     };
-    if open {
-        let Some(id) = parse_num(body, "\"device\"").filter(|id| *id >= 0) else {
-            return Some(Err("openeditor needs the device id"));
-        };
-        p.command_type = UiCommandType::OpenPluginEditor as u16;
-        p.device_id = id as u32;
-        return Some(Ok(p));
-    }
     if mv {
         let Some(id) = parse_num(body, "\"device\"").filter(|id| *id >= 0) else {
             return Some(Err("movedevice needs the id of the device to move"));
@@ -3484,6 +3524,7 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
     if let Some(r) = build_quantize(body) { return r; }
     if let Some(r) = build_sound_addressed(body) { return r; }
     if let Some(r) = build_track_collapsed(body) { return r; }
+    if let Some(r) = build_open_editor(body) { return r; }
     if let Some(r) = build_harmony_quantize(body) { return r; }
     if let Some(r) = build_lines_per_beat(body) { return r; }
     if let Some(r) = build_allow_overlap(body) { return r; }

@@ -1420,6 +1420,8 @@ export class Dock {
     this.history = [];
     this.historyAt = -1;
     this._dirty = true;
+    /** Set by the host: "the input just took DOM focus". See the listener below. */
+    this.onFocus = null;
 
     this.input.addEventListener('keydown', (e) => {
       // Stops here rather than bubbling to the app: a console that also plays
@@ -1430,6 +1432,23 @@ export class Dock {
       else if (e.key === 'ArrowDown') { this.recall(1); e.preventDefault(); }
       else if (e.key === 'Escape') { this.api.close(); }
     });
+
+    /**
+     * THE OTHER DIRECTION, and the one that was missing.
+     *
+     * `blur()` below closes app -> DOM: when the app's focus moves off the dock, the
+     * input gives the keyboard back. Nothing closed DOM -> app, so focusing the input
+     * the way a person actually does it — CLICKING IT — left `state.focus` on the
+     * centre, and the host's render does `if (state.focus !== 'dock') dock.blur()`
+     * every frame. The click focused the field and the next frame took it away, at
+     * frame rate: "I can't type anything in the console, the tracker steals the focus
+     * immediately."
+     *
+     * Half a rule is not a rule. The comment on blur() already says two notions of
+     * focus that can disagree are one too many; this is that same sentence applied to
+     * the direction it did not cover.
+     */
+    this.input.addEventListener('focus', () => { if (this.onFocus) this.onFocus(); });
   }
 
   focus() { this.input.focus(); }
