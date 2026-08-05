@@ -1183,6 +1183,15 @@ add_test(NAME plugin_path_load_check
 )
 set_tests_properties(plugin_path_load_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# A DEPS STRUCT NAMES AT MOST ONE OF THE ENGINE'S STATE GROUPS. Two or more and it should take
+# EngineState& instead — the rule that took main()'s wiring from 536 positional arguments to 473.
+# ONE group stays legal on purpose: a function needing only TrackTable& says what it needs, and
+# widening it to the whole engine would lose that.
+add_test(NAME deps_state_group_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/deps_state_group_check.sh
+)
+set_tests_properties(deps_state_group_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120)
+
 # An AUDIO clip's in-point, gain and fades (opcode 95). Three layers have to move together and the
 # check asserts each one separately: the descriptor table (which was a load-time snapshot until
 # this command existed), the baked audio render (which the table cannot see), and the saved file.

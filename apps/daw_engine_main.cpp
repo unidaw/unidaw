@@ -1563,8 +1563,7 @@ int main(int argc, char** argv) {
   // LOCK ORDER is tracksMutex -> trackMutex, taken as a pointer snapshot under tracksMutex and
   // then released, matching every other command-thread walk over all tracks.
   daw::engine::AudioClipTableDeps audioClipTableDeps{
-      loadedProject, resolveSourcePath, tempoProvider, trackTable, uiShm,
-      waveformStore};
+      engineState, resolveSourcePath, tempoProvider, uiShm, waveformStore};
 
   auto publishAudioClipTable = [&]() {
     daw::engine::publishAudioClipTable(audioClipTableDeps);
