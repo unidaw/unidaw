@@ -1515,8 +1515,56 @@ fn delete_note(handle: &EngineHandle, args: &Value) -> ToolResult {
 
 /// Append a track. No arguments: v1 of AddTrack always appends, because
 /// inserting needs a display-order field the engine does not have yet.
+/// Append a track, and TELL THE CALLER WHICH ONE IT IS.
+///
+/// This used to answer `{"added": true}` and nothing else, so a model that had just made a
+/// track had to work out its id by counting the ones it could see — and the shape it counts
+/// included the master's published slot, so it counted one too many and addressed the next
+/// edit at a track that does not exist:
+///
+///     add_notes {"pitches":[36 x16],"track":2} -> {"applied":false,"sent":16}
+///     engine: track 2 does not exist — that edit went nowhere
+///
+/// The master is out of the observation now, which fixes the counting. This fixes the need to
+/// count at all: a tool that creates something should return its name for it. Guessing an id
+/// is the caller doing the tool's job, and the failure is silent — the edit goes nowhere and
+/// the model reports success.
+///
+/// Waits for the engine to publish rather than reporting the id it expects, for the same
+/// reason: an id we predicted is a guess with better manners.
 fn add_track(handle: &EngineHandle) -> ToolResult {
-    send_now(handle, blank(UiCommandType::AddTrack), json!({ "added": true }))
+    let before = handle.snapshot().map(|s| s.ui_track_count).unwrap_or(0);
+    if let Err(e) = handle.send_command(blank(UiCommandType::AddTrack)) {
+        return ToolResult::err(e);
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+    loop {
+        let snap = handle.snapshot();
+        let count = snap.as_ref().map(|s| s.ui_track_count).unwrap_or(before);
+        if count > before {
+            // The highest NON-MASTER slot: the engine appends, and the master sits in a slot
+            // of its own that is not a track anyone can write to.
+            let flags = snap.as_ref().map(|s| s.ui_track_flags);
+            let mut id = None;
+            for t in 0..count {
+                let master = flags
+                    .as_ref()
+                    .and_then(|f| f.get(t as usize).copied())
+                    .map_or(false, |b| b & daw_bridge::layout::UI_TRACK_FLAG_MASTER != 0);
+                if !master { id = Some(t); }
+            }
+            return ToolResult::ok(json!({ "added": true, "track": id.unwrap_or(count - 1) }));
+        }
+        if std::time::Instant::now() >= deadline {
+            // Sent, and we could not confirm. Said plainly rather than inventing an id: a
+            // wrong id here is exactly the failure this function exists to remove.
+            return ToolResult::ok(json!({
+                "added": true,
+                "note": "the engine did not publish the new track in time; call observe for its id",
+            }));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 /// Remove a track by its STABLE id.

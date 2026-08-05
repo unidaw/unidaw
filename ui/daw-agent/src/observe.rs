@@ -251,8 +251,35 @@ pub fn observe_window(handle: &EngineHandle, window: Option<Window>) -> Observat
     let harmony = handle.read_harmony();
     let mixer = handle.read_mixer();
 
+    /*
+     * THE MASTER IS A PUBLISHED SLOT AND IS NOT A TRACK YOU CAN WRITE TO.
+     *
+     * `ui_track_count` counts SLOTS, and since the master-track work the master occupies one
+     * — so enumerating 0..track_count listed it as an ordinary track at the end, with a name
+     * and a note count of zero. A model reading that shape counts the tracks it can see and
+     * addresses the next edit at the last index.
+     *
+     * That is not hypothetical. Asked for a kick pattern on a new track, the agent called
+     * add_track and then add_notes on track 2 of a song whose real tracks are 0 and 1:
+     *
+     *     add_notes {"pitches":[36 x16],"track":2} -> {"applied":false,"sent":16}
+     *     engine: track 2 does not exist — that edit went nowhere
+     *
+     * and then told the person "you can now play it back to hear the pattern", over a song
+     * with no notes in it. The model was not hallucinating the track; we showed it one.
+     *
+     * Identified by FLAG, never by position — the master's slot index is wherever the engine
+     * put it, and a rule keyed on "the last one" is wrong the moment that changes.
+     */
+    let flags = snapshot.as_ref().map(|s| s.ui_track_flags);
+    let is_master = |id: u32| flags
+        .as_ref()
+        .and_then(|f| f.get(id as usize).copied())
+        .map_or(false, |b| b & daw_bridge::layout::UI_TRACK_FLAG_MASTER != 0);
+
     let mut tracks = Vec::new();
     for track_id in 0..track_count {
+        if is_master(track_id) { continue; }
         // The full note list is read either way — the shape is measured from it —
         // but it is only KEPT when a window asked for notes.
         let all = observe_track(handle, track_id);
