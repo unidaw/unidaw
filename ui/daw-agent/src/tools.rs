@@ -459,14 +459,16 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
         ToolSpec {
             name: "add_device",
             description: "Insert a device into a track's chain at a position (0 is first). \
-                          kind: vst_effect, vst_instrument or patcher. A VST needs `plugin`, \
+                          kind: sampler, vst_effect, vst_instrument or patcher. `sampler` is the \
+                          engine's own instrument and needs nothing else; a VST needs `plugin`, \
                           the name as the plugin catalogue reports it.",
             params: json!({
                 "type": "object",
                 "required": ["track"],
                 "properties": {
                     "track": { "type": "integer", "minimum": 0 },
-                    "kind": { "type": "string", "enum": ["vst_effect", "vst_instrument", "patcher"] },
+                    "kind": { "type": "string",
+                              "enum": ["sampler", "vst_effect", "vst_instrument", "patcher"] },
                     "position": { "type": "integer", "minimum": 0 },
                 },
             }),
@@ -927,11 +929,9 @@ fn add_device(handle: &EngineHandle, args: &Value) -> ToolResult {
     // snapshot's `kind`. Named here rather than passed as a number, for the reason the
     // sidecar's mod kinds are named: a literal that means something else after the next enum
     // change is the kind that outlives its meaning.
-    let kind = match arg_str(args, "kind").unwrap_or("vst_effect") {
-        "patcher" | "patcher_event" => 0u32,
-        "vst_instrument" => 3,
-        "vst_effect" => 4,
-        other => return ToolResult::err(format!("unknown device kind {other:?}")),
+    let name = arg_str(args, "kind").unwrap_or("vst_effect");
+    let Some(kind) = device_kind_code(name) else {
+        return ToolResult::err(format!("unknown device kind {name:?}"));
     };
     let mut p = chain_blank(UiCommandType::AddDevice, track as u32);
     p.device_kind = kind;
@@ -1515,6 +1515,33 @@ fn delete_note(handle: &EngineHandle, args: &Value) -> ToolResult {
 
 /// Append a track. No arguments: v1 of AddTrack always appends, because
 /// inserting needs a display-order field the engine does not have yet.
+/// A device-kind name from the manifest, as the engine's `DeviceKind` number.
+///
+/// Mirrored from `apps/device_chain.h` through the chain snapshot's `kind`, and named rather
+/// than passed as a number for the reason the sidecar's mod kinds are: a literal that means
+/// something else after the next enum change is the kind that outlives its meaning.
+///
+/// A FUNCTION, not an inline match, so a test can ask it what it accepts. The names it accepts
+/// and the names `add_device`'s schema ADVERTISES have to be the same set — a name in the schema
+/// that this rejects is a capability the model will try and be refused for, and a name this
+/// accepts that the schema omits is one it will never think to try. `add_device` has already
+/// been on the wrong side of that: its description promises a `plugin` argument that the schema
+/// never declares and the executor never reads.
+fn device_kind_code(name: &str) -> Option<u32> {
+    match name {
+        "patcher" | "patcher_event" => Some(0),
+        "vst_instrument" => Some(3),
+        "vst_effect" => Some(4),
+        // The engine's OWN instrument, and the only one needing no plugin installed. Its absence
+        // meant "put a sampler on that track" — a thing the DAW does, the UI offers, and the
+        // engine's AddDevice has handled all along — came back as "unknown device kind". The
+        // manifest is the agent's entire reach: a capability missing from it does not exist as
+        // far as anyone asking is concerned.
+        "sampler" => Some(5),
+        _ => None,
+    }
+}
+
 fn add_track(handle: &EngineHandle) -> ToolResult {
     send_now(handle, blank(UiCommandType::AddTrack), json!({ "added": true }))
 }
@@ -1954,6 +1981,46 @@ mod tests {
             assert!(arms.contains(&spec.name),
                     "manifest tool {:?} has no dispatch arm in execute()", spec.name);
         }
+    }
+
+    /// WHAT add_device ADVERTISES AND WHAT IT ACCEPTS MUST BE THE SAME SET.
+    ///
+    /// Not a tautology — the two live in different places and have already drifted apart in this
+    /// very tool. `sampler` was accepted by the engine and offered by the UI but appeared in
+    /// neither the schema nor the executor, so asking for one answered "unknown device kind";
+    /// meanwhile the description still promises a `plugin` argument that the schema does not
+    /// declare and the executor does not read. This compares the two lists by BEHAVIOUR — it
+    /// asks the mapping — so it cannot be satisfied by editing a comment.
+    #[test]
+    fn advertised_device_kinds_are_exactly_the_accepted_ones() {
+        let spec = tool_manifest()
+            .into_iter()
+            .find(|s| s.name == "add_device")
+            .expect("add_device is in the manifest");
+        let advertised: Vec<String> = spec.params["properties"]["kind"]["enum"]
+            .as_array()
+            .expect("add_device declares a kind enum")
+            .iter()
+            .map(|v| v.as_str().expect("enum entries are strings").to_string())
+            .collect();
+        assert!(!advertised.is_empty(), "add_device advertises no kinds at all");
+
+        for name in &advertised {
+            assert!(device_kind_code(name).is_some(),
+                    "add_device ADVERTISES kind {name:?} but the executor rejects it — the model \
+                     will ask for it and be refused");
+        }
+        // And the other direction: anything the executor accepts should be offered, or nobody
+        // will ever ask for it. `patcher_event` is the documented alias for `patcher`, so it is
+        // allowed to be accepted without being advertised twice.
+        for name in ["patcher", "vst_instrument", "vst_effect", "sampler"] {
+            assert!(advertised.iter().any(|a| a == name),
+                    "the executor accepts {name:?} but add_device does not advertise it, so the \
+                     model has no way to know the capability exists");
+        }
+        assert_eq!(device_kind_code("sampler"), Some(5),
+                   "the sampler is DeviceKind 5 in apps/device_chain.h");
+        assert_eq!(device_kind_code("no_such_kind"), None);
     }
 
     #[test]

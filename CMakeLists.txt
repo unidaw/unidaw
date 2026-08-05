@@ -1200,6 +1200,24 @@ add_test(NAME host_stall_check
 )
 set_tests_properties(host_stall_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# ASKING THE MODEL TO EDIT THE SONG MUST EDIT THE SONG. The headline feature had no coverage at
+# all until this. Verdict is the engine's track count after the exchange, not the model's reply —
+# "say/did/done all arrive while nothing reaches the engine" is the failure worth catching.
+# SKIPS with no API key and on transport failures; FAILS on an API refusal (bad key, dead model).
+# Costs one small API call per run.
+add_test(NAME ask_path_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/ask_path_check.sh
+)
+# RUN_SERIAL because this boots an ENGINE, which opens the default audio output device. Run
+# alongside a timing-sensitive audio check under `ctest -j`, it starves the other one's producer:
+# adding it made `panic` fail with "the PRODUCER had no block ready for 509 of 1469 callbacks",
+# and panic then passed 3/3 on its own. The contention is not new — nothing in this suite
+# declares a lock on the audio device, so the engine-booting checks have always been able to
+# collide — but a check that also waits on a network round trip holds the device far longer than
+# most, so it is the one that has to stand aside.
+set_tests_properties(ask_path_check PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 420 RUN_SERIAL TRUE)
+
 # An AUDIO clip's in-point, gain and fades (opcode 95). Three layers have to move together and the
 # check asserts each one separately: the descriptor table (which was a load-time snapshot until
 # this command existed), the baked audio render (which the table cannot see), and the saved file.
