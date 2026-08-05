@@ -1868,8 +1868,8 @@ int main(int argc, char** argv) {
   // apps/engine_song_store.h for why the interface is 17 members rather than the 24 captures the
   // measurement reports — HarmonyTimeline absorbs six of them and TrackTable two.
   daw::engine::SongStoreDeps songStoreDeps{
-      arrange, automationVersion, clipEditDeps, clipDirty, harmonyTimeline, songTiming,
-      tempoProvider, trackTable, buildTrackSnapshot, bumpClipVersionFor, ensurePlacementIds,
+      engineState, automationVersion, clipEditDeps, clipDirty, harmonyTimeline,
+      tempoProvider, buildTrackSnapshot, bumpClipVersionFor, ensurePlacementIds,
       rebuildAudioRender, rebuildFlatAndPublish, recomputeSongEnd, snapshotTracks,
       emitClipResync};
   auto snapshotSongStore = [&]() { return daw::engine::snapshotSongStore(songStoreDeps); };
@@ -2104,9 +2104,8 @@ int main(int argc, char** argv) {
       snapshotTrackStoreFn, trackTable};
 
   daw::engine::TransportCommandDeps transportCommandDeps{
-      previewQueue, songTiming, transport, masterTrack, panicPending, patternTicks,
-      resetTimeline, restartCv, running, tempoProvider,
-      trackTable
+      engineState, masterTrack, panicPending, patternTicks,
+      resetTimeline, restartCv, running, tempoProvider
   };
 
   daw::engine::HandleUiEntryDeps handleUiEntryDeps{
@@ -2136,15 +2135,15 @@ int main(int argc, char** argv) {
   daw::LogLine() << "UI: command thread launched" << std::endl;
 
   daw::engine::ProducerThreadDeps producerThreadDeps{
-      renderPoolOwner, producerTelemetry, previewQueue, audioPlaybackBlockId, engineConfig,
+      engineState, audioPlaybackBlockId, engineConfig,
       getHarmonyAt,
       getRingCtrl, getRingStd,
       getScaleForHarmony, harmonyTimeline, lastOverflowTick, nextBlockId,
-      nextNoteId, offlineProducerArmed, offlineRender, panicPending, patcherGraph,
+      nextNoteId, offlineProducerArmed, offlineRender, panicPending,
       patcherParallel, patcherPool, patternTicks,
       projectSeed, publishedCallback, quantizePitch, resetTimeline,
-      resolveDevicePluginPath, running, snapshotTracks, songTiming, tempoProvider,
-      testThrottleMs, tickConverter, traceNotes, transport, warnedEventOutsideBlock,
+      resolveDevicePluginPath, running, snapshotTracks, tempoProvider,
+      testThrottleMs, tickConverter, traceNotes, warnedEventOutsideBlock,
       writeMirrorParams};
   std::thread producer([&] { daw::engine::runProducerThread(producerThreadDeps); });
 

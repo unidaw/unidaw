@@ -43,46 +43,46 @@ void produceBlock(ProducerBlockDeps& deps,
   auto& debugStall = deps.debugStall;
   auto& engineConfig = deps.engineConfig;
   auto enqueuePreview = [&](uint32_t t_, uint8_t p_, uint8_t v_, bool on_) {
-    deps.previewQueue.enqueuePreview(t_, p_, v_, on_);
+    deps.engineState.previewQueue.enqueuePreview(t_, p_, v_, on_);
   };
   auto& getHarmonyAt = deps.getHarmonyAt;
   auto& getRingCtrl = deps.getRingCtrl;
   auto& getRingStd = deps.getRingStd;
   auto& getScaleForHarmony = deps.getScaleForHarmony;
   auto& lastOverflowTick = deps.lastOverflowTick;
-  auto& loopEndNanotick = deps.transport.loopEndNanotick;
-  auto& loopStartNanotick = deps.transport.loopStartNanotick;
-  auto& meterSnapshot = deps.songTiming.meterSnapshot;
+  auto& loopEndNanotick = deps.engineState.transport.loopEndNanotick;
+  auto& loopStartNanotick = deps.engineState.transport.loopStartNanotick;
+  auto& meterSnapshot = deps.engineState.songTiming.meterSnapshot;
   auto& nextBlockId = deps.nextBlockId;
   auto& nextNoteId = deps.nextNoteId;
   auto& offlineRender = deps.offlineRender;
   auto& panicPending = deps.panicPending;
-  auto& patcherGraphSnapshot = deps.patcherGraph.patcherGraphSnapshot;
+  auto& patcherGraphSnapshot = deps.engineState.patcherGraph.patcherGraphSnapshot;
   auto& patcherParallel = deps.patcherParallel;
   auto& patcherPool = deps.patcherPool;
-  auto& pendingPreviewNotes = deps.previewQueue.pendingPreviewNotes;
-  auto& playing = deps.transport.playing;
-  auto& poolAlwaysOn = deps.renderPoolOwner.poolAlwaysOn;
-  auto& poolEngaged = deps.renderPoolOwner.poolEngaged;
-  auto& poolWorkEwmaUs = deps.renderPoolOwner.poolWorkEwmaUs;
-  auto& previewMutex = deps.previewQueue.previewMutex;
+  auto& pendingPreviewNotes = deps.engineState.previewQueue.pendingPreviewNotes;
+  auto& playing = deps.engineState.transport.playing;
+  auto& poolAlwaysOn = deps.engineState.renderPoolOwner.poolAlwaysOn;
+  auto& poolEngaged = deps.engineState.renderPoolOwner.poolEngaged;
+  auto& poolWorkEwmaUs = deps.engineState.renderPoolOwner.poolWorkEwmaUs;
+  auto& previewMutex = deps.engineState.previewQueue.previewMutex;
   auto& producerBlockBudgetUs = deps.producerBlockBudgetUs;
-  auto& producerBlockUsMax = deps.producerTelemetry.producerBlockUsMax;
-  auto& producerBlockUsTotal = deps.producerTelemetry.producerBlockUsTotal;
-  auto& producerBlocksOverBudget = deps.producerTelemetry.producerBlocksOverBudget;
-  auto& producerBlocksTimed = deps.producerTelemetry.producerBlocksTimed;
-  auto& producerSamplerUsMax = deps.producerTelemetry.producerSamplerUsMax;
-  auto& producerSamplerUsTotal = deps.producerTelemetry.producerSamplerUsTotal;
+  auto& producerBlockUsMax = deps.engineState.producerTelemetry.producerBlockUsMax;
+  auto& producerBlockUsTotal = deps.engineState.producerTelemetry.producerBlockUsTotal;
+  auto& producerBlocksOverBudget = deps.engineState.producerTelemetry.producerBlocksOverBudget;
+  auto& producerBlocksTimed = deps.engineState.producerTelemetry.producerBlocksTimed;
+  auto& producerSamplerUsMax = deps.engineState.producerTelemetry.producerSamplerUsMax;
+  auto& producerSamplerUsTotal = deps.engineState.producerTelemetry.producerSamplerUsTotal;
   auto& projectSeed = deps.projectSeed;
   auto& publishedCallback = deps.publishedCallback;
   auto& quantizePitch = deps.quantizePitch;
-  auto& renderPool = deps.renderPoolOwner.renderPool;
+  auto& renderPool = deps.engineState.renderPoolOwner.renderPool;
   auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
   auto& tempoProvider = deps.tempoProvider;
   auto& tickConverter = deps.tickConverter;
   auto& traceNotes = deps.traceNotes;
-  auto& transportElapsedNanotick = deps.transport.transportElapsedNanotick;
-  auto& transportNanotick = deps.transport.transportNanotick;
+  auto& transportElapsedNanotick = deps.engineState.transport.transportElapsedNanotick;
+  auto& transportNanotick = deps.engineState.transport.transportNanotick;
   auto& patternTicks = deps.patternTicks;
   auto& warnedEventOutsideBlock = deps.warnedEventOutsideBlock;
   auto& writeMirrorParams = deps.writeMirrorParams;
@@ -153,13 +153,13 @@ void produceBlock(ProducerBlockDeps& deps,
           engineConfig,
           deps.harmonyTimeline,
           lastOverflowTick,
-          deps.patcherGraph,
+          deps.engineState.patcherGraph,
           patcherParallel,
           patcherPool,
           projectSeed,
           tempoProvider,
           traceNotes,
-          deps.transport,
+          deps.engineState.transport,
           warnedEventOutsideBlock,
           resolveDevicePluginPath};
       auto renderTrack = [&](TrackRuntime& runtime,

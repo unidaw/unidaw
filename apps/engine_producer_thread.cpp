@@ -9,9 +9,7 @@
 namespace daw::engine {
 
 void runProducerThread(ProducerThreadDeps& deps) {
-  auto& renderPoolOwner = deps.renderPoolOwner;
-  auto& producerTelemetry = deps.producerTelemetry;
-  auto& previewQueue = deps.previewQueue;
+  auto& engineState = deps.engineState;
   auto& audioPlaybackBlockId = deps.audioPlaybackBlockId;
   auto& engineConfig = deps.engineConfig;
   auto& getHarmonyAt = deps.getHarmonyAt;
@@ -25,7 +23,6 @@ void runProducerThread(ProducerThreadDeps& deps) {
   auto& offlineProducerArmed = deps.offlineProducerArmed;
   auto& offlineRender = deps.offlineRender;
   auto& panicPending = deps.panicPending;
-  auto& patcherGraph = deps.patcherGraph;
   auto& patcherParallel = deps.patcherParallel;
   auto& patcherPool = deps.patcherPool;
   auto& patternTicks = deps.patternTicks;
@@ -36,12 +33,11 @@ void runProducerThread(ProducerThreadDeps& deps) {
   auto& resolveDevicePluginPath = deps.resolveDevicePluginPath;
   auto& running = deps.running;
   auto& snapshotTracks = deps.snapshotTracks;
-  auto& songTiming = deps.songTiming;
   auto& tempoProvider = deps.tempoProvider;
   auto& testThrottleMs = deps.testThrottleMs;
   auto& tickConverter = deps.tickConverter;
   auto& traceNotes = deps.traceNotes;
-  auto& transport = deps.transport;
+  auto& transport = deps.engineState.transport;
   auto& warnedEventOutsideBlock = deps.warnedEventOutsideBlock;
   auto& writeMirrorParams = deps.writeMirrorParams;
 
@@ -120,10 +116,10 @@ void runProducerThread(ProducerThreadDeps& deps) {
       // Built once per producer thread, immediately before the loop: every member is a
       // reference to something that outlives it, so the per-block call adds no work.
       daw::engine::ProducerBlockDeps producerBlockDeps{
-      renderPoolOwner, producerTelemetry, previewQueue, blockDuration, blockTicksFor, debugStall,
+      engineState, blockDuration, blockTicksFor, debugStall,
       engineConfig, getHarmonyAt, getRingCtrl, getRingStd, getScaleForHarmony, harmonyTimeline,
-      lastOverflowTick, transport, songTiming, nextBlockId, nextNoteId,
-      offlineRender, panicPending, patcherGraph, patcherParallel, patcherPool,
+      lastOverflowTick, nextBlockId, nextNoteId,
+      offlineRender, panicPending, patcherParallel, patcherPool,
       producerBlockBudgetUs, projectSeed,
       publishedCallback, quantizePitch, resolveDevicePluginPath, tempoProvider,
       tickConverter, traceNotes, patternTicks, warnedEventOutsideBlock, writeMirrorParams
