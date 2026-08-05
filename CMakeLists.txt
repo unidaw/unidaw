@@ -1310,6 +1310,17 @@ set_tests_properties(block_edge_note PROPERTIES
 # ignores note-off by definition, so it is structurally incapable of testing the other half. Three
 # hand-rolled note-off sites kept the pre-fix arithmetic and dropped the release: two left a note
 # PERMANENTLY STUCK, one held it a whole extra loop pass.
+# THE COMMAND ENUM IS WRITTEN TWICE, IN TWO LANGUAGES. The Rust value is what goes on the wire and
+# the C++ value is what the engine switches on, so a disagreement is not a build error — it is a
+# command that silently does something else. contract_freshness_check says outright that it does
+# NOT check the mirrors agree; contract_layout_check pins sizes only; op_registry_check reads a
+# different file. This is the pair every feature commit touches.
+add_test(NAME opcode_mirror
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/opcode_mirror_check.sh
+)
+set_tests_properties(opcode_mirror PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
+
 add_test(NAME note_off_edge
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/note_off_edge_check.sh
 )
