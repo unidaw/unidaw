@@ -1,5 +1,7 @@
 #include "engine_load_project.h"
 
+#include "apps/engine_load_track.h"
+
 // The module header covers the Deps struct's own surface. These are what the load body
 // reaches for, and they are the whole list — the file arrived carrying main.cpp's 93
 // includes, which describe where it used to live rather than what it uses.
@@ -30,7 +32,6 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   auto& emitModSnapshot = deps.emitModSnapshot;
   auto& emitRoutingSnapshot = deps.emitRoutingSnapshot;
   auto& emitUiDiff = deps.emitUiDiff;
-  auto& ensurePlacementIds = deps.ensurePlacementIds;
   auto& ensureTrack = deps.ensureTrack;
   auto& harmonyDirty = deps.harmonyTimeline.harmonyDirty;
   auto& harmonyEvents = deps.harmonyTimeline.harmonyEvents;
@@ -57,9 +58,7 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   auto& publishAudioClipTable = deps.publishAudioClipTable;
   auto& rebuildAudioRender = deps.rebuildAudioRender;
   auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
-  auto& rebuildHostForChain = deps.rebuildHostForChain;
   auto& reconcileMasterHost = deps.reconcileMasterHost;
-  auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   auto& resetTrackContent = deps.resetTrackContent;
   auto& songEndNanotick = deps.songTiming.songEndNanotick;
   auto& songMeter = deps.arrange.songMeter;
@@ -569,182 +568,14 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
       }
     }
 
+    // ONE TRACK AT A TIME — apps/engine_load_track.h. The 171-line body of this loop is the
+    // largest single phase of the load, and it is now a function whose name says which phase.
     for (const auto& source : document.tracks) {
       TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, source.trackId);
       if (!runtime) {
         continue;
       }
-      std::shared_ptr<const ClipSnapshot> snapshot;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        // M3.2 structural store: this track owns its placements + copies of the
-        // clips they reference; track.clip and the rails are DERIVED from them by
-        // rebuildFlatAndPublish. Editing later mutates this store, not track.clip.
-        runtime->sourcePlacements = source.placements;
-        ensurePlacementIds(runtime->sourcePlacements);
-        runtime->ownedClips.clear();
-        for (const auto& pl : source.placements) {
-          bool have = false;
-          for (const auto& oc : runtime->ownedClips) {
-            if (oc.id == pl.clipId) {
-              have = true;
-              break;
-            }
-          }
-          if (have) {
-            continue;
-          }
-          for (const auto& c : document.clips) {
-            if (c.id == pl.clipId) {
-              runtime->ownedClips.push_back(c);
-              break;
-            }
-          }
-        }
-        runtime->arrangementDirty.store(false, std::memory_order_relaxed);
-        snapshot = rebuildFlatAndPublish(*runtime);
-        // Decode + resolve this track's placed audio clips for the audio thread.
-        std::atomic_store_explicit(&runtime->audioRender,
-                                   rebuildAudioRender(*runtime),
-                                   std::memory_order_release);
-        runtime->track.harmonyQuantize = source.harmonyQuantize;
-        runtime->track.soundAddressedOnly = source.soundAddressedOnly;
-        // M3.27: adopt the automation. Parsed at load and never installed would be the
-        // mod-link data loss all over again — the next save would write an empty list and
-        // delete it from disk.
-        runtime->track.automationClips = source.automationClips;
-        // M1.13: adopt the lane's quantize BEFORE the flat rebuild below, so the very
-        // first scheduling copy after a load already sounds quantized. Adopting it
-        // afterwards would leave the lane straight until the next edit.
-        runtime->quantizeGrid.store(source.quantize.gridNanoticks,
-                                    std::memory_order_release);
-        runtime->quantizeStrength.store(source.quantize.strengthMilli,
-                                        std::memory_order_release);
-        runtime->quantizeSwing.store(source.quantize.swingMilli,
-                                     std::memory_order_release);
-        if (!source.name.empty()) {
-          runtime->trackName = source.name;
-        }
-        // Restore the device chain so reopening a session restores its plugins,
-        // and its sound. hostSlotIndex is a runtime scan index with no meaning
-        // across runs, so re-resolve each VST device from its durable vstRef
-        // into the current cache. A plugin present only on disk (not in the
-        // scan) can't be pinned to a stable slot here — it was reported by the
-        // project.plugin_* events above and is left for a rescan rather than
-        // loaded by an unstable index.
-        daw::TrackChain loadedChain = source.chain;
-        for (auto& device : loadedChain.devices) {
-          if (device.kind != daw::DeviceKind::VstInstrument &&
-              device.kind != daw::DeviceKind::VstEffect) {
-            continue;
-          }
-          if (device.vstRef.empty()) {
-            continue;
-          }
-          const auto resolution = daw::resolveVstRef(
-              pluginCache, device.vstRef.uid16, device.vstRef.path,
-              device.vstRef.vendor, device.vstRef.name);
-          if (resolution.match != daw::VstMatch::None) {
-            device.hostSlotIndex = static_cast<uint32_t>(resolution.index);
-          } else {
-            // A NAMED PLUGIN THAT IS NOT HERE LOADS NOTHING. The file's own host_slot_index is an
-            // index into the machine it was SAVED on, so using it when the ref fails to resolve
-            // loads whatever now sits at that number: rack.uniproj.json asks for Identity and got
-            // an Analog Heat. The device stays in the chain and stays inert, which is visible;
-            // project.plugin_missing above already says which one and why.
-            //
-            // TWO EXEMPTIONS, and the second one cost a suite run to find:
-            //
-            //   * the path is right there on disk — a plugin loaded by path need not appear in
-            //     the scan at all, which is the same exemption the report above makes.
-            //   * the slot is the DIRECT SENTINEL. Direct means "the engine's default plugin",
-            //     which is an intentional value, not a stale index into someone else's machine —
-            //     it is what every test fixture and the fake instrument use, with a name like
-            //     "identity" that resolves to nothing in the cache. Overwriting it made seven
-            //     audio checks render silence at once, which is how I know the first version of
-            //     this was too broad: my own negative control used a real slot index, so it
-            //     never exercised the case that actually mattered.
-            std::error_code pathEc;
-            const bool onDisk = !device.vstRef.path.empty() &&
-                                std::filesystem::exists(device.vstRef.path, pathEc);
-            const bool direct = device.hostSlotIndex == daw::kHostSlotIndexDirect;
-            if (!onDisk && !direct) {
-              device.hostSlotIndex = daw::kHostSlotIndexUnresolved;
-            }
-          }
-        }
-        runtime->track.chain = std::move(loadedChain);
-        refreshSamplerForTrack(*runtime);
-        // Adopt the project's routing so track-to-track sends and the sidechain source
-        // survive a reopen (previously the runtime kept its default master-out routing
-        // and a saved sidechain/send was silently dropped). Read by rebuildHostForChain
-        // below and by the producer's routing, both under this same trackMutex.
-        runtime->track.routing = source.routing;
-        // Adopt the project's modulation matrix. Without this a saved mod link was parsed
-        // into the document and then DROPPED — the runtime kept its empty list, and the
-        // next save (which writes runtime->track.modRegistry.links) emitted an empty
-        // mod_links array, deleting the link from disk. Serialization was never the bug;
-        // the load side simply never installed them, so every other field being adopted
-        // here made the omission invisible. Verified: maximal has one link on Bass, and a
-        // load+save round trip took it from 1 to 0 before this line existed.
-        runtime->track.modRegistry.links = source.modLinks;
-        runtime->mixGainLinear.store(
-            static_cast<float>(std::pow(10.0, source.mixer.gainDb / 20.0)),
-            std::memory_order_relaxed);
-        runtime->mixPan.store(static_cast<float>(source.mixer.pan),
-                              std::memory_order_relaxed);
-        runtime->mixMute.store(source.mixer.mute, std::memory_order_relaxed);
-        runtime->mixSolo.store(source.mixer.solo, std::memory_order_relaxed);
-        runtime->parentId.store(source.parentId, std::memory_order_relaxed);
-        runtime->collapsed.store(source.collapsed, std::memory_order_relaxed);
-        // A document track is never an aux child — clear the flag in case this slot
-        // held a child of a previously loaded project, so it doesn't route audio from a
-        // stale parent's aux plane.
-        runtime->isAuxChild.store(false, std::memory_order_release);
-        runtime->auxParentTrackId.store(0, std::memory_order_relaxed);
-        runtime->auxBusChannelCount.store(0, std::memory_order_relaxed);
-        runtime->childrenReconciled.store(false, std::memory_order_relaxed);
-        runtime->linesPerBeat.store(
-            source.linesPerBeat == 0 ? 4u : source.linesPerBeat,
-            std::memory_order_relaxed);
-        runtime->allowNoteOverlap.store(source.allowNoteOverlap, std::memory_order_relaxed);
-        // snapshot already built by rebuildFlatAndPublish above.
-      }
-      std::atomic_store_explicit(&runtime->clipSnapshot,
-                                 snapshot,
-                                 std::memory_order_release);
-      // Republish the track-state snapshot now that the chain, routing (sidechain +
-      // sends), and mod links are restored. The snapshot built before this loop ran
-      // holds the pre-load defaults, so without this the producer keeps routing to
-      // master and never reads the project's sidechain source.
-      {
-        std::shared_ptr<const TrackStateSnapshot> snap;
-        {
-          std::lock_guard<std::mutex> tlock(runtime->trackMutex);
-          snap = buildTrackSnapshot(runtime->track);
-        }
-        std::atomic_store_explicit(&runtime->trackSnapshot, snap,
-                                   std::memory_order_release);
-      }
-      // Spawn or reconcile the host for the restored chain. Idempotent when the
-      // live chain already matches (reopen-same-session): equal plugin paths are
-      // a no-op, so this only does work when the chain actually changed.
-      rebuildHostForChain(*runtime);
-      // Re-publish the rack now that it holds the project's devices. The
-      // all-tracks snapshot above ran before this loop restored them, so on its
-      // own it would leave a UI showing the pre-load chain.
-      //
-      // ROUTING AND MOD LINKS NEED THE SAME REPUBLISH, and did not have it. The reasoning in the
-      // comment above applies to all three identically — the all-tracks emit runs 150 lines
-      // before `modRegistry.links = source.modLinks` — and only the chain was fixed. For
-      // modulation it was worse than a stale value: emitModSnapshot iterated the links, so an
-      // EMPTY registry emitted nothing at all. Net effect, reported by the frontend agent: open a
-      // project with modulation in it and the UI is told NOTHING, forever, with no way to ask.
-      // There is no RequestModSnapshot, so it was absent rather than late. presets/projects/
-      // rack.uniproj.json ships a link and a fresh load published zero.
-      emitChainSnapshot(*runtime);
-      emitRoutingSnapshot(*runtime);
-      emitModSnapshot(*runtime);
+      loadTrackFromDocument(deps, *runtime, source, document);
     }
 
     // Restore the MASTER track's chain/mixer lifted out above (patcher-is-a-device 4a).
