@@ -28,7 +28,7 @@
 
 #include "engine_clip_window.h"
 #include "engine_aux_child_overlays.h"
-#include "engine_arrange_markers.h"
+#include "engine_arrange_rail.h"
 #include "engine_patcher_graph_owner.h"
 #include "engine_song_timing.h"
 #include "engine_transport_state.h"
@@ -57,7 +57,7 @@ struct UiWriterDeps {  // The one clip-window request in flight, with its lock: 
 
   // Nine publish gates in one: see apps/engine_publish_gates.h.
   PublishGates& publishGates;
-  ArrangeMarkers& arrange;
+  ArrangeRail& arrange;
   std::atomic<uint32_t>& automationVersion;
   std::atomic<uint32_t>& clipVersion;
   HarmonyTimeline& harmonyTimeline;

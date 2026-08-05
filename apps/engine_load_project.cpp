@@ -62,7 +62,7 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   auto& refreshSamplerForTrack = deps.refreshSamplerForTrack;
   auto& resetTrackContent = deps.resetTrackContent;
   auto& songEndNanotick = deps.songTiming.songEndNanotick;
-  auto& songMeter = deps.songTiming.songMeter;
+  auto& songMeter = deps.arrange.songMeter;
   auto& songTimeSigDen = deps.songTiming.songTimeSigDen;
   auto& songTimeSigNum = deps.songTiming.songTimeSigNum;
   auto& tempoProvider = deps.tempoProvider;

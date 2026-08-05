@@ -56,7 +56,7 @@
 #include "apps/engine_publish_clips.h"
 #include "apps/engine_clip_edit.h"
 #include "apps/engine_track_setup.h"
-#include "apps/engine_arrange_markers.h"
+#include "apps/engine_arrange_rail.h"
 #include "apps/engine_track_table.h"
 #include "apps/engine_patcher_graph_owner.h"
 #include "apps/engine_song_extent.h"
@@ -692,7 +692,7 @@ int main(int argc, char** argv) {
   // and would have wedged the engine mid-edit with no diagnostic. Moving the meter onto the
   // section deleted one of the two; deleting the section deletes the derivation itself, so a
   // marker's bar is a lookup in the map and there is no pair left to invert.
-  daw::engine::ArrangeMarkers arrange;
+  daw::engine::ArrangeRail arrange;
   // AN RT-SAFE COPY OF THE METER, for the audio/host thread. The play head has to report the
   // signature at the PLAYHEAD, not the song default — that is the whole point of an authoritative
   // meter map, and reporting the default is the bug this replaces. The RT cannot take arrangeMutex,

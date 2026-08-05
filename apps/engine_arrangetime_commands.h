@@ -26,7 +26,7 @@
 #include <string>
 #include <vector>
 
-#include "engine_arrange_markers.h"
+#include "engine_arrange_rail.h"
 #include "engine_song_timing.h"
 #include "engine_harmony_timeline.h"
 #include "apps/engine_pure.h"
@@ -39,7 +39,7 @@
 namespace daw::engine {
 
 struct ArrangeTimeCommandDeps {
-  ArrangeMarkers& arrange;
+  ArrangeRail& arrange;
   std::atomic<uint32_t>& automationVersion;
   const std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)>& buildTrackSnapshot;
   const std::function<uint32_t(TrackRuntime*)>& bumpClipVersionFor;

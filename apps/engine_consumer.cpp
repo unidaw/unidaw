@@ -218,7 +218,7 @@ void writeUiArrangeSummaryTo(UiWriterDeps& deps, bool force) {
   auto& lastArrangeVersion = deps.publishGates.lastArrangeVersion;
   auto& markerList = deps.arrange.markerList;
   auto& songEndNanotick = deps.songTiming.songEndNanotick;
-  auto& songMeter = deps.songTiming.songMeter;
+  auto& songMeter = deps.arrange.songMeter;
   auto& uiShm = deps.uiShm;
 
     if (!uiShm.header || uiShm.header->uiArrangeOffset == 0) {

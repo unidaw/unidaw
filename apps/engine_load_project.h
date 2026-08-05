@@ -28,7 +28,7 @@
 #include "engine_aux_child_overlays.h"
 #include "engine_loaded_project.h"
 #include "engine_track_table.h"
-#include "engine_arrange_markers.h"
+#include "engine_arrange_rail.h"
 #include "engine_patcher_graph_owner.h"
 #include "engine_song_timing.h"
 #include "engine_transport_state.h"
@@ -50,7 +50,7 @@ struct LoadProjectDeps {
   AuxChildOverlays& auxChildOverlays;
   // What a load left behind: see apps/engine_loaded_project.h.
   LoadedProject& loadedProject;
-  ArrangeMarkers& arrange;
+  ArrangeRail& arrange;
   std::atomic<uint32_t>& automationVersion;
   std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)> buildTrackSnapshot;
   std::function<void()> bumpAllTrackClipVersions;

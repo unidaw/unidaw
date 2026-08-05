@@ -1,9 +1,14 @@
 #pragma once
 
-// THE SONG'S METER AND EXTENT — how many beats are in a bar, where the bars fall, how long the
-// song is, and the tempo points a project was loaded with.
+// THE SONG'S TEMPO, EXTENT AND DEFAULT METER PAIR — how fast time passes, how long the song is,
+// and what to count in where no meter point applies.
 //
-// The third engine object of #26. These six appeared as TWENTY-FOUR separate members across seven
+// songMeter LEFT THIS STRUCT for apps/engine_arrange_rail.h, because every access to it is under
+// arrangeMutex and that is where the lock's state now lives. meterSnapshot stayed: it is the
+// immutable copy the PRODUCER loads atomically with no lock, and handing the producer a marker
+// list to reach it would be the coupling this file's own argument below rejects.
+//
+// The third engine object of #26. These appeared as separate members across seven
 // *Deps structs: LoadProjectDeps wanted all six, ArrangeTimeCommandDeps five, SaveProjectDeps four,
 // ConsumerDeps and ProducerBlockDeps three each. Every module that draws a ruler, saves a document
 // or answers "which bar is this" had to be handed the pieces individually.
@@ -41,7 +46,6 @@
 namespace daw::engine {
 
 struct SongTiming {
-  daw::TimeSignatureMap songMeter;
   std::shared_ptr<const daw::TimeSignatureMap> meterSnapshot =
       std::make_shared<const daw::TimeSignatureMap>();
   // The song-level default, used where no meter point applies. 4/4 because a project written

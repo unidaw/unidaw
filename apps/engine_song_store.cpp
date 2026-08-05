@@ -28,7 +28,7 @@ SongStoreState snapshotSongStore(SongStoreDeps& deps) {
     {
       std::lock_guard<std::mutex> alock(arrange.arrangeMutex);
       s.markers = arrange.markerList.markers();
-      s.meterPoints = songTiming.songMeter.points();
+      s.meterPoints = arrange.songMeter.points();
     }
     s.tempoMap = songTiming.loadedTempoMap;
     {
@@ -121,13 +121,13 @@ bool restoreSongStore(SongStoreDeps& deps, const SongStoreState& state) {
     {
       std::lock_guard<std::mutex> alock(arrange.arrangeMutex);
       arrange.markerList.setMarkers(state.markers);
-      songTiming.songMeter.setMap(state.meterPoints);
+      arrange.songMeter.setMap(state.meterPoints);
       // The RT reads the meter from a snapshot, so a restored map that is not republished is a
       // map the play head never sees — the same rule the automation republish above follows.
       std::atomic_store_explicit(
           &songTiming.meterSnapshot,
           std::static_pointer_cast<const daw::TimeSignatureMap>(
-              std::make_shared<daw::TimeSignatureMap>(songTiming.songMeter)),
+              std::make_shared<daw::TimeSignatureMap>(arrange.songMeter)),
           std::memory_order_release);
     }
     songTiming.loadedTempoMap = state.tempoMap;

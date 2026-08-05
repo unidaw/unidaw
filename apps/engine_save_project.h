@@ -24,7 +24,7 @@
 
 #include "engine_loaded_project.h"
 #include "engine_track_table.h"
-#include "engine_arrange_markers.h"
+#include "engine_arrange_rail.h"
 #include "engine_patcher_graph_owner.h"
 #include "engine_song_timing.h"
 #include "engine_harmony_timeline.h"
@@ -41,7 +41,7 @@ namespace daw::engine {
 struct SaveProjectDeps {
   // What a load left behind: see apps/engine_loaded_project.h.
   LoadedProject& loadedProject;
-  ArrangeMarkers& arrange;
+  ArrangeRail& arrange;
   HarmonyTimeline& harmonyTimeline;
   std::atomic<uint32_t>& liveTrackCount;
   SongTiming& songTiming;

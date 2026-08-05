@@ -25,7 +25,7 @@ bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path,
   auto& patcherPoolEdited = deps.patcherGraph.patcherPoolEdited;
   auto& pluginCache = deps.pluginCache;
   auto& projectSeed = deps.projectSeed;
-  auto& songMeter = deps.songTiming.songMeter;
+  auto& songMeter = deps.arrange.songMeter;
   auto& songTimeSigDen = deps.songTiming.songTimeSigDen;
   auto& songTimeSigNum = deps.songTiming.songTimeSigNum;
   auto& tracks = deps.trackTable.tracks;

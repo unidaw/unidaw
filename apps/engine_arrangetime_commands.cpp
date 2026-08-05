@@ -30,7 +30,7 @@ void handleArrangeTime(ArrangeTimeCommandDeps& deps,
   auto& recomputeSongEnd = deps.recomputeSongEnd;
   auto& snapshotSongStore = deps.snapshotSongStore;
   auto& snapshotTracks = deps.snapshotTracks;
-  auto& songMeter = deps.songTiming.songMeter;
+  auto& songMeter = deps.arrange.songMeter;
   auto& songTimeSigDen = deps.songTiming.songTimeSigDen;
   auto& songTimeSigNum = deps.songTiming.songTimeSigNum;
   auto& tempoProvider = deps.tempoProvider;

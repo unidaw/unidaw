@@ -18,7 +18,7 @@
 #include <memory>
 #include <vector>
 
-#include "engine_arrange_markers.h"
+#include "engine_arrange_rail.h"
 #include "engine_clip_edit.h"
 #include "engine_harmony_timeline.h"
 #include "engine_song_timing.h"
@@ -31,7 +31,7 @@ namespace daw::engine {
 // main() passes bare lambdas, and a const reference member would bind to a temporary that dies at
 // the end of the initialising statement.
 struct SongStoreDeps {
-  ArrangeMarkers& arrange;
+  ArrangeRail& arrange;
   std::atomic<uint32_t>& automationVersion;
   ClipEditDeps& clipEditDeps;
   std::atomic<bool>& clipDirty;
