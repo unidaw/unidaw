@@ -45,6 +45,7 @@ struct FakeTrack {
   std::atomic<bool> hostReady{true};
   std::atomic<bool> active{false};
   std::atomic<bool> mute{false};
+  std::atomic<bool> solo{false};
   daw::ShmHeader header{};
 };
 
@@ -58,6 +59,7 @@ EngineAudioCallback::TrackInfo infoFor(FakeTrack& t, uint32_t trackId) {
   info.hostReady = &t.hostReady;
   info.active = &t.active;
   info.mute = &t.mute;
+  info.solo = &t.solo;
   info.trackId = trackId;
   return info;
 }
@@ -148,9 +150,50 @@ void testRequireActiveFalseIgnoresProduction() {
   CHECK(cb.awaitAllReadyTracks(2000, /*requireActive=*/false, &late));
 }
 
+// ------------------------------------------------------ A SOLOED-OUT TRACK IS NOT WAITED FOR
+// THE RULE HAD TWO ANSWERS. process()'s summing loop resolved mute AND solo; the priming loop and
+// all three waits tested mute only. So with any track soloed, this wait blocked on tracks the mix
+// was about to discard — for the full timeout, and then FAILED THE RENDER with "track N was still
+// not producing", naming a track whose audio was never going to be used.
+//
+// Both of this file's previous subjects were the same shape: two copies of "which tracks count"
+// disagreeing. That is why the mute/solo question is now one function, asserted here.
+void testSoloedOutTrackIsNotWaitedFor() {
+  std::atomic<uint32_t> playbackBlockId{0};
+  EngineAudioCallback cb(44100.0, 512, 3, &playbackBlockId);
+
+  FakeTrack a, b;
+  a.active.store(true);
+  a.solo.store(true);     // the one the user wants to hear
+  b.active.store(false);  // not soloed, never produces — the mix will discard it anyway
+  cb.updateTracks({infoFor(a, 0), infoFor(b, 1)});
+
+  uint32_t late = 0xFFFFFFFFu;
+  CHECK(cb.awaitAllReadyTracks(2000, /*requireActive=*/true, &late));
+}
+
+// AND SOLO DOES NOT EXCUSE THE TRACK THAT IS ACTUALLY SOLOED. The rule must still wait for what
+// the mix WILL read, or this fix would trade a stalled render for a truncated one.
+void testTheSoloedTrackIsStillWaitedFor() {
+  std::atomic<uint32_t> playbackBlockId{0};
+  EngineAudioCallback cb(44100.0, 512, 3, &playbackBlockId);
+
+  FakeTrack a, b;
+  a.solo.store(true);
+  a.active.store(false);  // soloed AND late: this one must block
+  b.active.store(true);
+  cb.updateTracks({infoFor(a, 0), infoFor(b, 1)});
+
+  uint32_t late = 0xFFFFFFFFu;
+  CHECK(!cb.awaitAllReadyTracks(50, /*requireActive=*/true, &late));
+  CHECK(late == 0u);
+}
+
 }  // namespace
 
 int main() {
+  testSoloedOutTrackIsNotWaitedFor();
+  testTheSoloedTrackIsStillWaitedFor();
   testAnyReturnsWhileATrackIsStillSilent();
   testAllReturnsWhenEveryTrackIsProducing();
   testAllWaitsForTheHostAsWellAsProduction();

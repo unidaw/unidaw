@@ -68,6 +68,44 @@ public:
     uint32_t mixChannelCount = 0;      // channels this track contributes to the master
   };
 
+  // ---------------------------------------------------------------- WHO IS IN THE MIX AT ALL
+  //
+  // ONE QUESTION, ASKED IN FIVE PLACES, AND IT USED TO HAVE TWO ANSWERS. Mute and solo decide
+  // whether the mixer reads a track. process()'s summing loop resolved both; the priming loop and
+  // all three waits tested MUTE ONLY. So with any track soloed, the offline pump waited — for up
+  // to fifteen seconds, then FAILED THE RENDER — on tracks process() was about to discard.
+  //
+  // Both shipped bugs in this file's history are the same shape: one wait disagreeing with
+  // another about which tracks count (#16, "ANY ready track, not ALL"), or with process() (the
+  // `active` note in awaitNextBlock). Each was fixed by editing one copy. There are no copies now.
+  //
+  // WHAT IS DELIBERATELY NOT IN HERE: hostReady and active. Those are READINESS, not membership,
+  // and they genuinely differ per caller — offline does not ask for `active`, the any-variant asks
+  // only whether the pipeline is up, and awaitNextBlock must not ask because `active` lags the
+  // data it is derived from. Folding them in would merge two rules that are only adjacent. Each
+  // site still states its own readiness test, and its own reason.
+
+  // Solo is exclusive across the whole bus, so it is resolved over the whole set before any one
+  // track can be judged.
+  static bool anySoloEngaged(const std::vector<TrackInfo>& tracks) {
+    for (const auto& track : tracks) {
+      if (track.solo && track.solo->load(std::memory_order_relaxed)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Whether the mixer will read this track this block. Muted is out; if anything is soloed,
+  // everything not soloed is out.
+  static bool contributesToMix(const TrackInfo& track, bool anySolo) {
+    if (track.mute && track.mute->load(std::memory_order_relaxed)) {
+      return false;
+    }
+    const bool soloed = track.solo && track.solo->load(std::memory_order_relaxed);
+    return !anySolo || soloed;
+  }
+
   // Per-slot output peak, written by the audio thread each block and read by the
   // consumer to publish uiTrackPeakRms. Relaxed atomics: a meter that reads one
   // block stale is invisible.
@@ -196,6 +234,11 @@ public:
     bool starvedThisCallback = false;  // an active track's block wasn't ready yet
     uint32_t starveGap = 0;            // how many blocks short the worst track was
 
+    // RESOLVED ONCE, ABOVE BOTH LOOPS. Solo is a property of the whole set, and the priming loop
+    // needs the same answer the summing loop does — it used to run before this was computed,
+    // which is exactly how the two came to disagree.
+    const bool anySolo = anySoloEngaged(*tracks);
+
     // Startup priming: right after Play the producer is still filling the pipeline. If the
     // callback begins consuming before a cushion is buffered it immediately outruns the
     // producer and starves for the first few blocks — the audible Play-time transient. So
@@ -210,7 +253,10 @@ public:
         if (!track.completedBlockId || !track.header) {
           continue;
         }
-        if (track.mute && track.mute->load(std::memory_order_relaxed)) {
+        // The SAME membership test the summing loop below uses. This asked only about mute, so a
+        // soloed-out track still contributed its completedBlockId to the maximum that decides
+        // which block is ready to mix.
+        if (!contributesToMix(track, anySolo)) {
           continue;
         }
         if (track.hostReady && !track.hostReady->load(std::memory_order_acquire)) {
@@ -234,23 +280,12 @@ public:
       }
     }
 
-    // Solo is exclusive across the whole bus, so it has to be resolved before
-    // any track is summed.
-    bool anySolo = false;
-    for (const auto& track : *tracks) {
-      if (track.solo && track.solo->load(std::memory_order_relaxed)) {
-        anySolo = true;
-        break;
-      }
-    }
 
     for (const auto& track : *tracks) {
       if (!track.shmView || !track.shmBase || !track.header || !track.completedBlockId) {
         continue;
       }
-      const bool muted = track.mute && track.mute->load(std::memory_order_relaxed);
-      const bool soloed = track.solo && track.solo->load(std::memory_order_relaxed);
-      if (muted || (anySolo && !soloed)) {
+      if (!contributesToMix(track, anySolo)) {
         continue;
       }
       if (track.hostReady && !track.hostReady->load(std::memory_order_acquire)) {
@@ -737,13 +772,17 @@ public:
       // awaitNextBlock skips muted tracks unconditionally, and correctly: there the question is
       // which tracks the NEXT MIX will read, and waiting on one that contributes nothing would
       // deadlock a render that is correct. Here the question is whether the pipeline is up.
-      bool anyUnmutedTrack = false;
-      bool anyReadyMutedTrack = false;
+      bool anyContributingTrack = false;
+      bool anyReadySilentTrack = false;
       if (tracks) {
+        const bool anySolo = anySoloEngaged(*tracks);
         for (const auto& track : *tracks) {
-          const bool muted = track.mute && track.mute->load(std::memory_order_relaxed);
-          if (!muted) {
-            anyUnmutedTrack = true;
+          // "Silent" here means muted OR soloed out — the fallback below exists so an
+          // all-muted project renders its silence instead of failing, and a project where
+          // everything is soloed out is the same situation reached by the other switch.
+          const bool contributes = contributesToMix(track, anySolo);
+          if (contributes) {
+            anyContributingTrack = true;
           }
           if (!track.completedBlockId || !track.header) {
             continue;
@@ -755,14 +794,14 @@ public:
               !track.active->load(std::memory_order_acquire)) {
             continue;
           }
-          if (muted) {
-            anyReadyMutedTrack = true;
+          if (!contributes) {
+            anyReadySilentTrack = true;
             continue;
           }
           return true;
         }
-        if (anyReadyMutedTrack && !anyUnmutedTrack) {
-          return true;  // every track is muted: render the silence rather than fail
+        if (anyReadySilentTrack && !anyContributingTrack) {
+          return true;  // nothing contributes: render the silence rather than fail
         }
       }
       if (std::chrono::steady_clock::now() >= deadline) {
@@ -809,11 +848,14 @@ public:
       bool allReady = true;
       uint32_t late = 0;
       if (tracks) {
+        const bool anySolo = anySoloEngaged(*tracks);
         for (const auto& track : *tracks) {
-          // A MUTED TRACK IS NOT WAITED FOR. It contributes nothing to the mix, and an all-muted
-          // project is a legitimate render of silence — the same reasoning the any-variant spells
-          // out, and the reason waiting on one could deadlock a render that is correct.
-          if (track.mute && track.mute->load(std::memory_order_relaxed)) {
+          // A TRACK THE MIX WILL NOT READ IS NOT WAITED FOR. Muted, or soloed out by another
+          // track's solo: it contributes nothing, an all-muted project is a legitimate render of
+          // silence, and waiting on one deadlocks a render that is correct. This tested MUTE only,
+          // so a soloed-out track that never became active failed the render after fifteen
+          // seconds — a render the mixer would have produced correctly without it.
+          if (!contributesToMix(track, anySolo)) {
             continue;
           }
           if (track.hostReady && !track.hostReady->load(std::memory_order_acquire)) {
@@ -863,13 +905,14 @@ public:
     for (;;) {
       uint32_t worstTrack = 0;
       uint32_t worstGap = 0;
+      const bool anySolo = anySoloEngaged(*tracks);
       for (const auto& track : *tracks) {
         if (!track.completedBlockId || !track.header) {
           continue;
         }
-        // Exactly the tracks process() will read from: a muted, hostless or inactive track
-        // contributes nothing, so waiting on it would deadlock a render that is correct.
-        if (track.mute && track.mute->load(std::memory_order_relaxed)) {
+        // Exactly the tracks process() will read from: a muted, SOLOED-OUT, hostless or inactive
+        // track contributes nothing, so waiting on it would deadlock a render that is correct.
+        if (!contributesToMix(track, anySolo)) {
           continue;
         }
         if (track.hostReady && !track.hostReady->load(std::memory_order_acquire)) {
