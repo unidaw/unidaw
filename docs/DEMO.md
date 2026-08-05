@@ -147,7 +147,7 @@ Verified prompts:
 | `write a simple four bar bassline in C minor on track 0` | 16 notes, root and fifth |
 | `add a four on the floor kick pattern` | writes the pattern |
 | `write a four chord progression on track 0, and strum them` | I-V-vi-IV with a real spread |
-| `put a sampler on track 0, load waveform_probe.wav into it, and write a four note phrase` | device, file and notes in one go |
+| `put a sampler on track 0, load demo_pluck_c4.wav into it, and write a four note phrase` | device, file and notes in one go |
 | `set the tempo to 96` | acts on the song already open |
 
 **Ask one thing at a time, and let each answer finish.** The agent remembers the last few

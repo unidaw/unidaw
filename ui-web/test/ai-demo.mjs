@@ -20,11 +20,17 @@
  *
  *   DAW_ENV_FILE=/path/to/.env node ui-web/test/ai-demo.mjs
  *
- * WHAT THE AGENT CANNOT DO, recorded here because a demo should not discover it live: there is
- * no chord tool, no sampler tooling and no patcher tooling in the manifest. "Ask it for a chord
- * progression", "ask it to load a kick" and "ask it to wire a patcher" all fail today — not
- * because the model is unwilling but because the tools do not exist. Those are gaps in
- * daw-agent, tracked separately.
+ * WHAT THE AGENT CANNOT DO, recorded here because a demo should not discover it live.
+ *
+ * This paragraph used to say there was no chord tool, no sampler tooling and no patcher tooling —
+ * true when written, and false by the time the checks below were passing. `add_chords`,
+ * `load_sample` and `patcher_node` exist now and this file asserts two of the three. A stale note
+ * about a gap reads exactly like a finding, so: what remains is ONE thing.
+ *
+ * The agent cannot DISCOVER DEVICE IDS. Five tools take a `device` and the observation it is
+ * given reports no chains, so "wire the patcher" needs a person to supply the id. It says so
+ * rather than guessing, which is the right behaviour and still a gap. Tracked separately; that is
+ * why there is no patcher prompt below.
  */
 
 import { chromium } from 'playwright';
@@ -204,8 +210,13 @@ check(strummed.length > 0 && strummed.some((v) => v > 0),
 // ---------------------------------------------------------------------------
 await run('new aisampler');
 await page.waitForTimeout(1500);
+/*
+ * `demo_pluck_c4.wav`, which is what the runbook tells a person to reach for: middle C with its
+ * attack in the first millisecond. Naming a probe asset here would have the model build something
+ * that is structurally perfect and inaudible for its first second.
+ */
 const smp = await askFor(
-  'put a sampler on track 0, load waveform_probe.wav into it, and write a four note phrase',
+  'put a sampler on track 0, load demo_pluck_c4.wav into it, and write a four note phrase',
   (a, b) => b.notes > a.notes);
 check(smp.ok, 'asking for a sampler part builds one — device, file and notes',
       `${smp.secs}s, notes ${smp.before.notes} -> ${smp.now.notes} :: ${smp.said.slice(-200)}`);
