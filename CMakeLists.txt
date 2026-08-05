@@ -1192,6 +1192,14 @@ add_test(NAME deps_state_group_check
 )
 set_tests_properties(deps_state_group_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120)
 
+# A FROZEN PLUGIN HOST MUST NOT HALT THE TRANSPORT. Property test, not a regression guard for a
+# fix — the property holds today and this keeps it that way. See the header for why it is not
+# evidence that the reported plugin-silence is fixed (it is not).
+add_test(NAME host_stall_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/host_stall_check.sh
+)
+set_tests_properties(host_stall_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 # An AUDIO clip's in-point, gain and fades (opcode 95). Three layers have to move together and the
 # check asserts each one separately: the descriptor table (which was a load-time snapshot until
 # this command existed), the baked audio render (which the table cannot see), and the saved file.

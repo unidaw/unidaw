@@ -63,6 +63,7 @@ void runProducerThread(ProducerThreadDeps& deps) {
     const auto stallStart = std::chrono::steady_clock::now();
     uint64_t stallLogMs = 0;
     uint32_t lastPlaybackBlock = 0;
+    std::string stallHosts;
     auto lastPlaybackAdvance = std::chrono::steady_clock::now();
     const auto playbackStallLimit = std::chrono::milliseconds(100);
     auto stallNowMs = [&]() -> uint64_t {
@@ -88,7 +89,8 @@ void runProducerThread(ProducerThreadDeps& deps) {
                 << ") next=" << nextId
                 << " minCompleted=" << minCompleted
                 << " playback=" << currentPlayback
-                << " extra=" << extra << std::endl;
+                << " extra=" << extra
+                << " hosts=[" << stallHosts << "]" << std::endl;
     };
     // THE TRANSPORT ADVANCES BY A CARRIED FRACTION, not by a rounded tick.
     //
@@ -249,12 +251,27 @@ void runProducerThread(ProducerThreadDeps& deps) {
       // THE RULE, applied where it can be tested: apps/engine_rt_helpers.h.
       const auto progress = daw::engine::completedMinimum(
           hostProgress, nextBlockId.load(std::memory_order_relaxed));
+      // WHICH host is holding the minimum, and what every host reported. "the hosts are behind"
+      // is as far as anyone can get from the numbers above, and with six hosted plugins that is
+      // not far enough to act on: one stuck host and six evenly-behind hosts are different bugs.
+      // Built only when the stall log is armed, so it costs nothing in a normal run.
+      if (debugStall) {
+        std::string perHost;
+        for (size_t i = 0; i < hostProgress.size(); ++i) {
+          perHost += (i ? "," : "");
+          perHost += std::to_string(i);
+          perHost += hostProgress[i].active ? ":" : ":inactive@";
+          perHost += std::to_string(hostProgress[i].completedBlockId);
+        }
+        stallHosts = perHost;
+      }
       anyActive = progress.anyContributing;
       minCompleted = progress.minCompleted;
       const bool throttleInactive = !anyActive;
       if (minCompleted == std::numeric_limits<uint32_t>::max()) {
         if (isPlaying) {
-          logStall("minCompleted", nextBlockId.load(std::memory_order_relaxed), 0, 0, 0);
+          logStall("minCompleted", nextBlockId.load(std::memory_order_relaxed), 0,
+                   audioPlaybackBlockId.load(std::memory_order_acquire), 0);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         continue;
@@ -263,7 +280,8 @@ void runProducerThread(ProducerThreadDeps& deps) {
       const uint32_t inFlight = nextBlockId.load() - minCompleted;
       if (inFlight >= engineConfig.numBlocks) {
         if (isPlaying) {
-          logStall("inFlight", nextBlockId.load(std::memory_order_relaxed), minCompleted, 0, inFlight);
+          logStall("inFlight", nextBlockId.load(std::memory_order_relaxed), minCompleted,
+                   audioPlaybackBlockId.load(std::memory_order_acquire), inFlight);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         continue;
