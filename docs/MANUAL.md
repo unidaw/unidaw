@@ -80,12 +80,20 @@ what the golden tests use.
 │ breadcrumb: project · track · surface   |  entry state       │
 ├──────────┬───────────────────────────────────┬───────────────┤
 │ BROWSER  │            the stage              │  HARMONY      │
-│  rail    │   (one or two panes of surfaces)  │  pending diff │
+│  rail    │   (one or two panes of surfaces)  │  CELL         │
+│          │                                   │  pending diff │
 │          │                                   │  AGENT (dock) │
 │          ├───────────────────────────────────┤               │
 │          │        DEVICE CHAIN (rack)        │               │
 └──────────┴───────────────────────────────────┴───────────────┘
 ```
+
+**CELL** is the inspector: what is in the cell under the cursor, or under the pointer when you
+are hovering one — it says which. A tracker cell has three characters to work with, so the things
+it cannot show live here: a note's length and velocity and which of the seven row ops are riding
+on it, and for a chord the degree, quality, inversion, and whether it is a **strum** (a spread
+greater than zero) or a block chord. A block chord says so in words rather than by leaving the
+line out, because a missing line and a panel that does not know are the same thing to look at.
 
 Every boundary above is draggable. The handle is invisible at rest, 9px wide; the mark you aim at
 is the 1px rule. Double-click one for its default size; Tab to one and the arrows resize it, Shift
@@ -195,6 +203,28 @@ channels to every hosted plugin, drops each track's pending retrigger strikes, a
 
 ## 4. The shortest path to a noise
 
+### With the pointer
+
+`⌘B` opens the browser rail. It has four live categories:
+
+| chip | what it lists |
+|---|---|
+| PROJECTS | the songs on disk |
+| PLUGINS | the engine's own plugin scan |
+| DEVICES | the built-in device kinds — three patcher kinds and the sampler |
+| SAMPLES | audio files the engine can resolve, from the project directory and its sibling `audio/` |
+
+Clicking a row acts on the **cursor's track**: a DEVICES row adds that device, a PLUGINS row
+inserts that plugin, a SAMPLES row loads that file into the track's sampler. So the shortest
+pointer path to a noise is: `⌘B`, DEVICES, `sampler`, then `⌘B`, SAMPLES, a file — and then type
+notes on the grid.
+
+DEVICES offers four of the engine's six kinds. `vst instrument` and `vst effect` are deliberately
+absent: adding one without naming a plugin makes a device with nothing in it, which is a card you
+can see and never load. A plugin device is made by choosing the plugin.
+
+### With the console
+
 From nothing to a sound, entirely in the console (`/`):
 
 ```
@@ -245,6 +275,10 @@ pressing it twice auditions two consecutive rows.
 
 For a plugin instead of a sampler: `⌘B` for the browser rail, `f` to focus the search, type part
 of the plugin's name, `↑`/`↓`, Enter. It lands on the cursor's track.
+
+**Choosing by name matters for bundles.** One `.vst3` can contain several plugins — Zebra2.vst3
+holds Zebra2 and Zebralette — and the row you pick is what the engine loads. The rack shows the
+name the host reports back, which is the one to believe.
 
 ---
 
@@ -444,8 +478,15 @@ A chord draws as a roman numeral (`III`, `V7`, `IV/1`): it is stored as a degree
 and an inversion against the harmony timeline, never as a pitch set. It always occupies the
 track's **first** note column, and draws only into a cell the notes left empty.
 
-Also `chord <degree> [triad|seventh|degree] [inv] [oct]` and `delchord`. `Backspace` takes the
-note first and the chord on a second press.
+Also `chord <degree> [triad|seventh|degree] [inv] [oct] [spread] [ht] [hv]` and `delchord`.
+`Backspace` takes the note first and the chord on a second press.
+
+**Reading a chord back.** A cell shows `IV7` and nothing else, so whether that chord is a strum
+is not something the grid can tell you. The **CELL** panel does: it names the degree, quality
+and inversion, and says either `strum: yes — 16th · 240000nt across the voices` or `strum: no —
+a block chord, every voice together`, plus the humanize amounts. The engine has published the
+spread and both humanize values on every frame since chords existed; until recently nothing on
+this side decoded them, so the app could write a strum and never show you one.
 
 ### Quantize
 
@@ -1000,6 +1041,7 @@ marker <tick> [name]
 delmarker <id>                unname the point; the music stays put
 namemarker <id> <name>
 movemarker <id> <tick>        move the marker ALONE; no music follows
+colormarker <id> <rgb>        recolour it; 0xRRGGBB or decimal
 time <tick> <bars>            insert bars (negative removes); everything after moves
 timesig <sig> [tick]          the meter from a point, like 7/8
 ```
@@ -1597,7 +1639,8 @@ searchable, with argument checking.
 **Clips and markers** — `clips`, `add-clip <clip> <track> <bar> <bars>`,
 `move-clip <id> <track> <bar> [toTrack]`, `trim-clip <id> <track> [bar] [bars]`,
 `del-clip <id> <track>`, `shared`, `fork [placement]`, `swapclip [placement]`,
-`keepclip [placement]`, `markers`, `marker <tick> [name]`, `delmarker <id>`,
+`keepclip [placement]`, `markers`, `marker <tick> [name]`, `delmarker <id>`, `colormarker <id> <rgb>`,
+`cliptext <track> <clip> <name|source> <text>`, `envshape [track] [device] [modset] [target]`,
 `namemarker <id> <name>`, `movemarker <id> <tick>`, `time <tick> <bars>`.
 
 **Devices** — `sampler [track]`, `deldevice <track> <device>`,
