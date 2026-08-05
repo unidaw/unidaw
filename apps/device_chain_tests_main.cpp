@@ -208,6 +208,65 @@ int main() {
     }
   }
 
+  // ONE INSTRUMENT PER TRACK, AND A SAMPLER IS ONE. Jaakko's ruling: "it doesn't make sense to
+  // add two VST instruments or a vsti and sampler". Sampler used to be missing from
+  // isInstrumentKind, so all three combinations below were accepted — and TrackRuntime has a
+  // single samplerDeviceId, so the second sampler was a device nothing could address.
+  {
+    daw::TrackChain instChain;
+    daw::Device s1;
+    s1.id = daw::kDeviceIdAuto;
+    s1.kind = daw::DeviceKind::Sampler;
+    if (!require(daw::addDevice(instChain, s1, daw::kDeviceIdAuto),
+                 "the first instrument should be accepted")) {
+      return 1;
+    }
+    // A second SAMPLER: only one is addressable.
+    daw::Device s2;
+    s2.id = daw::kDeviceIdAuto;
+    s2.kind = daw::DeviceKind::Sampler;
+    if (!require(!daw::addDevice(instChain, s2, daw::kDeviceIdAuto),
+                 "a SECOND sampler must be refused")) {
+      return 1;
+    }
+    // A hosted synth NEXT TO a sampler: two instruments on one track.
+    daw::Device vst;
+    vst.id = daw::kDeviceIdAuto;
+    vst.kind = daw::DeviceKind::VstInstrument;
+    if (!require(!daw::addDevice(instChain, vst, daw::kDeviceIdAuto),
+                 "a VST instrument alongside a sampler must be refused")) {
+      return 1;
+    }
+    if (!require(instChain.devices.size() == 1,
+                 "neither refused instrument may end up in the chain")) {
+      return 1;
+    }
+    // AND THE MIRROR OF IT: a sampler alongside a hosted synth is refused too, so the rule does
+    // not depend on which instrument arrived first.
+    daw::TrackChain vstFirst;
+    daw::Device v1;
+    v1.id = daw::kDeviceIdAuto;
+    v1.kind = daw::DeviceKind::VstInstrument;
+    if (!require(daw::addDevice(vstFirst, v1, daw::kDeviceIdAuto), "vst first should be accepted")) {
+      return 1;
+    }
+    daw::Device s3;
+    s3.id = daw::kDeviceIdAuto;
+    s3.kind = daw::DeviceKind::Sampler;
+    if (!require(!daw::addDevice(vstFirst, s3, daw::kDeviceIdAuto),
+                 "a sampler alongside a VST instrument must be refused")) {
+      return 1;
+    }
+    // EFFECTS ARE UNAFFECTED — the rule is about instruments, not about chain length.
+    daw::Device fx;
+    fx.id = daw::kDeviceIdAuto;
+    fx.kind = daw::DeviceKind::VstEffect;
+    if (!require(daw::addDevice(vstFirst, fx, daw::kDeviceIdAuto),
+                 "an effect must still be accepted next to an instrument")) {
+      return 1;
+    }
+  }
+
   std::cout << "device_chain_tests_main: ok" << std::endl;
   return 0;
 }
