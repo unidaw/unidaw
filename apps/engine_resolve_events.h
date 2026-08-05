@@ -42,10 +42,19 @@ namespace daw::engine {
 // resolving musical logic MEANS for a track that owns a sampler.
 //
 // OVERFLOW IS REPORTED, NOT THROWN. The scratchpad is fixed-size and pre-sized by the caller; when
-// a resolution would exceed it, the tick of the first lost event is published to
-// deps.lastOverflowTick and the rest are dropped. The RT path cannot allocate, so this is the
-// existing contract — stated here because it is the one way this function silently does less than
-// it was asked.
+// a resolution would exceed it the event is dropped and its tick is published to
+// deps.lastOverflowTick. The RT path cannot allocate, so this is the existing contract — stated
+// here because it is the one way this function silently does less than it was asked.
+//
+// THE TICK IS THE LAST ONE LOST, NOT THE FIRST. This comment said "first"; the store overwrites on
+// every drop, so what survives is the most recent. Measured: six entries into a four-entry buffer
+// publish the sixth entry's tick, not the fifth's.
+//
+// AND ALL THREE WRITE SITES ARE GUARDED, which they were not when this paragraph was first
+// written. outCount is NOT bounded by the input count — one MusicalLogic entry can emit a note-on
+// and a note-off — so two unguarded writes ran off the end of the vector while the third dropped
+// politely. A contract stated in a header and honoured at one site out of three is worse than no
+// contract, because it stops the next reader looking.
 uint32_t resolveMusicalLogicAndSort(RenderTrackDeps& deps,
                                     TrackRuntime& runtime,
                                     const TrackStateSnapshot& trackState,

@@ -170,6 +170,51 @@ void testEqualSampleTimesOrderByPriority() {
   }
 }
 
+// ------------------------------------------------------------------ OVERFLOW DROPS, IT DOES NOT
+// ------------------------------------------------------------------ RUN OFF THE END OF THE BUFFER
+//
+// THE HEADER PROMISED THIS AND THE CODE HONOURED IT AT ONE OF THREE WRITE SITES. outCount is not
+// bounded by the input count: a MusicalLogic entry carrying a duration emits a note-ON and a
+// note-OFF, so N of them produce up to 2N. The note-off went through the guarded appender and was
+// dropped correctly; the two unguarded writes then indexed past the end of the vector.
+//
+// AND THE ONLY OVERFLOW ASSERTION IN THIS FILE USED TO BE `lastOverflowTick == 0` ON EMPTY INPUT,
+// which is true of a function that does nothing at all. A contract stated in a header and tested
+// with a tautology is worth less than no contract, because it stops anyone looking.
+void testOverflowIsReportedAndBounded() {
+  Fixture f;
+  // A SMALL SCRATCHPAD so the boundary is reachable in a test rather than only at 1024 events.
+  // The engine sizes this to kPatcherScratchpadCapacity; the rule is about the relationship
+  // between outCount and size(), not about the specific number.
+  f.scratchpad.assign(4, daw::EventEntry{});
+  const uint32_t kInput = 6;
+  for (uint32_t i = 0; i < kInput; ++i) {
+    daw::EventEntry degree{};
+    degree.type = static_cast<uint16_t>(daw::EventType::MusicalLogic);
+    degree.sampleTime = 10 * i;
+    daw::MusicalLogicPayload logic{};
+    logic.metadata[0] = daw::kMusicalLogicKindDegree;
+    logic.degree = 0;
+    logic.base_octave = 5;
+    logic.velocity = 100;
+    logic.duration_ticks = 100;   // makes each entry emit a note-off as well as a note-on
+    degree.size = sizeof(logic);
+    std::memcpy(degree.payload, &logic, sizeof(logic));
+    f.scratchpad[i] = degree;
+  }
+
+  const uint32_t out = f.run(kInput);
+
+  // NEVER PAST THE END. Six inputs each wanting two events is twelve into a buffer of eight.
+  CHECK(out <= f.scratchpad.size());
+  // AND IT SAID SO. The tick of the first lost event is published rather than the loss being
+  // silent, which is the whole difference between a documented limit and a corruption.
+  // THE TICK OF THE LAST EVENT LOST — 50, the sixth entry's, MEASURED. Not "nonzero": that would
+  // pass on a function that published any tick at all, including the wrong one. The store
+  // overwrites on each drop, so the survivor is the most recent, and the header says so now.
+  CHECK(f.lastOverflowTick.load() == 50);
+}
+
 // -------------------------------------------------------------------- an empty block is not work
 // scratchpadCount == 0 must come back 0 rather than reading scratchpad[0], which the caller has
 // resized but never written. The caller guards this with `eventDirty`, so the guard and the
@@ -250,6 +295,7 @@ void testDegreeLogicBecomesMidi() {
 
 int main() {
   testDegreeLogicBecomesMidi();
+  testOverflowIsReportedAndBounded();
   testNonLogicEventsPassThroughUnchanged();
   testOutputIsSortedBySampleTime();
   testEqualSampleTimesOrderByPriority();

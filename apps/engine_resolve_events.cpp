@@ -53,7 +53,12 @@ uint32_t resolveMusicalLogicAndSort(RenderTrackDeps& deps,
           for (uint32_t i = 0; i < scratchpadCount; ++i) {
             auto entry = scratchpad[i];
             if (static_cast<daw::EventType>(entry.type) != daw::EventType::MusicalLogic) {
-              scratchpad[outCount++] = entry;
+              // GUARDED LIKE EVERY OTHER WRITE. This wrote unguarded, and outCount is NOT bounded
+              // by i: one MusicalLogic entry can produce a note-on AND a note-off, so a block of
+              // N duration-carrying entries emits up to 2N and outruns the fixed 1024-entry
+              // scratchpad from about halfway. The note-off went through appendScratchpad and was
+              // dropped safely; the two writes here then ran off the end of the vector.
+              appendScratchpad(entry, windowStartTicks);
               continue;
             }
             daw::MusicalLogicPayload logic{};
@@ -137,7 +142,9 @@ uint32_t resolveMusicalLogicAndSort(RenderTrackDeps& deps,
             entry = daw::engine::makeNoteOnEntry(entry.sampleTime, entry.blockId, pitch, velocity,
                                                  channel, tuningCents, noteId,
                                                  kEventFlagMusicalLogic);
-            scratchpad[outCount++] = entry;
+            if (!appendScratchpad(entry, eventTick)) {
+              continue;
+            }
             // TEE TO THE BUILT-IN SAMPLER. Without this a patcher could not play the sampler at
             // all: every one of the six existing tees is on the CLIP path, so a Euclidean or
             // RandomDegree node produced MIDI that reached a hosted plugin and an in-engine

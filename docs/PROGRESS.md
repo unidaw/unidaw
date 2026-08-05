@@ -11,10 +11,10 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: 7950bc7
+- as-of-commit: 8812b11
 - main-cpp-lines: 2277
 - main-function-lines: 2072
-- ctest-entries: 186
+- ctest-entries: 189
 - main-function-ceiling: 2072
 
 ## Why this file cannot quietly go stale
@@ -379,9 +379,15 @@ than shipped — a check-auditing tool that produces confident false accusations
   `producer.load` reports mean and peak block cost against the budget. I had grepped for the wrong
   words and was one commit from writing a worse second copy of it.
 
-**Both of the first two are now MEASURED even though neither is fixed**, by inverted checks that
-assert the defect is present and announce their own retirement:
-`tools/pdc_window_check.sh` and `tools/meter_publish_check.sh`. Each was verified by simulating
-its fix and confirming the check reports "this has been fixed, delete this block" rather than
-reading as a regression. So neither defect can drift while the decision is outstanding, and
-whoever lands a fix gets told what to do with the check that was holding the line.
+~~**Both of the first two are now MEASURED even though neither is fixed**~~ — **BOTH ARE FIXED
+(2026-08-05), and this paragraph was left standing after they were.** `tools/pdc_window_check.sh`
+and `tools/meter_publish_check.sh` were inverted checks asserting the defect was present; each
+announced its own retirement, each went red when the defect went away, and each is now inverted
+back to assert the correct behaviour. A test judge found this paragraph still claiming otherwise
+in a file edited AFTER the fixes landed — `doc_citation_check` passes because it verifies that
+named files exist, never that a claim about them is true.
+
+Both were pinned rather than fixed on a cost estimate that was never re-derived: one was "an
+owner's call between three options", and the offset those options traded off turned out to be
+inert; the other was "a contract change that bumps kShmVersion", and only the VALUE was wrong.
+See the memory note on pinned defects overestimating their fix.
