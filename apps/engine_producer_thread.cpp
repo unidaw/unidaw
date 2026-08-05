@@ -129,6 +129,10 @@ void runProducerThread(ProducerThreadDeps& deps) {
       tickConverter, traceNotes, patternTicks, warnedEventOutsideBlock, writeMirrorParams
   };
 
+    // Held across iterations so collecting host progress costs no allocation on the RT path.
+    std::vector<daw::engine::HostProgress> hostProgress;
+    hostProgress.reserve(daw::kUiMaxTracks);
+
     while (running.load()) {
       // Offline: produce nothing until the pump says the transport is at a known start. See
       // offlineProducerArmed.
@@ -217,6 +221,8 @@ void runProducerThread(ProducerThreadDeps& deps) {
       }
 
       uint32_t minCompleted = std::numeric_limits<uint32_t>::max();
+      // Reused across iterations: the producer path must not allocate per block.
+      hostProgress.clear();
       bool anyActive = false;
       for (auto* runtime : trackSnapshot) {
         if (!runtime->hostReady.load(std::memory_order_acquire)) {
@@ -237,20 +243,19 @@ void runProducerThread(ProducerThreadDeps& deps) {
         if (completed > 0) {
           runtime->active.store(true, std::memory_order_release);
         }
-        if (!runtime->active.load(std::memory_order_acquire)) {
-          continue;
-        }
-        anyActive = true;
-        minCompleted = std::min(minCompleted, completed);
+        // COLLECTED, NOT ACCUMULATED. The rule for which hosts count toward the back-pressure
+        // minimum is daw::engine::completedMinimum in apps/engine_rt_helpers.h, where it can be
+        // asked a question without booting an engine — which matters because getting it wrong
+        // froze the transport for every track and took a live stack sample to find. See the
+        // header for the deadlock it now excludes.
+        hostProgress.push_back({true, completed});
       }
+      // THE RULE, applied where it can be tested: apps/engine_rt_helpers.h.
+      const auto progress = daw::engine::completedMinimum(
+          hostProgress, nextBlockId.load(std::memory_order_relaxed));
+      anyActive = progress.anyContributing;
+      minCompleted = progress.minCompleted;
       const bool throttleInactive = !anyActive;
-      if (!anyActive) {
-        const uint32_t fallback =
-            nextBlockId.load(std::memory_order_relaxed) > 0
-                ? nextBlockId.load(std::memory_order_relaxed) - 1
-                : 0;
-        minCompleted = fallback;
-      }
       if (minCompleted == std::numeric_limits<uint32_t>::max()) {
         if (isPlaying) {
           logStall("minCompleted", nextBlockId.load(std::memory_order_relaxed), 0, 0, 0);

@@ -993,9 +993,59 @@ void testVisualPlayheadSample() {
   CHECK(shallow.visualPlayheadSample(7) == 7);
 }
 
+
+// ---------------------------------------------- the gate that froze the whole engine
+// A host stores 0 into completedBlockId every time it attaches its shared memory, and a chain
+// reconcile or a UI reattach does that to a LIVE host mid-session. `active` is a latch, so the
+// track stayed in the minimum with completed == 0 while nextBlockId was deep into the session:
+// inFlight was permanently >= numBlocks, the producer slept 1ms forever, and THE TRANSPORT
+// STOPPED FOR EVERY TRACK. Measured on the live stack — playhead frozen 34s at one tick while
+// ui_version kept climbing, 2477 of 2503 producer samples parked at that gate.
+void testCompletedMinimum() {
+  // THE DEADLOCK, stated as the assertion that would have caught it. One healthy host deep into
+  // the session, one that has just re-attached and reports 0. The minimum must be the healthy
+  // one's — NOT zero, which would gate the producer against a host that has finished nothing.
+  {
+    const auto m = completedMinimum({{true, 500000}, {true, 0}}, 500003);
+    CHECK(m.anyContributing);
+    CHECK(m.minCompleted == 500000);
+  }
+  // The ordinary case is unchanged: the slowest producing host sets the pace.
+  {
+    const auto m = completedMinimum({{true, 900}, {true, 880}, {true, 1000}}, 902);
+    CHECK(m.anyContributing);
+    CHECK(m.minCompleted == 880);
+  }
+  // An inactive track is ignored, as it always was.
+  {
+    const auto m = completedMinimum({{false, 5}, {true, 700}}, 702);
+    CHECK(m.anyContributing);
+    CHECK(m.minCompleted == 700);
+  }
+  // NOTHING PRODUCING IS NOT THE SAME AS EVERYONE BEING BEHIND. An all-sampler project has no
+  // hosts at all; gating it on a minimum of zero would mean it never played. The fallback keeps
+  // the producer exactly one block ahead of itself.
+  {
+    const auto m = completedMinimum({}, 4242);
+    CHECK(!m.anyContributing);
+    CHECK(m.minCompleted == 4241);
+  }
+  {
+    const auto m = completedMinimum({{true, 0}, {false, 0}}, 4242);
+    CHECK(!m.anyContributing);   // a re-attached host alone does not count as producing
+    CHECK(m.minCompleted == 4241);
+  }
+  // And block 0 must not underflow the fallback.
+  {
+    const auto m = completedMinimum({}, 0);
+    CHECK(m.minCompleted == 0);
+  }
+}
+
 }  // namespace
 
 int main() {
+  testCompletedMinimum();
   testHarmonyAtOrDefault();
   testQuantizePitchFallback();
   testEnqueueMirrorReplaySkipsAuxChild();

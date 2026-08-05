@@ -197,6 +197,32 @@ daw::SamplerEvent samplerNoteOnFor(uint32_t offsetInBlock, uint8_t pitch, uint8_
                                    uint8_t column, uint16_t sound, uint16_t offsetFrac,
                                    bool soundAddressedOnly, uint32_t noteId);
 
+// THE PRODUCER'S BACK-PRESSURE MINIMUM: which hosts count, and what the minimum is.
+//
+// The producer may run at most numBlocks ahead of the SLOWEST host that is actually producing.
+// Deciding which hosts those are is the whole rule, and getting it wrong deadlocked the engine:
+// a host stores 0 into completedBlockId every time it attaches its shared memory
+// (juce_host_process_main.cpp), which a chain reconcile and a UI reattach both do to a LIVE host.
+// `active` is a latch, so the track stayed in the minimum with a completed of 0 while nextBlockId
+// was deep into the session — inFlight was then permanently >= numBlocks and THE TRANSPORT
+// STOPPED FOR EVERY TRACK. The producer would not send a block until the host reported progress,
+// and the host could not report progress until it was sent a block.
+//
+// A completed of 0 means "nothing finished since this host attached", which is precisely the
+// not-yet-producing state, so it is excluded exactly like an inactive track and rejoins the
+// moment it finishes its first block.
+struct HostProgress {
+  bool active = false;          // has this track ever produced (the engine's latch)
+  uint32_t completedBlockId = 0;
+};
+struct CompletedMinimum {
+  bool anyContributing = false;  // false when no host is producing yet
+  uint32_t minCompleted = 0;
+};
+// `nextBlockId` supplies the fallback used when nothing is contributing: the producer must not
+// gate itself on hosts that do not exist, or an all-sampler project would never play.
+CompletedMinimum completedMinimum(const std::vector<HostProgress>& hosts, uint32_t nextBlockId);
+
 // WHERE AN EVENT LANDS IN THIS BLOCK, or nothing if it falls outside it.
 //
 // SEVEN sites computed this identically: convert the tick delta to samples, add the block start,

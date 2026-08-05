@@ -2,6 +2,8 @@
 // declaration; this file is the mechanics only.
 #include "apps/engine_rt_helpers.h"
 
+#include <limits>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -472,6 +474,26 @@ uint64_t clampTickIntoLoop(uint64_t tick, uint64_t loopStartTick, uint64_t loopE
     clamped = loopEndTick - 1;
   }
   return clamped;
+}
+
+
+CompletedMinimum completedMinimum(const std::vector<HostProgress>& hosts, uint32_t nextBlockId) {
+  CompletedMinimum out;
+  uint32_t lowest = std::numeric_limits<uint32_t>::max();
+  for (const auto& h : hosts) {
+    if (!h.active) {
+      continue;
+    }
+    if (h.completedBlockId == 0) {
+      continue;   // attached but has finished nothing yet — see the header
+    }
+    out.anyContributing = true;
+    lowest = std::min(lowest, h.completedBlockId);
+  }
+  out.minCompleted = out.anyContributing
+                         ? lowest
+                         : (nextBlockId > 0 ? nextBlockId - 1 : 0);
+  return out;
 }
 
 }  // namespace daw::engine
