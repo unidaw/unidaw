@@ -48,3 +48,6 @@ build-*/
 # compile_commands.json. Same lesson as build-asan below: an ignore list has to name what
 # the build ACTUALLY produces, not what it produced when the list was written.
 .cache/
+
+# Local only. A symlink to another checkout was committed here once; never again.
+node_modules/
