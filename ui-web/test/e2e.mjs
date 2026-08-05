@@ -1532,21 +1532,27 @@ let substituted = false;
   });
   ok(d !== null, 'the rack project published a device');
   /*
-   * DID THE PROJECT GET THE PLUGIN IT ASKED FOR?
+   * IS THERE A PLUGIN HERE AT ALL?
    *
-   * `rack.uniproj.json` names "Identity" with an EMPTY PATH, and the plugin cache on this
-   * machine does not contain our own Identity build — 52 plugins, none of them it. So the
-   * engine reports `project.plugin_missing` and substitutes whatever the cache offers FIRST,
-   * which here is an Elektron hardware controller with no buses to speak of.
+   * WAS: `rack.uniproj.json` named "Identity" with an EMPTY PATH — a vst_ref that resolved on
+   * no machine — so the engine reported `project.plugin_missing` and SUBSTITUTED whatever the
+   * scan offered first, here an Elektron controller with no buses to speak of. Every assertion
+   * below then failed as "0/0 buses", which says nothing about the bus publisher and everything
+   * about which plugin turned up. It was also what a person saw in the rack: a card labelled
+   * "VST instrument" with nothing in it.
    *
-   * Every assertion below then failed as "every bus the engine promised arrived: 0/0", which
-   * says nothing about the bus code and everything about which plugin turned up. BLOCKED with
-   * the substitution named, rather than failed: reporting a machine whose plugin set differs as
-   * a bug in the bus publisher is the kind of flake that teaches people to ignore a suite —
-   * audible.mjs makes the same distinction for the same reason.
+   * That device is GONE from the preset, replaced by a built-in `sampler`, which needs no
+   * plugin and therefore loads identically everywhere. So nothing is substituted any more — and
+   * the preset now names no VST at all, which means these two blocks have nothing whose plugin
+   * buses or parameters could be read.
    *
-   * Reported to backend: a preset that names a plugin nothing can resolve is a preset that
-   * loads as something else, silently, and every fixture built on it measures the substitute.
+   * Still BLOCKED rather than failed, for the same reason as before: this is a statement about
+   * what the fixture contains, not about the bus code. The real fix is for these two blocks to
+   * INSERT a scanned instrument from the catalogue, the way full-song.mjs picks Zebralette by
+   * name — machine-adaptive, and it would make them assert a real plugin on any machine. Tried,
+   * and backed out: leaving the rail open perturbed six later checks that assert rail state, and
+   * a real plugin's bus list legitimately contains disabled 0-channel buses that the assertion
+   * below does not expect. Both are fixable and neither is this change.
    */
   const asked = await page.evaluate(() => {
     const c = window.__uni.chainProbe();
@@ -1555,9 +1561,10 @@ let substituted = false;
   substituted = !!d && d.busCount === 0 && !/Identity/i.test(String(asked));
   if (substituted) {
     blocked(false, 'the rack project publishes its plugin buses',
-            'rack.uniproj.json names "Identity" with an empty path and the plugin cache on this '
-            + 'machine has none, so the engine substituted another plugin — reported to backend',
-            `loaded ${JSON.stringify(asked)} instead`);
+            'the rack preset carries no VST — its unloadable "Identity" reference was removed '
+            + 'and a built-in sampler took its place, so there is nothing here whose plugin '
+            + 'buses could be read. Insert a scanned instrument to make this assert something',
+            `chain reads ${JSON.stringify(asked)}`);
   } else if (d) {
     // COMPLETE, not partial. busCount is the field I held the version bump for:
     // without it, two buses received out of eight is indistinguishable from a
@@ -1599,8 +1606,8 @@ const beforeP = await page.evaluate(() => {
  */
 if (substituted) {
   blocked(!!(beforeP && beforeP.count > 0), 'the rack reads a real plugin\'s parameters',
-          'the project asked for a plugin this machine\'s cache does not have, so the engine '
-          + 'substituted one — the mirror has nothing to read through no fault of its own',
+          'the rack preset carries no VST — the unloadable "Identity" reference was removed and '
+          + 'a built-in sampler took its place, so the mirror has nothing to read',
           beforeP ? `${beforeP.name}, ${beforeP.count} params` : 'none published');
 } else {
   ok(beforeP && beforeP.count > 0, 'the rack reads a real plugin\'s parameters',

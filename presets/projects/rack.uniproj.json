@@ -133,17 +133,12 @@
         },
         {
           "device_id": 0,
-          "kind": "vst_instrument",
-          "capability_mask": 5,
+          "kind": "sampler",
+          "capability_mask": 4,
           "patcher_node_id": 0,
           "host_slot_index": 0,
           "bypass": false,
-          "vst_ref": {
-            "vendor": "",
-            "name": "Identity",
-            "path": "",
-            "uid16": ""
-          }
+          "vst_ref": null
         }
       ],
       "mod_links": [
