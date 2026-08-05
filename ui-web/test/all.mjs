@@ -85,6 +85,15 @@ const NOT_A_SUITE = new Set([
   'shot.mjs', 'alloc.mjs', 'alloc-where.mjs', 'frametime.mjs', 'scale.mjs', 'layout.mjs',
 ]);
 
+/**
+ * How long one suite may take before the sweep stops waiting for it.
+ *
+ * Not a performance budget — e2e really does take five minutes and chrome.mjs has been
+ * measured at 320s under load. This is only the point past which "slow" is better treated
+ * as "stuck", so the remaining suites still get to run and the report says which one hung.
+ */
+const HANG_MS = 12 * 60 * 1000;
+
 const argv = process.argv.slice(2);
 const withAudio = argv.includes('--with-audio');
 const onlyArg = argv.find((a) => a.startsWith('--only'));
@@ -125,7 +134,31 @@ const run = (file) => new Promise((resolve) => {
   let out = '';
   child.stdout.on('data', (d) => { out += d; });
   child.stderr.on('data', (d) => { out += d; });
+
+  /*
+   * A SUITE THAT HANGS MUST NOT HANG THE SWEEP.
+   *
+   * There was no bound here at all, so one stuck suite blocked every one after it, for as
+   * long as anyone left it. `panic.mjs` did exactly that: its browser died mid-run and an
+   * `await page.*` never settled, so the node process sat in uv__io_poll with nothing to
+   * wake it — fifteen minutes, two days before a demo, and the sweep looked like it was
+   * simply slow.
+   *
+   * The ceiling is generous on purpose. e2e legitimately takes five minutes and chrome has
+   * been seen at 320s under load, so this is not a performance assertion — it is the
+   * difference between a sweep that finishes and one that has to be noticed.
+   *
+   * SIGTERM first, then SIGKILL, because a suite killed outright leaves its engine and
+   * sidecar behind: its own `stop()` is what reaps them, and it needs a moment to run.
+   */
+  const bomb = setTimeout(() => {
+    out += `\n\n*** killed after ${(HANG_MS / 1000) | 0}s — this suite hung ***\n`;
+    try { child.kill('SIGTERM'); } catch { /* already gone */ }
+    setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already gone */ } }, 5000);
+  }, HANG_MS);
+
   child.on('close', (code) => {
+    clearTimeout(bomb);
     const secs = Number(process.hrtime.bigint() - started) / 1e9;
     const found = out.match(SUMMARY);
     resolve({ file, code, secs, summary: found ? found[found.length - 1] : '(no summary line)', out });
