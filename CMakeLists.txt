@@ -1247,6 +1247,16 @@ set_tests_properties(lock_order PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 # Every write to the UI-out ring must go through sendUiDiff, which is what counts the drops. Six
 # emitters used to call ringWrite directly and discard the result: same bytes on the wire, so
 # nothing could tell the difference, and a refusal that did not fit the ring was lost in silence.
+# The arrange summary is gated on TWO inputs: the arrangement version and the song end. The second
+# was uncovered — arrangement_check pins markers, the meter and the ripple and never reads
+# song_end_tick, so dropping half the gate left the whole suite green. A placement move is the only
+# edit that separates the two inputs.
+add_test(NAME arrange_song_end_gate
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/arrange_song_end_gate_check.sh
+)
+set_tests_properties(arrange_song_end_gate PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 add_test(NAME ui_diff_accounting
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/ui_diff_accounting_check.sh
 )

@@ -1026,10 +1026,10 @@ int main(int argc, char** argv) {
   // So a client that drew the song end from here kept the value from the last section edit, and
   // no reader could tell: the version it caches on had not moved either. Gating on both inputs
   // and publishing a generation means the number moves whenever anything in the region did.
-  // A note edit still moves nothing. That property was pinned by arrange_summary_check, WHICH NO
-  // LONGER EXISTS — arrangement_check replaced it and does not assert this rule, so the song-end
-  // half of the gate is currently uncovered (task #28). Saying so is better than citing a guard
-  // that is gone; a comment naming a check nobody runs reads as coverage.
+  // A note edit still moves nothing. The SONG-END half of this gate is pinned by
+  // tools/arrange_song_end_gate_check.sh, which moves a placement — the only edit that separates
+  // the two inputs, since a marker or meter edit bumps arrangeVersion and would satisfy a
+  // one-input gate too.
   // recomputeSongEnd runs only on a placement edit, a section ripple, or a load.
   //
   // Second, the torn read. The comments here used to claim that "reading version-body-version
