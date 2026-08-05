@@ -37,13 +37,7 @@ void emitChainSnapshot(ChainSnapshotDeps& deps, TrackRuntime& runtime) {
       diffPayload.trackId = runtime.trackId;
       diffPayload.chainVersion = version;
       diffPayload.deviceId = daw::kDeviceIdAuto;
-      daw::EventEntry diffEntry;
-      diffEntry.sampleTime = 0;
-      diffEntry.blockId = 0;
-      diffEntry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
-      diffEntry.size = sizeof(daw::UiChainDiffPayload);
-      std::memcpy(diffEntry.payload, &diffPayload, sizeof(diffPayload));
-      daw::ringWrite(ringUiOut, diffEntry);
+      sendUiDiff(deps.uiPublishDeps, ringUiOut, daw::EventType::UiDiff, diffPayload);
       return;
     }
     uint32_t hostIndex = 0;
@@ -96,13 +90,7 @@ void emitChainSnapshot(ChainSnapshotDeps& deps, TrackRuntime& runtime) {
       diffPayload.hostSlotIndex = device.hostSlotIndex;
       diffPayload.capabilityMask = device.capabilityMask;
       diffPayload.bypass = device.bypass ? 1u : 0u;
-      daw::EventEntry diffEntry;
-      diffEntry.sampleTime = 0;
-      diffEntry.blockId = 0;
-      diffEntry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
-      diffEntry.size = sizeof(daw::UiChainDiffPayload);
-      std::memcpy(diffEntry.payload, &diffPayload, sizeof(diffPayload));
-      daw::ringWrite(ringUiOut, diffEntry);
+      sendUiDiff(deps.uiPublishDeps, ringUiOut, daw::EventType::UiDiff, diffPayload);
 
       // One DeviceBus diff per bus, immediately after this device's snapshot diff.
       // HostBusWire.flags and UiBusDiffPayload.flags share the bit layout (bit0 input,
@@ -119,13 +107,7 @@ void emitChainSnapshot(ChainSnapshotDeps& deps, TrackRuntime& runtime) {
         std::memcpy(busPayload.name, bus.name,
                     std::min(::strnlen(bus.name, sizeof(bus.name)),
                              sizeof(busPayload.name)));
-        daw::EventEntry busEntry;
-        busEntry.sampleTime = 0;
-        busEntry.blockId = 0;
-        busEntry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
-        busEntry.size = sizeof(daw::UiBusDiffPayload);
-        std::memcpy(busEntry.payload, &busPayload, sizeof(busPayload));
-        daw::ringWrite(ringUiOut, busEntry);
+        sendUiDiff(deps.uiPublishDeps, ringUiOut, daw::EventType::UiDiff, busPayload);
       }
 
       if (resolves) {

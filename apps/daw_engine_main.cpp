@@ -1290,7 +1290,7 @@ int main(int argc, char** argv) {
                            daw::UiCommandType)> emitClipRejectFn = emitClipReject;
 
   daw::engine::ChainSnapshotDeps chainSnapshotDeps{
-      chainVersion, getRingUiOut, resolveDevicePluginPath};
+      uiPublishDeps, chainVersion, getRingUiOut, resolveDevicePluginPath};
 
   auto emitChainSnapshot = [&](TrackRuntime& runtime) {
     daw::engine::emitChainSnapshot(chainSnapshotDeps, runtime);
