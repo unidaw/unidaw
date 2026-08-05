@@ -977,7 +977,17 @@ set_tests_properties(preview_note PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DI
 add_test(NAME sidechain
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sidechain_check.sh
 )
-set_tests_properties(sidechain PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+# RUN_SERIAL on evidence, not on principle. Under `ctest -j2` this failed with "bound L (key
+# source) is silent — the source never played", then passed 3/3 run on its own, and the next full
+# suite was green: the definition of a contention-sensitive check. It runs TWO engines with
+# hosted plugins for ~36s, so it holds the audio device longer than almost anything else here.
+#
+# Note what is NOT being done: a shared RESOURCE_LOCK across every engine-booting check. 117 of
+# the 131 check scripts invoke daw_engine, so that would serialise the suite end to end, every
+# run, to buy protection that only two checks have ever been measured to need (this one and
+# ask_path_check, which additionally waits on a network round trip). See task #46.
+set_tests_properties(sidechain PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300 RUN_SERIAL TRUE)
 
 
 add_test(NAME lint
