@@ -200,6 +200,14 @@ if (wav) {
    * is no origin to locate. A device capture starts when the DEVICE does and could not carry
    * this claim at all.
    */
+  /*
+   * NEGATIVE CONTROL, RUN: swapping this suite back to `waveform_probe` leaves the peak check
+   * above PASSING and fails only this one — "first sound at 4.00s, first note at 2.00s". Two
+   * seconds, which is the asset's one silent second doubled by the octave-down transposition.
+   *
+   * So the check has teeth, and the check it replaces demonstrably did not: a peak anywhere in
+   * eight seconds is satisfied by the exact defect this file exists to catch.
+   */
   const FLOOR = 0.004;
   const Q = 960000, SEC_PER_TICK = 0.5 / Q;         // 120bpm: a quarter is half a second
   const expected = ticks[0] * SEC_PER_TICK;

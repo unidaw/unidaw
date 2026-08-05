@@ -117,7 +117,13 @@ step('3. the sampler — DEVICES then SAMPLES, then play');
 // ===========================================================================
 check(await pick('devs', 'sampler') === true, 'DEVICES puts a sampler on the track');
 await settle(1500);
-check(await pick('smpl', 'waveform_probe') === true, 'SAMPLES puts a file in it');
+/*
+ * THE SAMPLE THE RUNBOOK NAMES. `demo_pluck_c4.wav` is middle C with an immediate attack, which
+ * is what makes the walk's next gesture — type a note, hear it — actually work on stage. The
+ * probe assets that used to be the only choice here are silent for their first second and the
+ * sampler stretches that when transposing down.
+ */
+check(await pick('smpl', 'demo_pluck') === true, 'SAMPLES puts a file in it');
 await settle(2500);
 
 const kit = await page.waitForFunction(() => {

@@ -75,7 +75,11 @@ reaches the others and a delete removes it everywhere.
 
 ## 3. The sampler
 
-`⌘B` → **DEVICES** → `sampler`, then `⌘B` → **SAMPLES** → a file. Then type notes.
+`⌘B` → **DEVICES** → `sampler`, then `⌘B` → **SAMPLES** → **`demo_pluck_c4`**. Then type notes.
+
+**Use `demo_pluck_c4` or `demo_kick`, not the `waveform_probe` files.** The pluck is middle C with
+its attack in the first millisecond, so it sounds the instant you type — see rough edge 1 for what
+the probe files do instead. Regenerate either with `python3 tools/make_demo_samples.py`.
 
 A single sample now lands across the whole keyboard from middle C, so any note you play sounds it.
 (It used to be pinned to MIDI 36 alone, so this exact gesture produced silence.) A comma-separated
@@ -171,7 +175,8 @@ DAW_PROJECT_DIR=<the project dir> ./daw_engine --project <name> --render take --
    transposes by resampling, so a note an octave down plays at half speed and the silent second
    becomes two; two octaves down, four. The tracker's default `oct 4` puts `z` at 48 — a whole
    octave below the root — so the first thing a person types is exactly the case that stalls.
-   **Load a musical sample for the demo, or play `q` (60) rather than `z`.**
+   **`demo_pluck_c4` and `demo_kick` exist for exactly this** — both attack in the first
+   millisecond and so sound immediately at any transposition. Use them and the problem is gone.
    This cost two wrong bug reports: first "a note at tick 0 is dropped", then "a sampler alone on
    a track reaches no output". Both were this.
 2. **`goto` counts displayed rows**, and how much time a row spans depends on the zoom. If you
