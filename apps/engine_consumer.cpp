@@ -839,7 +839,7 @@ void runConsumerThread(ConsumerDeps& deps) {
           static_cast<uint64_t>(currentPlaybackBlock - 1) *
           static_cast<uint64_t>(engineConfig.blockSize);
       const uint64_t uiSampleCount =
-          latencyMgr.getCompensatedStart(engineSampleStart);
+          latencyMgr.visualPlayheadSample(engineSampleStart);
       const uint64_t uiBlockStartTicks =
           transportNanotick.load(std::memory_order_acquire);
 

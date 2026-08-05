@@ -1278,6 +1278,19 @@ add_test(NAME block_edge_note
 set_tests_properties(block_edge_note PROPERTIES
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# The OTHER way the head of a render lost its timing, and unlike the one above it fired on every
+# hosted-plugin bounce ever made. The engine mapped its sample clock onto a plugin timeline by
+# subtracting the pipeline depth, and below that depth the subtraction has no answer: every event
+# in the first (numBlocks-1) blocks was stamped 0 and arrived STACKED on the block boundary. Three
+# notes at samples 0/400/900 came out as two pulses, at 0 and 512, the first at FULL SCALE because
+# the fixture adds and two notes had landed on it. Runs at two pipeline depths because the window
+# is (numBlocks-1)*blockSize and therefore moves.
+add_test(NAME pdc_head_event
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/pdc_head_event_check.sh
+)
+set_tests_properties(pdc_head_event PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 add_test(NAME sampler_routed_input
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_routed_input_check.sh
 )

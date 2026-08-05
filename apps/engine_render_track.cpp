@@ -30,7 +30,6 @@ bool renderTrack(RenderTrackDeps& deps,
   auto& harmonyEvents = deps.harmonyTimeline.harmonyEvents;
   auto& harmonyMutex = deps.harmonyTimeline.harmonyMutex;
   auto& lastOverflowTick = deps.lastOverflowTick;
-  auto& latencyMgr = deps.latencyMgr;
   auto& nextNoteId = deps.nextNoteId;
   auto& patcherAssembledFromDevices = deps.patcherGraph.patcherAssembledFromDevices;
   auto& patcherGraphSnapshot = deps.patcherGraph.patcherGraphSnapshot;
@@ -1569,14 +1568,17 @@ runtime.samplerEvents.push_back(daw::engine::samplerNoteOnFor(
           }
         }
 
-        const uint64_t panicSampleTime =
-            latencyMgr.getCompensatedStart(blockSampleStart);
+        // STAMPED IN ENGINE SAMPLES, which is the clock the host windows this block against. The
+        // pipeline-depth offset that used to be subtracted here cancelled against the block start
+        // the host was given, and below latencySamples_ it could not be subtracted at all: every
+        // event in the first (numBlocks-1) blocks came out at the same instant, summed. See
+        // apps/latency_manager.h for the measurement.
+        const uint64_t panicSampleTime = blockSampleStart;
         flushPendingNoteOffs(panicSampleTime, currentBlockId);
         if (scratchpadCount > 0) {
           for (uint32_t i = 0; i < scratchpadCount; ++i) {
             auto entry = scratchpad[i];
             entry.blockId = currentBlockId;
-            entry.sampleTime = latencyMgr.getCompensatedStart(entry.sampleTime);
             if (entry.type == static_cast<uint16_t>(daw::EventType::Param) &&
                 entry.size >= sizeof(daw::ParamPayload) &&
                 paramTargetIndex != daw::kParamTargetAll) {

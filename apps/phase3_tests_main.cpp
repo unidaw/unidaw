@@ -1266,7 +1266,7 @@ bool runPulseFullTest(const std::string& pluginPath) {
         static_cast<int64_t>(blockId - 1) * testConfig.blockSize;
     const int64_t engineSampleEnd = engineSampleStart + testConfig.blockSize;
     const uint64_t pluginSampleStart =
-        latency.getCompensatedStart(static_cast<uint64_t>(engineSampleStart));
+        static_cast<uint64_t>(engineSampleStart);
 
     clearInputBlock(host.controller, blockId);
 
@@ -1276,7 +1276,7 @@ bool runPulseFullTest(const std::string& pluginPath) {
         break;
       }
       const uint64_t compensated =
-          latency.getCompensatedStart(static_cast<uint64_t>(eventSample));
+          static_cast<uint64_t>(eventSample);
       if (!writeMidiNoteOn(host.ringStd, compensated, 60, 100)) {
         std::cerr << "Failed to write MIDI event." << std::endl;
         validated = false;
@@ -1353,7 +1353,7 @@ bool runCompositionFullTest(const std::string& pluginPath) {
         static_cast<int64_t>(blockId - 1) * testConfig.blockSize;
     const int64_t engineSampleEnd = engineSampleStart + testConfig.blockSize;
     const uint64_t pluginSampleStart =
-        latency.getCompensatedStart(static_cast<uint64_t>(engineSampleStart));
+        static_cast<uint64_t>(engineSampleStart);
 
     clearInputBlock(host.controller, blockId);
 
@@ -1363,7 +1363,7 @@ bool runCompositionFullTest(const std::string& pluginPath) {
         break;
       }
       const uint64_t compensated =
-          latency.getCompensatedStart(static_cast<uint64_t>(eventSample));
+          static_cast<uint64_t>(eventSample);
       if (!writeMidiNoteOn(host.ringStd, compensated, 60, 100)) {
         std::cerr << "Failed to write MIDI event." << std::endl;
         validated = false;
@@ -1436,13 +1436,13 @@ bool runNoteOffFullTest(const std::string& pluginPath) {
         static_cast<int64_t>(blockId - 1) * testConfig.blockSize;
     const int64_t engineSampleEnd = engineSampleStart + testConfig.blockSize;
     const uint64_t pluginSampleStart =
-        latency.getCompensatedStart(static_cast<uint64_t>(engineSampleStart));
+        static_cast<uint64_t>(engineSampleStart);
 
     clearInputBlock(host.controller, blockId);
 
     if (!onSeen && onSample >= engineSampleStart && onSample < engineSampleEnd) {
       const uint64_t compensated =
-          latency.getCompensatedStart(static_cast<uint64_t>(onSample));
+          static_cast<uint64_t>(onSample);
       writeMidiNoteOn(host.ringStd, compensated, 60, 100);
       onSeen = true;
     }
@@ -1507,7 +1507,7 @@ bool runResurrectionFullTest(const std::string& pluginPath) {
 
   const int64_t onSample = testConfig.blockSize + 5;
   const uint64_t compensated =
-      latency.getCompensatedStart(static_cast<uint64_t>(onSample));
+      static_cast<uint64_t>(onSample);
 
   writeParamChange(host.ringStd, compensated, gainId, mirroredValue);
   writeMidiNoteOn(host.ringStd, compensated, 60, 100);
@@ -1516,7 +1516,7 @@ bool runResurrectionFullTest(const std::string& pluginPath) {
   const int64_t engineSampleStart =
       static_cast<int64_t>(blockId - 1) * testConfig.blockSize;
   const uint64_t pluginSampleStart =
-      latency.getCompensatedStart(static_cast<uint64_t>(engineSampleStart));
+      static_cast<uint64_t>(engineSampleStart);
 
   clearInputBlock(host.controller, blockId);
   host.controller.sendProcessBlock(blockId, engineSampleStart, pluginSampleStart);

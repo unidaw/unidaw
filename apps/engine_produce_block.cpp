@@ -114,7 +114,13 @@ void produceBlock(ProducerBlockDeps& deps,
           static_cast<uint64_t>(engineConfig.blockSize) *
           static_cast<uint64_t>(blockId - 1);
 
-      const uint64_t pluginSampleStart = latencyMgr.getCompensatedStart(sampleStart);
+      // THE PLUGIN TIMELINE IS THE ENGINE TIMELINE. The host windows this block's events on
+      // [pluginSampleStart, +blockSize) and the engine stamps those events from the same clock, so
+      // any constant offset between the two cancels — and the one the pipeline depth used to
+      // supply could not be applied below latencySamples_, where it collapsed every event onto a
+      // block boundary. See apps/latency_manager.h. The master host has always been sent its
+      // engine sample unchanged in both arguments; this makes every host agree with it.
+      const uint64_t pluginSampleStart = sampleStart;
       const auto loop = daw::engine::effectiveLoop(
           loopStartNanotick.load(std::memory_order_acquire),
           loopEndNanotick.load(std::memory_order_acquire), patternTicks);

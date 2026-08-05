@@ -1,31 +1,32 @@
 #!/usr/bin/env bash
-# PLUGIN DELAY COMPENSATION COLLAPSES THE OPENING OF A RENDER, AND THIS PINS IT.
+# EVERY NOTE LANDS ON ITS OWN SAMPLE, INCLUDING AT THE VERY OPENING OF A RENDER.
 #
-# apps/latency_manager.h (`getCompensatedStart`) shifts every event EARLIER by latencySamples_ and
-# clamps at zero when that would go negative:
+# THIS CHECK USED TO BE PART INVERTED. Two of its assertions pinned behaviour that was WRONG:
+# apps/latency_manager.h mapped engine samples onto a plugin timeline by subtracting the pipeline
+# depth and clamping at zero, so every event in the opening (numBlocks-1)*blockSize samples
+# collapsed onto the same instant. An opening chord or a fast run was squashed flat, once, at the
+# start of playback — and never on a loop, which is why it read as imagination rather than a bug.
+# It was pinned rather than fixed because the fix looked like an owner's call between three
+# options that traded off against each other.
 #
-#     if (engineSampleStart >= latencySamples_) return engineSampleStart - latencySamples_;
-#     return 0;                      // <-- every earlier event collapses onto the SAME sample
+# IT WAS NOT. Measured 2026-08-05: the host windows a block's events on the same start value the
+# engine hands it, so the subtraction was applied to both sides and cancelled — it changed nothing
+# anywhere except where it could not be applied at all. The master host had never used it, passing
+# its engine sample as both arguments. So the plugin timeline is the engine timeline now, the
+# clamped mapping survives only as the visual playhead (apps/latency_manager.h), and the two
+# inverted blocks that lived here have been deleted per their own retirement instructions.
 #
-# So notes in the opening window are not merely early, they land ON TOP OF EACH OTHER. An opening
-# chord or a fast run is squashed into one instant, once, at the start of playback. It never
-# recurs on a loop, which is why it reads as imagination rather than as a bug.
+# WHAT REPLACED THEM is directly below: the exact-placement table now runs THROUGH the old window
+# instead of starting past it, and the two-note case asserts the opening keeps the same spacing the
+# loop pass does. That second one is the assertion that states the harm the defect actually did —
+# not "each note is early" but "they were no longer distinguishable from each other".
 #
-# THIS CHECK IS PART INVERTED, AND SAYS SO LOUDLY. Two of its assertions pin behaviour that is
-# WRONG, because a bug nobody can measure is a bug that changes silently in either direction. The
-# fix needs an owner's call between three options that trade off against each other (delay the
-# transport start; put signed offsets on the wire, which is a contract change; or accept and
-# document), so until that call is made the honest thing is to make the defect visible and stop it
-# from drifting.
+# tools/pdc_head_event_check.sh covers the same rule through a REAL hosted VST3 and the IPC that
+# carries the stamps; this one uses the in-process fake, so a regression in either the engine-side
+# arithmetic or the wire is caught by one of them.
 #
-# WHEN THE INVERTED BLOCK GOES RED, READ ITS MESSAGE BEFORE ASSUMING A REGRESSION. If the
-# placements have become CORRECT, PDC was fixed and this check has done its job: delete that block
-# and extend the exact-placement table to cover the whole range. That is the same retirement the
-# chord-render inverted check went through, and the reason it must print both numbers rather than
-# just failing.
-#
-# WHY THIS COULD NOT BE WRITTEN BEFORE TODAY: the placements are sample counts, so the render has
-# to happen at a KNOWN rate. Until `--sample-rate` existed the offline render took whatever the
+# WHY THIS COULD NOT BE WRITTEN BEFORE: the placements are sample counts, so the render has to
+# happen at a KNOWN rate. Until `--sample-rate` existed the offline render took whatever the
 # default output device reported, and connecting headphones would have moved every number in the
 # table — the exact coupling that made sampler_vintage fail a correct engine.
 #
@@ -113,34 +114,37 @@ print(' '.join(str(s) for s in starts))
 PY
 }
 
-# ---- EXACT, outside the compensation window. This half is a genuine regression guard: everything
-# past the window is sample-accurate end to end, and that is worth defending.
-for S in 1102 2297 4096; do
+# ---- EXACT, ACROSS THE WHOLE RANGE. 86, 344 and 600 are inside the old compensation window
+# (1024 samples at numBlocks=3, blockSize=512) and used to collapse onto a block boundary; 600 in
+# particular was pinned here for years as "short by 88". They are first in the list deliberately:
+# if the clamp ever comes back, the check fails on the very sample it used to excuse.
+for S in 86 344 600 1102 2297 4096; do
   mk "exact$S" "$S"
   GOT="$(pulses "exact$S" | awk '{print $1}')"
   [ "$GOT" = "$S" ] || \
-    fail "a note at sample $S rendered at ${GOT:-nothing}. Outside the PDC window the placement
-        is exact, so this is a real scheduling regression rather than the known collapse below"
-done
-echo "  exact outside the window: 1102, 2297, 4096 all land on their own sample"
+    fail "a note at sample $S rendered at ${GOT:-nothing}, and every note lands on its own sample.
 
-# ---- THE COLLAPSE, pinned. TWO notes, at different samples, both inside the window.
+        If \$S is under 1024 this is the pipeline-depth clamp returning: the engine stamped every
+        event in the opening (numBlocks-1)*blockSize samples with 0, so they arrived stacked on a
+        block boundary instead of where they were written. That was pinned here as a known defect
+        until 2026-08-05 and is fixed — see apps/latency_manager.h. Above 1024 it is an ordinary
+        scheduling regression."
+done
+echo "  exact across the range: 86, 344, 600, 1102, 2297, 4096 all land on their own sample"
+
+# ---- RELATIVE TIMING AT THE OPENING, against a reference the render carries itself.
 #
-# This is the assertion that states the harm: not "each note is early" but "they are no longer
-# distinguishable from each other". A check that only asserted each note's position would report a
-# timing error; this reports the loss of RELATIVE timing, which is what a squashed opening chord
-# actually is.
+# TWO notes, at different samples, both inside the old window. This is the assertion that states
+# what the defect actually cost: not "each note is early" but "they were no longer distinguishable
+# from each other", which is what a squashed opening chord is.
+#
+# THE RENDER IS ITS OWN CONTROL, so nothing here is a hardcoded expectation. The clip loops every
+# 4 quarters — 88200 samples at this rate — and the loop pass was always past the compensation
+# window, so the same two notes appear there with their spacing intact. The opening must now match
+# it. When this check was inverted, the opening had ONE pulse and the loop pass had two 258 apart;
+# that difference was the defect, and its absence is the fix.
 mk "collapse" 86 344
 STARTS="$(pulses collapse)"
-# THE RENDER CARRIES ITS OWN CONTROL, which is what makes this assertion free of hardcoded
-# expectations. The clip loops every 4 quarters — 88200 samples at this rate — and the loop pass
-# is PAST the compensation window, so the same two notes appear there with their spacing intact.
-#
-# First pass:  one pulse   (86 and 344 both clamped to 0 — the timing between them is gone)
-# Loop pass:   two pulses, 258 samples apart, which is exactly 344 - 86
-#
-# So the check does not need to know what the right answer is. It compares the opening of the
-# render against a later pass of THE SAME NOTES, and the defect is the difference between them.
 python3 - "$STARTS" <<'PYS' || fail "see the message above"
 import sys
 LOOP = 88200          # 4 quarters at 120 bpm, 44100 Hz
@@ -158,33 +162,35 @@ if gap_later != WANT_GAP:
     print(f"  FAIL: on the loop pass the two notes are {gap_later} samples apart, not {WANT_GAP}.")
     print( "        The reference itself is wrong, so nothing below can be trusted")
     raise SystemExit(1)
-if len(first) == 1:
-    print(f"  KNOWN DEFECT pinned: on the opening pass the two notes render as ONE pulse at "
-          f"{first[0]},")
-    print(f"    while the SAME notes on the loop pass are {gap_later} samples apart. The opening")
-    print( "    lost the timing between them entirely — getCompensatedStart clamps both to zero.")
-    print( "    Task #1; awaiting an owner's call between three fixes.")
-    raise SystemExit(0)
-gap_first = first[1] - first[0] if len(first) > 1 else None
-print(f"  FAIL: the opening pass now has {len(first)} pulse(s) at {first}, gap {gap_first}.")
-print( "        READ THIS BEFORE ASSUMING A REGRESSION: if the gap is now "
-      f"{WANT_GAP}, PDC HAS BEEN")
-print( "        FIXED and this inverted block has done its job — delete it and extend the exact")
-print( "        table above over the opening window. Any other value means compensation changed")
-print( "        in a way nobody recorded.")
-raise SystemExit(1)
+if len(first) != 2:
+    print(f"  FAIL: the opening pass has {len(first)} pulse(s) at {first}, and it should have 2 —")
+    print(f"        the SAME two notes on the loop pass are {gap_later} samples apart.")
+    print( "")
+    print( "        ONE pulse is the pipeline-depth clamp coming back: the opening window mapped")
+    print( "        to a plugin timeline by subtracting (numBlocks-1)*blockSize, which has no")
+    print( "        answer below itself, so every event there was stamped 0 and they arrived")
+    print( "        stacked. See apps/latency_manager.h — the plugin timeline is the engine")
+    print( "        timeline, and only the visual playhead still subtracts.")
+    raise SystemExit(1)
+gap_first = first[1] - first[0]
+if gap_first != gap_later:
+    print(f"  FAIL: the opening pass has the two notes {gap_first} samples apart and the loop pass")
+    print(f"        has them {gap_later} apart. The same two notes must be spaced the same way")
+    print( "        wherever they are played; the opening is not a special case any more.")
+    raise SystemExit(1)
+print(f"  opening pass: two pulses at {first}, {gap_first} apart — the same spacing the loop pass")
+print( "    has, where the clamp used to leave exactly one")
 PYS
 
-# ---- AND THE EDGE, which moves rather than collapses: a note just inside the window is shifted
-# back to the block boundary rather than to zero. Pinned for the same reason — it is the part of
-# the defect that a fix must also change, so it is evidence about the scope of the fix.
+# ---- AND THE EDGE, which used to move rather than collapse: a note just inside the window was
+# shifted back to the block boundary. It is in the exact table above now, so this only records
+# what the old number was, for anyone reading a git blame.
 mk "edge" 600
 EDGE="$(pulses edge | awk '{print $1}')"
-if [ "$EDGE" = "600" ]; then
-  fail "a note at sample 600 now lands exactly. That is the FIX, not a failure — PDC no longer
-        clamps, so delete this block and the collapse block above, and assert exact placement
-        across the whole range"
-fi
-echo "  KNOWN DEFECT pinned: a note at sample 600 renders at $EDGE, short by $((600 - EDGE))"
+[ "$EDGE" = "600" ] || fail "a note at sample 600 rendered at ${EDGE:-nothing}. This one was
+        pinned for a long time as 'short by 88' — the clamp pulling it back to the block
+        boundary — so a non-exact value here is that defect returning"
+echo "  a note at sample 600 lands at 600, where the clamp used to leave it 88 samples short"
 
-echo "pdc_window_check: PASS — exact outside the window; the collapse inside it is measured, not assumed"
+echo "pdc_window_check: PASS — exact across the whole range, and the opening keeps the same" \
+     "spacing the loop pass does; the inverted blocks retired 2026-08-05"

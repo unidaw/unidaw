@@ -13,6 +13,7 @@
 // the rule moved. Separating them is what makes the rule testable at all — a function that takes
 // a lock cannot be asked about its behaviour without also arranging its concurrency.
 #include "apps/engine_rt_helpers.h"
+#include "apps/latency_manager.h"
 
 #include <cstdio>
 #include <cstring>
@@ -941,6 +942,57 @@ void testClampTickIntoLoop() {
   CHECK(clampTickIntoLoop(999999, 0, 0) == 999999);
 }
 
+
+// ---------------------------------------------------- the pipeline depth, and its one honest use
+// WHAT SURVIVED OF THE OLD PDC MAPPING, and why it is safe exactly here. LatencyManager used to
+// convert engine samples to a "plugin timeline" by subtracting the pipeline depth, and that
+// subtraction was applied to EVERY EVENT STAMP. Below the depth it has no answer, so it returned
+// 0 — and N events stamped 0 are N events at the same instant. Three notes written at samples 0,
+// 400 and 900 rendered as two pulses, at 0 and 512, the first CLIPPED because two had been summed
+// onto it (tools/pdc_head_event_check.sh renders exactly that).
+//
+// The mapping was also pointless: the host windows a block's events on the same start value it is
+// given, so the constant cancelled, and the master host never used it at all. So the plugin
+// timeline is now the engine timeline, and the clamped mapping is left with the one question it
+// was always the right answer to: WHERE TO DRAW THE PLAYHEAD. The engine head runs ahead of the
+// device by the pipeline depth, so the cursor belongs that far back, and before the pipeline has
+// filled nothing has been heard — the start of the song is the truth, not an approximation.
+//
+// One scalar per block for one cursor. There is no ordering inside a single number for a clamp to
+// destroy, which is the whole difference from stamping events with it.
+void testVisualPlayheadSample() {
+  daw::LatencyManager latency;
+  latency.init(/*blockSize=*/512, /*numBlocks=*/3);
+  CHECK(latency.getLatencySamples() == 1024);
+
+  // Past the depth it is an exact shift — the playhead trails the engine head by the pipeline.
+  CHECK(latency.visualPlayheadSample(1024) == 0);
+  CHECK(latency.visualPlayheadSample(1536) == 512);
+  CHECK(latency.visualPlayheadSample(100000) == 98976);
+
+  // Inside it, the answer is the start of the song. THIS IS THE CLAMP, asserted as intended
+  // behaviour so that its remaining caller is pinned and a future one has to read this.
+  CHECK(latency.visualPlayheadSample(0) == 0);
+  CHECK(latency.visualPlayheadSample(1023) == 0);
+
+  // AND IT IS MONOTONE, which is the property a cursor actually needs: a playhead that went
+  // backwards between blocks would jitter visibly. The clamp preserves this; a wrapping
+  // subtraction on unsigned samples would not, and that is the failure this pins.
+  uint64_t prev = 0;
+  for (uint64_t s = 0; s < 4096; s += 64) {
+    const uint64_t v = latency.visualPlayheadSample(s);
+    CHECK(v >= prev);
+    prev = v;
+  }
+
+  // A DEPTH OF ONE HAS NO LATENCY, so nothing is clamped and the cursor is the head itself.
+  daw::LatencyManager shallow;
+  shallow.init(/*blockSize=*/512, /*numBlocks=*/1);
+  CHECK(shallow.getLatencySamples() == 0);
+  CHECK(shallow.visualPlayheadSample(0) == 0);
+  CHECK(shallow.visualPlayheadSample(7) == 7);
+}
+
 }  // namespace
 
 int main() {
@@ -972,6 +1024,7 @@ int main() {
   testClampTickIntoLoop();
   testCutActiveNotes();
   testPushScratchpadOverflow();
+  testVisualPlayheadSample();
 
   if (g_fail == 0) {
     std::printf("engine_rt_helpers_tests: PASS\n");

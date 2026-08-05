@@ -212,7 +212,7 @@ bool runImpulseTest(const std::string& pluginPath) {
 
   const uint64_t targetSample =
       latency.getLatencySamples() + testConfig.blockSize + 7;
-  const uint64_t compensatedTarget = latency.getCompensatedStart(targetSample);
+  const uint64_t compensatedTarget = targetSample;
 
   bool validated = false;
   const uint32_t maxBlocks = 20;
@@ -221,7 +221,7 @@ bool runImpulseTest(const std::string& pluginPath) {
         static_cast<uint64_t>(blockId - 1) * testConfig.blockSize;
     const uint64_t engineSampleEnd = engineSampleStart + testConfig.blockSize;
     const uint64_t pluginSampleStart =
-        latency.getCompensatedStart(engineSampleStart);
+        engineSampleStart;
 
     clearInputBlock(host.controller, blockId);
 
@@ -270,7 +270,7 @@ bool runParamPriorityTest(const std::string& pluginPath) {
 
   const uint64_t targetSample =
       latency.getLatencySamples() + testConfig.blockSize + 3;
-  const uint64_t compensatedTarget = latency.getCompensatedStart(targetSample);
+  const uint64_t compensatedTarget = targetSample;
   const std::string gainId = "index:0";
   const float gainValue = 0.35f;
 
@@ -281,7 +281,7 @@ bool runParamPriorityTest(const std::string& pluginPath) {
         static_cast<uint64_t>(blockId - 1) * testConfig.blockSize;
     const uint64_t engineSampleEnd = engineSampleStart + testConfig.blockSize;
     const uint64_t pluginSampleStart =
-        latency.getCompensatedStart(engineSampleStart);
+        engineSampleStart;
 
     clearInputBlock(host.controller, blockId);
 
@@ -333,8 +333,8 @@ bool runParamTargetingTest(const std::string& pluginPath) {
   const uint64_t targetSampleA =
       latency.getLatencySamples() + testConfig.blockSize + 3;
   const uint64_t targetSampleB = targetSampleA + testConfig.blockSize;
-  const uint64_t compensatedA = latency.getCompensatedStart(targetSampleA);
-  const uint64_t compensatedB = latency.getCompensatedStart(targetSampleB);
+  const uint64_t compensatedA = targetSampleA;
+  const uint64_t compensatedB = targetSampleB;
   const std::string gainId = "index:0";
   const float gainPlugin0 = 0.2f;
   const float gainPlugin1 = 0.37f;
@@ -347,7 +347,7 @@ bool runParamTargetingTest(const std::string& pluginPath) {
         static_cast<uint64_t>(blockId - 1) * testConfig.blockSize;
     const uint64_t engineSampleEnd = engineSampleStart + testConfig.blockSize;
     const uint64_t pluginSampleStart =
-        latency.getCompensatedStart(engineSampleStart);
+        engineSampleStart;
 
     clearInputBlock(host.controller, blockId);
 
@@ -434,7 +434,7 @@ bool runChaosRecoveryTest(const std::string& pluginPath) {
 
   const uint64_t targetSample =
       latency.getLatencySamples() + testConfig.blockSize + 5;
-  const uint64_t compensatedTarget = latency.getCompensatedStart(targetSample);
+  const uint64_t compensatedTarget = targetSample;
   const uint32_t maxBlocks = 120;
   bool restarted = false;
   bool postRestartOutput = false;
@@ -465,7 +465,7 @@ bool runChaosRecoveryTest(const std::string& pluginPath) {
         static_cast<uint64_t>(blockId - 1) * testConfig.blockSize;
     const uint64_t engineSampleEnd = engineSampleStart + testConfig.blockSize;
     const uint64_t pluginSampleStart =
-        latency.getCompensatedStart(engineSampleStart);
+        engineSampleStart;
 
     clearInputBlock(host.controller, blockId);
 
@@ -525,7 +525,7 @@ bool runUiVisualSampleCountTest(const std::string& pluginPath) {
     const uint64_t engineSampleStart =
         static_cast<uint64_t>(blockId - 1) * testConfig.blockSize;
     const uint64_t expected =
-        latency.getCompensatedStart(engineSampleStart);
+        engineSampleStart;
 
     header->uiVisualSampleCount = expected;
     if (header->uiVisualSampleCount != expected) {
