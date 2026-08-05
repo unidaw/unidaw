@@ -1,32 +1,29 @@
 #!/usr/bin/env bash
-# THE PUBLISHED METER POINTS ARE INTERNALLY INCONSISTENT, AND THIS PINS IT.
+# A PUBLISHED METER CHANGE SITS A WHOLE NUMBER OF PRECEDING BARS AFTER THE ONE BEFORE IT.
 #
-# `UiArrangeSummaryRegion.timeSigPoints` publishes `points()[i].nanotick` — the tick a signature
-# change was ASKED FOR. TimeSignatureMap::setMap then snaps every change FORWARD to the next bar
-# line of the preceding signature, because a change landing mid-bar would leave a partial bar and
-# "bar 9" would mean two different things depending which side you counted from. That snapped
-# position lives in `segments_`, which is never published.
+# THIS CHECK USED TO BE INVERTED. `UiArrangeSummaryRegion.timeSigPoints` published
+# `points()[i].nanotick` — the tick a signature change was ASKED FOR — while TimeSignatureMap
+# snaps every change FORWARD to the next bar line of the preceding signature and keeps that
+# snapped position in `segments_`, which was never published. So a client drew the change where it
+# was requested rather than where it happens, and every bar line after it inherited the error. It
+# looked like the CLIENT's arithmetic, because the client's arithmetic was fine.
 #
-# So a client drawing the ruler from this region places the change where it was requested rather
-# than where it happens. Measured: 3/4 requested at 5 quarters comes back as 5 quarters, while the
-# change actually begins at 8 — three quarters early, and every bar line derived after it inherits
-# the error. It looks like the CLIENT's arithmetic, because the client's arithmetic is fine.
+# IT WAS PINNED RATHER THAN FIXED because the fix was believed to be a contract change: publishing
+# the effective tick "bumps kShmVersion and forces a rebuild on both sides". IT DID NOT. The field,
+# its type and its meaning are unchanged; only the VALUE was wrong, because TimeSignatureMap kept
+# the request instead of the answer. points() is now rebuilt from segments_, so the map reports
+# what it does rather than what it was asked, and the wire is byte-identical in shape.
+#
+# THE SAME REBUILD CLOSED A SECOND, SHARPER LEAK. A change that snapped onto the previous
+# segment's start was dropped from segments_ but STAYED in points_ — so it was published AND SAVED
+# as though it had taken effect. Measured: three published points against two real segments, with
+# signatureAt() reporting the one that was never published as a change.
 #
 # THE ASSERTION NEEDS NO KNOWLEDGE OF THE SNAPPING RULE, which is what makes it worth having. A
 # meter change must sit a WHOLE NUMBER OF PRECEDING BARS after the point before it — that is what
 # "no partial bars" means, and it is checkable from the published points alone. Recomputing the
 # snap here would be a second copy of the rule under test, and this repo has spent a night finding
 # out what those cost.
-#
-# THIS CHECK IS INVERTED. It asserts the violation is PRESENT, because the fix is a contract change
-# (publishing the effective tick, plus a resolved bar number so clients need not re-derive the
-# prefix sum) that bumps kShmVersion and forces a rebuild on both sides. That is an owner's call
-# and a coordination question, not something to land quietly at night. Until then the defect is at
-# least measured, and cannot drift.
-#
-# WHEN THIS GOES RED, READ THE MESSAGE. If the published point has become a whole number of bars,
-# the wire now carries effective ticks and this check has done its job: invert it to assert the
-# invariant holds, and delete this paragraph.
 #
 #   tools/meter_publish_check.sh
 #
@@ -91,7 +88,17 @@ SHM="/meterpub_$$"
     ./daw_engine --project meterpub --run-seconds 25 >"$TMP/eng.log" 2>&1 ) &
 ENG=$!
 wait_for_boot "$TMP/eng.log" "$ENG" 120
-sleep 0.8
+# THE READ IS OF A PUBLISHED REGION, so it polls for the region rather than betting 0.8s on how
+# busy the machine is. wait_for_boot means the project LOADED; it does not mean the arrange
+# summary has been written. Two points is what the fixture states, so that is the condition —
+# and the assertions below still run, because this removes the race, it does not replace them.
+arr_points() {
+  DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" get arrangement 2>/dev/null \
+    | python3 -c 'import json,sys
+try: print(len(json.load(sys.stdin).get("time_sig", [])))
+except Exception: print(0)'
+}
+wait_for_published 20 2 arr_points
 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" get arrangement >"$TMP/arr.json" 2>&1 \
   || fail "get arrangement failed — see $TMP/arr.json"
 
@@ -127,19 +134,20 @@ print(f"  published: {pts[0]['sig']} at {pts[0]['nanotick']}, {pts[1]['sig']} at
 bar0 = n0 * (4 * Q // d0)             # a 4/4 bar, in nanoticks
 delta = pts[1]["nanotick"] - pts[0]["nanotick"]
 bars = delta / bar0
-if delta % bar0 == 0:
-    print(f"  FAIL: the second point is {bars:.0f} whole bars in — the invariant now HOLDS.")
-    print( "        READ THIS BEFORE ASSUMING A REGRESSION: this check is INVERTED. If the wire")
-    print( "        now publishes the tick where the change TAKES EFFECT rather than the one it")
-    print( "        was requested at, the contract fix has landed and this check has done its")
-    print( "        job — invert it to assert the invariant and delete the inverted paragraph in")
-    print( "        its header.")
+if delta % bar0 != 0:
+    print(f"  FAIL: the change is published {bars:.2f} bars after the previous point, which is not")
+    print( "        a whole number of bars — so the published tick is the one the change was")
+    print( "        REQUESTED at, not the one it takes effect at.")
+    print( "")
+    print( "        TimeSignatureMap::setMap snaps a change forward to the next bar line of the")
+    print( "        preceding signature and keeps that in segments_. points() must be rebuilt from")
+    print( "        segments_ so the map reports what it DOES; publishing points_ as it arrived is")
+    print(f"        this defect. Snapping {bars:.2f} -> {-(-bars // 1):.0f} bars is what the engine")
+    print( "        actually counts, and what a client must draw.")
     raise SystemExit(1)
-print(f"  KNOWN DEFECT pinned: the change is published {bars:.2f} bars after the previous point,")
-print( "    which is not a whole number of bars — so the published tick is the one the change was")
-print( "    REQUESTED at, not the one it takes effect at. setMap snaps forward to the next bar")
-print(f"    line ({bars:.2f} -> {-(-bars // 1):.0f} bars) and that snapped position is never published.")
-print( "    Task #2; the fix bumps kShmVersion and needs coordination with the UI.")
+print(f"  the change sits {bars:.0f} whole bar(s) after the previous point — the published tick is")
+print( "    where it takes effect, not where it was asked for")
 PY
 
-echo "meter_publish_check: PASS — the published meter is measured, and its inconsistency is pinned"
+echo "meter_publish_check: PASS — a published meter change lands on a bar line of the meter" \
+     "before it; the inverted block retired 2026-08-05"

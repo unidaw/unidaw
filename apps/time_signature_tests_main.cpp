@@ -145,6 +145,79 @@ int main() {
             "the implied origin takes the first point's signature");
   }
 
+  // ---------------------------------------------------------------------------------------
+  // POINTS() REPORTS WHAT THE MAP DOES, NOT WHAT IT WAS ASKED FOR.
+  //
+  // setMap snaps a change forward to the next bar line of the preceding signature, and that
+  // snapped position used to live only in the private segments while points() handed back the
+  // raw request. points() is read by the published arrangement ruler, the saved project file
+  // and the undo store — so all three described a song the engine was not playing.
+  {
+    // 7/8 asked for halfway through bar 3 of 4/4. Bar lines are at 0, 1 and 2 bars, so the
+    // request is mid-bar and the snap has somewhere to move it: forward to bar 3, at 3 bars.
+    const uint64_t requested = 2 * k44Bar + k44Bar / 2;
+    TimeSignatureMap m;
+    m.setMap({{0, {4, 4}}, {requested, {7, 8}}});
+    checkEq(m.pointCount(), 2, "the origin and the change are both published");
+    checkEq(m.points()[1].nanotick, 3 * k44Bar,
+            "points() reports the EFFECTIVE tick, not the requested one");
+    // AND IT AGREES WITH THE MAP'S OWN ANSWER, which is the assertion that matters: a published
+    // tick where signatureAt() still reports the old signature is the defect, whatever the
+    // number happens to be.
+    checkEq(m.signatureAt(m.points()[1].nanotick).numerator, 7,
+            "the published tick is where the new signature actually begins");
+    checkEq(m.signatureAt(requested).numerator, 4,
+            "and the requested tick is still in the OLD signature — the snap is real");
+
+    // EVERY PUBLISHED POINT MUST SIT A WHOLE NUMBER OF PRECEDING BARS AFTER THE ONE BEFORE IT.
+    // This is the same invariant tools/meter_publish_check.sh asserts on the wire, stated here
+    // without needing to know the snapping rule — it is what "no partial bars" means.
+    for (size_t i = 1; i < m.points().size(); ++i) {
+      const uint64_t prevBar = m.points()[i - 1].sig.barNanoticks();
+      const uint64_t delta = m.points()[i].nanotick - m.points()[i - 1].nanotick;
+      checkEq(prevBar > 0 ? delta % prevBar : 0, 0,
+              "a published change lands on a bar line of the meter before it");
+    }
+  }
+
+  // A CHANGE THAT COLLAPSES IS NOT PUBLISHED, AND THE LATER ONE WINS.
+  //
+  // Two changes requested inside the same bar both belong at the next bar line. The second used
+  // to be dropped from the segments but LEFT IN points(), so it was published and saved as
+  // though it had taken effect while signatureAt() reported the first — three points against
+  // two segments. And the survivor was the FIRST, contradicting the rule one line above in the
+  // same function, where two points at one raw tick keep the LAST.
+  {
+    TimeSignatureMap c;
+    c.setMap({{0, {4, 4}}, {kNanoticksPerQuarter, {7, 8}},
+              {kNanoticksPerQuarter + 1, {3, 4}}});
+    checkEq(c.pointCount(), 2, "the collapsed change is not published");
+    checkEq(c.points()[1].nanotick, k44Bar, "both requests belong at the next bar line");
+    checkEq(c.points()[1].sig.numerator, 3, "the LATER change wins the collapse");
+    checkEq(c.signatureAt(k44Bar).numerator, 3,
+            "and what is published is what signatureAt reports");
+  }
+
+  // SETMAP(POINTS()) IS IDEMPOTENT, which is the property save-then-load rests on. Effective
+  // ticks are already bar lines of the preceding signature, so a second pass snaps nothing and
+  // collapses nothing. Feeding raw requests back in did not have this property: each reload
+  // could move a point again.
+  {
+    TimeSignatureMap a;
+    a.setMap({{0, {4, 4}}, {2 * k44Bar + 2 * kNanoticksPerQuarter, {7, 8}},
+              {40 * kNanoticksPerQuarter + 7, {3, 4}},
+              {100 * kNanoticksPerQuarter, {5, 8}}});
+    const auto first = a.points();
+    TimeSignatureMap b;
+    b.setMap(first);
+    const auto second = b.points();
+    checkEq(second.size(), first.size(), "a reload publishes the same number of points");
+    for (size_t i = 0; i < first.size() && i < second.size(); ++i) {
+      checkEq(second[i].nanotick, first[i].nanotick, "a reload moves no point");
+      checkEq(second[i].sig.numerator, first[i].sig.numerator, "a reload changes no signature");
+    }
+  }
+
   if (g_fail == 0) {
     std::printf("time_signature_tests: all passed\n");
     return 0;

@@ -121,7 +121,18 @@ class TimeSignatureMap {
             prev.barLength > 0 ? (sincePrev + prev.barLength - 1) / prev.barLength : 0;
         seg.startTick = prev.startTick + wholeBars * prev.barLength;
         if (seg.startTick <= prev.startTick) {
-          continue;  // collapsed onto the previous segment; it wins
+          // COLLAPSED ONTO THE PREVIOUS SEGMENT, and the LATER change wins — the same rule the
+          // dedupe above applies to two points at one raw tick. It used to `continue` here, so
+          // two changes that arrived at the same tick kept the last while two that SNAPPED to the
+          // same bar line kept the first. One rule, two answers, and only reachable when an
+          // earlier change snapped forward past a later one's tick.
+          //
+          // Only the signature is taken: startTick and startBar are where this bar line is, which
+          // does not depend on which signature ends up starting here.
+          Segment& target = segments.back();
+          target.sig = seg.sig;
+          target.barLength = seg.sig.barNanoticks();
+          continue;
         }
         barsSoFar += wholeBars;
       }
@@ -129,7 +140,27 @@ class TimeSignatureMap {
       segments.push_back(seg);
     }
     segments_ = std::move(segments);
-    points_ = std::move(points);
+    // THE POINTS ARE REBUILT FROM THE SEGMENTS, not kept as they arrived. What the caller asked
+    // for and what this map DOES are two different things: a change is snapped forward to a bar
+    // line, and one that snaps onto the previous segment's start is dropped entirely. points() is
+    // read by the published ruler, the saved project file and the undo store — none of which want
+    // a request, all of which want the answer.
+    //
+    // Measured before this: 7/8 asked for halfway through bar 3 published as a point at tick
+    // 9600000 while signatureAt(9600000) still said 4/4 and 7/8 truly began at 11520000, so the
+    // UI drew the change two quarters before the engine counted it. And a 3/4 change one tick
+    // after a 7/8 change was PUBLISHED AND SAVED even though it collapsed and never applied —
+    // three points against two segments, which is also why the comment below claiming they are
+    // the same size was false.
+    //
+    // Rebuilding here makes setMap(points()) idempotent: every tick is already a bar line of the
+    // preceding signature, so nothing snaps and nothing collapses on a second pass. That is the
+    // property save-then-load depends on.
+    points_.clear();
+    points_.reserve(segments_.size());
+    for (const auto& seg : segments_) {
+      points_.push_back({seg.startTick, seg.sig});
+    }
   }
 
   TimeSignature signatureAt(uint64_t nanotick) const {
@@ -198,7 +229,10 @@ class TimeSignatureMap {
   }
 
   std::vector<TimeSignaturePoint> points_;
-  std::vector<Segment> segments_;  // same size as points_, prefix-summed by bar
+  // ALWAYS the same size as points_, because points_ is rebuilt from this at the end of
+  // setMap. It was not before, and the difference was invisible: a collapsed change stayed
+  // in points_ and was published and saved as though it had taken effect.
+  std::vector<Segment> segments_;  // prefix-summed by bar
 };
 
 }  // namespace daw
