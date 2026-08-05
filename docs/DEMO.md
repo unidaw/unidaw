@@ -165,14 +165,22 @@ DAW_PROJECT_DIR=<the project dir> ./daw_engine --project <name> --render take --
 
 ## Known rough edges, in the order you might hit them
 
-1. **`waveform_probe.wav` is silent for its first second.** It is the peak-pyramid probe asset —
-   stepped level regions for testing the waveform display, not a musical sample — so a note that
-   starts on the downbeat plays and cannot be heard for a second. Nothing is wrong; if you are
-   demonstrating the sampler with that file, start a beat in, or load something musical.
-   (I reported this as an engine bug — "a note at tick 0 is dropped" — and it was not one.)
+1. **`waveform_probe.wav` is silent for its first second, and PLAYING BELOW THE ROOT STRETCHES
+   THAT.** It is the peak-pyramid probe asset — stepped level regions for testing the waveform
+   display, not a musical sample. A loaded slot is rooted at middle C (60), and a sampler
+   transposes by resampling, so a note an octave down plays at half speed and the silent second
+   becomes two; two octaves down, four. The tracker's default `oct 4` puts `z` at 48 — a whole
+   octave below the root — so the first thing a person types is exactly the case that stalls.
+   **Load a musical sample for the demo, or play `q` (60) rather than `z`.**
+   This cost two wrong bug reports: first "a note at tick 0 is dropped", then "a sampler alone on
+   a track reaches no output". Both were this.
 2. **`goto` counts displayed rows**, and how much time a row spans depends on the zoom. If you
    navigate by row and something lands somewhere surprising, that is why.
-3. The AI takes 5–25 seconds to answer. It streams; wait for it to stop before typing again.
+3. **A sampler voice plays the whole sample, however short the note.** Measured offline: a
+   two-second note on a four-second file produces four seconds of audio. Fine for one-shots and
+   drums, which is most of what it is for, but a short tracker note and a long one sound the
+   same. Do not build a demo moment on note length in the sampler.
+4. The AI takes 5–25 seconds to answer. It streams; wait for it to stop before typing again.
 
 ---
 

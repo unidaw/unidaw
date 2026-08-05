@@ -85,7 +85,15 @@ const pick = async (cat, want) => {
 
 check(await pick('devs', 'sampler') === true, 'a sampler goes on the track from the rail');
 await settle(1500);
-check(await pick('smpl', 'waveform_probe') === true, 'and a sample goes into it from the rail');
+/*
+ * A MUSICAL ONE-SHOT, NOT THE PROBE ASSET. `demo_pluck_c4.wav` is middle C with its attack in
+ * the first millisecond (tools/make_demo_samples.py). The probe files that used to be the only
+ * thing in this directory are silent for their first second, which the sampler STRETCHES when
+ * transposing down — and this test plays 48 against a root of 60, an octave below, so the probe
+ * would be mute for two seconds under notes that are barely longer than that. Every reading here
+ * would have been about the asset.
+ */
+check(await pick('smpl', 'demo_pluck') === true, 'and a sample goes into it from the rail');
 await settle(2500);
 
 // ---------------------------------------------------------------------------
@@ -125,11 +133,6 @@ if (kit) {
  * SPACED IN TICKS, NOT IN ROWS. `goto` counts DISPLAYED rows and how many nanoticks a row
  * spans depends on the ZOOM, so "rows 2, 4, 6" is a different stretch of time at every zoom
  * level. The ticks are asserted below rather than assumed.
- *
- * And they are placed past the first second because `waveform_probe.wav` is SILENT for its
- * first second by construction — it is the peak-pyramid probe asset, stepped level regions,
- * not a musical sample. A note there plays and cannot be heard, which reads exactly like a
- * note that did not play. That cost a wrong bug report; see harmony-quantize.mjs.
  */
 for (const row of [4, 8, 12, 16]) {
   await run(`goto ${row} 0`);
@@ -137,8 +140,23 @@ for (const row of [4, 8, 12, 16]) {
   await settle(250);
 }
 await settle(900);
+/*
+ * READ WHERE THE FIRST NOTE IS. DO NOT ASSUME IT.
+ *
+ * `goto 4` does not mean "one beat in": a row is a DISPLAYED row and how much time one spans
+ * depends on the zoom, so the four notes below landed on quarters 4/8/12/16 rather than the
+ * 1/2/3/4 the row numbers suggest. Assuming the first was at 0.5s made the render look two
+ * seconds late, and the phantom shift survived everything: constant across playback rates,
+ * scaling with tempo, indifferent to the time signature. I built five fixtures chasing an engine
+ * bug that was my own arithmetic.
+ *
+ * These ticks are SONG-ABSOLUTE, which is worth stating because the near-miss fix was to add the
+ * placement's `at` — and a placement begins at its first note, so `at` EQUALS the first note's
+ * tick and adding it doubles the offset. Both readings predict the same time for the first note
+ * on this fixture, so the fixture cannot tell them apart; the saved project can, and does.
+ */
 const ticks = await page.evaluate(() =>
-  (window.__uni.notes() || []).map((n) => n.on ?? n.t ?? n.tOn).sort((a, b) => a - b));
+  (window.__uni.notes() || []).map((x) => x.on ?? x.t ?? x.tOn).sort((a, b) => a - b));
 check(ticks.length === 4 && ticks[ticks.length - 1] >= 960000,
       'the notes are spread over real time, not bunched at the start',
       `ticks ${JSON.stringify(ticks)}`);
@@ -162,10 +180,35 @@ try {
 check(wav && wav.length > 44, 'the song renders', wav ? `${wav.length} bytes` : 'nothing');
 if (wav) {
   const w = readWav(join(stack.dir, 'take.wav'));
-  const pk = envelope(w.mono, w.rate, 0.05).reduce((m, v) => Math.max(m, v), 0);
+  const per = 0.05;
+  const env = envelope(w.mono, w.rate, per);
+  const pk = env.reduce((m, v) => Math.max(m, v), 0);
   check(pk > 0.001,
         'A SAMPLE LOADED FROM THE RAIL SOUNDS WHEN YOU TYPE A NOTE — no remapping',
         `peak ${pk.toFixed(4)} — silence here means the slot is pinned away from the keyboard again`);
+
+  /*
+   * AND IT SOUNDS *AT* THE NOTE, NOT A SECOND AFTER IT.
+   *
+   * A peak somewhere in eight seconds is a weak claim: it is satisfied by audio arriving
+   * whenever, and that is exactly what the old probe asset produced — silence for its first
+   * second, stretched by any downward transposition — which got reported as an engine fault
+   * twice. `demo_pluck_c4.wav` has its attack in the first millisecond, so lateness here means
+   * the sampler and not the file.
+   *
+   * Asserted against the SONG, which only a render permits: sample zero IS song zero, so there
+   * is no origin to locate. A device capture starts when the DEVICE does and could not carry
+   * this claim at all.
+   */
+  const FLOOR = 0.004;
+  const Q = 960000, SEC_PER_TICK = 0.5 / Q;         // 120bpm: a quarter is half a second
+  const expected = ticks[0] * SEC_PER_TICK;
+  const firstLoud = env.findIndex((v) => v > FLOOR);
+  const heard = firstLoud < 0 ? -1 : firstLoud * per;
+  check(heard >= 0 && Math.abs(heard - expected) < 0.3,
+        'and it sounds AT the note rather than a second late — the attack is immediate',
+        `first sound at ${heard.toFixed(2)}s, first note at ${expected.toFixed(2)}s ` +
+        `(tick ${ticks[0]})`);
 }
 
 check(errors.length === 0, 'no page errors', errors.join(' | '));
