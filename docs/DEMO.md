@@ -81,6 +81,11 @@ reaches the others and a delete removes it everywhere.
 its attack in the first millisecond, so it sounds the instant you type — see rough edge 1 for what
 the probe files do instead. Regenerate either with `python3 tools/make_demo_samples.py`.
 
+**One instrument per track, and the sampler counts as one.** Adding a plugin instrument to a
+track that already has a sampler is refused in words — "track 1 already has an instrument" — so
+give the sampler its own track. (Until today that refusal arrived as "chain error on track 0
+(code 1)".)
+
 A single sample now lands across the whole keyboard from middle C, so any note you play sounds it.
 (It used to be pinned to MIDI 36 alone, so this exact gesture produced silence.) A comma-separated
 list is a drum kit and each file stays on its own key.

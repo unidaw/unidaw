@@ -423,13 +423,43 @@ const sampleMeters = async () => {
                      out: Math.max(prev.out, x.outPeak || 0) };
   }
 };
-await page.waitForTimeout(5000);          // the control's note is at 0s; the samplers start at 4s
+/*
+ * ASK WHILE THE PLAYHEAD IS INSIDE THE NOTE — WAIT FOR IT, DO NOT SLEEP TOWARDS IT.
+ *
+ * The previous version slept 5s, then 4s per track. Each of those 4s was eight iterations of
+ * "evaluate the meters, sleep 500ms", and an evaluate is not free — so every track's request
+ * went out a little later than the last, the error accumulated, and by the third one it could
+ * land after the note had ended. Two runs of this file disagreed about whether track 2 ever
+ * started a voice, which is a coin toss dressed as a measurement.
+ *
+ * The playhead is published, so the question is answerable instead of estimated: wait until the
+ * transport is inside the note, ask then. Drift cannot accumulate because nothing is counted
+ * forward from a start time.
+ *
+ * The notes are at 4s, 8s and 12s, two seconds each, and 120bpm makes a quarter 960000
+ * nanoticks — so the middles are at 9, 17 and 25 quarters.
+ */
+const Q_TICKS = 960000;
+const NOTE_MIDDLE = [9 * Q_TICKS, 17 * Q_TICKS, 25 * Q_TICKS];
+const playhead = () => page.evaluate(() => (window.__uni.engine() || {}).tick || 0);
 for (let t = 0; t < 3; t++) {
+  const want = NOTE_MIDDLE[t];
+  let reached = false;
+  for (let i = 0; i < 120 && !reached; i++) {
+    const tick = await playhead();
+    if (tick >= want) { reached = true; break; }
+    await sampleMeters();                 // the meters are wanted throughout, not only at the ask
+    await page.waitForTimeout(250);
+  }
+  if (!reached) {
+    console.log(`  the playhead never reached ${want} for track ${t} — asking anyway`);
+  }
   await page.evaluate(([tr, d]) => window.__uni.send({ type: 'samplerkit', track: tr, device: d }),
                       [t, devs[t]]);
-  for (let i = 0; i < 8; i++) { await sampleMeters(); await page.waitForTimeout(500); }
+  // Two more meter reads so the publication that answers this request is inside the window.
+  await sampleMeters(); await page.waitForTimeout(400); await sampleMeters();
 }
-await page.waitForTimeout(2000);
+await page.waitForTimeout(1500);
 console.log('  device meters while the notes sounded:',
             JSON.stringify(meterPeak));
 await page.evaluate(() => window.__uni.transport('stop'));
