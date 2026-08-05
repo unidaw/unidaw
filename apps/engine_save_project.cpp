@@ -12,24 +12,24 @@ namespace daw::engine {
 
 bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path,
                        std::string* error) {
-  auto& arrangeMutex = deps.arrange.arrangeMutex;
+  auto& arrangeMutex = deps.engineState.arrange.arrangeMutex;
   auto& harmonyEvents = deps.harmonyTimeline.harmonyEvents;
   auto& liveTrackCount = deps.liveTrackCount;
-  auto& loadedClips = deps.loadedProject.loadedClips;
-  auto& loadedClipsMutex = deps.loadedProject.loadedClipsMutex;
-  auto& loadedTempoMap = deps.songTiming.loadedTempoMap;
-  auto& markerList = deps.arrange.markerList;
+  auto& loadedClips = deps.engineState.loadedProject.loadedClips;
+  auto& loadedClipsMutex = deps.engineState.loadedProject.loadedClipsMutex;
+  auto& loadedTempoMap = deps.engineState.songTiming.loadedTempoMap;
+  auto& markerList = deps.engineState.arrange.markerList;
   auto& masterTrack = deps.masterTrack;
-  auto& patcherAssembledFromDevices = deps.patcherGraph.patcherAssembledFromDevices;
-  auto& patcherGraphState = deps.patcherGraph.patcherGraphState;
-  auto& patcherPoolEdited = deps.patcherGraph.patcherPoolEdited;
+  auto& patcherAssembledFromDevices = deps.engineState.patcherGraph.patcherAssembledFromDevices;
+  auto& patcherGraphState = deps.engineState.patcherGraph.patcherGraphState;
+  auto& patcherPoolEdited = deps.engineState.patcherGraph.patcherPoolEdited;
   auto& pluginCache = deps.pluginCache;
   auto& projectSeed = deps.projectSeed;
-  auto& songMeter = deps.arrange.songMeter;
-  auto& songTimeSigDen = deps.songTiming.songTimeSigDen;
-  auto& songTimeSigNum = deps.songTiming.songTimeSigNum;
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& songMeter = deps.engineState.arrange.songMeter;
+  auto& songTimeSigDen = deps.engineState.songTiming.songTimeSigDen;
+  auto& songTimeSigNum = deps.engineState.songTiming.songTimeSigNum;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
   const auto& songBarGrid = deps.songBarGrid;
   const auto& trackIsPersisted = deps.trackIsPersisted;
   {

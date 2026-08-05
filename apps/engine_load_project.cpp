@@ -20,11 +20,11 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
                          std::string* error) {
   // Re-bind every dependency to the name the body already uses, so the 943 lines below are
   // the untouched original.
-  auto& arrangeMutex = deps.arrange.arrangeMutex;
-  auto& arrangeVersion = deps.arrange.arrangeVersion;
+  auto& arrangeMutex = deps.engineState.arrange.arrangeMutex;
+  auto& arrangeVersion = deps.engineState.arrange.arrangeVersion;
   auto& automationVersion = deps.automationVersion;
-  auto& auxChildOverlayMutex = deps.auxChildOverlays.auxChildOverlayMutex;
-  auto& auxChildOverlays = deps.auxChildOverlays.auxChildOverlays;
+  auto& auxChildOverlayMutex = deps.engineState.auxChildOverlays.auxChildOverlayMutex;
+  auto& auxChildOverlays = deps.engineState.auxChildOverlays.auxChildOverlays;
   auto& buildTrackSnapshot = deps.buildTrackSnapshot;
   auto& bumpAllTrackClipVersions = deps.bumpAllTrackClipVersions;
   auto& clipDirty = deps.clipDirty;
@@ -40,18 +40,18 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   auto& harmonyVersion = deps.harmonyTimeline.harmonyVersion;
   auto& liveTrackCount = deps.liveTrackCount;
   auto& loadInProgress = deps.loadInProgress;
-  auto& loadedClips = deps.loadedProject.loadedClips;
-  auto& loadedClipsMutex = deps.loadedProject.loadedClipsMutex;
-  auto& loadedProjectDir = deps.loadedProject.loadedProjectDir;
-  auto& loadedTempoMap = deps.songTiming.loadedTempoMap;
-  auto& loopEndNanotick = deps.transport.loopEndNanotick;
-  auto& loopStartNanotick = deps.transport.loopStartNanotick;
-  auto& loopUserSet = deps.transport.loopUserSet;
-  auto& markerList = deps.arrange.markerList;
+  auto& loadedClips = deps.engineState.loadedProject.loadedClips;
+  auto& loadedClipsMutex = deps.engineState.loadedProject.loadedClipsMutex;
+  auto& loadedProjectDir = deps.engineState.loadedProject.loadedProjectDir;
+  auto& loadedTempoMap = deps.engineState.songTiming.loadedTempoMap;
+  auto& loopEndNanotick = deps.engineState.transport.loopEndNanotick;
+  auto& loopStartNanotick = deps.engineState.transport.loopStartNanotick;
+  auto& loopUserSet = deps.engineState.transport.loopUserSet;
+  auto& markerList = deps.engineState.arrange.markerList;
   auto& masterTrack = deps.masterTrack;
-  auto& meterSnapshot = deps.songTiming.meterSnapshot;
+  auto& meterSnapshot = deps.engineState.songTiming.meterSnapshot;
   auto& nextClipId = deps.nextClipId;
-  auto& patcherAssembledFromDevices = deps.patcherGraph.patcherAssembledFromDevices;
+  auto& patcherAssembledFromDevices = deps.engineState.patcherGraph.patcherAssembledFromDevices;
   auto& patternTicks = deps.patternTicks;
   auto& pluginCache = deps.pluginCache;
   auto& projectSeed = deps.projectSeed;
@@ -60,13 +60,13 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   auto& rebuildFlatAndPublish = deps.rebuildFlatAndPublish;
   auto& reconcileMasterHost = deps.reconcileMasterHost;
   auto& resetTrackContent = deps.resetTrackContent;
-  auto& songEndNanotick = deps.songTiming.songEndNanotick;
-  auto& songMeter = deps.arrange.songMeter;
-  auto& songTimeSigDen = deps.songTiming.songTimeSigDen;
-  auto& songTimeSigNum = deps.songTiming.songTimeSigNum;
+  auto& songEndNanotick = deps.engineState.songTiming.songEndNanotick;
+  auto& songMeter = deps.engineState.arrange.songMeter;
+  auto& songTimeSigDen = deps.engineState.songTiming.songTimeSigDen;
+  auto& songTimeSigNum = deps.engineState.songTiming.songTimeSigNum;
   auto& tempoProvider = deps.tempoProvider;
-  auto& tracks = deps.trackTable.tracks;
-  auto& tracksMutex = deps.trackTable.tracksMutex;
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
   auto& waveformStore = deps.waveformStore;
 
     daw::ProjectDocument document;

@@ -259,9 +259,39 @@ capture_diagnosis() {
         upstream, so treat this as INCONCLUSIVE rather than as a failure of whatever is under
         test: on a loaded machine the audio may simply never have been generated in time"
     else
-      echo "the device ${dev:-(unnamed)} ran $callbacks playback callbacks and the producer met
-        its budget, so both ends were working — an empty capture here is not the device's fault
-        and is worth reading $log directly"
+      # THE DEVICE'S OWN DROPOUT COUNT, which this function used to ignore entirely — and that
+      # made it announce the opposite of the truth. On 2026-08-05 panic_check captured 14s of
+      # silence and this printed "both ends were working" over a log reading
+      #
+      #   Audio underrun summary: 1427 of 1468 callbacks that HAD A TRACK TO PLAY dropped one
+      #
+      # 97% of callbacks got nothing to play. over_budget was 0 because that counter is written
+      # at project.load and describes the producer's own budget, not what the device received;
+      # taking its silence as proof of health is the same mistake as reading a green suite as
+      # proof of coverage. A wrong diagnosis is worse than none — it sends the next person to
+      # the wrong layer, which is what this whole function exists to prevent.
+      local dropped total
+      dropped="$(grep -oE 'underrun summary: [0-9]+ of [0-9]+' "$log" 2>/dev/null | tail -1 |
+                 grep -oE '[0-9]+' | head -1)"
+      total="$(grep -oE 'underrun summary: [0-9]+ of [0-9]+' "$log" 2>/dev/null | tail -1 |
+               grep -oE '[0-9]+' | tail -1)"
+      if [ "${dropped:-0}" -gt 0 ] 2>/dev/null; then
+        # ATTRIBUTE THIS TO THE PRODUCER, NOT THE DEVICE. An underrun is counted when a callback
+        # HAD a track to play and the producer had no block ready for it. The device asking is
+        # what `$callbacks` counts, and it asked every time. The first version of this branch
+        # said the device "was handed nothing to play" and blamed a high-latency output — which
+        # is the same misreading the counter's own comment in engine_audio_callback.h records
+        # having been made twice before in writing, and it made three.
+        echo "the device ${dev:-(unnamed)} ran $callbacks playback callbacks and the PRODUCER had
+        no block ready for ${dropped} of ${total:-?} of them. The device did its job; the engine
+        did not fill it. A capture written from inside that callback is silence for that reason,
+        so read this as the producer failing to keep up with the fixture's load — see the
+        underrun summary and pipeline depth in $log — and NOT as a fault of the output device"
+      else
+        echo "the device ${dev:-(unnamed)} ran $callbacks playback callbacks, the producer met
+        its budget and the device dropped none, so all three were working — an empty capture here
+        is not the device's fault and is worth reading $log directly"
+      fi
     fi
   else
     echo "the engine log has no underrun summary, so it did not reach a clean shutdown — read

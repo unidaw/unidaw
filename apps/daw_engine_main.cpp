@@ -57,6 +57,7 @@
 #include "apps/engine_clip_edit.h"
 #include "apps/engine_track_setup.h"
 #include "apps/engine_arrange_rail.h"
+#include "apps/engine_state.h"
 #include "apps/engine_track_table.h"
 #include "apps/engine_patcher_graph_owner.h"
 #include "apps/engine_song_extent.h"
@@ -339,7 +340,10 @@ int main(int argc, char** argv) {
                                           allowConnect, startHost);
   };
 
-  daw::engine::TrackTable trackTable;
+  // The engine's state, in one object; the bindings below keep every body unchanged. Why it
+  // exists and what may go in it: apps/engine_state.h.
+  daw::engine::EngineState engineState;
+  auto& trackTable = engineState.trackTable;
   auto& tracks = trackTable.tracks;
   tracks.reserve(daw::kUiMaxTracks);
   auto& tracksMutex = trackTable.tracksMutex;
@@ -408,7 +412,6 @@ int main(int argc, char** argv) {
   };
 
   // The map and its lock in one object: apps/engine_aux_child_overlays.h.
-  daw::engine::AuxChildOverlays auxChildOverlays;
   TrackRuntime* uiTrack = nullptr;
   {
     auto runtime = setupTrackRuntime(0, pluginPath, !spawnHost, true);
@@ -491,7 +494,7 @@ int main(int argc, char** argv) {
   // Six counters in one object: see apps/engine_producer_telemetry.h. They were passed
   // individually into ProducerBlockDeps, ProducerThreadDeps and ShutdownDeps — eighteen member
   // slots for one measurement, and nothing has ever read one of them without the others.
-  daw::engine::ProducerTelemetry producerTelemetry;
+  auto& producerTelemetry = engineState.producerTelemetry;
 
   // The pool the per-track work runs on. Sized to leave the audio callback, the master render
   // thread and the OS room to breathe rather than claiming every core — a producer that
@@ -499,7 +502,7 @@ int main(int argc, char** argv) {
   // worse. DAW_ENGINE_RENDER_THREADS overrides; 0 or 1 keeps everything on the producer thread,
   // which is also the reference the parallel path is checked for bit-identical output against.
   // The pool and its three decision variables in one object: apps/engine_render_pool_owner.h.
-  daw::engine::RenderPoolOwner renderPoolOwner;
+  auto& renderPoolOwner = engineState.renderPoolOwner;
   // WHETHER TO USE IT THIS BLOCK, and it is not "always". Measured on a real device: at 8 sampler
   // tracks one thread spends 0.18x of the block budget and has room to spare, and waking seven
   // workers every block to help costs MORE than it saves — across four runs the pool dropped
@@ -563,7 +566,7 @@ int main(int argc, char** argv) {
   // No test notes - wait for user input from the tracker
   std::cout << "Engine: Ready for tracker input" << std::endl;
 
-  daw::engine::PatcherGraphOwner patcherGraph;
+  auto& patcherGraph = engineState.patcherGraph;
   // Has anyone actually EDITED the shared pool this session?
   //
   // The save's legacy branch parks the pool on the first instrument so the one global graph
@@ -636,7 +639,7 @@ int main(int argc, char** argv) {
   };
   updatePatcherGraphSnapshot();
 
-  daw::engine::TransportState transport;
+  auto& transport = engineState.transport;
   // TICKS PLAYED SINCE THE TRANSPORT LAST STARTED FROM THE LOOP START, never wrapped.
   //
   // transportNanotick is a POSITION and wraps at the loop end, so nothing in the engine knew
@@ -679,7 +682,7 @@ int main(int argc, char** argv) {
   // placement past the end left the loop where it was and the new material NEVER PLAYED:
   // you would add a section at bar 4, press play, and hear nothing, with no explanation
   // anywhere. Recomputed whenever a placement edit changes the arrangement.
-  daw::engine::SongTiming songTiming;
+  auto& songTiming = engineState.songTiming;
   // v29: THE ARRANGEMENT — named positions and the song's meter. Its own version counter,
   // deliberately NOT clipVersion: renaming a marker moves no note, so it must not invalidate
   // anyone's in-flight edit — the same separation quantizeVersion has.
@@ -692,7 +695,7 @@ int main(int argc, char** argv) {
   // and would have wedged the engine mid-edit with no diagnostic. Moving the meter onto the
   // section deleted one of the two; deleting the section deletes the derivation itself, so a
   // marker's bar is a lookup in the map and there is no pair left to invert.
-  daw::engine::ArrangeRail arrange;
+  auto& arrange = engineState.arrange;
   // AN RT-SAFE COPY OF THE METER, for the audio/host thread. The play head has to report the
   // signature at the PLAYHEAD, not the song default — that is the whole point of an authoritative
   // meter map, and reporting the default is the bug this replaces. The RT cannot take arrangeMutex,
@@ -766,7 +769,7 @@ int main(int argc, char** argv) {
   // Nine publish gates and a warning latch in one object: see apps/engine_publish_gates.h. They
   // are touched only by the consumer thread and were nine loose locals here, threaded through
   // ConsumerDeps and PublishClipsDeps by hand.
-  daw::engine::PublishGates publishGates;
+  auto& publishGates = engineState.publishGates;
   std::atomic<uint32_t> chainVersion{0};
   std::atomic<uint32_t> routingVersion{0};
   std::atomic<uint32_t> modVersion{0};
@@ -781,7 +784,7 @@ int main(int argc, char** argv) {
   // store (load, restore, single-note creation).
   // Three locals and their lambda became one object: see apps/engine_preview_queue.h. They were
   // passed individually into three different Deps structs — seven member slots for one idea.
-  daw::engine::PreviewQueue previewQueue;
+  auto& previewQueue = engineState.previewQueue;
   // Enqueue an audition and update the held-pitch set. Caller holds nothing; this locks.
   auto enqueuePreview = [&](uint32_t trackId, uint8_t pitch, uint8_t velocity, bool on) {
     previewQueue.enqueuePreview(trackId, pitch, velocity, on);
@@ -805,14 +808,14 @@ int main(int argc, char** argv) {
   // retained one. Bumped when a track creates a clip or COW-forks a loaded one.
   std::atomic<uint32_t> nextClipId{1};
   // The two stacks and their lock in one object: apps/engine_undo_stacks.h.
-  daw::engine::UndoStacks undoStacks;
+  auto& undoStacks = engineState.undoStacks;
 
   // Project-level clip definitions retained from load. Placements (per-track,
   // on TrackRuntime::sourcePlacements) reference these by id. Save re-emits the
   // ones still referenced by a clean track so the arrangement's structure
   // survives a load->save round-trip. Guarded by loadedClipsMutex.
   // What a load left behind, in one object: see apps/engine_loaded_project.h.
-  daw::engine::LoadedProject loadedProject;
+  auto& loadedProject = engineState.loadedProject;
 
   // Project tempo map retained from load so a save re-emits the FULL map (any tempo
   // changes included), rather than collapsing it to the current single tempo. Only
@@ -971,7 +974,7 @@ int main(int argc, char** argv) {
   // Below snapshotTracks, which it takes: a struct of references cannot be built before its
   // members exist, and snapshotTracksFn is the wrapper for the lambda just above.
   const std::function<std::vector<TrackRuntime*>()> snapshotTracksFn = snapshotTracks;
-  daw::engine::SongExtentDeps songExtentDeps{transport, songTiming, snapshotTracksFn, patternTicks};
+  daw::engine::SongExtentDeps songExtentDeps{engineState, snapshotTracksFn, patternTicks};
   auto trackWindowEnd = [&](const TrackRuntime& rt) {
     return daw::engine::trackWindowEnd(songExtentDeps, rt);
   };
@@ -993,7 +996,7 @@ int main(int argc, char** argv) {
   // not build is REPORTED and the previous one is left running — a bad edge in one device must not
   // silently take down every other device's graph.
   // The request slot and its lock in one object: apps/engine_clip_window.h.
-  daw::engine::ClipWindow clipWindow;
+  auto& clipWindow = engineState.clipWindow;
 
 
   // v9: publish every track's clip in one region so read-only observers see
@@ -1661,9 +1664,8 @@ int main(int argc, char** argv) {
   // track is copied under its own mutex so the document is consistent per
   // track without stalling audio behind one global lock.
   daw::engine::SaveProjectDeps saveProjectDeps{
-      loadedProject, arrange, harmonyTimeline, liveTrackCount, songTiming,
-      masterTrack, patcherGraph, pluginCache, projectSeed, trackTable, songBarGrid,
-      trackIsPersisted
+      engineState, harmonyTimeline, liveTrackCount, masterTrack, pluginCache,
+      projectSeed, songBarGrid, trackIsPersisted
   };
   auto saveProjectToPath = [&](const std::string& path,
                                  std::string* error) -> bool {
@@ -1698,14 +1700,14 @@ int main(int argc, char** argv) {
   // here — that needs host restarts and the vst_state blobs described in
   // PROJECT_PERSISTENCE.md, which this version does not yet write.
   daw::engine::LoadProjectDeps loadProjectDeps{
-      auxChildOverlays, loadedProject, arrange, automationVersion,
+      engineState, automationVersion,
       buildTrackSnapshot, bumpAllTrackClipVersions, clipDirty, clipVersion,
       emitChainSnapshot, emitModSnapshot, emitRoutingSnapshot, emitUiDiff,
       ensurePlacementIds, ensureTrack, harmonyTimeline, liveTrackCount, loadInProgress,
-      songTiming, transport, masterTrack,
-      nextClipId, patcherGraph, patternTicks, pluginCache, projectSeed,
+      masterTrack, nextClipId, patternTicks, pluginCache, projectSeed,
       publishAudioClipTable, rebuildAudioRender, rebuildFlatAndPublish, rebuildHostForChain,
-      reconcileMasterHost, refreshSamplerForTrack, resetTrackContent, tempoProvider, trackTable, updatePatcherGraphSnapshot, waveformStore
+      reconcileMasterHost, refreshSamplerForTrack, resetTrackContent, tempoProvider,
+      updatePatcherGraphSnapshot, waveformStore
   };
 
   auto loadProjectFromPath = [&](const std::string& path, std::string* error) -> bool {
@@ -2147,18 +2149,17 @@ int main(int argc, char** argv) {
   std::thread producer([&] { daw::engine::runProducerThread(producerThreadDeps); });
 
   daw::engine::UiWriterDeps uiWriterDeps{
-      clipWindow, publishGates, arrange, automationVersion, clipVersion,
-      harmonyTimeline, laneQuantizeOf, patcherGraph,
-      quantizeVersion, snapshotTracks, songTiming, trackIsPersisted, uiShm
+      engineState, automationVersion, clipVersion, harmonyTimeline, laneQuantizeOf,
+      quantizeVersion, snapshotTracks, trackIsPersisted, uiShm
   };
 
   daw::engine::ConsumerDeps consumerDeps{
-      auxChildOverlays, audioPlaybackBlockId, buildTrackSnapshot,
+      engineState, audioPlaybackBlockId, buildTrackSnapshot,
       clipVersion, engineConfig, ensurePlacementIds, harmonyTimeline, lastOverflowTick,
-      latencyMgr, liveTrackCount, loadInProgress, transport, masterTrack, maxUiTracks,
+      latencyMgr, liveTrackCount, loadInProgress, masterTrack, maxUiTracks,
       pdcDisabled, projectLoadOk, projectLoadSeq, publishedCallback, quantizeVersion,
       rebuildAudioRender, rebuildFlatAndPublish, reconcileChildTracks, running,
-      samplerKitVersion, scheduleHostRestart, snapshotTracks, songTiming, tempoProvider,
+      samplerKitVersion, scheduleHostRestart, snapshotTracks, tempoProvider,
       uiShm, uiWriterDeps, writeUiClipExtents
   };
 

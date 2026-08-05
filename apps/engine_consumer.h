@@ -34,6 +34,7 @@
 #include "engine_transport_state.h"
 #include "engine_harmony_timeline.h"
 #include "engine_publish_gates.h"
+#include "engine_state.h"
 #include "engine_types.h"
 #include "latency_manager.h"
 #include "project_file.h"
@@ -51,28 +52,26 @@ class EngineAudioCallback;
 //
 // The six `last*Version` latches are in here because they are the writers' private state, and
 // they stay OWNED BY main() so the move changes no lifetime and no initialisation order.
-struct UiWriterDeps {  // The one clip-window request in flight, with its lock: see
+struct UiWriterDeps {
+  // The engine's state rather than five of its groups by name — apps/engine_state.h.
+  EngineState& engineState;  // The one clip-window request in flight, with its lock: see
   // apps/engine_clip_window.h.
-  ClipWindow& clipWindow;
 
   // Nine publish gates in one: see apps/engine_publish_gates.h.
-  PublishGates& publishGates;
-  ArrangeRail& arrange;
   std::atomic<uint32_t>& automationVersion;
   std::atomic<uint32_t>& clipVersion;
   HarmonyTimeline& harmonyTimeline;
   std::function<daw::LaneQuantize(const TrackRuntime&)> laneQuantizeOf;
-  PatcherGraphOwner& patcherGraph;
   std::atomic<uint32_t>& quantizeVersion;
   std::function<std::vector<TrackRuntime*>()> snapshotTracks;
-  SongTiming& songTiming;
   std::function<bool(const TrackRuntime&)> trackIsPersisted;
   UiShmState& uiShm;
 };
 struct ConsumerDeps {
+  // The engine's state rather than three of its groups by name — apps/engine_state.h.
+  EngineState& engineState;
   // A loaded child track's material, held until its bus exists: see
   // apps/engine_aux_child_overlays.h.
-  AuxChildOverlays& auxChildOverlays;
 
   std::atomic<uint32_t>& audioPlaybackBlockId;
   std::function<std::shared_ptr<const TrackStateSnapshot>(const Track&)> buildTrackSnapshot;
@@ -84,7 +83,6 @@ struct ConsumerDeps {
   daw::LatencyManager& latencyMgr;
   std::atomic<uint32_t>& liveTrackCount;
   std::atomic<bool>& loadInProgress;
-  TransportState& transport;
   std::unique_ptr<TrackRuntime>& masterTrack;
   const uint32_t maxUiTracks;
   const bool pdcDisabled;
@@ -99,7 +97,6 @@ struct ConsumerDeps {
   std::atomic<uint32_t>& samplerKitVersion;
   std::function<void(TrackRuntime&)> scheduleHostRestart;
   std::function<std::vector<TrackRuntime*>()> snapshotTracks;
-  SongTiming& songTiming;
   daw::TempoMapProvider& tempoProvider;
   UiShmState& uiShm;
   UiWriterDeps& uiWriterDeps;

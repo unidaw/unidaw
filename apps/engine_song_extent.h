@@ -20,14 +20,21 @@
 #include <vector>
 
 #include "engine_song_timing.h"
+#include "engine_state.h"
 #include "engine_transport_state.h"
 #include "engine_types.h"
 
 namespace daw::engine {
 
 struct SongExtentDeps {
-  TransportState& transport;
-  SongTiming& songTiming;
+  // THE ENGINE'S STATE, not a hand-picked list of its parts. `transport` and `songTiming` used to
+  // be named here and passed individually at every construction; naming the object they both live
+  // in means this struct stops changing when a group does, and there is one fewer place for the
+  // argument ORDER to be wrong (which is what tools/deps_order_check.sh exists to catch).
+  //
+  // What stays as its own member is the plumbing: a std::function the caller owns, and a value
+  // that is configuration rather than state. Those are not the engine.
+  EngineState& engineState;
   const std::function<std::vector<TrackRuntime*>()>& snapshotTracks;
   // The arrangement's own loop length in ticks, taken by value: it is a configuration constant for
   // the life of the engine, not live state, and a reference would suggest otherwise.
