@@ -1,0 +1,86 @@
+/* The cell inspector, directly under the harmony card in the right dock.
+ *
+ * Shaped to match harmony.css so the dock reads as one column rather than two
+ * panels that happen to be stacked: same 34px head, same 11px side padding, same
+ * label treatment. Nothing here names a hex — every colour is a token, for the
+ * reason harmony.css gives, and where the two disagree the token wins.
+ *
+ * The value column is what a person actually reads, so it gets the readable
+ * font and the key column is the quiet one. A monospace value would line the
+ * numbers up and make the words worse, and most of these lines are words. */
+
+.insp {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-bottom: 1px solid var(--base-neutral-800);
+  font-family: var(--font-chrome);
+  flex: 0 0 auto;
+  max-height: 42%;
+}
+
+.insp-head {
+  flex: 0 0 34px; height: 34px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 11px; box-sizing: border-box;
+}
+
+.insp-label {
+  font-size: var(--font-size-inst);
+  letter-spacing: .14em;
+  color: var(--base-accent);
+}
+
+.insp-title {
+  font-size: var(--font-size-inst);
+  color: var(--uni-text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.insp-sub {
+  padding: 0 11px 6px;
+  font-size: var(--font-size-gutter);
+  color: var(--uni-text-gutter);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.insp-list {
+  padding: 0 11px 8px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.insp-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 16px;
+  line-height: 16px;
+}
+
+.insp-k {
+  flex: 0 0 84px;
+  font-size: var(--font-size-gutter);
+  color: var(--uni-text-gutter);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.insp-v {
+  flex: 1 1 auto;
+  font-size: var(--font-size-gutter);
+  color: var(--uni-text-primary);
+  /* Wraps rather than truncating: these are sentences, and "no — a block chord,
+     every voice toge…" is the half of the answer that matters being cut off. */
+  overflow-wrap: anywhere;
+}
+
+/* A fact the cell does not carry, or context rather than content. Dimmed so the
+   lines that ARE the answer stand out without any of them being hidden. */
+.insp-row.muted .insp-v { color: var(--uni-text-gutter); }
+
+/* The one line someone came here to read — today that is "strum: yes". */
+.insp-row.strong .insp-v { color: var(--base-accent); }
+
+/* An empty cell still draws its head and one line, so the panel never vanishes
+   and leave you wondering whether it is broken or the cell is bare. */
+.insp.empty .insp-title { color: var(--uni-text-gutter); }

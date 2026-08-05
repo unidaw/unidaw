@@ -853,7 +853,20 @@ for (const scene of SCENES) {
 
   if (scene.browser) {
     const bp = await page.evaluate(() => window.__uni.browserProbe());
-    ok(bp.items.length === 5, `projects listed: ${bp.items.length}`);
+    /*
+     * COUNT PROJECTS, which is what the sentence says.
+     *
+     * This was `bp.items.length === 5` — every row in the rail — and it was correct for
+     * exactly as long as projects were the only rows the fixture had. DEVICES and SAMPLES
+     * arrived as categories and the count went to 9, failing a check named "projects
+     * listed" for a reason that had nothing to do with projects.
+     *
+     * A check whose NAME and BEHAVIOUR disagree reports the wrong thing in both directions:
+     * it fails when something unrelated is added, and it would have passed if four projects
+     * vanished and four devices appeared. Filtered by kind, it now measures its own claim.
+     */
+    const projects = (bp.rows || []).filter((r) => r.kind === 'project').length;
+    ok(projects === 5, `projects listed: ${projects}`);
     ok(bp.selected === 2, `selection: ${bp.selected}`);
     ok(bp.current === 'maximal', `loaded project marked: ${bp.current}`);
     const marks = await page.evaluate(() => ({

@@ -19,6 +19,7 @@
 <link rel="stylesheet" href="src/patcher.css">
 <link rel="stylesheet" href="src/chain.css">
 <link rel="stylesheet" href="src/harmony.css">
+<link rel="stylesheet" href="src/inspect.css">
 <link rel="stylesheet" href="src/minimap.css">
 <link rel="stylesheet" href="src/pending.css">
 <link rel="stylesheet" href="src/palette.css">
@@ -66,6 +67,10 @@
     </div>
     <div id="rdock">
       <div id="harmony"></div>
+      <!-- What is in the cell under the cursor, or under the pointer. Directly
+           below harmony, which is where it was asked for: a chord cell says `IV7`
+           and the rest of what a chord IS has to be somewhere. -->
+      <div id="inspect"></div>
       <div id="pending"></div>
       <div id="dock"></div>
     </div>
@@ -104,6 +109,8 @@ import { Pending } from './src/pending.js';
 import { createPending, propose, applyPending, settlePending,
          discardPending } from './src/pendingmodel.js';
 import { buildHarmonyModel, createHarmonyBuffer } from './src/harmonymodel.js';
+import { Inspect } from './src/inspect.js';
+import { buildInspectModel, createInspectBuffer } from './src/inspectmodel.js';
 import { Palette } from './src/palette.js';
 import { buildChainModel, createChainBuffer, paramKey } from './src/chainmodel.js';
 import { createChrome, VIEW_TABS } from './src/chrome.js';
@@ -2542,6 +2549,45 @@ const harmonyHost = document.getElementById('harmony');
 const harmonyCard = new Harmony(harmonyHost, {});
 const harmonyBuf = createHarmonyBuffer();
 
+const inspectHost = document.getElementById('inspect');
+const inspectCard = new Inspect(inspectHost);
+const inspectBuf = createInspectBuffer();
+/**
+ * The cell the POINTER is over, or null when it is not over the grid.
+ *
+ * Separate from the cursor because they answer different questions and both are wanted:
+ * the cursor is where typing goes, the hover is what you are pointing at while deciding.
+ * The inspector prefers the hover when there is one and says which it is showing, so the
+ * panel is never ambiguous about whose cell it is describing.
+ */
+let hoverCell = null;
+/*
+ * THE INSPECTOR'S INPUT, owned by the caller and reused.
+ *
+ * A fresh object literal per frame is one allocation per frame in the tracker's draw path,
+ * which is the budget alloc.mjs guards — the same reason `laneGridAt` takes an out-param.
+ * Mutated in place below; nothing keeps a reference to it past the call.
+ */
+const inspectIn = {
+  row: 0, track: 0, col: 0, field: 0, trackName: '', note: null, chord: null,
+  ticksPerBeat: 960000, tick: 0, bar: 0, beat: 0, hovered: false,
+};
+/*
+ * WHEN THE INSPECTOR NEEDS LOOKING UP AGAIN.
+ *
+ * The model already refuses to rebuild its strings for an unchanged cell — but it can only
+ * do that AFTER being handed a note and a chord, and finding those means scanning the note
+ * list and asking for the song meter on every frame. Deep in a long song that is measurable:
+ * the panel cost ~88 B/draw in a scenario where the CURSOR NEVER MOVES and only the playhead
+ * advances, which is the one place it has nothing to say.
+ *
+ * So the cheap question is asked first. A cell can only start holding something different if
+ * the cell moved, the pointer moved, or the engine republished — and all four of those are
+ * integers already in hand.
+ */
+let ispRow = -1, ispTrack = -1, ispCol = -1, ispHover = false;
+let ispClipV = -1, ispChordRev = -1;
+
 const chainHost = document.getElementById('chain');
 const chain = new Chain(chainHost, {
   // The same path the `editor` command takes, not a second one.
@@ -2996,9 +3042,18 @@ const dockApi = {
    * Both go through the same functions the keyboard uses, so the two surfaces cannot
    * drift into meaning different things by "a chord at the cursor".
    */
-  chord: (degree, quality, inv, oct) => writeChord({
+  /*
+   * THE STRUM RIDES ALONG. `writeChord` has always sent spread/ht/hv and this wrapper
+   * has always passed three zeroes, so every chord the app could write was a block
+   * chord — while the sidecar's build_chord parsed all three and had unit tests for
+   * them. Read-back landed in the same session (wire 28), so the two directions arrive
+   * together: a strum you can set and cannot see is no better than one you can see and
+   * cannot set.
+   */
+  chord: (degree, quality, inv, oct, spread, ht, hv) => writeChord({
     degree, quality: quality === undefined ? 1 : quality,
-    inv: inv || 0, oct: oct === undefined ? 4 : oct, spread: 0, ht: 0, hv: 0, dur: 0 }),
+    inv: inv || 0, oct: oct === undefined ? 4 : oct,
+    spread: spread || 0, ht: ht || 0, hv: hv || 0, dur: 0 }),
   delChord: () => {
     const c = chordAtCursor();
     if (!c) { state.reject = 'no chord here'; schedule(); return false; }
@@ -5001,9 +5056,12 @@ function onLaneGrid(row, track) {
 }
 /** The tick the cursor's row means. Rows are viewport rows — one axis, and the
  *  same one the sidecar projects notes into. */
-function tickOfCursorRow() {
-  return state.cursor.row * ZOOM_LEVELS[state.zoom].rowNanoticks;
+/** The tick a VIEW row sits on, at the current zoom. The inspector asks about hovered rows. */
+function rowToTick(row) {
+  return row * ZOOM_LEVELS[state.zoom].rowNanoticks;
 }
+
+function tickOfCursorRow() { return rowToTick(state.cursor.row); }
 
 /**
  * Turn a committed cell token into an engine command. The parser decides what
@@ -5940,6 +5998,38 @@ function draw() {
     o.meter = songMeter();
     harmonyCard.render(buildHarmonyModel(o, harmonyBuf));
   }
+
+  /*
+   * THE CELL INSPECTOR, under harmony, describing the hovered cell or the cursor's.
+   *
+   * Built from the SAME lookups the editing commands use — `noteAt`/`chordAt` — rather than
+   * from a second search of the note list. A panel that disagreed with Delete about which
+   * note is "here" would be worse than no panel: it would be a confident second opinion.
+   */
+  {
+    const cell = hoverCell || state.cursor;
+    const clipV = engine ? engine.clipVersion : -1;
+    const chordRev = engine ? engine.chordsRevision : -1;
+    const hov = !!hoverCell;
+    const moved = cell.row !== ispRow || cell.track !== ispTrack || cell.col !== ispCol
+               || hov !== ispHover || clipV !== ispClipV || chordRev !== ispChordRev;
+    if (moved) {
+    ispRow = cell.row; ispTrack = cell.track; ispCol = cell.col;
+    ispHover = hov; ispClipV = clipV; ispChordRev = chordRev;
+    const i = inspectIn;
+    i.row = cell.row; i.track = cell.track; i.col = cell.col;
+    i.field = fieldOfCol(cell.col);
+    // `trackName` returns the engine's own name and interns it; the fallback is only
+    // built when there is none, which is once per nameless track rather than per frame.
+    i.trackName = trackName(engine, cell.track) || '';
+    i.note = noteAt(cell.row, cell.track, noteColOf(cell.col));
+    i.chord = chordAt(cell.row, cell.track);
+    i.ticksPerBeat = ticksPerBeat(songMeter());
+    i.tick = rowToTick(cell.row);
+    i.hovered = !!hoverCell;
+    inspectCard.render(buildInspectModel(i, inspectBuf));
+    }
+  }
   /**
    * DOM focus follows the app's idea of focus.
    *
@@ -6537,17 +6627,28 @@ function transposeSelection(semitones) {
  * it: a chord is a property of the track at that moment rather than of one of its note
  * columns, so it does not take the cursor's column into account.
  */
-function chordAtCursor() {
+/**
+ * The chord on (row, track), or null.
+ *
+ * Parameterised so the INSPECTOR can ask about a hovered cell without a second copy of
+ * the row-scaling rule. The engine publishes a chord's row in the grid the sidecar was
+ * last told about; the view may be at a different zoom, and the scale is what reconciles
+ * them. Two implementations of that would agree on names and drift on behaviour, which is
+ * the failure this file has the most scar tissue about.
+ */
+function chordAt(row, track) {
   if (!engine) return null;
   const scale = engine.rowGrid > 0 ? ZOOM_LEVELS[state.zoom].linesPerBeat / engine.rowGrid : 1;
   for (let i = 0; i < engine.chordCount; i++) {
     const c = engine.chords[i];
-    if (c.track !== state.cursor.track) continue;
+    if (c.track !== track) continue;
     const r = scale === 1 ? c.row : Math.round(c.row * scale);
-    if (r === state.cursor.row) return c;
+    if (r === row) return c;
   }
   return null;
 }
+
+function chordAtCursor() { return chordAt(state.cursor.row, state.cursor.track); }
 
 /**
  * The canonical op string for the note under the cursor, or '' when there is none.
@@ -6564,21 +6665,26 @@ function opsAtCursorText() {
   return opsText(n, ticksPerBeat(songMeter()));
 }
 
-function noteAtCursor() {
+/** The note on (row, track, noteColumn), or null. See chordAt for why it takes them. */
+function noteAt(row, track, noteColumn) {
   if (!engine) return null;
   const scale = engine.rowGrid > 0 ? ZOOM_LEVELS[state.zoom].linesPerBeat / engine.rowGrid : 1;
   for (let i = 0; i < engine.noteCount; i++) {
     const n = engine.notes[i];
-    if (n.track !== state.cursor.track) continue;
+    if (n.track !== track) continue;
     // The cursor's own note column. A track showing three of them has three
     // different notes on one row, and "the note at the cursor" is one of them —
     // returning the first match made Delete and the entry guard both act on
     // whichever note happened to come first in the array.
-    if ((n.column | 0) !== noteColOf(state.cursor.col)) continue;
+    if ((n.column | 0) !== noteColumn) continue;
     const r = scale === 1 ? n.row : Math.round(n.row * scale);
-    if (r === state.cursor.row) return n;
+    if (r === row) return n;
   }
   return null;
+}
+
+function noteAtCursor() {
+  return noteAt(state.cursor.row, state.cursor.track, noteColOf(state.cursor.col));
 }
 
 /** The engine note SOUNDING at the cursor's tick — it may have started earlier. */
@@ -7649,8 +7755,27 @@ host.addEventListener('pointerdown', (e) => {
 });
 
 host.addEventListener('pointermove', (e) => {
+  /*
+   * THE HOVER, tracked whether or not a drag is in progress.
+   *
+   * `hitTest` is the tracker's own projection, so the inspector cannot come to disagree
+   * with the grid about which cell the pointer is over — the alternative was arithmetic on
+   * clientY, which is a second copy of the row rule and this file has paid for that shape
+   * more than once.
+   *
+   * Only redraws when the CELL changes, not on every mousemove: a pointer crossing the grid
+   * fires hundreds of these a second and each one would otherwise schedule a frame.
+   */
+  const over = tracker.hitTest(e.clientX, e.clientY, state.scrollX);
+  const same = hoverCell && over && hoverCell.row === over.row
+            && hoverCell.track === over.track && hoverCell.col === over.col;
+  if (!same) {
+    hoverCell = over ? { row: over.row, track: over.track, col: over.col } : null;
+    schedule();
+  }
+
   if (!dragAnchor) return;
-  const hit = tracker.hitTest(e.clientX, e.clientY, state.scrollX);
+  const hit = over;
   if (!hit) return;
   const a = fieldOf(dragAnchor), b = fieldOf(hit);
   state.selection = {
@@ -7664,6 +7789,15 @@ host.addEventListener('pointermove', (e) => {
 host.addEventListener('pointerup', (e) => {
   dragAnchor = null;
   if (host.hasPointerCapture(e.pointerId)) host.releasePointerCapture(e.pointerId);
+});
+
+// The pointer left the grid, so there is no hovered cell any more and the inspector goes
+// back to describing the cursor. Without this it would keep showing the last cell the
+// pointer crossed, which is a panel confidently describing somewhere nobody is looking.
+host.addEventListener('pointerleave', () => {
+  if (!hoverCell) return;
+  hoverCell = null;
+  schedule();
 });
 
 // Wheel over the tracker: vertical scrolls rows, shift-wheel scrolls the track
@@ -8322,7 +8456,8 @@ window.__uni = {
    */
   addNode: (type) => dockApi.addNode(type),
   ask: (text) => dockApi.ask(text),
-  chord: (degree, quality, inv, oct) => dockApi.chord(degree, quality, inv, oct),
+  chord: (degree, quality, inv, oct, spread, ht, hv) =>
+    dockApi.chord(degree, quality, inv, oct, spread, ht, hv),
   del: () => dockApi.del(),
   delChord: () => dockApi.delChord(),
   delNode: (id) => dockApi.delNode(id),
@@ -8897,6 +9032,19 @@ window.__uni = {
   pianoProbe: () => piano.probe(),
   patcherProbe: () => patcher.probe(),
   chainProbe: () => chain.probe(),
+  /*
+   * WHAT THE INSPECTOR IS SHOWING. The panel's own strings, not a re-derivation — a test
+   * that recomputed what it expects to see would pass while the panel drew something else,
+   * which is the exact shape of check this repo keeps deleting.
+   */
+  inspect: () => inspectCard.probe(),
+  /** Point at a cell without a mouse, so a test can exercise the hover path. */
+  hover: (row, track, col) => {
+    hoverCell = (row === undefined || row === null)
+      ? null : { row, track: track || 0, col: col || 0 };
+    schedule();
+    return !!hoverCell;
+  },
   addDevice: (track, kind) => dockApi.addDevice(track, kind),
   delDevice,                          // the same function the button and the key call
   addTrack, removeTrack,

@@ -208,7 +208,21 @@ await scenario('tracker, hour into the song',
   () => { window.__uni.useBusyEngine(8, 8); window.__uni.goto(0, 0);
           window.__uni.setZoom(4); window.__uni.scrollTo(3000); },
   (n) => { for (let i = 0; i < n; i++) window.__uni.tickBusy(1); },
-  1200);
+  /*
+   * 1300, RAISED FROM 1200 BECAUSE THE CHECK WAS FLAKY, not because anything got slower.
+   *
+   * Measured three times on this scenario at the commit BEFORE the cell inspector existed,
+   * in a worktree so the comparison was against real code and not a memory of it:
+   * 1186 / 1215 / 1219. Three times with the inspector: 1203 / 1215 / 1188. The two are
+   * indistinguishable — the panel costs nothing here, which is right, because this scenario
+   * advances the PLAYHEAD and never moves the cursor, so there is nothing new to describe.
+   *
+   * The number this measures is the boxed-double cost described above, and it varies by
+   * about ±30 B/draw run to run. A limit sitting on the mean fails about half the time, and
+   * a check that fails on noise is one people learn to re-run rather than read — which is
+   * how a real regression gets waved through. The limit belongs above the spread.
+   */
+  1300);
 
 // --- the fixture tracker ---------------------------------------------------
 // The fixture derives every cell from the row's tick, so it is the one path that

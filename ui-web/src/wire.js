@@ -7,7 +7,7 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 27;
+export const WIRE_VERSION = 28;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
@@ -629,7 +629,12 @@ export function decode(buf, store) {
     const have = Math.max(0, Math.min(want, (buf.byteLength - at) / CHORD_BYTES | 0));
     while (store.chords.length < have) {
       store.chords.push({ tick: 0, duration: 0, id: 0, track: 0, degree: 0,
-                          quality: 0, inversion: 0, octave: 0, flags: 0, row: 0 });
+                          quality: 0, inversion: 0, octave: 0, flags: 0, row: 0,
+                          // The strum, in the engine's own units: spread is nanoticks
+                          // between the first and last voice, the humanize pair are
+                          // 0..255 amounts. All three zero IS a block chord, which is
+                          // why they are read as numbers and not as a flag.
+                          spread: 0, humanizeTiming: 0, humanizeVelocity: 0 });
     }
     let changed = store.chordCount !== have;
     for (let i = 0; i < have; i++) {
@@ -652,6 +657,12 @@ export function decode(buf, store) {
       // re-derives the projection; a client that computed its own put material
       // three beats out with no error anywhere.
       c.row = v.getUint32(o + 32, true);
+      const spread = v.getUint32(o + 36, true);
+      const ht = v.getUint16(o + 40, true);
+      const hv = v.getUint16(o + 42, true);
+      if (c.spread !== spread || c.humanizeTiming !== ht
+          || c.humanizeVelocity !== hv) changed = true;
+      c.spread = spread; c.humanizeTiming = ht; c.humanizeVelocity = hv;
     }
     store.chordCount = have;
     // A revision, like the notes have. What draws chords needs to know when they
@@ -866,7 +877,15 @@ export function decode(buf, store) {
 }
 
 /** 40 bytes each; see the sidecar's encode. */
-const CHORD_BYTES = 40;
+/*
+ * 48 SINCE WIRE 28. It was 40, and the eight new bytes carry the STRUM: the spread and
+ * the two humanize amounts. The engine has published all three on every frame since
+ * UiClipChord had them, and this decoder dropped them — so "is this chord a strum or a
+ * block chord" was unanswerable from the interface, while the sidecar could WRITE all
+ * three the whole time. A field the engine sends, the model persists and nothing reads
+ * is the same defect as one nothing can write; it just fails in the other direction.
+ */
+const CHORD_BYTES = 48;
 /** 16 bytes each; see the sidecar's encode. */
 const METER_BYTES = 16;
 /** 24 bytes each; see the sidecar's encode. */

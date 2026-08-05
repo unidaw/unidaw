@@ -296,17 +296,33 @@ export function createCommands(api) {
      * the wire. Converted once, at this boundary, which is the same rule the entry
      * tokens follow.
      */
-    chord: { help: 'chord <degree> [triad|seventh|degree] [inv] [oct] — at the cursor',
+    /*
+     * THE STRUM IS PART OF THE CHORD, and until now no surface could set it.
+     *
+     * `spread` is the nanoticks between the first voice and the last — that is what makes
+     * a strum a strum rather than a block chord — and `ht`/`hv` humanize the timing and
+     * the velocity of each voice. The sidecar has parsed all three since chords landed and
+     * has unit tests for them; this verb passed none, and dockApi.chord hardcoded zeroes,
+     * so the capability existed at both ends with nothing joining them.
+     */
+    chord: { help: 'chord <degree> [triad|seventh|degree] [inv] [oct] [spread] [ht] [hv] '
+                 + '— at the cursor; spread is nanoticks and makes it a strum',
       args: [{ name: 'degree', type: 'int', min: 1, max: 13 },
              oneOf(['triad', 'seventh', 'degree'], true),
              { name: 'inv', type: 'int', min: 0, max: 3, optional: true },
-             { name: 'oct', type: 'int', min: 0, max: 9, optional: true }],
+             { name: 'oct', type: 'int', min: 0, max: 9, optional: true },
+             { name: 'spread', type: 'int', min: 0, optional: true },
+             { name: 'ht', type: 'int', min: 0, max: 255, optional: true },
+             { name: 'hv', type: 'int', min: 0, max: 255, optional: true }],
       run: (a) => {
         // The engine's own numbering: 0 = the degree alone, 1 = triad, 2 = seventh.
         const QUALITY = { degree: 0, triad: 1, seventh: 2 };
         const q = a[1] === undefined ? 1 : QUALITY[a[1]];
         return api.chord(Number(a[0]) - 1, q, a[2] === undefined ? 0 : Number(a[2]),
-                         a[3] === undefined ? 4 : Number(a[3]))
+                         a[3] === undefined ? 4 : Number(a[3]),
+                         a[4] === undefined ? 0 : Number(a[4]),
+                         a[5] === undefined ? 0 : Number(a[5]),
+                         a[6] === undefined ? 0 : Number(a[6]))
           ? `chord ${a[0]}` : 'refused';
       } },
     delchord: { help: 'delchord — remove the chord at the cursor',

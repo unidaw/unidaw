@@ -76,7 +76,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 const WIRE_LANES: usize = 64;
 
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 27;
+const WIRE_VERSION: u16 = 28;
 
 /// `kUiSamplerSlotNameBytes` (shared_memory.h). The array a slot name has to fit INCLUDING its
 /// nul, so a name of exactly this length does not fit — hence `>=` at the check.
@@ -382,7 +382,11 @@ struct Frame {
     /// never re-derives the projection — one axis on the wire — because a lane's
     /// grid is the engine's business and a client that computed its own put
     /// notes three beats out with no error anywhere.
-    chords: Vec<(u64, u64, u32, u8, u8, u8, u8, u8, u32, u32)>,
+    /// (tick, duration, id, track, degree, quality, inversion, octave, flags, row,
+    /// spread_nanoticks, humanize_timing, humanize_velocity) — see the writer for the
+    /// 48-byte layout. The last three arrived with wire 28: the engine had always
+    /// published them and this side had always dropped them.
+    chords: Vec<(u64, u64, u32, u8, u8, u8, u8, u8, u32, u32, u32, u16, u16)>,
     /// v24 per-insert meters, as (track ID, device id, inPeak, outPeak, inRms,
     /// outRms) in dBFS millibels. Only PRESENT entries — the region is 64x16 and
     /// almost all of it is "no device". kUiMeterSilent (i16::MIN) means silent or
@@ -854,7 +858,13 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
      * since, and the "nothing follows this" line moved with the position rather
      * than being left behind as a claim that had quietly stopped being true.
      *
-     * 40 bytes each, counted by the u16 at header offset 98, which was a pad.
+     * 48 bytes each, counted by the u16 at header offset 98, which was a pad.
+     *
+     * WAS 40. It grew by eight for the spread and the two humanize amounts, rather than
+     * squeezing them into the spare bytes at 25..27: `humanize_timing` and
+     * `humanize_velocity` are u16 in UiClipChord, and packing a u16 into a u8 because
+     * today's write path happens to clamp at 255 is a silent narrowing waiting for the
+     * day the write path changes. WIRE_VERSION went to 28 with it.
      *
      * The engine has always published a track's chords and this side never read
      * them, so a track of chords played and showed nothing at all — reported
@@ -862,7 +872,8 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
      * quality, inversion) resolved against the harmony timeline, which is what
      * lets a chord track survive a key change.
      */
-    for &(tick, dur, id, track, degree, quality, inversion, octave, flags, row)
+    for &(tick, dur, id, track, degree, quality, inversion, octave, flags, row,
+           spread, humanize_timing, humanize_velocity)
         in &f.chords
     {
         out.extend_from_slice(&tick.to_le_bytes());     // 0
@@ -872,7 +883,10 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
         out.push(octave); out.push(0); out.push(0); out.push(0);                   // 24
         out.extend_from_slice(&flags.to_le_bytes());    // 28
         out.extend_from_slice(&row.to_le_bytes());      // 32
-        out.extend_from_slice(&0u32.to_le_bytes());     // 36, to 40
+        out.extend_from_slice(&spread.to_le_bytes());               // 36
+        out.extend_from_slice(&humanize_timing.to_le_bytes());      // 40
+        out.extend_from_slice(&humanize_velocity.to_le_bytes());    // 42
+        out.extend_from_slice(&0u32.to_le_bytes());                 // 44, to 48
     }
 
     /*
@@ -1246,7 +1260,13 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
                 out.chords.push((c.nanotick, c.duration_nanoticks, c.chord_id,
                                  track as u8, c.degree, c.quality, c.inversion,
                                  c.base_octave, c.flags,
-                                 vp_grid.row_of_tick(c.nanotick) as u32));
+                                 vp_grid.row_of_tick(c.nanotick) as u32,
+                                 // THE STRUM. The engine has published these three since
+                                 // UiClipChord had them and this side dropped all of them
+                                 // on the floor, so nothing on screen could tell a strum
+                                 // from a block chord — while `build_chord` below has been
+                                 // able to WRITE all three the whole time.
+                                 c.spread_nanoticks, c.humanize_timing, c.humanize_velocity));
             }
             let count = (w.note_count as usize).min(w.notes.len());
             for note in &w.notes[..count] {

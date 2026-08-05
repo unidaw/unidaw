@@ -185,21 +185,21 @@ const EMPTY_PLUG_PENDING = 'the plugin catalogue has not been read yet';
 const NOUN_PROJECT = { one: ' project', many: ' projects' };
 const NOUN_PLUGIN = { one: ' plugin', many: ' plugins' };
 const NOUN_ITEM = { one: ' item', many: ' items' };
+const NOUN_DEVICE = { one: ' device', many: ' devices' };
+const NOUN_SAMPLE = { one: ' sample', many: ' samples' };
 
 const PH_PROJECTS = 'search projects…';
 const PH_PLUGINS = 'search plugins…';
 const PH_BOTH = 'search projects · plugins…';
 
-// The footer's standing caveat, in two shapes. Named categories rather than a
-// count, because "six kinds" is a number you have to go and check and this is a
-// list you can read against the chips directly above it. The first shape is the
-// truth before a catalogue arrives; the second is the truth after one does, and
-// a note that kept saying "no plugins cross the wire" beside 52 of them would be
-// the most confidently wrong thing on the screen.
-const FOOT_NOTE = 'no plugins, presets, samples, clips, patches or tunings cross '
-                + 'the wire yet — those chips are unavailable, not empty';
-const FOOT_NOTE_PLUGINS = 'no presets, samples, clips, patches or tunings cross '
-                + 'the wire yet — those chips are unavailable, not empty';
+// The footer's standing caveat is DERIVED — see `_rebuildNote`. It names the categories
+// with nothing behind them, which is the right thing to say and was a hand-maintained pair
+// of constants until this. Both of them listed "samples" among what does not cross the wire:
+// true when written, false the day the sidecar grew a samples feed, and nobody re-reads a
+// caveat. Built from the same `available()` the chips use, so the sentence and the buttons
+// cannot come to disagree — a note reading "no plugins cross the wire" beside 52 of them
+// would be the most confidently wrong thing on the screen, and the same is now true of a
+// note that hides a category which is sitting there working.
 
 const TITLE_PLUG_LIVE = 'PLUGINS from the engine\'s own scan';
 const TITLE_SMPL_LIVE = 'audio files the engine can resolve, from the project and audio directories';
@@ -467,6 +467,8 @@ export class Browser {
     }
     this._cat = null;
     this._feedKey = '';
+    this._footNote = '';
+    this._rebuildNote();
 
     this.listEl = div('br-list', host);
     this.emptyEl = div('br-empty', host);
@@ -727,6 +729,7 @@ export class Browser {
     // Built once, here: the footer shows it every frame and must not build it.
     this.plugNote = err ? 'plugins: ' + err : '';
     this.plugCount = fillRows(this.plugRows, src, setPluginRow);
+    this._rebuildNote();
     // A category cannot outlive its feed. Losing the catalogue while PLUGINS is
     // selected would leave a disabled chip lit over an empty list.
     if (!this.available(this.category)) { this.category = 'all'; this.selected = 0; }
@@ -743,6 +746,7 @@ export class Browser {
     this.sampSrc = src;
     this.sampState = src ? PLUG_OK : PLUG_PENDING;
     this.sampCount = fillRows(this.sampRows, src, setSampleRow);
+    this._rebuildNote();
     if (!this.available(this.category)) { this.category = 'all'; this.selected = 0; }
     this._rebuild();
   }
@@ -1005,16 +1009,35 @@ export class Browser {
   _total() {
     if (this.category === 'proj') return this.projCount;
     if (this.category === 'plug') return this.plugCount;
+    if (this.category === 'devs') return this.devCount;
+    if (this.category === 'smpl') return this.sampCount;
     return this.rows.length;
   }
 
   /** What to call them. A mixed list is items; a list of one kind says so. */
+  /**
+   * What to call them. A mixed list is items; a list of ONE kind says which.
+   *
+   * The rule was right and its implementation knew about two kinds, so with no plugin
+   * catalogue it called everything "projects" — and the footer read "9 projects" over a
+   * list of five projects and four devices. A rule stated for a set and implemented for
+   * two of its members stops being true the moment the set grows, which is the same shape
+   * as the one chip whose availability was recomputed.
+   *
+   * Counted rather than chained, so adding a fifth kind cannot reintroduce it.
+   */
   _noun() {
     if (this.category === 'proj') return NOUN_PROJECT;
     if (this.category === 'plug') return NOUN_PLUGIN;
-    if (this.plugCount === 0) return NOUN_PROJECT;
-    if (this.projCount === 0) return NOUN_PLUGIN;
-    return NOUN_ITEM;
+    if (this.category === 'devs') return NOUN_DEVICE;
+    if (this.category === 'smpl') return NOUN_SAMPLE;
+    const kinds = (this.projCount > 0 ? 1 : 0) + (this.plugCount > 0 ? 1 : 0)
+                + (this.devCount > 0 ? 1 : 0) + (this.sampCount > 0 ? 1 : 0);
+    if (kinds !== 1) return NOUN_ITEM;
+    if (this.projCount > 0) return NOUN_PROJECT;
+    if (this.plugCount > 0) return NOUN_PLUGIN;
+    if (this.devCount > 0) return NOUN_DEVICE;
+    return NOUN_SAMPLE;
   }
 
   /**
@@ -1041,9 +1064,32 @@ export class Browser {
    * sidecar refused, it carries the refusal, which is how the reason reaches
    * the screen without anyone having to hover a disabled chip.
    */
+  /**
+   * The standing caveat, naming exactly the categories with nothing behind them.
+   *
+   * BUILT WHEN A FEED MOVES, never per frame — `_footNote` is refreshed by setPlugins and
+   * setSamples, which is where the answer can actually change.
+   *
+   * It used to be two constants, and both of them listed "samples" among the categories
+   * that do not cross the wire. That became false the day the sidecar grew a samples feed,
+   * and a caveat that is wrong is worse than none: it tells you not to look for something
+   * that is there. Derived from the same `available()` the chips use, so the sentence and
+   * the buttons cannot disagree.
+   */
   _noteText() {
     if (this.plugState === PLUG_ERROR) return this.plugNote;
-    return this.plugState === PLUG_OK ? FOOT_NOTE_PLUGINS : FOOT_NOTE;
+    return this._footNote;
+  }
+
+  /** Recompute the footer caveat. Called only when a feed's state changes. */
+  _rebuildNote() {
+    const missing = [];
+    for (const k of KINDS) {
+      if (k.key === 'all' || this.available(k.key)) continue;
+      missing.push(k.label.replace('★ ', '').toLowerCase());
+    }
+    this._footNote = missing.length === 0 ? ''
+      : `no ${missing.join(', ')} cross the wire yet — those chips are unavailable, not empty`;
   }
 
   /** The field promises exactly what it searches. */

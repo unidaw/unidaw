@@ -822,6 +822,8 @@ const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'sampl
                      'samplerSlotName',
                      'edit', 'harmony', 'ask', 'forget',
                      'clips', 'moveClip', 'trimClip', 'delClip', 'addClip',
+                     // The cell inspector: what it is showing, and pointing at a cell.
+                     'inspect', 'hover',
                      'selectedClip', 'ticksPerBar', 'master',
                      // The spine. Six, because a section has six things you can do to it
                      // and every one is reachable from both surfaces — the strip's click,
