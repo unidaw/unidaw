@@ -1315,6 +1315,17 @@ set_tests_properties(block_edge_note PROPERTIES
 # command that silently does something else. contract_freshness_check says outright that it does
 # NOT check the mirrors agree; contract_layout_check pins sizes only; op_registry_check reads a
 # different file. This is the pair every feature commit touches.
+# TRACK-TO-TRACK MIDI ROUTING, IN BOTH DIRECTIONS. The receive path had NO fixture at all — an
+# abort() at the top of the destination's inbound drain did not fire in any of the 189 registered
+# tests — and it was broken one way round: the source stamps for the next block, the destination
+# drained against this one and discarded the rest, so routing 0->1 deleted every event while 1->0
+# played. Track-id order decided which.
+add_test(NAME midi_route
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/midi_route_check.sh
+)
+set_tests_properties(midi_route PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 add_test(NAME opcode_mirror
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/opcode_mirror_check.sh
 )

@@ -85,9 +85,26 @@ bool renderTrack(RenderTrackDeps& deps,
           runtime.inboundMidiEvents.clear();
         }
         if (!inboundEvents.empty()) {
+          // AN EVENT STAMPED FOR A LATER BLOCK IS KEPT, NOT SWALLOWED.
+          //
+          // The drain above takes the WHOLE queue, so anything this loop declines is gone. A
+          // routing SOURCE stamps its events for the NEXT block (nextBlockSampleStart, at the end
+          // of its processTrack) and the destination drains against THIS one — so when the
+          // destination is processed after the source in the same block, every routed event was
+          // consumed here and discarded.
+          //
+          // That made track-to-track MIDI routing depend on TRACK-ID ORDER: routing 1 -> 0 played,
+          // routing 0 -> 1 was silent, in the same project with the ids swapped. Measured with
+          // tools/midi_route_check.sh, which renders both directions.
+          std::vector<daw::EventEntry> deferred;
           for (const auto& entry : inboundEvents) {
-            if (entry.sampleTime < blockSampleStart ||
-                entry.sampleTime >= blockSampleEnd) {
+            if (entry.sampleTime >= blockSampleEnd) {
+              deferred.push_back(entry);
+              continue;
+            }
+            if (entry.sampleTime < blockSampleStart) {
+              // Genuinely in the past: the block that owned it has already been rendered, so
+              // holding it would emit it at the wrong time rather than late.
               continue;
             }
             int64_t offsetSamples =
@@ -141,6 +158,13 @@ bool renderTrack(RenderTrackDeps& deps,
                 static_cast<long double>(offsetSamples) / samplesPerTick));
             const uint64_t eventTick = wrapTick(windowStartTicks + tickDelta);
             pushScratchpad(entry, eventTick);
+          }
+          // Put the future ones back for the block they belong to. Appended rather than assigned:
+          // the source may already have enqueued more while this ran.
+          if (!deferred.empty()) {
+            std::lock_guard<std::mutex> lock(runtime.inboundMutex);
+            runtime.inboundMidiEvents.insert(runtime.inboundMidiEvents.end(),
+                                             deferred.begin(), deferred.end());
           }
         }
         static const daw::PatcherGraph kEmptyGraph{};
