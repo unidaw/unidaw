@@ -69,8 +69,8 @@ second copy, so an edit can be refused. Refusals are always shown.
     open http://127.0.0.1:8173/index.html
 
 Sidecar ports are derived from the page's own: page port + 1 for state, + 2 for commands, so two
-stacks can run side by side. `?engine=off` boots the page standalone against a fixture, which is
-what the golden tests use.
+stacks can run side by side. `?engine=off` boots the page standalone against a fixture, with no
+engine behind it.
 
 ### Regions
 
@@ -81,7 +81,7 @@ what the golden tests use.
 ├──────────┬───────────────────────────────────┬───────────────┤
 │ BROWSER  │            the stage              │  HARMONY      │
 │  rail    │   (one or two panes of surfaces)  │  pending diff │
-│          │                                   │  AGENT (dock) │
+│          │                                   │  CONSOLE      │
 │          ├───────────────────────────────────┤               │
 │          │        DEVICE CHAIN (rack)        │               │
 └──────────┴───────────────────────────────────┴───────────────┘
@@ -90,8 +90,8 @@ what the golden tests use.
 Every boundary above is draggable. The handle is invisible at rest, 9px wide; the mark you aim at
 is the 1px rule. Double-click one for its default size; Tab to one and the arrows resize it, Shift
 for 1px steps, Home for the default. Resizable: browser width, right-dock width, device-chain
-height, the harmony cell, the pending cell, the second pane's height. The agent cell takes what is
-left. Harmony, pending and the agent cell each have a collapse chevron in their header. Below
+height, the harmony cell, the pending cell, the second pane's height. The console cell takes what
+is left. Harmony, pending and the console each have a collapse chevron in their header. Below
 about 892px of window the right dock goes; below about 1158px the browser rail goes too, and focus
 moves back to the centre.
 
@@ -119,9 +119,8 @@ view cannot be in both panes: `that view is already open above` / `below`. `Esca
 second pane. `Ctrl+Tab` cycles the top pane; `Cmd+Tab` is the OS switcher and never reaches a
 page. Plain `Tab` belongs to the surface — in the tracker it is next track.
 
-> The `?` overlay is a hand-maintained mirror of the keydown handler and says so in its own
-> header. Where they disagree the handler is right, and a few of its per-surface notes are still
-> behind the code; the list is in [Known gaps](#17-known-gaps-and-things-that-will-refuse).
+> The `?` overlay is a hand-maintained mirror of the keymap. Where it and the app disagree, the
+> app is right; a few of its per-surface notes are behind the code.
 
 ### The chrome, left to right
 
@@ -152,8 +151,7 @@ An orange `generates: …` badge appears in the chrome when a patcher graph is e
 
 **The pointer and the keymap.** `?` shows the keymap for the surface you are on.
 
-**The console** — `/` or `⌘J`. `help` prints the full list; `↑`/`↓` recall history. An input that
-is not a command is handed to the agent as a prompt (see §15).
+**The console** — `/` or `⌘J`. `help` prints the full list; `↑`/`↓` recall history. See §15.
 
 **The palette** — `⌘K`. Exactly the console's command registry — the list in §18 — fuzzy-filtered,
 each with its help string beside it. A space starts the arguments: type `gain 0 -6` and press
@@ -264,9 +262,7 @@ block is *N* note columns × 3 fields:
 | 2 — ops | the collapsed glyph run | `@` opens the op text buffer; **digits are refused here** |
 
 The ops column is not a value field. A digit typed there answers
-`effect column needs an engine param path`. There is **no instrument or delay column**; if you
-have seen one it was the standalone fixture, which fabricates plausible-looking content for the
-golden screenshots.
+`effect column needs an engine param path`. There is **no instrument or delay column**.
 
 The TIME gutter reads `12` at bar-or-coarser zooms, `12:3` on a beat, `12:3:02` off it — the
 third field is the row's index within the beat on the current grid.
@@ -358,10 +354,7 @@ A clip's meter is a **numerator of 1..31 over a power-of-two denominator in 1..1
 expressible, 6/6 is not; a non-power-of-two denominator is refused, not rounded. Out of range
 is **refused, not clamped**.
 
-Both levels are writable. Whether the per-track field — and `lpb` with it — survives at all is
-undecided in this tree: `docs/per-lane-grids.md` calls a set-subdivision command "the one new
-command needed", and `persisted_field_reach_check` calls the same field "legacy, superseded by
-the per-extent grid".
+Both levels are writable.
 
 ### Moving and selecting
 
@@ -505,7 +498,7 @@ delay. The glyph is **identity, not magnitude**, so the character names the op (
 `v`, not `r`). A track whose notes carry no ops draws no column at all.
 
 Stand on the cell and the breadcrumb's field readout prints the full canonical string,
-`ret3 p60 d1/6` — exactly the text `parse_row_ops` accepts and exactly what an agent writes.
+`ret3 p60 d1/6` — exactly the text the `ops` command accepts.
 
 ### Editing the cell
 
@@ -766,8 +759,7 @@ env <track> <device> <attack> <decay> <sustain> <release> [target]
 
 Times are **microseconds**; sustain is 0–1000; target is `volume|pan|pitch|cutoff|resonance`.
 A default mod set already carries an amp envelope — instant attack, full sustain, 5 ms release
-— so a freshly loaded slot sounds with no envelope command at all; some comments in the source
-still tell you to send an envelope first, and you should ignore them.
+— so a freshly loaded slot sounds with no envelope command at all.
 
 An envelope is points with a one-point sustain loop; ADSR is that shape. It lives on the **mod
 set**, so `env` moves every slot pointing at that set, and it is addressed by *target* — the
@@ -1027,9 +1019,8 @@ and no command clears one. The chrome chip is a readout, not a toggle.
 
 > Believe the second one. This is a conventional MIDI piano roll: 128 absolute pitch rows,
 > black keys shaded, C's labelled. It draws **no scale degrees, no in-key shading, no cents
-> gutter and no chord tokens**; the scale-degree material in the design was not built. What
-> does exist lives in the harmony card's read-only cents ladder and in the tracker's chord
-> cells.
+> gutter and no chord tokens**. What does exist lives in the harmony card's read-only cents
+> ladder and in the tracker's chord cells.
 
 Row height is fixed at 11px; there is no vertical zoom. Six horizontal zoom levels, from
 `beat/512px` to `beat/16px`.
@@ -1192,9 +1183,7 @@ engine rejects reverts on the next mixer version rather than sticking.
 `F3`. A node graph, per device. Double-clicking a patcher device card in the rack opens its
 graph. **One device's graph at a time**: the surface names whose graph it shows, and which
 empty case you are in — `this device's graph`, `this track has no patcher — other tracks do`,
-or `no patcher graph anywhere in this song`. The `?` overlay's line here is stale — it still
-says "one global graph; the engine does not run per-device graphs yet", but the engine pools
-every device's nodes and names each device's own output.
+or `no patcher graph anywhere in this song`.
 
 ### Node types
 
@@ -1344,19 +1333,19 @@ for host automation, with the reason in the row's tooltip. Refusals:
 
 ## 15. The console
 
-`/` or `⌘J`. The pane is labelled **AGENT** and subtitled *runs the same commands you do*.
+`/` or `⌘J`. It is the pane in the bottom right of the dock, headed **AGENT**.
 
 - `help` lists every command with its help string.
 - `↑` / `↓` recall history.
 - `Escape` hands the keyboard back.
-- Anything that is **not** a command is sent to the agent as a prompt; its reply arrives as
-  lines in the log. `forget` starts a new conversation; loading a song, starting one, undo and
-  redo clear it on their own.
+- An input that is not a command is sent as a natural-language prompt and answered in the log;
+  it can only reach the song through the same commands you can type. `forget` starts a fresh
+  conversation, and loading or starting a song, undo and redo clear it on their own.
 
 ### How a refusal reads
 
 One gate validates both the console and the palette, so a bad argument is refused **by name**
-rather than clamped, and a test keeps each command's `help` prose in sync with its schema:
+rather than clamped:
 
 ```
 > gain 64 0
@@ -1382,27 +1371,11 @@ When the engine refuses, its own reason comes back on the reject line.
 `state` dumps the UI's state; `engine` dumps the engine's. `clips`, `markers`, `mods`,
 `automation`, `kit`, `nodes` and `shared` are all reads.
 
-### Driving it from code
-
-`window.__uni` is the automation surface: `probe()`, `state()`, per-surface probes, and
-`run(line)` for the command grammar. A ratchet holds `dockApi ⊆ __uni`, so anything the
-console can do is scriptable. `__uni.state()` is a frozen deep copy — writing to it throws.
-
-```js
-window.__uni.run('load webtest')
-window.__uni.run('goto 16 2')
-window.__uni.run('note 64')
-window.__uni.run('view arrange')
-```
-
 ### The pending diff card
 
 The card between the harmony card and the console holds a **proposed batch of edits** — ops
-composed but not sent. It normally reads
-`nothing pending — a proposal comes from whoever drives the console; the engine does not offer
-them`. It is reachable only from `__uni.propose(ops, label)`: the engine proposes nothing and
-there is no console verb for it. `Apply` hands the ops to the batch sender (one frame, re-based
-op by op); `Discard` throws them away.
+composed but not sent, with `Apply` and `Discard`. Nothing in the app produces one: the engine
+proposes nothing and no command does either, so it reads `nothing pending` in ordinary use.
 
 ---
 
@@ -1494,7 +1467,6 @@ harmony changes) as single atomic entries. Consequences:
   and `fork` gives an appearance its own copy.
 - **Adding a VST from the rack's `+`.** Use the browser rail.
 - **`cfill` / `cnfill` conditional trigs.** Reserved and refused on both sides, on purpose.
-- **Proposals from the engine.** The pending card is driven from `__uni` only.
 - **A pencil editor for envelopes.** `env` sets an ADSR; multi-point shapes exist in the file
   format and the engine and have no editor.
 - **Per-slot device chains.** Refused permanently by design — use a stem and a child track.
@@ -1506,13 +1478,9 @@ harmony changes) as single atomic entries. Consequences:
 
 ### The app's own help
 
-The `?` overlay is a hand-maintained mirror of the keydown handler and says so. Where they
-disagree, the handler is right. It says what a key does and nothing else; limitations live in
-this document, and a unit check refuses a help line that claims something is missing. Lines that were stale here and have since been corrected: `clip edits — not
-implemented`, `**` = notes a cell cannot show apart, the `slice` help's "from C1 up", the
-`slot … 0` reply, the unwired scale button and the palette's discarded output. Several
-*source comments* still say a freshly loaded sampler slot renders silence until you send an
-envelope; that is wrong — the default kit is audible.
+The `?` overlay is a hand-maintained mirror of the keymap, and says so. Where it and the app
+disagree, the app is right. It says what a key does and nothing else — limitations live in this
+document.
 
 ### Silent-ish failures to know about
 
@@ -1526,7 +1494,6 @@ envelope; that is wrong — the default kit is audible.
   every device.
 - **A velocity you have just typed reads in decimal for one round trip.** The settled cell is
   hex, the optimistic overlay is not, so 0x40 flashes as `64` before settling to `40`.
-- **The pending card never warns that a proposal has gone stale**, though the check exists.
 - **`no_such_note` in the log** is the shape to suspect for a row op addressed at a note in a
   loaded project's source clip.
 
