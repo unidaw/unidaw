@@ -51,6 +51,13 @@ const EXCLUDED = {
    * converted in the morning and stayed out of the sweep, so seventeen checks including the one
    * that catches a sampler landing on the no-device sentinel were running nowhere.
    */
+  /*
+   * Needs a stack SOMEBODY ELSE started — `tools/webstack.sh`, the demo's own — so it cannot boot
+   * one for itself, and starting a second engine mid-sweep collides with the one all.mjs is
+   * driving. Run it by hand before a demo; it is the only thing here that touches webstack.sh at
+   * all, and a green sweep says nothing about whether the demo starts.
+   */
+  'demo-stack-smoke.mjs': 'needs a running tools/webstack.sh — run it by hand before a demo',
   'repro-hang.mjs': 'a reproduction script for one bug, not a suite — it is meant to hang',
   'soak.mjs': 'minutes of heap soak; run it deliberately, not on every sweep',
 };

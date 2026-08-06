@@ -28,6 +28,17 @@ asks the engine to quit a few seconds after the last tab closes.
 
 Open **http://127.0.0.1:8173/index.html**.
 
+**One command confirms the whole path before you rely on it:**
+
+```
+node ui-web/test/demo-stack-smoke.mjs
+```
+
+It checks the page connects to the engine, a project loads with tracks and notes, and the scale
+registry arrived — that last one is sent once per client rather than polled, so a stack missing it
+looks fine and draws every chord numeral upper case. Verified against this exact stack on
+2026-08-06.
+
 ---
 
 ## You can add plugins while it plays
