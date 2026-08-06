@@ -11,7 +11,7 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: b1b5c39
+- as-of-commit: dc3c7b5
 - main-cpp-lines: 2191
 - main-function-lines: 1985
 - ctest-entries: 198

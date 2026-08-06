@@ -1635,6 +1635,17 @@ add_test(NAME note_overlap
 )
 set_tests_properties(note_overlap PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# EVERY OPERATION MUST BE UNDOABLE (owner's ruling 2026-08-06). This is the ratchet that measures
+# how far that is from true: it classifies every UiCommandType entry — an unclassified one fails,
+# which is the shell equivalent of a switch with no `default:` — and for each command it can drive
+# it asserts the command CHANGED the document, that undo restores it byte-identically through the
+# canonical serializer, and that redo re-reaches it. Correct under every undo architecture, since
+# it tests behaviour through the command wire and knows nothing about the mechanism.
+add_test(NAME undo_ratchet
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/undo_ratchet_check.sh
+)
+set_tests_properties(undo_ratchet PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+
 # A lane's subdivision is settable at last, and it is the LANE's — a one-track fixture cannot
 # tell "set the track I asked for" from "set all of them".
 add_test(NAME lines_per_beat
