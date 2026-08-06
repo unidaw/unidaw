@@ -2478,6 +2478,49 @@ const OP_REGISTRY = {
  *
  *   `shared` — the agent HAS `shared_clips`; only the CLI lacks it. That is a plain missing verb
  *   with a known shape, not a design question, and it is the cheapest thing on this list.
+ *
+ * ── RE-AUDITED 2026-08-07, after both of those turned out to be buildable ────────────────────
+ *
+ * `shared` and `new` are BUILT and DRIVEN, and the second one is the lesson: I had written that
+ * `new` "needs an owner ruling on WHERE it should live". It did not. The sidecar owns it because
+ * a BROWSER cannot write a file — and daw-cli and the agent are native processes that can. The
+ * ruling I was waiting for was a limitation of one surface mistaken for a property of the op.
+ *
+ * So the remaining rows were re-derived rather than re-read, and they now divide into two kinds
+ * which are NOT the same and should not sit in one list:
+ *
+ *   VIEW-ONLY, which is the owner's own exemption:
+ *     `clear`   — clears the console LOG. There is no log on the other surfaces.
+ *     `columns` — how many note columns the tracker DRAWS. It sends nothing to the engine, and
+ *                 the count is DERIVED from the highest column any note uses, floored by what
+ *                 was asked for. So a project saved with notes in column 1 comes back showing
+ *                 two columns on its own; there is no state to carry and nothing to lose. I went
+ *                 looking for an invisible-notes bug here and the derivation had already closed
+ *                 it. The CAPABILITY behind it is not exempt and is not missing: `add_notes`
+ *                 takes a `column`, which is how an agent writes the overlapping pair a mono
+ *                 synth reads as legato.
+ *     `copy`, `cut`, `paste`, `transpose`, `del` — these act on the SELECTION or the CURSOR.
+ *                 Worth revisiting as range ops (`transpose --from --to`) rather than treated as
+ *                 settled: `transposeSelection` is a BATCH of ordinary note writes, so nothing
+ *                 about it needs a viewport. Recorded as a candidate, not as exempt-for-ever.
+ *     `editor`  — opens a plugin's own GUI window. daw-cli has it; a headless agent asking for a
+ *                 window on somebody's screen is a different thing from the other rows here.
+ *
+ *   BLOCKED ON THE ENGINE, which is not an exemption at all:
+ *     `mods`    — the READ. Both surfaces can already CREATE modulation (daw-cli `mod-link`,
+ *                 `mod-depth`, `mod-target`; the agent `modulate`/`unmodulate`) and neither can
+ *                 say what modulation exists — which is the question you ask BEFORE changing
+ *                 anything, exactly as `shared` was for clips.
+ *
+ *                 It is not a missing verb. Modulation links reach the browser only as CHAIN
+ *                 DIFFS on the single-consumer ring, and there is no published region for them:
+ *                 `control.rs` has read_mixer, read_patcher, read_device_params, read_automation
+ *                 and seventeen more, and no read_mod_links. daw-cli cannot drain that ring
+ *                 without stealing the diffs from the sidecar and breaking the UI.
+ *
+ *                 So this needs a published region or a request/response mirror like
+ *                 RequestDeviceParams — an engine change, and backend's call. Raised with them.
+ *                 Recorded here so it stays visible as a HOLE rather than passing as exempt.
  */
 const CLI_GAP = ['clear', 'columns', 'copy', 'cut', 'paste', 'transpose',
                  'mods'];
