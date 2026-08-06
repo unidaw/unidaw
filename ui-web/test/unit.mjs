@@ -2646,6 +2646,69 @@ test('every suite the runbook cites exists, and the unswept ones are flagged as 
     + 'reading DEMO.md would never learn they have to run it');
 });
 
+/**
+ * Agent tools the registry claims that NO engine test has ever called.
+ *
+ * The twin of CLI_NEVER_DRIVEN, and it exists because the weaker check was not enough.
+ *
+ * `the agent really implements every tool the registry claims` verifies that the NAMED TOOL
+ * EXISTS in tools.rs. That is satisfiable by a tool whose relevant branch does nothing.
+ * `patcher_node` has an `action: "link"` which set the two node ids and left `src_port_id` and
+ * `dst_port_id` at the struct's zeros — and port 0 is the event INPUT, so every link it sent
+ * asked the engine to join an input to an input. Refused with `invalid_port` into a diff no tool
+ * reads; the tool returned `sent: true`; the registry row was green throughout. It took a person
+ * trying to build a patch to find it.
+ *
+ * Existing is not working. The only thing that tells them apart is a test that drives the tool
+ * against a live engine and reads the SAVED PROJECT back, which is what ui/daw-agent/tests does.
+ *
+ * WHAT THIS DOES NOT CLAIM. Appearing in the corpus is not proof a tool is correct — `patcher_node`
+ * appears there and was broken in a branch. It is a floor: a tool nothing has ever called is a
+ * capability nobody has ever seen work, and that is worth knowing separately from a bug.
+ */
+const AGENT_NEVER_EXERCISED = [
+  // Placement and clip surgery. Reachable, plausible, and never once driven end to end.
+  'add_clip',
+  'fork_placement',
+  'keep_placement_clip',
+  'move_clip',
+  'remove_clip',
+  'shared_clips',
+  'swap_placement_clip',
+  'trim_clip',
+  // Track removal, and the sampler paths the existing sampler tests do not reach.
+  'remove_track',
+  'load_sample',
+  'sampler_emit_rows',
+  'sampler_slice',
+  // Automation and the macro knob.
+  'automation',
+  'automation_points',
+  'set_macro',
+];
+
+test('every agent tool the registry claims has been driven against a real engine', async () => {
+  const { readFileSync, readdirSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const here = new URL('.', import.meta.url).pathname;
+  const testsDir = join(here, '../../ui/daw-agent/tests');
+
+  const corpus = readdirSync(testsDir).filter((f) => f.endsWith('.rs'))
+    .map((f) => readFileSync(join(testsDir, f), 'utf8')).join('\n');
+  assert.ok(corpus.length > 1000, 'the agent test corpus was read');
+
+  const claimed = [...new Set(Object.values(OP_REGISTRY).map((e) => e.agent).filter(Boolean))];
+  // `tool: "name"` is how every ToolCall in that corpus is written. Deliberately not a bare name
+  // match: these names appear in prose and in comments, and matching those is how a list like
+  // this decays into agreeing with itself.
+  const never = claimed.filter((t) => !corpus.includes(`tool: "${t}"`)).sort();
+
+  assert.deepEqual(never, [...AGENT_NEVER_EXERCISED].sort(),
+    'the set of registry-claimed agent tools that no engine test drives changed. A tool nothing '
+    + 'has ever called is a capability nobody has seen work — add a test in '
+    + 'ui/daw-agent/tests/engine_e2e.rs that asserts the SAVED PROJECT, or say here why not.');
+});
+
 test('every AI prompt in the runbook is one a test actually asks', async () => {
   /*
    * THE RUNBOOK PROMISED TWO THINGS NO RUN HAD EVER MADE.

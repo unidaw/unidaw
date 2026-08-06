@@ -160,24 +160,32 @@ const ids = nodes0.map((n) => n.id);
 check(ids.length >= 2, 'a euclidean and an out are in the graph', JSON.stringify(ids));
 
 /*
- * A FRESHLY ADDED EUCLIDEAN GENERATES NOTHING, and this is the finding, not a workaround.
+ * A FRESHLY ADDED EUCLIDEAN ARRIVES WITH SETTINGS — this used to read the other way round.
  *
- * `addnode euclidean` mints the node with every config field at ZERO — steps 0, hits 0,
- * velocity 0 — and a Euclidean pattern of no hits at no velocity emits no events. So the
- * runbook's patcher section, followed exactly as written (add the device, open it, `a` for a
- * node, `c` to link), produces SILENCE, and the graph looks perfect while it does.
+ * What it said, and it was true: `addnode euclidean` minted the node with every published
+ * field at ZERO, because `AddPatcherNode` attaches no config struct at all
+ * (apps/patcher_graph.cpp `addPatcherNode`) and the published `hasConfig` byte is 0. The box
+ * said "no config published" and the eight settings could not be touched — reported from
+ * live use, and the whole of building a patch from scratch.
  *
- * Asserted rather than just worked around, because the day it gains a musical default this
- * check should be the thing that says so.
+ * The app now sends the defaults for a node it adds, as soon as the engine publishes the
+ * node it made (index.html `seedNewNodes`). The values are the engine's own — the member
+ * initialisers in apps/patcher_abi.h, which are also what the Rust kernel falls back to for
+ * a null config block — so this changed what the node SAYS, not what it does.
+ *
+ * Asserted as the exact eight, because "not all zero" would pass on a node seeded with one
+ * field set, and because these numbers are a mirror of the engine's.
  */
 const euclid = nodes0.find((n) => String(n.type).includes('euclid'));
 check(!!euclid, 'the euclidean is identifiable in the graph', JSON.stringify(nodes0.map((n) => n.type)));
 if (euclid) {
   const cfg = euclid.config || [];
-  check(cfg.every((v) => v === 0),
-        'and it arrives with EVERY field at zero — steps, hits and velocity included',
-        `config ${JSON.stringify(cfg)} — if this fails the node now has a default and the `
-        + `runbook's "add a node" step may no longer be silent`);
+  // steps 16, hits 5, offset 0, degree 1, oct 0, vel 100, base octave 4, dur 0 (half a step).
+  const want = [16, 5, 0, 1, 0, 100, 4, 0];
+  check(want.every((v, i) => cfg[i] === v),
+        'and it arrives with the ENGINE\'S OWN defaults, not "no config published"',
+        `config ${JSON.stringify(cfg)} vs ${JSON.stringify(want)} — all zeros means the seed `
+        + 'never landed and the node has eight settings nobody can edit');
 
   // steps/hits/vel, because a pattern of no hits at no velocity is not a pattern.
   await run(`patch ${euclid.id} steps 8`);

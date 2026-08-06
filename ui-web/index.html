@@ -2123,11 +2123,13 @@ function addPatcherNode() {
  * asked for, carrying no config, that nothing has seeded yet. Smallest id first, so two
  * quick adds of one type are matched in the order they were made.
  *
- * `hasConfig` is doing more work than it looks: the pool re-ids every device's nodes by a
- * running base offset (apps/engine_patcher_assemble.cpp), so adding a node on one track
- * shifts the published ids of every device after it and those nodes look new too. A node
- * that already has its settings is not a candidate, which is what keeps this from tuning
- * somebody else's euclidean.
+ * TWO GUARDS EXIST FOR ONE REASON, and it is not belt and braces. The pool re-ids every
+ * device's nodes by a running base offset (apps/engine_patcher_assemble.cpp), so adding a
+ * node to one device SHIFTS the published ids of every device after it and those nodes look
+ * new as well. So a candidate must also be one that could not be somebody else's: it has no
+ * config yet, and it is joined to nothing. A node the engine has just made for us is
+ * unconnected by construction — connecting it is the next thing the user does — while a
+ * node in a device's working graph is wired into it.
  */
 function seedNewNodes() {
   if (!patchSeeds.length || !engine) return;
@@ -2146,6 +2148,7 @@ function seedNewNodes() {
     for (const n of engine.patcherNodes) {
       if (n.type !== seed.type || n.hasConfig) continue;
       if (seed.before.has(n.id) || patchSeeded.has(n.id)) continue;
+      if (engine.patcherEdges.some((e) => e.src === n.id || e.dst === n.id)) continue;
       if (!found || n.id < found.id) found = n;
     }
     if (!found) {
@@ -2981,8 +2984,96 @@ function onChainParam(edit) {
     const ok = conn.send({ type: 'setparam', track: edit.track, device: edit.device,
                            index: edit.index, uid: edit.uid, valueMilli: edit.valueMilli });
     state.reject = ok ? null : 'no engine';
+    // A write is not a read. Nothing else asks the plugin again, so ask —
+    // otherwise the bar snaps back to a value that stopped being true 1.2
+    // seconds ago. See confirmParam.
+    if (ok) confirmParam(edit.track, edit.device, edit.index, edit.valueMilli);
     schedule();
     return ok;
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * READING BACK WHAT WE WROTE.
+ *
+ * THE BUG THIS EXISTS FOR: dragging a parameter moved the bar, and 1.2 seconds
+ * later it went back where it started — reported from live use as "editing a
+ * VST parameter appears to take effect but doesn't". Measured with a real
+ * plugin: the write DOES reach the plugin. Setting Identity's Gain to 400
+ * milli, then asking the host for that device's parameters again, reads back
+ * "-36.0 dB", and the params manifest the engine writes beside a saved project
+ * — which is a live GetParams of the actual plugin — carries the new value
+ * too. The parameter was right and only the display was wrong.
+ *
+ * WHY the display was wrong: the parameter mirror is REQUEST-DRIVEN. The engine
+ * fills UiDeviceParamsRegion only in answer to a `reqparams`, and the rack asks
+ * once per device (see `paramsAsked`) — so after the first answer the mirror
+ * never moves again. chain.js holds the dragged value optimistically for
+ * EDIT_HOLD_MS (1200 ms) waiting for the engine to agree, the engine was never
+ * asked, the hold expired, and the bar fell back to the answer from before the
+ * edit. The revert was the timeout, exactly on time.
+ *
+ * So a write schedules its own read-back. DEBOUNCED, because a drag sends one
+ * message per milli-unit and each read-back is a blocking round-trip to the
+ * plugin host on the other side of a socket — one query per mouse sample is the
+ * query storm the per-frame asker above is already careful not to be. The delay
+ * is small compared with the hold, so the answer lands well inside it.
+ *
+ * RETRIED, up to a bound, when the answer disagrees. The host applies a written
+ * value to the plugin on its next processed block, so a read-back can honestly
+ * cross a write in flight; asking again a moment later is how that resolves,
+ * and stopping after three tries is how "the plugin quantised it to its own
+ * grid" stops being mistaken for "it has not arrived yet".
+ */
+/** paramKey -> the confirmation in flight for that device. */
+const paramConfirms = new Map();
+/** How long after the last write to ask. Well inside chainmodel's EDIT_HOLD_MS. */
+const PARAM_CONFIRM_MS = 150;
+/** How many times one value may go unconfirmed before it is left to the hold. */
+const PARAM_CONFIRM_TRIES = 3;
+
+/** Ask this device for its parameters shortly, without restarting the try count. */
+function askParamsSoon(st) {
+  if (st.timer) clearTimeout(st.timer);
+  st.timer = setTimeout(() => {
+    st.timer = 0;
+    st.tries++;
+    if (conn && conn.canSend()) conn.send({ type: 'reqparams', track: st.track, device: st.device });
+  }, PARAM_CONFIRM_MS);
+}
+
+/**
+ * Read one device's parameters back after writing one of them.
+ *
+ * A new value resets the try count: the bound is per value, not per device, so
+ * a long drag is not cut off by the tries its own earlier positions spent.
+ */
+function confirmParam(track, device, index, milli) {
+  const key = paramKey(track, device);
+  let st = paramConfirms.get(key);
+  if (!st) { st = { track, device, index: -1, milli: -1, tries: 0, timer: 0 }; paramConfirms.set(key, st); }
+  if (st.index !== index || st.milli !== milli) { st.index = index; st.milli = milli; st.tries = 0; }
+  askParamsSoon(st);
+}
+
+/**
+ * An answer arrived. Does it agree with what we wrote?
+ *
+ * Within a milli-unit is agreement — the engine rounds to the same grid the
+ * drag does, and a plugin is free to quantise to its own (chainmodel's
+ * `reapParamEdits` settles on the same tolerance, so this and the bar cannot
+ * disagree about what "arrived" means).
+ */
+function noteParamAnswer(dp) {
+  const key = paramKey(dp.track, dp.device);
+  const st = paramConfirms.get(key);
+  if (!st || st.index < 0 || st.timer) return;
+  const list = dp && dp.params;
+  const hit = list && (list.find ? list.find((p) => p.index === st.index) : null);
+  const milli = hit ? Math.round(hit.value * 1000) : -1;
+  if (milli >= 0 && Math.abs(milli - st.milli) <= 1) { paramConfirms.delete(key); return; }
+  if (st.tries >= PARAM_CONFIRM_TRIES) { paramConfirms.delete(key); return; }
+  askParamsSoon(st);
 }
 const chainBuf = createChainBuffer();
 
@@ -6922,6 +7013,35 @@ function selectionOrigin() {
  */
 let clipboard = { notes: [], span: 0 };
 
+/**
+ * The text the user has HIGHLIGHTED, if any, and if the place it is highlighted
+ * in is one this application offers as text at all.
+ *
+ * Asked once, on ⌘C, so the whole ⌘C question has one answer. The tracker's
+ * selection and a text selection are two different things wearing the same word,
+ * and the keymap has to choose between them: see the note at the ⌘C binding.
+ *
+ * The test is the COMPUTED `user-select` of the node the selection is anchored
+ * in, NOT a list of panel class names. shell.css already decides which regions
+ * are prose and which are drag surfaces, and a list here would be that decision
+ * copied — so a panel later made selectable would gain a highlight and silently
+ * keep losing its ⌘C, with the two rules agreeing on every name and disagreeing
+ * on the behaviour. Reading the CSS back means there is one rule.
+ *
+ * `getComputedStyle` flushes style, so this must never move into a frame. It is
+ * on a keystroke that happens a few times an hour.
+ */
+function selectedText() {
+  const sel = document.getSelection();
+  if (!sel || sel.isCollapsed) return '';
+  const text = sel.toString();
+  if (!text) return '';
+  const node = sel.anchorNode;
+  const el = node && (node.nodeType === 1 ? node : node.parentElement);
+  if (!el) return '';
+  return getComputedStyle(el).userSelect === 'none' ? '' : text;
+}
+
 function copySelection() {
   const picked = notesInSelection();
   if (!picked.length) { state.reject = 'nothing to copy'; return false; }
@@ -8319,7 +8439,12 @@ conn = WANTS_ENGINE ? connectEngine({
   // Filed under (track, device), never the device alone — see paramKey. Device
   // ids are per-track, so `deviceParams[0]` was one slot shared by every track's
   // first device and the last answer to land won it.
-  onDeviceParams: (dp) => { deviceParams[paramKey(dp.track, dp.device)] = dp; schedule(); },
+  onDeviceParams: (dp) => { deviceParams[paramKey(dp.track, dp.device)] = dp;
+                            // A write asks to be read back; this is where the answer is
+                            // checked against it, and asked for again if it crossed the
+                            // write in flight. See confirmParam.
+                            noteParamAnswer(dp);
+                            schedule(); },
   /**
    * The audio source table, and which clip reads which source.
    *
@@ -9691,6 +9816,15 @@ window.__uni = {
     state.focus = state.dockOpen ? 'dock' : 'centre'; draw(); return state.dockOpen; },
   focus: (where) => { if (where) state.focus = where; draw(); return state.focus; },
   dockProbe: () => dock.probe(),
+  /**
+   * The console's own copy control, by name — the SAME method the button calls,
+   * not a copy of it. A control an agent cannot reach is a control that is only
+   * half built (requirement 4), and it also gives a test the text that was put on
+   * the clipboard without needing the clipboard permission to read it back.
+   */
+  dockCopy: () => dock.copy(),
+  /** What is highlighted right now, as the ⌘C binding judges it. */
+  selectedText: () => selectedText(),
   help: (on) => { state.helpOpen = on === undefined ? !state.helpOpen : !!on; draw(); return state.helpOpen; },
   helpProbe: () => help.probe(),
   /** The declared keymap, so a test can check the overlay renders all of it. */

@@ -2928,3 +2928,121 @@ fn the_agents_patcher_link_actually_connects() {
         std::thread::sleep(Duration::from_millis(200));
     }
 }
+
+/// The DEVICE RACK, through the agent: add, move, bypass, remove — none of them ever driven.
+///
+/// Four tools the parity registry counted as covered that no test had called. `move_device` and
+/// `remove_device` are exercised through daw-cli by cli-verbs.mjs, which says nothing about the
+/// AGENT's versions: they are different code sending different payloads.
+///
+/// Asserts the ORDER OF IDS in the saved chain, not a count. A move that dropped the device and
+/// re-added it keeps the count and loses the identity; a move that did nothing keeps both. Only
+/// the sequence tells the three apart. Bypass is read back as its persisted flag.
+#[test]
+fn the_agent_can_work_the_device_rack() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agrack");
+
+    let chain = |name: &str| -> Vec<(u64, bool)> {
+        assert!(session.execute(&ToolCall {
+            tool: "save".into(), args: json!({"name": name}) }).ok);
+        read_project(&engine.proj, name)["tracks"][0]["device_chain"].as_array()
+            .cloned().unwrap_or_default().iter()
+            .map(|d| (d["device_id"].as_u64().unwrap_or(0),
+                      d["bypass"].as_bool().unwrap_or(false)))
+            .collect()
+    };
+
+    assert!(chain("agrack_a").is_empty(), "the track starts with no devices");
+
+    for kind in ["sampler", "patcher_event"] {
+        let r = session.execute(&ToolCall {
+            tool: "add_device".into(), args: json!({ "track": 0, "kind": kind }) });
+        assert!(r.ok, "add_device {kind} failed: {r:?}");
+        std::thread::sleep(Duration::from_millis(700));
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(6);
+    let ids: Vec<u64> = loop {
+        let c = chain("agrack_b");
+        if c.len() == 2 { break c.iter().map(|(id, _)| *id).collect(); }
+        assert!(Instant::now() < deadline, "two add_device calls left {} device(s)", c.len());
+        std::thread::sleep(Duration::from_millis(200));
+    };
+
+    // MOVE the second to the front. Ids, not positions: position 0 and id 0 are different things
+    // and confusing them is a documented trap on this wire.
+    assert!(session.execute(&ToolCall {
+        tool: "move_device".into(),
+        args: json!({ "track": 0, "device": ids[1], "position": 0 }),
+    }).ok);
+    let deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        let got: Vec<u64> = chain("agrack_c").iter().map(|(id, _)| *id).collect();
+        if got == vec![ids[1], ids[0]] { break; }
+        assert!(Instant::now() < deadline,
+                "chain is {got:?}, want {:?} — a move that dropped and re-added keeps the COUNT \
+                 and loses the identity, so only the order can tell them apart",
+                vec![ids[1], ids[0]]);
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    assert!(session.execute(&ToolCall {
+        tool: "set_bypass".into(),
+        args: json!({ "track": 0, "device": ids[0], "on": true }),
+    }).ok);
+    let deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        let c = chain("agrack_d");
+        if c.iter().any(|(id, byp)| *id == ids[0] && *byp) { break; }
+        assert!(Instant::now() < deadline, "bypass never reached the saved chain: {c:?}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    assert!(session.execute(&ToolCall {
+        tool: "remove_device".into(), args: json!({ "track": 0, "device": ids[1] }) }).ok);
+    let deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        let got: Vec<u64> = chain("agrack_e").iter().map(|(id, _)| *id).collect();
+        // The SURVIVOR, not the count: removing the wrong device leaves one either way.
+        if got == vec![ids[0]] { break; }
+        assert!(Instant::now() < deadline, "chain is {got:?}, want [{}]", ids[0]);
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// Tempo, time signature and the loop range — three more the registry claimed and nothing drove.
+#[test]
+fn the_agent_can_set_tempo_meter_and_loop() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agtime");
+
+    assert!(session.execute(&ToolCall {
+        tool: "set_tempo".into(), args: json!({ "bpm": 96 }) }).ok);
+    assert!(session.execute(&ToolCall {
+        tool: "set_time_signature".into(), args: json!({ "signature": "3/4" }) }).ok);
+    // A loop is transport state, not document state — asserted through the observation rather
+    // than the file, because the file is not where it lives.
+    let loop_set = session.execute(&ToolCall {
+        tool: "set_loop".into(), args: json!({ "start": 0, "end": Q * 8 }) });
+    assert!(loop_set.ok, "set_loop failed: {loop_set:?}");
+
+    let deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        assert!(session.execute(&ToolCall {
+            tool: "save".into(), args: json!({"name": "agtime_out"}) }).ok);
+        let doc = read_project(&engine.proj, "agtime_out");
+        let map = doc["tempo_map"].as_array().cloned().unwrap_or_default();
+        let bpm = map.first().and_then(|p| p["bpm"].as_f64()).unwrap_or(0.0);
+        // No position given means FLATTEN, so one point at 96 — an append would leave 120 first
+        // and still read as "the tempo changed".
+        let flat = map.len() == 1 && (bpm - 96.0).abs() < 0.01;
+        // `timebase.time_sig_numerator` — the SONG's meter. Not the clip's: a clip carries its
+        // own, and reading that would have this pass or fail on whether a clip happened to exist.
+        let num = doc["timebase"]["time_sig_numerator"].as_u64();
+        if flat && num == Some(3) { break; }
+        assert!(Instant::now() < deadline,
+                "tempo_map={map:?} numerator={num:?} — want one point at 96 and a 3/4 meter");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
