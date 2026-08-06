@@ -197,4 +197,62 @@ assert s["mod_sets"], "a sampler created by command has no mod set, so it can ne
 print("  survives: two slots on one source, fixed-pitch keys, and a mod set — all in the file")
 PYS
 
+# ---- AND IT RESOLVES WITH NO PROJECT EVER LOADED, which is how a session actually starts.
+#
+# EVERYTHING ABOVE RUNS AFTER `cli do load blank`, and that one line is what made the loads above
+# resolve: `loadedProjectDir` is set ONLY by LOADING a project (engine_load_project.cpp), never by
+# saving, and resolveSourcePath treated an empty one as "resolve against the process working
+# directory" — i.e. build/. So a freshly started stack, which is what the web UI comes up as and
+# what a person prompting "load a kick into the sampler" is sitting in front of, minted a slot
+# whose source did not exist. The kit drew it perfectly and the track was silent.
+#
+# This check could not see that, and it was not for want of asserting: it asserts the event, the
+# slot ids, the keys, the refusals and the round trip. It loaded a project on line ~105 for
+# unrelated reasons and every later assertion inherited the precondition. That is the shape to
+# watch for — not a missing assertion, a setup step that quietly supplies what is being tested.
+SHM2="/smplchk2_$$"
+( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" \
+    ./daw_engine --run-seconds 30 >"$TMP/eng2.log" 2>&1 ) &
+ENG=$!
+cli2() { DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
+# WAIT FOR THE COMMAND THREAD, NOT FOR A PROJECT LOAD. wait_for_boot defaults to
+# "event":"project.load", and this phase deliberately never loads one — so the default waited the
+# full budget for something that was never going to happen and failed saying the engine was stuck.
+# It was not stuck; it was idle, exactly as intended. The right marker is the one that means "this
+# engine will now read the command ring", which is what the phase actually depends on.
+wait_for_boot "$TMP/eng2.log" "$ENG" 80 'UI: command thread started' 
+# NO `do load` HERE. That is the entire point of this phase.
+#
+# ON ITS OWN TRACK, because a fresh engine with no project puts the Identity fixture on track 0 —
+# "No plugin specified; using ... Identity.vst3" — and one instrument per track means the sampler
+# is then correctly REFUSED with chain.rejected/add_failed. That default is exactly what loading
+# `blank` above replaces, so the phase that skips the load has to make its own empty track. The
+# refusal is right; putting the sampler somewhere it can live is the fix.
+# PUBLISHED, NOT HISTORY. after_command returns when the ENGINE ACTED — the journal line says
+# `add_track received` and the host for the new track is still launching. What comes next reads
+# the track back through `daw-cli get`, which is the PUBLISHED view on the consumer's own tick, so
+# the wait has to be the one that watches what is being read. Waiting on history here found one
+# track and reported that add-track had done nothing, which was the check misreading its own race.
+tracks_seen() { cli2 get tracks | sed -n 's/.*"track_id": *\([0-9][0-9]*\).*/\1/p' \
+                | awk '$1 < 100000' | sort -n | tr '\n' ' '; }
+cli2 do add-track >/dev/null 2>&1 || true
+wait_for_published 20 "0 1 " tracks_seen || fail \
+  "add-track never became visible on the fresh engine (tracks: $(tracks_seen)). Without a second
+        track the phase would test track 0's Identity fixture instead of a sampler."
+NEWTRACK=1
+after_command "$TMP" cli2 do add-device --track "$NEWTRACK" --kind sampler --device-id 7 || true
+after_command "$TMP" cli2 do sampler-load --track "$NEWTRACK" --device 7 --file tone.wav --root 60 || true
+
+KIT="$(cli2 get sampler-kit --track "$NEWTRACK" --device 7 2>&1)"
+echo "$KIT" | grep -q '"found": *true' || \
+  fail "no sampler answered on track $NEWTRACK of the fresh engine — the phase tested nothing: $KIT"
+# `length_frames` IS THE ENGINE'S OWN VERDICT on whether the source resolved: 0 means the slot
+# exists, draws, and is silent. Asserting the slot's PRESENCE would pass with the bug intact,
+# because a load that resolves nothing still mints one.
+LEN="$(echo "$KIT" | grep -oE '"length_frames": *[0-9]+' | head -1 | grep -oE '[0-9]+$')"
+[ -n "$LEN" ] && [ "$LEN" -gt 0 ] || fail \
+  "with no project loaded, tone.wav resolved to nothing: length_frames=${LEN:-absent}. The slot is
+        minted either way, so this is a SILENT sampler that looks completely healthy in the kit."
+echo "  with no project ever loaded: tone.wav still resolves ($LEN frames)"
+
 echo "sampler_load_check: PASS — create, load and play a sampler without touching a file"

@@ -1702,3 +1702,122 @@ fn lane_quantize_tool_converts_its_units() {
     assert!(!bad.ok && bad.error.clone().unwrap_or_default().contains("unknown grid"),
             "an unknown grid must be refused by name: {bad:?}");
 }
+
+/// A wav the engine can decode, written where a bare name resolves. Hand-rolled rather than
+/// checked in: a fixture whose bytes nothing states is one nobody can reason about when an
+/// assertion below moves, and this one's length IS the assertion.
+fn write_wav(path: &std::path::Path, frames: u32) {
+    let rate = 44_100u32;
+    let data_bytes = frames * 2;
+    let mut v: Vec<u8> = Vec::new();
+    v.extend(b"RIFF");
+    v.extend((36 + data_bytes).to_le_bytes());
+    v.extend(b"WAVEfmt ");
+    v.extend(16u32.to_le_bytes());
+    v.extend(1u16.to_le_bytes()); // PCM
+    v.extend(1u16.to_le_bytes()); // mono
+    v.extend(rate.to_le_bytes());
+    v.extend((rate * 2).to_le_bytes());
+    v.extend(2u16.to_le_bytes());
+    v.extend(16u16.to_le_bytes());
+    v.extend(b"data");
+    v.extend(data_bytes.to_le_bytes());
+    for i in 0..frames {
+        let s = ((i as f32 * 0.05).sin() * 12_000.0) as i16;
+        v.extend(s.to_le_bytes());
+    }
+    std::fs::write(path, v).expect("write wav");
+}
+
+/// THE GAP THIS CLOSES: `add_device` could mint a sampler and nothing could give it a sound, so
+/// "add a four on the floor kick" wrote sixteen notes onto a silent track and every count-based
+/// check passed it.
+#[test]
+fn load_sample_gives_the_sampler_a_sound_across_the_keyboard() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("loadsample");
+    write_wav(&engine.proj.join("probe.wav"), 22_050);
+
+    assert!(session.execute(&ToolCall {
+        tool: "add_device".into(), args: json!({"track":0,"kind":"sampler"}) }).ok);
+    // DELIBERATELY NO SAVE AND NO LOAD FIRST. `loadedProjectDir` is set only by LOADING a
+    // project, so until this was fixed a bare sample name on a fresh session resolved against the
+    // engine's working directory and the slot's source did not exist — the state the web stack
+    // comes up in, and the state the demo prompt "load a kick into the sampler" runs in.
+
+    // NO `device` ARGUMENT. Omitted means the track's first sampler, which is the whole point:
+    // a model that has just added one should not need a second observe to learn an id.
+    let r = session.execute(&ToolCall {
+        tool: "load_sample".into(), args: json!({"track":0,"file":"probe.wav"}) });
+    assert!(r.ok, "load_sample failed: {r:?}");
+
+    assert_eq!(r.output["key_low"].as_u64(), Some(0));
+    assert_eq!(r.output["key_high"].as_u64(), Some(127),
+               "the default must map ACROSS the keyboard — a slot pinned to one key is silent for \
+                every other note, which is the failure mode that reads as 'the DAW is broken': {r:?}");
+    assert_eq!(r.output["root"].as_u64(), Some(60), "pitched default roots at middle C: {r:?}");
+    // THE SLOT RESOLVED ITS SOURCE. lengthFrames 0 is a slot that exists, draws, and is silent —
+    // the exact state a load reported as ok on the send alone would have hidden.
+    assert!(r.output["length_frames"].as_u64().unwrap_or(0) > 0,
+            "the slot did not resolve its source, so it is silent: {r:?}");
+}
+
+#[test]
+fn a_drum_slot_is_pinned_to_its_key_and_the_answer_says_so() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("loaddrum");
+    write_wav(&engine.proj.join("kick.wav"), 8_000);
+
+    assert!(session.execute(&ToolCall {
+        tool: "add_device".into(), args: json!({"track":0,"kind":"sampler"}) }).ok);
+    let r = session.execute(&ToolCall {
+        tool: "load_sample".into(), args: json!({"track":0,"file":"kick.wav","drum":true}) });
+    assert!(r.ok, "load_sample drum failed: {r:?}");
+
+    assert_eq!(r.output["key_low"].as_u64(), Some(36),
+               "drum:true defaults to root 36, the key a kick is written at: {r:?}");
+    assert_eq!(r.output["key_high"].as_u64(), Some(36));
+    // SAID IN WORDS, because "key_low == key_high" is a fact a model has to derive and the
+    // consequence — every other note is silent — is the one it needs before writing the part.
+    let plays = r.output["plays"].as_str().unwrap_or("");
+    assert!(plays.contains("only note 36"),
+            "the answer must SAY it plays one key alone, not leave it to be inferred: {plays:?}");
+}
+
+/// The signature defect of this codebase: success reported for work the engine did not do. A name
+/// that resolves to nothing still MINTS A SLOT — it is published with SOURCE MISSING and
+/// lengthFrames 0 — so a load that checked only "did the write land" would answer ok for a
+/// sampler that cannot make a sound.
+#[test]
+fn a_sample_that_does_not_exist_is_an_error_not_a_silent_ok() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("loadmissing");
+    assert!(session.execute(&ToolCall {
+        tool: "add_device".into(), args: json!({"track":0,"kind":"sampler"}) }).ok);
+
+    let r = session.execute(&ToolCall {
+        tool: "load_sample".into(), args: json!({"track":0,"file":"no_such_file.wav"}) });
+    assert!(!r.ok,
+            "loading a file that does not exist reported SUCCESS. The slot is minted either way, \
+             so this is indistinguishable from a working load until the track plays nothing: {r:?}");
+    let e = r.error.clone().unwrap_or_default();
+    assert!(e.contains("silent") || e.contains("did not resolve") || e.contains("never appeared"),
+            "the error must say the sampler will be silent, which is the consequence: {e:?}");
+}
+
+/// REFUSED, NOT TRUNCATED. A cut name resolves to nothing or to a DIFFERENT file, and the second
+/// is worse than failing because it looks like it worked.
+#[test]
+fn an_over_long_sample_name_is_refused_rather_than_cut() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("loadlong");
+    assert!(session.execute(&ToolCall {
+        tool: "add_device".into(), args: json!({"track":0,"kind":"sampler"}) }).ok);
+
+    let r = session.execute(&ToolCall {
+        tool: "load_sample".into(),
+        args: json!({"track":0,"file":"a_name_far_longer_than_twenty_four_bytes.wav"}) });
+    assert!(!r.ok, "a 44-byte name must be refused, not truncated to 24: {r:?}");
+    assert!(r.error.clone().unwrap_or_default().contains("24"),
+            "the refusal should name the limit so it can be acted on: {r:?}");
+}

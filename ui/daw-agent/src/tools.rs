@@ -516,6 +516,35 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "load_sample",
+            description: "Load an audio file into a sampler device, minting a slot that plays it. \
+                          A SAMPLER WITH NOTHING LOADED IS SILENT — add_device gives you the \
+                          instrument, this gives it a sound, and notes written before this lands \
+                          make no noise. The file is named PROJECT-RELATIVE, not by path (a \
+                          project referring to an absolute path stops playing the moment you send \
+                          it to someone), and the name must fit 24 bytes. By default the sample \
+                          plays ACROSS THE WHOLE KEYBOARD from its root, so any note you write \
+                          sounds it — that is what you want for a pluck, pad, bass or lead. Pass \
+                          drum:true for one piece of a kit, which pins it to the single key \
+                          `root` AND SILENCES EVERY OTHER NOTE, so write that part's notes at \
+                          exactly that pitch.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "file"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "device": { "type": "integer", "minimum": 0,
+                                "description": "The sampler's device id from `observe`. Omit it for the track's FIRST sampler, which is what a track you just added one to has — that saves re-observing to learn an id you do not need." },
+                    "file": { "type": "string",
+                              "description": "Project-relative file name, 24 bytes or fewer, e.g. demo_pluck_c4.wav." },
+                    "root": { "type": "integer", "minimum": 0, "maximum": 127,
+                              "description": "The key the sample plays untransposed: default 60 (middle C) pitched, 36 for a drum. With drum:true this is the ONLY key that sounds." },
+                    "drum": { "type": "boolean",
+                              "description": "Pin the slot to `root` alone instead of the whole keyboard (default false)." },
+                },
+            }),
+        },
+        ToolSpec {
             name: "remove_device",
             description: "Take a device out of a chain. NOT undoable, and the device's \
                           settings go with it.",
@@ -971,6 +1000,162 @@ fn chain_blank(cmd: UiCommandType, track: u32) -> UiChainCommandPayload {
     }
 }
 
+/// Ask one sampler for its kit and wait for the answer that echoes this question.
+///
+/// `device` 0 means the track's FIRST sampler, matching every handler in
+/// engine_sampler_commands.cpp — the load and this read resolve it the same way, which is what
+/// makes omitting it safe.
+fn read_kit(handle: &EngineHandle, track: u64, device: u64, within: std::time::Duration)
+            -> Result<daw_bridge::control::SamplerKitView, String> {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    // Forced non-zero: zero means "no answer here", so a seq of 0 reads as an empty slot.
+    let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::AcqRel) | 1;
+    let req = daw_bridge::layout::UiSamplerKitRequestPayload {
+        command_type: UiCommandType::RequestSamplerKit as u16,
+        flags: 0, track_id: track as u32, device_id: device as u32,
+        request_seq: seq, reserved: [0u8; 24],
+    };
+    handle.send_sampler_kit_request(req)?;
+    let index = (seq as usize) % daw_bridge::layout::UI_SAMPLER_KIT_SLOTS;
+    let deadline = std::time::Instant::now() + within;
+    loop {
+        // THE ECHO IS THE POINT: a slot reused for a DIFFERENT question looks exactly like an
+        // answer to this one without it.
+        if let Some(v) = handle.read_sampler_kit_slot(index).filter(|v| v.request_seq == seq) {
+            return Ok(v);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(format!("the sampler on track {track} did not answer within {:?}", within));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// A SAMPLER WITH NOTHING LOADED IS SILENT, and until this tool existed the agent could mint one
+/// and write notes onto it and had no way at all to give it a sound — `add_device` puts the
+/// instrument there and every note after it makes no noise. `SamplerLoad` (73) was reachable from
+/// daw-cli and the console and from no tool, so "add a four on the floor kick" produced sixteen
+/// notes on a silent track and the rehearsal passed it, because the rehearsal counted notes.
+///
+/// THE SEND IS NOT THE ANSWER. A file name that resolves to nothing still mints a slot: the
+/// engine publishes it with SOURCE MISSING set and lengthFrames 0 — a slot that exists, draws,
+/// and cannot make a sound. Reporting ok on a successful write would make "loaded, no audio" the
+/// reply, which is the exact failure this tool is here to prevent, so the kit is read back and
+/// the slot's own verdict is what is returned.
+fn load_sample(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(track) = arg_u64(args, "track") else {
+        return ToolResult::err("load_sample needs \"track\"");
+    };
+    // 0 IS A REAL SENTINEL HERE, not an accidental default. Every sampler command in
+    // engine_sampler_commands.cpp matches on `deviceId != 0 && d.id != deviceId`, so zero means
+    // "this track's first sampler" to the load AND to the kit read-back below — the two agree,
+    // which is what makes omitting it safe. Worth saying out loud because on this wire an omitted
+    // field is usually NOT the same as a zero one.
+    let device = arg_u64(args, "device").unwrap_or(0);
+    let Some(file) = arg_str(args, "file").filter(|f| !f.is_empty()) else {
+        return ToolResult::err("load_sample needs \"file\" — a project-relative name like demo_pluck_c4.wav");
+    };
+    // REFUSED, NEVER TRUNCATED. A cut name resolves to nothing or, worse, to a DIFFERENT file,
+    // and "loaded the wrong sample" is not a failure anybody thinks to check for.
+    if file.len() > 24 {
+        return ToolResult::err(format!(
+            "{file:?} is {} bytes and this command carries 24. Rename the file — shortening the \
+             argument would load a different sample or none, and both look like success.",
+            file.len()));
+    }
+    let drum = args.get("drum").and_then(|v| v.as_bool()).unwrap_or(false);
+    // KIND-DEPENDENT, because one number cannot serve both. A pitched slot rooted at 36 sits an
+    // octave and a half below where anything writes a melody; a drum rooted at 60 is silent for
+    // the 36 a model writes a kick at. Same shape as add_device's position default.
+    let root = arg_u64(args, "root").unwrap_or(if drum { 36 } else { 60 }).min(127) as u8;
+    let mut name = [0u8; 24];
+    name[..file.len()].copy_from_slice(file.as_bytes());
+    let payload = daw_bridge::layout::UiSamplerLoadPayload {
+        command_type: UiCommandType::SamplerLoad as u16,
+        // WIDE BY DEFAULT, and the asymmetry is the argument: a wide slot still sounds when you
+        // play its root, while a slot pinned to one key is silent for every other note. The
+        // forgiving default belongs on the side whose failure is audible.
+        flags: if drum { daw_bridge::layout::SAMPLER_LOAD_FIXED_PITCH } else { 0 },
+        track_id: track as u32,
+        device_id: device as u32,
+        root_key: root,
+        reserved: [0u8; 3],
+        name,
+    };
+    // WHICH SLOTS EXISTED BEFORE, because the new one is identified by BEING NEW and by nothing
+    // else. Matching the answer by file name looks obvious and is wrong twice over: the engine
+    // seeds `slot.name` with the file's STEM (sampleDisplayName), so a load of "probe.wav" is
+    // named "probe" — the first version of this cost a test run to learn — and SamplerSetSlotName
+    // can rename it afterwards, so the name is not an identity at all. Loading the same file
+    // twice also reuses the SOURCE while minting a fresh slot, so source id cannot serve either.
+    let before = match read_kit(handle, track, device, std::time::Duration::from_secs(2)) {
+        Ok(v) if v.found => v.slots.iter().map(|e| e.slotId).collect::<Vec<_>>(),
+        // Said before the load rather than as a 5s timeout afterwards: "no sampler there" and
+        // "the file did not resolve" are different problems with different fixes.
+        Ok(_) => return ToolResult::err(format!(
+            "track {track} has no sampler to load into — add one first with \
+             add_device kind:\"sampler\"")),
+        Err(e) => return ToolResult::err(e),
+    };
+
+    if let Err(e) = handle.send_sampler_load(payload) { return ToolResult::err(e); }
+
+    // Decoding takes time the command does not wait for, so the kit is ASKED REPEATEDLY. Asking
+    // once answers "not yet" and reads exactly like "it did not load".
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let v = match read_kit(handle, track, device, std::time::Duration::from_millis(500)) {
+            Ok(v) => v,
+            Err(_) if std::time::Instant::now() < deadline => continue,
+            Err(e) => return ToolResult::err(e),
+        };
+        if let Some(e) = v.slots.iter().find(|e| !before.contains(&e.slotId)) {
+            let missing = (e.flags & daw_bridge::layout::UI_SAMPLER_SLOT_SOURCE_MISSING) != 0;
+            // A SLOT THAT EXISTS AND CANNOT SOUND. lengthFrames 0 is the engine saying the
+            // source did not resolve; reporting ok here would hand back "loaded" for a sampler
+            // that plays nothing, which is the whole failure this tool is built to prevent.
+            if missing || e.lengthFrames == 0 {
+                return ToolResult::err(format!(
+                    "a slot for {file:?} was created but its source did not resolve, so the \
+                     sampler is SILENT. Check the file is in the project folder (or its sibling \
+                     audio/ directory) and spelled exactly."));
+            }
+            let raw: Vec<u8> = e.name.iter().map(|&c| c as u8).take_while(|&c| c != 0).collect();
+            return ToolResult::ok(json!({
+                "track": track, "device": device, "file": file,
+                "slot": e.slotId, "name": String::from_utf8_lossy(&raw),
+                "root": e.rootKey, "key_low": e.keyLow, "key_high": e.keyHigh,
+                // SAID IN WORDS. That key_low == key_high means "every other note is silent" is
+                // a step of reasoning, and it is the one that decides whether the part sounds.
+                "plays": if e.keyLow == e.keyHigh {
+                    format!("only note {} — write this part at exactly that pitch", e.keyLow)
+                } else {
+                    format!("notes {}..{}, rooted at {}", e.keyLow, e.keyHigh, e.rootKey)
+                },
+                "length_frames": e.lengthFrames,
+            }));
+        }
+        if std::time::Instant::now() >= deadline {
+            // NOT ok. A load that never reaches the kit is a silent instrument, and "loaded"
+            // here would hand the model exactly the wrong belief to write notes on.
+            // TRUNCATION IS A DIFFERENT ANSWER, and saying "it never loaded" about a kit whose
+            // 65th slot the region cannot carry would be a confident wrong report. The region
+            // holds kUiMaxSamplerSlots = 64, which a chop set reaches, and it says so rather
+            // than shortening the list silently — so the one case this identification cannot
+            // see is the one case it names.
+            if v.slots_truncated > 0 {
+                return ToolResult::err(format!(
+                    "the kit has more slots than the shared-memory region carries \
+                     ({} not shown), so whether {file:?} loaded cannot be told apart from \
+                     whether it is merely out of view", v.slots_truncated));
+            }
+            return ToolResult::err(format!(
+                "{file:?} never appeared in track {track}'s kit within 5s — the sampler still \
+                 has the {} slot(s) it started with, so it will be silent", before.len()));
+        }
+    }
+}
+
 fn add_device(handle: &EngineHandle, args: &Value) -> ToolResult {
     let Some(track) = arg_u64(args, "track") else {
         return ToolResult::err("add_device needs \"track\"");
@@ -1422,6 +1607,7 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "set_time_signature" => set_time_signature(handle, &call.args),
         "device_params" => device_params(handle, &call.args),
         "add_device" => add_device(handle, &call.args),
+        "load_sample" => load_sample(handle, &call.args),
         "remove_device" => chain_edit(handle, &call.args, UiCommandType::RemoveDevice),
         "move_device" => move_device(handle, &call.args),
         "set_bypass" => set_bypass(handle, &call.args),

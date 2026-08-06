@@ -163,6 +163,24 @@ n_samplers(){
   done
   echo "$n"
 }
+# A SAMPLER THAT CAN ACTUALLY SOUND, which is not the same fact as a sampler being present and is
+# the one that decides whether the demo makes noise. n_samplers above counts DEVICES: it answered
+# "yes, a sampler" for a bank with nothing in it, so the AI could add an instrument, write sixteen
+# notes and pass every step of this rehearsal with a track that is audibly nothing. That is what a
+# count-based check cannot see, and it went unnoticed because no step here ever listened.
+#
+# `length_frames` is the engine's own verdict: 0 means the slot's source did not resolve, so the
+# slot exists, draws, and is silent. Counting SLOTS would repeat the original mistake one level
+# down.
+n_sounding() {
+  local n=0 id
+  for id in $(cli get tracks | sed -n 's/.*"track_id": *\([0-9][0-9]*\).*/\1/p'); do
+    [ "$id" -gt 100000 ] && continue
+    cli get sampler-kit --track "$id" 2>/dev/null \
+      | grep -oE '"length_frames": *[0-9]+' | grep -qvE ': *0$' && n=$((n+1))
+  done
+  echo "$n"
+}
 # EVERY track's notes, not track 0's. The model routinely makes its own track for a part, and a
 # count that only ever looks at track 0 reports "the song did not change" while the notes are
 # sitting one track over.
@@ -260,10 +278,27 @@ except Exception: print('unreadable')" "$f"
 }
 h_quantize(){ cli get tracks 2>/dev/null | grep -o '"quantize_grid": *[0-9]*' | tr -d '\n ' ; }
 
+# SOMETHING TO LOAD. The engine runs with DAW_PROJECT_DIR="$TMP", and a bare sample name
+# resolves there, so a wav written here is exactly what the demo's "load a kick into it" reaches.
+# Generated rather than copied from presets/audio: the two files there are the WAVEFORM PROBE
+# assets, which are silent for their first second and stretch that when played below their root —
+# a rehearsal that loaded one and heard nothing would be reporting the probe's shape, not the
+# product's.
+python3 - "$TMP/demo_kick.wav" <<'PYWAV'
+import sys, wave, struct, math
+w = wave.open(sys.argv[1], 'wb')
+w.setnchannels(1); w.setsampwidth(2); w.setframerate(44100)
+# Attack in the first millisecond, so it sounds the instant a note starts at any transposition.
+frames = [int(32000 * math.exp(-i / 3000.0) * math.sin(i * 0.08)) for i in range(8000)]
+w.writeframes(b''.join(struct.pack('<h', f) for f in frames))
+w.close()
+PYWAV
+
 echo "REHEARSING — each step is one prompt, judged by whether the ENGINE changed."
 echo
 step "add a track"        "Add a new track named Bass."                     n_tracks
 step "put a sampler on it" "Put a sampler on the track named Bass."         n_samplers
+step "load a sample"      "Load demo_kick.wav into the sampler on the track named Bass." n_sounding
 step "write a bassline"   "Write a simple four-bar bassline on the track named Bass, root notes on the beat." n_notes
 step "the harmony lane"   "Set the key to C minor from the start of the song."   h_harmony
 step "lane quantize"      "Quantize the Bass track to a 1/16 grid at full strength." h_quantize

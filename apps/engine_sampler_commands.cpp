@@ -12,6 +12,7 @@
 #include "apps/sampler_slice.h"
 #include "apps/sampler_serialize.h"
 #include "apps/musical_structures.h"
+#include "apps/patcher_preset_library.h"  // defaultProjectDir, the fallback when nothing is loaded
 
 namespace daw::engine {
 
@@ -1473,11 +1474,20 @@ void handleSamplerLoad(SamplerCommandDeps& deps,
 
 std::string resolveSourcePath(const std::string& loadedProjectDir,
                               const std::string& sourcePath) {
-
+    // AN EMPTY loadedProjectDir MEANT "resolve against the current working directory", and that
+    // is not a decision anybody made. It is set ONLY when a project is LOADED
+    // (engine_load_project.cpp:182) — saving does not set it — so a session that started fresh
+    // and saved, which is exactly how the web stack comes up, resolved every bare sample name
+    // against the engine's cwd, i.e. build/. Loading a kick into a sampler then minted a slot
+    // whose source did not exist: the kit drew perfectly, the notes were there, and the track was
+    // silent. defaultProjectDir() is the same fallback HistoryJournal::historyPath uses when this
+    // string is empty, and the same directory SaveProject/LoadProject resolve their names in.
+    const std::string projectDir =
+        loadedProjectDir.empty() ? daw::defaultProjectDir() : loadedProjectDir;
     std::filesystem::path sp(sourcePath);
-    std::filesystem::path base = sp.is_absolute() || loadedProjectDir.empty()
+    std::filesystem::path base = sp.is_absolute() || projectDir.empty()
                                      ? sp
-                                     : std::filesystem::path(loadedProjectDir) / sp;
+                                     : std::filesystem::path(projectDir) / sp;
     // A BARE NAME ALSO LOOKS IN THE PROJECT'S SIBLING audio/ DIRECTORY, which is where samples
     // actually live: projects sit in presets/projects/ and every one references its audio as
     // "../audio/<name>".
@@ -1496,10 +1506,10 @@ std::string resolveSourcePath(const std::string& loadedProjectDir,
     // filename still will not fit, and the general answer is to carry the path over the bulk
     // carrier (opcode 83) the way SamplerSetEnvelopePoints does.
     std::error_code exists_ec;
-    if (!sp.is_absolute() && !loadedProjectDir.empty() &&
+    if (!sp.is_absolute() && !projectDir.empty() &&
         !std::filesystem::exists(base, exists_ec)) {
       const std::filesystem::path alt =
-          std::filesystem::path(loadedProjectDir) / ".." / "audio" / sp;
+          std::filesystem::path(projectDir) / ".." / "audio" / sp;
       if (std::filesystem::exists(alt, exists_ec)) {
         base = alt;
       }

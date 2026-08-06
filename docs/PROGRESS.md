@@ -155,6 +155,61 @@ perfectly", and it took a diagnostic dump of the actual ticks to see it.
 That is the same shape as every other fixture failure in this file: the test was measuring
 something real and it was not the thing under test.
 
+## 2026-08-06 — the AI could add a sampler and never give it a sound
+
+The agent shipped forty-one tools and not one of them could load a sample. `add_device` mints the
+instrument; `SamplerLoad` was reachable from `daw-cli` and from the browser console and from no
+tool at all. So "add a four on the floor kick pattern" wrote sixteen notes onto a **silent track**,
+and `tools/demo_rehearsal.sh` scored that step a pass — because it counted notes.
+
+That is the same failure this repo keeps meeting from a new direction: not a wrong answer, a
+question nobody asked. Every check around the sampler asked whether the structure was right. None
+asked whether the track could make a noise.
+
+**`load_sample` reads the kit back rather than reporting the send.** A file name that resolves to
+nothing still MINTS A SLOT — published with SOURCE MISSING and `length_frames` 0, a slot that
+exists, draws, and is silent. A tool that answered "ok" on a successful write would say *loaded*
+about a sampler that plays nothing, which is precisely the belief that then gets notes written on
+top of it. It also says in words what the slot plays, because `key_low == key_high` meaning "every
+other note is silent" is a step of reasoning, and it is the step that decides whether the part
+sounds.
+
+`device` is optional: 0 means the track's first sampler, which is how every handler in
+`apps/engine_sampler_commands.cpp` already resolves it. On this wire an omitted field is usually
+NOT a zero one, so it is worth saying that here it deliberately is.
+
+**A sample name only resolved after a project had been LOADED.** `resolveSourcePath` treated an
+empty `loadedProjectDir` as "resolve against the process working directory". That string is set
+only by loading a project — saving does not set it — so a freshly started stack, which is how the
+web UI comes up and what a person prompting "load a kick into the sampler" is sitting in front of,
+resolved every bare name against the build directory. It now falls back to `defaultProjectDir()`,
+which is what `HistoryJournal` already does with the same empty string.
+
+**The check that should have caught it was green the whole time, and not for want of asserting.**
+`tools/sampler_load_check.sh` asserts the load event, the slot ids, the fixed-pitch keys, the
+refusals, and the save round trip. Early on it runs `cli do load blank` for unrelated reasons — and
+loading a project is exactly what sets the variable under test. Every assertion after that line
+inherited the precondition it was supposed to be checking.
+
+Worth naming as its own shape: **not a missing assertion, a setup step quietly supplying the thing
+being tested.** A missing assertion is visible by reading the check. This is only visible by asking
+what the setup provides, which nobody does when the check is green. The new phase boots an engine
+and never loads a project.
+
+**Three wrong turns, each caught by running something rather than by thinking harder.** Matching
+the read-back by file name — the engine seeds a slot's name with the file's *stem*, and a rename
+command can change it afterwards, so the slot's identity is that it was not there before. Judging
+a shell pipeline by pasting it into an interactive shell — that `grep` is a ugrep wrapper which
+inverts `-qv` against the real one a script gets, and it reported a correct counter as broken.
+And a first pass at the preset lint phase whose two negative controls both produced no output,
+which read as "the controls did not fire" and was actually three separate bugs in the check.
+
+**Duplicated work, third time this week.** The web-UI agent had built `load_sample` on its own
+branch, as it had `add_chords` and the `add_device` ordering default before it. Neither of us can
+see the other's branch, and the standing "announce before it lands" rule is scoped to the wire —
+a tool is not an opcode, so none of the three tripped it. Proposed on the channel that the rule
+extend to anything taken off a gap list, announced before the work rather than after.
+
 ## 2026-08-05 — an engine object, and what it was actually costing not to have one
 
 `main()` went 2,072 → 1,985 and the wiring went from 536 hand-written positional arguments to 473.
