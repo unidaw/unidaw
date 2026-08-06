@@ -2129,3 +2129,103 @@ fn the_agent_reads_a_sampler_kit_back() {
     });
     assert!(!none.ok, "a track with no sampler must be refused rather than answered empty: {none:?}");
 }
+
+/// The agent can take back a chord and a key change it wrote.
+///
+/// `add_chords` and `set_harmony` were both write-only, so an agent that put a wrong chord or a
+/// wrong key on the timeline could overwrite it and never remove it — and a key change nobody
+/// wanted is not cosmetic, because every harmony-quantized track is read against that timeline.
+///
+/// The delete asserts the chord COUNT drops, not that a command was accepted: `DeleteChord`
+/// addresses by tick and column, and a mis-addressed removal is accepted and removes nothing.
+#[test]
+fn the_agent_can_delete_a_chord_and_a_key_change() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agdel");
+
+    let proj = json!({
+        "schema_version": 2,
+        "meta": { "name": "agdel_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [], "clips": [ { "id": 1, "name": "c", "length": Q * 16,
+            "lines_per_beat": 4, "kind": "symbolic", "time_sig_numerator": 4,
+            "time_sig_denominator": 4, "notes": [], "chords": [] } ],
+        "tracks": [ {
+            "track_id": 0, "name": "T", "harmony_quantize": 0, "lines_per_beat": 4,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            "device_chain": [], "mod_links": [],
+            "placements": [ { "clip_id": 1, "at": 0, "length": Q * 16,
+                              "notes": [], "chords": [], "mutes": [] } ]
+        } ]
+    });
+    std::fs::write(engine.proj.join("agdel_in.uniproj.json"),
+                   serde_json::to_string_pretty(&proj).unwrap()).unwrap();
+    assert!(session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"agdel_in"}) }).ok);
+
+    // Two chords, so removing one is visible as a COUNT and not only as an absence.
+    let wrote = session.execute(&ToolCall {
+        tool: "add_chords".into(),
+        args: json!({ "track": 0, "degrees": [1, 5], "start": 0, "step": Q * 4 }),
+    });
+    assert!(wrote.ok, "add_chords failed: {wrote:?}");
+
+    let chords_in = |name: &str| -> usize {
+        let s = session.execute(&ToolCall { tool: "save".into(), args: json!({"name": name}) });
+        assert!(s.ok, "save failed: {s:?}");
+        read_project(&engine.proj, name)["clips"].as_array().unwrap().iter()
+            .filter_map(|c| c["chords"].as_array()).map(|a| a.len()).sum()
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if chords_in("agdel_a") == 2 { break; }
+        assert!(Instant::now() < deadline, "the two chords never reached the clip");
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    let gone = session.execute(&ToolCall {
+        tool: "delete_chord".into(), args: json!({ "track": 0, "tick": 0 }),
+    });
+    assert!(gone.ok, "delete_chord failed: {gone:?}");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let n = chords_in("agdel_b");
+        if n == 1 { break; }
+        assert!(Instant::now() < deadline,
+                "the chord count is {n}, want 1 — DeleteChord addresses by tick and column, and a \
+                 mis-addressed removal is ACCEPTED and removes nothing");
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    // A key change, then take it back.
+    assert!(session.execute(&ToolCall {
+        tool: "set_harmony".into(), args: json!({ "tick": 0, "root": 2, "scale": 1 }),
+    }).ok);
+    let keys_in = |name: &str| -> usize {
+        let s = session.execute(&ToolCall { tool: "save".into(), args: json!({"name": name}) });
+        assert!(s.ok, "save failed: {s:?}");
+        read_project(&engine.proj, name)["harmony_timeline"].as_array().map_or(0, |a| a.len())
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if keys_in("agdel_c") > 0 { break; }
+        assert!(Instant::now() < deadline, "the key change never reached the timeline");
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    let unkey = session.execute(&ToolCall {
+        tool: "delete_harmony".into(), args: json!({ "tick": 0 }),
+    });
+    assert!(unkey.ok, "delete_harmony failed: {unkey:?}");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let n = keys_in("agdel_d");
+        if n == 0 { break; }
+        assert!(Instant::now() < deadline,
+                "the harmony timeline still holds {n} point(s) — a key nobody wanted is not \
+                 cosmetic, every quantized track is read against this");
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}

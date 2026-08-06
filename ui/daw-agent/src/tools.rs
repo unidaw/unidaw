@@ -549,6 +549,34 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "delete_chord",
+            description: "Remove the chord at a tick — the counterpart to add_chords, which could \
+                          write a progression and never correct one. Addresses by TICK and column, \
+                          the same way the chord was written.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "tick"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "tick": { "type": "integer", "minimum": 0 },
+                    "column": { "type": "integer", "minimum": 0 },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "delete_harmony",
+            description: "Remove the key change at a tick. `set_harmony` could add one and there \
+                          was no way to take it back, so a wrong key had to be overwritten rather \
+                          than removed — which leaves the timeline with a point nobody wanted.",
+            params: json!({
+                "type": "object",
+                "required": ["tick"],
+                "properties": {
+                    "tick": { "type": "integer", "minimum": 0 },
+                },
+            }),
+        },
+        ToolSpec {
             name: "set_mixer",
             description: "Set a track's gain, pan, mute or solo. Gain is in dB (0 is unity,                           negative is quieter); pan is -1 hard left to 1 hard right.",
             params: json!({
@@ -1952,6 +1980,65 @@ fn sampler_kit(handle: &EngineHandle, args: &Value) -> ToolResult {
     }))
 }
 
+/// Remove the chord at a tick.
+///
+/// `add_chords` could write a progression and nothing could correct one, so an agent that wrote a
+/// wrong chord had to overwrite it or reload.
+///
+/// SPREAD IS ZERO ON A DELETE, AND THAT IS NOT TIDINESS. The engine reads `spread_nanoticks` as
+/// the CHORD ID on a removal (applyRemoveChordAt) — the same field that means strum width on a
+/// write. Sending a leftover spread would address a chord nobody named. daw-cli carries the same
+/// note over the same line; it is the sort of overload that only stays safe while every caller
+/// knows about it, so this one does not offer a spread argument at all.
+fn delete_chord(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(track), Some(tick)) = (arg_u64(args, "track"), arg_u64(args, "tick")) else {
+        return ToolResult::err("delete_chord needs \"track\" and \"tick\"");
+    };
+    let base = handle.clip_version_for_track(track as u32);
+    let p = UiChordCommandPayload {
+        command_type: UiCommandType::DeleteChord as u16,
+        flags: arg_u64(args, "column").unwrap_or(0).min(u16::MAX as u64) as u16,
+        track_id: track as u32,
+        base_version: base,
+        nanotick_lo: (tick & 0xffff_ffff) as u32,
+        nanotick_hi: (tick >> 32) as u32,
+        duration_lo: 0,
+        duration_hi: 0,
+        degree: 0,
+        quality: 0,
+        inversion: 0,
+        base_octave: 0,
+        humanize_timing: 0,
+        humanize_velocity: 0,
+        reserved: 0,
+        // Read as the chord id on this command type. 0 means "the chord at this tick and column".
+        spread_nanoticks: 0,
+    };
+    match handle.send_chord_command(p) {
+        Ok(()) => {
+            let applied = handle.wait_for_track_clip_version(
+                track as u32, base, base.wrapping_add(1), std::time::Duration::from_secs(2));
+            ToolResult::ok(json!({ "deleted": { "track": track, "tick": tick }, "applied": applied }))
+        }
+        Err(e) => ToolResult::err(e),
+    }
+}
+
+/// Remove the key change at a tick.
+///
+/// `set_harmony` could add one and nothing could take it back, so a wrong key had to be
+/// overwritten — which leaves a point on the timeline nobody wanted, and the timeline is what
+/// every quantized track is read against.
+fn delete_harmony(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(tick) = arg_u64(args, "tick") else {
+        return ToolResult::err("delete_harmony needs \"tick\"");
+    };
+    let mut p = blank(UiCommandType::DeleteHarmony);
+    p.note_nanotick_lo = (tick & 0xffff_ffff) as u32;
+    p.note_nanotick_hi = (tick >> 32) as u32;
+    send_edit(handle, p, json!({ "deleted_harmony_at": tick }))
+}
+
 /// Make a modulation link, name its parameter, and turn the knob. THREE commands.
 ///
 /// All three, because a link the engine accepts moves nothing without them: it addresses a
@@ -2312,6 +2399,8 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "sampler_emit_rows" => sampler_emit_rows(handle, &call.args),
         "sampler_vintage" => sampler_vintage(handle, &call.args),
         "sampler_kit" => sampler_kit(handle, &call.args),
+        "delete_chord" => delete_chord(handle, &call.args),
+        "delete_harmony" => delete_harmony(handle, &call.args),
         "set_mixer" => set_mixer(handle, &call.args),
         "set_loop" => set_loop(handle, &call.args),
         "preview_note" => preview_note(handle, &call.args),
