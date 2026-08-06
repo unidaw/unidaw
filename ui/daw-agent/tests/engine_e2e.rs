@@ -4082,3 +4082,87 @@ fn patcher_config_sets_a_node_and_a_later_partial_edit_keeps_the_rest() {
     });
     assert!(!ghost.ok, "configuring a node that does not exist reported success: {ghost:?}");
 }
+
+/// TRANSPOSE MOVES NOTES THAT EXIST, keeps their column, and refuses rather than clamping.
+///
+/// The agent could write new notes and could not retune a part it had already written, so "take
+/// the bassline down an octave" meant reading every pitch back and rewriting the phrase — the kind
+/// of thing a model gets almost right.
+///
+/// THE COLUMN CHECK IS THE POINT. A transpose is a rewrite of the same cell with a new pitch, and
+/// the web UI's version of this op sent no column for years: the transposed copy landed in column
+/// 0 while the original stayed put, so one note became two. This asserts the count is unchanged
+/// AND that the second column's note is still in the second column.
+#[test]
+fn transpose_moves_notes_in_place_and_keeps_their_column() {
+    let (engine, session) = start_engine("agtrans");
+
+    // Column 0 gets three notes; column 1 gets one. Different columns, so a transpose that
+    // forgets the column has somewhere wrong to put it.
+    let a = session.execute(&ToolCall {
+        tool: "add_notes".into(),
+        args: json!({"track":0,"pitches":[60,62,64],"start":0,"step":Q,"duration":Q/2}),
+    });
+    assert!(a.ok, "add_notes failed: {a:?}");
+    let b = session.execute(&ToolCall {
+        tool: "add_notes".into(),
+        args: json!({"track":0,"pitches":[72],"start":0,"step":Q,"duration":Q/2,"column":1}),
+    });
+    assert!(b.ok, "add_notes into column 1 failed: {b:?}");
+
+    let before = read_notes(&session, &engine, "agtrans_before");
+    assert_eq!(before.len(), 4, "fixture: {before:?}");
+
+    let up = session.execute(&ToolCall {
+        tool: "transpose".into(),
+        args: json!({"track":0,"semitones":12}),
+    });
+    assert!(up.ok, "transpose failed: {up:?}");
+
+    let after = read_notes(&session, &engine, "agtrans_after");
+    assert_eq!(after.len(), before.len(),
+               "TRANSPOSE DUPLICATED NOTES instead of moving them — the classic symptom of an op \
+                that rewrites without naming the column: {after:?}");
+    let mut pitches: Vec<i64> = after.iter().map(|n| n.0).collect();
+    pitches.sort();
+    assert_eq!(pitches, vec![72, 74, 76, 84], "every pitch up an octave: {after:?}");
+    let in_col1: Vec<_> = after.iter().filter(|n| n.1 == 1).collect();
+    assert_eq!(in_col1.len(), 1, "column 1 still holds exactly its own note: {after:?}");
+    assert_eq!(in_col1[0].0, 84, "and it is the transposed one: {after:?}");
+
+    // OUT OF RANGE IS SKIPPED, NOT CLAMPED. 84 + 48 = 132.
+    let far = session.execute(&ToolCall {
+        tool: "transpose".into(), args: json!({"track":0,"semitones":48}),
+    });
+    assert!(far.ok, "transpose failed: {far:?}");
+    assert_eq!(far.output["skipped"], json!(1), "the 84 must be declined: {far:?}");
+    let clamped = read_notes(&session, &engine, "agtrans_clamped");
+    assert!(clamped.iter().all(|n| n.0 != 127),
+            "a skipped note reappeared at 127 — that is clamping, and it is a different note: \
+             {clamped:?}");
+
+    // A RANGE THAT HOLDS NOTHING IS A REFUSAL, not an empty success: "nothing was there" and
+    // "it worked" are different answers and a model can act on both.
+    let empty = session.execute(&ToolCall {
+        tool: "transpose".into(),
+        args: json!({"track":0,"semitones":1,"from":Q*400,"to":Q*401}),
+    });
+    assert!(!empty.ok, "an empty range reported success: {empty:?}");
+
+    // And zero is refused as a non-edit rather than sent as a no-op batch.
+    let zero = session.execute(&ToolCall {
+        tool: "transpose".into(), args: json!({"track":0,"semitones":0}),
+    });
+    assert!(!zero.ok, "0 semitones should be refused: {zero:?}");
+}
+
+/// Every note on track 0 of a saved project, as (pitch, column).
+fn read_notes(session: &AgentSession, engine: &Engine, tag: &str) -> Vec<(i64, i64)> {
+    let s = session.execute(&ToolCall { tool: "save".into(), args: json!({"name": tag}) });
+    assert!(s.ok, "save failed: {s:?}");
+    let doc = read_project(&engine.proj, tag);
+    doc["clips"].as_array().map(|cs| cs.iter()
+        .flat_map(|c| c["notes"].as_array().cloned().unwrap_or_default())
+        .map(|n| (n["pitch"].as_i64().unwrap_or(-1), n["column"].as_i64().unwrap_or(0)))
+        .collect()).unwrap_or_default()
+}

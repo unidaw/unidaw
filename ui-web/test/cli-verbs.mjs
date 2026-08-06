@@ -355,6 +355,52 @@ const afterRm = await saved(`${NAME}_g`);
 check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
       'remove-device removes device 3 and leaves 7', JSON.stringify(chainOf(afterRm, 0)));
 
+/* ── do transpose ───────────────────────────────────────────────────────────────────────────
+ * A RANGE, not a selection — the console's transpose acts on what is selected, and a selection is
+ * view state this surface does not have. Same arithmetic as the agent's tool: both call
+ * plan_transpose in daw-bridge, so the two cannot answer differently.
+ *
+ * THIS FIXTURE IS THE REFUSAL CASE, and by accident rather than design — it places one clip three
+ * times so that `get shared` has something to count. That is exactly the shape a range transpose
+ * cannot describe: `read_track_clip` flattens the track, so a clip placed three times contributes
+ * its notes three times, and writing them back edits ONE clip repeatedly. Measured before the
+ * guard existed: two notes became three.
+ *
+ * So this asserts the refusal and the reason. The positive case is covered against a live engine
+ * on a track with no shared clips, in daw-agent's engine_e2e
+ * (transpose_moves_notes_in_place_and_keeps_their_column).
+ */
+{
+  const before = await saved(`${NAME}_t0`);
+  const pitchesOf = (doc) => (doc ? (doc.clips || []) : [])
+    .flatMap((c) => (c.notes || []).map((n) => n.pitch)).sort((a, b) => a - b);
+  const p0 = pitchesOf(before);
+  check(p0.length > 0, 'the fixture has notes', JSON.stringify(p0));
+
+  const up = cli('do', 'transpose', '--track', '0', '--semitones', '12');
+  check(!up.ok,
+        'TRANSPOSE OVER A SHARED CLIP IS REFUSED, not silently done three times',
+        up.out.slice(0, 220));
+  check(/shared/i.test(up.out) && /get shared/.test(up.out),
+        'and the refusal names the read that explains it',
+        `${up.out.slice(0, 220)} — a refusal that does not say what to do next is one the caller `
+        + 'works around');
+
+  await sleep(800);
+  const after = await saved(`${NAME}_t1`);
+  check(JSON.stringify(pitchesOf(after)) === JSON.stringify(p0),
+        'AND NOTHING MOVED — a refusal that half-applies is worse than no refusal',
+        `${JSON.stringify(p0)} -> ${JSON.stringify(pitchesOf(after))}`);
+
+  // The two argument refusals, which do not depend on the fixture's shape.
+  const zero = cli('do', 'transpose', '--track', '0', '--semitones', '0');
+  check(!zero.ok, '0 semitones is REFUSED as a non-edit', zero.out.slice(0, 160));
+  const backwards = cli('do', 'transpose', '--track', '0', '--semitones', '1',
+                        '--from', '9600000', '--to', '9600000');
+  check(!backwards.ok, 'an empty range is REFUSED, not reported as 0 transposed',
+        backwards.out.slice(0, 160));
+}
+
 /* ── do new ─────────────────────────────────────────────────────────────────────────────────
  * LAST, because it REPLACES the loaded document — everything above needs the fixture.
  *

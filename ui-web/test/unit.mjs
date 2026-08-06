@@ -2277,7 +2277,12 @@ const OP_REGISTRY = {
   copy:      { cli: null, agent: null, why: 'gap' },
   cut:       { cli: null, agent: null, why: 'gap' },
   paste:     { cli: null, agent: null, why: 'gap' },
-  transpose: { cli: null, agent: null, why: 'gap' },
+  // A RANGE on the other two surfaces, not a selection — a selection is view state a headless
+  // caller does not have and should not simulate. Both call plan_transpose in daw-bridge, so the
+  // skip-never-clamp and half-open-range rules cannot drift apart. Both REFUSE a track with a
+  // shared clip: a flattened track repeats a shared clip's notes per appearance, so writing them
+  // back edits one clip several times and the result is not what the range describes.
+  transpose: { cli: 'transpose', agent: 'transpose' },
   loop:      { cli: 'loop', agent: 'set_loop', why: 'gap' },
   // `transport` with action=seek IS this op; it was recorded as having no tool at all.
   seek:      { cli: 'position', agent: 'transport', why: 'gap' },
@@ -2522,7 +2527,7 @@ const OP_REGISTRY = {
  *                 RequestDeviceParams — an engine change, and backend's call. Raised with them.
  *                 Recorded here so it stays visible as a HOLE rather than passing as exempt.
  */
-const CLI_GAP = ['clear', 'columns', 'copy', 'cut', 'paste', 'transpose',
+const CLI_GAP = ['clear', 'columns', 'copy', 'cut', 'paste',
                  'mods'];
 /** Ops with no agent tool today. Same rule. */
 // `bypass` joins the list rather than being smuggled past it: the engine takes
@@ -2580,8 +2585,7 @@ const CLI_GAP = ['clear', 'columns', 'copy', 'cut', 'paste', 'transpose',
  */
 const AGENT_GAP = ['clear', 'columns', 'copy', 'cut',
                    'del', 'editor',
-                   'paste',
-                   'transpose', 'mods'];
+                   'paste', 'mods'];
 
 test('every dock command is in the op registry', () => {
   // The forcing function: a new command cannot be added without deciding whether

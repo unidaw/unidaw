@@ -99,6 +99,32 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "transpose",
+            description: "Move existing notes on a track up or down by semitones, in place. A \
+                          RANGE of the timeline, not a selection — give `from` and `to` in \
+                          nanoticks, or leave them out for the whole track. Notes that would \
+                          leave MIDI range are SKIPPED and counted, never clamped: a note pushed \
+                          past 127 is not a note at 127. Use this to move a part that already \
+                          exists; `add_notes` is for writing new ones.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "semitones"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "semitones": { "type": "integer", "minimum": -127, "maximum": 127,
+                                   "description": "12 is an octave up, -12 an octave down." },
+                    "from": { "type": "integer", "minimum": 0,
+                              "description": "First nanotick to touch. Default: the start of the \
+                                              published window." },
+                    "to": { "type": "integer", "minimum": 0,
+                            "description": "One PAST the last nanotick to touch, so two adjacent \
+                                            ranges do not share a note. Default: the end of the \
+                                            published window. The reply always states the span it \
+                                            actually acted on." }
+                }
+            }),
+        },
+        ToolSpec {
             name: "add_chords",
             description: "Write a chord progression onto a track, one chord per step. Chords are \
                           DEGREES OF THE CURRENT KEY, not absolute pitches, and degrees are \
@@ -3328,6 +3354,7 @@ pub fn execute_in(handle: &EngineHandle, call: &ToolCall, project_dir: &str) -> 
     match call.tool.as_str() {
         "observe" => observe_tool(handle, &call.args),
         "add_notes" => add_notes(handle, &call.args),
+        "transpose" => transpose(handle, &call.args),
         "add_chords" => add_chords(handle, &call.args),
         "transport" => transport(handle, &call.args),
         "save" => named(handle, UiCommandType::SaveProject, &call.args, "saved"),
@@ -3400,6 +3427,152 @@ pub fn execute_in(handle: &EngineHandle, call: &ToolCall, project_dir: &str) -> 
 /// every caller that was written before the first tool needed to touch the filesystem.
 pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
     execute_in(handle, call, &daw_bridge::project::engine_project_dir())
+}
+
+/// MOVE NOTES THAT ALREADY EXIST, in place.
+///
+/// The agent could write new notes and could not retune a part it had written — so "take the
+/// bassline down an octave" meant reading every pitch back and rewriting the whole phrase, which
+/// is the kind of thing a model gets almost right.
+///
+/// A RANGE, not a selection. The web UI transposes what is selected, and a selection is view
+/// state a headless surface does not have and should not simulate; a half-open tick range says
+/// the same thing without inventing a cursor. That is why this is not simply the same verb.
+///
+/// The arithmetic and both edge rules live in `daw_bridge::layout::plan_transpose`, which the CLI
+/// verb calls too — skip-never-clamp, and half-open on the right so two adjacent ranges do not
+/// transpose the note between them twice.
+fn transpose(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(track) = arg_u64(args, "track") else {
+        return ToolResult::err("transpose needs \"track\"");
+    };
+    let track = track as u32;
+    let Some(semitones) = args.get("semitones").and_then(|v| v.as_i64()) else {
+        return ToolResult::err("transpose needs \"semitones\" — 12 is an octave up");
+    };
+    if semitones == 0 {
+        return ToolResult::err("transpose by how much? 0 semitones is not an edit");
+    }
+    let from = arg_u64(args, "from").unwrap_or(0);
+    let to = arg_u64(args, "to").unwrap_or(u64::MAX);
+    if to <= from {
+        return ToolResult::err("\"to\" must be after \"from\" — the range is half-open");
+    }
+
+    /*
+     * SHARED CLIPS ARE REFUSED, and this is a limit rather than a bug I hid.
+     *
+     * `read_track_clip` gives a FLATTENED track: a clip placed three times contributes its notes
+     * three times, at three different track ticks. Writing each of those back edits the SAME clip
+     * repeatedly, and what comes out is not what a caller would predict — measured on a fixture
+     * with one clip placed three times, two notes became three.
+     *
+     * The honest options were to work out the clip-relative semantics properly or to decline, and
+     * declining is what a tool should do with an edit it cannot describe. `get shared` /
+     * `shared_clips` is the read that tells you which clips this affects — it exists for exactly
+     * this question — and forking a placement first makes the edit unambiguous.
+     */
+    let extents = handle.read_clip_extents();
+    let uses = daw_bridge::layout::clip_appearances(&extents);
+    let shared_here: Vec<u32> = extents.iter()
+        .filter(|e| e.track_id == track)
+        .filter(|e| uses.get(&e.clip_id).copied().unwrap_or(1) > 1)
+        .map(|e| e.clip_id)
+        .collect();
+    if !shared_here.is_empty() {
+        return ToolResult::err(format!(
+            "track {track} plays clip(s) {shared_here:?} that appear more than once, and a range \
+             transpose over a shared clip edits it once per appearance — the result is not what \
+             the range describes. Use `shared_clips` to see what is shared, and fork the \
+             placement first if you want to change only one of them"));
+    }
+    let Some(snap) = handle.read_track_clip(track) else {
+        return ToolResult::err(format!("track {track} has no clip to read"));
+    };
+    /*
+     * WHAT IS ACTUALLY VISIBLE, and say so.
+     *
+     * `read_track_clip` publishes a WINDOW, not the track: bounded ticks and at most 4096 notes.
+     * So "leave `to` out and I will do the whole track" is a promise this data cannot keep, and a
+     * tool that made it would transpose part of a bassline and report plain success — the caller
+     * would hear the seam and have nothing to read that explained it.
+     *
+     * The range is therefore intersected with the window, and the reply states the span acted on
+     * plus whether the request was cut down to fit. Reporting beats refusing here: the window is
+     * usually the whole song, and a refusal would block the common case to guard the rare one.
+     */
+    let win_from = from.max(snap.window_start_nanotick);
+    let win_to = if snap.window_end_nanotick > snap.window_start_nanotick {
+        to.min(snap.window_end_nanotick)
+    } else {
+        to
+    };
+    if win_to <= win_from {
+        return ToolResult::err(format!(
+            "the range {from}..{to} lies outside the published window \
+             {}..{}", snap.window_start_nanotick, snap.window_end_nanotick));
+    }
+    let n = (snap.note_count as usize).min(snap.notes.len());
+    let plan = daw_bridge::layout::plan_transpose(
+        &snap.notes[..n], win_from, win_to, semitones as i32);
+
+    if plan.moved.is_empty() {
+        // A REFUSAL, not an empty success. "Nothing was in range" and "everything in range would
+        // have left MIDI range" are different answers and the model can act on both; reporting
+        // either as `ok` teaches it the edit landed.
+        return ToolResult::err(if plan.skipped > 0 {
+            format!("all {} note(s) in range would leave MIDI range at {semitones:+} semitones",
+                    plan.skipped)
+        } else {
+            format!("no notes on track {track} between {from} and {to}")
+        });
+    }
+
+    // Same optimistic-concurrency protocol as add_notes, and per TRACK: each accepted write bumps
+    // this track's counter by one, so the next base is the previous plus one.
+    let first_base = handle.clip_version_for_track(track);
+    let mut base = first_base;
+    let mut sent = 0usize;
+    for m in &plan.moved {
+        let payload = UiCommandPayload {
+            command_type: UiCommandType::WriteNote as u16,
+            // THE NOTE'S OWN COLUMN. A transpose is a rewrite of the same cell with a different
+            // pitch; sending column 0 for every note is what made the web UI's transpose duplicate
+            // notes out of the second column instead of moving them.
+            flags: match daw_bridge::layout::edit_column(u64::from(m.column)) {
+                Ok(c) => c,
+                Err(e) => return ToolResult::err(e),
+            },
+            track_id: track,
+            plugin_index: 0,
+            note_pitch: u32::from(m.pitch),
+            value0: u32::from(m.velocity),
+            note_nanotick_lo: (m.tick & 0xffff_ffff) as u32,
+            note_nanotick_hi: (m.tick >> 32) as u32,
+            note_duration_lo: (m.duration & 0xffff_ffff) as u32,
+            note_duration_hi: (m.duration >> 32) as u32,
+            base_version: base,
+        };
+        if let Err(e) = handle.send_command(payload) {
+            return ToolResult::err(format!("{e} after {sent} notes"));
+        }
+        sent += 1;
+        base = base.wrapping_add(1);
+    }
+    let applied = handle.wait_for_track_clip_version(
+        track, first_base, first_base.wrapping_add(sent as u32),
+        std::time::Duration::from_secs(2));
+    ToolResult::ok(json!({
+        "transposed": sent,
+        "skipped": plan.skipped,
+        "semitones": semitones,
+        "track": track,
+        "applied": applied,
+        // The span actually acted on, always — not only when it differs from what was asked.
+        "from": win_from,
+        "to": win_to,
+        "clipped_to_window": win_from != from || win_to != to,
+    }))
 }
 
 fn add_notes(handle: &EngineHandle, args: &Value) -> ToolResult {

@@ -2362,6 +2362,104 @@ fn main() {
                     }
                     }
                 },
+                /*
+                 * `do transpose --track N --semitones S [--from T] [--to T]`
+                 *
+                 * A RANGE, because the console's transpose acts on a SELECTION and a selection is
+                 * view state this surface does not have. Same arithmetic and the same two edge
+                 * rules as the agent's tool — both call plan_transpose — so the answer cannot
+                 * differ by which surface asked.
+                 */
+                Some(&"transpose") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let semitones = match flag_i64(&args, "--semitones", 0) {
+                        Ok(v) if v != 0 => v as i32,
+                        Ok(_) => { eprintln!("daw-cli: --semitones is required and cannot be 0"); std::process::exit(2) }
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
+                    let from = flag_u64(&args, "--from", Some(0)).unwrap_or(0);
+                    let to = flag_u64(&args, "--to", Some(u64::MAX)).unwrap_or(u64::MAX);
+                    if to <= from {
+                        eprintln!("daw-cli: --to must be after --from (the range is half-open)");
+                        std::process::exit(2);
+                    }
+                    // SHARED CLIPS ARE REFUSED — same rule and same reason as the agent tool:
+                    // a flattened track repeats a shared clip's notes per appearance, so writing
+                    // them back edits one clip several times and the result is not what the range
+                    // describes. `get shared` is the read that says which clips those are.
+                    let extents = handle.read_clip_extents();
+                    let uses = daw_bridge::layout::clip_appearances(&extents);
+                    let shared_here: Vec<u32> = extents.iter()
+                        .filter(|e| e.track_id == track)
+                        .filter(|e| uses.get(&e.clip_id).copied().unwrap_or(1) > 1)
+                        .map(|e| e.clip_id)
+                        .collect();
+                    if !shared_here.is_empty() {
+                        eprintln!("daw-cli: track {track} plays shared clip(s) {shared_here:?}; a range transpose would edit one clip once per appearance. See `get shared`, and fork the placement first.");
+                        std::process::exit(1);
+                    }
+                    let Some(snap) = handle.read_track_clip(track) else {
+                        eprintln!("daw-cli: track {track} has no clip to read");
+                        std::process::exit(1);
+                    };
+                    // THE PUBLISHED WINDOW, not the track — see the agent tool's note. The
+                    // range is intersected with it and the reply states the span acted on, so a
+                    // partial transpose cannot report as a whole one.
+                    let win_from = from.max(snap.window_start_nanotick);
+                    let win_to = if snap.window_end_nanotick > snap.window_start_nanotick {
+                        to.min(snap.window_end_nanotick)
+                    } else { to };
+                    if win_to <= win_from {
+                        eprintln!("daw-cli: the range {from}..{to} lies outside the published window {}..{}",
+                                  snap.window_start_nanotick, snap.window_end_nanotick);
+                        std::process::exit(1);
+                    }
+                    let n = (snap.note_count as usize).min(snap.notes.len());
+                    let plan = daw_bridge::layout::plan_transpose(
+                        &snap.notes[..n], win_from, win_to, semitones);
+                    if plan.moved.is_empty() {
+                        eprintln!("daw-cli: nothing to transpose ({} skipped as out of MIDI range)",
+                                  plan.skipped);
+                        std::process::exit(1);
+                    }
+                    let first_base = handle.clip_version_for_track(track);
+                    let mut base = first_base;
+                    let mut sent = 0usize;
+                    let mut failed = None;
+                    for m in &plan.moved {
+                        let column = match daw_bridge::layout::edit_column(u64::from(m.column)) {
+                            Ok(c) => c,
+                            Err(e) => { failed = Some(e); break }
+                        };
+                        let payload = UiCommandPayload {
+                            command_type: UiCommandType::WriteNote as u16,
+                            flags: column,
+                            track_id: track,
+                            plugin_index: 0,
+                            note_pitch: u32::from(m.pitch),
+                            value0: u32::from(m.velocity),
+                            note_nanotick_lo: (m.tick & 0xffff_ffff) as u32,
+                            note_nanotick_hi: (m.tick >> 32) as u32,
+                            note_duration_lo: (m.duration & 0xffff_ffff) as u32,
+                            note_duration_hi: (m.duration >> 32) as u32,
+                            base_version: base,
+                        };
+                        if let Err(e) = handle.send_command(payload) { failed = Some(e); break }
+                        sent += 1;
+                        base = base.wrapping_add(1);
+                    }
+                    if let Some(e) = failed {
+                        eprintln!("daw-cli: {e} after {sent} notes");
+                        1
+                    } else {
+                        let applied = handle.wait_for_track_clip_version(
+                            track, first_base, first_base.wrapping_add(sent as u32),
+                            Duration::from_secs(2));
+                        println!("{{ \"transposed\": {sent}, \"skipped\": {}, \"semitones\": {semitones}, \"track\": {track}, \"applied\": {applied}, \"from\": {win_from}, \"to\": {win_to}, \"clipped_to_window\": {} }}",
+                                 plan.skipped, win_from != from || win_to != to);
+                        0
+                    }
+                }
                 Some(&"load") => {
                     let project = rest.get(1).copied().unwrap_or("default");
                     let code = send_named(&handle, UiCommandType::LoadProject, project);

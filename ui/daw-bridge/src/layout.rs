@@ -2865,3 +2865,120 @@ mod patcher_config_tests {
         }
     }
 }
+
+/// One note a transpose intends to rewrite.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TransposedNote {
+    pub tick: u64,
+    pub duration: u64,
+    pub pitch: u8,
+    pub velocity: u8,
+    pub column: u8,
+}
+
+/// What a transpose would do: the notes it moves, and how many it declined to.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TransposePlan {
+    pub moved: Vec<TransposedNote>,
+    /// In the range, but the new pitch would leave 0..=127.
+    pub skipped: usize,
+}
+
+/// WHICH NOTES A TRANSPOSE TOUCHES, AND WHAT HAPPENS AT THE EDGES.
+///
+/// The rule the web UI already implements in `transposeSelection`, moved somewhere the CLI and the
+/// agent can share it — because the interesting part is not the addition, it is the two decisions
+/// either side of it, and those are what two independent implementations get differently.
+///
+/// SKIP, NEVER CLAMP. A note transposed past 127 is not a note at 127; clamping would silently
+/// change the music and leave nothing to notice. The UI's own comment on that line says
+/// "silently clamping would lose the note", and this keeps that promise on every surface.
+///
+/// HALF-OPEN ON THE RIGHT — `[from, to)`. A note starting exactly at `to` belongs to the next bar,
+/// the next selection, the next anything; including it makes two adjacent ranges overlap by one
+/// note and transpose it twice. The caller that wants "everything from here on" passes u64::MAX.
+///
+/// The note's COLUMN and DURATION ride along untouched. A transpose is a rewrite of the same cell
+/// with a different pitch, so dropping either would move the note as well as retune it — which is
+/// the defect that made ten operations in the web UI edit the wrong column.
+pub fn plan_transpose(
+    notes: &[UiClipNote],
+    from: u64,
+    to: u64,
+    semitones: i32,
+) -> TransposePlan {
+    let mut plan = TransposePlan::default();
+    for n in notes {
+        if n.t_on < from || n.t_on >= to {
+            continue;
+        }
+        let want = i32::from(n.pitch) + semitones;
+        if !(0..=127).contains(&want) {
+            plan.skipped += 1;
+            continue;
+        }
+        plan.moved.push(TransposedNote {
+            tick: n.t_on,
+            // A zero duration on the wire means "until the next event", which is NOT what this
+            // note is doing — it has a measured length and must keep it.
+            duration: n.t_off.saturating_sub(n.t_on).max(1),
+            pitch: want as u8,
+            velocity: n.velocity,
+            column: n.column,
+        });
+    }
+    plan
+}
+
+#[cfg(test)]
+mod transpose_tests {
+    use super::*;
+
+    fn note(t_on: u64, t_off: u64, pitch: u8, column: u8) -> UiClipNote {
+        UiClipNote { t_on, t_off, pitch, velocity: 100, column, ..Default::default() }
+    }
+
+    #[test]
+    fn it_moves_what_is_in_range_and_keeps_column_and_duration() {
+        let notes = [note(0, 480, 60, 0), note(960, 1440, 67, 1)];
+        let p = plan_transpose(&notes, 0, u64::MAX, 2);
+        assert_eq!(p.skipped, 0);
+        assert_eq!(p.moved.len(), 2);
+        assert_eq!(p.moved[0], TransposedNote { tick: 0, duration: 480, pitch: 62,
+                                                velocity: 100, column: 0 });
+        assert_eq!(p.moved[1].column, 1, "the column must ride along");
+        assert_eq!(p.moved[1].duration, 480, "and so must the length");
+    }
+
+    #[test]
+    fn the_range_is_half_open_so_adjacent_ranges_do_not_share_a_note() {
+        let notes = [note(0, 480, 60, 0), note(960, 1440, 62, 0)];
+        assert_eq!(plan_transpose(&notes, 0, 960, 1).moved.len(), 1, "960 belongs to the next range");
+        assert_eq!(plan_transpose(&notes, 960, 1920, 1).moved.len(), 1);
+    }
+
+    #[test]
+    fn out_of_midi_range_is_skipped_not_clamped() {
+        let notes = [note(0, 480, 126, 0), note(960, 1440, 60, 0)];
+        let p = plan_transpose(&notes, 0, u64::MAX, 4);
+        assert_eq!(p.skipped, 1, "126 + 4 leaves MIDI range");
+        assert_eq!(p.moved.len(), 1);
+        assert_eq!(p.moved[0].pitch, 64);
+        // The one that would clamp must NOT appear at 127 — that is a different note.
+        assert!(p.moved.iter().all(|m| m.pitch != 127));
+    }
+
+    #[test]
+    fn a_zero_length_note_still_gets_a_length() {
+        // 0 on the wire means "until the next event". A note that already has an end must not be
+        // re-described as open-ended by a transpose.
+        let p = plan_transpose(&[note(0, 0, 60, 0)], 0, u64::MAX, 1);
+        assert_eq!(p.moved[0].duration, 1);
+    }
+
+    #[test]
+    fn nothing_in_range_is_an_empty_plan_rather_than_a_panic() {
+        let p = plan_transpose(&[note(0, 480, 60, 0)], 5000, 6000, 1);
+        assert!(p.moved.is_empty() && p.skipped == 0);
+    }
+}
