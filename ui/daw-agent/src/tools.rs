@@ -2122,10 +2122,20 @@ fn delete_chord(handle: &EngineHandle, args: &Value) -> ToolResult {
     let (Some(track), Some(tick)) = (arg_u64(args, "track"), arg_u64(args, "tick")) else {
         return ToolResult::err("delete_chord needs \"track\" and \"tick\"");
     };
+    // REFUSED, NOT CLAMPED, and the difference matters: the engine reads the column as
+    // `flags & 0xff`, so a column of 300 arrives as 44 — a well-formed removal of a chord in a
+    // column the caller never named. Clamping to u16 (which this did) was the same bug one type
+    // wider. Verified against engine_note_commands.cpp, which masks identically on the write.
+    let column = arg_u64(args, "column").unwrap_or(0);
+    if column > 0xff {
+        return ToolResult::err(format!(
+            "column {column} does not fit the byte the engine reads — it would arrive as {} and \
+             remove a chord in a column you did not name", column & 0xff));
+    }
     let base = handle.clip_version_for_track(track as u32);
     let p = UiChordCommandPayload {
         command_type: UiCommandType::DeleteChord as u16,
-        flags: arg_u64(args, "column").unwrap_or(0).min(u16::MAX as u64) as u16,
+        flags: column as u16,
         track_id: track as u32,
         base_version: base,
         nanotick_lo: (tick & 0xffff_ffff) as u32,
