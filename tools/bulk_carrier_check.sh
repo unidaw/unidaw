@@ -32,6 +32,11 @@
 #
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# The wait primitives. This check did not source them and used fixed sleeps; note that an
+# unsourced wait_for_event is an UNKNOWN COMMAND, which `|| true` swallows in silence — so
+# a missing source line here would turn each wait below into no wait at all, which is worse
+# than the sleep it replaced and looks identical in a passing run.
+. "$ROOT/tools/lib/engine_wait.sh"
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
@@ -129,14 +134,20 @@ draw() {
   local shm="/bulkchk_$$_$name"
   start_engine "$shm" "$TMP/$name.eng.log"
   DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do load bulk --force >/dev/null 2>&1 || true
-  sleep 1.2
+  wait_for_event "$TMP/$name.eng.log" "project.load" 60 "the load of 'bulk'" >/dev/null 2>&1 || true
   if [ "$#" -gt 0 ]; then
     DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do sampler-env-draw "$@" \
       >"$TMP/$name.cli.log" 2>&1 || fail "sampler-env-draw was refused for '$name'"
-    sleep 0.8
+    wait_for_event "$TMP/$name.eng.log" "sampler.envelope_points_set" 40 "the drawn envelope" \
+      >/dev/null 2>&1 || true
   fi
   DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do save "$name" --force >/dev/null 2>&1 || true
-  sleep 1.5
+  # WAIT FOR THE SAVE TO BE ANNOUNCED BEFORE KILLING THE ENGINE. This slept 1.5s and then killed
+  # it, so on a loaded machine the write had not finished and the next line reported "'step'
+  # produced no saved project" — which reads as the bulk carrier losing data when the truth is
+  # that nobody waited. The engine emits project.save AFTER saveProjectToPath returns
+  # (engine_project_commands.cpp), so the event is the completion, not the intent.
+  wait_for_event "$TMP/$name.eng.log" "project.save" 60 "the save of '$name'" >/dev/null 2>&1 || true
   kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
   [ -f "$TMP/$name.uniproj.json" ] || fail "'$name' produced no saved project"
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/bulkrnd_$$_$name" \

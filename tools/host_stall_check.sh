@@ -126,10 +126,22 @@ def rms(a, b):
     s = d[int(a*sr):int(b*sr)]
     return float(np.sqrt((s**2).mean())) if s.size else 0.0
 before, after = rms(2.0, 5.0), rms(7.5, 11.5)
-print(f"  rms before the freeze={before:.5f}  after={after:.5f}")
-if before < 1e-4:
-    print("  FAIL(setup): nothing was sounding BEFORE the freeze, so the comparison below is")
-    print("        between two silences and says nothing about the fix.")
+print(f"  rms before the freeze={before:.5f}  after={after:.5f}  (context, not the verdict)")
+# THE PRECONDITION IS "THE FIXTURE MADE SOUND", NOT "IT MADE SOUND IN SECONDS 2 TO 5".
+#
+# This used to fail the whole check when rms(2,5) was zero, which is an ABSOLUTE offset into a
+# capture whose origin is when the DEVICE started — so on a loaded machine the device starts
+# later, the window slides off the front of the audio, and the check reports "nothing was
+# sounding" about a run that sounded perfectly well. Observed exactly that: before=0.00000,
+# after=0.07274, stalls after the freeze 0. The verdict (the stall count) had already passed.
+#
+# The windows stay printed because they are useful context. What gates is whether the capture
+# contains audio ANYWHERE, which is the thing the setup actually has to guarantee and is
+# immune to where the origin fell.
+peak = float(np.abs(d).max())
+if peak < 1e-4:
+    print(f"  FAIL(setup): the capture is silent end to end (peak {peak:.6f}), so the freeze")
+    print("        was applied to a run that never made a sound and proves nothing.")
     raise SystemExit(1)
 if False:  # the window numbers are CONTEXT, not the verdict — see the note above the awk.
     print("  FAIL: ONE FROZEN PLUGIN HOST SILENCED THE WHOLE SONG.")
