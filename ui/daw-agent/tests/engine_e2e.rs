@@ -2054,3 +2054,78 @@ fn the_agent_reaches_the_master_bus_and_recolours_a_marker() {
     });
     assert!(!bad.ok, "an unknown marker op must be refused: {bad:?}");
 }
+
+/// The agent can READ a sampler back, and gets the kit it asked for.
+///
+/// The write tools landed without an observation half: an agent could load a sample, map it, chop
+/// it, shape its envelope and crush it, and could not see any of it — the same shape as the device
+/// ids, where five tools took an id nothing reported.
+///
+/// TWO SAMPLERS, DELIBERATELY. The answer lands in `request_seq % UI_SAMPLER_KIT_SLOTS` and
+/// daw-cli once defaulted that sequence to a CONSTANT, so every request matched the slot's
+/// existing contents and each read returned the PREVIOUS question's answer. That survived because
+/// every fixture had ONE sampler, where the previous answer and the current one are the same kit.
+/// With two, a swapped answer is wrong in its CONTENT and not merely in its label.
+#[test]
+fn the_agent_reads_a_sampler_kit_back() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agkit");
+
+    let sampler = |dev: u64, slot_id: u64, name: &str, lo: u64, hi: u64| json!({
+        "device_id": dev, "kind": "sampler", "patcher_node_id": 0, "bypass": false,
+        "sampler": { "slots": [ { "id": slot_id, "name": name, "key_low": lo, "key_high": hi,
+                                  "root_key": 60, "gate": 0 } ] }
+    });
+    let proj = json!({
+        "schema_version": 2,
+        "meta": { "name": "agkit_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [], "clips": [],
+        "tracks": [
+            { "track_id": 0, "name": "A", "harmony_quantize": 0, "lines_per_beat": 4,
+              "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+              "device_chain": [ sampler(3, 1, "alpha", 0, 127) ], "mod_links": [], "placements": [] },
+            { "track_id": 1, "name": "B", "harmony_quantize": 0, "lines_per_beat": 4,
+              "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+              "device_chain": [ sampler(4, 2, "beta", 36, 36) ], "mod_links": [], "placements": [] },
+        ]
+    });
+    std::fs::write(engine.proj.join("agkit_in.uniproj.json"),
+                   serde_json::to_string_pretty(&proj).unwrap()).unwrap();
+    assert!(session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"agkit_in"}) }).ok);
+
+    let read = |track: u64| -> Value {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let r = session.execute(&ToolCall {
+                tool: "sampler_kit".into(), args: json!({ "track": track }),
+            });
+            if r.ok {
+                let v: Value = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+                if v.to_string().contains("slots") { return v; }
+            }
+            assert!(Instant::now() < deadline, "sampler_kit never answered for track {track}: {r:?}");
+            std::thread::sleep(Duration::from_millis(150));
+        }
+    };
+
+    // ASKED IN TURN, and each answer must carry ITS OWN track's slot — not the previous one's.
+    let a = read(0).to_string();
+    let b = read(1).to_string();
+    assert!(a.contains("alpha"), "track 0's kit should hold `alpha`: {a}");
+    assert!(b.contains("beta"),
+            "track 1's kit came back without `beta` — if it holds `alpha`, the answer slot was \
+             read before this request landed and the previous question's answer was returned: {b}");
+    assert!(!b.contains("alpha"), "track 1's answer still carries track 0's slot: {b}");
+
+    // The key range distinguishes them in CONTENT as well as in name: 0-127 against 36-36.
+    assert!(a.contains("\"key_high\":127"), "track 0's slot spans the keyboard: {a}");
+    assert!(b.contains("\"key_high\":36"), "track 1's slot is pinned to one key: {b}");
+
+    // A track with no sampler is refused with a message that says what to do, not a silent empty.
+    let none = session.execute(&ToolCall {
+        tool: "sampler_kit".into(), args: json!({ "track": 5 }),
+    });
+    assert!(!none.ok, "a track with no sampler must be refused rather than answered empty: {none:?}");
+}

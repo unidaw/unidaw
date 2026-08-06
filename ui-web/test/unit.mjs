@@ -2290,7 +2290,7 @@ const OP_REGISTRY = {
   draw:      { cli: null, agent: null, why: 'view' },
   // The sampler read-back. Reaches the engine from this app; daw-cli has no verb for it and the
   // agent manifest still owes it a tool, so both are recorded rather than waved through.
-  kit:       { cli: 'sampler-kit', agent: null, why: 'gap' },
+  kit:       { cli: 'sampler-kit', agent: 'sampler_kit', why: 'gap' },
   // The sampler, reachable at last. daw-cli had both from the day the opcodes landed, so the
   // CLI paths are real and only the agent manifest owes them tools.
   // The agent's device-kind list was three of the engine's six and the sampler was not
@@ -2484,9 +2484,8 @@ const AGENT_GAP = ['clear', 'columns', 'copy', 'cut',
                    'clip-grid', 'audio-clip', 'del-point',
                    // With the two above: new commands for fields that had no writer at all,
                    // so the agent manifest owes them a tool rather than having lost one.
-                   'cliptext', 'envshape',
-                   // With `mods`: a read-back this app has and the agent manifest does not.
-                   'kit'];
+                   'cliptext',
+                   'envshape'];
 
 test('every dock command is in the op registry', () => {
   // The forcing function: a new command cannot be added without deciding whether

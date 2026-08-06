@@ -530,6 +530,25 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "sampler_kit",
+            description: "READ a sampler back: every slot with its key range, root, tuning and \
+                          gate, plus the bank's defaults and how many notes hit NO slot. Use it \
+                          to check a load landed, to find the slot id the other sampler tools \
+                          want, and to diagnose a silent sampler — `unmapped` above zero means \
+                          the notes arrived and no slot answers their pitch, which is a keymap \
+                          problem and not a routing one.",
+            params: json!({
+                "type": "object",
+                "required": ["track"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "device": { "type": "integer", "minimum": 0,
+                                "description": "The sampler's device id; 0 (default) means the \
+                                                track's FIRST sampler." },
+                },
+            }),
+        },
+        ToolSpec {
             name: "set_mixer",
             description: "Set a track's gain, pan, mute or solo. Gain is in dB (0 is unity,                           negative is quieter); pan is -1 hard left to 1 hard right.",
             params: json!({
@@ -1837,6 +1856,102 @@ fn sampler_vintage(handle: &EngineHandle, args: &Value) -> ToolResult {
     }
 }
 
+/// A slot's NUL-terminated name, as the wire carries it.
+///
+/// The array is `c_char`, which is signed on this platform, so it needs the cast — and it is
+/// NUL-TERMINATED inside a fixed 24 bytes rather than length-prefixed, so reading the whole array
+/// yields the trailing zeros as characters.
+fn slot_name(bytes: &[std::os::raw::c_char]) -> String {
+    let raw: Vec<u8> = bytes.iter().map(|&b| b as u8).collect();
+    let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+    String::from_utf8_lossy(&raw[..end]).into_owned()
+}
+
+/// Read a sampler's kit back — the observation half the sampler tools never had.
+///
+/// The agent could load a sample, map it, chop it, shape its envelope and crush it, and could not
+/// SEE any of it. That is the same act-but-cannot-observe shape as the device ids: five tools took
+/// a slot id and nothing an agent could read reported one.
+///
+/// REQUEST AND ANSWER, MATCHED ON A SEQUENCE THAT MUST VARY. The engine writes the answer into
+/// `request_seq % UI_SAMPLER_KIT_SLOTS`, and daw-cli once defaulted that sequence to a CONSTANT —
+/// so every request matched the slot's existing contents immediately and each read returned the
+/// PREVIOUS question's answer. Asking about track 1 returned track 0's kit, and it survived
+/// because every fixture had one sampler, where the previous answer and the current one are the
+/// same kit. Hence the counter, and hence matching on the exact value rather than on arrival.
+fn sampler_kit(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(track) = arg_u64(args, "track") else {
+        return ToolResult::err("sampler_kit needs \"track\"");
+    };
+    // 0 is legal here and means "the track's first sampler", which is how every handler in
+    // engine_sampler_commands.cpp resolves it — unlike the WRITE tools, where 0 is the no-device
+    // sentinel and is refused.
+    let device = arg_u64(args, "device").unwrap_or(0) as u32;
+
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SEQ: AtomicU32 = AtomicU32::new(1);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+
+    let req = daw_bridge::layout::UiSamplerKitRequestPayload {
+        command_type: UiCommandType::RequestSamplerKit as u16,
+        flags: 0,
+        track_id: track as u32,
+        device_id: device,
+        request_seq: seq,
+        reserved: [0; 24],
+    };
+    if let Err(e) = handle.send_sampler_kit_request(req) {
+        return ToolResult::err(e);
+    }
+
+    let slot = (seq as usize) % daw_bridge::layout::UI_SAMPLER_KIT_SLOTS;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut view = None;
+    while std::time::Instant::now() < deadline {
+        if let Some(v) = handle.read_sampler_kit_slot(slot) {
+            // The SEQ, not merely "something is there" — the slot holds the last answer written
+            // to it, which is somebody else's until this one lands.
+            if v.request_seq == seq {
+                view = Some(v);
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let Some(v) = view else {
+        return ToolResult::err(
+            "the engine did not answer with this kit within 2s — it answers per request, so this \
+             means the request was not picked up rather than that the sampler is empty");
+    };
+    if !v.found {
+        return ToolResult::err(format!(
+            "no sampler on track {track}{} — add one with add_device kind:sampler",
+            if device == 0 { String::new() } else { format!(" with device id {device}") }));
+    }
+
+    let slots: Vec<Value> = v.slots.iter().map(|s| json!({
+        "slot": s.slotId,
+        "name": slot_name(&s.name),
+        "key_low": s.keyLow, "key_high": s.keyHigh, "root": s.rootKey,
+        "vel_low": s.velLow, "vel_high": s.velHigh,
+        "gain_millibels": s.gainMillibels, "pan_thousandths": s.panThousandths,
+        "frames": s.lengthFrames,
+        // A slot whose source never resolved has no frames — the difference between "loaded" and
+        // "a slot exists with nothing behind it", which is silent and looks identical otherwise.
+        "resolved": s.lengthFrames > 0,
+    })).collect();
+
+    ToolResult::ok(json!({
+        "track": v.track_id, "device": v.device_id,
+        "slots": slots,
+        "default_gate": v.default_gate,
+        "voice_cap": v.voice_cap,
+        "active_voices": v.active_voices,
+        "unmapped": v.unmapped,
+        "truncated": v.slots_truncated != 0,
+    }))
+}
+
 /// Make a modulation link, name its parameter, and turn the knob. THREE commands.
 ///
 /// All three, because a link the engine accepts moves nothing without them: it addresses a
@@ -2196,6 +2311,7 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "sampler_envelope" => sampler_envelope(handle, &call.args),
         "sampler_emit_rows" => sampler_emit_rows(handle, &call.args),
         "sampler_vintage" => sampler_vintage(handle, &call.args),
+        "sampler_kit" => sampler_kit(handle, &call.args),
         "set_mixer" => set_mixer(handle, &call.args),
         "set_loop" => set_loop(handle, &call.args),
         "preview_note" => preview_note(handle, &call.args),
