@@ -2160,10 +2160,10 @@ const OP_REGISTRY = {
   // The agent grew `add_chords` — a degree/quality/inversion write with a strum, not a
   // pile of simultaneous notes. Both surfaces now, so no `why` and no gap entry.
   chord:     { cli: 'chord', agent: 'add_chords' },
-  delchord:  { cli: 'chord',    agent: null, why: 'gap' },
+  delchord:  { cli: 'chord',    agent: 'delete_chord' },
   // The engine has taken DeleteHarmony since before this UI existed and nothing sent it,
   // so a key change could be added to the timeline and never taken off.
-  delharmony: { cli: 'harmony',   agent: null, why: 'gap' },
+  delharmony: { cli: 'harmony',   agent: 'delete_harmony' },
   // M1.13. daw-cli shipped `do quantize` with the engine, so the CLI path is real
   // from day one; the agent's manifest still owes it a tool.
   quantize:  { cli: 'quantize', agent: 'set_lane_quantize' },
@@ -2224,7 +2224,7 @@ const OP_REGISTRY = {
   colormarker: { cli: 'marker', agent: 'edit_marker', why: 'gap' },
   // The clip's name and source path. Reached the engine and this console together;
   // neither the CLI nor the agent has a verb for either yet.
-  cliptext:    { cli: 'clip-name', agent: null, why: 'gap' },
+  cliptext:    { cli: 'clip-name', agent: 'set_clip_text' },
   // The envelope READ-BACK. The write half has a CLI verb; reading one back is new
   // everywhere, so both the CLI and the agent owe it one.
   envshape:    { cli: 'sampler-env-draw', agent: null, why: 'gap' },
@@ -2316,7 +2316,7 @@ const OP_REGISTRY = {
    * not caught up — so it is recorded as a gap rather than claimed as covered. Recording it as
    * covered would be worse than recording it as missing.
    */
-  filter:    { cli: 'sampler-filter', agent: null, why: 'gap' },
+  filter:    { cli: 'sampler-filter', agent: 'sampler_filter' },
   /*
    * The envelope (opcode 82). daw-cli has `sampler-env` — it is what proved a loaded slot is
    * silent without one — so the CLI path is real; the agent has no sampler tooling at all.
@@ -2329,7 +2329,7 @@ const OP_REGISTRY = {
   slot:      { cli: 'sampler-slot', agent: 'sampler_slot' },
   // Naming a pad. The CLI shipped with opcode 90; the agent has no sampler tooling at all, which
   // is the same recorded gap every other sampler verb carries.
-  'slot-name': { cli: 'sampler-slot-name', agent: null, why: 'gap' },
+  'slot-name': { cli: 'sampler-slot-name', agent: 'sampler_slot_name' },
   // Vintage (opcode 91). With the other sampler verbs: the agent has no sampler tooling.
   vintage:   { cli: 'sampler-vintage', agent: 'sampler_vintage' },
   /*
@@ -2354,24 +2354,24 @@ const OP_REGISTRY = {
   // Saving a patcher graph. With the other patcher verbs: no agent tool for the graph at all.
   'save-patch': { cli: 'patcher-save', agent: null, why: 'gap' },
   // A lane's subdivision (opcode 92). Landed engine-side today; no CLI verb yet.
-  lpb: { cli: 'lines-per-beat', agent: null, why: 'gap' },
+  lpb: { cli: 'lines-per-beat', agent: 'set_track_grid' },
   // The master bus fader and mute (SetTrackMixer addressed to kMasterTrackId). The engine has
   // honoured both on the summed output since the master track landed; nothing could move them.
   'main-gain': { cli: 'mixer', agent: 'set_mixer', why: 'gap' },
   'main-mute': { cli: 'mixer', agent: 'set_mixer', why: 'gap' },
   // A CLIP's own subdivision and meter (opcode 94) — the level the renderer honours FIRST.
   // Backend shipped `daw-cli do clip-grid` with it, so this one has a CLI path from the start.
-  'clip-grid': { cli: 'clip-grid', agent: null, why: 'gap' },
+  'clip-grid': { cli: 'clip-grid', agent: 'set_clip_grid' },
   // An audio clip's gain, fades and in-point (opcode 95). Backend shipped `daw-cli do
   // audio-clip` with it, so this has a CLI path from the start.
-  'audio-clip': { cli: 'audio-clip', agent: null, why: 'gap' },
+  'audio-clip': { cli: 'audio-clip', agent: 'set_audio_clip' },
   // Whether a drag in the piano roll sets velocity. A VIEW decision like `draw`, which it
   // mirrors — the mode changes what a gesture means here and nothing about the document.
   'vel-edit': { cli: null, agent: null, why: 'view' },
   // Remove one automation point (opcode 96). The lane was create-and-adjust-only until it.
-  'del-point': { cli: 'delete-automation', agent: null, why: 'gap' },
+  'del-point': { cli: 'delete-automation', agent: 'delete_automation_point' },
   // Whether note entry cuts the sounding note (opcode 93). Landed engine-side today.
-  'note-overlap': { cli: 'note-overlap', agent: null, why: 'gap' },
+  'note-overlap': { cli: 'note-overlap', agent: 'set_track_grid' },
   // Which columns this window draws. Genuinely a view decision — the engine already remembers
   // the only half that outlives the tab, which is whether the ops are THERE.
   'ops-column': { cli: null, agent: null, why: 'view' },
@@ -2471,20 +2471,38 @@ const CLI_GAP = ['clear', 'columns', 'copy', 'cut', 'new', 'paste', 'transpose',
  * `mods` is its own case and is explained on its registry row: the read is structurally
  * unavailable to a tool, not merely unwritten.
  */
+/*
+ * TEN NAMES CAME OFF THIS LIST BY BUILDING THE TOOLS, and every one of them is covered by an
+ * engine test that asserts the SAVED PROJECT rather than the tool's own reply — because on this
+ * wire the default failure is a well-formed no-op, and three of these ten failed exactly that way
+ * the first time they ran:
+ *
+ *   delchord, delharmony -> delete_chord, delete_harmony      cliptext     -> set_clip_text
+ *   lpb, note-overlap    -> set_track_grid                    clip-grid    -> set_clip_grid
+ *   audio-clip           -> set_audio_clip                    del-point    -> delete_automation_point
+ *   filter               -> sampler_filter                    slot-name    -> sampler_slot_name
+ *
+ * What is LEFT divides into three kinds, and only the last is a real gap:
+ *
+ *  - NOT THE AGENT'S BUSINESS: `clear`, `columns`, `copy`, `cut`, `paste`, `del`, `transpose`,
+ *    `new`. These operate on the CURSOR and the SELECTION — view state an agent does not have and
+ *    should not simulate. An agent edits by naming notes, which `add_notes` and `delete_note` do.
+ *  - STRUCTURALLY UNAVAILABLE: `mods`, explained on its registry row — the READ has no shape a
+ *    tool can return.
+ *  - REACHABLE AND UNGIVEN, the honest remainder: `patch` (patcher-config), `save-patch`,
+ *    `editor` (open-editor), `envshape` (the envelope draw).
+ *
+ * `patch` is deliberately not built rather than merely unbuilt: it is a per-node-type byte layout
+ * that already has three hand-rolled copies, and a fourth belongs behind a shared packer, not in
+ * a tool. `editor` opens a window the engine owns, so the only assertion available is the absence
+ * of a refusal line in the engine log — `cli-verbs.mjs` makes exactly that assertion for the CLI
+ * verb, and an agent tool would add a caller without adding evidence.
+ */
 const AGENT_GAP = ['clear', 'columns', 'copy', 'cut',
-                   'del', 'delchord', 'delharmony', 'editor',
+                   'del', 'editor',
                    'new', 'paste', 'patch',
                    'transpose', 'mods',
-                   // With the other sampler verbs: the agent has no sampler tooling at all.
-                   'filter',
-                   'slot-name',
-                   'save-patch', 'lpb', 'note-overlap',
-                   // A clip's own grid (opcode 94). It HAS a CLI path — `daw-cli do clip-grid`
-                   // shipped with the opcode — so it is only in the agent half of the gap.
-                   'clip-grid', 'audio-clip', 'del-point',
-                   // With the two above: new commands for fields that had no writer at all,
-                   // so the agent manifest owes them a tool rather than having lost one.
-                   'cliptext',
+                   'save-patch',
                    'envshape'];
 
 test('every dock command is in the op registry', () => {

@@ -2130,6 +2130,40 @@ fn the_agent_reads_a_sampler_kit_back() {
     assert!(!none.ok, "a track with no sampler must be refused rather than answered empty: {none:?}");
 }
 
+/// Wait until a LOADED project's clips are visible, and hand back the runtime clip id.
+///
+/// TWO SEPARATE MISTAKES THIS EXISTS TO PREVENT, both of which I made:
+///
+/// 1. `load` returns as soon as the command is ACCEPTED, not when the document has been swapped.
+///    Writing immediately afterwards races the load: the edit is applied to the outgoing document
+///    and vanishes when the new one lands. The tool reports `applied: true` and the chords are
+///    simply not there — the same silent-no-op shape as a wrong payload, from a different cause.
+///
+/// 2. **THE FIXTURE'S CLIP ID IS NOT THE RUNTIME'S.** A hand-written project can say `id: 7` and
+///    the engine will hold that clip under a different id, so a tool addressed at 7 edits nothing
+///    and succeeds. Round trips ARE stable (save/load/save keeps an id), which is exactly what
+///    makes this easy to assume wrongly — it is only the first load of an authored fixture that
+///    re-numbers.
+///
+/// So: poll the published extents, which is what an agent would actually do, and take the id from
+/// there rather than from the file we wrote.
+fn wait_for_clip_on(session: &AgentSession, track: u64, what: &str) -> u64 {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let r = session.execute(&ToolCall { tool: "clips".into(), args: json!({}) });
+        if let Some(list) = r.output["clips"].as_array() {
+            if let Some(c) = list.iter().find(|c| c["track"].as_u64() == Some(track)) {
+                if let Some(id) = c["clip"].as_u64() { return id; }
+            }
+        }
+        assert!(Instant::now() < deadline,
+                "{what}: no clip on track {track} after 8s — `load` returns when the command is \
+                 ACCEPTED, not when the document has been swapped, and an edit sent before the \
+                 swap is applied to the outgoing document and lost");
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
 /// The agent can take back a chord and a key change it wrote.
 ///
 /// `add_chords` and `set_harmony` were both write-only, so an agent that put a wrong chord or a
@@ -2162,6 +2196,7 @@ fn the_agent_can_delete_a_chord_and_a_key_change() {
     std::fs::write(engine.proj.join("agdel_in.uniproj.json"),
                    serde_json::to_string_pretty(&proj).unwrap()).unwrap();
     assert!(session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"agdel_in"}) }).ok);
+    wait_for_clip_on(&session, 0, "agdel");
 
     // Two chords, so removing one is visible as a COUNT and not only as an absence.
     let wrote = session.execute(&ToolCall {
@@ -2263,6 +2298,9 @@ fn the_agent_can_name_a_clip() {
     std::fs::write(engine.proj.join("agname_in.uniproj.json"),
                    serde_json::to_string_pretty(&proj).unwrap()).unwrap();
     assert!(session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"agname_in"}) }).ok);
+    // The id the ENGINE holds this clip under, not the 7 the fixture asked for — see
+    // wait_for_clip_on. Addressing the file's id renamed nothing and reported success.
+    let clip_id = wait_for_clip_on(&session, 0, "agname");
 
     // Addressing first: a rename that cannot say WHICH clip is the failure this tool refuses to
     // have, so the refusal is asserted rather than assumed.
@@ -2273,7 +2311,7 @@ fn the_agent_can_name_a_clip() {
 
     let sent = session.execute(&ToolCall {
         tool: "set_clip_text".into(),
-        args: json!({ "track": 0, "clip": 7, "field": "name", "text": "Verse Bass" }),
+        args: json!({ "track": 0, "clip": clip_id, "field": "name", "text": "Verse Bass" }),
     });
     assert!(sent.ok, "set_clip_text failed: {sent:?}");
 
@@ -2285,7 +2323,7 @@ fn the_agent_can_name_a_clip() {
         assert!(s.ok, "save failed: {s:?}");
         let doc = read_project(&engine.proj, "agname_out");
         saw = doc["clips"].as_array().unwrap().iter()
-            .find(|c| c["id"] == 7)
+            .find(|c| c["id"].as_u64() == Some(clip_id))
             .and_then(|c| c["name"].as_str())
             .unwrap_or("<missing>").to_string();
         if saw == "Verse Bass" { break; }
@@ -2333,11 +2371,12 @@ fn the_agent_can_set_grids_and_remove_an_automation_point() {
     std::fs::write(engine.proj.join("aggrid_in.uniproj.json"),
                    serde_json::to_string_pretty(&proj).unwrap()).unwrap();
     assert!(session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"aggrid_in"}) }).ok);
+    let clip3 = wait_for_clip_on(&session, 0, "aggrid");
 
     // Naming NO field is refused rather than sent: flags of 0 is a command that travels, is
     // accepted, and does nothing — which would pass any "was it accepted" assertion.
     let empty = session.execute(&ToolCall {
-        tool: "set_clip_grid".into(), args: json!({ "track": 0, "clip": 3 }) });
+        tool: "set_clip_grid".into(), args: json!({ "track": 0, "clip": clip3 }) });
     assert!(!empty.ok, "set_clip_grid naming no field must be refused: {empty:?}");
     let neither = session.execute(&ToolCall {
         tool: "set_track_grid".into(), args: json!({ "track": 0 }) });
@@ -2354,7 +2393,7 @@ fn the_agent_can_set_grids_and_remove_an_automation_point() {
     }).ok);
     assert!(session.execute(&ToolCall {
         tool: "set_clip_grid".into(),
-        args: json!({ "track": 0, "clip": 3, "lines": 6, "numerator": 7, "denominator": 8 }),
+        args: json!({ "track": 0, "clip": clip3, "lines": 6, "numerator": 7, "denominator": 8 }),
     }).ok);
 
     let points_at = |doc: &Value| -> usize {
@@ -2372,7 +2411,8 @@ fn the_agent_can_set_grids_and_remove_an_automation_point() {
             tool: "save".into(), args: json!({"name": "aggrid_a"}) }).ok);
         doc = read_project(&engine.proj, "aggrid_a");
         let t = &doc["tracks"][0];
-        let c = doc["clips"].as_array().unwrap().iter().find(|c| c["id"] == 3).unwrap().clone();
+        let c = doc["clips"].as_array().unwrap().iter()
+            .find(|c| c["id"].as_u64() == Some(clip3)).unwrap().clone();
         if t["lines_per_beat"] == 3 && t["allow_note_overlap"] == true
             && c["lines_per_beat"] == 6 && c["time_sig_numerator"] == 7
             && c["time_sig_denominator"] == 8 && points_at(&doc) == 1 { break; }
@@ -2449,6 +2489,7 @@ fn the_agent_can_set_a_filter_a_pad_name_and_an_audio_region() {
     std::fs::write(engine.proj.join("agfilt_in.uniproj.json"),
                    serde_json::to_string_pretty(&proj).unwrap()).unwrap();
     assert!(session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"agfilt_in"}) }).ok);
+    let clip5 = wait_for_clip_on(&session, 0, "agfilt");
 
     // The refusal that separates this tool from the CLI verb it mirrors.
     let typeless = session.execute(&ToolCall {
@@ -2467,14 +2508,24 @@ fn the_agent_can_set_a_filter_a_pad_name_and_an_audio_region() {
         tool: "sampler_slot_name".into(),
         args: json!({ "track": 0, "device": 7, "slot": 1, "name": "Snare" }),
     }).ok);
-    // 3000 millibels of gain: far enough from 0 that a default could not produce it.
+    /*
+     * 3000 MILLIBELS, WHICH THE ENGINE CLAMPS TO 2400 — AND THAT IS THE POINT.
+     *
+     * `engine_clip_commands.cpp` bounds clip gain to [-9600, 2400] millibels. Asking for 3000 and
+     * asserting 24.0 dB on disk proves two things at once: the value travelled, and the ENGINE's
+     * domain guard is reachable through this tool. daw-cli's own comments record why that matters
+     * — a guard whose only caller validates first is a guard nothing exercises, and it rots. The
+     * tool deliberately does not duplicate the range for the same reason.
+     *
+     * It is also still far enough from 0 that a defaulted value could not have produced it.
+     */
     assert!(session.execute(&ToolCall {
         tool: "set_audio_clip".into(),
-        args: json!({ "track": 0, "clip": 5, "field": "gain", "value": 3000 }),
+        args: json!({ "track": 0, "clip": clip5, "field": "gain", "value": 3000 }),
     }).ok);
     assert!(session.execute(&ToolCall {
         tool: "set_audio_clip".into(),
-        args: json!({ "track": 0, "clip": 5, "field": "fade_in", "value": Q }),
+        args: json!({ "track": 0, "clip": clip5, "field": "fade_in", "value": Q }),
     }).ok);
 
     let deadline = Instant::now() + Duration::from_secs(6);
@@ -2489,14 +2540,14 @@ fn the_agent_can_set_a_filter_a_pad_name_and_an_audio_region() {
             .and_then(|a| a.iter().find(|s| s["id"] == 1))
             .and_then(|s| s["name"].as_str()).unwrap_or("").to_string();
         let clip = doc["clips"].as_array().unwrap().iter()
-            .find(|c| c["id"] == 5).cloned().unwrap_or(Value::Null);
+            .find(|c| c["id"].as_u64() == Some(clip5)).cloned().unwrap_or(Value::Null);
         let fade = clip["audio"]["fade_in"].as_u64().unwrap_or(0);
-        // Millibels on the wire, dB on disk: 3000 mB is 30 dB, and the round trip is not exact.
+        // Millibels on the wire, dB on disk, and CLAMPED to +24 by the engine on the way.
         let gain = clip["audio"]["gain_db"].as_f64().unwrap_or(0.0);
-        if ftype == 2 && pad == "Snare" && fade == Q as u64 && (gain - 30.0).abs() < 0.05 { break; }
+        if ftype == 2 && pad == "Snare" && fade == Q as u64 && (gain - 24.0).abs() < 0.05 { break; }
         assert!(Instant::now() < deadline,
                 "filter_type={ftype} pad={pad:?} fade_in={fade} gain_db={gain} — \
-                 want 2 (lp24), \"Snare\", {Q}, 30.0");
+                 want 2 (lp24), \"Snare\", {Q}, 24.0 (3000 mB clamped to the engine's 2400)");
         std::thread::sleep(Duration::from_millis(200));
     }
 }

@@ -2168,7 +2168,26 @@ fn delete_harmony(handle: &EngineHandle, args: &Value) -> ToolResult {
     let mut p = blank(UiCommandType::DeleteHarmony);
     p.note_nanotick_lo = (tick & 0xffff_ffff) as u32;
     p.note_nanotick_hi = (tick >> 32) as u32;
-    send_edit(handle, p, json!({ "deleted_harmony_at": tick }))
+    /*
+     * THE HARMONY VERSION, NOT THE CLIP'S — the same trap `set_harmony` documents forty lines
+     * above, and I walked into it anyway by reaching for `send_edit` because this is "an edit".
+     *
+     * `requireMatchingHarmonyVersion` guards DeleteHarmony exactly as it guards WriteHarmony, and
+     * nothing but a harmony write moves that counter. `send_edit` stamps `clip_version()` and then
+     * waits for the CLIP version to advance, so the command quoted a number the engine was never
+     * going to match: refused in silence, `applied: false` after a two-second stall, and a key
+     * change that stayed on the timeline.
+     *
+     * That makes THREE occurrences of one mistake — set_harmony, the page's socket layer
+     * overwriting the base on the way out, and now this. "Base version" reads as one idea and is
+     * two, and the wrong one is always the one closest to hand.
+     */
+    let base = handle.harmony_version();
+    p.base_version = base;
+    if let Err(e) = handle.send_command(p) {
+        return ToolResult::err(e);
+    }
+    ToolResult::ok(json!({ "deleted_harmony_at": tick, "base": base }))
 }
 
 /// An audio clip's in-point, gain or fades — all four persisted, published, honoured by the
