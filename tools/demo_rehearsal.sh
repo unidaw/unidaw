@@ -319,6 +319,121 @@ step "a drum beat"        "Add a track called Drums with a sampler on it, and wr
 step "a chord progression" "On a new track called Keys, write a four-bar I-V-vi-IV chord progression, strummed." n_chords
 step "the patcher"        "Put a patcher device on the Bass track."                 n_patcher
 
+# ---- AND DOES THE SONG ACTUALLY MAKE A NOISE.
+#
+# ASKED OF THE WHOLE SONG AT THE END, not step by step, because the per-step version kept missing.
+# Each step measures the thing its own prompt was about — notes for a bassline, chords for a
+# progression, a device for the patcher — and every one of those can be perfectly correct on a
+# track that emits nothing. The drum step scored 16 -> 32 for a silent track; the chord step
+# scored 0 -> 4 for a track with NO DEVICES AT ALL. Two of the seven things being demonstrated,
+# both green, both silent.
+#
+# A per-step audio assertion would have to be written into each new step and would be forgotten in
+# exactly the same way. This is one rule over the finished song: anything carrying musical content
+# must have something that can sound it. It applies to steps nobody has written yet.
+#
+# STRUCTURAL, and deliberately weaker than a render. A render says "this song made noise", which a
+# single loud track satisfies while three others are silent; per-track audio needs stems and a solo
+# pass and is not a night-before change. "Has an instrument that could sound this" is the property
+# that was actually violated, and it names the track.
+echo
+cli do save rehearsal --force >/dev/null 2>&1
+# THE FILE SAYS WHAT IS ON EACH TRACK; THE ENGINE SAYS WHETHER IT CAN SOUND. Splitting it that
+# way is not tidiness — the first version of this check read `slots` out of the saved file and
+# passed the Drums track, which held TWO slots pointing at kick.wav and snare.wav, neither of
+# which exists. A refused load still MINTS A SLOT, so slot COUNT is exactly the wrong question,
+# and answering it from the file would mean re-implementing the engine's path resolution here as
+# a second copy that guesses at the same directories.
+#
+# `length_frames` is the engine's own verdict and it is only available live.
+ROWS="$(python3 - "$TMP/rehearsal.uniproj.json" 2>/dev/null <<'PYQ'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit
+clips = {c.get("id"): c for c in d.get("clips", [])}
+for t in d.get("tracks", []):
+    if t.get("is_master"):
+        continue
+    content = 0
+    for pl in t.get("placements", []):
+        c = clips.get(pl.get("clip_id"))
+        if c:
+            content += len(c.get("notes", [])) + len(c.get("chords", []))
+        content += len(pl.get("chords", []))
+    if content == 0:
+        continue
+    kinds = [x.get("kind") for x in t.get("device_chain", [])]
+    # `track_id`, NOT `id`. Getting this wrong did not raise: t.get("id") returned None, the
+    # query became `--track None`, and the engine answered found:false for EVERY track — so the
+    # phase reported all three as silent, including the one that demonstrably sounded. A wrong
+    # field name reads exactly like a real defect, which is why the id is asserted here rather
+    # than formatted into a command and hoped for.
+    tid = t.get("track_id")
+    if tid is None:
+        print("HARNESS_BUG no_track_id_field 0 0 0 %s" % ",".join(sorted(t.keys())))
+        continue
+    name = (t.get("name") or ("track %s" % tid)).replace(" ", "_")
+    print("%s %s %d %d %d %s" % (tid, name, content,
+                                 int("vst_instrument" in kinds), int("sampler" in kinds),
+                                 ",".join(kinds) or "no_devices_at_all"))
+PYQ
+)"
+SILENT=""
+while read -r tid tname content has_vst has_smp kinds; do
+  [ -n "${tid:-}" ] || continue
+  if [ "$tid" = "HARNESS_BUG" ]; then
+    SILENT="$SILENT|THIS CHECK IS BROKEN, not the song: no track_id field in the saved project (keys: $kinds)"
+    continue
+  fi
+  [ "$has_vst" = "1" ] && continue
+  if [ "$has_smp" != "1" ]; then
+    SILENT="$SILENT|$tname: $content note/chord event(s) and NO INSTRUMENT ($kinds)"
+    continue
+  fi
+  # A slot whose source did not resolve reports length_frames 0 — minted, drawn, and silent.
+  #
+  # RETRIED, for the reason n_samplers above is retried and this phase was not: the kit is a
+  # REQUEST, not a field, so a single ask can legitimately answer found:false while the engine is
+  # still filling the answer. Asking once flagged the BASS track — the one track here that
+  # demonstrably sounds — as silent. Two hazards in one line: an answer that has not arrived reads
+  # exactly like an answer of "nothing", and </dev/null keeps the real `cli` from eating the rows
+  # this loop is still reading from its stdin.
+  resolved=0; kit=""
+  for _try in 1 2 3 4 5 6 7 8; do
+    kit="$(cli get sampler-kit --track "$tid" </dev/null 2>/dev/null)"
+    if printf '%s' "$kit" | grep -oE '"length_frames": *[0-9]+' | grep -qvE ': *0$'; then
+      resolved=1; break
+    fi
+    sleep 0.25
+  done
+  if [ "$resolved" = "0" ]; then
+    # THE FAILURE CARRIES THE ANSWER IT JUDGED. Without this the message says "no slot resolves"
+    # for three indistinguishable causes — the kit says found:false, the kit has slots that are
+    # all zero-length, or the query never reached the right track at all — and the first time this
+    # phase fired it flagged a track that demonstrably sounded, which is a bug in the CHECK that
+    # a verdict-only message cannot tell apart from a bug in the product.
+    why="$(printf '%s' "$kit" | grep -oE '"found": *(true|false)|"length_frames": *[0-9]+' \
+           | head -4 | tr '\n' ' ')"
+    [ -n "$why" ] || why="the kit query returned nothing at all for track $tid"
+    SILENT="$SILENT|$tname (track $tid): $content note/chord event(s), sampler present, no slot resolves its source — kit said: $why"
+  fi
+done <<< "$ROWS"
+
+if [ -n "$SILENT" ]; then
+  echo "  SILENT TRACKS — content written where nothing can sound it:"
+  # QUOTED AND SPLIT ON THE SEPARATOR ONLY. Unquoted, the shell word-splits each message on every
+  # space and printf emits one line PER WORD — "Drums:", "17", "note/chord" — which is unreadable
+  # exactly when somebody is reading it to find out what broke.
+  printf '%s\n' "$SILENT" | tr '|' '\n' | while IFS= read -r line; do
+    [ -n "$line" ] && echo "    $line"
+  done
+  FAIL=$((FAIL+1))
+else
+  echo "  every track carrying notes or chords has something that can sound it"
+fi
+
 echo
 echo "rehearsed: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

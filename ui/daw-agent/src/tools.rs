@@ -81,7 +81,11 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "add_notes",
-            description: "Write a phrase of notes onto a track, one pitch per step.",
+            description: "Write a phrase of notes onto a track, one pitch per step. NOTES ARE \
+                          SOUNDED BY THE TRACK'S INSTRUMENT — a track with no instrument, or with \
+                          a sampler that has nothing loaded, stores the notes correctly and plays \
+                          SILENCE. Check the track's chain in `observe` first: add_device gives it \
+                          an instrument and load_sample gives a sampler a sound.",
             params: json!({
                 "type": "object",
                 "required": ["track", "pitches"],
@@ -105,7 +109,9 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
                           dominant (V), 6 is the relative minor (vi). So a I-V-vi-IV progression \
                           is degrees [1, 5, 6, 4]. Chords follow the harmony lane — change the \
                           key and the same progression transposes with it. Use add_notes when \
-                          you want fixed MIDI pitches instead.",
+                          you want fixed MIDI pitches instead. CHORDS ARE SOUNDED BY THE TRACK'S \
+                          INSTRUMENT, so a chord progression written onto a bare track is stored \
+                          perfectly and heard as nothing — give the track an instrument first.",
             params: json!({
                 "type": "object",
                 "required": ["track", "degrees"],
