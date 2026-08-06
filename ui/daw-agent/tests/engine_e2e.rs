@@ -3444,24 +3444,40 @@ fn forking_a_shared_clip_stops_an_edit_reaching_the_other_placement() {
     };
 
     /*
-     * THE NON-LEAK IS NOT ASSERTED HERE, AND THAT IS A GAP I AM RECORDING RATHER THAN HIDING.
+     * ── THE NON-LEAK, which is the whole reason forking exists ──────────────────────────────
      *
-     * Forking exists so an edit reaches one appearance and not the other, so that is the
-     * assertion this test wants. It is missing because I could not write a note into the second
-     * placement at all — and measured that it is NOT a fork problem: with two placements sharing
-     * one clip and NO fork, `add_notes` at a tick inside the second placement's span
-     * (at 7680000, length 3840000, written at 8640000) left the clip at four notes.
+     * OFF THE GRID, and that detail is the whole of an hour I spent thinking this was a bug.
      *
-     * So either placement resolution does not route a write to the placement under the tick, or
-     * I am wrong about what `start` means to `add_notes`. One of those is a real bug and the
-     * other is my misunderstanding, and I have not yet told them apart. Worth noting that the
-     * first placement carries `len0` in that state, which is its own oddity.
+     * A placement is a WINDOW onto a clip, and `resolveNoteEntry` wraps the tick:
+     *     clipRelativeTick = rel % clipLength
+     * So a write inside the second placement lands at (tick - placementAt) MODULO the clip's
+     * length — and `addNoteToClip` removes any note already at that tick and column before
+     * adding. The fixture puts four notes at 0, Q, 2Q and 3Q of a 4Q clip, so EVERY quarter
+     * -aligned position is taken: my write REPLACED a note and the count never moved, which
+     * reads exactly like the write vanishing.
      *
-     * What IS proven below and above: the fork gives the placement its own clip, keeps the
-     * original as the alternate, swap exchanges them, and keep drops the alternate. Those are the
-     * mechanics. The isolation guarantee they exist to provide is untested, and saying so is
-     * better than an assertion that passes for the wrong reason.
+     * Half a beat in is empty, so the edit adds rather than replaces.
      */
+    let (_, before) = state("agfork_d");
+    let other_before = *before.get(&clip_id).unwrap_or(&0);
+    assert!(session.execute(&ToolCall {
+        tool: "add_notes".into(),
+        args: json!({ "track": 0, "pitches": [72], "start": Q * 8 + Q / 2, "step": Q }),
+    }).ok);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let (_, now) = state("agfork_e");
+        let mine = *now.get(&own).unwrap_or(&0);
+        let theirs = *now.get(&clip_id).unwrap_or(&0);
+        // BOTH HALVES. A fork that shared the notes would grow both; a write that silently
+        // failed would grow neither. Only "one moved and the other did not" is the guarantee.
+        if mine == other_before + 1 && theirs == other_before { break; }
+        assert!(Instant::now() < deadline,
+                "after editing the forked placement: forked clip {own} has {mine} notes, shared \
+                 clip {clip_id} has {theirs} (both were {other_before}). The edit must reach one \
+                 and not the other — that is what forking is for");
+        std::thread::sleep(Duration::from_millis(200));
+    }
 
     // ── SWAP puts the original back, and KEEP drops the alternate ───────────────────────────
     assert!(session.execute(&ToolCall {
