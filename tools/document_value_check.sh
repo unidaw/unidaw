@@ -81,6 +81,21 @@ wait_for_boot "$TMP/eng.log" "$ENG" 80 'UI: command thread started'
 
 # DELETED BEFORE IT IS CLAIMED. A save that silently did nothing would otherwise be compared as
 # the previous save's bytes, and the check would pass on a file nobody wrote this run.
+# A LOAD THAT FAILED LEAVES THE ENGINE ON ITS PREVIOUS STATE — so the two saves match and this
+# check goes GREEN, including on the exact failure it exists to catch (round two loads the file
+# round one just produced). The `|| true` on the loads made every load unverifiable. Found by the
+# review panel, which called it the most dangerous thing in the implementation: an instrument that
+# reports success when the property is false is worse than no instrument.
+assert_loads_ok() {  # assert_loads_ok <what>
+  if grep -q '"event":"project.load"[^}]*"ok":false' "$TMP/eng.log" 2>/dev/null; then
+    echo "  FAIL: a project.load reported ok:false during $1 — every comparison after it is void,"
+    echo "        because a failed load leaves the engine on the state it already had."
+    grep -o '"event":"project.load"[^}]*"ok":false[^}]*' "$TMP/eng.log" | tail -2 | sed 's/^/          /'
+    return 1
+  fi
+  return 0
+}
+
 save_as() {  # save_as <project-name> <dest>
   local out="$TMP/$1.uniproj.json"
   rm -f "$out"
@@ -131,6 +146,7 @@ for f in "$TMP"/*.uniproj.json; do
     fails=$((fails + 1)); continue
   fi
 
+  assert_loads_ok "$name" || { fails=$((fails + 1)); continue; }
   checked=$((checked + 1))
   if ! cmp -s "$TMP/a_$name.json" "$TMP/b_$name.json"; then
     # THE DIFF IS THE FINDING. "not identical" names no field; the first differing line does.

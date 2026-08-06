@@ -53,7 +53,17 @@ Q=960000
 # WriteHarmony. The audit puts the true figure at 10 of 70 across the whole enum; this harness
 # drives 15 of them so far. Both numbers move up together as commands become undoable AND as more
 # of them get exercised — which is why the ratchet counts PROVEN, not claimed.
-EXPECTED_UNDOABLE="${DAW_UNDO_EXPECTED:-15}"
+# 15 of 15 since the switchover (undo Step 2c): undo is a cursor over whole-document versions, so
+# a command is undoable by construction rather than by somebody having widened a struct for it.
+EXPECTED_UNDOABLE=15
+# THE NAMES THAT PASS, sorted — checked alongside the count, because a COUNT IS SATISFIED BY ANY
+# FIFTEEN. Break WriteNote, make some other opcode work, and the total is unchanged while undo has
+# silently regressed on the most common edit in the program. Found by the review panel.
+#
+# The DAW_UNDO_EXPECTED override was REMOVED: this is an equality gate, so an env override is a
+# way to bless a regression from the command line without anyone reading a diff. The branch that
+# raised the count to 15 still carried the override; taking main's hardening means it goes.
+EXPECTED_NAMES="AddDevice AddTrack DeleteNote RemoveDevice SetLaneQuantize SetTempo SetTrackAllowNoteOverlap SetTrackCollapsed SetTrackHarmonyQuantize SetTrackMixer SetTrackName SetTrackSoundAddressed WriteChord WriteHarmony WriteNote"
 
 TMP="$(mktemp -d)"
 SHM="/undoratchet_$$"
@@ -239,7 +249,7 @@ snap() {  # snap <label> -> path of a copy of the saved document
   echo "$TMP/$1.json"
 }
 
-PASS=0; FAILED=0
+PASS=0; FAILED=0; PASSING_NAMES=""
 declare -a FAIL_LINES
 
 for i in "${!MUT_NAME[@]}"; do
@@ -281,6 +291,7 @@ for i in "${!MUT_NAME[@]}"; do
   fi
 
   PASS=$((PASS + 1))
+  PASSING_NAMES="$PASSING_NAMES $name"
 done
 
 echo "  exercised ${#MUT_NAME[@]} command(s): $PASS fully undoable, $FAILED not"
@@ -289,6 +300,16 @@ for line in "${FAIL_LINES[@]:-}"; do [ -n "$line" ] && echo "      - $line"; don
 # ---------------------------------------------------------------------------------------------
 # THE RATCHET
 # ---------------------------------------------------------------------------------------------
+SORTED_NAMES="$(echo $PASSING_NAMES | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/^ *//;s/ *$//')"
+if [ "$PASS" -eq "$EXPECTED_UNDOABLE" ] && [ "$SORTED_NAMES" != "$EXPECTED_NAMES" ]; then
+  echo "  FAIL: the same NUMBER of commands is undoable, but not the same ONES."
+  echo "        was: $EXPECTED_NAMES"
+  echo "        now: $SORTED_NAMES"
+  echo "        A count cannot see a swap. If this is a deliberate trade, update EXPECTED_NAMES"
+  echo "        and say which command was given up and why."
+  echo "undo_ratchet_check: FAIL"
+  exit 1
+fi
 if [ "$PASS" -lt "$EXPECTED_UNDOABLE" ]; then
   echo "  FAIL: $PASS commands are undoable, down from $EXPECTED_UNDOABLE. Undo coverage REGRESSED."
   echo "        This is the one direction this check refuses. If a command was deliberately"
