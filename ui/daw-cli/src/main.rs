@@ -225,6 +225,26 @@ fn escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// THE NAME OUT OF A FIXED BYTE ARRAY, as a JSON string literal — quotes included.
+///
+/// One function because there were two, and they disagreed. `get extents` truncated at the first
+/// NUL, which is what a C string means; `get shared` trimmed only TRAILING NULs, so a name like
+/// `ab\0cd` came back with the NUL still in it — and Rust's `{:?}` renders that as `\u{0}`, which
+/// is not valid JSON and would have made the whole array unparseable. Two readers of one field
+/// agreeing on the common case and differing on the edge is the shape that costs the most here.
+fn json_name(bytes: &[u8]) -> String {
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    // `escape` handles the two characters that can end a JSON string early. Control characters
+    // below 0x20 are not legal in a JSON string at all, so they are dropped rather than passed
+    // through as themselves — a name is a label, and an unparseable array is worse than a label
+    // missing a byte nobody can see.
+    let text: String = String::from_utf8_lossy(&bytes[..end])
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    format!("\"{}\"", escape(&text))
+}
+
 /// Reads `--key value` from the argument list.
 fn flag(args: &[String], key: &str) -> Option<String> {
     let mut iter = args.iter();
@@ -1329,10 +1349,9 @@ fn get_shared(handle: &EngineHandle, track: Option<u32>) -> i32 {
     println!("[");
     for (i, e) in shown.iter().enumerate() {
         let comma = if i + 1 == shown.len() { "" } else { "," };
-        let name = String::from_utf8_lossy(&e.name);
-        let name = name.trim_end_matches('\0');
+        let name = json_name(&e.name);
         println!(
-            "  {{ \"placement\": {}, \"clip\": {}, \"track\": {}, \"name\": {:?}, \
+            "  {{ \"placement\": {}, \"clip\": {}, \"track\": {}, \"name\": {}, \
              \"start_tick\": {}, \"end_tick\": {}, \"appearances\": {}, \"forked\": {} }}{comma}",
             e.placement_id, e.clip_id, e.track_id, name, e.start_tick, e.end_tick,
             uses.get(&e.clip_id).copied().unwrap_or(1),
@@ -1380,12 +1399,9 @@ fn get_extents(handle: &EngineHandle) -> i32 {
         // A field that is written, mirrored in Rust and readable from no client is invisible in
         // exactly the way a field with no writer is — which is what `name` also was until
         // SetClipText (98). Now that a command can change it, a caller has to be able to see it.
-        let name = String::from_utf8_lossy(
-            &e.name[..e.name.iter().position(|&b| b == 0).unwrap_or(e.name.len())],
-        )
-        .to_string();
+        let name = json_name(&e.name);
         println!(
-            "  {{ \"placement\": {}, \"clip\": {}, \"track\": {}, \"name\": {name:?}, \"audio\": {}, \"local_edits\": {local}, \"overrides\": {overrides}, \"has_overrides\": {has_overrides}, \"has_alternate\": {alt}, \"start\": {}, \"end\": {}, \"grid\": {} }}{comma}",
+            "  {{ \"placement\": {}, \"clip\": {}, \"track\": {}, \"name\": {name}, \"audio\": {}, \"local_edits\": {local}, \"overrides\": {overrides}, \"has_overrides\": {has_overrides}, \"has_alternate\": {alt}, \"start\": {}, \"end\": {}, \"grid\": {} }}{comma}",
             e.placement_id, e.clip_id, e.track_id, audio, e.start_tick, e.end_tick, grid
         );
     }
