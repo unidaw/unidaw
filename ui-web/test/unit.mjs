@@ -2336,7 +2336,7 @@ const OP_REGISTRY = {
   edit:      { cli: null, agent: null, why: 'view' },
   fold:      { cli: null, agent: null, why: 'view' },
   // The engine has taken this since before the web UI existed; the CLI verb is `harmony-quantize`.
-  'harmony-quantize': { cli: 'harmony-quantize', agent: null, why: 'gap' },
+  'harmony-quantize': { cli: 'harmony-quantize', agent: 'harmony_quantize' },
   // Saving a patcher graph. With the other patcher verbs: no agent tool for the graph at all.
   'save-patch': { cli: null, agent: null, why: 'gap' },
   // A lane's subdivision (opcode 92). Landed engine-side today; no CLI verb yet.
@@ -2475,7 +2475,7 @@ const AGENT_GAP = ['clear', 'columns', 'copy', 'cut',
                    // With `ops`, and for the same reason: the agent has no row-op tool at all.
                    'op',
                    'slice', 'slot-name', 'vintage',
-                   'harmony-quantize', 'save-patch', 'lpb', 'note-overlap',
+                   'save-patch', 'lpb', 'note-overlap',
                    // A clip's own grid (opcode 94). It HAS a CLI path — `daw-cli do clip-grid`
                    // shipped with the opcode — so it is only in the agent half of the gap.
                    'clip-grid', 'audio-clip', 'main-gain', 'main-mute', 'del-point',

@@ -96,14 +96,33 @@ const OPS = [
   { token: 'd1/6',   key: 'delay',          want: 160000, glyph: /6/ },
 ];
 
-/** Move the cursor onto the ops field of the given row, by keystroke. */
+/**
+ * Move the cursor onto the ops field of the given row, by keystroke, and CHECK IT LANDED.
+ *
+ * Two rights from the note field: `fieldOfCol` is `col % FIELDS_PER_NOTE` and the ops field is
+ * 2 (index.html:349, :5246). ops.mjs navigates the same way and does not verify it, which is
+ * fine there because it writes through the console — here the keystrokes ARE the test, and
+ * typing a token into the wrong field would be refused silently and read as a broken op.
+ *
+ * So the landing is asserted once rather than assumed seven times.
+ */
+let fieldChecked = false;
 const toOpsField = async (row) => {
   await run(`goto ${row} 0`);
   await settle(150);
-  // Two fields right of the note: note, velocity, ops. ops.mjs navigates the same way.
   await page.keyboard.press('ArrowRight');
   await page.keyboard.press('ArrowRight');
   await settle(200);
+  if (!fieldChecked) {
+    fieldChecked = true;
+    const field = await page.evaluate(() => {
+      const c = window.__uni.state().cursor;
+      return c && c.col !== undefined ? c.col % 3 : -1;
+    });
+    check(field === 2, 'two cursor-rights from the note lands on the OPS field',
+          `field ${field} — if the tracker gained or lost a field, every token below goes `
+          + `somewhere else and is refused without saying so`);
+  }
 };
 
 for (let i = 0; i < OPS.length; i++) {

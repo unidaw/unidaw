@@ -325,6 +325,23 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "harmony_quantize",
+            description: "Make a track FOLLOW the harmony timeline, or stop following it. \
+                          Out-of-key notes then SOUND in key while the notes themselves stay \
+                          exactly as written — it is non-destructive, like timing quantize, and \
+                          nothing in the clip changes. Set the key with `set_harmony` first; a \
+                          track quantized against an empty timeline sounds unchanged.",
+            params: json!({
+                "type": "object",
+                "required": ["track"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "on": { "type": "boolean",
+                            "description": "Default true. False stops the track following." },
+                },
+            }),
+        },
+        ToolSpec {
             name: "set_mixer",
             description: "Set a track's gain, pan, mute or solo. Gain is in dB (0 is unity,                           negative is quieter); pan is -1 hard left to 1 hard right.",
             params: json!({
@@ -1222,6 +1239,29 @@ fn set_bypass(handle: &EngineHandle, args: &Value) -> ToolResult {
     }
 }
 
+/// Make a track follow the harmony timeline, or stop.
+///
+/// The agent could already WRITE a key change (`set_harmony`) and had no way to make anything
+/// obey it, which is half a feature: the timeline is inert on its own — it re-pitches only the
+/// tracks that opt in. So "put this in D minor" was answerable and "make the bass follow it" was
+/// not, and the second is the one that changes what you hear.
+///
+/// Non-destructive by design. The engine re-pitches at playback and the clip is untouched, so
+/// this is safe to turn on and off while listening; it is not an edit to undo.
+fn harmony_quantize(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(track) = arg_u64(args, "track") else {
+        return ToolResult::err("harmony_quantize needs \"track\"");
+    };
+    // Defaults to ON. The tool exists to switch it on; an omitted flag meaning "off" would make
+    // the shortest call a no-op, and `omitted is not zero` is the trap that costs most on this
+    // wire — a wrong payload's failure mode here is a silent no-op.
+    let on = args.get("on").and_then(|v| v.as_bool()).unwrap_or(true);
+    let mut p = blank(UiCommandType::SetTrackHarmonyQuantize);
+    p.track_id = track as u32;
+    p.value0 = if on { 1 } else { 0 };
+    send_edit(handle, p, json!({ "track": track, "harmony_quantize": on }))
+}
+
 /// Make a modulation link, name its parameter, and turn the knob. THREE commands.
 ///
 /// All three, because a link the engine accepts moves nothing without them: it addresses a
@@ -1573,6 +1613,7 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "add_clip" => add_clip(handle, &call.args),
         "set_harmony" => set_harmony(handle, &call.args),
         "set_tempo" => set_tempo(handle, &call.args),
+        "harmony_quantize" => harmony_quantize(handle, &call.args),
         "set_mixer" => set_mixer(handle, &call.args),
         "set_loop" => set_loop(handle, &call.args),
         "preview_note" => preview_note(handle, &call.args),
