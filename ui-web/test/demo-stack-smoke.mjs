@@ -75,6 +75,52 @@ if (reached) {
   }
 }
 
+/*
+ * DOES SOUND ACTUALLY LEAVE THE MACHINE?
+ *
+ * Nothing else in this repo asks. Every audio assertion we have goes through the OFFLINE RENDER,
+ * which is the right oracle precisely because it does not touch a device — byte-exact, no
+ * hardware, no CoreAudio. Which means the entire suite can be green on a machine where the demo
+ * would be silent, and that is the one failure a runbook cannot absorb: it happens in front of
+ * people, in the first ten seconds, with no error on screen.
+ *
+ * The engine already answers it, and answers it the strong way. It does not trust `start()`
+ * returning true, and it does not trust the device's own `isPlaying()` — both report success on a
+ * machine where CoreAudio opens the device, reports its name and rate, and never runs the IO
+ * proc. It COUNTS REAL CALLBACKS and prints one of two lines. Both agents have lost time to "the
+ * app makes no sound" against the weaker version of this check.
+ *
+ * So this reads the line rather than re-deriving it. `webstack.sh` writes the engine log to
+ * /tmp/eng<SEG>.log, where SEG is the shm name with non-alphanumerics turned into underscores.
+ */
+{
+  const { readFileSync, existsSync, readdirSync, statSync } = await import('node:fs');
+  /** mtime, or 0 — a log we cannot stat must not throw and take the whole check with it. */
+  const mtime = (f) => { try { return statSync(f).mtimeMs; } catch { return 0; } };
+  const shm = process.env.DAW_UI_SHM_NAME || '/daw_web_ui';
+  const seg = shm.replace(/[^A-Za-z0-9]/g, '_');
+  let path = `/tmp/eng${seg}.log`;
+  if (!existsSync(path)) {
+    // The stack may have been started with a different segment. Take the newest engine log
+    // rather than reporting a missing file as a silent device — being wrong about WHICH engine
+    // is recoverable; reporting nothing at all is what this check exists to prevent.
+    const candidates = readdirSync('/tmp').filter((f) => /^eng.*\.log$/.test(f))
+      .map((f) => `/tmp/${f}`)
+      .sort((a, b) => mtime(b) - mtime(a));
+    if (candidates.length) path = candidates[0];
+  }
+  const log = existsSync(path) ? readFileSync(path, 'utf8') : '';
+  const started = /Audio output started/.test(log);
+  const opened = /OPENED BUT NEVER STARTED/.test(log);
+  check(started && !opened,
+        'AUDIO IS ACTUALLY RUNNING — the device ran a real callback, not just opened',
+        opened
+          ? `the engine says the device OPENED BUT NEVER STARTED: ${
+              (log.match(/OPENED BUT NEVER STARTED[^\n]*/) || [''])[0].slice(0, 160)}`
+          : (log ? `no "Audio output started" in ${path} — every render will still be perfect`
+                 : `no engine log found at ${path}; is tools/webstack.sh running?`));
+}
+
 check(errors.length === 0, 'nothing threw in the browser', errors.slice(0, 3).join(' | '));
 
 await browser.close();
