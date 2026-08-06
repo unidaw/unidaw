@@ -317,6 +317,18 @@ which is the worst possible failure on stage: it looks like it worked.
 `put an event patcher on track 0 and add a euclidean node to it` works end to end. Verified against
 the saved project, not just the reply.
 
+**And it can now CONFIGURE what it wires.** Until tonight the agent could add a euclidean node and
+had no way to say how many steps it takes — `patcher_config` is the tool that was missing, so
+"add a euclidean node with eight steps and three hits" is reachable in one go. Partial edits keep
+the rest: asking for hits afterwards does not put the steps back to sixteen.
+
+NOT IN THE VERIFIED TABLE ABOVE, deliberately. Those eight strings are asserted character for
+character against what `ai-demo.mjs` asks, and that suite calls a real model and costs money per
+run, so it is excluded from the sweep. The TOOL is covered by a live-engine test
+(`patcher_config_sets_a_node_and_a_later_partial_edit_keeps_the_rest`) with the negative control
+run; what is unverified is the PHRASING — whether a model reliably reaches for it from that
+sentence. Say it on stage only if you are willing to have it miss.
+
 One habit worth knowing on stage: a device it has *just added* is not in the shape it is holding,
 so it calls `observe` again to learn the id. That is a second round trip, and it looks like a
 pause.
