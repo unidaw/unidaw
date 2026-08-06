@@ -3214,3 +3214,127 @@ fn overlapping_notes_in_one_column_survive_as_authored() {
         std::thread::sleep(Duration::from_millis(200));
     }
 }
+
+/// THE PLACEMENT LIFECYCLE: place, share, move, trim, remove — five tools, none ever driven.
+///
+/// `clips` reports a placement's `id` and the `clip` it shows, and the four editing tools address
+/// the PLACEMENT. That distinction is the whole of this store: a clip is the material, a
+/// placement is an appearance of it, and two placements of one clip are the same notes seen
+/// twice. Getting them the wrong way round is how an edit meant for one chorus reaches all three.
+///
+/// Every assertion reads the SAVED PROJECT's placements. The tools report `sent` and the
+/// published extents lag a frame or two, so neither answers "did the document change".
+#[test]
+fn the_agent_can_place_share_move_trim_and_remove_a_clip() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agplace");
+
+    // Notes first, so a clip exists with material in it — placing an empty clip would leave
+    // "did this actually place anything" unanswerable from the file.
+    assert!(session.execute(&ToolCall {
+        tool: "add_notes".into(),
+        args: json!({ "track": 0, "pitches": [60, 62, 64, 65], "start": 0, "step": Q }),
+    }).ok);
+    std::thread::sleep(Duration::from_millis(800));
+
+    /// Every placement on track 0, as (id, clip_id, at, length).
+    let places = |name: &str| -> Vec<(u64, u64, u64, u64)> {
+        assert!(session.execute(&ToolCall {
+            tool: "save".into(), args: json!({"name": name}) }).ok);
+        let doc = read_project(&engine.proj, name);
+        let mut v: Vec<(u64, u64, u64, u64)> = doc["tracks"].as_array().unwrap().iter()
+            .find(|t| t["track_id"].as_u64() == Some(0))
+            .and_then(|t| t["placements"].as_array()).cloned().unwrap_or_default()
+            .iter().map(|p| (p["id"].as_u64().unwrap_or(0),
+                             p["clip_id"].as_u64().unwrap_or(0),
+                             p["at"].as_u64().unwrap_or(0),
+                             p["length"].as_u64().unwrap_or(0)))
+            .collect();
+        v.sort();
+        v
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let first = loop {
+        let p = places("agplace_a");
+        if p.len() == 1 { break p[0]; }
+        assert!(Instant::now() < deadline, "expected one placement to start from, got {p:?}");
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    let (_first_id, clip_id, _, _) = first;
+
+    // ── PLACE THE SAME CLIP AGAIN — which is what makes it SHARED ──────────────────────────
+    let added = session.execute(&ToolCall {
+        tool: "add_clip".into(),
+        args: json!({ "clip": clip_id, "track": 0, "beat": 8.0, "beats": 4.0 }),
+    });
+    assert!(added.ok, "add_clip failed: {added:?}");
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let second = loop {
+        let p = places("agplace_b");
+        if p.len() == 2 {
+            // The one that is NOT where we started: the new appearance.
+            break *p.iter().find(|x| x.0 != first.0).expect("a second placement");
+        }
+        assert!(Instant::now() < deadline, "add_clip left {p:?}");
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert_eq!(second.1, clip_id,
+               "the new placement must show the SAME clip — a placement of a COPY is a different \
+                feature and would make every assertion below meaningless");
+
+    // `shared_clips` is a read, so it is asserted for AGREEMENT with the file rather than for a
+    // shape of its own: two placements of one clip is the definition of shared.
+    let shared = session.execute(&ToolCall {
+        tool: "shared_clips".into(), args: json!({ "track": 0 }) });
+    assert!(shared.ok, "shared_clips failed: {shared:?}");
+    assert!(shared.output.to_string().contains(&clip_id.to_string()),
+            "shared_clips does not mention clip {clip_id}, which now has two placements: {shared:?}");
+
+    // ── MOVE ────────────────────────────────────────────────────────────────────────────────
+    assert!(session.execute(&ToolCall {
+        tool: "move_clip".into(),
+        args: json!({ "id": second.0, "track": 0, "beat": 16.0 }),
+    }).ok);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let now = places("agplace_c");
+        let moved = now.iter().find(|x| x.0 == second.0).copied();
+        // BY ID, and the other placement is checked too: a move that rewrote both would still
+        // put one of them in the right place.
+        let other = now.iter().find(|x| x.0 == first.0).copied();
+        if moved.map(|m| m.2) == Some(Q * 16) && other.map(|o| o.2) == Some(first.2) { break; }
+        assert!(Instant::now() < deadline,
+                "move_clip left {now:?}; wanted placement {} at {} with the other untouched",
+                second.0, Q * 16);
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // ── TRIM ────────────────────────────────────────────────────────────────────────────────
+    assert!(session.execute(&ToolCall {
+        tool: "trim_clip".into(),
+        args: json!({ "id": second.0, "track": 0, "beats": 2.0 }),
+    }).ok);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let now = places("agplace_d");
+        if now.iter().any(|x| x.0 == second.0 && x.3 == Q * 2) { break; }
+        assert!(Instant::now() < deadline, "trim_clip left {now:?}; wanted length {}", Q * 2);
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // ── REMOVE ──────────────────────────────────────────────────────────────────────────────
+    assert!(session.execute(&ToolCall {
+        tool: "remove_clip".into(), args: json!({ "id": second.0, "track": 0 }) }).ok);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let now = places("agplace_e");
+        // THE SURVIVOR, not the count. Removing the wrong placement leaves one either way, and
+        // the two are the same clip — so a count cannot tell them apart at all.
+        if now.len() == 1 && now[0].0 == first.0 { break; }
+        assert!(Instant::now() < deadline,
+                "remove_clip left {now:?}; wanted only placement {} to survive", first.0);
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
