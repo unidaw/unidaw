@@ -2513,6 +2513,39 @@ test('the CLI really implements every path the registry claims', async () => {
   }
 });
 
+test('every AI prompt in the runbook is one a test actually asks', async () => {
+  /*
+   * THE RUNBOOK PROMISED TWO THINGS NO RUN HAD EVER MADE.
+   *
+   * docs/DEMO.md lists the AI prompts under the word "Verified", and ai-demo.mjs asks a list of
+   * prompts and asserts the song changed. Nothing tied the two lists together, and two of them
+   * had drifted: the runbook said "on track 0" where the test says "on track 1" (the Bass track
+   * the previous prompt creates), and "add a four on the floor kick pattern" where the test says
+   * "...on a new track".
+   *
+   * A model is not a function. A prompt one word different is a different prompt, and the whole
+   * value of that table is that someone typed each line and watched it work. Drift here is worse
+   * than an ordinary stale doc, because the failure lands live in front of an audience.
+   *
+   * VERBATIM, not fuzzy: matching loosely would let exactly the drift this exists to catch
+   * through. The test reads both files rather than sharing a constant, because the runbook has
+   * to be readable as prose by someone who has never seen this suite.
+   */
+  const { readFileSync } = await import('node:fs');
+  const doc = readFileSync(new URL('../../docs/DEMO.md', import.meta.url), 'utf8');
+  const suite = readFileSync(new URL('./ai-demo.mjs', import.meta.url), 'utf8');
+
+  const ai = doc.slice(doc.indexOf('## 7. The AI'));
+  const table = ai.slice(0, ai.indexOf('\n\n', ai.indexOf('| say |')));
+  const prompts = [...table.matchAll(/^\| `([^`]+)` \|/gm)].map((m) => m[1]);
+  assert.ok(prompts.length >= 6, `the runbook's prompt table was parsed: ${prompts.length} rows`);
+
+  const missing = prompts.filter((p) => !suite.includes(p));
+  assert.deepEqual(missing, [],
+    'the runbook lists prompts ai-demo.mjs never asks — either fix the wording or test it, but '
+    + 'do not print "verified" over a string no run has made');
+});
+
 test('the agent really implements every tool the registry claims', async () => {
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('../../ui/daw-agent/src/tools.rs', import.meta.url), 'utf8');

@@ -204,13 +204,15 @@ Or just load `generator` from the projects rail, which is this already built and
 
 Type a sentence into the console — anything that is not a command goes to the agent.
 
-Verified prompts:
+Verified prompts. **These strings are the ones `ai-demo.mjs` actually asks, character for
+character**, and a test asserts that they stay identical — two of them had already drifted from
+what was tested, which is a runbook promising something no run has ever made:
 
 | say | it does |
 |---|---|
 | `add a track called Bass` | adds one and names it |
-| `write a simple four bar bassline in C minor on track 0` | 16 notes, root and fifth |
-| `add a four on the floor kick pattern` | writes the pattern |
+| `write a simple four bar bassline in C minor on track 1` | 16 notes, root and fifth |
+| `add a four on the floor kick pattern on a new track` | writes the pattern |
 | `write a four chord progression on track 0, and strum them` | I-V-vi-IV with a real spread |
 | `put a sampler on track 0, load demo_pluck_c4.wav into it, and write a four note phrase` | device, file and notes in one go |
 | `add a track called Drums with a sampler on it, load a drum sound into it, and write a four bar beat` | **picks the file itself** — no filename given |
