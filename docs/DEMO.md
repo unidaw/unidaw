@@ -92,12 +92,14 @@ list is a drum kit and each file stays on its own key.
 
 `kit 0 1` prints what is in it, slot by slot.
 
-**For a sustained sound, set the slot's gate.** A freshly loaded slot is a one-shot: it plays the
-whole file and note length does nothing.
+**For a sustained sound, flip the gate — and flip it BEFORE you load.** A freshly loaded slot is
+a one-shot: it plays the whole file and note length does nothing.
 
-```
-slot 0 1 0 gate 1          track 0, device 1, slot 0 — stop with the note
-```
+The sampler card carries a two-state button reading **`1shot`**. Click it and it reads `gate`.
+But it sets the bank's *default*, which seeds slots **at mint** and leaves existing ones alone —
+so clicking it after you have loaded a sample changes nothing you can hear. Click first, then load.
+
+For a slot already in place: `slot <track> <device> <slot> gate 1` from the console.
 
 Drums want the default; a pad does not. See rough edge 3.
 
@@ -206,8 +208,8 @@ DAW_PROJECT_DIR=<the project dir> ./daw_engine --project <name> --render take --
    difference between a drum and a pad, and it is per slot.
 
    It defaults to 0 and neither load nor slice sets it, so every slot you make by hand is a
-   one-shot. From the console, `slot <track> <device> <slot> gate 1` — `gate` is one of the slot
-   fields, so this needs nothing outside the app.
+   one-shot. The sampler card's `1shot` button sets the bank default for slots minted AFTER it;
+   `slot <track> <device> <slot> gate 1` changes one that already exists. Both are in the app.
 
    (I had this in here as "do not build a demo moment on note length" — wrong, and it would have
    talked you out of something you can do. `apps/sampler_engine.h:309`.)
