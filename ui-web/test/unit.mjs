@@ -2147,14 +2147,14 @@ const OP_REGISTRY = {
   load:      { cli: 'load',        agent: 'load' },
   // New this session, all three still owed a programmatic path.
   new:       { cli: null, agent: null, why: 'gap' },
-  deldevice: { cli: null, agent: 'remove_device', why: 'gap' },
+  deldevice: { cli: 'remove-device', agent: 'remove_device', why: 'gap' },
   // Bypass reached the ENGINE from daw-cli first (`do set-bypass`, backend's
   // verb) and this app second, so the CLI path is real and the agent's manifest
   // is what still owes it a tool.
   bypass:    { cli: 'set-bypass', agent: 'set_bypass' },
   // Reordering reached the engine from this app FIRST — daw-cli has no verb for it —
   // which is the opposite of the usual direction and worth recording as such.
-  movedevice: { cli: null, agent: 'move_device', why: 'gap' },
+  movedevice: { cli: 'move-device', agent: 'move_device', why: 'gap' },
   // Chords reached the CLI first (`do chord`) and this app's console never had them at
   // all — writing one meant typing a token into a cell, and removing one was impossible.
   // The agent grew `add_chords` — a degree/quality/inversion write with a strum, not a
@@ -2189,7 +2189,7 @@ const OP_REGISTRY = {
    */
   autopoint:   { cli: null, agent: 'write_automation_point', why: 'gap' },
   automation:  { cli: 'automation', agent: 'automation' },
-  curve:       { cli: null, agent: 'automation_points', why: 'gap' },
+  curve:       { cli: 'automation-points', agent: 'automation_points', why: 'gap' },
   mods:        { cli: null, agent: null, why: 'gap' },
   // `depth` is `mod-link` again on the CLI. The agent reaches it through `modulate`, which
   // takes a depth — there is no separate opcode to give it a tool of its own.
@@ -2204,7 +2204,7 @@ const OP_REGISTRY = {
    * heard from daw-cli, because a macro nobody has turned is skipped by the applier.
    * Recorded as a gap on their side rather than left looking covered.
    */
-  macro:       { cli: null, agent: 'set_macro', why: 'gap' },
+  macro:       { cli: 'macro', agent: 'set_macro', why: 'gap' },
   // SCRATCH CLIPS. The read has no CLI verb — daw-cli can fork and swap but cannot say what is
   // shared, which is the half a person needs first. Recorded rather than claimed.
   shared:      { cli: null, agent: 'shared_clips', why: 'gap' },
@@ -2224,15 +2224,15 @@ const OP_REGISTRY = {
   colormarker: { cli: null, agent: null, why: 'gap' },
   // The clip's name and source path. Reached the engine and this console together;
   // neither the CLI nor the agent has a verb for either yet.
-  cliptext:    { cli: null, agent: null, why: 'gap' },
+  cliptext:    { cli: 'clip-name', agent: null, why: 'gap' },
   // The envelope READ-BACK. The write half has a CLI verb; reading one back is new
   // everywhere, so both the CLI and the agent owe it one.
-  envshape:    { cli: null, agent: null, why: 'gap' },
+  envshape:    { cli: 'sampler-env-draw', agent: null, why: 'gap' },
   movemarker:  { cli: 'marker', agent: 'edit_marker' },
   // The two that change TIME rather than a label, and they are deliberately not marker ops.
   time:        { cli: 'time', agent: 'insert_time' },
   timesig:     { cli: 'time-sig', agent: 'set_time_signature' },
-  editor:    { cli: null, agent: null, why: 'gap' },
+  editor:    { cli: 'open-editor', agent: null, why: 'gap' },
   // v22 (AddTrack=46/RemoveTrack=47). daw-cli shipped its verbs in the same
   // commit the engine did, so these are covered on the CLI from day one; the
   // agent manifest still owes them.
@@ -2258,25 +2258,25 @@ const OP_REGISTRY = {
   gain:      { cli: 'mixer',       agent: 'set_mixer' },
   mute:      { cli: 'mixer',       agent: 'set_mixer' },
   solo:      { cli: 'mixer',       agent: 'set_mixer' },
-  undo:      { cli: null,          agent: 'undo',           why: 'gap' },
-  redo:      { cli: null,          agent: 'redo',           why: 'gap' },
-  rename:    { cli: null,          agent: 'set_track_name', why: 'gap' },
-  stop:      { cli: null,          agent: 'transport',      why: 'gap' },
+  undo:      { cli: 'undo',          agent: 'undo',           why: 'gap' },
+  redo:      { cli: 'redo',          agent: 'redo',           why: 'gap' },
+  rename:    { cli: 'rename',          agent: 'set_track_name', why: 'gap' },
+  stop:      { cli: 'stop',          agent: 'transport',      why: 'gap' },
   // Document operations with NO programmatic path at all. The real hole.
   clear:     { cli: null, agent: null, why: 'gap' },
   copy:      { cli: null, agent: null, why: 'gap' },
   cut:       { cli: null, agent: null, why: 'gap' },
   paste:     { cli: null, agent: null, why: 'gap' },
   transpose: { cli: null, agent: null, why: 'gap' },
-  loop:      { cli: null, agent: 'set_loop', why: 'gap' },
+  loop:      { cli: 'loop', agent: 'set_loop', why: 'gap' },
   // `transport` with action=seek IS this op; it was recorded as having no tool at all.
-  seek:      { cli: null, agent: 'transport', why: 'gap' },
+  seek:      { cli: 'position', agent: 'transport', why: 'gap' },
   // One tool, three actions — add, link and remove all address ONE patcher device,
   // which is the thing that makes them land in the graph a project saves.
-  addnode:   { cli: null, agent: 'patcher_node', why: 'gap' },
-  delnode:   { cli: null, agent: 'patcher_node', why: 'gap' },
-  link:      { cli: null, agent: 'patcher_node', why: 'gap' },
-  patch:     { cli: null, agent: null, why: 'gap' },
+  addnode:   { cli: 'patcher-node', agent: 'patcher_node', why: 'gap' },
+  delnode:   { cli: 'patcher-unnode', agent: 'patcher_node', why: 'gap' },
+  link:      { cli: 'patcher-connect', agent: 'patcher_node', why: 'gap' },
+  patch:     { cli: 'patcher-config', agent: null, why: 'gap' },
   // View state. An agent has no viewport to address.
   // Edit mode is a property of the KEYBOARD, and an agent has no keyboard — it
   // calls add_notes, which writes regardless. So this is view state for the same
@@ -2290,7 +2290,7 @@ const OP_REGISTRY = {
   draw:      { cli: null, agent: null, why: 'view' },
   // The sampler read-back. Reaches the engine from this app; daw-cli has no verb for it and the
   // agent manifest still owes it a tool, so both are recorded rather than waved through.
-  kit:       { cli: null, agent: null, why: 'gap' },
+  kit:       { cli: 'sampler-kit', agent: null, why: 'gap' },
   // The sampler, reachable at last. daw-cli had both from the day the opcodes landed, so the
   // CLI paths are real and only the agent manifest owes them tools.
   // The agent's device-kind list was three of the engine's six and the sampler was not
@@ -2316,7 +2316,7 @@ const OP_REGISTRY = {
    * not caught up — so it is recorded as a gap rather than claimed as covered. Recording it as
    * covered would be worse than recording it as missing.
    */
-  filter:    { cli: null, agent: null, why: 'gap' },
+  filter:    { cli: 'sampler-filter', agent: null, why: 'gap' },
   /*
    * The envelope (opcode 82). daw-cli has `sampler-env` — it is what proved a loaded slot is
    * silent without one — so the CLI path is real; the agent has no sampler tooling at all.
@@ -2336,7 +2336,7 @@ const OP_REGISTRY = {
    * Chromatic mode (SetTrackSoundAddressed, 87). Landed engine-side this morning; daw-cli has
    * not caught up, and the agent has no sampler tooling at all.
    */
-  soundaddr: { cli: null, agent: null, why: 'gap' },
+  soundaddr: { cli: 'sound-addressed', agent: null, why: 'gap' },
   /*
    * The kit's own settings (SamplerSetDevice, 88). daw-cli has `sampler-device`, so the CLI path
    * is real; the agent has no sampler tooling at all.
@@ -2352,9 +2352,9 @@ const OP_REGISTRY = {
   // The engine has taken this since before the web UI existed; the CLI verb is `harmony-quantize`.
   'harmony-quantize': { cli: 'harmony-quantize', agent: 'harmony_quantize' },
   // Saving a patcher graph. With the other patcher verbs: no agent tool for the graph at all.
-  'save-patch': { cli: null, agent: null, why: 'gap' },
+  'save-patch': { cli: 'patcher-save', agent: null, why: 'gap' },
   // A lane's subdivision (opcode 92). Landed engine-side today; no CLI verb yet.
-  lpb: { cli: null, agent: null, why: 'gap' },
+  lpb: { cli: 'lines-per-beat', agent: null, why: 'gap' },
   // The master bus fader and mute (SetTrackMixer addressed to kMasterTrackId). The engine has
   // honoured both on the summed output since the master track landed; nothing could move them.
   'main-gain': { cli: null, agent: null, why: 'gap' },
@@ -2369,9 +2369,9 @@ const OP_REGISTRY = {
   // mirrors — the mode changes what a gesture means here and nothing about the document.
   'vel-edit': { cli: null, agent: null, why: 'view' },
   // Remove one automation point (opcode 96). The lane was create-and-adjust-only until it.
-  'del-point': { cli: null, agent: null, why: 'gap' },
+  'del-point': { cli: 'delete-automation', agent: null, why: 'gap' },
   // Whether note entry cuts the sounding note (opcode 93). Landed engine-side today.
-  'note-overlap': { cli: null, agent: null, why: 'gap' },
+  'note-overlap': { cli: 'note-overlap', agent: null, why: 'gap' },
   // Which columns this window draws. Genuinely a view decision — the engine already remembers
   // the only half that outlives the tab, which is whether the ops are THERE.
   'ops-column': { cli: null, agent: null, why: 'view' },
@@ -2389,11 +2389,11 @@ const OP_REGISTRY = {
    * the rule, and an arrangement you can only edit by dragging is an arrangement
    * no test and no agent can build. The drag and these call the same functions.
    */
-  clips:        { cli: null,          agent: 'clips',           why: 'gap' },
-  'move-clip':  { cli: null,          agent: 'move_clip',       why: 'gap' },
-  'trim-clip':  { cli: null,          agent: 'trim_clip',       why: 'gap' },
-  'del-clip':   { cli: null,          agent: 'remove_clip',     why: 'gap' },
-  'add-clip':   { cli: null,          agent: 'add_clip',        why: 'gap' },
+  clips:        { cli: 'extents',          agent: 'clips',           why: 'gap' },
+  'move-clip':  { cli: 'move-placement',          agent: 'move_clip',       why: 'gap' },
+  'trim-clip':  { cli: 'resize-placement',          agent: 'trim_clip',       why: 'gap' },
+  'del-clip':   { cli: 'remove-placement',          agent: 'remove_clip',     why: 'gap' },
+  'add-clip':   { cli: 'add-placement',          agent: 'add_clip',        why: 'gap' },
   // Which chain the rack shows. View state — it changes what you are looking at
   // and nothing about the song — but unlike zoom it is the ONLY route to the
   // master's chain, so it is listed rather than waved through.
@@ -2411,48 +2411,41 @@ const OP_REGISTRY = {
   state:     { cli: null, agent: null, why: 'ask' },
 };
 
-/** Ops with no CLI path today. This list may SHRINK, never grow. */
-const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cut',
-                 'del-clip', 'deldevice', 'delnode', 'editor', 'link', 'loop',
-                 // Reordering reached the engine from this APP first — the usual
-                 // direction is the other way round, so the CLI owes it a verb rather
-                 // than the app owing the CLI one.
-                 'delchord', 'delharmony', 'move-clip', 'movedevice', 'new', 'paste',
-                 'patch', 'redo', 'rename', 'seek', 'stop', 'transpose', 'trim-clip',
-                 'undo',
-                 // The master bus fader and mute. SetTrackMixer addressed to kMasterTrackId
-                 // is what they send, and daw-cli's mixer verb takes a track INDEX, so there
-                 // is no spelling for the master there yet.
-                 'main-gain', 'main-mute', 'del-point',
-                 // The sampler filter (opcode 86). It landed engine-side this morning and the
-                 // CLI has no verb for it yet — recorded as a gap rather than claimed as covered.
-                 'filter', 'soundaddr',
-                 // A marker's COLOUR and a clip's NAME/SOURCE. Both reached the engine and this
-                 // console together — the fields were persisted, published and drawn with no
-                 // writer anywhere, so there was nothing for the CLI to have covered first.
-                 'colormarker', 'cliptext', 'envshape',
-                 // Reached the engine from this app first, both of them: saving a patcher preset
-                 // and a lane's subdivision. The CLI owes them a verb rather than the reverse.
-                 'save-patch', 'lpb', 'note-overlap',
-                 // The sampler read-back. Reached the engine from this app first; daw-cli has
-                 // no verb for it, which is the usual direction reversed and worth recording.
-                 'kit',
-                 /*
-                  * `mods` — reading what modulates what — and `macro` — turning the knob —
-                  * have no CLI verb at all. The second is the one that matters: daw-cli can
-                  * MAKE a modulation link and cannot make it audible, because a macro
-                  * nobody has turned is skipped by the applier. Recorded rather than left
-                  * looking covered.
-                  */
-                 'mods', 'macro',
-                 /*
-                  * `curve` — one lane's points — has a CLI verb (`get automation-points`) but
-                  * the registry maps one console command to one verb and this one is under
-                  * `get` rather than `do`, which the CLI-parity check reads from the `do`
-                  * table. Recorded here rather than claimed, since claiming a path the check
-                  * cannot see is worse than recording a gap that is nearly closed.
-                  */
-                 'curve', 'autopoint', 'shared'];
+/**
+ * Ops with no CLI path today. This list may SHRINK, never grow.
+ *
+ * IT WAS 44 AND MOST OF THAT WAS A NAMING MISMATCH. The registry pairs a console command with a
+ * CLI verb BY NAME, and wherever daw-cli chose a different word the row was recorded as "no CLI
+ * path" — so the gap counted vocabulary, not capability. Twenty-seven of them were already
+ * implemented:
+ *
+ *     addnode -> patcher-node      link      -> patcher-connect   patch     -> patcher-config
+ *     delnode -> patcher-unnode    editor    -> open-editor       deldevice -> remove-device
+ *     add-clip -> add-placement    del-clip  -> remove-placement  move-clip -> move-placement
+ *     trim-clip -> resize-placement                               movedevice -> move-device
+ *     lpb     -> lines-per-beat    cliptext  -> clip-name         kit       -> sampler-kit
+ *     filter  -> sampler-filter    soundaddr -> sound-addressed   envshape  -> sampler-env-draw
+ *     save-patch -> patcher-save   del-point -> delete-automation curve     -> automation-points
+ *     stop, undo, redo, rename, loop, macro, note-overlap — same name, simply never mapped
+ *
+ * This is not re-labelling a gap as exempt: the capability EXISTS and the record was wrong. The
+ * check below reads daw-cli's own source, so a claimed verb that is not there fails — which is
+ * what makes correcting the map safe rather than a way of moving numbers.
+ *
+ * What is left divides into three kinds:
+ *   - CURSOR AND SELECTION: clear, columns, copy, cut, paste, transpose, new. These act on the
+ *     cursor or the selection, which a CLI invocation does not have.
+ *   - GENUINELY MISSING: delchord, delharmony, main-gain, main-mute, colormarker, mods, autopoint,
+ *     shared, seek, clips. Real verbs the CLI owes.
+ * `seek` and `clips` were on that "genuinely missing" list until I READ the two candidates rather
+ * than assuming: `do position` sends SetPosition, which is what seek is, and `get extents` is the
+ * placement list. `get transport` is a READ and is NOT seek, which is the kind of near-miss that
+ * makes a guessed mapping worse than an admitted gap.
+ */
+const CLI_GAP = ['clear', 'columns', 'copy', 'cut',
+                 'delchord', 'delharmony', 'new', 'paste', 'transpose',
+                 'main-gain', 'main-mute', 'colormarker',
+                 'mods', 'autopoint', 'shared'];
 /** Ops with no agent tool today. Same rule. */
 // `bypass` joins the list rather than being smuggled past it: the engine takes
 // the command and daw-cli sends it, but the agent's manifest has no tool for it,
