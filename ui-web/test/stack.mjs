@@ -19,7 +19,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { statSync } from 'node:fs';
+import { statSync, readdirSync } from 'node:fs';
 import { mkdtempSync, cpSync, rmSync, existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -181,21 +181,54 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
    * The cross-language case still lands, because a real contract change touches both mirrors:
    * shared_memory.h and layout.rs move together or the wire is already broken.
    */
+  /*
+   * THE RUST SIDE IS A RULE PER BINARY, AND BOTH HALVES OF THAT MATTER.
+   *
+   * It was a hand-maintained list naming `daw-bridge/src/layout.rs` and `daw-sidecar/src/main.rs`.
+   * The sidecar also links daw-agent — every agent tool is compiled into it — so eight new tools
+   * could be newer than the binary running them and this guard said nothing. daw-cli was not
+   * watched at all, while several suites shell out to it, including the one whose whole purpose
+   * is proving its verbs work. A list of files is wrong the moment a crate is added, and nobody
+   * adding a crate comes here.
+   *
+   * PER BINARY, because the first fix — one Rust partition over the whole workspace — recreated
+   * the defect this file already documents two paragraphs up. Editing daw-agent marked `daw-cli`
+   * stale, and cargo will NEVER relink daw-cli for that edit: it does not depend on daw-agent. A
+   * warning that cannot be cleared by doing what it asks is ignored exactly like one that never
+   * fires, and I reintroduced it within an hour of reading the comment explaining it.
+   *
+   * So each binary is measured against the crates it actually links, from Cargo.toml:
+   *   daw-sidecar -> daw-sidecar, daw-agent, daw-bridge
+   *   daw-cli     -> daw-cli, daw-bridge
+   */
+  const rustSources = (d, out = []) => {
+    if (!existsSync(d)) return out;
+    for (const name of readdirSync(d)) {
+      if (name === 'target' || name === 'node_modules' || name === '.git') continue;
+      const p2 = join(d, name);
+      const st = statSync(p2);
+      if (st.isDirectory()) rustSources(p2, out);
+      else if (name.endsWith('.rs') || name === 'Cargo.toml') out.push(p2);
+    }
+    return out;
+  };
+  const crates = (...names) => names.flatMap((n) => rustSources(bin(join('ui', n))));
+  const CARGO_FIX = 'cargo build --release --manifest-path ui/Cargo.toml';
   const PARTITIONS = [
-    { srcs: ['apps/shared_memory.h', 'apps/event_payloads.h'],
+    { srcs: ['apps/shared_memory.h', 'apps/event_payloads.h'].map((f) => bin(f)),
       bins: [[engineBin, 'daw_engine'], [hostBin, 'juce_host_process']],
       fix: 'cmake --build build --target daw_engine juce_host_process -j 8' },
-    { srcs: ['ui/daw-bridge/src/layout.rs', 'ui/daw-sidecar/src/main.rs'],
-      bins: [[sidecarBin, 'daw-sidecar']],
-      fix: 'cargo build --release --manifest-path ui/Cargo.toml' },
+    { srcs: crates('daw-sidecar', 'daw-agent', 'daw-bridge'),
+      bins: [[sidecarBin, 'daw-sidecar']], fix: CARGO_FIX },
+    { srcs: crates('daw-cli', 'daw-bridge'),
+      bins: [[bin('ui/target/release/daw-cli'), 'daw-cli']], fix: CARGO_FIX },
   ];
   for (const part of PARTITIONS) {
     let newest = 0, newestName = '';
-    for (const f of part.srcs) {
-      const p2 = bin(f);
+    for (const p2 of part.srcs) {
       if (!existsSync(p2)) continue;
       const t = statSync(p2).mtimeMs;
-      if (t > newest) { newest = t; newestName = f; }
+      if (t > newest) { newest = t; newestName = p2.replace(ROOT, ''); }
     }
     for (const [p2, what] of part.bins) {
       if (!existsSync(p2) || !newest) continue;
