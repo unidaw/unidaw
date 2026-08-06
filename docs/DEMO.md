@@ -149,6 +149,7 @@ Verified prompts:
 | `write a four chord progression on track 0, and strum them` | I-V-vi-IV with a real spread |
 | `put a sampler on track 0, load demo_pluck_c4.wav into it, and write a four note phrase` | device, file and notes in one go |
 | `set the tempo to 96` | acts on the song already open |
+| `put an event patcher on track 0 and add a euclidean node to it` | finds the device id itself |
 
 **Ask one thing at a time, and let each answer finish.** The agent remembers the last few
 exchanges — that is what makes "now do the same to the lead" work — but an unrelated follow-up
@@ -156,9 +157,13 @@ gets read in light of the last one. Asked for a bassline immediately after "add 
 Bass" it renamed the track and wrote nothing; the same sentence in a fresh conversation wrote
 sixteen notes. `forget` starts a clean conversation.
 
-**What it cannot do yet:** discover device ids. Five tools take a `device` and the agent's
-observation reports no chains, so "wire the patcher" needs you to tell it which device. It says so
-rather than guessing.
+**It can wire the patcher now.** The observation carries each track's chain with device ids, so
+`put an event patcher on track 0 and add a euclidean node to it` works end to end. Verified against
+the saved project, not just the reply.
+
+One habit worth knowing on stage: a device it has *just added* is not in the shape it is holding,
+so it calls `observe` again to learn the id. That is a second round trip, and it looks like a
+pause.
 
 ## 8. Hearing the result
 
