@@ -147,6 +147,7 @@ export class Piano {
     this._onEsc = (e) => { if (e.key === 'Escape' && (this._note || this._drag)) this._cancel(); };
     window.addEventListener('keydown', this._onEsc);
     this._drag = null;
+    this._cursor = null;
 
     /*
      * THE WHEEL, on the HOST rather than on the band.
@@ -301,9 +302,39 @@ export class Piano {
       this.onDrag && this.onDrag(this._note);
       return;
     }
-    if (!this._drag) return;
+    if (!this._drag) { this._hoverCursor(e); return; }
     this._drag.x1 = p.x; this._drag.y1 = p.y;
     this.onMarquee && this.onMarquee(this._drag);
+  }
+
+  /**
+   * SHOW THAT THE EDGE RESIZES, by changing the cursor over it.
+   *
+   * Dragging a note's right edge has changed its length since the roll was written, and the help
+   * panel says so — but nothing ON THE NOTE did, so the owner asked for it as a missing feature.
+   * A gesture that works and gives no sign it exists is worth about as much as one that does not.
+   *
+   * FROM `this.EDGE`, the same number the hit test uses, rather than a matching constant in CSS.
+   * The two would drift the first time either changed, and then the cursor would promise a resize
+   * a pixel outside the zone that performs one — which is worse than no cursor, because it is a
+   * promise the app breaks.
+   *
+   * Cached, because pointermove fires continuously and assigning `style.cursor` on every one of
+   * them is a write per frame to say the same thing.
+   */
+  _hoverCursor(e) {
+    let want = '';
+    if (!this.velocityEdit) {
+      const el = e.target.closest ? e.target.closest('.pr-note') : null;
+      if (el) {
+        const r = el.getBoundingClientRect();
+        if (r.right - e.clientX <= this.EDGE) want = 'ew-resize';
+      }
+    }
+    if (this._cursor !== want) {
+      this._cursor = want;
+      this.band.style.cursor = want;
+    }
   }
 
   _up(e) {

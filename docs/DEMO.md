@@ -111,6 +111,13 @@ reload.
 Asserted by `same-data.mjs` (12 checks) by note **id**, including that an edit in one surface
 reaches the others and a delete removes it everywhere.
 
+**In the roll, drag a note's right edge to change its length** — the cursor turns into a resize
+arrow when you are on it. Dragging anywhere else on the note moves it. This is the only way to
+author an OVERLAP, because a note typed in the tracker ends where the next one begins, and an
+overlap is what makes a monophonic synth glide from one note to the next instead of retriggering.
+`roll-resize.mjs` asserts the length in the saved project, that the note's start does not move,
+and that the cursor says so before you drag.
+
 ## 3. The sampler
 
 `⌘B` → **DEVICES** → `sampler`, then `⌘B` → **SAMPLES** → **`demo_pluck_c4`**. Then type notes.
