@@ -664,6 +664,17 @@ target_include_directories(engine_ui_publish_tests PRIVATE
 )
 target_link_libraries(engine_ui_publish_tests PRIVATE engine_commands)
 
+# UNDO AS A CURSOR over document versions — the structure that makes redo the exact opposite of
+# undo by construction. Pure: no engine, no audio device, no file, so it runs in milliseconds.
+add_executable(engine_document_history_tests
+  apps/engine_document_history_tests_main.cpp
+)
+target_include_directories(engine_document_history_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(engine_document_history_tests PRIVATE engine_commands)
+
 add_executable(engine_clip_helpers_tests
   apps/engine_clip_helpers_tests_main.cpp
 )
@@ -1641,6 +1652,11 @@ set_tests_properties(note_overlap PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DI
 # it asserts the command CHANGED the document, that undo restores it byte-identically through the
 # canonical serializer, and that redo re-reaches it. Correct under every undo architecture, since
 # it tests behaviour through the command wire and knows nothing about the mechanism.
+add_test(NAME document_history
+  COMMAND engine_document_history_tests
+)
+set_tests_properties(document_history PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
+
 add_test(NAME undo_ratchet
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/undo_ratchet_check.sh
 )
