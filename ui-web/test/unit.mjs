@@ -2583,6 +2583,69 @@ test('every CLI verb the registry claims is actually driven by something', async
     + 'over untested code.');
 });
 
+/**
+ * Suites the runbook cites that the sweep does NOT run, and which therefore have to be run by
+ * hand before a demo. Each must be named in DEMO.md's own pre-flight section, so the obligation
+ * lives where the person reading the runbook will see it — not only in a test.
+ */
+const MANUAL_BEFORE_DEMO = ['ai-demo.mjs', 'demo-stack-smoke.mjs'];
+
+test('every suite the runbook cites exists, and the unswept ones are flagged as manual', async () => {
+  /*
+   * DEMO.md earns its authority by naming the check behind each claim — "`ops-ui.mjs` types all
+   * seven with real keystrokes", "`live-plugin-add.mjs` guards it". That is the right way to write
+   * a runbook and it creates two ways to lie that nothing was watching for.
+   *
+   * A RENAMED OR DELETED SUITE leaves the runbook citing a ghost. The claim reads exactly as
+   * strong as before and nothing runs.
+   *
+   * AN EXCLUDED SUITE is worse, because it is invisible from both ends. `ai-demo.mjs` costs money
+   * per run and `demo-stack-smoke.mjs` needs a live `tools/webstack.sh`, so all.mjs skips both —
+   * correctly. But the runbook cites them the same way it cites the fourteen that DO run every
+   * sweep, and "all suites passed" never mentioned them. Two of the six suites DEMO.md leans on
+   * were only ever going to run if I remembered.
+   *
+   * So: cited-and-swept is fine, cited-and-unswept must be on MANUAL_BEFORE_DEMO *and* named in
+   * the runbook's pre-flight section, and cited-and-absent fails.
+   */
+  const { readFileSync, existsSync } = await import('node:fs');
+  const doc = readFileSync(new URL('../../docs/DEMO.md', import.meta.url), 'utf8');
+  const all = readFileSync(new URL('./all.mjs', import.meta.url), 'utf8');
+
+  const cited = [...new Set([...doc.matchAll(/([a-z0-9-]+\.mjs)/g)].map((m) => m[1]))].sort();
+  assert.ok(cited.length >= 4, `the runbook cites suites: ${cited.length}`);
+
+  const missing = cited.filter((f) => !existsSync(new URL(`./${f}`, import.meta.url)));
+  assert.deepEqual(missing, [],
+    'the runbook cites a suite that does not exist — the claim reads as strong as ever and '
+    + 'nothing runs it');
+
+  /*
+   * EXCLUDED is a literal object in all.mjs; a suite named there is skipped by every sweep. The
+   * slice must stop at that object's own closing brace — my first version ran to `const skipped`,
+   * which swallowed NOT_A_SUITE (harnesses and libraries, declared in between) and reported
+   * `all.mjs` as an unswept suite the moment the runbook mentioned it in prose.
+   */
+  const exStart = all.indexOf('const EXCLUDED');
+  const excludedBlock = all.slice(exStart, all.indexOf('\n};', exStart));
+  const notASuite = all.slice(all.indexOf('const NOT_A_SUITE'),
+                              all.indexOf('\n]);', all.indexOf('const NOT_A_SUITE')));
+  // A harness or library named in prose is not a claim about coverage, so it is not held to one.
+  const unswept = cited.filter((f) => !notASuite.includes(`'${f}'`)
+                                       && excludedBlock.includes(`'${f}'`));
+  assert.deepEqual(unswept.sort(), [...MANUAL_BEFORE_DEMO].sort(),
+    'the set of runbook-cited suites that no sweep runs changed. Every one of them is a claim '
+    + 'that is only true if a person remembers to run it, so it belongs on MANUAL_BEFORE_DEMO '
+    + 'and in the runbook\'s pre-flight section.');
+
+  // And the runbook has to SAY so, where the person running the demo will read it.
+  const preflight = doc.slice(0, doc.indexOf('## 1. The tracker'));
+  const unmentioned = MANUAL_BEFORE_DEMO.filter((f) => !preflight.includes(f));
+  assert.deepEqual(unmentioned, [],
+    'a suite that no sweep runs is not named in the runbook\'s pre-flight section — the person '
+    + 'reading DEMO.md would never learn they have to run it');
+});
+
 test('every AI prompt in the runbook is one a test actually asks', async () => {
   /*
    * THE RUNBOOK PROMISED TWO THINGS NO RUN HAD EVER MADE.

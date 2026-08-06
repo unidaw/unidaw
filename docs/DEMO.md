@@ -39,6 +39,23 @@ registry arrived — that last one is sent once per client rather than polled, s
 looks fine and draws every chord numeral upper case. Verified against this exact stack on
 2026-08-06.
 
+**And if you are going to show §7, run the AI suite once as well:**
+
+```
+DAW_ENV_FILE=/Users/jak/src/daw-web/.env node ui-web/test/ai-demo.mjs
+```
+
+Two to three minutes, and it costs a few cents in tokens — which is exactly why no sweep runs it,
+and why it is listed here instead. It asks the model all eight prompts from §7 and asserts the
+song changed each time, ending with a render in which **every pitch heard is a pitch the model
+wrote**. It is the only check that exercises the key, the network and the model together, so it is
+also the only one that will tell you the AI is going to work today. Last green: 21/21 on
+2026-08-06.
+
+(Those two are the whole manual list. Everything else the runbook cites runs in `all.mjs`, and a
+test asserts that this stays true — if a suite is ever excluded from the sweep without being named
+here, the unit suite fails.)
+
 ---
 
 ## You can add plugins while it plays
