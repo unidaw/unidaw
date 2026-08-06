@@ -7,7 +7,8 @@
 
 use daw_bridge::control::EngineHandle;
 use daw_bridge::grid::NANOTICKS_PER_QUARTER;
-use daw_bridge::layout::{UiChainCommandPayload, UiChordCommandPayload,
+use daw_bridge::layout::{clip_appearances, UI_CLIP_EXTENT_HAS_ALTERNATE,
+                        UiChainCommandPayload, UiChordCommandPayload,
                          UiCommandPayload, UiCommandType,
                          UiModLinkCommandPayload, UiModLinkUid16Payload,
                          UiModSourceValuePayload, UiPatcherPresetCommandPayload,
@@ -1229,14 +1230,12 @@ fn arg_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
 /// changed all of them silently. A model that can fork but cannot see what is shared will fork
 /// the wrong things and leave the right ones alone.
 fn shared_clips(handle: &EngineHandle, args: &Value) -> ToolResult {
-    const HAS_ALTERNATE: u32 = 1 << 24;      // kUiClipExtentHasAlternate (v31)
     let want = arg_u64(args, "track").map(|t| t as u32);
     let extents = handle.read_clip_extents();
-    // Counted over ALL of them, not the filtered set: a clip is shared whether or not its other
-    // appearances are on the track being asked about, and a count that changed with the filter
-    // would be a different number for the same question.
-    let mut uses: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
-    for e in &extents { *uses.entry(e.clip_id).or_insert(0) += 1; }
+    // The whole slice, deliberately — `clip_appearances` documents why the filter must not reach
+    // it. `daw-cli get shared` calls the same function, so the two surfaces cannot answer this
+    // question differently; they used to have a copy each.
+    let uses = clip_appearances(&extents);
     let list: Vec<Value> = extents.iter()
         .filter(|e| want.is_none() || want == Some(e.track_id))
         .map(|e| json!({
@@ -1249,7 +1248,7 @@ fn shared_clips(handle: &EngineHandle, args: &Value) -> ToolResult {
             // How many appearances play this clip. 1 means an edit here changes only this one.
             "appearances": uses.get(&e.clip_id).copied().unwrap_or(1),
             // Forked: this appearance has its own copy with another version behind it.
-            "forked": (e.flags & HAS_ALTERNATE) != 0,
+            "forked": (e.flags & UI_CLIP_EXTENT_HAS_ALTERNATE) != 0,
         }))
         .collect();
     ToolResult::ok(json!({ "placements": list }))

@@ -1397,6 +1397,28 @@ pub const UI_CLIP_EXTENT_LOCAL_EDITS: u32 = 1 << 23;
 /// having one. What PLAYS is always the extent's `clip_id`; this only says there is another.
 pub const UI_CLIP_EXTENT_HAS_ALTERNATE: u32 = 1 << 24;
 
+/// HOW MANY APPEARANCES PLAY EACH CLIP, keyed by clip id.
+///
+/// Two placements of one clip are the same music seen twice, so an edit to either reaches both.
+/// This is the number that answers "if I edit here, what else changes?", and it is here — beside
+/// the extents it reads — because two surfaces ask it: the agent's `shared_clips` tool and
+/// `daw-cli get shared`. They had a copy each, agreeing today.
+///
+/// COUNT OVER ALL EXTENTS, NEVER A FILTERED SET. A clip is shared whether or not its other
+/// appearances are on the track being asked about, so a caller narrowing its OUTPUT to one track
+/// must still pass every extent in here. Counting the filtered set answers 1 for a clip with
+/// three appearances — and 1 reads as "safe to edit, nothing else changes", which is the precise
+/// opposite of the truth. That failure is silent and destroys work, which is why this takes the
+/// whole slice and does no filtering of its own: there is no way to pass it a filtered set by
+/// accident that does not look wrong at the call site.
+pub fn clip_appearances(extents: &[UiClipExtent]) -> std::collections::HashMap<u32, u32> {
+    let mut uses = std::collections::HashMap::new();
+    for e in extents {
+        *uses.entry(e.clip_id).or_insert(0u32) += 1;
+    }
+    uses
+}
+
 /// Per-device addressing for the patcher graph commands, carried in the payload's `flags`
 /// because the payload is exactly 40 bytes and full. Bit 15 marks the id PRESENT; bits 0-14 are
 /// the id. The presence bit matters: device ids start at 0, so a bare 0 cannot mean

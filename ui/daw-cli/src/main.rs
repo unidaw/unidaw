@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{
+    clip_appearances, UI_CLIP_EXTENT_HAS_ALTERNATE,
     UiChainCommandPayload, UiChordCommandPayload, UiClipWindowCommandPayload, UiCommandPayload,
     UiCommandType, UiPatcherPresetCommandPayload, UiSamplerKitRequestPayload,
     UiSamplerEmitRowsPayload, UiSamplerLoadPayload, UiSamplerMarkerPayload, UiSamplerSetSlotPayload, UiSamplerSlicePayload,
@@ -1313,7 +1314,6 @@ fn get_device_params(handle: &EngineHandle, args: &[&str]) -> i32 {
 /// is deliberately the same one — two surfaces answering one question have to agree, and the way
 /// they drift is each deciding what "shared" means.
 fn get_shared(handle: &EngineHandle, track: Option<u32>) -> i32 {
-    const HAS_ALTERNATE: u32 = 1 << 24;      // kUiClipExtentHasAlternate (v31)
     let (extents, truncated) = handle.read_clip_extents_with_truncation();
     if truncated > 0 {
         eprintln!(
@@ -1321,8 +1321,7 @@ fn get_shared(handle: &EngineHandle, track: Option<u32>) -> i32 {
              LOW, because an appearance that did not fit is an appearance not counted"
         );
     }
-    let mut uses: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
-    for e in &extents { *uses.entry(e.clip_id).or_insert(0) += 1; }
+    let uses = clip_appearances(&extents);
 
     let shown: Vec<_> = extents.iter()
         .filter(|e| track.is_none() || track == Some(e.track_id))
@@ -1337,7 +1336,7 @@ fn get_shared(handle: &EngineHandle, track: Option<u32>) -> i32 {
              \"start_tick\": {}, \"end_tick\": {}, \"appearances\": {}, \"forked\": {} }}{comma}",
             e.placement_id, e.clip_id, e.track_id, name, e.start_tick, e.end_tick,
             uses.get(&e.clip_id).copied().unwrap_or(1),
-            (e.flags & HAS_ALTERNATE) != 0);
+            (e.flags & UI_CLIP_EXTENT_HAS_ALTERNATE) != 0);
     }
     println!("]");
     0
