@@ -156,9 +156,12 @@ n_chords(){
   python3 -c "
 import json,sys
 d=json.load(open(sys.argv[1]))
-# BOTH PLACES. A chord can sit on a CLIP or, for a placement-local edit, on the PLACEMENT —
-# the project format writes a 'chords' array in each. Counting only clips would report 0 for a
-# step that worked, which in a rehearsal reads as 'the demo is broken' the day before the demo.
+# THE CLIP IS A CHORD'S HOME. The array on a PLACEMENT is not a second home — it is that
+# placement's local-edit overlay (`placement.adds`, with `mutes` alongside it for removals), the
+# per-appearance edit scope. It serialises through the same writeEvents as a clip body, which is
+# why it carries the same field name and why counting one and not the other is easy to do by
+# accident. A locally-edited appearance would report 0 chords, which the day before a demo reads
+# as "it is broken".
 print(sum(len(c.get('chords',[])) for c in d.get('clips',[]))
     + sum(len(pl.get('chords',[])) for t in d.get('tracks',[]) for pl in t.get('placements',[])))" "$f" 2>/dev/null || echo 0
 }
