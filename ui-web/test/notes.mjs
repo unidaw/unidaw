@@ -15,10 +15,27 @@
  *
  * ── HOW IT WORKS ─────────────────────────────────────────────────────────────────────────────
  *
- * ONSETS by energy rise. A frame's RMS is compared against a running floor; a rise through the
- * threshold after being below it is an attack. Percussive and plucked material — which is what
- * this repo's fixtures are — gives clean rises. Sustained pads would need spectral flux, and
- * this says so rather than pretending otherwise.
+ * ONSETS by energy rise, in two forms — and the second was missing for a while, which made this
+ * file confidently wrong about the question it exists to answer.
+ *
+ *   - a rise through the floor from silence, and
+ *   - a FAST rise above the quietest point since the last attack, needing no silence at all.
+ *
+ * Only the first existed at first. It is correct for notes separated by silence and blind to
+ * anything that rings into the next note — which is most music. Four overlapping plucks came back
+ * as ONE note, which is indistinguishable from the engine having dropped three of them.
+ *
+ * The second form needs a discriminator, because "got louder" is not "was struck". It is SPEED: a
+ * struck or plucked note reaches its peak in a few milliseconds, while a deep tremolo reaches the
+ * same ratio over tens. So a rise counts only if it happens inside `riseSeconds`, and a
+ * refractory (fall to half the peak before re-arming) stops one attack being counted twice as it
+ * builds. All three numbers are calibrated in unit.mjs against synthetic signals in BOTH
+ * directions: four overlapping notes must give four, one tremolo'd tone must give one.
+ *
+ * The honest limit is unchanged in kind: this suits percussive and plucked material, which is
+ * what this repo's fixtures are. A pad that swells has no fast rise anywhere in it and will read
+ * as one note however many are played — that needs spectral flux, and this says so rather than
+ * pretending otherwise.
  *
  * PITCH by YIN — the cumulative-mean-normalised difference function — with parabolic
  * interpolation, on a window just after each onset. Chosen over zero-crossing (which counts
@@ -34,7 +51,8 @@
  *
  * ── WHAT IT IS NOT ───────────────────────────────────────────────────────────────────────────
  *
- * Not a transcriber. It will not follow overlapping voices, it has no opinion about note-offs,
+ * Not a transcriber. It finds overlapping ONSETS but will not separate simultaneous voices, it
+ * has no opinion about note-offs,
  * and it reports what it is confident about rather than everything. Used as an assertion it is
  * strong in one direction: if it says a C4 sounded at 2.0s, one did. If it says nothing sounded,
  * check `confidence` before concluding silence.
@@ -145,12 +163,28 @@ export function fundamental(samples, rate, { minHz = 50, maxHz = 2000, threshold
  * @param {number} [opts.floor]     RMS a frame must exceed to be sounding.
  * @param {number} [opts.minGap]    Seconds between onsets; below this they are one attack.
  * @param {number} [opts.minConf]   Reject a pitch below this autocorrelation confidence.
+ * @param {number} [opts.riseRatio] Rise above the local minimum that counts as a new attack
+ *                                  WITHOUT the sound having returned to silence first.
+ * @param {number} [opts.riseSeconds] How fast that rise must happen. Separates an attack from a
+ *                                  deep tremolo, which reaches the same ratio far more slowly.
  * @param {number} [opts.skip]      Seconds to skip past an onset before measuring pitch.
  * @param {number} [opts.window]    Seconds of audio to measure the pitch over.
  */
 export function detectNotes(mono, rate, opts = {}) {
   const {
     floor = 0.01, minGap = 0.05, minConf = 0.3,
+    // How far above the quietest point since the last attack a rise must go to count as a new
+    // one. 2.5x is well clear of a decaying tail's ripple and well under a real attack, which
+    // measured 4.8x on the case that exposed this. Calibrated in unit.mjs against synthetic
+    // signals of KNOWN content, in both directions — four overlapping notes must give four, and
+    // one steady tone must give one.
+    riseRatio = 2.5,
+    // How QUICKLY that rise has to happen, in seconds. This is the real discriminator between an
+    // attack and a loud wobble, and ratio alone is not: a deep tremolo swings 3x, comfortably past
+    // riseRatio, but it takes half a cycle to do it. A struck or plucked note goes from its
+    // quietest point to its peak in a few milliseconds. Calibrated against a 12 Hz tremolo (~42 ms
+    // trough to peak, must read as ONE note) and a real pluck (~10 ms, must read as an attack).
+    riseSeconds = 0.02,
     // MEASURED PAST THE ATTACK. A pluck's first few milliseconds are broadband noise — the
     // transient — and autocorrelating it returns confident nonsense. Skipping into the body of
     // the note is the difference between a reliable pitch and a random one.
@@ -166,14 +200,52 @@ export function detectNotes(mono, rate, opts = {}) {
     rms.push(Math.sqrt(s / frame));
   }
 
+  /*
+   * TWO WAYS TO BE AN ATTACK, AND A REFRACTORY BETWEEN THEM.
+   *
+   * The original rule was: sound rises through the floor, and does not count again until it has
+   * fallen back below it. Correct for notes separated by silence, and BLIND to overlap — which is
+   * most music. It cost a real measurement: `demo_pluck_c4.wav` is 1.6 seconds and a sampler slot
+   * defaults to one-shot, so four notes half a second apart ring over each other and the level
+   * never returns to the floor. Four notes played and this reported ONE, which reads exactly like
+   * the engine dropping three of them. I nearly filed that as an engine bug.
+   *
+   * So an attack is EITHER a rise through the floor from silence, OR a rise of `riseRatio` above
+   * the quietest point since the detector re-armed. In that measurement the level dipped to 0.0995
+   * and jumped to 0.4753 — a 4.8x rise at exactly the written tick. The energy was always there;
+   * nothing was looking for it.
+   *
+   * THE REFRACTORY IS NOT OPTIONAL, and the first version without it double-counted. An attack
+   * takes tens of milliseconds to reach its peak, so the rising edge crosses `riseRatio` above its
+   * own starting point more than once and each crossing looks like a new note. `minGap` alone does
+   * not fix that — it just moves where the second trigger lands.
+   *
+   * The fix is to require a FALL before re-arming: after an onset the detector tracks the peak,
+   * and does not look for another rise until the level has dropped to half of it. That is one
+   * attack, one detection, however the envelope wobbles on the way up.
+   */
   const out = [];
   let below = true, lastAt = -Infinity;
+  let armed = true, peakSince = 0, localMin = Infinity, minFrame = 0;
+  const riseFrames = Math.max(1, Math.round((riseSeconds * rate) / hop));
   for (let f = 0; f < rms.length; f++) {
     const at = (f * hop) / rate;
-    if (below && rms[f] > floor) {
+    if (rms[f] > peakSince) peakSince = rms[f];
+    if (!armed && rms[f] < peakSince * 0.5) { armed = true; localMin = rms[f]; minFrame = f; }
+    if (armed && rms[f] < localMin) { localMin = rms[f]; minFrame = f; }
+
+    const fromSilence = below && rms[f] > floor;
+    const fromRise = !below && armed && rms[f] > floor
+                     && rms[f] > localMin * riseRatio && f - minFrame <= riseFrames
+                     && at - lastAt >= minGap;
+    if (fromSilence || fromRise) {
       below = false;
       if (at - lastAt < minGap) continue;
       lastAt = at;
+      armed = false;
+      peakSince = rms[f];
+      localMin = Infinity;
+      minFrame = f;
 
       const from = Math.round((at + skip) * rate);
       const to = Math.min(mono.length, from + Math.round(window * rate));

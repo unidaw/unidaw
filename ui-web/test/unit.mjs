@@ -3980,6 +3980,59 @@ test('the note detector recovers pitches it was never told', async () => {
       `${n.name} detected at ${n.at}s, expected about ${(i * 0.65).toFixed(2)}s`);
   });
 
+  /*
+   * OVERLAPPING NOTES — THE CASE THAT WAS SILENTLY WRONG, AND THE ONE MUSIC ACTUALLY IS.
+   *
+   * The onset rule used to be: rise through the floor, and do not count again until you have
+   * fallen back BELOW it. Correct for the sequence above, where the gaps are real silence, and
+   * blind to anything that rings over the next note.
+   *
+   * It cost a real measurement. `demo_pluck_c4.wav` is 1.6 seconds and a sampler slot defaults to
+   * one-shot, so the four notes the model wrote half a second apart overlapped and the level never
+   * returned to the floor. The detector reported ONE note. That reads exactly like the engine
+   * dropping three of them, and it is the failure mode this whole file exists to catch — so it
+   * was about to be reported as an engine bug on the strength of a broken instrument.
+   *
+   * DECAYING tails, so the notes genuinely overlap and the level never reaches silence.
+   */
+  const decayed = (midi, seconds) => {
+    const s2 = tone(midi, seconds);
+    for (let i = 0; i < s2.length; i++) s2[i] *= Math.exp(-3 * (i / RATE));
+    return s2;
+  };
+  const overlap = new Float64Array(Math.round(RATE * 4));
+  want.forEach((m, i) => {
+    const part = decayed(m, 1.6);
+    const at2 = Math.round(i * 0.5 * RATE);
+    for (let k = 0; k < part.length && at2 + k < overlap.length; k++) overlap[at2 + k] += part[k];
+  });
+  const over = detectNotes(overlap, RATE, { minConf: 0.4 });
+  assert.deepEqual(over.map((n) => n.midi), want,
+    `four OVERLAPPING notes came back as ${JSON.stringify(over.map((n) => n.name))} — a detector `
+    + 'that needs silence between notes cannot answer "did all the notes play" for real music');
+  over.forEach((n, i) => {
+    assert.ok(Math.abs(n.at - i * 0.5) < 0.06,
+      `overlapping ${n.name} detected at ${n.at}s, expected about ${(i * 0.5).toFixed(2)}s`);
+  });
+
+  /*
+   * AND THE OTHER DIRECTION, which is the whole risk of the rise rule: one long tone must be ONE
+   * note. A rise-based onset detector invents attacks out of ordinary envelope wobble, and a
+   * detector that over-counts is worse than one that under-counts here — it would make "all the
+   * notes played" pass on a part that played too many.
+   *
+   * A tremolo is the hostile case: amplitude swinging 2x, twelve times a second, with no attack
+   * anywhere in it.
+   */
+  const trem = tone(60, 2.0);
+  for (let i = 0; i < trem.length; i++) {
+    trem[i] *= 0.6 + 0.3 * Math.sin((2 * Math.PI * 12 * i) / RATE);
+  }
+  const tremFound = detectNotes(trem, RATE);
+  assert.equal(tremFound.length, 1,
+    `a single tremolo'd tone must be ONE note, got ${tremFound.length} — a rise rule that fires `
+    + 'on envelope wobble makes over-counting pass as "every note played"');
+
   // Silence is silence, not a confident guess.
   assert.deepEqual(detectNotes(new Float64Array(RATE), RATE), [],
     'silence must produce no notes at all');

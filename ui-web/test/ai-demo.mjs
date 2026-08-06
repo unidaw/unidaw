@@ -106,6 +106,27 @@ const askFor = async (prompt, moved, ms = 120000) => {
    * still explaining the bassline. "The transcript stopped growing" is the only signal here
    * that the turn is over.
    */
+  /*
+   * THE BASELINE IS READ AFTER THE ECHO SETTLES, and that is not a detail.
+   *
+   * `spoke` exists so "it has gone quiet" cannot fire during the silence BEFORE the model's first
+   * token. But it was set by ANY growth in the console, and the console echoes the prompt you just
+   * typed — plus whatever status line comes with it. So `spoke` went true immediately, the ten
+   * seconds of quiet that follow are the model still thinking, and the loop returned a 12-second
+   * turn in which nothing had been asked yet. It reported the PREVIOUS answer's tail as this
+   * one's, which is precisely the failure the comment below already describes, arriving through a
+   * door that comment did not cover.
+   *
+   * Seen under load: backend's ctest was running, first-token latency stretched past ten seconds,
+   * and three chord checks failed on a prompt the model had not begun to answer. The same run
+   * passed with the machine idle, which is the signature of a test racing rather than a product
+   * fault — so the fix belongs here.
+   */
+  await page.waitForTimeout(1500);
+  // Does this predicate carry information? One that answers true for an unchanged song cannot
+  // distinguish "it worked" from "it has not started", and must not shorten the wait.
+  let informative = false;
+  try { informative = !moved(before, before); } catch { informative = true; }
   let now = before, quiet = 0, spoke = false, last = await lines();
   while (Date.now() - t0 < ms) {
     await page.waitForTimeout(2000);
@@ -115,13 +136,25 @@ const askFor = async (prompt, moved, ms = 120000) => {
     quiet = n === last ? quiet + 2 : 0;
     last = n;
     /*
-     * `spoke &&` HERE TOO. This break had the same flaw the one below is documented for, and
-     * it stayed hidden because it needs a `moved` that is trivially true to show: with
-     * `() => true`, the loop can satisfy "the song moved and it has gone quiet" during the
-     * five to fifteen seconds BEFORE the model's first token, and return a 4-second turn in
-     * which nothing happened. Two checks failed on a model that had not been asked yet.
+     * THE FAST PATH NEEDS EVIDENCE, AND A PREDICATE THAT IS ALWAYS TRUE IS NOT EVIDENCE.
+     *
+     * This break exists to return promptly once the song has demonstrably changed. Three call
+     * sites pass `() => true` because what they check is not a counter — the patcher's device
+     * graph, the tempo. For those, `moved(before, now)` is true before the model has said a
+     * word, so the only remaining condition is four seconds of quiet, and four seconds of quiet
+     * is ORDINARY MID-TURN: a model pauses that long between tool calls while it thinks.
+     *
+     * Measured, not guessed. The patcher turn returned at 8s with the transcript ending on
+     * `add_device` — the node it was about to add had not been added yet — and the tempo prompt
+     * then collided with the still-running turn and read its answer. Two checks failed on a model
+     * that was working correctly.
+     *
+     * `informative` asks the predicate whether it can tell "nothing changed" from "something
+     * did". If it cannot, this break is skipped entirely and the slow path below decides, which
+     * is the honest answer: with no song-side signal, the only evidence a turn has ended is that
+     * the model has stopped talking.
      */
-    if (spoke && moved(before, now) && quiet >= 4) break;
+    if (spoke && informative && moved(before, now) && quiet >= 6) break;
     /*
      * "STOPPED TALKING" ONLY COUNTS ONCE IT HAS STARTED.
      *
@@ -131,7 +164,11 @@ const askFor = async (prompt, moved, ms = 120000) => {
      * working prompt a failure. Silence before the first word and silence after the last
      * are the same measurement and opposite facts.
      */
-    if (spoke && quiet >= 10) break;
+    // 16, not 10. The comment above puts first-token latency at five to fifteen seconds, so a
+    // ten-second quiet window sits INSIDE the range it is meant to be outside of — and a model
+    // that pauses mid-turn between tool calls looks identical to one that has finished. This
+    // costs six seconds only on the path where the answer never comes.
+    if (spoke && quiet >= 16) break;
   }
   const secs = ((Date.now() - t0) / 1000).toFixed(0);
   return { before, now, secs, ok: moved(before, now), said: await transcript() };
