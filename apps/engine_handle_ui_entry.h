@@ -81,6 +81,15 @@ struct HandleUiEntryDeps {
   TrackpropsCommandDeps& trackpropsCommandDeps;
   TransportCommandDeps& transportCommandDeps;
   UndoCommandDeps& undoCommandDeps;
+
+  // THE TRANSACTION BRACKET. handleUiEntry is the ONE place every UI command passes through, so
+  // it is the one place a version has to be recorded — 48 branches, one recording site. Both are
+  // std::function because the gatherers live in main() alongside the save/load deps they need.
+  std::function<daw::ProjectDocument()> captureDocument;
+  // NO DEFAULT INITIALIZER: deps_order_check reads the last token before the semicolon as the
+  // member's name, so `= nullptr` made member 25 be called "nullptr" and the name match failed.
+  // It is always bound in the initializer anyway — a default would only hide an unbound field.
+  DocumentHistory* documentHistory;
 };
 
 // Dispatches one UI command. Silently ignores entries that are not UiCommand or are too

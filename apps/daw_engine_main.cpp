@@ -2025,13 +2025,17 @@ int main(int argc, char** argv) {
       resetTimeline, restartCv, running, tempoProvider
   };
 
+  // Named locals, because deps_order_check matches each positional argument to its member BY NAME.
+  auto captureDocument = [&] { return daw::engine::captureDocument(saveProjectDeps); };
+  auto* documentHistory = &engineState.documentHistory;
   daw::engine::HandleUiEntryDeps handleUiEntryDeps{
       arrangeTimeCommandDeps, automationCommandDeps, bulkStreams, bulkTick,
       chainCommandDeps, clipCommandDeps, deviceCommandDeps, enqueuePreview,
       handleAssembledBulk, historyAppend, markerCommandDeps, modlinkCommandDeps,
       moduleCommandDeps, noteCommandDeps, patcherCommandDeps, placementCommandDeps,
       projectCommandDeps, requestCommandDeps, rowopsCommandDeps, samplerCommandDeps,
-      trackCommandDeps, trackpropsCommandDeps, transportCommandDeps, undoCommandDeps
+      trackCommandDeps, trackpropsCommandDeps, transportCommandDeps, undoCommandDeps,
+      captureDocument, documentHistory
   };
 
   auto handleUiEntry = [&](const daw::EventEntry& entry) {

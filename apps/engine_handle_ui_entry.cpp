@@ -1,5 +1,7 @@
 #include "engine_handle_ui_entry.h"
 
+#include "apps/engine_command_mutates.h"
+
 // The module header carries the dependency surface of the Deps struct — the command
 // modules, engine_types, the event log. These two are what the dispatcher BODY reaches
 // for on its own, and they are the whole list: the file arrived here carrying main.cpp's
@@ -53,6 +55,36 @@ void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
     std::memcpy(&header, entry.payload, sizeof(header));
     const auto commandType =
         static_cast<daw::UiCommandType>(header.commandType);
+
+    // RECORD A VERSION WHEN THIS COMMAND FINISHES, whichever of the 48 branches it leaves by.
+    //
+    // RAII rather than a line at the end, because there is no end: every branch returns from
+    // inside itself. A recording site that has to be repeated 48 times is a site that will be
+    // missed once, and "missed once" is exactly how undo came to cover 15 commands of 70.
+    //
+    // Nothing is captured BEFORE the command. History holds versions, not before/after pairs: the
+    // state to undo to is the version already at the cursor, so one capture per edit is enough
+    // and the pair cannot disagree with itself.
+    struct RecordVersion {
+      HandleUiEntryDeps& d;
+      bool mutates;
+      const char* label;
+      ~RecordVersion() {
+        if (!mutates || d.documentHistory == nullptr || !d.captureDocument) {
+          return;
+        }
+        d.documentHistory->commit(d.captureDocument(), label);
+        // OBSERVABLE FROM OUTSIDE, because "the history is being built" is otherwise a claim
+        // nobody can check until undo is repointed at it. A check can read this line and assert
+        // the count rises once per mutating command and not at all for a query.
+        DAW_EVENT("undo.version_recorded")
+            .field("label", std::string(label))
+            .field("versions", static_cast<uint64_t>(d.documentHistory->size()))
+            .field("cursor", static_cast<uint64_t>(d.documentHistory->cursor()))
+            .field("bytes", static_cast<uint64_t>(d.documentHistory->bytes()));
+      }
+    } recordVersion{deps, commandMutatesDocument(commandType),
+                    daw::engine::commandLabel(commandType)};
 
     // ---- BULK CHUNK (83). Intercepted BEFORE the journal: a 17-chunk envelope would otherwise
     // write 17 indistinguishable lines and bury the command it spells. The ASSEMBLED command
