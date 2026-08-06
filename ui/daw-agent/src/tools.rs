@@ -577,6 +577,21 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "save_patcher_preset",
+            description: "Save the current patcher graph as a named preset, so a graph the agent \
+                          built can be recalled later instead of rebuilt node by node.",
+            params: json!({
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                    "name": { "type": "string",
+                              "description": "The preset's file name. 27 bytes at most — the \
+                                              wire's name field is fixed and the engine refuses \
+                                              rather than truncating." },
+                },
+            }),
+        },
+        ToolSpec {
             name: "sampler_envelope_points",
             description: "DRAW an envelope as a curve, rather than setting an ADSR. `points` is a \
                           list of {time, value} in ascending time; `value` is millis where 1000 is \
@@ -2238,6 +2253,40 @@ fn delete_harmony(handle: &EngineHandle, args: &Value) -> ToolResult {
     ToolResult::ok(json!({ "deleted_harmony_at": tick, "base": base }))
 }
 
+/// Save the current patcher graph as a named preset.
+///
+/// A NAMED COMMAND: the name rides in a `UiPatcherPresetCommandPayload`, which is transmuted into
+/// the generic 40-byte slot. That works only because the two structs are the same size, and
+/// daw-bridge holds a const assert saying so — if they ever diverge the engine stops recognising
+/// named commands entirely, since it dispatches on `entry.size`.
+///
+/// AN EMPTY NAME IS REFUSED HERE, not left to the engine. The engine does refuse it
+/// (`reportPreset(false, "empty_name")`), but its answer arrives as a UI diff on a channel this
+/// tool does not read, so an agent would see a successful call and no file.
+fn save_patcher_preset(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(name) = args.get("name").and_then(|v| v.as_str()) else {
+        return ToolResult::err("save_patcher_preset needs \"name\"");
+    };
+    if name.trim().is_empty() {
+        return ToolResult::err(
+            "save_patcher_preset needs a non-empty \"name\" — the engine refuses an empty one on \
+             a channel this tool cannot read, so it would look like a success with no file");
+    }
+    // The wire's name field is 28 bytes and `named()` TRUNCATES to fit. Refusing instead, because
+    // a silently shortened name is a preset saved under a name the caller cannot predict.
+    if name.len() > 27 {
+        return ToolResult::err(format!(
+            "the preset name is {} bytes; the wire's field holds 27 and would truncate it, \
+             saving under a name you did not choose", name.len()));
+    }
+    let p = daw_bridge::layout::UiPatcherPresetCommandPayload::named(
+        UiCommandType::SavePatcherPreset, name);
+    match handle.send_command(p.as_command()) {
+        Ok(()) => ToolResult::ok(json!({ "sent": true, "name": name })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
 /// THE PENCIL. An envelope as a drawn curve rather than four ADSR numbers.
 ///
 /// The agent had `sampler_envelope` (attack/decay/sustain/release) and nothing else, so every
@@ -3052,6 +3101,7 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "set_track_grid" => set_track_grid(handle, &call.args),
         "set_audio_clip" => set_audio_clip(handle, &call.args),
         "sampler_envelope_points" => sampler_envelope_points(handle, &call.args),
+        "save_patcher_preset" => save_patcher_preset(handle, &call.args),
         "sampler_filter" => sampler_filter(handle, &call.args),
         "sampler_slot_name" => sampler_slot_name(handle, &call.args),
         "set_clip_grid" => set_clip_grid(handle, &call.args),

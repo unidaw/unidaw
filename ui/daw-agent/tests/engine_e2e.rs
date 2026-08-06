@@ -62,6 +62,10 @@ fn start_engine(tag: &str) -> (Engine, AgentSession) {
         .env("DAW_UI_SHM_NAME", &shm)
         .env("DAW_PROJECT_DIR", &proj)
         .env("DAW_ENGINE_TEST_MODE", "1")
+        // Presets go into the test's own directory. Without this the engine writes into the
+        // repo's presets/patcher/, so a test would leave files behind in the working tree —
+        // and would pass by finding a preset an EARLIER run had written.
+        .env("DAW_PATCHER_PRESET_DIR", proj.join("patcher"))
         .arg("--run-seconds")
         .arg("45")
         .stdout(Stdio::null())
@@ -2686,6 +2690,58 @@ fn the_agent_can_draw_an_envelope_an_adsr_cannot_describe() {
         assert!(Instant::now() < deadline,
                 "no envelope with five points reached the saved project — a bulk send with a \
                  wrong header field is accepted by the carrier and dropped by the engine");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// A patcher graph the agent built can be saved and recalled, rather than rebuilt node by node.
+///
+/// Asserts THE FILE ON DISK, in the test's own preset directory. The engine reports the outcome as
+/// a UI diff on a channel this tool does not read, so `sent: true` carries no information at all
+/// here — an empty name, a full disk and a successful save are the same reply.
+#[test]
+fn the_agent_can_save_a_patcher_preset() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agpreset");
+    let preset_dir = engine.proj.join("patcher");
+
+    // Two refusals the tool makes itself, because the engine's version of each answers on a
+    // channel an agent cannot hear.
+    let empty = session.execute(&ToolCall {
+        tool: "save_patcher_preset".into(), args: json!({ "name": "  " }) });
+    assert!(!empty.ok, "an empty preset name must be refused here: {empty:?}");
+    let long = session.execute(&ToolCall {
+        tool: "save_patcher_preset".into(),
+        args: json!({ "name": "a_preset_name_far_longer_than_the_wire_field_allows" }) });
+    assert!(!long.ok,
+            "an oversize name must be refused rather than truncated — it would save under a name \
+             the caller cannot predict: {long:?}");
+
+    // Something to save, so the preset is not merely an empty graph.
+    let node = session.execute(&ToolCall {
+        tool: "patcher_node".into(),
+        args: json!({ "track": 0, "type": "euclidean" }),
+    });
+    assert!(node.ok, "patcher_node failed: {node:?}");
+
+    let saved = session.execute(&ToolCall {
+        tool: "save_patcher_preset".into(), args: json!({ "name": "agentmade" }) });
+    assert!(saved.ok, "save_patcher_preset failed: {saved:?}");
+
+    let path = preset_dir.join("agentmade.json");
+    let deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        if path.exists() {
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            // The graph's CONTENT, not merely a file: an empty preset would be written just as
+            // happily, and would recall as nothing.
+            assert!(text.contains("nodes"), "the preset holds no nodes array: {text}");
+            break;
+        }
+        assert!(Instant::now() < deadline,
+                "no preset at {} — the engine answers a refused save on a UI channel this tool \
+                 does not read, so `sent: true` says nothing about whether a file exists",
+                path.display());
         std::thread::sleep(Duration::from_millis(200));
     }
 }
