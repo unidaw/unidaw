@@ -89,7 +89,11 @@ const EXCLUDED = {
 
 /** Not suites: helpers, fixtures, and the ones with their own npm script. */
 const NOT_A_SUITE = new Set([
-  'stack.mjs', 'serve.mjs', 'wav.mjs', 'all.mjs',
+  // `notes.mjs` is a LIBRARY — YIN pitch and onset detection — like wav.mjs beside it. Left in
+  // the discovery set it would be spawned as a suite, export its functions, exit 0 and be
+  // reported as a pass, which is a green line for a file that asserts nothing. Its own coverage
+  // is in unit.mjs.
+  'stack.mjs', 'serve.mjs', 'wav.mjs', 'notes.mjs', 'all.mjs',
   'unit.mjs',            // node --test, `npm run unit`
   'shot.mjs', 'alloc.mjs', 'alloc-where.mjs', 'frametime.mjs', 'scale.mjs', 'layout.mjs',
 ]);
