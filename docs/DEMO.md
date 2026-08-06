@@ -125,6 +125,14 @@ note-ons on one channel. Inside a single column that cannot be expressed at all,
 note-on IS the previous note's end. (The count is currently global — every track shows the same
 number.)
 
+Editing in the second column is covered by `column-ops.mjs`, and it is worth knowing why that file
+exists: until 2026-08-07 ten of the fourteen note and delete operations in the page sent no COLUMN
+at all, and the wire defaults a missing column to zero. So a transpose duplicated the note instead
+of moving it, a cut left the second column's note behind, a paste collapsed both columns onto one,
+and dragging a note's length in the roll — the gesture two paragraphs down — rewrote column 0 and
+left the note you were dragging alone. All of it silent, and none of it visible on screen, which
+is why the suite asserts the SAVED PROJECT.
+
 **The GLIDE is the instrument's, not ours.** Overlapping note-ons are the condition; what happens
 next is the synth's portamento setting, and only a MONOPHONIC one has an opinion. The built-in
 sampler is not one — give it two overlapping notes and you get two voices, which is polyphony and
