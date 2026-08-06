@@ -3097,6 +3097,36 @@ fn build_chain_edit(body: &str) -> Option<Result<UiChainCommandPayload, &'static
     let kind = match device_kind(body) { Ok(k) => k, Err(why) => return Some(Err(why)) };
     p.command_type = UiCommandType::AddDevice as u16;
     p.device_kind = kind;
+    /*
+     * WHERE A NEW DEVICE LANDS DEPENDS ON WHAT IT IS, and appending is wrong for exactly one kind.
+     *
+     * An EVENT patcher generates notes for whatever comes AFTER it. Appended to a track that
+     * already has an instrument it lands behind, emits into nothing, and the track is silent with
+     * every structural check green — the rack draws it, the graph saves, the device is in the
+     * chain. That is how I built a broken fixture and spent two renders looking for an engine
+     * fault, and backend introduced the same regression from the other direction on the same day:
+     * their agent head-inserted EVERYTHING, was "fixed" to append, and silently broke the patcher
+     * case for several hours while a check that counts devices kept passing.
+     *
+     * Two surfaces, opposite defaults, both confidently wrong about one rule inside a day.
+     *
+     * So the default is chosen by KIND: an event patcher goes to the head, everything else
+     * appends. An effect belongs after what it processes; an event graph belongs before what it
+     * feeds. An explicit `pos` still wins.
+     *
+     * THE RIGHT HOME FOR THIS IS THE ENGINE — `insertIndex = auto` should mean "where this kind
+     * belongs" so no caller has to know — and backend and I agree on that and on not doing it the
+     * evening before a demo of device insertion. Filed; this restores correct behaviour here now.
+     */
+    match parse_num(body, "\"pos\"") {
+        Some(pos) if pos >= 0 => p.insert_index = pos as u32,
+        Some(_) => return Some(Err("a chain position cannot be negative")),
+        // ADDED WHILE FIXING THE DEFAULT: `adddevice` had no way to say WHERE at all, while the
+        // agent's tool has taken a `position` since it was written. So the one surface that could
+        // not express it was the one whose default was wrong.
+        None if kind == 0 => p.insert_index = 0,
+        None => {}
+    }
     // hostSlotIndex is an index into the engine's plugin scan, and a VST device
     // without one is a device pointing at whatever the scan happened to list
     // first. There is nowhere in 40 bytes to put a path or a VstRef, so the
@@ -7681,6 +7711,38 @@ mod tests {
         // first node instead of to none.
         assert_eq!(p.patcher_node_id, K_CHAIN_DEVICE_ID_AUTO, "no patcher node yet");
         assert_eq!(p.bypass, 0);
+    }
+
+    /// An EVENT patcher goes to the head of the chain; everything else appends.
+    ///
+    /// BOTH HALVES, because fixing one direction is exactly how this broke: an event graph feeds
+    /// what comes after it, so appending it behind an instrument is a silent track — and an
+    /// effect appended is the whole point of an effect. A test that pinned only one would have
+    /// let the other regress, which is what happened on the agent side the same day.
+    #[test]
+    fn an_event_patcher_leads_the_chain_and_everything_else_follows() {
+        let ev = build_chain_edit(r#"{"type":"adddevice","track":0,"kind":"patcher event"}"#)
+            .expect("recognised").expect("built");
+        assert_eq!(ev.device_kind, 0);
+        assert_eq!(ev.insert_index, 0,
+                   "an event patcher must land BEFORE the instrument it feeds — appended, it \
+                    emits into nothing and the track is silent with the rack drawing it happily");
+
+        for (kind, name) in [(2u32, "patcher audio"), (5, "sampler")] {
+            let other = build_chain_edit(
+                &format!(r#"{{"type":"adddevice","track":0,"kind":"{name}"}}"#))
+                .expect("recognised").expect("built");
+            assert_eq!(other.device_kind, kind);
+            assert_eq!(other.insert_index, K_CHAIN_DEVICE_ID_AUTO,
+                       "{name} must still APPEND — an effect belongs after what it processes, and \
+                        head-inserting everything is the opposite regression");
+        }
+
+        // An explicit position still wins over the kind's default.
+        let placed = build_chain_edit(
+            r#"{"type":"adddevice","track":0,"kind":"patcher event","pos":3}"#)
+            .expect("recognised").expect("built");
+        assert_eq!(placed.insert_index, 3, "an explicit pos overrides the kind default");
     }
 
     #[test]
