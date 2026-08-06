@@ -145,11 +145,29 @@ twice and requiring the audio to differ.
 
 ## 6. The patcher
 
-`⌘B` → DEVICES → `patcher event`, then **double-click its rack card** to open the graph.
+**Feed it Zebralette, not the sampler, and put the patcher FIRST in the chain.**
+
+`⌘B` → DEVICES → `patcher event`, **then** the plugin — order matters, because an event graph
+feeds whatever comes *after* it. Then **double-click the patcher's rack card** to open the graph.
 
 Opening it for a device is what makes the edits land in that device's own graph — `a` adds a node,
 `t` changes its type, `c` links two, Delete removes. The patcher is an EVENT graph: it generates or
 transforms notes and the track's instrument sounds them, so it needs an instrument after it.
+
+Three things that will otherwise cost you the moment, all measured:
+
+1. **A patcher into the built-in sampler is SILENT.** Into a VST instrument it plays. Measured
+   offline: the same graph gives peak 0.1010 into Zebralette and 0.0000 into the sampler, while a
+   typed note through that same sampler gives 0.2656. Reported to backend;
+   `patcher-audible.mjs` holds the numbers. **Use a plugin.**
+2. **A new node generates nothing.** `a` mints a euclidean with every field at zero — steps 0,
+   hits 0, velocity 0 — so the graph looks right and emits nothing. Set them: `patch <node> steps
+   8`, `patch <node> hits 4`, `patch <node> vel 100`, and `patch <node> base 4` for the octave
+   (0 is four octaves down and inaudibly slow on a sampler).
+3. **The track needs a clip.** With no placement nothing on the track is scheduled and the
+   generator never runs. Type a note anywhere on it — that makes the clip — and delete it again.
+
+Or just load `generator` from the projects rail, which is this already built and working.
 
 ## 7. The AI
 
