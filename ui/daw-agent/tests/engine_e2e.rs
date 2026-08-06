@@ -3046,3 +3046,86 @@ fn the_agent_can_set_tempo_meter_and_loop() {
         std::thread::sleep(Duration::from_millis(200));
     }
 }
+
+/// DELETING A NOTE ON A TRACK THAT IS NOT THE ONLY ONE EDITED — every such call was refused.
+///
+/// From a live log, verbatim:
+///
+///     engine: track 2 refused an edit composed against version 80 (it is at 13 now)
+///
+/// Eighty was the GLOBAL clip version, which `observe` reports as `transport.clip_version`.
+/// Thirteen was TRACK 2's. `requireMatchingClipVersion` gates per track (M2.17), and `send_edit`
+/// stamped the global counter — so on any session where another track had been touched, the two
+/// were nowhere near each other and delete_note could not land.
+///
+/// Thirteen deletes came back `applied: false` in a row. The model read that as success — it said
+/// "Good, all the old kicks are deleted" — and wrote eight new notes on top of the twelve that
+/// were still there.
+///
+/// THE SETUP IS THE WHOLE TEST. A delete on a single-track song passes either way, because with
+/// one track the global and per-track counters move together. Editing track 0 FIRST is what
+/// separates them, and it is why every existing test missed this: they all write to one track.
+#[test]
+fn deleting_a_note_works_when_another_track_has_been_edited() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agdelnote");
+
+    assert!(session.execute(&ToolCall { tool: "add_track".into(), args: json!({}) }).ok);
+    std::thread::sleep(Duration::from_millis(600));
+
+    // TRACK 0 FIRST, and enough of them to push the global counter well past track 1's. Without
+    // this the two versions agree and the bug is invisible.
+    let a = session.execute(&ToolCall {
+        tool: "add_notes".into(),
+        args: json!({ "track": 0, "pitches": [60, 62, 64, 65, 67, 69, 71, 72],
+                      "start": 0, "step": Q }),
+    });
+    assert!(a.ok, "seeding track 0 failed: {a:?}");
+
+    // Now track 1: three notes, then delete the middle one.
+    let b = session.execute(&ToolCall {
+        tool: "add_notes".into(),
+        args: json!({ "track": 1, "pitches": [36, 36, 36], "start": 0, "step": Q * 2 }),
+    });
+    assert!(b.ok, "seeding track 1 failed: {b:?}");
+
+    let notes_on = |name: &str, track: u64| -> usize {
+        assert!(session.execute(&ToolCall {
+            tool: "save".into(), args: json!({"name": name}) }).ok);
+        let doc = read_project(&engine.proj, name);
+        let t = doc["tracks"].as_array().unwrap().iter()
+            .find(|t| t["track_id"].as_u64() == Some(track)).cloned().unwrap_or(Value::Null);
+        let clip_id = t["placements"].as_array().and_then(|p| p.first())
+            .and_then(|p| p["clip_id"].as_u64());
+        doc["clips"].as_array().unwrap().iter()
+            .filter(|c| c["id"].as_u64() == clip_id)
+            .filter_map(|c| c["notes"].as_array()).map(|n| n.len()).sum()
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        if notes_on("agdel_pre", 1) == 3 { break; }
+        assert!(Instant::now() < deadline, "track 1's three notes never landed");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    let gone = session.execute(&ToolCall {
+        tool: "delete_note".into(), args: json!({ "track": 1, "tick": Q * 2 }),
+    });
+    assert!(gone.ok, "delete_note errored: {gone:?}");
+    // `applied` is the tool's own report, and it was FALSE for every call in the live log while
+    // the tool still returned ok. Asserting it separately names the failure the model saw.
+    assert_eq!(gone.output["applied"].as_bool(), Some(true),
+               "delete_note reported applied:false — the engine refused it against the wrong \
+                counter, and a model reading this reply concludes the note is gone: {gone:?}");
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let n = notes_on("agdel_post", 1);
+        if n == 2 { break; }
+        assert!(Instant::now() < deadline,
+                "track 1 still has {n} notes, want 2 — the delete was composed against the GLOBAL \
+                 clip version while the engine gates on the TRACK's");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}

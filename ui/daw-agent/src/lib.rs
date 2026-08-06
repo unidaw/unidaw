@@ -15,7 +15,7 @@ pub mod observe;
 pub mod tools;
 
 pub use harness::{run_agent_loop, CallOutcome, Decider, ScriptedDecider, StepOutcome};
-pub use observe::{observe, DeviceView, NoteView, Observation, TrackView, Transport};
+pub use observe::{observe, DeviceView, NoteView, Observation, PluginView, TrackView, Transport};
 pub use tools::{
     execute, manifest_json, tool_manifest, ToolCall, ToolResult, ToolSpec,
 };

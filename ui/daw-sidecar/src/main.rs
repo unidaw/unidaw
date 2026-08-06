@@ -1870,6 +1870,38 @@ fn is_complete_json_object(t: &str) -> bool {
  * cannot see is worse than one you can see and cannot use, and "why is Zebra not
  * in the list" is a question the list itself should answer.
  */
+/// The catalogue as the AGENT needs it: a slot, a name, and whether it can be an instrument.
+///
+/// `list_plugins` above hands the browser the raw file. A model needs one thing from it and needs
+/// it to be unambiguous — WHICH NUMBER names this plugin — because `host_slot_index` is the only
+/// thing that does, and an add without one takes slot 0. On this machine slot 0 is Analog Heat.
+///
+/// Entries the scanner marked failed are dropped here, unlike the browser's list: a person
+/// benefits from seeing "Zebra2: error", because it answers "why can I not find it". A model
+/// cannot act on it and would only be given a slot that does not load.
+fn agent_plugins(path: &str) -> Vec<daw_agent::PluginView> {
+    let Ok(text) = std::fs::read_to_string(path) else { return Vec::new() };
+    if !is_complete_json_object(&text) { return Vec::new(); }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return Vec::new() };
+    // The array is the file's own order, and that order IS the slot numbering — the browser
+    // sends `row.pluginIndex`, which is the index it was listed at. Same rule, one reader.
+    let arr = v.as_array().cloned()
+        .or_else(|| v.get("plugins").and_then(|p| p.as_array()).cloned())
+        .or_else(|| v.as_object().and_then(|o| o.values()
+            .find_map(|x| x.as_array().cloned())))
+        .unwrap_or_default();
+    arr.iter().enumerate().filter_map(|(i, e)| {
+        if e.get("ok").and_then(|o| o.as_bool()) == Some(false) { return None; }
+        let name = e.get("name").and_then(|n| n.as_str())?.to_string();
+        if name.is_empty() { return None; }
+        Some(daw_agent::PluginView {
+            slot: i as u32,
+            name,
+            instrument: e.get("is_instrument").and_then(|b| b.as_bool()).unwrap_or(false),
+        })
+    }).collect()
+}
+
 fn list_plugins(path: &str) -> String {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
@@ -4784,6 +4816,7 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                             let hist = history.clone();
                             let ch = chains.clone();
                             let projects2 = projects.clone();
+                            let plugin_cache2 = plugin_cache.clone();
                             thread::spawn(move || {
                                 /*
                                  * WHAT IS ON EACH TRACK, from the store the drainer keeps.
@@ -4817,7 +4850,12 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                          */
                                         let names: Vec<String> = scan_samples(&projects2)
                                             .into_iter().map(|(n, _, _)| n).collect();
-                                        ask::run(&session, &prompt, &tx, &hist, &lookup, &names)
+                                        // Read at ask time like the samples, and for the same
+                                        // reason: a plugin installed since the sidecar booted is
+                                        // one the model would otherwise be told does not exist.
+                                        let plugs = agent_plugins(&plugin_cache2);
+                                        ask::run(&session, &prompt, &tx, &hist, &lookup, &names,
+                                                 &plugs)
                                     }
                                     Err(e) => {
                                         let _ = tx.send(ask::Progress::Failed(

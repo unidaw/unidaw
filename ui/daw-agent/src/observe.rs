@@ -34,6 +34,9 @@ pub struct Observation {
     /// guessing at one, which would be a second copy of the resolution rule.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub samples: Vec<String>,
+    /// FILLED BY THE CALLER, like `devices` and `samples`: this crate cannot read the plugin
+    /// catalogue, which lives beside the engine binary and is the sidecar's to find.
+    pub plugins: Vec<PluginView>,
 }
 
 /// What the song IS, as opposed to where it is playing: tempo, meter, key.
@@ -134,6 +137,19 @@ pub struct TrackView {
 }
 
 /// One device on a track, as much of it as an agent needs to name and judge it.
+/// One installed plugin, as the engine's scanner left it in plugin_cache.json.
+///
+/// `slot` is its INDEX IN THAT FILE and it is the only thing that names a plugin on this wire —
+/// `host_slot_index` on the chain command. Slot 0 is whatever happened to be scanned first, and
+/// on this machine that is Analog Heat, which is not even an instrument. An add with no slot gets
+/// it, which is exactly what "add zebralette" produced.
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginView {
+    pub slot: u32,
+    pub name: String,
+    pub instrument: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DeviceView {
     /// The id every device-taking tool wants. Stable for the device's lifetime.
@@ -414,6 +430,7 @@ pub fn observe_window(handle: &EngineHandle, window: Option<Window>) -> Observat
         // Empty here by construction — see `attach_samples`. This crate cannot know the project
         // directory, and guessing at one would be a second copy of the engine's resolution rule.
         samples: Vec::new(),
+        plugins: Vec::new(),
     }
 }
 
@@ -578,6 +595,31 @@ impl Observation {
             }
             out.push('\n');
         }
+        /*
+         * THE INSTALLED PLUGINS, BY SLOT — and the slot is the point of the line.
+         *
+         * `host_slot_index` is the only thing that names a plugin on this wire, and an add
+         * without one takes slot 0. On this machine slot 0 is Analog Heat, which is not even an
+         * instrument, so "add zebralette to track 1" produced a distortion. The model then could
+         * not tell what it had made, said the device had not been added, and removed it.
+         *
+         * INSTRUMENTS MARKED, because the model has to choose one and half the catalogue cannot
+         * be one. `add_device` refuses nothing here — the engine owns that — but a list that
+         * makes the distinction visible is the difference between choosing and guessing.
+         */
+        if !self.plugins.is_empty() {
+            const SHOWN: usize = 40;
+            let head: Vec<String> = self.plugins.iter().take(SHOWN)
+                .map(|p| format!("{}={}{}", p.slot, p.name,
+                                 if p.instrument { " (instrument)" } else { "" }))
+                .collect();
+            out.push_str(&format!("plugins ({}), by slot: {}",
+                                  self.plugins.len(), head.join(", ")));
+            if self.plugins.len() > SHOWN {
+                out.push_str(&format!(", … and {} more", self.plugins.len() - SHOWN));
+            }
+            out.push('\n');
+        }
         out
     }
 }
@@ -596,6 +638,11 @@ impl Observation {
     /// Tell the observation which audio files exist, so the agent stops guessing at names.
     pub fn attach_samples(&mut self, names: Vec<String>) {
         self.samples = names;
+    }
+
+    /// The installed plugins, by the slot that names them on the wire.
+    pub fn attach_plugins(&mut self, plugins: Vec<PluginView>) {
+        self.plugins = plugins;
     }
 
     pub fn attach_devices(&mut self, track_id: u32, devices: Vec<DeviceView>) {

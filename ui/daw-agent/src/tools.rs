@@ -1490,8 +1490,30 @@ fn add_device(handle: &EngineHandle, args: &Value) -> ToolResult {
     let mut p = chain_blank(UiCommandType::AddDevice, track as u32);
     p.device_kind = kind;
     p.insert_index = arg_u64(args, "position").unwrap_or(0) as u32;
+    /*
+     * WHICH PLUGIN, and the absence of this was the whole of a live failure.
+     *
+     * Asked to "add zebralette to track 1", the model sent kind `vst_instrument` and nothing
+     * else, because nothing else was on offer. A kind is a CATEGORY: the engine picked a plugin
+     * from the catalogue and picked Analog Heat. The model then observed, could not find what it
+     * had made, said "the device wasn't added", removed it and tried a sampler instead.
+     *
+     * `host_slot_index` is how the wire names a plugin — its index in the scanned catalogue —
+     * which is why the sidecar's own adddevice takes `{"kind":4,"slot":2}`. The slot comes from
+     * the `plugins:` line of an observation, the same way sample names do: the agent crate cannot
+     * scan the catalogue itself, so the sidecar hands it over.
+     *
+     * K_CHAIN_DEVICE_ID_AUTO is left in place when no slot is named, which is the engine's
+     * "choose for me" — correct for the kinds that have no plugin (sampler, patcher) and the
+     * documented behaviour for the ones that do.
+     */
+    if let Some(slot) = arg_u64(args, "plugin_slot") {
+        p.host_slot_index = slot as u32;
+    }
     match handle.send_chain_command(p) {
-        Ok(()) => ToolResult::ok(json!({ "sent": true, "track": track, "kind": kind })),
+        Ok(()) => ToolResult::ok(json!({
+            "sent": true, "track": track, "kind": kind,
+            "plugin_slot": arg_u64(args, "plugin_slot") })),
         Err(e) => ToolResult::err(e),
     }
 }
@@ -3445,13 +3467,35 @@ fn send_now(handle: &EngineHandle, p: UiCommandPayload, out: Value) -> ToolResul
 
 /// Send a CLIP edit and wait for the engine to apply it.
 fn send_edit(handle: &EngineHandle, mut p: UiCommandPayload, out: Value) -> ToolResult {
-    let base = handle.clip_version();
+    /*
+     * THE TRACK'S VERSION, NOT THE GLOBAL ONE — and this was wrong, which made delete_note
+     * refuse every single call.
+     *
+     * `requireMatchingClipVersion` compares against the version of the TRACK being edited (M2.17),
+     * so acceptance is per track. This read the global counter, which is the sum of every track's
+     * edits, and on any session where another track has been touched the two are nowhere near
+     * each other. From a live log:
+     *
+     *     engine: track 2 refused an edit composed against version 80 (it is at 13 now)
+     *
+     * Eighty was the global; thirteen was track 2's. Thirteen delete_note calls in a row came
+     * back `applied: false`, the model read that as the notes being gone — it said "Good, all the
+     * old kicks are deleted" — and wrote new ones on top of the twelve that were still there.
+     *
+     * `add_notes` and `add_chords` were already right: they call `clip_version_for_track`. So the
+     * WRITE path worked and the DELETE path did not, which is why this survived — every test that
+     * writes notes passed, and the one operation nobody had covered was the broken one.
+     *
+     * `p.track_id` is set by every caller before this point, which is what makes taking it from
+     * the payload safe rather than adding an argument two of three callers would pass redundantly.
+     */
+    let base = handle.clip_version_for_track(p.track_id);
     p.base_version = base;
     if let Err(e) = handle.send_command(p) {
         return ToolResult::err(e);
     }
-    let applied =
-        handle.wait_for_clip_version(base, base.wrapping_add(1), std::time::Duration::from_secs(2));
+    let applied = handle.wait_for_track_clip_version(
+        p.track_id, base, base.wrapping_add(1), std::time::Duration::from_secs(2));
     let mut v = out;
     if let Value::Object(ref mut m) = v {
         m.insert("applied".into(), json!(applied));

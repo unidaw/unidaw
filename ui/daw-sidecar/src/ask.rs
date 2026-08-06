@@ -264,7 +264,7 @@ be in it: add it, then `observe` to learn its id.";
 
 /// The half that does: the song as it stands, plus a warning about the past.
 fn shape_block(session: &AgentSession, has_history: bool, devices: &DeviceLookup,
-               samples: &[String]) -> String {
+               samples: &[String], plugins: &[daw_agent::PluginView]) -> String {
     // The TEXT form, and the SHAPE rather than every note.
     //
     // This used to embed the whole song as JSON — ~114 bytes per note, which is
@@ -297,6 +297,15 @@ fn shape_block(session: &AgentSession, has_history: bool, devices: &DeviceLookup
      */
     if !samples.is_empty() {
         obs.attach_samples(samples.to_vec());
+    }
+    /*
+     * WHICH PLUGINS EXIST, and which slot names each one. Without it the model is asked to pick a
+     * plugin from a catalogue it cannot see: told to "add zebralette" it sent a bare
+     * `vst_instrument`, the engine took slot 0, and slot 0 on this machine is Analog Heat. The
+     * model said out loud that it had no access to the VST list, and then guessed.
+     */
+    if !plugins.is_empty() {
+        obs.attach_plugins(plugins.to_vec());
     }
     let obs = obs.to_text();
     let stale = if has_history {
@@ -349,6 +358,7 @@ pub fn run(
     history: &std::sync::Mutex<History>,
     devices: &DeviceLookup,
     samples: &[String],
+    plugins: &[daw_agent::PluginView],
 ) {
     let Some(key) = api_key() else {
         let _ = tx.send(Progress::Failed(
@@ -379,7 +389,7 @@ pub fn run(
     let tools = tools_json(session);
     let system = json!([
         { "type": "text", "text": INSTRUCTIONS, "cache_control": { "type": "ephemeral" } },
-        { "type": "text", "text": shape_block(session, past > 0, devices, samples) },
+        { "type": "text", "text": shape_block(session, past > 0, devices, samples, plugins) },
     ]);
 
     // The running conversation. Tool results have to come back in the same
@@ -505,6 +515,13 @@ pub fn run(
                 // mean deriving Deserialize on eight types purely to add a field that is already
                 // shaped exactly like the one `attach_devices` fills — and every one of those
                 // derives would be a chance for the two paths to disagree about the wire.
+                if plugins.is_empty() {
+                    // nothing to add
+                } else if let Ok(v) = serde_json::to_value(plugins) {
+                    if let Some(obj) = out.output.as_object_mut() {
+                        obj.insert("plugins".to_string(), v);
+                    }
+                }
                 if let Some(tracks) = out.output.get_mut("tracks").and_then(|v| v.as_array_mut()) {
                     for t in tracks.iter_mut() {
                         let Some(id) = t.get("track_id").and_then(|v| v.as_u64()) else { continue };
