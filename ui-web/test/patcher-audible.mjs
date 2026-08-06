@@ -137,8 +137,14 @@ check(devId !== null && target.device === devId,
       'the patcher card is open, so the edits land in ITS graph',
       `${JSON.stringify(target)} vs device ${devId}`);
 
-// euclidean -> event out. The generator and the terminal; without the link nothing leaves.
+/*
+ * euclidean -> random_degree -> event out, which is the shape `generator.uniproj.json` uses and
+ * the shape backend measured at 0.4027. A direct euclidean -> out is what the runbook's steps
+ * produce and is being compared against it below.
+ */
 await run('addnode euclidean');
+await settle(700);
+await run('addnode random');
 await settle(700);
 await run('addnode out');
 await settle(700);
@@ -198,9 +204,10 @@ if (euclid) {
         JSON.stringify(after && after.config));
 }
 
-if (ids.length >= 2) {
-  await run(`link ${ids[ids.length - 2]} ${ids[ids.length - 1]}`);
-  await settle(800);
+// Chain them in order: each node to the next.
+for (let i = 0; i + 1 < ids.length; i++) {
+  await run(`link ${ids[i]} ${ids[i + 1]}`);
+  await settle(500);
 }
 
 /*
@@ -226,23 +233,47 @@ if (!(await page.evaluate(() => window.__uni.state().editMode))) {
   await page.keyboard.press('Meta+e');
   await settle(300);
 }
-await run('goto 4 0');
-await run('note 60 960000');
+await run('goto 0 0');
+/*
+ * ONE LONG NOTE — 30 quarters, 15 seconds — and its length is the CLIP's length.
+ *
+ * A quarter-note version made a 0.5s placement, which LOOPS: the note retriggered every half
+ * second forever and the "patcher" window was measuring it. The control caught that — pattern on
+ * and pattern off gave the identical 0.2658 — which is exactly what a control is for.
+ *
+ * The sample is a one-shot and decays in about 1.6s whatever the note length, so a long note
+ * gives the clip its extent without sounding through the window being measured.
+ */
+await run('note 60 28800000');
 await settle(800);
-const madeClip = await page.evaluate(() => (window.__uni.clips() || []).length);
-await run('goto 4 0');
-await run('del');
-await settle(800);
-const leftNotes = await page.evaluate(() => (window.__uni.notes() || []).length);
-check(madeClip > 0 && leftNotes === 0,
-      'a typed-then-deleted note leaves an EMPTY clip for the track to be scheduled over',
-      `${madeClip} placement(s), ${leftNotes} note(s) left`);
+/*
+ * THE NOTE STAYS. Deleting it left the placement with LENGTH 0 — `placements: [(1, 3840000, 0)]`
+ * — and a placement covering no time schedules nothing, so the generator never ran and the render
+ * was silent. That cost a wrong report to backend: the patcher was fine, my clip had no duration.
+ *
+ * So the note stays and gives the clip its extent, and the patcher is measured in a window WELL
+ * AFTER it has decayed. The sample rings for about 1.6s, so from 3s on, anything sounding is the
+ * pattern. The control below re-renders with the pattern emptied and that same window must go
+ * silent — which is what separates "the patcher played" from "the note is still ringing".
+ */
+const clipInfo = await page.evaluate(() => (window.__uni.clips() || [])
+  .map((c) => ({ at: c.at, len: c.len })));
+console.log(`  placements: ${JSON.stringify(clipInfo)}`);
+check(clipInfo.length > 0 && clipInfo[0].len > 0,
+      'the clip has a real LENGTH — a zero-length placement schedules nothing at all',
+      JSON.stringify(clipInfo));
 
 await run(`save ${SONG}`);
 await settle(2200);
 
-/** Render the saved project and return its envelope peak, or -1. */
-const renderPeak = (name, out) => {
+/**
+ * Render the saved project and return the peak of a WINDOW, or -1.
+ *
+ * From 3 seconds by default: the clip's one typed note is at tick 0 and rings for about 1.6s, so
+ * everything after that is the generator. Measuring the whole file would credit the patcher with
+ * the note that gives the clip its length.
+ */
+const renderPeak = (name, out, from = 3.0) => {
   const wav = join(stack.dir, `${out}.wav`);
   try { unlinkSync(wav); } catch { /* absent is normal */ }
   try {
@@ -259,7 +290,11 @@ const renderPeak = (name, out) => {
   }
   if (!existsSync(wav)) return -1;
   const w = readWav(wav);
-  return envelope(w.mono, w.rate, 0.05).reduce((m, v) => Math.max(m, v), 0);
+  const per = 0.05;
+  const env = envelope(w.mono, w.rate, per);
+  let m = 0;
+  for (let i = Math.round(from / per); i < env.length; i++) m = Math.max(m, env[i]);
+  return m;
 };
 
 /*
@@ -273,6 +308,36 @@ const renderPeak = (name, out) => {
  *
  * Typed into the clip AFTER the patcher render, so the first render measures the graph alone.
  */
+/*
+ * THE KEYMAP QUESTION, ASKED BEFORE THE ROUTING ONE.
+ *
+ * The engine publishes `unmapped` on the kit read-back — notes that hit no slot — and it splits
+ * a silent render into two completely different investigations:
+ *
+ *     silent, unmapped > 0   the notes arrived and no slot answers their pitch (a KEYMAP miss)
+ *     silent, unmapped == 0  no notes arrived at all (a ROUTING failure)
+ *
+ * Backend's A/B showed a patcher into a slot pinned at key 36 is silent while the same graph into
+ * a slot spanning 0-127 peaks at 0.4027 — a euclidean emits degrees around 48-60 and a one-key
+ * slot matches none of them. So this reading is what tells my fixture's case from theirs, and it
+ * is one line rather than another round of renders.
+ */
+const kitAfter = await page.evaluate(() => {
+  for (let d = 0; d < 6; d++) {
+    const k = window.__uni.samplerKitCached(0, d);
+    if (k && k.slots && k.slots.length) {
+      return { unmapped: k.unmapped, voices: k.activeVoices,
+               slots: k.slots.map((s) => ({ lo: s.keyLow, hi: s.keyHigh, root: s.root })) };
+    }
+  }
+  return null;
+});
+console.log(`  kit: ${JSON.stringify(kitAfter)}`);
+check(kitAfter && kitAfter.slots.some((s) => s.lo <= 48 && s.hi >= 60),
+      'the slot spans the pitches a euclidean emits (degrees near 48-60)',
+      `${JSON.stringify(kitAfter && kitAfter.slots)} — a slot pinned to one key is silent for a `
+      + `generated pattern and sounds for a typed note, which reads as a routing failure`);
+
 const live = renderPeak(SONG, 'take');
 console.log(`  with the pattern:  peak ${live < 0 ? 'RENDER FAILED' : live.toFixed(4)}`);
 check(live > 0.004, 'THE PATCHER MAKES A SOUND — its notes reach the instrument and the master',
@@ -340,7 +405,17 @@ if (!(await page.evaluate(() => window.__uni.state().editMode))) {
   await settle(300);
 }
 await run('goto 4 0');
-await run('note 60 960000');
+/*
+ * ONE LONG NOTE — 30 quarters, 15 seconds — and its length is the CLIP's length.
+ *
+ * A quarter-note version made a 0.5s placement, which LOOPS: the note retriggered every half
+ * second forever and the "patcher" window was measuring it. The control caught that — pattern on
+ * and pattern off gave the identical 0.2658 — which is exactly what a control is for.
+ *
+ * The sample is a one-shot and decays in about 1.6s whatever the note length, so a long note
+ * gives the clip its extent without sounding through the window being measured.
+ */
+await run('note 60 28800000');
 await settle(700);
 await run(`save ${SONG}_note`);
 await settle(2000);
