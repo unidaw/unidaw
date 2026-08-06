@@ -262,8 +262,34 @@ for i in "${!MUT_NAME[@]}"; do
 
   before="$(snap "before_$i")"
 
-  after_command "$TMP" cli $cmd >/dev/null 2>&1 || true
+  # SEND UNTIL THE ENGINE ACCEPTS, BOUNDED — because a REFUSAL IS NOT A VERDICT ON UNDO.
+  #
+  # Version-gated commands (WriteNote, WriteHarmony, the clip edits) stamp their base from the
+  # PUBLISHED state, and the published version LAGS the engine's after a load — task #120. So a
+  # command can be refused for reasons that have nothing to do with whether it is undoable, and
+  # assertion 1 below then reports "the command changed NOTHING ... may be a silent no-op", which
+  # is an accusation aimed at the wrong thing entirely. That is exactly what happened: WriteHarmony
+  # came back 14-of-15 in a full-suite run and passed alone twice, and the cause was
+  # harmony.version_mismatch base:9 current:10 — the engine correctly declining a stale write.
+  #
+  # Each send re-reads the version, so this converges as soon as the publish catches up.
+  refusals() { grep -c '"outcome":"rejected' "$TMP/history.jsonl" 2>/dev/null || true; }
+  accepted=0
+  for _ in 1 2 3 4 5; do
+    r_before="$(refusals)"
+    after_command "$TMP" cli $cmd >/dev/null 2>&1 || true
+    if [ "$(refusals)" -eq "$r_before" ]; then accepted=1; break; fi
+    sleep 0.3
+  done
   snap "after_$i" >/dev/null
+
+  # A COMMAND THE ENGINE REFUSED IS REPORTED AS A REFUSAL, not as a no-op. The two look identical
+  # from the document — both leave it unchanged — and only one of them says anything about undo.
+  if [ "$accepted" -eq 0 ]; then
+    FAILED=$((FAILED + 1))
+    FAIL_LINES+=("$name: the engine REFUSED this command on all 5 attempts (stale base — see task #120), so undo was never exercised. This is not an undo regression.")
+    continue
+  fi
 
   # 1. IT CHANGED SOMETHING. A command that did nothing would pass 2 and 3 perfectly.
   if cmp -s "$TMP/before_$i.json" "$TMP/after_$i.json"; then
