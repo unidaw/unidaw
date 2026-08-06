@@ -695,6 +695,7 @@ mod device_view_tests {
             },
             tracks,
             samples: Vec::new(),
+            plugins: Vec::new(),
         }
     }
 

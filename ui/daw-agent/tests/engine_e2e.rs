@@ -3129,3 +3129,88 @@ fn deleting_a_note_works_when_another_track_has_been_edited() {
         std::thread::sleep(Duration::from_millis(200));
     }
 }
+
+/// TWO NOTES THAT OVERLAP IN ONE COLUMN SURVIVE AS AUTHORED — the 303-slide precondition.
+///
+/// A slide between two notes on a monophonic VSTi is not a tracker effect and not a second
+/// column: it is what a mono synth does when it receives a note-on WHILE THE PREVIOUS NOTE IS
+/// STILL HELD. It glides to the new pitch and does not retrigger its envelope. So the whole
+/// question is whether the document can express "A is still sounding when B starts".
+///
+/// It can, but only with `allow_note_overlap` on. Without it, `applyLocalNoteEdit` truncates the
+/// sounding note at the new note's tick — and `clip_edit.cpp` calls that out as the one edit in
+/// the tracker that DESTROYS DATA, because the length the player typed is gone and no later view
+/// can recover it. With it, both notes are left exactly as authored, and the scheduler already
+/// honours overlapping durations in one column (measured there as a power sum, not one winning).
+///
+/// This asserts the DOCUMENT, which is the layer the flag acts on. What a hosted plugin then does
+/// with two overlapping note-ons is the plugin's business — that is the synth's portamento, not
+/// something this engine decides.
+#[test]
+fn overlapping_notes_in_one_column_survive_as_authored() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agoverlap");
+
+    let durations = |name: &str| -> Vec<(u64, u64)> {
+        assert!(session.execute(&ToolCall {
+            tool: "save".into(), args: json!({"name": name}) }).ok);
+        let doc = read_project(&engine.proj, name);
+        let mut out: Vec<(u64, u64)> = doc["clips"].as_array().unwrap().iter()
+            .filter_map(|c| c["notes"].as_array())
+            .flatten()
+            .map(|n| (n["nanotick"].as_u64().unwrap_or(0), n["duration"].as_u64().unwrap_or(0)))
+            .collect();
+        out.sort();
+        out
+    };
+
+    // OFF FIRST, so the truncation is demonstrated rather than assumed — otherwise "they overlap"
+    // could be true for a build where the flag does nothing at all.
+    assert!(session.execute(&ToolCall {
+        tool: "set_track_grid".into(), args: json!({ "track": 0, "note_overlap": false }) }).ok);
+    std::thread::sleep(Duration::from_millis(400));
+    // A whole bar long, starting a beat apart: A must reach well past B's start.
+    for (tick, pitch) in [(0u64, 60u64), (Q, 62)] {
+        assert!(session.execute(&ToolCall {
+            tool: "add_notes".into(),
+            args: json!({ "track": 0, "pitches": [pitch], "start": tick, "step": Q,
+                          "duration": Q * 4 }),
+        }).ok);
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    let cut = durations("agoverlap_off");
+    assert_eq!(cut.len(), 2, "both notes exist: {cut:?}");
+    assert_eq!(cut[0].1, Q,
+               "with overlap OFF the first note is truncated to the second's start — {cut:?}. \
+                This is the documented data-destroying edit, and the control for the case below");
+
+    // NOW ON, on a fresh pair.
+    assert!(session.execute(&ToolCall {
+        tool: "set_track_grid".into(), args: json!({ "track": 0, "note_overlap": true }) }).ok);
+    std::thread::sleep(Duration::from_millis(400));
+    for (tick, pitch) in [(Q * 8, 64u64), (Q * 9, 65)] {
+        assert!(session.execute(&ToolCall {
+            tool: "add_notes".into(),
+            args: json!({ "track": 0, "pitches": [pitch], "start": tick, "step": Q,
+                          "duration": Q * 4 }),
+        }).ok);
+        std::thread::sleep(Duration::from_millis(300));
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        let all = durations("agoverlap_on");
+        let a = all.iter().find(|(t, _)| *t == Q * 8).copied();
+        let b = all.iter().find(|(t, _)| *t == Q * 9).copied();
+        if let (Some((at, ad)), Some((bt, _))) = (a, b) {
+            // THE CONDITION ITSELF: A is still sounding when B starts. Not "A is long" and not
+            // "both exist" — the overlap is what a mono synth reads as legato.
+            if at + ad > bt { break; }
+        }
+        assert!(Instant::now() < deadline,
+                "with overlap ON the first note must still be sounding when the second starts — \
+                 {all:?}. Without that the plugin gets note-off before note-on and retriggers \
+                 instead of gliding");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
