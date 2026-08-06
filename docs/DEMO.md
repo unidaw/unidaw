@@ -11,17 +11,42 @@ an unverified step in a runbook is worse than an absent one, because it reads li
 
 ```
 cd /Users/jak/src/daw-web
+tools/dev.sh
+```
+
+That is the whole thing: it **builds first**, starts the engine, sidecar and page server, opens
+the browser, and holds the terminal so **Ctrl-C stops all three**. Arrow-up and run it again to
+pick up the latest — the build is inside the command, so "run the latest" is not something you
+have to remember to do first.
+
+The build step is not politeness. A running stack keeps the binary it STARTED with, so rebuilding
+while it is up leaves the process older than the code on disk — a fix lands, the suites go green,
+and the app in front of you still has the bug. That happened three times in one day before this
+script existed.
+
+`tools/webstack.sh` is still there and unchanged, and is what the harness and
+`demo-stack-smoke.mjs` use. Reach for it directly only if you need its flags:
+
+```
 DAW_ENV_FILE=/Users/jak/src/daw-web/.env KEEP_ENGINE=1 tools/webstack.sh
 ```
 
-Then check the line it prints:
+Either way, check the two lines it prints about the key:
 
 ```
-ask     enabled — key file /Users/jak/src/daw-web/.env
+> ask: an ANTHROPIC_API_KEY resolves — the AI box should work
+> ask     enabled — key file /Users/jak/src/daw-web/.env
 ```
 
-**If it says DISABLED, the AI will refuse every prompt** with a message in the console that is
-easy to miss on stage. `.env` in the repo root is enough; `DAW_ENV_FILE` overrides it.
+They answer different questions and you want both. The first repeats the sidecar's own search and
+says whether a key **resolves**; the second names **which file** it came from. A stack can find a
+key in a place you did not mean — an inherited `ANTHROPIC_API_KEY` in the shell, or a `.env` one
+directory up — and only the second line tells you that.
+
+**If either says `DISABLED` or `NO ANTHROPIC_API_KEY RESOLVES`, the AI box will not work** — and
+it will not say so until somebody types into it, which on stage is the worst possible moment to
+find out. The script prints the two ways to fix it. `.env` in the repo root is enough;
+`DAW_ENV_FILE` overrides it, and `dev.sh` passes the repo one unless you set that.
 
 `--keep-engine` means closing the browser tab does not kill the engine. Without it the sidecar
 asks the engine to quit a few seconds after the last tab closes.
