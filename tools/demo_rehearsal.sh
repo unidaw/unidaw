@@ -459,7 +459,14 @@ fi
 # a solo pass per track.
 echo
 if [ -f "$TMP/rehearsal.uniproj.json" ]; then
-  ( cd "$BUILD" && exec env DAW_PROJECT_DIR="$TMP" ./daw_engine --project rehearsal \
+  # ITS OWN SEGMENT NAME. The rehearsal's engine is still alive on $SHM at this point, and an
+  # engine with no DAW_UI_SHM_NAME takes the DEFAULT one — from which the host socket paths and
+  # the shared segment are derived. Two engines on one segment is the collision that started the
+  # instance-isolation work in this repo; leaving it to chance because "nothing else is probably
+  # using the default right now" is how it happened the first time. Derived from $SHM so it is
+  # unique per run and obviously related to it.
+  ( cd "$BUILD" && exec env DAW_UI_SHM_NAME="${SHM}_render" DAW_PROJECT_DIR="$TMP" \
+      ./daw_engine --project rehearsal \
       --render "$TMP/take" --run-seconds 12 ) >"$TMP/render.log" 2>&1
   PEAK="$(python3 - "$TMP/take.wav" <<'PYR' 2>/dev/null
 import wave, struct, sys
