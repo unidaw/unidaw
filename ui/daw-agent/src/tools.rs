@@ -2122,20 +2122,11 @@ fn delete_chord(handle: &EngineHandle, args: &Value) -> ToolResult {
     let (Some(track), Some(tick)) = (arg_u64(args, "track"), arg_u64(args, "tick")) else {
         return ToolResult::err("delete_chord needs \"track\" and \"tick\"");
     };
-    // REFUSED, NOT CLAMPED, and the difference matters: the engine reads the column as
-    // `flags & 0xff`, so a column of 300 arrives as 44 — a well-formed removal of a chord in a
-    // column the caller never named. Clamping to u16 (which this did) was the same bug one type
-    // wider. Verified against engine_note_commands.cpp, which masks identically on the write.
-    let column = arg_u64(args, "column").unwrap_or(0);
-    if column > 0xff {
-        return ToolResult::err(format!(
-            "column {column} does not fit the byte the engine reads — it would arrive as {} and \
-             remove a chord in a column you did not name", column & 0xff));
-    }
+    let column = match edit_column(args, "delete_chord") { Ok(c) => c, Err(e) => return ToolResult::err(e) };
     let base = handle.clip_version_for_track(track as u32);
     let p = UiChordCommandPayload {
         command_type: UiCommandType::DeleteChord as u16,
-        flags: column as u16,
+        flags: column,
         track_id: track as u32,
         base_version: base,
         nanotick_lo: (tick & 0xffff_ffff) as u32,
@@ -2934,7 +2925,7 @@ fn add_notes(handle: &EngineHandle, args: &Value) -> ToolResult {
     let step = arg_u64(args, "step").unwrap_or(NANOTICKS_PER_QUARTER);
     let duration = arg_u64(args, "duration").unwrap_or(step);
     let velocity = arg_u64(args, "velocity").unwrap_or(100).min(127) as u32;
-    let column = arg_u64(args, "column").unwrap_or(0) as u16;
+    let column = match edit_column(args, "add_notes") { Ok(c) => c, Err(e) => return ToolResult::err(e) };
 
     // Optimistic concurrency: each accepted write bumps this TRACK's clip version by
     // one, so the next note's base_version is the previous plus one. Same protocol the
@@ -3091,7 +3082,7 @@ fn add_chords(handle: &EngineHandle, args: &Value) -> ToolResult {
         v if v <= 255 => v as u8,
         v => return ToolResult::err(format!("humanize_velocity is 0..255 (a byte on the wire), got {v}")),
     };
-    let column = arg_u64(args, "column").unwrap_or(0) as u16;
+    let column = match edit_column(args, "add_chords") { Ok(c) => c, Err(e) => return ToolResult::err(e) };
 
     // The same optimistic-concurrency protocol add_notes follows, and per TRACK for the same
     // reason: reading the global counter makes every write fail the moment anyone edits
@@ -3185,6 +3176,27 @@ fn send_edit(handle: &EngineHandle, mut p: UiCommandPayload, out: Value) -> Tool
 
 /// A payload with everything zeroed but the command. The struct has twelve fields
 /// and most tools set three of them.
+/// The note/chord edit column, refused rather than truncated.
+///
+/// ONE RULE, THREE SITES — `add_notes`, `add_chords` and `delete_chord` all put the column in the
+/// payload's `flags`, and all three had their own cast. Two used `as u16` and one clamped to
+/// `u16::MAX`; none of them was the READER's bound, which is `kUiEditColumnMask = 0x00FF`.
+///
+/// AND THE OVERFLOW IS NOT MERELY A WRONG COLUMN. The same 16 bits carry `kUiEditScopeLocal`
+/// (1 << 15), so a column of 32768 does not land in column 0 — it turns a document edit into a
+/// placement-local override. Every value above 255 is some combination of a wrong column and
+/// flag bits the caller never asked for, sent as a well-formed command that reports success.
+///
+/// So it lives here once, and the three call sites ask it rather than each deciding again.
+fn edit_column(args: &Value, tool: &str) -> Result<u16, String> {
+    let column = arg_u64(args, "column").unwrap_or(0);
+    if column > u64::from(daw_bridge::layout::UI_EDIT_COLUMN_MASK) {
+        return Err(format!(
+            "{tool}: column {column} does not fit the byte the engine reads (0..255). The rest of              that field is FLAG BITS — bit 15 is the local-edit scope — so this would not simply              land in the wrong column, it would change what kind of edit this is"));
+    }
+    Ok(column as u16)
+}
+
 fn blank(cmd: UiCommandType) -> UiCommandPayload {
     UiCommandPayload {
         command_type: cmd as u16,

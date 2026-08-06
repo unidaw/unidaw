@@ -2500,3 +2500,44 @@ fn the_agent_can_set_a_filter_a_pad_name_and_an_audio_region() {
         std::thread::sleep(Duration::from_millis(200));
     }
 }
+
+/// All three column-carrying tools refuse an out-of-range column, rather than two of them casting.
+///
+/// `add_notes`, `add_chords` and `delete_chord` put the column in the payload's `flags`, and each
+/// had grown its own cast: two `as u16`, one `min(u16::MAX)`. None was the READER's bound, which
+/// is `kUiEditColumnMask = 0x00FF`.
+///
+/// AND THE OVERFLOW IS NOT MERELY A WRONG COLUMN. The same 16 bits carry `kUiEditScopeLocal`
+/// (1 << 15), so column 32768 does not land in column 0 — it turns a document edit into a
+/// placement-local override. That is why this is asserted at all three sites in one test: the
+/// rule has three call sites, so a fix at one of them is a fix that comes back.
+#[test]
+fn every_column_carrying_tool_refuses_a_column_the_engine_cannot_read() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("agcol");
+
+    // 300 truncates to 44; 32768 sets the local-scope bit and leaves column 0.
+    for bad in [300u64, 32768] {
+        let notes = session.execute(&ToolCall {
+            tool: "add_notes".into(),
+            args: json!({ "track": 0, "pitches": [60], "start": 0, "step": Q, "column": bad }),
+        });
+        assert!(!notes.ok, "add_notes accepted column {bad}: {notes:?}");
+        let chords = session.execute(&ToolCall {
+            tool: "add_chords".into(),
+            args: json!({ "track": 0, "degrees": [1], "start": 0, "step": Q, "column": bad }),
+        });
+        assert!(!chords.ok, "add_chords accepted column {bad}: {chords:?}");
+        let del = session.execute(&ToolCall {
+            tool: "delete_chord".into(),
+            args: json!({ "track": 0, "tick": 0, "column": bad }),
+        });
+        assert!(!del.ok, "delete_chord accepted column {bad}: {del:?}");
+    }
+
+    // The boundary is INCLUSIVE at 255 and the tools still work without a column at all, so the
+    // guard cannot be satisfied by refusing everything.
+    let ok_edge = session.execute(&ToolCall {
+        tool: "delete_chord".into(), args: json!({ "track": 0, "tick": 0, "column": 255 }) });
+    assert!(ok_edge.ok, "column 255 is the last legal one and must be accepted: {ok_edge:?}");
+}
