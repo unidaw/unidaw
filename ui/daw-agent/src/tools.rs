@@ -577,6 +577,54 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "sampler_envelope_points",
+            description: "DRAW an envelope as a curve, rather than setting an ADSR. `points` is a \
+                          list of {time, value} in ascending time; `value` is millis where 1000 is \
+                          full. `target` is amp, pan, pitch, cutoff or res. This is the only way \
+                          to make a shape an ADSR cannot describe — a double attack, a hold, a \
+                          rise-then-fall.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "points"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "device": { "type": "integer", "minimum": 0 },
+                    "mod_set": { "type": "integer", "minimum": 0 },
+                    "target": { "type": "string", "enum": ["amp", "pan", "pitch", "cutoff", "res"],
+                                "description": "Defaults to amp." },
+                    "points": {
+                        "type": "array", "minItems": 2,
+                        "description": "At least TWO — one point is not a shape, and inventing a \
+                                        second would be the tool deciding what you meant.",
+                        "items": {
+                            "type": "object",
+                            "required": ["time", "value"],
+                            "properties": {
+                                "time": { "type": "integer", "minimum": 0,
+                                          "description": "Microseconds from the note's start." },
+                                "value": { "type": "integer", "minimum": -1000, "maximum": 1000,
+                                           "description": "Millis; 1000 is full." },
+                                "tension": { "type": "integer", "minimum": -100, "maximum": 100,
+                                             "description": "Curve of the segment INTO this \
+                                                             point. 0 is a straight line." },
+                                "step": { "type": "boolean",
+                                          "description": "Hold the previous value, then jump." },
+                            },
+                        },
+                    },
+                    "sustain_loop": { "type": "array", "items": { "type": "integer" },
+                                      "description": "[start, end] point indices." },
+                    "release_loop": { "type": "array", "items": { "type": "integer" } },
+                    "rate": { "type": "integer", "minimum": 0,
+                              "description": "Playback rate in millis; 1000 is 1x (the default)." },
+                    "sync": { "type": "boolean", "description": "Time in beats, not microseconds." },
+                    "release_fade": { "type": "integer", "minimum": 0,
+                                      "description": "Fade applied on release, in the same time \
+                                                      unit as the points." },
+                },
+            }),
+        },
+        ToolSpec {
             name: "set_audio_clip",
             description: "An audio clip's in-point, gain or fades. `field` is \"start\" (a frame \
                           offset into the file), \"gain\" (millibels, 0 is unity), \"fade_in\" or \
@@ -2190,6 +2238,120 @@ fn delete_harmony(handle: &EngineHandle, args: &Value) -> ToolResult {
     ToolResult::ok(json!({ "deleted_harmony_at": tick, "base": base }))
 }
 
+/// THE PENCIL. An envelope as a drawn curve rather than four ADSR numbers.
+///
+/// The agent had `sampler_envelope` (attack/decay/sustain/release) and nothing else, so every
+/// shape it could make was the same shape with different numbers. A double attack, a hold, a
+/// rise-then-fall — none of them are expressible as an ADSR, and all of them are ordinary things
+/// to want. This is the third bulk-carrier tool: N points do not fit the ring's 40-byte payload,
+/// which is the whole reason opcode 83 exists.
+///
+/// TWO POINTS MINIMUM, REFUSED NOT PADDED — the same line daw-cli draws, for the reason its
+/// comment gives: one point is not a shape, and inventing a second would be the tool deciding
+/// what the envelope means.
+fn sampler_envelope_points(handle: &EngineHandle, args: &Value) -> ToolResult {
+    use daw_bridge::layout as L;
+    let Some(track) = arg_u64(args, "track") else {
+        return ToolResult::err("sampler_envelope_points needs \"track\"");
+    };
+    let target = match args.get("target").and_then(|v| v.as_str()) {
+        None | Some("amp") | Some("volume") => 0u8,
+        Some("pan") => 1u8,
+        Some("pitch") => 2u8,
+        Some("cutoff") | Some("filter") => 3u8,
+        Some("res") | Some("resonance") => 4u8,
+        Some(other) => return ToolResult::err(format!(
+            "sampler_envelope_points target {other:?} is not one of amp, pan, pitch, cutoff, res")),
+    };
+    let Some(raw) = args.get("points").and_then(|v| v.as_array()) else {
+        return ToolResult::err("sampler_envelope_points needs \"points\"");
+    };
+    if raw.len() < 2 {
+        return ToolResult::err(
+            "\"points\" needs at least two — one point is not a shape, and inventing a second \
+             would be this tool deciding what you meant");
+    }
+    if raw.len() > u16::MAX as usize {
+        return ToolResult::err("more points than the wire's count field can carry");
+    }
+    let mut pts: Vec<L::UiEnvPointWire> = Vec::with_capacity(raw.len());
+    let mut last_time: i64 = -1;
+    for (i, p) in raw.iter().enumerate() {
+        let (Some(time), Some(value)) = (p.get("time").and_then(|v| v.as_i64()),
+                                         p.get("value").and_then(|v| v.as_i64())) else {
+            return ToolResult::err(format!("point {i} needs \"time\" and \"value\""));
+        };
+        // ASCENDING, and refused rather than sorted. A caller who hands over points out of order
+        // has computed something different from what they think, and quietly reordering hides
+        // that — the engine would draw a shape nobody asked for and report success.
+        if time <= last_time {
+            return ToolResult::err(format!(
+                "point {i} is at time {time}, which is not after the previous point's \
+                 {last_time} — points must ascend, and sorting them here would hide a caller \
+                 that computed the wrong times"));
+        }
+        last_time = time;
+        if !(-1000..=1000).contains(&value) {
+            return ToolResult::err(format!("point {i} value {value} is outside -1000..1000 millis"));
+        }
+        pts.push(L::UiEnvPointWire {
+            time: time as u32,
+            value_milli: value as i16,
+            tension: p.get("tension").and_then(|v| v.as_i64()).unwrap_or(0).clamp(-100, 100) as i8,
+            flags: u8::from(p.get("step").and_then(|v| v.as_bool()).unwrap_or(false)),
+        });
+    }
+    // 0xFF is kEnvLoopNone. Absent means NO loop, which is different from a loop at point 0.
+    let loop_pair = |key: &str| -> (u8, u8) {
+        match args.get(key).and_then(|v| v.as_array()) {
+            Some(a) if a.len() == 2 => (
+                a[0].as_u64().unwrap_or(255).min(255) as u8,
+                a[1].as_u64().unwrap_or(255).min(255) as u8),
+            _ => (255, 255),
+        }
+    };
+    let (sus_a, sus_b) = loop_pair("sustain_loop");
+    let (rel_a, rel_b) = loop_pair("release_loop");
+
+    let header = L::UiSamplerEnvPointsHeader {
+        command_type: UiCommandType::SamplerSetEnvelopePoints as u16,
+        // BY TARGET, not by modulator id: an agent knows it wants the amp envelope and has no way
+        // to learn a modulator id, so addressing by id would be a field it could never fill.
+        flags: L::SAMPLER_ENV_BY_TARGET,
+        track_id: track as u32,
+        device_id: arg_u64(args, "device").unwrap_or(0) as u32,
+        mod_set_id: arg_u64(args, "mod_set").unwrap_or(0) as u32,
+        modulator_id: 0,
+        time_base: u8::from(args.get("sync").and_then(|v| v.as_bool()).unwrap_or(false)),
+        target,
+        rate_milli: arg_u64(args, "rate").unwrap_or(1000).min(u16::MAX as u64) as u16,
+        point_count: pts.len() as u16,
+        sustain_loop_start: sus_a,
+        sustain_loop_end: sus_b,
+        release_loop_start: rel_a,
+        release_loop_end: rel_b,
+        release_fade: arg_u64(args, "release_fade").unwrap_or(0) as u32,
+    };
+    let mut buf = Vec::with_capacity(std::mem::size_of_val(&header) + pts.len() * 8);
+    buf.extend_from_slice(unsafe {
+        std::slice::from_raw_parts(
+            &header as *const L::UiSamplerEnvPointsHeader as *const u8,
+            std::mem::size_of::<L::UiSamplerEnvPointsHeader>(),
+        )
+    });
+    for p in &pts {
+        buf.extend_from_slice(unsafe {
+            std::slice::from_raw_parts(p as *const L::UiEnvPointWire as *const u8,
+                                       std::mem::size_of::<L::UiEnvPointWire>())
+        });
+    }
+    match handle.send_bulk(&buf) {
+        Ok(()) => ToolResult::ok(json!({
+            "sent": true, "track": track, "target": target, "points": pts.len() })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
 /// An audio clip's in-point, gain or fades — all four persisted, published, honoured by the
 /// renderer, and unreachable from a tool until now.
 ///
@@ -2889,6 +3051,7 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "set_clip_text" => set_clip_text(handle, &call.args),
         "set_track_grid" => set_track_grid(handle, &call.args),
         "set_audio_clip" => set_audio_clip(handle, &call.args),
+        "sampler_envelope_points" => sampler_envelope_points(handle, &call.args),
         "sampler_filter" => sampler_filter(handle, &call.args),
         "sampler_slot_name" => sampler_slot_name(handle, &call.args),
         "set_clip_grid" => set_clip_grid(handle, &call.args),

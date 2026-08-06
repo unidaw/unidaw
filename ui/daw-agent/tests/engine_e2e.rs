@@ -2592,3 +2592,100 @@ fn every_column_carrying_tool_refuses_a_column_the_engine_cannot_read() {
         tool: "delete_chord".into(), args: json!({ "track": 0, "tick": 0, "column": 255 }) });
     assert!(ok_edge.ok, "column 255 is the last legal one and must be accepted: {ok_edge:?}");
 }
+
+/// The envelope PENCIL — a drawn curve, not four ADSR numbers.
+///
+/// `sampler_envelope` sets attack/decay/sustain/release, so every shape the agent could make was
+/// the same shape with different numbers. This draws points, which is the only way to express a
+/// double attack, a hold, or a rise-then-fall.
+///
+/// The shape asserted here is deliberately NOT ADSR-describable: it rises, falls, rises again.
+/// A test using an ADSR-shaped curve would pass just as well against the old tool doing nothing
+/// new, which is the trap this whole session keeps finding.
+#[test]
+fn the_agent_can_draw_an_envelope_an_adsr_cannot_describe() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agenv");
+
+    let proj = json!({
+        "schema_version": 2,
+        "meta": { "name": "agenv_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [], "clips": [],
+        "tracks": [ {
+            "track_id": 0, "name": "S", "harmony_quantize": 0, "lines_per_beat": 4,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            "device_chain": [ { "device_id": 7, "kind": "sampler", "patcher_node_id": 0,
+                                "bypass": false,
+                                "sampler": { "slots": [ { "id": 1, "name": "s", "key_low": 0,
+                                                          "key_high": 127, "root_key": 60,
+                                                          "gate": 0 } ] } } ],
+            "mod_links": [], "placements": []
+        } ]
+    });
+    std::fs::write(engine.proj.join("agenv_in.uniproj.json"),
+                   serde_json::to_string_pretty(&proj).unwrap()).unwrap();
+    assert!(session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"agenv_in"}) }).ok);
+
+    // Two refusals first, both of which would otherwise be silent wrong shapes.
+    let one = session.execute(&ToolCall {
+        tool: "sampler_envelope_points".into(),
+        args: json!({ "track": 0, "device": 7, "points": [{"time": 0, "value": 0}] }),
+    });
+    assert!(!one.ok, "a single point is not a shape and must be refused: {one:?}");
+    let unsorted = session.execute(&ToolCall {
+        tool: "sampler_envelope_points".into(),
+        args: json!({ "track": 0, "device": 7, "points": [
+            {"time": 500, "value": 1000}, {"time": 100, "value": 0}] }),
+    });
+    assert!(!unsorted.ok,
+            "points out of order must be refused, not sorted — sorting hides a caller that \
+             computed the wrong times: {unsorted:?}");
+
+    // RISE, FALL, RISE. No ADSR can do this, which is the point of the tool and of this fixture.
+    let drawn = session.execute(&ToolCall {
+        tool: "sampler_envelope_points".into(),
+        args: json!({ "track": 0, "device": 7, "target": "amp", "points": [
+            { "time": 0,      "value": 0 },
+            { "time": 50000,  "value": 1000 },
+            { "time": 120000, "value": 200, "tension": 40 },
+            { "time": 200000, "value": 900 },
+            { "time": 400000, "value": 0, "step": true },
+        ] }),
+    });
+    assert!(drawn.ok, "sampler_envelope_points failed: {drawn:?}");
+
+    let deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        assert!(session.execute(&ToolCall {
+            tool: "save".into(), args: json!({"name": "agenv_out"}) }).ok);
+        let doc = read_project(&engine.proj, "agenv_out");
+        // Any modulator whose envelope carries our five points — addressed BY TARGET on the wire,
+        // so the modulator id is the engine's to choose and must not be assumed here.
+        let found = doc["tracks"][0]["device_chain"][0]["sampler"]["mod_sets"].as_array()
+            .into_iter().flatten()
+            .filter_map(|m| m["modulators"].as_array())
+            .flatten()
+            .filter_map(|m| m["points"].as_array())
+            .find(|pts| pts.len() == 5)
+            .cloned();
+        if let Some(pts) = found {
+            let times: Vec<i64> = pts.iter().filter_map(|p| p["t"].as_i64()).collect();
+            let vals: Vec<i64> = pts.iter().filter_map(|p| p["v"].as_i64()).collect();
+            assert_eq!(times, vec![0, 50000, 120000, 200000, 400000], "point times");
+            assert_eq!(vals, vec![0, 1000, 200, 900, 0], "point values");
+            // The non-monotonic middle is what proves this is not an ADSR: value FALLS to 200 and
+            // RISES again to 900. An attack/decay/sustain/release curve cannot produce that.
+            assert!(vals[1] > vals[2] && vals[3] > vals[2],
+                    "the drawn shape must rise, fall and rise — got {vals:?}");
+            assert_eq!(pts[2]["tension"].as_i64(), Some(40), "per-point tension survived");
+            assert_eq!(pts[4]["flags"].as_i64(), Some(1), "the step flag survived");
+            break;
+        }
+        assert!(Instant::now() < deadline,
+                "no envelope with five points reached the saved project — a bulk send with a \
+                 wrong header field is accepted by the carrier and dropped by the engine");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
