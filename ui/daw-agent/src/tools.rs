@@ -985,14 +985,28 @@ fn add_device(handle: &EngineHandle, args: &Value) -> ToolResult {
     };
     let mut p = chain_blank(UiCommandType::AddDevice, track as u32);
     p.device_kind = kind;
-    // APPEND WHEN NOT TOLD OTHERWISE. This defaulted to 0, which is HEAD-insert, while every
-    // other producer of this command appends: daw-cli's `--at` defaults to 0xFFFF_FFFF and
-    // UiChainCommandPayload::insertIndex defaults to kChainDeviceIdAuto. So the agent alone put
-    // each new device at the FRONT of the chain, in reverse order of asking — including for the
-    // manifest's own example, where "add a delay, then a reverb after it" produced reverb, delay.
-    // The engine special-cases 0 for deviceId, not for insertIndex, so nothing downstream
-    // corrected it.
-    p.insert_index = arg_u64(args, "position").unwrap_or(0xFFFF_FFFF) as u32;
+    // THE DEFAULT DEPENDS ON THE KIND, because neither answer fits both and this has now been
+    // wrong in both directions.
+    //
+    // An EVENT PATCHER generates notes for whatever follows it, so it has to sit AHEAD of the
+    // instrument. Appending one gives [sampler, patcher]: the graph emits into nothing, the track
+    // is silent, and every structural check stays green because the device is present and the
+    // graph is valid and only the order is wrong.
+    //
+    // Everything else appends, which is what daw-cli's `--at` and UiChainCommandPayload's
+    // insertIndex already default to — an effect added after a delay belongs after the delay.
+    //
+    // This defaulted to 0 (head-insert) for everything, which was wrong for effects and right for
+    // patchers by accident; I changed it to append for everything this morning, which fixed
+    // effects and broke patchers. Both are one number standing in for a rule that has two cases.
+    // The web-UI agent found the same shape independently on their side: their console appends,
+    // with a test pinning it, and is therefore wrong for exactly this.
+    //
+    // NOTE the rule lives in three surfaces now (here, daw-cli, the sidecar) and belongs in one.
+    // See the follow-up: the ENGINE should place an event-kind patcher, because a rule three
+    // callers must remember is one a fourth will forget.
+    let default_position = if kind == 0 { 0 } else { 0xFFFF_FFFF };
+    p.insert_index = arg_u64(args, "position").unwrap_or(default_position) as u32;
     match handle.send_chain_command(p) {
         Ok(()) => ToolResult::ok(json!({ "sent": true, "track": track, "kind": kind })),
         Err(e) => ToolResult::err(e),

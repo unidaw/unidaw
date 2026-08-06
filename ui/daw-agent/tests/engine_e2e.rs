@@ -1175,6 +1175,74 @@ fn failed_load_surfaces_error() {
 /// Per-track mixer state written via SetTrackMixer is published back verbatim, so
 /// the UI can render a fader at its true position; the mixer version advances.
 #[test]
+// AN EVENT PATCHER LANDS AHEAD OF THE INSTRUMENT IT FEEDS.
+//
+// A patcher_event GENERATES notes for whatever follows it, so a chain of [sampler, patcher] emits
+// into nothing: the track is silent and every structural check stays green, because the device is
+// present and the graph is valid and the order is the whole problem.
+//
+// BOTH DEFAULTS HAVE BEEN WRONG, in opposite directions. add_device used to default position to 0
+// — head-insert — which is wrong for an effect and right for this, by luck. Fixing it to append
+// (to match daw-cli and the payload default) made effects correct and broke this. The sidecar
+// appends too, with a test pinning it. Three surfaces, two defaults, and neither fits both kinds.
+//
+// So the default is chosen BY KIND here rather than being one number for everything. The rule is
+// not a preference: an event graph feeds what comes after it, and there is no arrangement in
+// which anyone wants it last.
+//
+// The demo rehearsal's patcher step counts patcher devices in the saved chain, so it passes
+// whichever end they land on — which is why this is asserted here, on the ORDER.
+fn an_event_patcher_lands_before_the_instrument() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("patchorder");
+
+    let s = session.execute(&ToolCall {
+        tool: "add_device".into(), args: json!({"track":0,"kind":"sampler"}) });
+    assert!(s.ok, "adding the sampler failed: {s:?}");
+    let p = session.execute(&ToolCall {
+        tool: "add_device".into(), args: json!({"track":0,"kind":"patcher"}) });
+    assert!(p.ok, "adding the patcher failed: {p:?}");
+
+    assert!(session.execute(&ToolCall {
+        tool: "save".into(), args: json!({"name":"patchorder"}) }).ok);
+    let doc = read_project(&engine.proj, "patchorder");
+    let kinds: Vec<String> = doc["tracks"][0]["device_chain"].as_array().unwrap().iter()
+        .map(|d| d["kind"].as_str().unwrap_or("?").to_string())
+        .collect();
+
+    let pat = kinds.iter().position(|k| k.starts_with("patcher"));
+    let inst = kinds.iter().position(|k| k == "sampler" || k == "vst_instrument");
+    let (pat, inst) = match (pat, inst) {
+        (Some(a), Some(b)) => (a, b),
+        _ => panic!("expected both a patcher and an instrument in the chain, got {kinds:?}"),
+    };
+    assert!(pat < inst,
+            "the event patcher landed at {pat} and the instrument at {inst} ({kinds:?}). A patcher \
+             that sits AFTER the instrument generates notes nobody plays — the track is silent and \
+             the chain looks perfectly correct to anything counting devices.");
+
+    // AND THE OTHER HALF OF THE RULE, or fixing one direction just breaks the other again — which
+    // is what happened this morning. A patcher_AUDIO is not a generator; it processes what reaches
+    // it, so it appends like every other non-generator. Added to a chain that already holds an
+    // event patcher, it must land AFTER it.
+    let a = session.execute(&ToolCall {
+        tool: "add_device".into(), args: json!({"track":0,"kind":"patcher_audio"}) });
+    assert!(a.ok, "adding the audio patcher failed: {a:?}");
+    assert!(session.execute(&ToolCall {
+        tool: "save".into(), args: json!({"name":"patchorder2"}) }).ok);
+    let doc = read_project(&engine.proj, "patchorder2");
+    let kinds: Vec<String> = doc["tracks"][0]["device_chain"].as_array().unwrap().iter()
+        .map(|d| d["kind"].as_str().unwrap_or("?").to_string())
+        .collect();
+    let ev = kinds.iter().position(|k| k == "patcher_event").expect("event patcher still present");
+    let au = kinds.iter().position(|k| k == "patcher_audio").expect("audio patcher was added");
+    assert!(au > ev,
+            "the audio patcher landed at {au}, before the event patcher at {ev} ({kinds:?}). Only \
+             the EVENT kind head-inserts; everything else appends, which is what daw-cli and the \
+             payload default already do.");
+}
+
+#[test]
 // set_mixer THE TOOL, not the payload — and the two are not the same thing.
 //
 // mixer_read_back below sends a hand-built UiCommandPayload, so it proves the ENGINE reads the
