@@ -1995,9 +1995,13 @@ int main(int argc, char** argv) {
       applyAddChord, applyRemoveChordFn, applyRemoveChordAtFn, addOrUpdateHarmony,
       removeHarmony, requireMatchingClipVersion, requireMatchingHarmonyVersion};
 
+  auto applyDocument = [&](daw::ProjectDocument& doc) {
+    std::string err;
+    return daw::engine::applyDocument(loadProjectDeps, doc, std::string(), &err);
+  };
   daw::engine::UndoCommandDeps undoCommandDeps{
      engineState, applyUndoEntry, restoreSongStore, restoreTrackStore,
-      requireMatchingClipVersion
+      requireMatchingClipVersion, applyDocument
   };
 
   daw::engine::DeviceCommandDeps deviceCommandDeps{

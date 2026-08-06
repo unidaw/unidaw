@@ -23,6 +23,7 @@
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
 #include "apps/engine_state.h"
+#include "apps/project_file.h"
 
 namespace daw::engine {
 
@@ -35,6 +36,7 @@ struct UndoCommandDeps {
   std::function<bool(const SongStoreState&)> restoreSongStore;
   std::function<bool(uint32_t, const TrackStoreState&)> restoreTrackStore;
   std::function<bool(uint32_t, daw::UiCommandType, uint32_t)> requireMatchingClipVersion;
+  std::function<bool(daw::ProjectDocument&)> applyDocument;
 };
 
 void handleUndo(UndoCommandDeps& deps,

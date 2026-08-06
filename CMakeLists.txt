@@ -1660,7 +1660,11 @@ set_tests_properties(document_history PROPERTIES WORKING_DIRECTORY ${CMAKE_BINAR
 add_test(NAME undo_ratchet
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/undo_ratchet_check.sh
 )
-set_tests_properties(undo_ratchet PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+# 900s: every command now drives a real undo AND redo through applyDocument, and the harness waits
+# on the journal for each. An undo itself measures 0 ms — the budget is the harness's waits, not
+# the feature's cost. I first read this timeout being hit as a deadlock and reverted the whole
+# switchover on that inference, without observing it. It was neither hung nor slow.
+set_tests_properties(undo_ratchet PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 900)
 
 # THE DOCUMENT IS A VALUE. Undo is built on captureDocument/applyDocument, so a field either of
 # them drops would be dropped by every undo at once. Loading a preset, saving, loading THAT and

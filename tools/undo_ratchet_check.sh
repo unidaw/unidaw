@@ -53,7 +53,7 @@ Q=960000
 # WriteHarmony. The audit puts the true figure at 10 of 70 across the whole enum; this harness
 # drives 15 of them so far. Both numbers move up together as commands become undoable AND as more
 # of them get exercised — which is why the ratchet counts PROVEN, not claimed.
-EXPECTED_UNDOABLE="${DAW_UNDO_EXPECTED:-4}"
+EXPECTED_UNDOABLE="${DAW_UNDO_EXPECTED:-15}"
 
 TMP="$(mktemp -d)"
 SHM="/undoratchet_$$"

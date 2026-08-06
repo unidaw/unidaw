@@ -747,7 +747,9 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   if (!daw::loadProject(document, path, error)) {
     return false;
   }
-  return applyDocument(deps, document, path, error);
+  if (!applyDocument(deps, document, path, error)) { return false; }
+  deps.engineState.documentHistory.seed(document);
+  return true;
 }
 
 }  // namespace daw::engine
