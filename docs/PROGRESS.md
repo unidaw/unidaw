@@ -47,6 +47,60 @@ The reason it is built this way: every stale claim found in this repo was in a f
 after it was fixed — stale in the direction that gets work done twice, by someone with no reason to
 suspect the first attempt exists.
 
+## 2026-08-06 (afternoon) — a bug panel, and the regression it caused
+
+An adversarial panel over the demo-critical surface: four finders with distinct lenses, deduped,
+then each finding handed to an independent agent whose job was to REFUTE it, defaulting to refuted
+when unsure. Six survived, five were fixed. It also killed three of its own finders' claims —
+"the reverb processes silence", "a following observe shows pan 0.0", "the rehearsal triggers the
+ring spin" — each of which would have had someone editing working code the day before a demo.
+
+**The root cause it named is the useful part.** The agent tool layer is a THIRD COPY of the wire,
+after daw-cli and the C++ payload defaults, and nothing in `tools/` drives an agent tool at all.
+Every existing test either hand-builds the payload or drives daw-cli — the two copies that were
+right. Three of the five findings were that: pan packed into a field the engine does not read for
+pan, an insert index defaulting the opposite way to every other producer, and an argument the
+executor reads that the schema never advertised.
+
+### The fix that caused the regression
+
+`add_device` defaulted its position to 0 — head-insert — while daw-cli and the payload append. I
+changed it to append. That is right for an effect and **wrong for an event patcher**, which
+generates notes for whatever follows it: `[sampler, patcher_event]` emits into nothing.
+
+For about ninety minutes, asking the agent to put a patcher on a track that already had a sampler
+produced a silent graph. **The demo rehearsal passed throughout**, because its patcher step counted
+patcher devices in the chain — the device was present, the graph was valid, and only the order was
+wrong.
+
+One number was standing in for a rule with two cases. It is chosen by kind now, and both halves are
+pinned, because fixing one direction is exactly how the other broke. The rehearsal's step counts
+only patchers that could actually sound.
+
+It was found by the web-UI agent asking a question — whether their console shared the head-insert
+default — not by any test. Their console appends, with a test pinning it, which is wrong for the
+same case in the same way. Two surfaces, two confident tests, opposite errors, one day. That is
+task #113: the constraint belongs in the engine, because a rule three callers must remember is one
+a fourth will forget.
+
+### Two silences that were not what they looked like
+
+The web-UI agent reported the patcher could not drive the built-in sampler: 0.1010 into a VST,
+0.0000 into the sampler. I reproduced *a* silence, found that a slot pinned to one key cannot
+answer a generated pitch, and told them that was their cause. It was not — their slot was already
+full-range, and their actual fault was a zero-length placement scheduling nothing.
+
+I had a measurement that explained a silence and offered it as explaining theirs. That is the same
+move they had just retracted, one step removed. The phase it produced is kept, because the boundary
+is real, with its comment rewritten to record a property rather than the story of an incident that
+turned out differently.
+
+Their narrower finding — `euclidean -> event_out` is silent without a middle node — was already
+documented in `tools/patcher_plays_sampler_check.sh`'s own header, which says a euclidean emits
+gates, a rhythm with no pitch, and the resolution path skips gates deliberately. The fixture's
+author had fallen into it too. Whether `event_out` should promote a bare gate is an open question
+for the owner; it is the obvious two-node gesture and it is the silent one.
+
 ## 2026-08-06 — rehearsing the demo, and the three things that found
 
 The demo is Friday. `tools/demo_rehearsal.sh` drives the sidecar's command socket with one prompt

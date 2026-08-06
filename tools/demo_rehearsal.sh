@@ -170,6 +170,18 @@ n_samplers(){
 # UI-scoped view, not a census. It read 3 nodes before and after adding a patcher, which
 # says nothing about whether the add landed. The device chain is only observable whole
 # through a SAVE, same as the harmony timeline.
+# COUNTS ONLY THE PATCHERS THAT COULD ACTUALLY SOUND — an EVENT patcher after the instrument is
+# not a patcher that works, it is a silent track with a valid-looking chain.
+#
+# This counted every patcher device regardless of position, and so reported success right through
+# a regression that put the event patcher AFTER the sampler: add_device's default was changed from
+# head-insert to append on 2026-08-06 to match the other surfaces, which is correct for an effect
+# and wrong for a generator. The device was present, the graph was valid, the count went 0 -> 1,
+# and the graph emitted into nothing. A step that cannot tell those apart is not testing the claim
+# it is named after.
+#
+# Returning 0 rather than a differently-worded answer is deliberate: `step` passes when the value
+# CHANGES, so encoding the mistake in the string would still read as a pass.
 n_patcher(){
   cli do save rehearsal --force >/dev/null 2>&1
   local f="$TMP/rehearsal.uniproj.json"
@@ -177,8 +189,20 @@ n_patcher(){
   python3 -c "
 import json,sys
 d=json.load(open(sys.argv[1]))
-print(sum(1 for t in d['tracks'] for x in t.get('device_chain',[])
-          if str(x.get('kind','')).startswith('patcher')))" "$f" 2>/dev/null || echo 0
+n=0
+for t in d['tracks']:
+    chain=[str(x.get('kind','')) for x in t.get('device_chain',[])]
+    inst=[i for i,k in enumerate(chain) if k in ('sampler','vst_instrument')]
+    first_inst = min(inst) if inst else len(chain)
+    for i,k in enumerate(chain):
+        if not k.startswith('patcher'):
+            continue
+        # An EVENT patcher only counts ahead of the instrument it feeds. The audio and instrument
+        # flavours process what reaches them, so their position is not this rule's business.
+        if k == 'patcher_event' and i > first_inst:
+            continue
+        n+=1
+print(n)" "$f" 2>/dev/null || echo 0
 }
 
 # CHORDS ARE NOT NOTES and are not counted by n_notes — they live in their own array on the clip,
