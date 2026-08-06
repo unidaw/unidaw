@@ -205,6 +205,12 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
     if (!existsSync(d)) return out;
     for (const name of readdirSync(d)) {
       if (name === 'target' || name === 'node_modules' || name === '.git') continue;
+      // NOT tests/, benches/ or examples/. They are .rs under a watched crate and they are not
+      // compiled into the release binary, so `cargo build --release` cannot clear a warning they
+      // cause — the third form of the unclearable-warning defect this file documents, and the
+      // second one I have written into it today. Editing an engine_e2e test warned that the
+      // sidecar was stale, forever.
+      if (name === 'tests' || name === 'benches' || name === 'examples') continue;
       const p2 = join(d, name);
       const st = statSync(p2);
       if (st.isDirectory()) rustSources(p2, out);
