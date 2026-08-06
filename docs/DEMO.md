@@ -91,10 +91,17 @@ At `oct 4`, `z` is C-3 and `q` is C-4 (MIDI 60).
 
 **`[` and `]` move the entry octave** down and up (0–9), and `octave 3` in the console sets it
 outright. **`shift+]` and `shift+[` add and remove a NOTE COLUMN** — a second column makes a track
-polyphonic, and it is also how you write a slide: two columns feed a monophonic instrument two
-overlapping note-ons on one channel, which makes it glide rather than retrigger. Inside a single
-column that cannot be expressed at all, because the next note-on IS the previous note's end.
-(The count is currently global — every track shows the same number.) The breadcrumb shows the current one. This is the first thing anybody asks after they
+polyphonic, and it is also how you write a slide: two columns feed an instrument two overlapping
+note-ons on one channel. Inside a single column that cannot be expressed at all, because the next
+note-on IS the previous note's end. (The count is currently global — every track shows the same
+number.)
+
+**The GLIDE is the instrument's, not ours.** Overlapping note-ons are the condition; what happens
+next is the synth's portamento setting, and only a MONOPHONIC one has an opinion. The built-in
+sampler is not one — give it two overlapping notes and you get two voices, which is polyphony and
+perfectly useful, but it is not a 303 slide. For that, put a mono VSTi on the track and turn its
+glide on. Drag a note's right edge in the roll to make the overlap; a note typed in the tracker
+ends where the next begins, which is exactly the thing that cannot slide. The breadcrumb shows the current one. This is the first thing anybody asks after they
 type a note and it comes out an octave from where they wanted it — and both rows move together,
 so `z` and `q` stay one octave apart.
 
