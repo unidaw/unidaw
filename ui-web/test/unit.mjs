@@ -2331,7 +2331,7 @@ const OP_REGISTRY = {
   // is the same recorded gap every other sampler verb carries.
   'slot-name': { cli: 'sampler-slot-name', agent: null, why: 'gap' },
   // Vintage (opcode 91). With the other sampler verbs: the agent has no sampler tooling.
-  vintage:   { cli: 'sampler-vintage', agent: null, why: 'gap' },
+  vintage:   { cli: 'sampler-vintage', agent: 'sampler_vintage' },
   /*
    * Chromatic mode (SetTrackSoundAddressed, 87). Landed engine-side this morning; daw-cli has
    * not caught up, and the agent has no sampler tooling at all.
@@ -2346,7 +2346,7 @@ const OP_REGISTRY = {
    * Lay a chop out as notes (SamplerEmitRows). daw-cli has `sampler-emit-rows`, so the CLI path
    * is real; the agent has no sampler tooling at all.
    */
-  emit:      { cli: 'sampler-emit-rows', agent: null, why: 'gap' },
+  emit:      { cli: 'sampler-emit-rows', agent: 'sampler_emit_rows' },
   edit:      { cli: null, agent: null, why: 'view' },
   fold:      { cli: null, agent: null, why: 'view' },
   // The engine has taken this since before the web UI existed; the CLI verb is `harmony-quantize`.
@@ -2485,8 +2485,8 @@ const AGENT_GAP = ['clear', 'columns', 'copy', 'cut',
                    'new', 'paste', 'patch',
                    'transpose', 'mods',
                    // With the other sampler verbs: the agent has no sampler tooling at all.
-                   'filter', 'soundaddr', 'emit',
-                   'slot-name', 'vintage',
+                   'filter', 'soundaddr',
+                   'slot-name',
                    'save-patch', 'lpb', 'note-overlap',
                    // A clip's own grid (opcode 94). It HAS a CLI path — `daw-cli do clip-grid`
                    // shipped with the opcode — so it is only in the agent half of the gap.

@@ -488,6 +488,48 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "sampler_emit_rows",
+            description: "Turn a CHOPPED sample into tracker rows — one note per slice, laid out \
+                          in time so the break plays back as itself. This is what makes a chop \
+                          editable: the slices become notes you can move, delete and reorder. \
+                          Chop first with sampler_slice. With no `step` the rows are spaced from \
+                          each slice's OWN length, which reproduces the break as recorded; give a \
+                          step to re-fit it to a grid instead.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "device"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "device": { "type": "integer", "minimum": 1 },
+                    "at": { "type": "integer", "minimum": 0,
+                            "description": "Tick the first row lands on. Default 0." },
+                    "step": { "type": "integer", "minimum": 0,
+                              "description": "Nanoticks between rows. 0 (default) derives it from \
+                                              each slice's own length." },
+                    "velocity": { "type": "integer", "minimum": 1, "maximum": 127 },
+                    "column": { "type": "integer", "minimum": 0 },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "sampler_vintage",
+            description: "Crush a sampler's output — bit depth and sample rate, the lo-fi/vintage \
+                          sound. 12 bits at 26040Hz is the classic sampler; 8 bits lower still. \
+                          Only the fields you name are changed.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "device"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "device": { "type": "integer", "minimum": 1 },
+                    "bits": { "type": "integer", "minimum": 1, "maximum": 32,
+                              "description": "Bit depth. 16 or above is effectively off." },
+                    "rate": { "type": "integer", "minimum": 1000, "maximum": 96000,
+                              "description": "Resampling rate in Hz." },
+                },
+            }),
+        },
+        ToolSpec {
             name: "set_mixer",
             description: "Set a track's gain, pan, mute or solo. Gain is in dB (0 is unity,                           negative is quieter); pan is -1 hard left to 1 hard right.",
             params: json!({
@@ -1707,6 +1749,88 @@ fn sampler_envelope(handle: &EngineHandle, args: &Value) -> ToolResult {
     }
 }
 
+/// A chop, laid out as tracker rows — one note per slice.
+///
+/// This is the step that makes a chop EDITABLE rather than just mapped: the slices become notes
+/// that can be moved, deleted and reordered like anything else. Without it an agent could cut a
+/// break into sixteen playable slots and had no way to place them in time.
+fn sampler_emit_rows(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(track), Some(device)) = (arg_u64(args, "track"), arg_u64(args, "device")) else {
+        return ToolResult::err("sampler_emit_rows needs \"track\" and \"device\"");
+    };
+    if device == 0 {
+        return ToolResult::err(
+            "device 0 is not a device id — read the real one from the observation's `devices:` line");
+    }
+    let at = arg_u64(args, "at").unwrap_or(0);
+    /*
+     * STEP 0 IS A SENTINEL, NOT A LENGTH — it means "derive the spacing from each slice's own
+     * length", which is how the break plays back as recorded. Said in the description too,
+     * because a model reading `minimum: 0` would otherwise take 0 for "no gap".
+     */
+    let step = arg_u64(args, "step").unwrap_or(0);
+    let p = daw_bridge::layout::UiSamplerEmitRowsPayload {
+        command_type: UiCommandType::SamplerEmitRows as u16,
+        flags: 0,
+        track_id: track as u32,
+        device_id: device as u32,
+        source_local_id: arg_u64(args, "source").unwrap_or(0) as u32,
+        at_nanotick: at,
+        step_nanoticks: step,
+        column: arg_u64(args, "column").unwrap_or(0).min(255) as u8,
+        velocity: arg_u64(args, "velocity").unwrap_or(100).clamp(1, 127) as u8,
+        reserved: [0; 6],
+    };
+    match handle.send_sampler_emit_rows(p) {
+        Ok(()) => ToolResult::ok(json!({
+            "sent": true, "track": track, "device": device, "at": at,
+            "step": if step == 0 { Value::from("from each slice's length") } else { Value::from(step) },
+        })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
+/// Bit depth and sample rate — the lo-fi sampler sound.
+///
+/// FLAGS SAY WHICH FIELD IS MEANT, so naming only `bits` cannot silently reset the rate to zero.
+/// Same shape as the row-op mask and for the same reason: on this wire an omitted field that is
+/// sent as 0 is a change nobody asked for.
+fn sampler_vintage(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(track), Some(device)) = (arg_u64(args, "track"), arg_u64(args, "device")) else {
+        return ToolResult::err("sampler_vintage needs \"track\" and \"device\"");
+    };
+    if device == 0 {
+        return ToolResult::err(
+            "device 0 is not a device id — read the real one from the observation's `devices:` line");
+    }
+    let mut flags = 0u16;
+    let bits = args.get("bits").and_then(|v| v.as_u64());
+    let rate = args.get("rate").and_then(|v| v.as_u64());
+    if bits.is_some() { flags |= daw_bridge::layout::SAMPLER_VINTAGE_SET_BITS; }
+    if rate.is_some() { flags |= daw_bridge::layout::SAMPLER_VINTAGE_SET_RATE; }
+    if flags == 0 {
+        return ToolResult::err(
+            "sampler_vintage was given neither \"bits\" nor \"rate\", so it would change nothing");
+    }
+    let p = daw_bridge::layout::UiSamplerVintagePayload {
+        command_type: UiCommandType::SamplerSetVintage as u16,
+        flags,
+        track_id: track as u32,
+        device_id: device as u32,
+        mod_set_id: arg_u64(args, "mod_set").unwrap_or(0) as u32,
+        bit_depth: bits.unwrap_or(16).clamp(1, 32) as u8,
+        reserved0: 0,
+        rate_hz: rate.unwrap_or(44100).clamp(1000, 65535) as u16,
+        reserved1: [0; 5],
+    };
+    match handle.send_sampler_vintage(p) {
+        Ok(()) => ToolResult::ok(json!({
+            "sent": true, "track": track, "device": device, "bits": bits, "rate": rate,
+        })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
 /// Make a modulation link, name its parameter, and turn the knob. THREE commands.
 ///
 /// All three, because a link the engine accepts moves nothing without them: it addresses a
@@ -2064,6 +2188,8 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "sampler_device" => sampler_device(handle, &call.args),
         "sampler_slice" => sampler_slice(handle, &call.args),
         "sampler_envelope" => sampler_envelope(handle, &call.args),
+        "sampler_emit_rows" => sampler_emit_rows(handle, &call.args),
+        "sampler_vintage" => sampler_vintage(handle, &call.args),
         "set_mixer" => set_mixer(handle, &call.args),
         "set_loop" => set_loop(handle, &call.args),
         "preview_note" => preview_note(handle, &call.args),
