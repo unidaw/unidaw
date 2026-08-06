@@ -2446,6 +2446,29 @@ const OP_REGISTRY = {
  * placement list. `get transport` is a READ and is NOT seek, which is the kind of near-miss that
  * makes a guessed mapping worse than an admitted gap.
  */
+/*
+ * AUDITED 2026-08-06, and two of these do not hold up as "exempt". Kept on the list with the
+ * doubt written down rather than quietly reclassified — the point of the list is that a gap
+ * stays visible until somebody decides.
+ *
+ * FAIRLY EXEMPT: `clear`, `copy`, `cut`, `paste`, `transpose` operate on the CURSOR and the
+ * SELECTION, which is view state a CLI does not have and should not simulate. `columns` is a
+ * display preference — how many note columns are drawn — and the owner's rule exempts view-only
+ * ops explicitly. `mods` is explained on its own row: the READ has no shape a command can return.
+ *
+ * NOT OBVIOUSLY EXEMPT, and both are worth a decision:
+ *
+ *   `new` — creating a song is a DOCUMENT operation, not a view one, and it is missing from the
+ *   CLI *and* the agent. An agent asked to start a new song cannot, so it works in whatever is
+ *   already open. That is not hypothetical: `new NAME` failing to set the current project cost
+ *   the owner a shipped preset tonight, and an agent has no way to say "start clean" at all. The
+ *   sidecar implements it (`{"type":"new"}`) because a browser cannot write a file; daw-cli and
+ *   the agent talk to the engine, which has no such command — so this needs an owner ruling on
+ *   WHERE it should live before anyone builds it.
+ *
+ *   `shared` — the agent HAS `shared_clips`; only the CLI lacks it. That is a plain missing verb
+ *   with a known shape, not a design question, and it is the cheapest thing on this list.
+ */
 const CLI_GAP = ['clear', 'columns', 'copy', 'cut', 'new', 'paste', 'transpose',
                  'mods', 'shared'];
 /** Ops with no agent tool today. Same rule. */
