@@ -4,6 +4,7 @@
 #include "apps/engine_save_project.h"
 
 #include <fstream>
+#include "apps/engine_clip_adoption.h"
 #include "apps/engine_sampler_commands.h"
 #include "apps/patcher_assemble.h"
 #include "apps/event_log.h"
@@ -20,6 +21,82 @@ namespace daw::engine {
 // NOT a new projection of the state — the same one, called from two places. A second
 // gatherer would drift from this one field at a time, and a field that undo forgets is
 // exactly the defect being fixed.
+// EVERY AUTHORED FIELD OF A TRACK, GATHERED IN ONE PLACE.
+//
+// This exists because the aux-child (stem) capture used to assemble its ProjectTrack by hand and
+// reached for FIVE things — name, placements, ownedClips, automationClips, mixer. The handlers
+// accept every other edit on a stem: add a device, collapse it, change its quantize, route it,
+// link a mod source. All of that was dropped on save, and once undo started applying documents it
+// was reverted by every undo as well.
+//
+// That is the hand-picked-subset shape this whole effort exists to kill, reappearing INSIDE the
+// new architecture — the document was complete, but one of its producers was not. A subset is not
+// a bug you fix once; it is a bug you fix once per field somebody remembers. So there is now one
+// gatherer and two callers, and a field added to ProjectTrack next year reaches both.
+//
+// IDENTITY IS NOT GATHERED HERE. trackId, parentId, isMaster, isAuxChild and auxBusIndex mean
+// different things for a slot track and for a stem — the stem's parent is a runtime relationship,
+// not a saved one — so each caller sets those itself and the difference stays visible.
+//
+// The caller's name policy also stays with the caller: a slot track falls back to "Track N", a
+// stem to the name the derivation would regenerate. Both are ABOUT the name rather than a source
+// of it, so they belong at the call site.
+static void captureAuthoredTrackFields(TrackRuntime& runtime, daw::ProjectTrack& out,
+                                       daw::MusicalClip* clipOut,
+                                       std::vector<daw::ProjectClip>* ownedClipsOut) {
+  out.collapsed = runtime.collapsed.load(std::memory_order_relaxed);
+  out.linesPerBeat = runtime.linesPerBeat.load(std::memory_order_relaxed);
+  out.allowNoteOverlap = runtime.allowNoteOverlap.load(std::memory_order_relaxed);
+  std::lock_guard<std::mutex> lock(runtime.trackMutex);
+  out.name = runtime.trackName;
+  out.harmonyQuantize = runtime.track.harmonyQuantize;
+  out.soundAddressedOnly = runtime.track.soundAddressedOnly;
+  out.automationClips = runtime.track.automationClips;
+  out.quantize.gridNanoticks = runtime.quantizeGrid.load(std::memory_order_acquire);
+  out.quantize.strengthMilli = runtime.quantizeStrength.load(std::memory_order_acquire);
+  out.quantize.swingMilli = runtime.quantizeSwing.load(std::memory_order_acquire);
+  out.routing = runtime.track.routing;
+  const float gainLinear = runtime.mixGainLinear.load(std::memory_order_relaxed);
+  out.mixer.gainDb =
+      gainLinear > 0.0f ? 20.0 * std::log10(static_cast<double>(gainLinear)) : -120.0;
+  out.mixer.pan = runtime.mixPan.load(std::memory_order_relaxed);
+  out.mixer.mute = runtime.mixMute.load(std::memory_order_relaxed);
+  out.mixer.solo = runtime.mixSolo.load(std::memory_order_relaxed);
+  out.chain = runtime.track.chain;
+  out.modLinks = runtime.track.modRegistry.links;
+  out.placements = runtime.sourcePlacements;
+  if (clipOut != nullptr) { *clipOut = runtime.track.clip; }
+  if (ownedClipsOut != nullptr) { *ownedClipsOut = runtime.ownedClips; }
+}
+
+// IS THIS STEM CARRYING ANYTHING WORTH SAVING?
+//
+// Asked by comparing it against an UNTOUCHED stem through the serializer, not by listing the
+// fields that count. The list version asked about placements, automation, mixer and the name —
+// which was already the same subset bug as the capture beside it, one line down: widen the
+// capture to include a stem's chain and the list would happily skip a stem whose ONLY content is
+// a device somebody added.
+//
+// Comparing against a default-constructed track means a field added to ProjectTrack next year is
+// covered the day it is added, by the same serializer that decides what "saved" means. A stem
+// that differs from a pristine stem is a stem the user has touched, by definition.
+static bool auxChildCarriesAnything(const daw::ProjectTrack& child,
+                                    const std::string& derivedName) {
+  daw::ProjectTrack pristine;
+  // Identity and the auto-derived name are not CONTENT — a stem always has them, so leaving them
+  // to differ would make every stem look touched and defeat the whole test.
+  pristine.trackId = child.trackId;
+  pristine.parentId = child.parentId;
+  pristine.isAuxChild = child.isAuxChild;
+  pristine.auxBusIndex = child.auxBusIndex;
+  pristine.name = derivedName.empty() ? child.name : derivedName;
+  daw::ProjectDocument touched;
+  touched.tracks.push_back(child);
+  daw::ProjectDocument untouched;
+  untouched.tracks.push_back(pristine);
+  return daw::serializeProject(touched) != daw::serializeProject(untouched);
+}
+
 daw::ProjectDocument captureDocument(SaveProjectDeps& deps) {
   auto& arrangeMutex = deps.engineState.arrange.arrangeMutex;
   auto& harmonyEvents = deps.harmonyTimeline.harmonyEvents;
@@ -101,47 +178,20 @@ daw::ProjectDocument captureDocument(SaveProjectDeps& deps) {
       }
       daw::ProjectTrack track;
       track.trackId = runtime->trackId;
-      // Persist the track's actual name (SetTrackName updates runtime->trackName). Saving a
-      // hardcoded "Track N+1" here silently dropped every rename on reload — right in the
-      // live UI mirror, gone on disk. Read under trackMutex (the same lock SetTrackName and
-      // the child-rename path write it under).
-      {
-        std::lock_guard<std::mutex> tlock(runtime->trackMutex);
-        track.name = runtime->trackName.empty()
-                         ? ("Track " + std::to_string(runtime->trackId + 1))
-                         : runtime->trackName;
-      }
       track.parentId = runtime->parentId.load(std::memory_order_relaxed);
-      track.collapsed = runtime->collapsed.load(std::memory_order_relaxed);
-      track.linesPerBeat = runtime->linesPerBeat.load(std::memory_order_relaxed);
-      track.allowNoteOverlap = runtime->allowNoteOverlap.load(std::memory_order_relaxed);
       daw::MusicalClip trackClip;
-      std::vector<daw::ProjectPlacement> trackPlacements;
       std::vector<daw::ProjectClip> trackOwnedClips;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        track.harmonyQuantize = runtime->track.harmonyQuantize;
-        track.soundAddressedOnly = runtime->track.soundAddressedOnly;
-        track.automationClips = runtime->track.automationClips;
-        track.quantize.gridNanoticks =
-            runtime->quantizeGrid.load(std::memory_order_acquire);
-        track.quantize.strengthMilli =
-            runtime->quantizeStrength.load(std::memory_order_acquire);
-        track.quantize.swingMilli =
-            runtime->quantizeSwing.load(std::memory_order_acquire);
-        track.routing = runtime->track.routing;
-        const float gainLinear = runtime->mixGainLinear.load(std::memory_order_relaxed);
-        track.mixer.gainDb =
-            gainLinear > 0.0f ? 20.0 * std::log10(static_cast<double>(gainLinear)) : -120.0;
-        track.mixer.pan = runtime->mixPan.load(std::memory_order_relaxed);
-        track.mixer.mute = runtime->mixMute.load(std::memory_order_relaxed);
-        track.mixer.solo = runtime->mixSolo.load(std::memory_order_relaxed);
-        track.chain = runtime->track.chain;
-        track.modLinks = runtime->track.modRegistry.links;
-        trackClip = runtime->track.clip;
-        trackPlacements = runtime->sourcePlacements;
-        trackOwnedClips = runtime->ownedClips;
+      captureAuthoredTrackFields(*runtime, track, &trackClip, &trackOwnedClips);
+      // The name policy stays here: an unnamed slot track saves as "Track N", which is a
+      // decision about presentation rather than a fact the runtime holds. The gatherer reads the
+      // name SetTrackName actually writes — a hardcoded "Track N+1" here once dropped every
+      // rename on reload, present in the live UI mirror and gone on disk.
+      if (track.name.empty()) {
+        track.name = "Track " + std::to_string(runtime->trackId + 1);
       }
+      // NO ALIAS. This was briefly a reference to track.placements, and the `std::move` at the
+      // foot of the block below then self-moved the vector and emptied it — every clip vanished
+      // from every saved project, caught by document_value on all eight presets.
       // The per-track structural store is authoritative for every track that has
       // any notes: note entry now edits the owned clips + placements in place (the
       // flat clip is derived), so save just re-emits them. Copy-on-write kept each
@@ -149,33 +199,17 @@ daw::ProjectDocument captureDocument(SaveProjectDeps& deps) {
       // content comparison, no collision. This is what makes a load -> edit -> save
       // preserve the arrangement's structure (multiple placements, per-placement
       // overrides), the M3.2 bug the reroute fixes.
-      if (!trackPlacements.empty()) {
+      if (!track.placements.empty()) {
         // EVERY CLIP A PLACEMENT NAMES, and a placement names TWO: the one it plays and its
         // ALTERNATE. Collecting only clipId dropped the alternate from the file — so an agent's
         // draft survived until you saved, and was gone when you reopened, with the placement
         // still carrying an alternate_clip_id pointing at nothing. Accepted, played, and lost:
         // the exact shape of the mod links and the multi-out stems before them.
-        auto emitClip = [&](uint32_t clipId) {
-          if (clipId == 0) {
-            return;
-          }
-          for (const auto& c : document.clips) {
-            if (c.id == clipId) {
-              return;
-            }
-          }
-          for (const auto& c : trackOwnedClips) {
-            if (c.id == clipId) {
-              document.clips.push_back(c);
-              return;
-            }
-          }
-        };
-        for (const auto& pl : trackPlacements) {
-          emitClip(pl.clipId);
-          emitClip(pl.alternateClipId);
-        }
-        track.placements = std::move(trackPlacements);
+        //
+        // This was the FOURTH hand-rolled copy of that rule and the last one — the two load sites
+        // and the stem save now call the same function. The header of engine_clip_adoption.h said
+        // "two copies" when I wrote it because two was all I had found.
+        adoptClipsForPlacements(track.placements, trackOwnedClips, document.clips);
       } else if (!trackClip.events().empty()) {
         // Defensive fallback only: track.clip is derived from the store, so an
         // empty store means an empty flat clip. Kept so a stray flat clip is still
@@ -264,21 +298,12 @@ daw::ProjectDocument captureDocument(SaveProjectDeps& deps) {
       if (busIndex == 0) {
         continue;  // bus 0 is the parent's main output and never becomes a child
       }
+      // THE SAME GATHERER A SLOT TRACK USES. This block used to name five fields by hand, and a
+      // stem's chain, quantize, collapsed state, routing and mod links were therefore dropped on
+      // save and reverted by every undo — while the handlers accepted all of those edits on it.
       daw::ProjectTrack child;
       std::vector<daw::ProjectClip> childOwnedClips;
-      {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        child.name = runtime->trackName;
-        child.placements = runtime->sourcePlacements;
-        childOwnedClips = runtime->ownedClips;
-        child.automationClips = runtime->track.automationClips;
-        const float gainLinear = runtime->mixGainLinear.load(std::memory_order_relaxed);
-        child.mixer.gainDb =
-            gainLinear > 0.0f ? 20.0 * std::log10(static_cast<double>(gainLinear)) : -120.0;
-        child.mixer.pan = runtime->mixPan.load(std::memory_order_relaxed);
-        child.mixer.mute = runtime->mixMute.load(std::memory_order_relaxed);
-        child.mixer.solo = runtime->mixSolo.load(std::memory_order_relaxed);
-      }
+      captureAuthoredTrackFields(*runtime, child, nullptr, &childOwnedClips);
       // The name the derivation would regenerate anyway is not worth persisting; a name
       // the user changed is.
       std::string derivedName;
@@ -289,37 +314,24 @@ daw::ProjectDocument captureDocument(SaveProjectDeps& deps) {
           break;
         }
       }
-      const bool mixerTouched = child.mixer.gainDb != 0.0 || child.mixer.pan != 0.0 ||
-                                child.mixer.mute || child.mixer.solo;
-      const bool renamed = !derivedName.empty() && child.name != derivedName;
-      if (child.placements.empty() && child.automationClips.empty() && !mixerTouched &&
-          !renamed) {
-        continue;
-      }
+      // Identity FIRST, because the "is it touched" test has to know what an untouched stem in
+      // this position would look like before it can tell the difference.
       child.isAuxChild = true;
       child.auxBusIndex = busIndex;
       child.trackId = runtime->trackId;
       child.parentId = parentTrackId;
-      // The stem's placements point into the shared clip pool, so the clips they name have
-      // to be there too — otherwise the entry reloads with placements referencing nothing.
-      for (const auto& pl : child.placements) {
-        bool present = false;
-        for (const auto& c : document.clips) {
-          if (c.id == pl.clipId) {
-            present = true;
-            break;
-          }
-        }
-        if (present) {
-          continue;
-        }
-        for (const auto& c : childOwnedClips) {
-          if (c.id == pl.clipId) {
-            document.clips.push_back(c);
-            break;
-          }
-        }
+      if (!auxChildCarriesAnything(child, derivedName)) {
+        continue;
       }
+      // The stem's placements point into the shared clip pool, so the clips they name have to be
+      // there too — otherwise the entry reloads with placements referencing nothing.
+      //
+      // BOTH clips, not just the one that sounds. This was the THIRD copy of the adoption rule and
+      // the last one still reading clipId alone: the slot-track save already emits the alternate,
+      // and the two LOAD sites were fixed with engine_clip_adoption.h — so a stem's A/B draft was
+      // the one remaining way to lose a fork. adoptClipsForPlacements skips ids already present,
+      // which is exactly the dedup this loop was hand-rolling.
+      adoptClipsForPlacements(child.placements, childOwnedClips, document.clips);
       document.tracks.push_back(std::move(child));
     }
     // Persist the MASTER track (patcher-is-a-device item 4a): its device chain + mixer,
