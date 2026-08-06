@@ -147,6 +147,103 @@ export class Piano {
     this._onEsc = (e) => { if (e.key === 'Escape' && (this._note || this._drag)) this._cancel(); };
     window.addEventListener('keydown', this._onEsc);
     this._drag = null;
+
+    /*
+     * THE WHEEL, on the HOST rather than on the band.
+     *
+     * The key ladder is part of the instrument you are looking at, so a wheel
+     * over it is a wheel over the roll; binding to the band would leave a 58px
+     * dead strip down the left where the gesture silently does nothing.
+     *
+     * `passive: false` because this preventDefaults. Wheel listeners are passive
+     * by default on window, document and body but NOT on an ordinary element —
+     * the flag is passed anyway so the intent is stated where the gesture is,
+     * which is what arrange.js does for the same reason.
+     */
+    this.host.addEventListener('wheel', (e) => this._wheel(e), { passive: false });
+    /** Sub-key wheel travel not yet spent. See `_wheel`. */
+    this._pitchAcc = 0;
+  }
+
+  /**
+   * The highest `lowPitch` that still fills the window with real keys.
+   *
+   * Measured from the key count the model actually laid out, not from a constant:
+   * the window's height in keys is height/keyHeight, and both of those move. Past
+   * this the roll shows empty sky above MIDI 127, which is the piano-roll version
+   * of the last-lane-unreachable bug — a viewport whose extent was computed
+   * instead of measured (GUIDELINES 3.11).
+   */
+  maxLowPitch() {
+    return this.vm ? Math.max(0, 128 - this.vm.keyCount) : 0;
+  }
+
+  /**
+   * The one wheel gesture, decoded. Asked for in these words:
+   * "scroll up/down with mousewheel, left/right with shift-mousewheel".
+   *
+   *   wheel              the PITCH window — this surface stacks pitch on Y
+   *   shift + wheel      the time axis
+   *
+   * Both drive the viewport the roll already has (`startTick`, `lowPitch`) rather
+   * than a scroll offset of the wheel's own. There is no second scrolling model
+   * here: `onNav` lands on the same two pieces of state the arrow keys move, so
+   * the keyboard and the wheel cannot come to disagree about where the view is.
+   *
+   * Pixels accumulate across events on the vertical axis instead of each event
+   * rounding to whole keys on its own — a trackpad sends streams of one- and
+   * two-pixel deltas, and rounding each independently either discards all of them
+   * or jumps a whole key per event. The horizontal axis needs no accumulator: a
+   * tick is finer than a pixel, so every pixel of travel is expressible.
+   */
+  _wheel(e) {
+    // Nothing wired means nothing handled, and the browser's own behaviour is a
+    // more honest fallback than swallowing the event into a surface that will not
+    // act on it. Same first line, same reason, as arrange.js's.
+    if (!this.vm || !this.onNav) return;
+    const view = this.vm.view;
+
+    // Shift-wheel is how a MOUSE asks for horizontal — with shift held it still
+    // reports its notch on deltaY — while a trackpad sends a real deltaX and
+    // needs no modifier. Honour whichever the device produced, so the hardware
+    // the author happens to own does not decide which gesture works.
+    const horizontal = Math.abs(e.deltaX) > Math.abs(e.deltaY);
+    if (e.shiftKey || horizontal) {
+      const px = wheelPixels(horizontal ? e.deltaX : e.deltaY, e.deltaMode, view.width);
+      if (!px) return;
+      e.preventDefault();
+      // One pixel of wheel is one pixel of timeline, so the music tracks the
+      // gesture exactly.
+      const start = Math.max(0, view.startTick + px * view.ticksPerPixel);
+      if (start === view.startTick) return;
+      this.onNav(start, view.lowPitch, 'pan');
+      return;
+    }
+
+    const px = wheelPixels(e.deltaY, e.deltaMode, view.keyHeight * this.vm.keyCount);
+    if (!px) return;
+    e.preventDefault();
+    this._pitchAcc += px;
+    // Truncate toward zero, so a remainder of either sign keeps its direction.
+    const keys = (this._pitchAcc / view.keyHeight) | 0;
+    if (!keys) return;                       // sub-key travel: nothing to redraw
+    this._pitchAcc -= keys * view.keyHeight;
+    /*
+     * A keyboard stands with its high notes at the top, so wheeling DOWN
+     * (deltaY > 0) walks the window down the keyboard and `lowPitch` falls. Get
+     * this sign wrong and the roll reads as inverted against every other scroll
+     * on screen.
+     *
+     * The ceiling is the current position when that is already above the measured
+     * limit, which it can be: ArrowUp clamps at a flat 115 and can leave the view
+     * higher than `maxLowPitch()` allows. Clamping hard would then TELEPORT the
+     * view down on the first notch — a wheel must never move the picture further
+     * than the gesture asked for, so up is refused and down still works.
+     */
+    const ceiling = Math.max(this.maxLowPitch(), view.lowPitch);
+    const low = Math.max(0, Math.min(ceiling, view.lowPitch - keys));
+    if (low === view.lowPitch) return;
+    this.onNav(view.startTick, low, 'pitch');
   }
 
   _local(e) {

@@ -133,7 +133,7 @@ import { createHelp, GLOBAL_KEYS, SURFACE_KEYS } from './src/help.js';
 import { Patcher } from './src/patcher.js';
 import { generatorsFrom } from './src/patchermodel.js';
 import { buildPatcherModel, createPatcherBuffer, configFields, nudgeConfig,
-         describeConfig, NODE_TYPES, orientLink } from './src/patchermodel.js';
+         describeConfig, defaultConfig, NODE_TYPES, orientLink } from './src/patchermodel.js';
 import { createEntry, feed, cancel, begin, parseToken, parseChord, editing, NOTE_KEYS, NOTE_OFF_KEY,
          TOKEN_KEY, pitchOf, pitchToToken, hexValue, shiftDigit } from './src/entry.js';
 
@@ -2068,8 +2068,101 @@ function patchTarget(extra) {
   return msg;
 }
 
+/**
+ * Adds waiting for the engine to publish the node it made, so its settings can be sent.
+ *
+ * One entry per `patchadd` that is still in flight: the type asked for, the ids that existed
+ * when it was asked, the graph it was addressed to, and when to give up. See `seedNewNodes`.
+ */
+const patchSeeds = [];
+
+/** Node ids this session has already seeded, so a second frame cannot send it twice. */
+const patchSeeded = new Set();
+
+/** How long a seed waits for its node before it is dropped. */
+const PATCH_SEED_MS = 5000;
+
 function addPatcherNode() {
-  return sendGraph(patchTarget({ type: 'patchadd', nodeType: state.patchAddType }));
+  const type = state.patchAddType;
+  const msg = patchTarget({ type: 'patchadd', nodeType: type });
+  if (!sendGraph(msg)) return false;
+  /*
+   * A NODE YOU ADD ARRIVES WITH SETTINGS.
+   *
+   * `AddPatcherNode` mints a node with no config struct (apps/patcher_graph.cpp
+   * `addPatcherNode`), so the engine publishes `hasConfig` 0 and the box says "no config
+   * published": a euclidean with eight named settings and no way to touch any of them.
+   * Every patcher check passed anyway, because they all start from a preset — a node ADDED
+   * through the app was the untested path, and it is the only path for building a patch
+   * from scratch.
+   *
+   * The fix is not optimism. Nothing is drawn here: the id is the ENGINE'S to issue, so the
+   * settings are sent once the node it made is on the wire, and the box fills in when the
+   * engine publishes them back. If the send never happens the box says "no config
+   * published" exactly as it does today, which is the truth about the node.
+   *
+   * ADDRESSED TO THE GRAPH THE ADD WENT TO, captured now rather than read again later:
+   * `patchTarget` follows the view, and a config that went to the pool while its node went
+   * to a device would tune a node that is not on screen.
+   */
+  if (defaultConfig(type)) {
+    const before = new Set();
+    if (engine) for (const n of engine.patcherNodes) before.add(n.id);
+    patchSeeds.push({ type, before,
+                      track: msg.track, device: msg.device === undefined ? -1 : msg.device,
+                      until: performance.now() + PATCH_SEED_MS });
+  }
+  return true;
+}
+
+/**
+ * Send the defaults for any node an add is still waiting on. Once per engine frame.
+ *
+ * WHICH NODE IS THE NEW ONE, given the engine answers an add with nothing but a republished
+ * graph: one whose id was not in the graph when the add was sent, of the type that was
+ * asked for, carrying no config, that nothing has seeded yet. Smallest id first, so two
+ * quick adds of one type are matched in the order they were made.
+ *
+ * `hasConfig` is doing more work than it looks: the pool re-ids every device's nodes by a
+ * running base offset (apps/engine_patcher_assemble.cpp), so adding a node on one track
+ * shifts the published ids of every device after it and those nodes look new too. A node
+ * that already has its settings is not a candidate, which is what keeps this from tuning
+ * somebody else's euclidean.
+ */
+function seedNewNodes() {
+  if (!patchSeeds.length || !engine) return;
+  const now = performance.now();
+  // Forget nodes that have left the graph. Ids are REUSED — a device's graph numbers from
+  // max+1 of what it holds — so a remembered id outliving its node would refuse to seed the
+  // next node to be given that number, which is the same bug this function exists to fix.
+  if (patchSeeded.size) {
+    for (const id of patchSeeded) {
+      if (!engine.patcherNodes.some((n) => n.id === id)) patchSeeded.delete(id);
+    }
+  }
+  for (let i = patchSeeds.length - 1; i >= 0; i--) {
+    const seed = patchSeeds[i];
+    let found = null;
+    for (const n of engine.patcherNodes) {
+      if (n.type !== seed.type || n.hasConfig) continue;
+      if (seed.before.has(n.id) || patchSeeded.has(n.id)) continue;
+      if (!found || n.id < found.id) found = n;
+    }
+    if (!found) {
+      // Dropped rather than kept forever: an add the engine refused (a graph that would not
+      // build) publishes nothing, and a seed with no deadline would sit here waiting to
+      // fire at the next node that happened to match.
+      if (now > seed.until) patchSeeds.splice(i, 1);
+      continue;
+    }
+    const cfg = defaultConfig(seed.type);
+    const msg = { type: 'patchcfg', node: found.id, nodeType: seed.type, track: seed.track };
+    if (seed.device >= 0) msg.device = seed.device;
+    for (let k = 0; k < 8; k++) msg['c' + k] = cfg[k];
+    if (!conn || !conn.send(msg)) continue;   // no engine: try again next frame, until it expires
+    patchSeeded.add(found.id);
+    patchSeeds.splice(i, 1);
+  }
 }
 
 /**
@@ -4292,6 +4385,23 @@ const piano = new Piano(pianoHost, {
     schedule();
   },
   onMarqueeEnd: () => { state.pianoMarquee = null; schedule(); },
+  /**
+   * Wheel navigation: the pitch window, and the time axis with shift.
+   *
+   * The roll's viewport is exactly these two numbers, and they are the same two
+   * the arrow keys move — so the wheel is a second way in to one scrolling model
+   * rather than a second model. `piano.js` has already clamped both.
+   */
+  onNav: (startTick, lowPitch, why) => {
+    state.pianoStart = Math.max(0, startTick);
+    state.pianoLow = Math.max(0, lowPitch);
+    // A wheel is a request to look somewhere, so it takes the view off the
+    // playhead — the same bargain the tracker's wheel and the roll's own arrow
+    // keys already make. Without it, follow would drag the view back before the
+    // frame you scrolled to was ever on screen.
+    state.followPlayhead = false;
+    schedule();
+  },
   onDrag: (d) => { state.pianoDrag = d; schedule(); },
   onDragEnd: (d) => {
     state.pianoDrag = null;
@@ -7347,7 +7457,16 @@ addEventListener('keydown', (e) => {
      * Above the text-field guard's sibling cases and inside the modifier block,
      * so a field still gets its own ⌘C: the guard at 0.1 returns before this
      * whenever the event came from an <input>.
+     *
+     * AND A LIVE TEXT SELECTION OUTRANKS THE SONG. The guard at 0.1 covers text
+     * you are TYPING; it says nothing about text you have merely highlighted,
+     * because a selection in the agent transcript leaves `e.target` on the log
+     * div and not on any field. So ⌘C over highlighted prose ran the tracker's
+     * note copy, preventDefault'd the browser's own copy, and answered "nothing
+     * to copy" about a paragraph the user had visibly selected. There is exactly
+     * one ⌘C and it has to mean the thing on screen that is highlighted.
      */
+    if (c === 'c' && selectedText()) return;   // NOT done(): let the browser copy
     if (c === 'c') { copySelection(); return done(); }
     if (c === 'x') { if (copySelection()) deleteSelection(); return done(); }
     if (c === 'v') { pasteClipboard(); return done(); }
@@ -8556,6 +8675,9 @@ conn = WANTS_ENGINE ? connectEngine({
     // edits reconcile on the clip version.
     reconcileMixer(mixerState, store);
     reconcilePatcher();
+    // A node the engine has just made, given the settings it should have started with. Here
+    // rather than in the add, because the id is the engine's to issue — see seedNewNodes.
+    seedNewNodes();
     reconcileLoop();
     // Ask for the project list once the COMMAND socket can actually carry it.
     // The rail used to request it when you opened it, which was right while it

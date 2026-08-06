@@ -1476,6 +1476,35 @@ export class Dock {
     div('dk-name', head).textContent = 'AGENT';
     div('dk-hint', head).textContent = 'runs the same commands you do';
 
+    /**
+     * COPY THE TRANSCRIPT — a button as well as a selection, deliberately.
+     *
+     * Making the text selectable (shell.css) is the fix for "I cannot copy from
+     * the ai panel"; it is not the whole answer. What a person wants out of this
+     * panel is usually the WHOLE exchange — a refusal to paste into a bug report,
+     * a plan the model just wrote — and getting that by dragging means dragging
+     * across a scrolling log while it auto-scrolls to the bottom under the
+     * pointer. A selection is for taking a sentence; a button is for taking the
+     * transcript, and the two wants are different enough that one control cannot
+     * serve both well.
+     *
+     * So it copies the SELECTION when there is one and the whole transcript
+     * otherwise: "copy what I am pointing at, or everything" is the only rule
+     * that never surprises, and it means the button is never the wrong thing to
+     * press.
+     *
+     * `pointerdown` is prevented for two reasons that both bite. A press
+     * COLLAPSES the current selection before `click` fires, so without this the
+     * button could never see the selection it exists to copy. And a press moves
+     * DOM focus, which this application reads as leaving the console — the same
+     * two-notions-of-focus trap `blur()` below is about.
+     */
+    this.copyEl = div('dk-copy', head);
+    this.copyEl.appendChild(document.createTextNode('copy'));
+    this.copyEl.title = 'copy the selection, or the whole transcript';
+    this.copyEl.addEventListener('pointerdown', (e) => e.preventDefault());
+    this.copyEl.addEventListener('click', () => this.copy());
+
     this.logEl = div('dk-log', host);
     const row = div('dk-row', host);
     this.prompt = div('dk-prompt', row);
@@ -1554,6 +1583,50 @@ export class Dock {
   }
 
   clear() { this.lines.length = 0; this._dirty = true; }
+
+  /**
+   * The transcript as one block of text, built from `lines` and NOT from the DOM.
+   *
+   * The log's elements are a pool: surplus ones are hidden rather than removed
+   * (GUIDELINES 3.7), so `logEl.innerText` would hand back whatever the pool last
+   * held below the live lines — text from a session that has been cleared. The
+   * model is the only place that knows how long the transcript is.
+   */
+  text() {
+    let out = '';
+    for (let i = 0; i < this.lines.length; i++) {
+      out += this.lines[i].text;
+      if (i + 1 < this.lines.length) out += '\n';
+    }
+    return out;
+  }
+
+  /**
+   * Put the selection, or failing that the whole transcript, on the system
+   * clipboard. Returns what it tried to copy, so a script can assert on it
+   * without needing clipboard permission.
+   *
+   * The write can be refused — a page that is not focused, or a browser that has
+   * not granted the permission — and a copy button that silently did nothing
+   * would be exactly the control section 4.5 forbids. So the outcome is reported
+   * into the transcript either way, which is also where a person is already
+   * looking.
+   */
+  copy() {
+    const sel = String(document.getSelection() || '');
+    const text = sel || this.text();
+    if (!text) { this.log('err', 'nothing to copy'); this.render(); return ''; }
+    const what = (sel ? 'selection' : this.lines.length + ' lines');
+    const done = (kind, msg) => { this.log(kind, msg); this.render(); };
+    try {
+      navigator.clipboard.writeText(text).then(
+        () => done('out', 'copied ' + what),
+        (err) => done('err', 'copy refused: ' + (err && err.message ? err.message : err)));
+    } catch (err) {
+      done('err', 'copy refused: ' + (err && err.message ? err.message : err));
+    }
+    return text;
+  }
 
   submit(raw) {
     const line = raw.trim();

@@ -2832,3 +2832,99 @@ fn consecutive_harmony_writes_all_land() {
         std::thread::sleep(Duration::from_millis(200));
     }
 }
+
+/// The agent's patcher LINK actually makes an edge — it never did.
+///
+/// From a live session: "the AI wasn't able to do it either: it did add the nodes but not the
+/// connections". The nodes appeared because `action: "add"` was correct. The absence of cables
+/// read as the model not trying.
+///
+/// It was trying. `patcher_node` with `action: "link"` set the two node ids and nothing else, so
+/// `src_port_id` and `dst_port_id` kept the struct's zeros — and port 0 is the event INPUT. Every
+/// link it ever sent asked the engine to join an input to an input, was refused with
+/// `invalid_port` on a channel no tool reads, and reported `sent: true`.
+///
+/// The parity registry pointed at this action the whole time, and the ratchet was satisfied
+/// because the named tool EXISTED. Existing is not the same as working, which is the lesson this
+/// whole file keeps re-teaching.
+#[test]
+fn the_agents_patcher_link_actually_connects() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("aglink");
+
+    let proj = json!({
+        "schema_version": 2,
+        "meta": { "name": "aglink_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [], "clips": [],
+        "tracks": [ {
+            "track_id": 0, "name": "P", "harmony_quantize": 0, "lines_per_beat": 4,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            "device_chain": [ { "device_id": 4, "kind": "patcher_event",
+                                "patcher_node_id": 0, "bypass": false } ],
+            "mod_links": [], "placements": []
+        } ]
+    });
+    std::fs::write(engine.proj.join("aglink_in.uniproj.json"),
+                   serde_json::to_string_pretty(&proj).unwrap()).unwrap();
+    assert!(session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"aglink_in"}) }).ok);
+    std::thread::sleep(Duration::from_millis(1500));
+
+    // euclidean -> out. NOT two euclideans: a euclidean emits gates and has no event input, so
+    // that pair is refused for a REAL reason and would hide a port bug behind a legitimate one.
+    for ty in ["euclidean", "out"] {
+        let r = session.execute(&ToolCall {
+            tool: "patcher_node".into(),
+            args: json!({ "track": 0, "device": 4, "action": "add", "type": ty }),
+        });
+        assert!(r.ok, "adding {ty} failed: {r:?}");
+        std::thread::sleep(Duration::from_millis(600));
+    }
+
+    let graph_of = |name: &str| -> (usize, usize) {
+        assert!(session.execute(&ToolCall {
+            tool: "save".into(), args: json!({"name": name}) }).ok);
+        let doc = read_project(&engine.proj, name);
+        let dev = &doc["tracks"][0]["device_chain"][0];
+        let n = dev["patcher"]["nodes"].as_array().map_or(0, |a| a.len());
+        let e = dev["patcher"]["edges"].as_array().map_or(0, |a| a.len());
+        (n, e)
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(6);
+    let ids: Vec<u64> = loop {
+        let doc = {
+            assert!(session.execute(&ToolCall {
+                tool: "save".into(), args: json!({"name": "aglink_a"}) }).ok);
+            read_project(&engine.proj, "aglink_a")
+        };
+        let nodes = doc["tracks"][0]["device_chain"][0]["patcher"]["nodes"]
+            .as_array().cloned().unwrap_or_default();
+        if nodes.len() == 2 {
+            break nodes.iter().filter_map(|n| n["id"].as_u64()).collect();
+        }
+        assert!(Instant::now() < deadline, "the two nodes never reached the device graph");
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert_eq!(graph_of("aglink_b").1, 0, "no edges before the link — else this proves nothing");
+
+    let linked = session.execute(&ToolCall {
+        tool: "patcher_node".into(),
+        args: json!({ "track": 0, "device": 4, "action": "link",
+                      "src": ids[0], "dst": ids[1] }),
+    });
+    assert!(linked.ok, "link failed: {linked:?}");
+
+    let deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        let (n, e) = graph_of("aglink_c");
+        if e >= 1 { break; }
+        assert!(Instant::now() < deadline,
+                "{n} node(s) and {e} edge(s) in the saved device graph — the link reported \
+                 success and made nothing. Port 0 is the event INPUT: a link that leaves both \
+                 port ids at zero asks to join an input to an input, and the engine refuses it \
+                 into a diff no tool reads");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}

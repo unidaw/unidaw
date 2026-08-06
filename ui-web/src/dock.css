@@ -28,7 +28,20 @@
 .dk-hint {
   font-size: 10px; color: var(--uni-text-faint);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* Takes the slack, so `copy` is pinned to the right edge of the bar rather
+     than floating wherever the hint's own length happens to leave it. */
+  flex: 1 1 auto;
 }
+
+/* Copy. Quiet until pointed at: the header names the pane, and a control that
+   shouts sits on screen competing with the transcript it is there to serve. */
+.dk-copy {
+  flex: 0 0 auto;
+  font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--uni-text-gutter);
+  cursor: pointer;
+}
+.dk-copy:hover { color: var(--base-accent); }
 
 .dk-log {
   flex: 1 1 auto;

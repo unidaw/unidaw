@@ -36,11 +36,30 @@
 /* Text selection is off across the application. Dragging in a tracker selects
    rows, dragging on a clip rail moves a clip — a blue text highlight following
    the pointer is never what was meant, and it makes every drag look broken. The
-   places that DO want selection ask for it back below. */
+   places that DO want selection ask for it back below.
+
+   EVERY EXCEPTION MUST CARRY THE `#app` — and two of them did not, so they were
+   not exceptions at all. `#app *` scores (1,0,0); a bare `.dk-log` scores (0,1,0)
+   and LOSES to it, while `#app input` scores (1,0,1) and wins. So the two rules
+   written as class selectors were overridden by the very rule they were listed to
+   escape, and the agent transcript — the one panel in this application whose whole
+   content is prose a person wants to keep — could not be selected with a pointer
+   at all. Nothing errored, the declaration was right there in the file, and the
+   only way to see it was to try to drag across the text.
+
+   This is section 2.15's note from the other end: `user-select` was chosen when
+   nothing had to be selectable, and it does not announce that it is now wrong. A
+   selector that is written down and outranked is indistinguishable from one that
+   was never written. Anything added here is prefixed, or it does nothing. */
 #app, #app * { user-select: none; -webkit-user-select: none; }
-#app input, #app textarea, .dk-log, .hm-body {
+#app input, #app textarea, #app .dk-log, #app .hm-body {
   user-select: text; -webkit-user-select: text;
 }
+/* The log is a container of pooled line divs, and `#app *` hits each of THEM
+   directly — inheritance never gets a chance, because a declaration that matches
+   the element itself beats one it would have inherited. So the lines must be
+   named too, or the box is selectable and every word inside it is not. */
+#app .dk-log * { user-select: text; -webkit-user-select: text; }
 
 #app {
   position: absolute;

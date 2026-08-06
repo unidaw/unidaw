@@ -111,6 +111,58 @@ const CONFIG_LIMITS = {
   slice: [[1, 0, 127], [1, 1, 128]],
 };
 
+/**
+ * WHAT A NODE YOU JUST ADDED IS SET TO.
+ *
+ * `AddPatcherNode` mints a node with NO config struct attached (apps/patcher_graph.cpp
+ * `addPatcherNode` default-constructs `PatcherNode`, whose four `hasXConfig` flags are
+ * false), so the published `hasConfig` byte is 0 and the box says "no config published" —
+ * eight settings that exist, are named right here, and cannot be edited. Reported from live
+ * use as "I added an Euclidean node, but it has no parameters", and it is the whole of
+ * building a patch from scratch.
+ *
+ * These are not invented numbers. They are the ENGINE'S OWN defaults, the member
+ * initialisers of PatcherEuclideanConfig / PatcherSliceSelectConfig /
+ * PatcherRandomDegreeConfig / PatcherLfoConfig in apps/patcher_abi.h — the same values the
+ * Rust kernel falls back to for a node whose config block is null (patcher_rust/src/lib.rs,
+ * EUCLIDEAN_STEPS and friends). So sending them changes nothing about what the node DOES;
+ * it makes what it is already doing visible and editable, which is the complaint.
+ *
+ * In the two scaled types the units are this file's, not the ABI's: `lfo` is milli-units
+ * (1.0 Hz is 1000), because that is what CONFIG_FIELDS renders and what the sidecar packs.
+ *
+ * A mirror of engine data, and therefore the thing GUIDELINES 5 warns about — kept honest by
+ * the fact that a wrong value here is a wrong number ON THE BOX the moment a node is added,
+ * not a silent difference.
+ */
+const CONFIG_DEFAULTS = {
+  // steps 16, hits 5, offset 0, degree 1, octave_offset 0, velocity 100, base_octave 4,
+  // duration_ticks 0 (the sentinel: half a step).
+  //
+  // DEGREE 1, not 0. Degrees are 1-based throughout this program — `add_chords` refuses 0 —
+  // and 1 is what the kernel uses for a euclidean with no config, so a node that arrives
+  // saying "degree 0" would be describing something the engine has never played.
+  euclidean: [16, 5, 0, 1, 0, 100, 4, 0],
+  random: [8, 100, 0],
+  lfo: [1000, 1000, 0, 0],
+  slice: [1, 8],
+};
+
+/**
+ * The settings a freshly added node of this type should start with, or null for a type that
+ * has none (passthru, audio, out — and kernel, whose config the engine does not publish).
+ *
+ * Padded to the published eight, because the wire carries eight values whatever the type
+ * uses: a short array would send `undefined` for the rest and the sidecar would read 0.
+ */
+export function defaultConfig(type) {
+  const table = CONFIG_DEFAULTS[NODE_TYPES[type]];
+  if (!table) return null;
+  const out = [0, 0, 0, 0, 0, 0, 0, 0];
+  for (let i = 0; i < table.length && i < out.length; i++) out[i] = table[i];
+  return out;
+}
+
 /** The most fields any type has, which is how many rows a node box pools. */
 const MAX_FIELDS = 8;
 

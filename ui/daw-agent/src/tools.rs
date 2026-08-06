@@ -1615,9 +1615,40 @@ fn patcher_node(handle: &EngineHandle, args: &Value) -> ToolResult {
             let (Some(src), Some(dst)) = (arg_u64(args, "src"), arg_u64(args, "dst")) else {
                 return ToolResult::err("a link needs \"src\" and \"dst\"");
             };
+            if src == dst {
+                return ToolResult::err("a node cannot connect to itself");
+            }
             p.command_type = UiCommandType::ConnectPatcherNodes as u16;
             p.src_node_id = src as u32;
             p.dst_node_id = dst as u32;
+            /*
+             * THE PORTS, WHICH THIS NEVER SET — SO EVERY LINK IT EVER SENT WAS REFUSED.
+             *
+             * The action existed, the parity registry pointed at it, and it filled in the node
+             * ids and nothing else. `src_port_id` and `dst_port_id` kept the struct's zeros, and
+             * port 0 is the event INPUT: it asked the engine to join an input to an input, every
+             * time. The engine answered `patcher_device_edit.rejected ... reason=invalid_port`,
+             * on a channel no tool reads, and the tool reported `sent: true`.
+             *
+             * Found from a live session: "the AI wasn't able to do it either: it did add the
+             * nodes but not the connections". The nodes appeared because `add` was correct. The
+             * absence of cables was the whole of the bug, and it looked like the model failing to
+             * try.
+             *
+             * Port 1 out to port 0 in is the event pair, and it is what daw-cli has always sent.
+             * Overridable for the one type that has more than one kind of port (`kernel`, which
+             * has events and control both ways) — and `kind` narrows it the same way the sidecar's
+             * `resolve_link` does with its `want_kind`.
+             */
+            p.src_port_id = arg_u64(args, "src_port").unwrap_or(1) as u32;
+            p.dst_port_id = arg_u64(args, "dst_port").unwrap_or(0) as u32;
+            p.edge_kind = match args.get("kind").and_then(|v| v.as_str()) {
+                None | Some("event") => 0,
+                Some("audio") => 1,
+                Some("control") | Some("cv") => 2,
+                Some(other) => return ToolResult::err(format!(
+                    "link kind {other:?} is one of event, audio, control")),
+            };
         }
         "remove" => {
             let Some(node) = arg_u64(args, "node") else {
