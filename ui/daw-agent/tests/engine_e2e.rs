@@ -2401,3 +2401,102 @@ fn the_agent_can_set_grids_and_remove_an_automation_point() {
         std::thread::sleep(Duration::from_millis(150));
     }
 }
+
+/// The filter, the pad's name and an audio region's fields — three more the agent could not write.
+///
+/// `sampler_filter` matters more than its size suggests: `filterType` was read at the kit publish
+/// site and written by nothing for a while, so a cutoff envelope built by any surface modulated a
+/// filter that was off. The tool REQUIRES a type where daw-cli defaults it, because the command
+/// writes the type on every send with no set-flag — so a caller adjusting only the cutoff through
+/// the CLI's default turns the filter off on the way past, and gets a successful call for it.
+///
+/// That difference is asserted here: the filter is set to lp24, then the cutoff is moved WITHOUT
+/// naming a type, and the call must be REFUSED rather than silently disabling the filter.
+#[test]
+fn the_agent_can_set_a_filter_a_pad_name_and_an_audio_region() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agfilt");
+
+    let wav = std::fs::canonicalize("ui-web/test/audio/waveform_probe.wav")
+        .or_else(|_| std::fs::canonicalize("../daw/ui-web/test/audio/waveform_probe.wav"))
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "waveform_probe.wav".into());
+    let proj = json!({
+        "schema_version": 2,
+        "meta": { "name": "agfilt_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [],
+        // An AUDIO clip, because set_audio_clip's fields exist only on one — the engine refuses
+        // with not_an_audio_clip otherwise, which would look exactly like the tool not working.
+        "clips": [ { "id": 5, "name": "a", "length": Q * 8, "lines_per_beat": 4, "kind": "audio",
+                     "time_sig_numerator": 4, "time_sig_denominator": 4,
+                     "audio": { "source_path": wav, "source_start_frame": 0, "gain_db": 0.0,
+                                "fade_in": 0, "fade_out": 0 } } ],
+        "tracks": [ {
+            "track_id": 0, "name": "S", "harmony_quantize": 0, "lines_per_beat": 4,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            "device_chain": [ { "device_id": 7, "kind": "sampler", "patcher_node_id": 0,
+                                "bypass": false,
+                                "sampler": { "slots": [ { "id": 1, "name": "s", "key_low": 0,
+                                                          "key_high": 127, "root_key": 60,
+                                                          "gate": 0 } ] } } ],
+            "mod_links": [],
+            "placements": [ { "clip_id": 5, "at": 0, "length": Q * 8,
+                              "notes": [], "chords": [], "mutes": [] } ]
+        } ]
+    });
+    std::fs::write(engine.proj.join("agfilt_in.uniproj.json"),
+                   serde_json::to_string_pretty(&proj).unwrap()).unwrap();
+    assert!(session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"agfilt_in"}) }).ok);
+
+    // The refusal that separates this tool from the CLI verb it mirrors.
+    let typeless = session.execute(&ToolCall {
+        tool: "sampler_filter".into(),
+        args: json!({ "track": 0, "device": 7, "cutoff": 400 }),
+    });
+    assert!(!typeless.ok,
+            "a filter change naming no type must be refused — the command writes the type on \
+             every send, so this would turn the filter off while adjusting its cutoff: {typeless:?}");
+
+    assert!(session.execute(&ToolCall {
+        tool: "sampler_filter".into(),
+        args: json!({ "track": 0, "device": 7, "type": "lp24", "cutoff": 400, "resonance": 250 }),
+    }).ok);
+    assert!(session.execute(&ToolCall {
+        tool: "sampler_slot_name".into(),
+        args: json!({ "track": 0, "device": 7, "slot": 1, "name": "Snare" }),
+    }).ok);
+    // 3000 millibels of gain: far enough from 0 that a default could not produce it.
+    assert!(session.execute(&ToolCall {
+        tool: "set_audio_clip".into(),
+        args: json!({ "track": 0, "clip": 5, "field": "gain", "value": 3000 }),
+    }).ok);
+    assert!(session.execute(&ToolCall {
+        tool: "set_audio_clip".into(),
+        args: json!({ "track": 0, "clip": 5, "field": "fade_in", "value": Q }),
+    }).ok);
+
+    let deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        assert!(session.execute(&ToolCall {
+            tool: "save".into(), args: json!({"name": "agfilt_out"}) }).ok);
+        let doc = read_project(&engine.proj, "agfilt_out");
+        let dev = &doc["tracks"][0]["device_chain"][0];
+        let ftype = dev["sampler"]["mod_sets"].as_array()
+            .and_then(|a| a.first()).map(|m| m["filter_type"].clone()).unwrap_or(Value::Null);
+        let pad = dev["sampler"]["slots"].as_array()
+            .and_then(|a| a.iter().find(|s| s["id"] == 1))
+            .and_then(|s| s["name"].as_str()).unwrap_or("").to_string();
+        let clip = doc["clips"].as_array().unwrap().iter()
+            .find(|c| c["id"] == 5).cloned().unwrap_or(Value::Null);
+        let fade = clip["audio"]["fade_in"].as_u64().unwrap_or(0);
+        // Millibels on the wire, dB on disk: 3000 mB is 30 dB, and the round trip is not exact.
+        let gain = clip["audio"]["gain_db"].as_f64().unwrap_or(0.0);
+        if ftype == 2 && pad == "Snare" && fade == Q as u64 && (gain - 30.0).abs() < 0.05 { break; }
+        assert!(Instant::now() < deadline,
+                "filter_type={ftype} pad={pad:?} fade_in={fade} gain_db={gain} — \
+                 want 2 (lp24), \"Snare\", {Q}, 30.0");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}

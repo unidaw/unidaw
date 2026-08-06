@@ -577,6 +577,59 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "set_audio_clip",
+            description: "An audio clip's in-point, gain or fades. `field` is \"start\" (a frame \
+                          offset into the file), \"gain\" (millibels, 0 is unity), \"fade_in\" or \
+                          \"fade_out\" (nanoticks). An audio region was read-only to an agent \
+                          until this.",
+            params: json!({
+                "type": "object",
+                "required": ["clip", "field", "value"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "clip": { "type": "integer", "minimum": 0 },
+                    "field": { "type": "string",
+                               "enum": ["start", "gain", "fade_in", "fade_out"] },
+                    "value": { "type": "integer",
+                               "description": "REQUIRED. 0 is a legal value for every one of \
+                                               these four, so it cannot double as \"unset\"." },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "sampler_filter",
+            description: "A sampler mod set's filter. `type` is off, lp12, lp24, hp or bp and is \
+                          REQUIRED — the command carries no keep-what-is-there, so omitting it \
+                          turns the filter off. `cutoff` and `resonance` are 0..1000 and are left \
+                          alone when omitted.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "type"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "device": { "type": "integer", "minimum": 0 },
+                    "mod_set": { "type": "integer", "minimum": 0 },
+                    "type": { "type": "string", "enum": ["off", "lp12", "lp24", "hp", "bp"] },
+                    "cutoff": { "type": "integer", "minimum": 0, "maximum": 1000 },
+                    "resonance": { "type": "integer", "minimum": 0, "maximum": 1000 },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "sampler_slot_name",
+            description: "Name a sampler slot — what the pad is called. An empty name clears it.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "slot", "name"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "device": { "type": "integer", "minimum": 0 },
+                    "slot": { "type": "integer", "minimum": 0 },
+                    "name": { "type": "string" },
+                },
+            }),
+        },
+        ToolSpec {
             name: "set_track_grid",
             description: "A track's rows-per-beat, and whether entering a note over a sounding \
                           one lets it ring. Give `lines` (1..31), `note_overlap` (true keeps the \
@@ -2114,6 +2167,146 @@ fn delete_harmony(handle: &EngineHandle, args: &Value) -> ToolResult {
     send_edit(handle, p, json!({ "deleted_harmony_at": tick }))
 }
 
+/// An audio clip's in-point, gain or fades — all four persisted, published, honoured by the
+/// renderer, and unreachable from a tool until now.
+///
+/// `value` IS REQUIRED, and the stakes are higher here than on the other absent-is-not-zero
+/// commands: 0 is a legal value for every one of the four fields (unity gain, no fade, the file's
+/// own start), so a defaulted value would be a silent reset that looks like a successful call.
+///
+/// The field is NAMED, not numbered, for the reason `vintage 0 9 8 2` once read a bit depth as a
+/// sample rate: the engine cannot tell a mistyped enum from a deliberate one.
+fn set_audio_clip(handle: &EngineHandle, args: &Value) -> ToolResult {
+    use daw_bridge::layout as L;
+    let Some(clip) = arg_u64(args, "clip") else {
+        return ToolResult::err("set_audio_clip needs \"clip\"");
+    };
+    let field = match args.get("field").and_then(|v| v.as_str()).unwrap_or("") {
+        "start" | "source_start" => L::AUDIO_CLIP_FIELD_SOURCE_START_FRAME,
+        "gain" => L::AUDIO_CLIP_FIELD_GAIN_MILLIBELS,
+        "fade_in" => L::AUDIO_CLIP_FIELD_FADE_IN_NANOTICKS,
+        "fade_out" => L::AUDIO_CLIP_FIELD_FADE_OUT_NANOTICKS,
+        other => return ToolResult::err(format!(
+            "set_audio_clip field {other:?} is not one of start, gain, fade_in, fade_out")),
+    };
+    let Some(value) = args.get("value").and_then(|v| v.as_i64()) else {
+        return ToolResult::err(
+            "set_audio_clip needs \"value\" — 0 is a legal value for every one of these four \
+             fields, so it cannot double as \"unset\"");
+    };
+    let p = L::UiAudioClipFieldPayload {
+        command_type: UiCommandType::SetAudioClipField as u16,
+        field,
+        track_id: arg_u64(args, "track").unwrap_or(0) as u32,
+        clip_id: clip as u32,
+        reserved0: 0,
+        value,
+        reserved1: [0; 4],
+    };
+    match handle.send_audio_clip_field(p) {
+        Ok(()) => ToolResult::ok(json!({ "sent": true, "clip": clip, "value": value })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
+/// A sampler mod set's filter — the field nothing could write for a while, so a cutoff envelope
+/// built by any surface modulated a filter that was off.
+///
+/// `type` IS REQUIRED HERE AND OPTIONAL IN daw-cli, deliberately. The command carries a filter
+/// type as a plain byte with no set-flag, so it is written on every send; daw-cli's default of
+/// `off` therefore means that adjusting only the CUTOFF turns the filter off on the way past. An
+/// agent computing a sweep would silence the thing it was sweeping and see a successful call.
+///
+/// Cutoff and resonance DO have set-flags and are left alone when omitted, because 0 is a legal
+/// cutoff and inferring "leave it" from the value would slam the filter shut.
+fn sampler_filter(handle: &EngineHandle, args: &Value) -> ToolResult {
+    use daw_bridge::layout as L;
+    let Some(track) = arg_u64(args, "track") else {
+        return ToolResult::err("sampler_filter needs \"track\"");
+    };
+    let filter_type = match args.get("type").and_then(|v| v.as_str()) {
+        Some("off") | Some("none") => 0u8,
+        Some("lp12") | Some("lp") => 1u8,
+        Some("lp24") => 2u8,
+        Some("hp") | Some("hp12") => 3u8,
+        Some("bp") | Some("bp12") => 4u8,
+        Some(other) => return ToolResult::err(format!(
+            "sampler_filter type {other:?} is not one of off, lp12, lp24, hp, bp")),
+        None => return ToolResult::err(
+            "sampler_filter needs \"type\" — the command writes the filter type on every send, so \
+             an omitted type would turn the filter off while you were adjusting its cutoff"),
+    };
+    let mut flags = 0u16;
+    let cutoff = match arg_u64(args, "cutoff") {
+        Some(v) => { flags |= L::SAMPLER_FILTER_SET_CUTOFF; v.min(1000) as u16 }
+        None => 0,
+    };
+    let resonance = match arg_u64(args, "resonance") {
+        Some(v) => { flags |= L::SAMPLER_FILTER_SET_RESONANCE; v.min(1000) as u16 }
+        None => 0,
+    };
+    let p = L::UiSamplerFilterPayload {
+        command_type: UiCommandType::SamplerSetFilter as u16,
+        flags,
+        track_id: track as u32,
+        device_id: arg_u64(args, "device").unwrap_or(0) as u32,
+        mod_set_id: arg_u64(args, "mod_set").unwrap_or(0) as u32,
+        filter_type,
+        reserved0: 0,
+        cutoff_milli: cutoff,
+        resonance_milli: resonance,
+        reserved1: 0,
+        reserved2: [0; 4],
+    };
+    match handle.send_sampler_filter(p) {
+        Ok(()) => ToolResult::ok(json!({
+            "sent": true, "track": track, "type": filter_type,
+            "cutoff": cutoff, "resonance": resonance })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
+/// Name a sampler slot. The second bulk-carrier tool, and the same shape as `set_clip_text`.
+///
+/// An ABSENT name is an error; an EMPTY one is a legal clear — a typo'd argument must not erase a
+/// pad's name and report success.
+fn sampler_slot_name(handle: &EngineHandle, args: &Value) -> ToolResult {
+    use daw_bridge::layout as L;
+    let (Some(track), Some(slot)) = (arg_u64(args, "track"), arg_u64(args, "slot")) else {
+        return ToolResult::err("sampler_slot_name needs \"track\" and \"slot\"");
+    };
+    let Some(name) = args.get("name").and_then(|v| v.as_str()) else {
+        return ToolResult::err(
+            "sampler_slot_name needs \"name\" (an empty string is a legal clear)");
+    };
+    if name.len() >= L::UI_SAMPLER_SLOT_NAME_BYTES {
+        return ToolResult::err(format!(
+            "the name is {} bytes; the published field holds {} (the engine refuses rather than \
+             truncating)", name.len(), L::UI_SAMPLER_SLOT_NAME_BYTES - 1));
+    }
+    let bytes = name.as_bytes();
+    let header = L::UiSamplerSlotNameHeader {
+        command_type: UiCommandType::SamplerSetSlotName as u16,
+        device_id: arg_u64(args, "device").unwrap_or(0) as u16,
+        track_id: track as u32,
+        slot_id: slot as u16,
+        name_bytes: bytes.len() as u16,
+    };
+    let mut buf = Vec::with_capacity(std::mem::size_of_val(&header) + bytes.len());
+    buf.extend_from_slice(unsafe {
+        std::slice::from_raw_parts(
+            &header as *const L::UiSamplerSlotNameHeader as *const u8,
+            std::mem::size_of::<L::UiSamplerSlotNameHeader>(),
+        )
+    });
+    buf.extend_from_slice(bytes);
+    match handle.send_bulk(&buf) {
+        Ok(()) => ToolResult::ok(json!({
+            "sent": true, "track": track, "slot": slot, "name": name })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
 /// A track's rows-per-beat and its note-overlap rule. Two commands, one tool.
 ///
 /// Together because they are the same question asked twice — how this track's lane behaves when
@@ -2672,6 +2865,9 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "delete_harmony" => delete_harmony(handle, &call.args),
         "set_clip_text" => set_clip_text(handle, &call.args),
         "set_track_grid" => set_track_grid(handle, &call.args),
+        "set_audio_clip" => set_audio_clip(handle, &call.args),
+        "sampler_filter" => sampler_filter(handle, &call.args),
+        "sampler_slot_name" => sampler_slot_name(handle, &call.args),
         "set_clip_grid" => set_clip_grid(handle, &call.args),
         "delete_automation_point" => delete_automation_point(handle, &call.args),
         "set_mixer" => set_mixer(handle, &call.args),
