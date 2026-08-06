@@ -92,6 +92,10 @@ list is a drum kit and each file stays on its own key.
 
 `kit 0 1` prints what is in it, slot by slot.
 
+**For a sustained sound, set the slot's gate.** A freshly loaded slot is a one-shot: it plays the
+whole file and note length does nothing. `sampler-slot --field gate --value 1` makes it stop with
+the note. Drums want the default; a pad does not. See rough edge 3.
+
 ## 4. Chords and strums
 
 `@` on a note field opens the token buffer:
@@ -191,10 +195,21 @@ DAW_PROJECT_DIR=<the project dir> ./daw_engine --project <name> --render take --
    a track reaches no output". Both were this.
 2. **`goto` counts displayed rows**, and how much time a row spans depends on the zoom. If you
    navigate by row and something lands somewhere surprising, that is why.
-3. **A sampler voice plays the whole sample, however short the note.** Measured offline: a
-   two-second note on a four-second file produces four seconds of audio. Fine for one-shots and
-   drums, which is most of what it is for, but a short tracker note and a long one sound the
-   same. Do not build a demo moment on note length in the sampler.
+3. **A sampler slot ignores note length until you tell it not to.** A two-second note on a
+   four-second file gives four seconds of audio — measured. That is not a limitation, it is the
+   slot's `gate`: 0 is one-shot and ignores note-off, 1 is gated and stops with the note. The
+   difference between a drum and a pad, and it is per slot.
+
+   It defaults to 0 and neither load nor slice sets it, so every slot you make by hand is a
+   one-shot. If you want to *show* note length mattering, set it:
+
+   ```
+   sampler-slot --field gate --value 1        one slot
+   sampler-device --field default-gate        seeds new slots at mint
+   ```
+
+   (I had this in here as "do not build a demo moment on note length" — wrong, and it would have
+   talked you out of something you can do. `apps/sampler_engine.h:309`.)
 4. The AI takes 5–25 seconds to answer. It streams; wait for it to stop before typing again.
 
 ---
