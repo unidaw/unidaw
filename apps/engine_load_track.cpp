@@ -1,5 +1,7 @@
 #include "apps/engine_load_track.h"
 
+#include "apps/engine_clip_adoption.h"
+
 // THE BODY BELOW IS VERBATIM — the body of loadProjectFromPath's per-track loop, unedited. Every
 // name it used is either a parameter or bound to one in the preamble, so the move is provable by
 // diffing this range against the parent commit.
@@ -36,24 +38,10 @@ void loadTrackFromDocument(LoadProjectDeps& deps,
         runtime->sourcePlacements = source.placements;
         ensurePlacementIds(runtime->sourcePlacements);
         runtime->ownedClips.clear();
-        for (const auto& pl : source.placements) {
-          bool have = false;
-          for (const auto& oc : runtime->ownedClips) {
-            if (oc.id == pl.clipId) {
-              have = true;
-              break;
-            }
-          }
-          if (have) {
-            continue;
-          }
-          for (const auto& c : document.clips) {
-            if (c.id == pl.clipId) {
-              runtime->ownedClips.push_back(c);
-              break;
-            }
-          }
-        }
+        // BOTH clips a placement references, not just the one that sounds — see
+        // engine_clip_adoption.h. This loop used to read pl.clipId alone, so an A/B draft was
+        // dropped by every load AND by every undo.
+        adoptClipsForPlacements(source.placements, document.clips, runtime->ownedClips);
         runtime->arrangementDirty.store(false, std::memory_order_relaxed);
         snapshot = rebuildFlatAndPublish(*runtime);
         // Decode + resolve this track's placed audio clips for the audio thread.

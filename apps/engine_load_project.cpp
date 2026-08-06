@@ -1,5 +1,6 @@
 #include "engine_load_project.h"
 
+#include "apps/engine_clip_adoption.h"
 #include "apps/engine_load_patcher_pool.h"
 #include "apps/engine_load_track.h"
 
@@ -12,6 +13,8 @@
 #include "engine_pure.h"
 #include "event_log.h"
 #include "patcher_assemble.h"
+// defaultProjectDir(), for loadStartupProject at the foot of this file.
+#include "patcher_preset_library.h"
 
 
 namespace daw::engine {
@@ -52,6 +55,7 @@ bool applyDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
   auto& loadedClips = deps.engineState.loadedProject.loadedClips;
   auto& loadedClipsMutex = deps.engineState.loadedProject.loadedClipsMutex;
   auto& loadedProjectDir = deps.engineState.loadedProject.loadedProjectDir;
+  auto& loadedProjectPath = deps.engineState.loadedProject.loadedProjectPath;
   auto& loadedTempoMap = deps.engineState.songTiming.loadedTempoMap;
   auto& loopEndNanotick = deps.engineState.transport.loopEndNanotick;
   auto& loopStartNanotick = deps.engineState.transport.loopStartNanotick;
@@ -156,24 +160,9 @@ bool applyDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
                   overlay.mixer = t.mixer;
                   overlay.placements = t.placements;
                   overlay.automationClips = t.automationClips;
-                  for (const auto& pl : t.placements) {
-                    bool have = false;
-                    for (const auto& oc : overlay.ownedClips) {
-                      if (oc.id == pl.clipId) {
-                        have = true;
-                        break;
-                      }
-                    }
-                    if (have) {
-                      continue;
-                    }
-                    for (const auto& c : document.clips) {
-                      if (c.id == pl.clipId) {
-                        overlay.ownedClips.push_back(c);
-                        break;
-                      }
-                    }
-                  }
+                  // The SECOND copy of the adoption rule, and it had the same hole as the first:
+                  // a stem's A/B draft was dropped exactly like a slot track's.
+                  adoptClipsForPlacements(t.placements, document.clips, overlay.ownedClips);
                   auxChildOverlays[{t.parentId, t.auxBusIndex}] = std::move(overlay);
                 }
                 return true;
@@ -185,6 +174,7 @@ bool applyDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
     // drop the previous project's waveform sources (and pyramids) before the track
     // loop below re-decodes and repopulates the store — one project's worth resident.
     loadedProjectDir = std::filesystem::path(path).parent_path().string();
+    loadedProjectPath = path;
     waveformStore.beginLoad();
 
     {
@@ -764,6 +754,39 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
     daw::ProjectDocument seeded = deps.captureDocument ? deps.captureDocument() : document;
     deps.engineState.documentHistory.seed(std::move(seeded));
   }
+  return true;
+}
+
+bool loadStartupProject(const std::string& startupProject,
+                        const std::function<bool(const std::string&, std::string*)>& load,
+                        std::atomic<uint32_t>& projectLoadOk,
+                        std::atomic<uint32_t>& projectLoadSeq) {
+  // --project: load before anything runs. For a render this is mandatory (the pump starts as
+  // soon as the threads are up, so there is no window for a CLI load); on its own it just saves
+  // a round trip. Reported loudly on failure and the render is abandoned rather than writing a
+  // file of silence, which is what the first version did and it looked exactly like success.
+  if (startupProject.empty()) {
+    return true;
+  }
+  const std::filesystem::path path = std::filesystem::path(daw::defaultProjectDir()) /
+                                     (startupProject + ".uniproj.json");
+  std::string error;
+  const bool ok = load(path.string(), &error);
+  projectLoadOk.store(ok ? 1u : 0u, std::memory_order_release);
+  projectLoadSeq.fetch_add(1, std::memory_order_acq_rel);
+  DAW_EVENT("project.load")
+      .field("path", path.string())
+      .field("ok", ok)
+      .field("startup", true)
+      .field("error", ok ? std::string() : error);
+  if (!ok) {
+    daw::LogLine() << "Startup load FAILED for " << path.string() << ": " << error << std::endl;
+    return false;
+  }
+  std::cout << "Startup load: " << path.string() << std::endl;
+  // No sleep here: a render waits for a host to be READY (awaitAnyReadyTrack), which is
+  // the condition that actually matters, and a fixed guess would be both slower and
+  // occasionally wrong.
   return true;
 }
 

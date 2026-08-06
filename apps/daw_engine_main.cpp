@@ -2000,7 +2000,12 @@ int main(int argc, char** argv) {
 
   auto applyDocument = [&](daw::ProjectDocument& doc) {
     std::string err;
-    return daw::engine::applyDocument(loadProjectDeps, doc, std::string(), &err);
+    // THE PATH THE DOCUMENT CAME FROM, not an empty string. Undo has no file to open, but
+    // applyDocument reads `path` for two things that are not about files at all — where relative
+    // sample paths resolve, and where plugin state lives — and an empty path answers both wrongly
+    // and silently. See LoadedProject::loadedProjectPath.
+    return daw::engine::applyDocument(
+        loadProjectDeps, doc, engineState.loadedProject.loadedProjectPath, &err);
   };
   daw::engine::UndoCommandDeps undoCommandDeps{
      engineState, applyUndoEntry, restoreSongStore, restoreTrackStore,
@@ -2143,33 +2148,9 @@ int main(int argc, char** argv) {
     });
   }
 
-  // --project: load before anything runs. For a render this is mandatory (the pump starts as
-  // soon as the threads are up, so there is no window for a CLI load); on its own it just saves
-  // a round trip. Reported loudly on failure and the render is abandoned rather than writing a
-  // file of silence, which is what the first version did and it looked exactly like success.
-  bool startupLoadFailed = false;
-  if (!startupProject.empty()) {
-    const std::filesystem::path path = std::filesystem::path(daw::defaultProjectDir()) /
-                                       (startupProject + ".uniproj.json");
-    std::string error;
-    const bool ok = loadProjectFromPath(path.string(), &error);
-    projectLoadOk.store(ok ? 1u : 0u, std::memory_order_release);
-    projectLoadSeq.fetch_add(1, std::memory_order_acq_rel);
-    DAW_EVENT("project.load")
-        .field("path", path.string())
-        .field("ok", ok)
-        .field("startup", true)
-        .field("error", ok ? std::string() : error);
-    if (!ok) {
-      daw::LogLine() << "Startup load FAILED for " << path.string() << ": " << error << std::endl;
-      startupLoadFailed = true;
-    } else {
-      std::cout << "Startup load: " << path.string() << std::endl;
-      // No sleep here: a render waits for a host to be READY (awaitAnyReadyTrack), which is
-      // the condition that actually matters, and a fixed guess would be both slower and
-      // occasionally wrong.
-    }
-  }
+  // --project, resolved and reported in engine_load_project.cpp. main() needs only the verdict.
+  const bool startupLoadFailed = !daw::engine::loadStartupProject(
+      startupProject, loadProjectFromPath, projectLoadOk, projectLoadSeq);
   if (offlineRender && startupLoadFailed) {
     daw::LogLine() << "Offline render abandoned: nothing was loaded to render" << std::endl;
     renderFailed = true;

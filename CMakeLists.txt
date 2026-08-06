@@ -1666,6 +1666,17 @@ add_test(NAME undo_ratchet
 # switchover on that inference, without observing it. It was neither hung nor slow.
 set_tests_properties(undo_ratchet PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 900)
 
+# THE FOUR THINGS THE RATCHET CANNOT SEE. undo_ratchet counts undoable commands, one at a time,
+# each from a freshly loaded project — so it is structurally blind to anything that needs a
+# SEQUENCE: a refusal after an undo, a session that never loaded a project, a command that only
+# exists inside a bulk envelope, a directory read long after the undo that blanked it. All four
+# were real defects found by a review panel rather than by a check, and each has its own engine on
+# its own segment here because sharing one would let a previous phase supply the state under test.
+add_test(NAME undo_invariants
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/undo_invariants_check.sh
+)
+set_tests_properties(undo_invariants PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+
 # THE DOCUMENT IS A VALUE. Undo is built on captureDocument/applyDocument, so a field either of
 # them drops would be dropped by every undo at once. Loading a preset, saving, loading THAT and
 # saving again must produce identical bytes: the second save came through the pair, so a loss in

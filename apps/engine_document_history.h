@@ -56,18 +56,46 @@ class DocumentHistory {
     labels_.emplace_back("open");
     cursor_ = 0;
     bytes_ = approximateBytes(versions_.front());
+    cursorJson_ = daw::serializeProject(versions_.front());
   }
 
   // Record the state AFTER an edit. `label` is required, not optional: a version nobody can name
   // is a version nobody can present in a menu, and making it a parameter means a new command
   // cannot be recorded anonymously by accident.
-  void commit(daw::ProjectDocument doc, std::string label) {
+  //
+  // RETURNS whether a version was actually recorded. `false` means the document was byte-identical
+  // to the one already at the cursor — see below.
+  bool commit(daw::ProjectDocument doc, std::string label) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (versions_.empty()) {
       versions_.push_back(doc);
       labels_.emplace_back("open");
       cursor_ = 0;
       bytes_ = approximateBytes(versions_.front());
+      cursorJson_ = daw::serializeProject(versions_.front());
+    }
+
+    // A COMMAND THAT CHANGED NOTHING DOES NOT OPEN AN UNDO STEP — and, far more importantly,
+    // DOES NOT DESTROY THE REDO TAIL.
+    //
+    // The recording bracket fires on every mutating opcode, whether or not the handler agreed to
+    // do anything. Handlers refuse constantly and by design: a stale baseVersion, an unknown
+    // track, an out-of-range slot. So the everyday sequence "undo, then send a command that gets
+    // refused" truncated everything ahead of the cursor and left the user with no redo and no
+    // change to show for it. That is data loss caused by a command the engine explicitly declined.
+    //
+    // THE TEST IS THE DOCUMENT, NOT THE HANDLER'S OPINION. An outcome flag threaded through 48
+    // branches would be 48 chances to forget one, and it would still miss the handler that
+    // succeeds while writing the value that was already there. Comparing what SAVE WOULD WRITE
+    // is the same definition undo itself uses, so the two cannot disagree.
+    //
+    // COST: one serialization per mutating command, against a cached string rather than a second
+    // serialization of the current version. That is real, and on a large project it is the
+    // dominant cost of an edit — Step 3's field visitor replaces it with a structural compare.
+    // It buys an invariant that no amount of handler discipline can provide.
+    std::string json = daw::serializeProject(doc);
+    if (json == cursorJson_) {
+      return false;
     }
     // COMMITTING AFTER AN UNDO DISCARDS THE REDO TAIL, which is what every editor does and what
     // the old stack did explicitly. Dropping it here rather than at the call site means it cannot
@@ -81,7 +109,30 @@ class DocumentHistory {
     versions_.push_back(std::move(doc));
     labels_.push_back(std::move(label));
     cursor_ = versions_.size() - 1;
+    cursorJson_ = std::move(json);
     evictOldest();
+    return true;
+  }
+
+  // REWRITE THE VERSION AT THE CURSOR instead of pushing a new one.
+  //
+  // For a command that changes the document but must not open an undo step — today only the A/B
+  // audition swap. Skipping the recording entirely would be wrong in a way that is hard to see:
+  // the version at the cursor would still hold the PREVIOUS audition state, so the next undo would
+  // restore it and silently flip the placement back as collateral on an unrelated edit. Amending
+  // keeps history and the live document in agreement while leaving the step count alone.
+  //
+  // THE REDO TAIL SURVIVES. An audition is not an edit, so it has no business destroying work the
+  // user can still redo — which is the same reason it does not push a version.
+  void amend(daw::ProjectDocument doc) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (versions_.empty()) {
+      return;
+    }
+    bytes_ -= approximateBytes(versions_[cursor_]);
+    bytes_ += approximateBytes(doc);
+    cursorJson_ = daw::serializeProject(doc);
+    versions_[cursor_] = std::move(doc);
   }
 
   // Undo and redo are the same motion with the sign flipped. Both return the version to apply,
@@ -92,6 +143,9 @@ class DocumentHistory {
       return nullptr;
     }
     --cursor_;
+    // The cache follows the cursor, or the next commit would compare against the version we just
+    // LEFT and conclude nothing changed — which would silently drop the redo-then-edit case.
+    cursorJson_ = daw::serializeProject(versions_[cursor_]);
     return &versions_[cursor_];
   }
 
@@ -101,6 +155,7 @@ class DocumentHistory {
       return nullptr;
     }
     ++cursor_;
+    cursorJson_ = daw::serializeProject(versions_[cursor_]);
     return &versions_[cursor_];
   }
 
@@ -160,6 +215,10 @@ class DocumentHistory {
   }
 
   mutable std::mutex mutex_;
+  // WHAT SAVE WOULD WRITE FOR versions_[cursor_], cached so the unchanged-document test costs one
+  // serialization per edit rather than two. Every path that moves cursor_ must refresh it; a stale
+  // cache does not merely mislead a log line, it decides whether an edit is recorded at all.
+  std::string cursorJson_;
   std::vector<daw::ProjectDocument> versions_;
   std::vector<std::string> labels_;
   size_t cursor_ = 0;

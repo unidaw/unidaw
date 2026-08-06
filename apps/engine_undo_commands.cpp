@@ -25,7 +25,12 @@ void handleUndo(UndoCommandDeps& deps,
   daw::ProjectDocument doc = *version;
   DAW_EVENT("undo.applying");
   const bool ok = deps.applyDocument && deps.applyDocument(doc);
-  DAW_EVENT("undo.applied").field("ok", ok);
+  // THE DIRECTORY IS PART OF THE OUTCOME. applyDocument derives it from the path it is handed,
+  // and undo used to hand it an empty string — which blanked it, silently re-pointing every
+  // relative sample path at the engine's working directory and every plugin state blob at
+  // ./.state. Reported here so a check can assert it SURVIVES an undo rather than trusting it to.
+  DAW_EVENT("undo.applied").field("ok", ok)
+      .field("project_dir", deps.engineState.loadedProject.loadedProjectDir);
 }
 
 void handleRedo(UndoCommandDeps& deps,
@@ -40,7 +45,8 @@ void handleRedo(UndoCommandDeps& deps,
   daw::ProjectDocument doc = *version;
   DAW_EVENT("redo.applying");
   const bool ok = deps.applyDocument && deps.applyDocument(doc);
-  DAW_EVENT("redo.applied").field("ok", ok);
+  DAW_EVENT("redo.applied").field("ok", ok)
+      .field("project_dir", deps.engineState.loadedProject.loadedProjectDir);
 }
 
 }  // namespace daw::engine

@@ -65,15 +65,57 @@ void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
     // Nothing is captured BEFORE the command. History holds versions, not before/after pairs: the
     // state to undo to is the version already at the cursor, so one capture per edit is enough
     // and the pair cannot disagree with itself.
+    // VERSION 0 ARRIVES WITH THE FIRST EDIT, not with a load.
+    //
+    // seed() had exactly one caller, inside loadProjectFromPath. A bare boot — no --project and
+    // no `do load` — therefore reached its first edit with an EMPTY history, and commit()'s empty
+    // branch pushes the document it is handed as version 0. That document is the state AFTER the
+    // edit, so the first edit of such a session was permanently un-undoable: there was no earlier
+    // version to reach, and undo() returned nullptr forever after.
+    //
+    // Not fixed by seeding at startup: that only covers the boot path, and it would put version 0
+    // at a moment the engine picked rather than at the state the user's first edit departs from.
+    // Seeding HERE, before the command runs, is correct for every entry into the engine and costs
+    // one capture per session.
+    auto seedHistoryIfEmpty = [&deps] {
+      if (deps.documentHistory != nullptr && deps.captureDocument &&
+          deps.documentHistory->size() == 0) {
+        deps.documentHistory->seed(deps.captureDocument());
+        DAW_EVENT("undo.seeded").field("where", "first_edit");
+      }
+    };
+    if (commandUndoPolicy(commandType) != UndoPolicy::None) {
+      seedHistoryIfEmpty();
+    }
+
     struct RecordVersion {
       HandleUiEntryDeps& d;
-      bool mutates;
+      UndoPolicy policy;
       const char* label;
       ~RecordVersion() {
-        if (!mutates || d.documentHistory == nullptr || !d.captureDocument) {
+        if (policy == UndoPolicy::None || d.documentHistory == nullptr || !d.captureDocument) {
           return;
         }
-        d.documentHistory->commit(d.captureDocument(), label);
+        // AN AUDITION KEEPS THE HISTORY HONEST WITHOUT ADDING TO IT. See commandUndoPolicy: the
+        // swap must not consume an undo step, but the cursor's version still has to follow the
+        // live document or the next undo flips the placement back as collateral.
+        if (policy == UndoPolicy::Amend) {
+          d.documentHistory->amend(d.captureDocument());
+          DAW_EVENT("undo.version_amended")
+              .field("label", std::string(label))
+              .field("cursor", static_cast<uint64_t>(d.documentHistory->cursor()));
+          return;
+        }
+        if (!d.documentHistory->commit(d.captureDocument(), label)) {
+          // THE COMMAND CHANGED NOTHING — refused, or applied a value already in place. Recorded
+          // as its own event rather than silently: "no version appeared" and "the guard never
+          // ran" look identical from outside, and only one of them is correct behaviour.
+          DAW_EVENT("undo.version_unchanged")
+              .field("label", std::string(label))
+              .field("versions", static_cast<uint64_t>(d.documentHistory->size()))
+              .field("cursor", static_cast<uint64_t>(d.documentHistory->cursor()));
+          return;
+        }
         // OBSERVABLE FROM OUTSIDE, because "the history is being built" is otherwise a claim
         // nobody can check until undo is repointed at it. A check can read this line and assert
         // the count rises once per mutating command and not at all for a query.
@@ -83,7 +125,7 @@ void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
             .field("cursor", static_cast<uint64_t>(d.documentHistory->cursor()))
             .field("bytes", static_cast<uint64_t>(d.documentHistory->bytes()));
       }
-    } recordVersion{deps, commandMutatesDocument(commandType),
+    } recordVersion{deps, commandUndoPolicy(commandType),
                     daw::engine::commandLabel(commandType)};
 
     // ---- BULK CHUNK (83). Intercepted BEFORE the journal: a 17-chunk envelope would otherwise
@@ -152,6 +194,26 @@ void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
             .field("stream", static_cast<uint32_t>(doneId))
             .field("chunks", static_cast<uint32_t>(c.total))
             .field("bytes", static_cast<uint64_t>(assembled.size()));
+        // THE ENVELOPE IS NOT THE COMMAND. BulkChunk itself changes nothing, so the guard above
+        // was built with mutates=false — correct for the carrier, wrong for what it carries.
+        // SetClipText, SamplerSetSlotName and SamplerSetEnvelopePoints arrive ONLY this way and
+        // can never arrive any other way, so with the guard reading the OUTER opcode they were
+        // classified `true` in commandMutatesDocument and still recorded nothing: draw an
+        // envelope, undo, and it is gone with no version to redo from. Re-point the guard at the
+        // opcode the envelope spells, which is its first two bytes and is what
+        // handleAssembledBulk itself dispatches on.
+        if (assembled.size() >= sizeof(uint16_t)) {
+          uint16_t innerOp = 0;
+          std::memcpy(&innerOp, assembled.data(), sizeof(innerOp));
+          const auto innerType = static_cast<daw::UiCommandType>(innerOp);
+          recordVersion.policy = commandUndoPolicy(innerType);
+          recordVersion.label = daw::engine::commandLabel(innerType);
+          // The seed above ran on the OUTER opcode, which is non-mutating, so it declined. An
+          // envelope drawn as the first act of a bare session would otherwise land as version 0.
+          if (recordVersion.policy != UndoPolicy::None) {
+            seedHistoryIfEmpty();
+          }
+        }
         handleAssembledBulk(assembled);
       }
       return;

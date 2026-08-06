@@ -16,6 +16,33 @@ namespace daw::engine {
 // serialised). Every one of those was checked against the audit of 2026-08-06 rather than
 // assumed, and a wrong `false` here is invisible — it silently removes a command from undo — so
 // the list is short and each entry is defensible on its own.
+// WHAT A COMMAND DOES TO THE HISTORY — three answers, because two were not enough.
+//
+// `commandMutatesDocument` is a bool, and a bool cannot say "this changes the document but must
+// not open an undo step". That state is not hypothetical: the A/B audition swap is built so a
+// musician can flip between their take and an agent's draft, and scratch_clip_check has asserted
+// since the feature shipped that auditioning does NOT consume the undo stack — "the agent's draft
+// standing between you and your own edit history is exactly what this feature exists to prevent".
+// The switchover made every mutating command undoable, which is right, and thereby broke that:
+// after two auditions, Ctrl-Z reversed a SWAP instead of the note the user had typed.
+//
+// THE LINE IS WHAT THE COMMAND CHANGES, not how it feels:
+//   Version — it changes what EXISTS. Fork creates a draft; ClearPlacementAlternate destroys one.
+//             Losing a draft to a mis-click must be reversible, so both open a step.
+//   Amend   — it changes only WHICH OF THEM YOU ARE HEARING. Swap moves no notes and loses no
+//             work. It rewrites the version at the cursor in place, so the history stays in sync
+//             with the live document without growing a step the user never made.
+//   None    — it changes nothing that is saved.
+//
+// Amend is NOT "skip the recording". Skipping would leave the cursor's version holding a stale
+// audition state, and the next undo would silently flip the placement back as collateral. The
+// document still has to be captured; what changes is whether a new step appears.
+enum class UndoPolicy { None, Version, Amend };
+
+// The audition swap is the only Amend today. Kept as its own function rather than a second
+// switch-complete classification, so there is one place that decides and nothing to drift apart.
+constexpr UndoPolicy commandUndoPolicy(daw::UiCommandType type);
+
 constexpr bool commandMutatesDocument(daw::UiCommandType type) {
   switch (type) {
     case daw::UiCommandType::None:  // no document state
@@ -308,6 +335,21 @@ constexpr const char* commandLabel(daw::UiCommandType type) {
     case daw::UiCommandType::SetMarkerColor: return "Set marker color";
   }
   return "Edit";
+}
+
+// One derived answer, so "does it change the document" and "does it open a step" can never
+// disagree: a command that changes nothing cannot be Amend, and everything else is a step unless
+// it is on the audition list.
+constexpr UndoPolicy commandUndoPolicy(daw::UiCommandType type) {
+  if (!commandMutatesDocument(type)) {
+    return UndoPolicy::None;
+  }
+  // SwapPlacementClip alone. Fork and ClearPlacementAlternate create and destroy drafts, which is
+  // work worth reversing; the swap only chooses which existing clip sounds.
+  if (type == daw::UiCommandType::SwapPlacementClip) {
+    return UndoPolicy::Amend;
+  }
+  return UndoPolicy::Version;
 }
 
 }  // namespace daw::engine
