@@ -89,6 +89,11 @@ upper   q 2 w 3 e r 5 t 6 y 7 u i    q = C in (octave)
 
 At `oct 4`, `z` is C-3 and `q` is C-4 (MIDI 60).
 
+**`[` and `]` move the entry octave** down and up (0–9), and `octave 3` in the console sets it
+outright. The breadcrumb shows the current one. This is the first thing anybody asks after they
+type a note and it comes out an octave from where they wanted it — and both rows move together,
+so `z` and `q` stay one octave apart.
+
 Worth showing: the third field is not one hex effect but a set of named per-note ops, every one
 of which is drawn. Type them into the cell — `@` opens the buffer seeded with what is there, so
 `@` then `ret3` gives three even strikes across the note — or set them from the console with `ops`
