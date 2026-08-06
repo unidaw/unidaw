@@ -59,10 +59,16 @@ Open **http://127.0.0.1:8173/index.html**.
 node ui-web/test/demo-stack-smoke.mjs
 ```
 
-It checks the page connects to the engine, a project loads with tracks and notes, and the scale
-registry arrived — that last one is sent once per client rather than polled, so a stack missing it
-looks fine and draws every chord numeral upper case. Verified against this exact stack on
-2026-08-06.
+Five checks. The page connects to the engine; a project loads with tracks and notes; the scale
+registry arrived — that one is sent once per client rather than polled, so a stack missing it looks
+fine and draws every chord numeral upper case; nothing threw in the browser; and **the audio device
+ran a real callback rather than merely opening**.
+
+That last one is the only check in the repo that shows sound will reach the speakers. All 54 sweep
+suites go through the offline render or shared memory, so a dead output device passes every one of
+them. It is the reason this file tells you to run this by hand.
+
+Last green: 5/5 on 2026-08-07, against a stack started exactly as above.
 
 **And if you are going to show §7, run the AI suite once as well:**
 
@@ -74,8 +80,11 @@ Two to three minutes, and it costs a few cents in tokens — which is exactly wh
 and why it is listed here instead. It asks the model all eight prompts from §7 and asserts the
 song changed each time, ending with a render in which **every pitch heard is a pitch the model
 wrote**. It is the only check that exercises the key, the network and the model together, so it is
-also the only one that will tell you the AI is going to work today. Last green: 21/21 on
-2026-08-06.
+also the only one that will tell you the AI is going to work today. Last green: 23/23 on
+2026-08-07 — including the four-bar key change landing FOUR points on the harmony lane, and the
+model reading a patcher device's real id instead of guessing at it. (It said 21/21 here until
+today; checks were added and the number was not. A count that is lower than what you see reads as
+something having gone wrong.)
 
 (Those two are the whole manual list. Everything else the runbook cites runs in `all.mjs`, and a
 test asserts that this stays true — if a suite is ever excluded from the sweep without being named
