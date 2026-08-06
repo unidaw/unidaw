@@ -1892,7 +1892,11 @@ fn sampler_tools_reach_the_engine() {
     // tells them to set, so it is the one worth proving.
     let gate = session.execute(&ToolCall {
         tool: "sampler_slot".into(),
-        args: json!({ "track": 0, "device": 7, "slot": 0, "field": "gate", "value": 1 }),
+        // SLOT 1, NOT 0 — `slot_id` addresses a slot by its ID and the fixture's slot is id 1.
+        // Passing 0 addressed a slot that does not exist: the command was accepted, reported
+        // success, and changed nothing. Exactly the silent no-op this test was written to catch,
+        // arriving first as a fault in the test itself.
+        args: json!({ "track": 0, "device": 7, "slot": 1, "field": "gate", "value": 1 }),
     });
     assert!(gate.ok, "sampler_slot failed: {gate:?}");
 
@@ -1936,7 +1940,7 @@ fn sampler_tools_reach_the_engine() {
     // is the normal case, and a silent no-op teaches the wrong lesson.
     let bad = session.execute(&ToolCall {
         tool: "sampler_slot".into(),
-        args: json!({ "track": 0, "device": 7, "slot": 0, "field": "gaet", "value": 1 }),
+        args: json!({ "track": 0, "device": 7, "slot": 1, "field": "gaet", "value": 1 }),
     });
     assert!(!bad.ok, "a misspelt slot field must be refused: {bad:?}");
     assert!(format!("{bad:?}").contains("gate"),
