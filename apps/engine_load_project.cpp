@@ -748,7 +748,22 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
     return false;
   }
   if (!applyDocument(deps, document, path, error)) { return false; }
-  deps.engineState.documentHistory.seed(document);
+  // SEEDED FROM WHAT THE ENGINE NOW HOLDS, NOT FROM THE PARSED FILE.
+  //
+  // `document` is passed to applyDocument BY NON-CONST REFERENCE and comes back GUTTED: the
+  // is_master track is lifted out of it, and so is every is_aux_child track. Seeding version 0
+  // from that object meant the first undo after opening a project reset the master chain, mixer
+  // and host, and un-childed every stem — restoring a state the user never had. The same gutted
+  // copy also carries the FILE's placement ids, which ensurePlacementIds never wrote back, so
+  // undo reintroduced ids the engine had already reassigned: that, not any lack of atomicity, is
+  // what cross_track_move_check was reporting.
+  //
+  // captureDocument() asks the engine what it actually holds, which is the state undo must return
+  // to by definition. Found by the review panel, ranked first of eleven.
+  {
+    daw::ProjectDocument seeded = deps.captureDocument ? deps.captureDocument() : document;
+    deps.engineState.documentHistory.seed(std::move(seeded));
+  }
   return true;
 }
 

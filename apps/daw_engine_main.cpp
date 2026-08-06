@@ -1685,6 +1685,9 @@ int main(int argc, char** argv) {
   // quantize. Device chains and plugin state are intentionally not reapplied
   // here — that needs host restarts and the vst_state blobs described in
   // PROJECT_PERSISTENCE.md, which this version does not yet write.
+  // Named, and declared before the struct, because deps_order_check matches each positional
+  // argument to its member BY NAME.
+  auto captureDocument = [&] { return daw::engine::captureDocument(saveProjectDeps); };
   daw::engine::LoadProjectDeps loadProjectDeps{
       engineState, automationVersion,
       buildTrackSnapshot, bumpAllTrackClipVersions, clipDirty, clipVersion,
@@ -1693,7 +1696,7 @@ int main(int argc, char** argv) {
       masterTrack, nextClipId, patternTicks, pluginCache, projectSeed,
       publishAudioClipTable, rebuildAudioRender, rebuildFlatAndPublish, rebuildHostForChain,
       reconcileMasterHost, refreshSamplerForTrack, resetTrackContent, tempoProvider,
-      updatePatcherGraphSnapshot, waveformStore
+      updatePatcherGraphSnapshot, waveformStore, captureDocument
   };
 
   auto loadProjectFromPath = [&](const std::string& path, std::string* error) -> bool {
@@ -2029,8 +2032,9 @@ int main(int argc, char** argv) {
       resetTimeline, restartCv, running, tempoProvider
   };
 
-  // Named locals, because deps_order_check matches each positional argument to its member BY NAME.
-  auto captureDocument = [&] { return daw::engine::captureDocument(saveProjectDeps); };
+  // captureDocument is declared once, above loadProjectDeps, and shared by both structs — the
+  // load path seeds the undo history with it and the command bracket records with it, and those
+  // must be the same gatherer or the two would disagree about what a version is.
   auto* documentHistory = &engineState.documentHistory;
   daw::engine::HandleUiEntryDeps handleUiEntryDeps{
       arrangeTimeCommandDeps, automationCommandDeps, bulkStreams, bulkTick,

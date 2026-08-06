@@ -83,6 +83,9 @@ struct LoadProjectDeps {
   daw::TempoMapProvider& tempoProvider;
   std::function<void()> updatePatcherGraphSnapshot;
   daw::WaveformStore& waveformStore;
+  // What the engine HOLDS, for seeding the undo history after a load. Not the parsed file:
+  // applyDocument gutted that of the master and aux-child tracks on its way through.
+  std::function<daw::ProjectDocument()> captureDocument;
 };
 
 // Returns false and fills *error if the document will not load. On success the engine is
