@@ -1466,20 +1466,60 @@ fn add_notes(handle: &EngineHandle, args: &Value) -> ToolResult {
         sent += 1;
         base = base.wrapping_add(1);
     }
-    // Wait for the engine to apply this batch (clip version reaches first_base +
-    // sent) before returning, so a following tool call reads a settled version
-    // and doesn't race the ring — no fixed delay between calls.
-    let applied = handle.wait_for_clip_version(
+    // Wait for the engine to apply this batch before returning, so a following tool call reads a
+    // settled version and does not race the ring — no fixed delay between calls.
+    //
+    // PER TRACK, matching the base above. This waited on the GLOBAL counter while taking its base
+    // from the per-track one, so it returned as soon as anything anywhere moved — including an
+    // edit to a different track — and the next call to this same track could read a version that
+    // had not caught up. add_notes' own comment on the base says reading the global is "exactly
+    // the failure the per-track counters were introduced to end"; the wait was doing it.
+    let applied = handle.wait_for_track_clip_version(
+        track,
         first_base,
         first_base.wrapping_add(sent as u32),
         std::time::Duration::from_secs(2),
     );
-    ToolResult::ok(json!({
+    report_batch(handle, "notes", track, first_base, sent, applied)
+}
+
+/// The shared tail of add_notes and add_chords: say what actually landed.
+///
+/// A REFUSED BATCH MUST NOT REPORT SUCCESS. These commands carry an optimistic base version and
+/// the engine drops any whose base is stale, so a whole batch can be thrown away while every send
+/// returns Ok — the ring accepted the bytes, the engine discarded the edit. Observed in a demo
+/// rehearsal: "kick on every beat, snare on 2 and 4" wrote sixteen kicks, had all eight snares
+/// refused, and the model told the user it had added both. The engine said so
+/// (`clip.version_mismatch ... action=resync_requested`) and nothing on this side was listening.
+///
+/// NOTHING LANDED IS AN ERROR, so the model retries and gets it right. A PARTIAL landing is
+/// reported but not an error: a retry would duplicate whatever did land, and a duplicated note is
+/// a worse outcome than a reported shortfall.
+fn report_batch(handle: &EngineHandle, what: &str, track: u32, first_base: u32,
+                sent: usize, applied: bool) -> ToolResult {
+    let now = handle.clip_version_for_track(track);
+    let landed = now.wrapping_sub(first_base) as usize;
+    if !applied && landed == 0 {
+        return ToolResult::err(format!(
+            "the engine refused all {sent} {what} on track {track} as stale (its clip version is \
+             still {now}, the batch was written against {first_base}). Nothing was added. Send \
+             them again — the version will have settled."));
+    }
+    let mut out = json!({
         "sent": sent,
+        "landed": landed.min(sent),
         "first_base_version": first_base,
         "applied": applied,
         "track": track,
-    }))
+    });
+    if landed < sent {
+        if let Value::Object(ref mut m) = out {
+            m.insert("warning".into(), json!(format!(
+                "only {landed} of {sent} {what} were applied; the rest were refused as stale. \
+                 Read the track back before assuming what is there.")));
+        }
+    }
+    ToolResult::ok(out)
 }
 
 // CHORDS ARE DEGREES, WHICH IS THE WHOLE POINT OF HAVING THEM SEPARATE FROM NOTES.
@@ -1583,17 +1623,13 @@ fn add_chords(handle: &EngineHandle, args: &Value) -> ToolResult {
         sent += 1;
         base = base.wrapping_add(1);
     }
-    let applied = handle.wait_for_clip_version(
+    let applied = handle.wait_for_track_clip_version(
+        track,
         first_base,
         first_base.wrapping_add(sent as u32),
         std::time::Duration::from_secs(2),
     );
-    ToolResult::ok(json!({
-        "sent": sent,
-        "first_base_version": first_base,
-        "applied": applied,
-        "track": track,
-    }))
+    report_batch(handle, "chords", track, first_base, sent, applied)
 }
 
 // Undo or redo the last structural (note/chord) edit. The engine keeps the undo
