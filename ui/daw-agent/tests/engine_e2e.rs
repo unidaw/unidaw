@@ -2717,12 +2717,33 @@ fn the_agent_can_save_a_patcher_preset() {
             "an oversize name must be refused rather than truncated — it would save under a name \
              the caller cannot predict: {long:?}");
 
-    // Something to save, so the preset is not merely an empty graph.
+    // A patcher DEVICE to build on, because that is the only graph an agent can edit:
+    // patcher_node requires a device id, since a pool edit is not what any project renders.
+    let proj = json!({
+        "schema_version": 2,
+        "meta": { "name": "agpreset_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [], "clips": [],
+        "tracks": [ {
+            "track_id": 0, "name": "P", "harmony_quantize": 0, "lines_per_beat": 4,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            "device_chain": [ { "device_id": 4, "kind": "patcher_event",
+                                "patcher_node_id": 0, "bypass": false } ],
+            "mod_links": [], "placements": []
+        } ]
+    });
+    std::fs::write(engine.proj.join("agpreset_in.uniproj.json"),
+                   serde_json::to_string_pretty(&proj).unwrap()).unwrap();
+    assert!(session.execute(&ToolCall {
+        tool: "load".into(), args: json!({"name":"agpreset_in"}) }).ok);
+    std::thread::sleep(Duration::from_millis(1500));
     let node = session.execute(&ToolCall {
         tool: "patcher_node".into(),
-        args: json!({ "track": 0, "type": "euclidean" }),
+        args: json!({ "track": 0, "device": 4, "type": "euclidean" }),
     });
     assert!(node.ok, "patcher_node failed: {node:?}");
+    std::thread::sleep(Duration::from_millis(800));
 
     let saved = session.execute(&ToolCall {
         tool: "save_patcher_preset".into(), args: json!({ "name": "agentmade" }) });
@@ -2733,9 +2754,21 @@ fn the_agent_can_save_a_patcher_preset() {
     loop {
         if path.exists() {
             let text = std::fs::read_to_string(&path).unwrap_or_default();
-            // The graph's CONTENT, not merely a file: an empty preset would be written just as
-            // happily, and would recall as nothing.
-            assert!(text.contains("nodes"), "the preset holds no nodes array: {text}");
+            /*
+             * THE NODE, not the word "nodes". My first version asserted `text.contains("nodes")`,
+             * which an empty `"nodes": []` satisfies — the exact weak assertion this session keeps
+             * finding elsewhere, written here by me.
+             *
+             * This matters more than tidiness: SavePatcherPreset serialises `patcherGraphState`,
+             * the SHARED POOL, and the engine's own comment records that "since patcher-is-a-device
+             * the pool is not what a project renders". If the pool did not carry the euclidean this
+             * test just built on DEVICE 4, the tool would be saving something the agent never made,
+             * and a `contains("nodes")` check would have called that a pass.
+             */
+            assert!(text.contains("euclidean"),
+                    "the preset does not contain the euclidean built on device 4 — \
+                     SavePatcherPreset serialises the shared pool, so if this is empty the tool \
+                     saves a graph the agent never built: {text}");
             break;
         }
         assert!(Instant::now() < deadline,

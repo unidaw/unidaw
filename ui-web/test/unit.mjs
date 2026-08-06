@@ -2227,7 +2227,7 @@ const OP_REGISTRY = {
   cliptext:    { cli: 'clip-name', agent: 'set_clip_text' },
   // The envelope READ-BACK. The write half has a CLI verb; reading one back is new
   // everywhere, so both the CLI and the agent owe it one.
-  envshape:    { cli: 'sampler-env-draw', agent: null, why: 'gap' },
+  envshape:    { cli: 'sampler-env-draw', agent: 'sampler_envelope_points' },
   movemarker:  { cli: 'marker', agent: 'edit_marker' },
   // The two that change TIME rather than a label, and they are deliberately not marker ops.
   time:        { cli: 'time', agent: 'insert_time' },
@@ -2352,7 +2352,7 @@ const OP_REGISTRY = {
   // The engine has taken this since before the web UI existed; the CLI verb is `harmony-quantize`.
   'harmony-quantize': { cli: 'harmony-quantize', agent: 'harmony_quantize' },
   // Saving a patcher graph. With the other patcher verbs: no agent tool for the graph at all.
-  'save-patch': { cli: 'patcher-save', agent: null, why: 'gap' },
+  'save-patch': { cli: 'patcher-save', agent: 'save_patcher_preset' },
   // A lane's subdivision (opcode 92). Landed engine-side today; no CLI verb yet.
   lpb: { cli: 'lines-per-beat', agent: 'set_track_grid' },
   // The master bus fader and mute (SetTrackMixer addressed to kMasterTrackId). The engine has
@@ -2501,9 +2501,7 @@ const CLI_GAP = ['clear', 'columns', 'copy', 'cut', 'new', 'paste', 'transpose',
 const AGENT_GAP = ['clear', 'columns', 'copy', 'cut',
                    'del', 'editor',
                    'new', 'paste', 'patch',
-                   'transpose', 'mods',
-                   'save-patch',
-                   'envshape'];
+                   'transpose', 'mods'];
 
 test('every dock command is in the op registry', () => {
   // The forcing function: a new command cannot be added without deciding whether
@@ -2829,7 +2827,6 @@ const ENGINE_UNUSED = {
    */
   SamplerSetLfo: 'gap — with SamplerSetEnvelope; a modulator wants to be seen moving',
   BulkChunk: 'gap — a carrier for payloads over 40 bytes; nothing here needs one yet',
-  SamplerSetEnvelopePoints: 'gap — with SamplerSetEnvelope, and rides BulkChunk',
   /*
    * SamplerSetSlot WAS recorded here as a gap "with SamplerLoad". It is wired now, and the
    * reason it stopped being deferrable is `gate`: field 2, 0 = a one-shot that IGNORES note-off.
