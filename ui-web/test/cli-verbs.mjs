@@ -69,7 +69,24 @@ const NAME = 'cliverbs';
 writeFileSync(`${stack.dir}/${NAME}.uniproj.json`, JSON.stringify({
   schema_version: 4, meta: { name: NAME, created_utc: 0, modified_utc: 0 },
   nanoticks_per_quarter: Q, tempo_map: [{ nanotick: 0, bpm: 120 }],
-  harmony_timeline: [], clips: [],
+  harmony_timeline: [],
+  /*
+   * TWO CLIPS, PLACED THREE TIMES — the fixture `get shared` needs, and it is built to be able
+   * to give a WRONG answer.
+   *
+   * Clip 1 appears three times (twice on track 0, once on track 1); clip 2 appears once. A test
+   * against a project where everything is shared cannot tell "counts appearances" from "returns
+   * the number of placements", and one where nothing is shared cannot tell it from a constant 1.
+   * Both numbers have to be present for either to mean anything.
+   */
+  clips: [
+    { id: 1, name: 'twice', length: Q * 4, lines_per_beat: 4, kind: 'symbolic',
+      time_sig_numerator: 4, time_sig_denominator: 4, chords: [],
+      notes: [{ nanotick: 0, duration: Q, pitch: 60, velocity: 100, column: 0, note_id: 1 }] },
+    { id: 2, name: 'once', length: Q * 4, lines_per_beat: 4, kind: 'symbolic',
+      time_sig_numerator: 4, time_sig_denominator: 4, chords: [],
+      notes: [{ nanotick: 0, duration: Q, pitch: 67, velocity: 100, column: 0, note_id: 2 }] },
+  ],
   tracks: [
     {
       track_id: 0, name: 'Rack', harmony_quantize: false, lines_per_beat: 4,
@@ -79,13 +96,19 @@ writeFileSync(`${stack.dir}/${NAME}.uniproj.json`, JSON.stringify({
           sampler: { slots: [{ id: 1, name: 'a', key_low: 0, key_high: 127, root_key: 60, gate: 0 }] } },
         { device_id: 7, kind: 'patcher_event', patcher_node_id: 0, bypass: false },
       ],
-      mod_links: [], placements: [],
+      mod_links: [],
+      placements: [
+        { clip_id: 1, at: 0, length: Q * 4, notes: [], chords: [], mutes: [] },
+        { clip_id: 1, at: Q * 8, length: Q * 4, notes: [], chords: [], mutes: [] },
+        { clip_id: 2, at: Q * 16, length: Q * 4, notes: [], chords: [], mutes: [] },
+      ],
     },
     {
       track_id: 1, name: 'Patch', harmony_quantize: false, lines_per_beat: 4,
       mixer: { gain_db: 0, pan: 0, mute: false, solo: false },
       device_chain: [{ device_id: 1, kind: 'patcher_event', patcher_node_id: 0, bypass: false }],
-      mod_links: [], placements: [],
+      mod_links: [],
+      placements: [{ clip_id: 1, at: 0, length: Q * 4, notes: [], chords: [], mutes: [] }],
     },
   ],
 }, null, 2));
@@ -257,6 +280,70 @@ const log2 = existsSync(ENGINE_LOG) ? readFileSync(ENGINE_LOG, 'utf8') : '';
 check(/OpenPluginEditor failed - device 777/.test(log2),
       'CONTROL: a different device id is echoed differently, so the check above is not constant',
       (log2.match(/OpenPluginEditor failed - device \d+/g) || []).join(' | '));
+
+/* ── get shared ─────────────────────────────────────────────────────────────────────────────
+ * "IF I EDIT HERE, WHAT ELSE CHANGES?" — the question shared clips make possible and surprising.
+ *
+ * The agent has had `shared_clips` since the scratch-placement work; only the CLI lacked it, so
+ * this was a plain missing arm rather than a design question. It is asserted here the way two
+ * surfaces answering ONE question have to be: against the rule, not against a number I typed.
+ *
+ * The fixture places clip 1 three times and clip 2 once, and the checks below are chosen so that
+ * each rules out a specific wrong implementation:
+ *
+ *   self-consistency  — kills "appearances = the number of rows returned"
+ *   3 vs 1            — kills "appearances = 1" and "appearances = total placements"
+ *   the --track filter — kills the one that actually matters, below
+ */
+{
+  const all = cli('get', 'shared');
+  check(all.ok, 'do `get shared` runs', all.out.slice(0, 200));
+  let rows = null;
+  try { rows = JSON.parse(all.out); } catch { /* reported by the next check */ }
+  check(Array.isArray(rows) && rows.length === 4,
+        '`get shared` answers PARSEABLE JSON, one row per placement',
+        `got ${JSON.stringify(all.out.slice(0, 200))}`);
+
+  if (Array.isArray(rows) && rows.length) {
+    // The definition, checked against the list itself rather than a number I chose.
+    const seen = new Map();
+    for (const r of rows) seen.set(r.clip, (seen.get(r.clip) || 0) + 1);
+    const disagree = rows.filter((r) => r.appearances !== seen.get(r.clip));
+    check(disagree.length === 0,
+          'APPEARANCES agrees with the placements actually sharing each clip',
+          JSON.stringify(disagree.slice(0, 3)));
+
+    const c1 = rows.filter((r) => r.clip === 1);
+    const c2 = rows.filter((r) => r.clip === 2);
+    check(c1.length === 3 && c1.every((r) => r.appearances === 3),
+          'the clip placed three times reports THREE appearances', JSON.stringify(c1));
+    check(c2.length === 1 && c2[0].appearances === 1,
+          'and the clip placed once reports ONE — a constant would pass the check above',
+          JSON.stringify(c2));
+  }
+
+  /*
+   * THE FILTER NARROWS THE ROWS, NOT THE COUNT — and this is the check the verb was written for.
+   *
+   * Clip 1 has three appearances: two on track 0 and one on track 1. Asking about track 1 must
+   * still say THREE, because a clip is shared whether or not its other appearances are on the
+   * track you asked about. An implementation that counts the filtered set answers 1 — and 1 means
+   * "safe to edit, nothing else changes", which is the exact opposite of the truth.
+   *
+   * The agent's `shared_clips` counts over all extents. If these two ever disagree, one of them is
+   * telling somebody it is safe to edit a clip that is not.
+   */
+  const one = cli('get', 'shared', '--track', '1');
+  check(one.ok, '`get shared --track 1` runs', one.out.slice(0, 200));
+  let only = null;
+  try { only = JSON.parse(one.out); } catch { /* reported below */ }
+  check(Array.isArray(only) && only.length === 1 && only[0].track === 1,
+        '--track 1 returns only track 1\'s placement', JSON.stringify(only));
+  check(Array.isArray(only) && only.length === 1 && only[0].appearances === 3,
+        'AND IT STILL REPORTS THREE APPEARANCES — the filter cannot change what "shared" means',
+        `${JSON.stringify(only)} — an answer of 1 here reads as "nothing else changes", which is `
+        + 'false: two more placements of this clip sit on track 0');
+}
 
 /* ── remove-device ──────────────────────────────────────────────────────────────────────────
  * Last, because it destroys the fixture. By ID, and the surviving id is asserted rather than the

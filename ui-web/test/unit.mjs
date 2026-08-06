@@ -2211,7 +2211,7 @@ const OP_REGISTRY = {
   macro:       { cli: 'macro', agent: 'set_macro', why: 'gap' },
   // SCRATCH CLIPS. The read has no CLI verb — daw-cli can fork and swap but cannot say what is
   // shared, which is the half a person needs first. Recorded rather than claimed.
-  shared:      { cli: null, agent: 'shared_clips', why: 'gap' },
+  shared:      { cli: 'shared', agent: 'shared_clips' },
   fork:        { cli: 'scratch', agent: 'fork_placement' },
   swapclip:    { cli: 'scratch', agent: 'swap_placement_clip' },
   keepclip:    { cli: 'scratch', agent: 'keep_placement_clip' },
@@ -2470,7 +2470,7 @@ const OP_REGISTRY = {
  *   with a known shape, not a design question, and it is the cheapest thing on this list.
  */
 const CLI_GAP = ['clear', 'columns', 'copy', 'cut', 'new', 'paste', 'transpose',
-                 'mods', 'shared'];
+                 'mods'];
 /** Ops with no agent tool today. Same rule. */
 // `bypass` joins the list rather than being smuggled past it: the engine takes
 // the command and daw-cli sends it, but the agent's manifest has no tool for it,

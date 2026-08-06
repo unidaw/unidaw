@@ -1299,6 +1299,50 @@ fn get_device_params(handle: &EngineHandle, args: &[&str]) -> i32 {
 }
 
 // get extents — dump the published clip rails, decoding each clip's packed grid.
+/// WHICH CLIPS ARE SHARED, and how many appearances each has.
+///
+/// `get extents` already lists every placement; this answers the different question the shared
+/// -clip design makes possible and surprising — "if I edit here, what else changes?". Two
+/// placements of one clip are the same notes seen twice, so an edit to either reaches both. The
+/// engine counts that reach on every edit (`placements_touched`), and until now the only way to
+/// know it in ADVANCE was to group extents by clip id yourself.
+///
+/// COUNTED OVER ALL EXTENTS, not the filtered set. A clip is shared whether or not its other
+/// appearances are on the track being asked about, and a count that changed with the filter would
+/// be a different number for the same question. That is the agent's `shared_clips` rule and this
+/// is deliberately the same one — two surfaces answering one question have to agree, and the way
+/// they drift is each deciding what "shared" means.
+fn get_shared(handle: &EngineHandle, track: Option<u32>) -> i32 {
+    const HAS_ALTERNATE: u32 = 1 << 24;      // kUiClipExtentHasAlternate (v31)
+    let (extents, truncated) = handle.read_clip_extents_with_truncation();
+    if truncated > 0 {
+        eprintln!(
+            "daw-cli: WARNING {truncated} clip extent(s) did not fit — the counts below are \
+             LOW, because an appearance that did not fit is an appearance not counted"
+        );
+    }
+    let mut uses: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    for e in &extents { *uses.entry(e.clip_id).or_insert(0) += 1; }
+
+    let shown: Vec<_> = extents.iter()
+        .filter(|e| track.is_none() || track == Some(e.track_id))
+        .collect();
+    println!("[");
+    for (i, e) in shown.iter().enumerate() {
+        let comma = if i + 1 == shown.len() { "" } else { "," };
+        let name = String::from_utf8_lossy(&e.name);
+        let name = name.trim_end_matches('\0');
+        println!(
+            "  {{ \"placement\": {}, \"clip\": {}, \"track\": {}, \"name\": {:?}, \
+             \"start_tick\": {}, \"end_tick\": {}, \"appearances\": {}, \"forked\": {} }}{comma}",
+            e.placement_id, e.clip_id, e.track_id, name, e.start_tick, e.end_tick,
+            uses.get(&e.clip_id).copied().unwrap_or(1),
+            (e.flags & HAS_ALTERNATE) != 0);
+    }
+    println!("]");
+    0
+}
+
 fn get_extents(handle: &EngineHandle) -> i32 {
     let (extents, truncated) = handle.read_clip_extents_with_truncation();
     // Truncation FIRST, and as a comment line before the array, so it cannot be missed by
@@ -2176,6 +2220,12 @@ fn main() {
                 Some(&"audio-sources") => get_audio_sources(&handle),
                 Some(&"automation") => get_automation(&handle),
                 Some(&"extents") => get_extents(&handle),
+                // `get shared [--track N]`. The agent has had `shared_clips` since the
+                // scratch-placement work; this is the same answer from the other surface.
+                Some(&"shared") => {
+                    let t = flag_u64(&args, "--track", None).ok().map(|v| v as u32);
+                    get_shared(&handle, t)
+                }
                 Some(&"arrangement") => {
                     match handle.read_arrange_summary() {
                         Some(r) => {
