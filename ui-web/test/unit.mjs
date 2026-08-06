@@ -3681,43 +3681,34 @@ test('every row op can actually be TYPED into the cell', async () => {
     + 'else. Add the character to ENTRY_MODES.ops in index.html.');
 });
 
-test('the three roman-numeral tables are the same table', async () => {
+test('the roman numerals are spelled out in exactly ONE place', async () => {
   /*
-   * ONE RULE, THREE HAND-MAINTAINED COPIES — harmonymodel.js draws the lane, inspectmodel.js
-   * writes the CELL panel, and index.html labels the optimistic edit that appears before the
-   * engine answers. All three index the numeral by the stored 0-based degree, and all three
-   * spell the list out separately.
+   * THERE WERE THREE. harmonymodel.js drew the lane and the tracker cell, inspectmodel.js wrote
+   * the CELL panel, and index.html labelled the optimistic edit that appears before the engine
+   * answers — each with its own `['I','II','III',...]` and its own hand-built suffix logic.
    *
-   * They agree today. The failure this guards is the one this repo keeps paying for: a
-   * duplicated rule that agrees on NAMES and drifts in BEHAVIOUR — the optimistic label saying
-   * one thing and the settled cell another, which reads as an edit that changed under you.
+   * They agreed while the rule was "upper case, plus a 7". The moment the numeral started
+   * carrying QUALITY — `vi` rather than `VI` — three copies meant the grid, the panel and the
+   * label could each be right about a different chord. The optimistic one is the worst of the
+   * three: it is drawn a frame before the engine's answer replaces it, so a divergence reads as
+   * a cell that changes its own text after you type.
    *
-   * A comparison of the LISTS, not of the outputs, because two of the three are not exported.
+   * All three call `nameChord` now. This asserts the copies did not come back — which is a
+   * claim about the TEXT, because that is what "no other site spells this out" means.
    */
   const { readFileSync } = await import('node:fs');
-  /*
-   * Matched on the LIST'S CONTENT, not just its name. index.html has several `NAMES = [...]` and
-   * the first one is not this table — the first version of this check extracted an empty list
-   * from a different constant and reported a divergence that did not exist.
-   */
-  const read = (path, name) => {
-    const src = readFileSync(new URL(path, import.meta.url), 'utf8');
-    const m = src.match(new RegExp(`${name}\\s*=\\s*\\[\\s*'I'([^\\]]*)\\]`));
-    assert.ok(m, `${name}'s numeral table not found in ${path} — if it moved, repoint this rather `
-                 + `than deleting it`);
-    return ['I', ...[...m[1].matchAll(/'([IVX]+)'/g)].map((x) => x[1])];
-  };
-  const lane = read('../src/harmonymodel.js', 'ROMAN');
-  const panel = read('../src/inspectmodel.js', 'DEGREES');
-  const optimistic = read('../index.html', 'NAMES');
-
-  assert.deepEqual(lane, ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'],
-    'the numerals are indexed by the STORED degree, which is 0-based — so entry 2 must be III, '
-    + 'and a typed `@3` reads III');
-  assert.deepEqual(panel, lane, 'the CELL panel names a degree differently from the harmony lane');
-  assert.deepEqual(optimistic, lane,
-    'the optimistic label names a degree differently from the settled one — the cell would change '
-    + 'its own text when the engine answered');
+  const files = ['../src/harmonymodel.js', '../src/inspectmodel.js', '../src/viewmodel.js',
+                 '../src/arrange.js', '../src/chain.js', '../index.html'];
+  const spellers = [];
+  for (const rel of files) {
+    const src = readFileSync(new URL(rel, import.meta.url), 'utf8');
+    // A list that starts 'I','II' is a numeral table by any name.
+    if (/\[\s*'I'\s*,\s*'II'\s*,/.test(src)) spellers.push(rel.split('/').pop());
+  }
+  assert.deepEqual(spellers, ['harmonymodel.js'],
+    'a roman-numeral table outside harmonymodel.js. `nameChord` is the speller — a second table '
+    + 'will agree with it right up until the naming rule changes, and then it will be wrong on '
+    + 'screen next to the right one.');
 });
 
 test('the numeral carries the chord quality, the way musicians write it', async () => {
@@ -3731,13 +3722,24 @@ test('the numeral carries the chord quality, the way musicians write it', async 
    * assuming everything is major-ish.
    */
   const { nameChord, triadQuality } = await import('../src/harmonymodel.js');
-  const MAJOR = [200, 200, 100, 200, 200, 200, 100];
-  const MINOR = [200, 100, 200, 200, 100, 200, 200];
+  /*
+   * COPIED VERBATIM OFF THE WIRE, and that is the point of this comment.
+   *
+   * `stepCents` is CUMULATIVE — one offset from the root per degree — not the per-step deltas
+   * the name suggests. The first version of this test invented [200,200,100,...] deltas, the
+   * first version of the code read them as deltas, and the two agreed perfectly while being
+   * wrong about the data. It passed. The app drawing `VI` where `vi` belonged is what caught it.
+   *
+   * So these are the exact arrays the sidecar sends, and a scale record is `{stepCents,
+   * octaveCents}` because the wrap past the last degree needs the octave.
+   */
+  const MAJOR = { stepCents: [0, 200, 400, 500, 700, 900, 1100], octaveCents: 1200 };
+  const MINOR = { stepCents: [0, 200, 300, 500, 700, 800, 1000], octaveCents: 1200 };
 
-  assert.deepEqual([0, 1, 2, 3, 4, 5, 6].map((d) => triadQuality(d, MAJOR)),
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 6].map((d) => triadQuality(d, MAJOR.stepCents)),
     ['major', 'minor', 'minor', 'major', 'major', 'minor', 'dim'],
     'the diatonic triads of a major scale');
-  assert.deepEqual([0, 1, 2, 3, 4, 5, 6].map((d) => triadQuality(d, MINOR)),
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 6].map((d) => triadQuality(d, MINOR.stepCents)),
     ['minor', 'dim', 'major', 'minor', 'minor', 'major', 'major'],
     'and of a natural minor');
 
@@ -3773,6 +3775,7 @@ test('the numeral carries the chord quality, the way musicians write it', async 
 
   // A scale that is not seven notes has no diatonic triads to speak of; say nothing rather than
   // inventing a quality.
-  assert.equal(triadQuality(0, [100, 100, 100, 100, 100, 100]), null);
-  assert.equal(nameChord(0, 1, 0, [100, 100, 100, 100, 100, 100]), 'I');
+  const SIX = { stepCents: [0, 200, 400, 600, 800, 1000], octaveCents: 1200 };
+  assert.equal(triadQuality(0, SIX.stepCents), null);
+  assert.equal(nameChord(0, 1, 0, SIX), 'I');
 });

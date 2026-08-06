@@ -303,32 +303,39 @@ export function buildHarmonyModel(opts, buf) {
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'];
 
 /**
- * The QUALITY of the diatonic triad on a degree, from the scale's own step sizes.
+ * The QUALITY of the diatonic triad on a degree, read off the scale the engine published.
  *
- * Musicians read case: `I-V-vi-IV` says at a glance that the sixth is minor, and writing it
- * `I-V-VI-IV` throws that away — the numerals stop carrying the one thing the notation exists to
- * carry. This is what lets the numeral be cased instead of shouted.
+ * Musicians read case: `I-V-vi-IV` says at a glance that the sixth is minor, and `I-V-VI-IV`
+ * throws that away — the numerals stop carrying the one thing the notation exists to carry.
  *
- * DERIVED FROM THE SCALE, not from a table of the major modes. `stepCents` is what the engine
- * publishes for every scale it knows, so this answers for the exotic ones too rather than
- * quietly assuming everything is major-ish. A scale that is not seven notes has no diatonic
- * triads to speak of and gets `null`, which the caller renders as the plain numeral.
+ * `stepCents` IS CUMULATIVE, one offset per degree from the root — Major is
+ * `[0, 200, 400, 500, 700, 900, 1100]`, not the [200,200,100,...] deltas the name suggests. I
+ * wrote this against deltas first and unit-tested it against deltas, so the test agreed with the
+ * code and both were wrong about the data; the app rendering `VI` where `vi` belonged is what
+ * said so. The fixtures below are now copied verbatim off the wire.
+ *
+ * Stacked thirds, wrapping at the octave: two degrees up to the third, four to the fifth.
+ * DERIVED rather than tabulated, because this is published for every scale the engine knows —
+ * a table of the major modes would be right for seven scales and quietly wrong for the rest.
+ * A scale that is not seven degrees has no diatonic triads to speak of and gets `null`.
  *
  * @param {number} degree 0-based, as stored.
- * @param {number[]} stepCents cents from each degree to the next, one per degree.
+ * @param {number[]} stepCents cents from the ROOT to each degree, ascending.
+ * @param {number} [octaveCents] the scale's own octave, for wrapping past the last degree.
  * @returns {'major'|'minor'|'dim'|'aug'|null}
  */
-export function triadQuality(degree, stepCents) {
+export function triadQuality(degree, stepCents, octaveCents = 1200) {
   if (!Array.isArray(stepCents) || stepCents.length !== 7) return null;
-  const span = (from, steps) => {
-    let c = 0;
-    for (let i = 0; i < steps; i++) c += stepCents[(from + i) % 7];
+  const oct = octaveCents > 0 ? octaveCents : 1200;
+  const above = (from, steps) => {
+    const to = (from + steps) % 7;
+    let c = stepCents[to] - stepCents[from];
+    // Past the last degree the next one is in the octave above.
+    while (c < 0) c += oct;
     return c;
   };
-  // Stacked thirds: two steps to the third, four to the fifth. Rounded to the nearest semitone
-  // because a scale in cents need not land exactly on 100s, and a third is a third.
-  const third = Math.round(span(degree, 2) / 100);
-  const fifth = Math.round(span(degree, 4) / 100);
+  const third = Math.round(above(degree, 2) / 100);
+  const fifth = Math.round(above(degree, 4) / 100);
   if (third === 4 && fifth === 7) return 'major';
   if (third === 3 && fifth === 7) return 'minor';
   if (third === 3 && fifth === 6) return 'dim';
@@ -336,15 +343,34 @@ export function triadQuality(degree, stepCents) {
   return null;
 }
 
+/**
+ * The harmony entry in force at a tick, or null.
+ *
+ * Exported because two callers need it — the tracker cell and the CELL panel — and a chord's
+ * numeral is cased by the key it LANDS in, which in a song that modulates is not the song's
+ * first key. Written once here rather than twice at the call sites; the same rule spelled twice
+ * is the shape this repo keeps paying for.
+ *
+ * `harmony` is the engine's timeline, ascending by tick.
+ */
+export function harmonyAtTick(harmony, tick) {
+  if (!harmony || !harmony.length) return null;
+  let active = null;
+  for (let i = 0; i < harmony.length; i++) {
+    if (harmony[i].tick <= tick) active = harmony[i]; else break;
+  }
+  return active;
+}
+
 const CHORD_NAMES = new Map();
-export function nameChord(degree, quality, inversion, stepCents) {
+export function nameChord(degree, quality, inversion, scale) {
   /*
    * THE SCALE IS PART OF THE KEY. The same degree is major in one scale and minor in another, so
    * an intern keyed only on (degree, quality, inversion) would hand back the previous key's
    * casing after a modulation — a cached answer to a different question, which is the shape that
    * made two chord bugs here already.
    */
-  const tq = triadQuality(degree, stepCents);
+  const tq = scale ? triadQuality(degree, scale.stepCents, scale.octaveCents) : null;
   const key = (degree * 256 + quality * 16 + (inversion & 15)) * 8
             + (tq === 'minor' ? 1 : tq === 'dim' ? 2 : tq === 'aug' ? 3 : tq === 'major' ? 4 : 0);
   let s = CHORD_NAMES.get(key);

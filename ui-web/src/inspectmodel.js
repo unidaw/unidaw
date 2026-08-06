@@ -23,9 +23,9 @@
 // pooled and the strings are only rebuilt when the CELL changes, keyed by `_key`.
 
 import { OP_MASK, ROW_OPS, opsText } from './rowops.js';
+import { nameChord } from './harmonymodel.js';
 
 /** Roman numerals for a degree, the way every other surface in this app writes them. */
-const DEGREES = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'];
 /** The engine's quality numbering: 0 = the degree alone, 1 = triad, 2 = seventh. */
 const QUALITIES = ['degree', 'triad', 'seventh'];
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
@@ -171,11 +171,19 @@ export function buildInspectModel(c, buf) {
     : (c.trackName || '');
 
   if (chord) {
-    const deg = DEGREES[chord.degree % 7] || String(chord.degree + 1);
+    /*
+     * THE SAME SPELLER THE GRID USES. This built its own label out of a private numeral table,
+     * so the panel and the cell were two implementations of one name — and the moment the grid
+     * started casing numerals by key they would have disagreed about the same chord, on screen,
+     * at the same time.
+     */
+    const named = nameChord(chord.degree, chord.quality, chord.inversion, c.scaleSteps);
     const qual = QUALITIES[chord.quality] || `quality ${chord.quality}`;
-    buf.title = `${deg}${chord.quality === 2 ? '7' : ''} · chord`;
+    buf.title = `${named} · chord`;
     buf.empty = false;
-    put('degree', `${deg} (${chord.degree + 1})`);
+    // The CASED numeral, with the plain degree number beside it — the case says major or minor
+    // and the number says which degree, and a person reading the panel wants both.
+    put('degree', `${named.replace(/[7°+].*$/, '')} (${chord.degree + 1})`);
     put('quality', qual);
     put('inversion', chord.inversion === 0 ? 'root position' : `inversion ${chord.inversion}`);
     put('octave', String(chord.octave));

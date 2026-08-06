@@ -117,8 +117,13 @@ h<n>        humanize
 
 `@3^7~80h20` is a strummed, humanised seventh on the third degree.
 
-**Then put the cursor on it and look at the CELL panel** on the right, under harmony. A cell shows
-`III7` and nothing else; the panel says the degree, quality, inversion, and either
+**The numeral carries the quality.** In C major, `[1,5,6,4]` draws **I-V-vi-IV** — lower case is
+minor, `°` is diminished — and the same four chords re-case themselves the moment you change the
+key. `@3^7` in a major key is therefore `iii7`, not `III7`: the third degree of a major scale is
+minor. With no key set the numerals stay upper case, because nothing has established a quality yet.
+
+**Then put the cursor on it and look at the CELL panel** on the right, under harmony. The cell
+shows `iii7` and nothing else; the panel says the degree, quality, inversion, and either
 
 ```
 strum: yes — 16th · 240000nt across the voices

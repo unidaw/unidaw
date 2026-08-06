@@ -1,5 +1,5 @@
 import { pitchName } from './wire.js';
-import { nameChord } from './harmonymodel.js';
+import { harmonyAtTick, nameChord } from './harmonymodel.js';
 import { DEFAULT_METER, createPosition, positionOf, sameMeter,
          ticksPerBar, ticksPerBeat, NANOTICKS_PER_QUARTER } from './meter.js';
 import { opsRun, opTokenAt } from './rowops.js';
@@ -746,6 +746,15 @@ export function buildViewModel(opts, buf) {
      *  so this module needs no opinion about note spelling. */
     nameHarmony = null,
     /**
+     * A scale id to its step sizes in cents, so a chord numeral can be CASED by the quality of
+     * the triad the key gives it — `vi` rather than `VI`.
+     *
+     * Supplied by the caller for the same reason `nameHarmony` is: the scale registry is the
+     * engine's and arrives over the wire, and this module should hold no copy of it. Absent, the
+     * numerals render upper case, which is what they always did.
+     */
+    scaleSteps = null,
+    /**
      * The SONG's meter — what the time gutter counts in.
      *
      * Not the clip's. A clip owns its own time signature now and draws its own
@@ -1472,7 +1481,15 @@ export function buildViewModel(opts, buf) {
         cell.kind = 'collide';
         continue;
       }
-      cell.text = nameChord(ch.degree, ch.quality, ch.inversion);
+      /*
+       * THE KEY IN FORCE AT THIS CHORD, not the song's first key. A chord is a DEGREE, so the
+       * quality its numeral should show depends on the scale it lands in — and a song that
+       * modulates has different answers for the same degree in different bars. Reading the
+       * timeline entry that covers this tick is the whole of that.
+       */
+      const active = scaleSteps ? harmonyAtTick(harmony, ch.tick) : null;
+      cell.text = nameChord(ch.degree, ch.quality, ch.inversion,
+                            active ? scaleSteps(active.scaleId) : null);
       cell.kind = 'chord';
       cell._row = ri;
     }
@@ -1610,6 +1627,16 @@ export function buildViewModel(opts, buf) {
         || s.notesRevision !== (engine ? engine.notesRevision : -1)
         || s.aggRevision !== (engine ? engine.aggRevision : -1)
         || s.rowGrid !== (engine ? engine.rowGrid : -1)
+        /*
+         * THE HARMONY VERSION, because a chord's numeral is CASED by the key it lands in —
+         * `vi` in C major and `VI` in C minor for the same stored degree. Without this, changing
+         * the key repainted nothing: the tracker only does a full repaint when this revision
+         * moves, so the numerals kept the previous key's casing until an unrelated clip edit
+         * happened to bump it. The data was right and the screen was a key behind.
+         *
+         * It was correct to omit before this: nothing drawn in the grid depended on the key.
+         */
+        || s.harmonyVersion !== (engine ? engine.harmonyVersion : -1)
         || s.extentsRevision !== (engine ? engine.extentsRevision : -1)) {
       s.zoomIndex = zoomIndex; s.pendingCount = pendingCount; s.overlayLen = overlayLen;
       s.badKey = badKey;
@@ -1618,6 +1645,7 @@ export function buildViewModel(opts, buf) {
       s.aggRevision = engine ? engine.aggRevision : -1;
       s.rowGrid = engine ? engine.rowGrid : -1;
       s.extentsRevision = engine ? engine.extentsRevision : -1;
+      s.harmonyVersion = engine ? engine.harmonyVersion : -1;
       contentRevision++;
     }
   }

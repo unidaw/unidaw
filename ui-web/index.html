@@ -108,7 +108,7 @@ import { buildMinimapModel, createMinimapBuffer } from './src/minimapmodel.js';
 import { Pending } from './src/pending.js';
 import { createPending, propose, applyPending, settlePending,
          discardPending } from './src/pendingmodel.js';
-import { buildHarmonyModel, createHarmonyBuffer } from './src/harmonymodel.js';
+import { buildHarmonyModel, createHarmonyBuffer, harmonyAtTick, nameChord } from './src/harmonymodel.js';
 import { Inspect } from './src/inspect.js';
 import { buildInspectModel, createInspectBuffer } from './src/inspectmodel.js';
 import { Palette } from './src/palette.js';
@@ -2673,6 +2673,8 @@ let hoverCell = null;
 const inspectIn = {
   row: 0, track: 0, col: 0, field: 0, trackName: '', note: null, chord: null,
   ticksPerBeat: 960000, tick: 0, bar: 0, beat: 0, hovered: false,
+  /** Step sizes of the key in force at `tick`, so the panel cases its numeral like the grid. */
+  scaleSteps: null,
 };
 /*
  * WHEN THE INSPECTOR NEEDS LOOKING UP AGAIN.
@@ -6104,7 +6106,26 @@ function syncNoteColumns() {
 const _vmOpts = { startRow: 0, rowCount: 0, tracks: 0, columns: 3, zoomIndex: 2,
                   cursor: null, playheadRow: 0, selection: null, engine: null,
                   pending: null, pendingCount: 0, entryOverlay: null,
-                  badToken: null, harmony: null, nameHarmony: null, meter: null };
+                  badToken: null, harmony: null, nameHarmony: null, meter: null,
+                  scaleSteps: null };
+
+/**
+ * A scale id to its step sizes in cents, for casing a chord numeral by the quality the key gives
+ * its degree — `vi` rather than `VI`.
+ *
+ * Reads the SCALE REGISTRY the engine publishes rather than a table here: a scale this app has
+ * never heard of still gets the right case, and there is no second list to drift. Returns null
+ * before the registry has arrived, which renders the numerals upper case exactly as before.
+ */
+function scaleStepsOf(id) {
+  if (!scales) return null;
+  for (let i = 0; i < scales.length; i++) {
+    // The WHOLE record: `stepCents` is cumulative from the root and the wrap needs
+    // `octaveCents`, so handing over the array alone loses half the information.
+    if (scales[i].id === id) return scales[i];
+  }
+  return null;
+}
 
 function draw() {
   if (helpHost.hidden === state.helpOpen) helpHost.hidden = !state.helpOpen;
@@ -6202,6 +6223,15 @@ function draw() {
     i.chord = chordAt(cell.row, cell.track);
     i.ticksPerBeat = ticksPerBeat(songMeter());
     i.tick = rowToTick(cell.row);
+    /*
+     * The key AT THIS CELL, not the song's first — the same rule the grid applies, through the
+     * same helper, so the panel and the cell cannot come to disagree about one chord.
+     */
+    {
+      const h = engine && state.useEngine !== false
+        ? harmonyAtTick(engine.harmony, i.tick) : null;
+      i.scaleSteps = h ? scaleStepsOf(h.scaleId) : null;
+    }
     i.hovered = !!hoverCell;
     inspectCard.render(buildInspectModel(i, inspectBuf));
     }
@@ -6453,6 +6483,7 @@ function draw() {
   o.badToken = state.badToken;
   o.harmony = engine && state.useEngine !== false ? engine.harmony : null;
   o.nameHarmony = nameHarmony;
+  o.scaleSteps = scaleStepsOf;
   // Bar NUMBERING in the time gutter, which counts the SONG's bars. A clip in a
   // different meter draws its own accents inside one of them; that grid comes off
   // the clip, not off this.
@@ -6974,9 +7005,14 @@ function writeChord(c) {
     inv: c.inv, oct: c.oct, spread: c.spread, ht: c.ht, hv: c.hv, dur: c.dur,
   });
   if (!ok) { state.reject = 'no engine'; return false; }
-  const NAMES = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'];
-  const label = (NAMES[c.degree % 7] || String(c.degree + 1))
-    + (c.quality === 2 ? '7' : c.quality === 0 ? '' : '');
+  /*
+   * THE SAME SPELLER THE GRID AND THE PANEL USE. This had its own numeral table and built the
+   * label by hand, which is the THIRD copy of one rule — and the optimistic label is drawn a
+   * frame before the engine's answer replaces it, so a divergence here shows as a cell that
+   * changes its own text after you type. Cased against the key at the cursor, like the others.
+   */
+  const h = engine ? harmonyAtTick(engine.harmony, tickOfCursorRow()) : null;
+  const label = nameChord(c.degree, c.quality, 0, h ? scaleStepsOf(h.scaleId) : null);
   addPending(state.cursor.row, state.cursor.track, state.cursor.col, label, base);
   return true;
 }
