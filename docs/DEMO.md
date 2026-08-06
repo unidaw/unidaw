@@ -213,6 +213,7 @@ Verified prompts:
 | `add a four on the floor kick pattern` | writes the pattern |
 | `write a four chord progression on track 0, and strum them` | I-V-vi-IV with a real spread |
 | `put a sampler on track 0, load demo_pluck_c4.wav into it, and write a four note phrase` | device, file and notes in one go |
+| `add a track called Drums with a sampler on it, load a drum sound into it, and write a four bar beat` | **picks the file itself** — no filename given |
 | `set the tempo to 96` | acts on the song already open |
 | `put an event patcher on track 0 and add a euclidean node to it` | finds the device id itself |
 
@@ -221,6 +222,11 @@ exchanges — that is what makes "now do the same to the lead" work — but an u
 gets read in light of the last one. Asked for a bassline immediately after "add a track called
 Bass" it renamed the track and wrote nothing; the same sentence in a fresh conversation wrote
 sixteen notes. `forget` starts a clean conversation.
+
+**It knows what samples exist.** The observation lists them, so you can ask for "a drum sound"
+rather than naming a file — it picked `demo_kick.wav` and mapped it to MIDI 36 unprompted. Until
+today it GUESSED at filenames, took the refusal, and wrote the notes anyway onto a silent track,
+which is the worst possible failure on stage: it looks like it worked.
 
 **It can wire the patcher now.** The observation carries each track's chain with device ids, so
 `put an event patcher on track 0 and add a euclidean node to it` works end to end. Verified against
