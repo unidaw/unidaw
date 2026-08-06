@@ -246,6 +246,20 @@ const slots = await page.evaluate(() => {
 check(slots > 0, 'and the file is in it — a slot, not just an accepted command',
       `${slots} slot(s)`);
 
+/*
+ * SAVED HERE, WHERE IT EXISTS. The render at the bottom needs this song, and the sections after
+ * this one open NEW ones — so saving at the end saved `aipatch` under this name and rendered a
+ * project with no notes in it. Nothing said so: the earlier checks had already passed against
+ * the song while it was still open.
+ */
+await run('save aisampler');
+await page.waitForTimeout(2200);
+const built = await page.evaluate(() => {
+  const e = window.__uni.engineState() || {};
+  return { notes: e.noteCount, ticks: (window.__uni.notes() || []).map((n) => n.t ?? n.on).slice(0, 8) };
+});
+console.log(`  the AI's sampler part: ${built.notes} note(s) at ${JSON.stringify(built.ticks)}`);
+
 // ---------------------------------------------------------------------------
 // THE PATCHER, WHICH WAS UNANSWERABLE UNTIL THE OBSERVATION CARRIED DEVICE IDS.
 //
@@ -278,6 +292,27 @@ await page.waitForTimeout(1500);
 const patch = await askFor(
   'put an event patcher on track 0 and add a euclidean node to it',
   () => true, 150000);
+
+/*
+ * WAIT FOR THE NODE, NOT FOR THE SILENCE.
+ *
+ * `askFor` ends a turn when the transcript has been quiet for four seconds, and a model making
+ * tool calls is quiet for longer than that between utterances — this prompt returned after 8s
+ * with the patcher added and the node still to come, and the assertion below read a device with
+ * an empty graph. The transcript stopping is not the work stopping.
+ *
+ * So: poll the published graph for a node until one appears. This can only make a failing case
+ * take longer; it cannot make a broken one pass, because the assertion is still on the SAVED
+ * project afterwards.
+ */
+for (let i = 0; i < 40; i++) {
+  const n = await page.evaluate(() => {
+    const p = window.__uni.patcher();
+    return p && p.nodes ? p.nodes.length : 0;
+  });
+  if (n > 0) break;
+  await page.waitForTimeout(1000);
+}
 
 // The EVENT patcher's id, read from the chain rather than assumed — kind 0 is patcher event.
 const eventId = await page.evaluate(() => {
@@ -352,6 +387,51 @@ check(bpm === null || Math.round((bpm || 0) / 1000) === 96 || /96/.test(tempo.sa
       `${bpm} :: ${tempo.said.slice(-160)}`);
 check(before.notes === 0 || true, 'the earlier material survived the tempo change',
       JSON.stringify(await song()));
+
+// ---------------------------------------------------------------------------
+// AND DOES ANY OF IT MAKE A SOUND?
+//
+// Every check above asserts the SONG CHANGED — a track appeared, notes exist, chords are chords.
+// All true and none of them is what a demo audience experiences. A model can build a structurally
+// perfect part that is inaudible, and this repo has found exactly that twice this week: a chord
+// that emitted note-ons at peak 0, and a patcher graph that assembles and reaches no instrument.
+//
+// So the last prompt's work is RENDERED. The sampler song is the one to use: the model put the
+// device, the file and the notes there itself, so if it sounds, every link in that chain — tool
+// call, engine command, sampler mapping, render — worked from one English sentence.
+// ---------------------------------------------------------------------------
+/*
+ * Rendered from the file saved at the sampler section — NOT from whatever is open now. The
+ * sections between here and there each start a new song.
+ */
+let aiPeak = -1;
+try {
+  const { execFileSync } = await import('node:child_process');
+  const { existsSync, unlinkSync } = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
+  const { readWav, envelope } = await import('./wav.mjs');
+  const ROOT = fileURLToPath(new URL('../..', import.meta.url));
+  const out = join(stack.dir, 'aitake.wav');
+  try { unlinkSync(out); } catch { /* absent is normal */ }
+  execFileSync(join(ROOT, 'build', 'daw_engine'),
+               ['--project', 'aisampler', '--render', 'aitake', '--run-seconds', '12'],
+               { cwd: join(ROOT, 'build'),
+                 env: { ...process.env, DAW_PROJECT_DIR: stack.dir,
+                        DAW_HOST_BINARY: join(ROOT, 'build', 'juce_host_process'),
+                        DAW_UI_SHM_NAME: `/aidemo_${process.pid}` },
+                 stdio: ['ignore', 'pipe', 'pipe'], timeout: 180000 });
+  if (existsSync(out)) {
+    const w = readWav(out);
+    aiPeak = envelope(w.mono, w.rate, 0.05).reduce((m, v) => Math.max(m, v), 0);
+  }
+} catch (e) {
+  check(false, 'the AI-built song renders', String(e).slice(0, 180));
+}
+console.log(`  the AI-built sampler part renders at peak ${aiPeak < 0 ? 'FAILED' : aiPeak.toFixed(4)}`);
+check(aiPeak > 0.004,
+      'WHAT THE AI BUILT ACTUALLY SOUNDS — device, sample and notes, from one sentence',
+      `peak ${aiPeak.toFixed(4)}; a structurally perfect part that is inaudible is the failure `
+      + `this repo has found twice this week, and every check above would still pass`);
 
 check(errors.length === 0, 'no page errors while prompting', errors.join(' | '));
 
