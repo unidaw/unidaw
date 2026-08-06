@@ -154,11 +154,14 @@ the two renders differed, which it was passing on a difference of six hundredths
 
 ## 6. The patcher
 
-**Put the patcher FIRST in the chain, then the instrument.**
+`⌘B` → DEVICES → `patcher event` and the instrument, in either order. The built-in sampler works;
+so does a plugin. Then **double-click the patcher's rack card** to open the graph.
 
-`⌘B` → DEVICES → `patcher event`, **then** the instrument — order matters, because an event graph
-feeds whatever comes *after* it. The built-in sampler works; so does a plugin. Then **double-click
-the patcher's rack card** to open the graph.
+An event graph feeds whatever comes *after* it, so the patcher has to sit ahead of the instrument
+— and the app now puts it there for you: an event patcher head-inserts, everything else appends.
+Adding the patcher second used to leave it behind the instrument, emitting into nothing, with the
+rack drawing it perfectly. If you like, add it first anyway; it costs nothing and the order is then
+plain on screen.
 
 Opening it for a device is what makes the edits land in that device's own graph — `a` adds a node,
 `t` changes its type, `c` links two, Delete removes. The patcher is an EVENT graph: it generates or
