@@ -166,10 +166,15 @@ transforms notes and the track's instrument sounds them, so it needs an instrume
 
 Three things that will otherwise cost you the moment, all measured:
 
-1. **`euclidean → out` alone makes no sound. Put a `random` node between them.** A euclidean
-   into an event-out directly measured 0.0000; `euclidean → random → out` measured 0.2675 through
-   the same sampler, same clip, same everything. `a` twice and one `c` is the obvious gesture and
-   it is the silent one — the `generator` preset has the three-node shape for this reason.
+1. **`euclidean → out` alone makes no sound, and that is BY DESIGN.** A euclidean emits GATES —
+   a rhythm with no pitch — and the note-resolution path skips gates deliberately. Something has
+   to turn a gate into a degree before there is a note: `random` does, and so does `slice`. So the
+   graph is **`euclidean → random → out`**, which is what the `generator` preset uses.
+
+   Measured: direct 0.0000, three-node 0.2675, same sampler and clip. `a` twice and one `c` is
+   the obvious gesture and it is the silent one — worth knowing before you do it on stage rather
+   than after. (Backend has flagged to Jaakko whether an event-out should promote a bare gate to
+   a default degree; a gate is not a note, so it is a real design call and not a bug.)
 2. **A new node generates nothing.** `a` mints a euclidean with every field at zero — steps 0,
    hits 0, velocity 0 — so the graph looks right and emits nothing. Set them: `patch <node> steps
    8`, `patch <node> hits 4`, `patch <node> vel 100`, and `patch <node> base 4` for the octave

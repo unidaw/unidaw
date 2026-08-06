@@ -138,9 +138,16 @@ check(devId !== null && target.device === devId,
       `${JSON.stringify(target)} vs device ${devId}`);
 
 /*
- * euclidean -> random_degree -> event out, which is the shape `generator.uniproj.json` uses and
- * the shape backend measured at 0.4027. A direct euclidean -> out is what the runbook's steps
- * produce and is being compared against it below.
+ * euclidean -> random_degree -> event out, AND THE MIDDLE NODE IS REQUIRED BY DESIGN.
+ *
+ * A euclidean emits GATES — a rhythm with no pitch — and the note-resolution path skips gates
+ * deliberately. Something has to promote a gate to a degree before a note exists: random_degree
+ * does, and so does SliceSelect. So a direct `euclidean -> event_out` renders silence, correctly.
+ *
+ * I measured that silence and reported it as a defect. It is documented in
+ * `tools/patcher_plays_sampler_check.sh`, whose header says the first version of THAT fixture
+ * made the same mistake — "a fixture that cannot produce the input makes the check agree with you
+ * for the wrong reason". Two of us fell in it, which is why the runbook now warns about it.
  */
 await run('addnode euclidean');
 await settle(700);
