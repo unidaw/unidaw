@@ -484,6 +484,18 @@ test('a chord is named by its degree, not by a pitch set it does not contain', a
    */
   assert.equal(nameChord(7, 1, 0), 'd8');
 
+  /*
+   * THE DEMO'S OWN EXAMPLE, end to end through the encodings.
+   *
+   * Typing `@3^7` writes degree 2 quality 2: degrees are 1-based as musicians write them and
+   * stored 0-based, and quality is an enum where 2 is a seventh. The numeral table is indexed by
+   * the STORED degree, so the two conventions cancel and `@3` reads III — not II.
+   *
+   * Worth pinning as the token rather than as bare numbers, because that cancellation is exactly
+   * the kind of thing an "obvious" off-by-one fix would break in the direction of looking right.
+   */
+  assert.equal(nameChord(2, 2, 0), 'III7', '`@3^7` is a seventh on the THIRD degree');
+
   // Interned, because a tracker row redraws at frame rate.
   assert.equal(nameChord(0, 1, 0), nameChord(0, 1, 0));
 });
@@ -3667,4 +3679,100 @@ test('every row op can actually be TYPED into the cell', async () => {
     'a row op whose own example cannot be typed into the cell. The charset silently DROPS a '
     + 'character it does not allow rather than refusing the edit, so the op commits as something '
     + 'else. Add the character to ENTRY_MODES.ops in index.html.');
+});
+
+test('the three roman-numeral tables are the same table', async () => {
+  /*
+   * ONE RULE, THREE HAND-MAINTAINED COPIES — harmonymodel.js draws the lane, inspectmodel.js
+   * writes the CELL panel, and index.html labels the optimistic edit that appears before the
+   * engine answers. All three index the numeral by the stored 0-based degree, and all three
+   * spell the list out separately.
+   *
+   * They agree today. The failure this guards is the one this repo keeps paying for: a
+   * duplicated rule that agrees on NAMES and drifts in BEHAVIOUR — the optimistic label saying
+   * one thing and the settled cell another, which reads as an edit that changed under you.
+   *
+   * A comparison of the LISTS, not of the outputs, because two of the three are not exported.
+   */
+  const { readFileSync } = await import('node:fs');
+  /*
+   * Matched on the LIST'S CONTENT, not just its name. index.html has several `NAMES = [...]` and
+   * the first one is not this table — the first version of this check extracted an empty list
+   * from a different constant and reported a divergence that did not exist.
+   */
+  const read = (path, name) => {
+    const src = readFileSync(new URL(path, import.meta.url), 'utf8');
+    const m = src.match(new RegExp(`${name}\\s*=\\s*\\[\\s*'I'([^\\]]*)\\]`));
+    assert.ok(m, `${name}'s numeral table not found in ${path} — if it moved, repoint this rather `
+                 + `than deleting it`);
+    return ['I', ...[...m[1].matchAll(/'([IVX]+)'/g)].map((x) => x[1])];
+  };
+  const lane = read('../src/harmonymodel.js', 'ROMAN');
+  const panel = read('../src/inspectmodel.js', 'DEGREES');
+  const optimistic = read('../index.html', 'NAMES');
+
+  assert.deepEqual(lane, ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'],
+    'the numerals are indexed by the STORED degree, which is 0-based — so entry 2 must be III, '
+    + 'and a typed `@3` reads III');
+  assert.deepEqual(panel, lane, 'the CELL panel names a degree differently from the harmony lane');
+  assert.deepEqual(optimistic, lane,
+    'the optimistic label names a degree differently from the settled one — the cell would change '
+    + 'its own text when the engine answered');
+});
+
+test('the numeral carries the chord quality, the way musicians write it', async () => {
+  /*
+   * CASE IS INFORMATION. `I-V-vi-IV` says at a glance that the sixth is minor; `I-V-VI-IV`
+   * throws that away and the numerals stop carrying the one thing the notation exists for.
+   * Every numeral here was upper case, so every progression read as though it were all major.
+   *
+   * DERIVED FROM THE SCALE'S OWN STEPS, not from a table of the major modes — `stepCents` is
+   * published for every scale the engine knows, so this answers for the exotic ones instead of
+   * assuming everything is major-ish.
+   */
+  const { nameChord, triadQuality } = await import('../src/harmonymodel.js');
+  const MAJOR = [200, 200, 100, 200, 200, 200, 100];
+  const MINOR = [200, 100, 200, 200, 100, 200, 200];
+
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 6].map((d) => triadQuality(d, MAJOR)),
+    ['major', 'minor', 'minor', 'major', 'major', 'minor', 'dim'],
+    'the diatonic triads of a major scale');
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 6].map((d) => triadQuality(d, MINOR)),
+    ['minor', 'dim', 'major', 'minor', 'minor', 'major', 'major'],
+    'and of a natural minor');
+
+  assert.equal([0, 1, 2, 3, 4, 5, 6].map((d) => nameChord(d, 1, 0, MAJOR)).join(' '),
+    'I ii iii IV V vi vii°', 'the major scale, spelled');
+  assert.equal([0, 1, 2, 3, 4, 5, 6].map((d) => nameChord(d, 1, 0, MINOR)).join(' '),
+    'i ii° III iv v VI VII', 'and the natural minor');
+
+  // The progression everyone knows, entered the way a person says it.
+  assert.equal([1, 5, 6, 4].map((n) => nameChord(n - 1, 1, 0, MAJOR)).join('-'),
+    'I-V-vi-IV');
+
+  /*
+   * WITHOUT A SCALE THE NUMERAL IS NOT CASED. That is the honest rendering of "the quality is
+   * not established here" — guessing major would be a claim the document does not make, and the
+   * tracker draws chords before the harmony timeline has necessarily been read.
+   */
+  assert.equal(nameChord(5, 1, 0), 'VI', 'no scale, no claim about quality');
+  assert.equal(nameChord(5, 1, 0, MAJOR), 'vi', 'with the scale, the case says minor');
+
+  // A single note is not a chord and must not be cased as one.
+  assert.equal(nameChord(5, 0, 0, MAJOR), 'VI', 'quality 0 is one note, not a minor triad');
+  // The seventh marker and the inversion still ride along.
+  assert.equal(nameChord(5, 2, 1, MAJOR), 'vi7/1');
+
+  /*
+   * THE INTERN IS KEYED ON THE SCALE TOO. Keyed only on (degree, quality, inversion) it would
+   * hand back the previous key's casing after a modulation — a cached answer to a different
+   * question, which is how two chord bugs got here already.
+   */
+  assert.equal(nameChord(5, 1, 0, MAJOR), 'vi');
+  assert.equal(nameChord(5, 1, 0, MINOR), 'VI', 'the same degree, cased for the key it is in');
+
+  // A scale that is not seven notes has no diatonic triads to speak of; say nothing rather than
+  // inventing a quality.
+  assert.equal(triadQuality(0, [100, 100, 100, 100, 100, 100]), null);
+  assert.equal(nameChord(0, 1, 0, [100, 100, 100, 100, 100, 100]), 'I');
 });

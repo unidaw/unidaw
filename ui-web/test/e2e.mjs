@@ -425,6 +425,16 @@ ok(back.every((n, i) => n.pitch === sel[i].pitch), 'and transposes back exactly'
 
 section('chords');
 const cv = (await E()).clipVersion;
+/*
+ * THE CHORDS ALREADY IN THE FIXTURE, so the typed one can be told from them.
+ *
+ * `chords()[0]` is not the chord you just wrote — this project ships with chords, and index 0 is
+ * one of them. Asserting against it reported degree 0 for a `@3` that had landed perfectly, and
+ * the strum/humanize checks beside it PASSED on that same wrong chord's values. A check that
+ * reads the wrong row is worse than no check: two of the three agreed with each other.
+ */
+const chordsBefore = await page.evaluate(() =>
+  (window.__uni.chords() || []).map((c) => JSON.stringify(c)));
 await page.evaluate(() => window.__uni.run('goto 12 1'));
 /*
  * THE WHOLE TOKEN THE RUNBOOK NAMES: `@3^7~80h20`, a strummed and humanised seventh.
@@ -448,9 +458,29 @@ await page.keyboard.press('Enter');
 await page.waitForTimeout(1000);
 ok((await E()).clipVersion > cv, 'a chord token writes', `clipVersion ${cv} -> ${(await E()).clipVersion}`);
 
-const typedChord = await page.evaluate(() => (window.__uni.chords() || [])[0] || null);
-ok(typedChord && typedChord.degree === 3, 'the typed DEGREE reaches the engine',
+/*
+ * THE WHOLE RECORD, not its position. Keying on (track, tick) found nothing at all: row 12 of
+ * track 1 ALREADY held a chord, so typing there REPLACED it rather than adding one, and a
+ * position that was present before is present after. Comparing the full record catches both — a
+ * chord that is new and a chord whose values moved.
+ */
+const typedChord = await page.evaluate((seen) => {
+  const all = window.__uni.chords() || [];
+  return all.find((c) => !seen.includes(JSON.stringify(c))) || null;
+}, chordsBefore);
+/*
+ * DEGREE 2 FOR A TYPED `@3`, AND QUALITY 2 FOR `^7`. Both are the storage, not a bug:
+ *
+ *   degrees are 1-based as musicians write them and stored 0-based (tools.rs:1922 `degree - 1`)
+ *   quality is an enum — 0 = the degree alone, 1 = triad, 2 = seventh (dock.js:319)
+ *
+ * Written down because I asserted the typed numbers verbatim and read the mismatch as a dropped
+ * token, which is the same mistake as expecting `o80` to be stored as 80.
+ */
+ok(typedChord && typedChord.degree === 2, 'the typed DEGREE reaches the engine (1-based `@3` stored 0-based)',
    JSON.stringify(typedChord));
+ok(typedChord && typedChord.quality === 2, 'and `^7` is a SEVENTH, not a triad',
+   `quality ${typedChord && typedChord.quality} (0 degree, 1 triad, 2 seventh)`);
 /*
  * `spread > 0` IS the strum. 0 is a legal answer meaning a block chord, not a missing field, so
  * a check that only asked "is spread defined" would pass on a dropped `~` token.

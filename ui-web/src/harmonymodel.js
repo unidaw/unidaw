@@ -301,16 +301,74 @@ export function buildHarmonyModel(opts, buf) {
  * the music does, which is to say hardly ever.
  */
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'];
+
+/**
+ * The QUALITY of the diatonic triad on a degree, from the scale's own step sizes.
+ *
+ * Musicians read case: `I-V-vi-IV` says at a glance that the sixth is minor, and writing it
+ * `I-V-VI-IV` throws that away — the numerals stop carrying the one thing the notation exists to
+ * carry. This is what lets the numeral be cased instead of shouted.
+ *
+ * DERIVED FROM THE SCALE, not from a table of the major modes. `stepCents` is what the engine
+ * publishes for every scale it knows, so this answers for the exotic ones too rather than
+ * quietly assuming everything is major-ish. A scale that is not seven notes has no diatonic
+ * triads to speak of and gets `null`, which the caller renders as the plain numeral.
+ *
+ * @param {number} degree 0-based, as stored.
+ * @param {number[]} stepCents cents from each degree to the next, one per degree.
+ * @returns {'major'|'minor'|'dim'|'aug'|null}
+ */
+export function triadQuality(degree, stepCents) {
+  if (!Array.isArray(stepCents) || stepCents.length !== 7) return null;
+  const span = (from, steps) => {
+    let c = 0;
+    for (let i = 0; i < steps; i++) c += stepCents[(from + i) % 7];
+    return c;
+  };
+  // Stacked thirds: two steps to the third, four to the fifth. Rounded to the nearest semitone
+  // because a scale in cents need not land exactly on 100s, and a third is a third.
+  const third = Math.round(span(degree, 2) / 100);
+  const fifth = Math.round(span(degree, 4) / 100);
+  if (third === 4 && fifth === 7) return 'major';
+  if (third === 3 && fifth === 7) return 'minor';
+  if (third === 3 && fifth === 6) return 'dim';
+  if (third === 4 && fifth === 8) return 'aug';
+  return null;
+}
+
 const CHORD_NAMES = new Map();
-export function nameChord(degree, quality, inversion) {
-  const key = degree * 256 + quality * 16 + (inversion & 15);
+export function nameChord(degree, quality, inversion, stepCents) {
+  /*
+   * THE SCALE IS PART OF THE KEY. The same degree is major in one scale and minor in another, so
+   * an intern keyed only on (degree, quality, inversion) would hand back the previous key's
+   * casing after a modulation — a cached answer to a different question, which is the shape that
+   * made two chord bugs here already.
+   */
+  const tq = triadQuality(degree, stepCents);
+  const key = (degree * 256 + quality * 16 + (inversion & 15)) * 8
+            + (tq === 'minor' ? 1 : tq === 'dim' ? 2 : tq === 'aug' ? 3 : tq === 'major' ? 4 : 0);
   let s = CHORD_NAMES.get(key);
   if (s !== undefined) return s;
   // Past the seventh degree the numeral table runs out. Shown as `d8` rather
   // than clamped to VII: a degree the scale does not have is a real thing to
   // see, and silently drawing it as the seventh would hide it.
-  const base = degree < ROMAN.length ? ROMAN[degree] : 'd' + (degree + 1);
-  s = base + (quality >= 2 ? '7' : '') + (inversion ? '/' + inversion : '');
+  let base = degree < ROMAN.length ? ROMAN[degree] : 'd' + (degree + 1);
+  /*
+   * LOWER CASE IS MINOR, and `°` is diminished — the convention everyone reads. Applied only
+   * when the scale is known and the degree really carries a triad; without a scale the numeral
+   * stays as it was, which is the honest rendering of "the quality is not established here"
+   * rather than a guess that it is major.
+   *
+   * `quality === 0` is a single note, not a chord, so it is left alone: casing one note as a
+   * minor triad would claim something the document does not say.
+   */
+  let mark = '';
+  if (quality >= 1 && degree < ROMAN.length) {
+    if (tq === 'minor') base = base.toLowerCase();
+    else if (tq === 'dim') { base = base.toLowerCase(); mark = '\u00B0'; }
+    else if (tq === 'aug') mark = '+';
+  }
+  s = base + (quality >= 2 ? '7' : '') + mark + (inversion ? '/' + inversion : '');
   CHORD_NAMES.set(key, s);
   return s;
 }
