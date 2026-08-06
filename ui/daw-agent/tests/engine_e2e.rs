@@ -3470,3 +3470,142 @@ fn forking_a_shared_clip_stops_an_edit_reaching_the_other_placement() {
         std::thread::sleep(Duration::from_millis(200));
     }
 }
+
+/// `load_sample` puts a real file in a real slot — the tool the demo's AI prompts lean on hardest.
+///
+/// "load a drum sound into it" is one of the runbook's prompts, and a model that calls this and
+/// gets a refusal it cannot read writes the pattern anyway onto a silent track. That exact
+/// sequence was watched happening. So this asserts the SLOT ON DISK carries the path, not that
+/// the command was accepted.
+///
+/// It also asserts the REFUSAL for a file that does not exist. A tool that accepts a guessed
+/// filename and reports success is worse than one that refuses: the model believes the sound is
+/// there and everything downstream is built on it.
+#[test]
+fn load_sample_fills_a_slot_and_refuses_a_file_that_is_not_there() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agload");
+
+    let proj = json!({
+        "schema_version": 2,
+        "meta": { "name": "agload_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [], "clips": [],
+        "tracks": [ {
+            "track_id": 0, "name": "S", "harmony_quantize": 0, "lines_per_beat": 4,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            "device_chain": [ { "device_id": 3, "kind": "sampler", "patcher_node_id": 0,
+                                "bypass": false, "sampler": { "slots": [] } } ],
+            "mod_links": [], "placements": []
+        } ]
+    });
+    std::fs::write(engine.proj.join("agload_in.uniproj.json"),
+                   serde_json::to_string_pretty(&proj).unwrap()).unwrap();
+    assert!(session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"agload_in"}) }).ok);
+    std::thread::sleep(Duration::from_millis(1500));
+
+    // A NAME NOBODY HAS. The engine resolves against the project directory, so this is the shape
+    // a model produces when it guesses rather than reading the `samples:` line.
+    let missing = session.execute(&ToolCall {
+        tool: "load_sample".into(),
+        args: json!({ "track": 0, "device": 3, "file": "no_such_sound_9f3a.wav" }),
+    });
+    // Either an outright refusal, or accepted-and-nothing-loaded. The second is the dangerous
+    // one, so it is checked on disk below rather than trusted here.
+    let slots_on_disk = |name: &str| -> Vec<String> {
+        assert!(session.execute(&ToolCall {
+            tool: "save".into(), args: json!({"name": name}) }).ok);
+        let doc = read_project(&engine.proj, name);
+        doc["tracks"][0]["device_chain"][0]["sampler"]["slots"].as_array()
+            .cloned().unwrap_or_default().iter()
+            .filter_map(|s| s["source_path"].as_str().map(|p| p.to_string()))
+            .collect()
+    };
+    std::thread::sleep(Duration::from_millis(1200));
+    let after_bad = slots_on_disk("agload_bad");
+    assert!(after_bad.iter().all(|p| !p.contains("no_such_sound")),
+            "a file that does not exist must not become a slot — the model then writes a pattern \
+             onto a silent track and every check above it passes: {after_bad:?} (reply: {missing:?})");
+
+    // A REAL ONE, by bare name — the same way the observation lists it.
+    let real = session.execute(&ToolCall {
+        tool: "load_sample".into(),
+        args: json!({ "track": 0, "device": 3, "file": "demo_kick.wav" }),
+    });
+    assert!(real.ok, "load_sample failed for a file that exists: {real:?}");
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let paths = slots_on_disk("agload_good");
+        if paths.iter().any(|p| p.contains("demo_kick")) { break; }
+        assert!(Instant::now() < deadline,
+                "no slot holds demo_kick.wav — slots on disk: {paths:?}. `sent: true` says the \
+                 command travelled, not that a sound is loadable");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// Removing a track takes its music with it, and leaves the others alone.
+#[test]
+fn removing_a_track_leaves_the_others_intact() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agrmtrack");
+
+    assert!(session.execute(&ToolCall { tool: "add_track".into(), args: json!({}) }).ok);
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(session.execute(&ToolCall { tool: "add_track".into(), args: json!({}) }).ok);
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Distinct material per track, so "the right one went" is answerable. Equal counts would make
+    // a remove of the wrong track indistinguishable from a remove of the right one.
+    for (track, pitches) in [(0u64, vec![60]), (1, vec![62, 64]), (2, vec![65, 67, 69])] {
+        assert!(session.execute(&ToolCall {
+            tool: "add_notes".into(),
+            args: json!({ "track": track, "pitches": pitches, "start": 0, "step": Q }),
+        }).ok);
+        std::thread::sleep(Duration::from_millis(400));
+    }
+
+    let shape = |name: &str| -> Vec<(u64, usize)> {
+        assert!(session.execute(&ToolCall {
+            tool: "save".into(), args: json!({"name": name}) }).ok);
+        let doc = read_project(&engine.proj, name);
+        let clips: std::collections::HashMap<u64, usize> = doc["clips"].as_array().unwrap().iter()
+            .filter_map(|c| Some((c["id"].as_u64()?, c["notes"].as_array().map_or(0, |n| n.len()))))
+            .collect();
+        let mut v: Vec<(u64, usize)> = doc["tracks"].as_array().unwrap().iter()
+            .map(|t| {
+                let id = t["track_id"].as_u64().unwrap_or(0);
+                let n: usize = t["placements"].as_array().cloned().unwrap_or_default().iter()
+                    .filter_map(|p| p["clip_id"].as_u64())
+                    .map(|c| *clips.get(&c).unwrap_or(&0)).sum();
+                (id, n)
+            }).collect();
+        v.sort();
+        v
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let s = shape("agrm_a");
+        if s.len() == 3 && s.iter().map(|x| x.1).sum::<usize>() == 6 { break; }
+        assert!(Instant::now() < deadline, "three tracks with 1/2/3 notes, got {s:?}");
+        std::thread::sleep(Duration::from_millis(250));
+    }
+
+    assert!(session.execute(&ToolCall {
+        tool: "remove_track".into(), args: json!({ "track": 1 }) }).ok);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let s = shape("agrm_b");
+        // The SURVIVORS and their music, not a count of two. Removing the wrong track also leaves
+        // two, and the note counts are what say which one went.
+        let kept: Vec<usize> = s.iter().map(|x| x.1).collect();
+        if s.len() == 2 && kept.contains(&1) && kept.contains(&3) && !kept.contains(&2) { break; }
+        assert!(Instant::now() < deadline,
+                "after removing track 1 the remaining tracks are {s:?}; wanted the 1-note and \
+                 3-note tracks to survive and the 2-note one to be gone");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
