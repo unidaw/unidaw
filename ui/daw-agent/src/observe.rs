@@ -103,6 +103,38 @@ pub struct TrackView {
     /// is more than a model can be given at all.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<NoteView>,
+    /// THE TRACK'S DEVICE CHAIN, so the ids the tools require can be discovered.
+    ///
+    /// Five tools — `patcher_node`, `device_params`, `set_bypass`, `remove_device`,
+    /// `modulate` — take a `device`, and until now nothing an agent could read ever
+    /// reported one. It had to be told the id by a person, which for an agent asked to
+    /// "wire up the patcher" means it cannot start.
+    ///
+    /// FILLED BY THE CALLER, not read here, and that is not a shortcut: the engine
+    /// publishes chains as DIFFS on a single-consumer ring, so there is no region to
+    /// read and no way for a second reader to attach and learn the current chain. The
+    /// sidecar's drainer accumulates them for the browser; `attach_devices` lets that
+    /// same accumulation reach the agent instead of a second, competing consumer.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<DeviceView>,
+}
+
+/// One device on a track, as much of it as an agent needs to name and judge it.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceView {
+    /// The id every device-taking tool wants. Stable for the device's lifetime.
+    pub id: u32,
+    /// The engine's DeviceKind number.
+    pub kind: u32,
+    /// That kind in words, because a model asked to add "a sampler" should not have
+    /// to know that a sampler is kind 5.
+    pub kind_name: String,
+    #[serde(skip_serializing_if = "is_false")]
+    pub bypass: bool,
+    /// Whether this device's own patcher graph emits events — the difference between
+    /// a patcher that generates notes and one that only transforms them.
+    #[serde(skip_serializing_if = "is_false")]
+    pub generates: bool,
 }
 
 /// Where a track's notes are, and how high.
@@ -322,6 +354,9 @@ pub fn observe_window(handle: &EngineHandle, window: Option<Window>) -> Observat
             span,
             truncated: all.len() >= daw_bridge::layout::K_UI_MAX_CLIP_NOTES,
             notes,
+            // Empty here by construction — see `attach_devices`. The chain lives on a
+            // single-consumer ring this crate must not drain.
+            devices: Vec::new(),
         });
     }
 
@@ -473,6 +508,24 @@ impl Observation {
                     mix_text(t),
                     if t.truncated { "  TRUNCATED" } else { "" })),
             }
+            /*
+             * THE CHAIN, WITH THE IDS. One line, because a device list is short and the
+             * ids are the whole point — a tool that takes a `device` is unusable without
+             * one, and every other way of getting it involves asking the person.
+             *
+             * Printed in chain order, which is audio order: what is first sees the signal
+             * first. Omitted entirely when the chain is empty, so a bare track stays a
+             * one-line entry.
+             */
+            if !t.devices.is_empty() {
+                let list: Vec<String> = t.devices.iter().map(|d| {
+                    let mut s = format!("#{} {}", d.id, d.kind_name);
+                    if d.generates { s.push_str(" (generates)"); }
+                    if d.bypass { s.push_str(" (bypassed)"); }
+                    s
+                }).collect();
+                out.push_str(&format!("  devices: {}\n", list.join(", ")));
+            }
             // Notes only when a window asked for them.
             for n in &t.notes {
                 out.push_str(&format!(
@@ -482,5 +535,120 @@ impl Observation {
             }
         }
         out
+    }
+}
+
+impl Observation {
+    /// Give a track its device chain, which this crate cannot read for itself.
+    ///
+    /// The engine publishes chains as diffs on a SINGLE-CONSUMER ring: whoever drains it
+    /// takes those entries away from everyone else. The sidecar already drains and
+    /// accumulates them to serve the browser, so the chain exists in the process — it just
+    /// does not exist in shared memory in a form a second reader can attach to. This is how
+    /// that accumulation reaches the observation without a competing consumer.
+    ///
+    /// A track id with no track is ignored rather than erroring: the caller is iterating
+    /// its own store, and a chain for a track that has since gone is stale, not invalid.
+    pub fn attach_devices(&mut self, track_id: u32, devices: Vec<DeviceView>) {
+        if let Some(t) = self.tracks.iter_mut().find(|t| t.track_id == track_id) {
+            t.devices = devices;
+        }
+    }
+}
+
+#[cfg(test)]
+mod device_view_tests {
+    use super::*;
+
+    /// A TrackView with nothing in it but an id, so the assertions are about devices only.
+    fn bare_track(track_id: u32) -> TrackView {
+        TrackView {
+            track_id,
+            name: String::new(),
+            peak_rms: 0.0,
+            gain_db: 0.0,
+            pan: 0.0,
+            mute: false,
+            solo: false,
+            lines_per_beat: 4,
+            note_count: 0,
+            span: None,
+            truncated: false,
+            notes: Vec::new(),
+            devices: Vec::new(),
+        }
+    }
+
+    fn bare_observation(tracks: Vec<TrackView>) -> Observation {
+        Observation {
+            version: 1,
+            transport: Transport {
+                playing: false,
+                playhead_nanotick: 0,
+                playhead_beats: 0.0,
+                clip_version: 0,
+                harmony_version: 0,
+            },
+            song: Song {
+                tempo_milli_bpm: 120_000,
+                tempo_points: 1,
+                time_sig_numerator: 4,
+                time_sig_denominator: 4,
+                key: None,
+                key_changes: 0,
+            },
+            tracks,
+        }
+    }
+
+    fn device(id: u32, kind_name: &str) -> DeviceView {
+        DeviceView { id, kind: 0, kind_name: kind_name.into(), bypass: false, generates: false }
+    }
+
+    /// THE MECHANISM, PINNED WITHOUT A MODEL IN THE LOOP.
+    ///
+    /// The end-to-end version of this claim — "ask it to wire a patcher and a node appears" —
+    /// passed with the device list forcibly disabled, because device ids start at 1 and a model
+    /// guessing "1" is right on an empty track. That check now uses a non-guessable id, but it
+    /// still depends on what a model chooses to do. This one does not: it asserts that the text
+    /// the model is HANDED contains the id at all, which is the whole of what this crate
+    /// contributes.
+    #[test]
+    fn the_observation_text_carries_device_ids() {
+        let mut obs = bare_observation(vec![bare_track(0), bare_track(1)]);
+        obs.attach_devices(0, vec![device(7, "sampler"), device(9, "patcher event")]);
+        let text = obs.to_text();
+
+        assert!(text.contains("devices: #7 sampler, #9 patcher event"),
+                "the chain line is what five tools get their `device` argument from, and it is \
+                 the only place an agent can learn an id — the engine publishes chains as diffs \
+                 on a single-consumer ring, so there is nothing to read. Got:\n{text}");
+        // Track 1 has no chain, so it gets no line — a bare track stays one line.
+        assert_eq!(text.matches("devices:").count(), 1,
+                   "an empty chain should print nothing at all. Got:\n{text}");
+    }
+
+    /// Bypassed and generating are stated, because they change what an agent should do next.
+    #[test]
+    fn the_chain_line_states_bypass_and_generates() {
+        let mut obs = bare_observation(vec![bare_track(0)]);
+        obs.attach_devices(0, vec![
+            DeviceView { id: 2, kind: 0, kind_name: "patcher event".into(),
+                         bypass: true, generates: true },
+        ]);
+        let text = obs.to_text();
+        assert!(text.contains("#2 patcher event (generates) (bypassed)"),
+                "a bypassed device is in the chain and inaudible, and an agent told only that it \
+                 exists will 'fix' a silence by adding another one. Got:\n{text}");
+    }
+
+    /// A chain for a track that is no longer there is stale, not invalid.
+    #[test]
+    fn attaching_to_a_missing_track_is_ignored() {
+        let mut obs = bare_observation(vec![bare_track(0)]);
+        obs.attach_devices(42, vec![device(1, "sampler")]);
+        assert!(!obs.to_text().contains("devices:"),
+                "the caller iterates its own store, which can name a track this observation no \
+                 longer has; that must not panic and must not invent a track");
     }
 }

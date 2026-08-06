@@ -4477,11 +4477,12 @@ fn json_line(kind: &str, text: &str, detail: Option<&str>, ok: bool) -> String {
 }
 
 fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, projects: String,
-                  plugin_cache: String) {
+                  plugin_cache: String, chains: Arc<ChainStore>) {
     for stream in listener.incoming().flatten() {
         let shm = shm.clone();
         let viewport = viewport.clone();
         let projects = projects.clone();
+        let chains = chains.clone();
         let plugin_cache = plugin_cache.clone();
         thread::spawn(move || {
             // A READ TIMEOUT, so this loop can do two things.
@@ -4739,9 +4740,32 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                             let (tx, shm2) = (ask_tx.clone(), shm.clone());
                             let flag = asking.clone();
                             let hist = history.clone();
+                            let ch = chains.clone();
                             thread::spawn(move || {
+                                /*
+                                 * WHAT IS ON EACH TRACK, from the store the drainer keeps.
+                                 *
+                                 * Five agent tools take a `device` and nothing the agent could
+                                 * read ever reported one, so "wire up the patcher" was
+                                 * unanswerable without a person supplying the id. The chain is
+                                 * published as diffs on a single-consumer ring, so the agent
+                                 * cannot go and read it — this hands over what has already been
+                                 * drained instead of starting a second consumer that would take
+                                 * entries away from the browser's rack.
+                                 */
+                                let lookup = |track: u32| -> Vec<daw_agent::DeviceView> {
+                                    ch.devices_of(track).into_iter().map(|d| daw_agent::DeviceView {
+                                        id: d.id,
+                                        kind: d.kind,
+                                        kind_name: DEVICE_KINDS.get(d.kind as usize)
+                                            .map(|s| (*s).to_string())
+                                            .unwrap_or_else(|| format!("kind {}", d.kind)),
+                                        bypass: d.bypass != 0,
+                                        generates: d.generates,
+                                    }).collect()
+                                };
                                 match daw_agent::AgentSession::attach(&shm2) {
-                                    Ok(session) => ask::run(&session, &prompt, &tx, &hist),
+                                    Ok(session) => ask::run(&session, &prompt, &tx, &hist, &lookup),
                                     Err(e) => {
                                         let _ = tx.send(ask::Progress::Failed(
                                             format!("could not attach to the engine: {e}")));
@@ -6184,7 +6208,13 @@ impl ChainStore {
         true
     }
 
-    #[cfg(test)]
+    /// The devices on a track, in chain order.
+    ///
+    /// Was `#[cfg(test)]`. It is production now because the AGENT needs it: five of its tools
+    /// take a device id and nothing it could read reported one. Promoting the existing helper
+    /// rather than writing a second reader is deliberate — the tests and the agent now ask the
+    /// store the same question through the same code, so a test that passes cannot be passing
+    /// about a different lookup than the one that ships.
     fn devices_of(&self, track: u32) -> Vec<ChainDevice> {
         let tracks = self.tracks.lock().unwrap();
         tracks.iter().find(|t| t.track == track).map(|t| t.devices.clone()).unwrap_or_default()
@@ -6671,6 +6701,18 @@ fn main() {
     // generous window, so a client that never sends a viewport still gets frames.
     let viewport = SharedViewport::new(Viewport { lines_per_beat: 4, first_row: 0, row_count: 256 });
 
+    // One drainer for the whole process, because the ring has one consumer. It
+    // owns both shared stores for the same reason: what it takes off the ring is
+    // taken from everyone else, so it has to put it somewhere every client can
+    // read.
+    //
+    // CREATED BEFORE THE COMMAND SERVER, which is a change: the agent needs the chain store
+    // too. It cannot drain the ring for itself — a second consumer would take entries away
+    // from the browser's rack — so the accumulation has to be handed to it, and it can only
+    // be handed to something that exists first.
+    let events = Arc::new(EngineEvents::default());
+    let chains = Arc::new(ChainStore::default());
+
     match TcpListener::bind(("127.0.0.1", args.cmd_port)) {
         Ok(l) => {
             eprintln!("sidecar: ws://127.0.0.1:{} for commands", args.cmd_port);
@@ -6678,17 +6720,12 @@ fn main() {
             let vp = viewport.clone();
             let projects = args.projects.clone();
             let plugin_cache = args.plugin_cache.clone();
-            thread::spawn(move || serve_commands(l, shm, vp, projects, plugin_cache));
+            let ch = chains.clone();
+            thread::spawn(move || serve_commands(l, shm, vp, projects, plugin_cache, ch));
         }
         Err(e) => eprintln!("sidecar: no command port {} ({e}) — read-only", args.cmd_port),
     }
 
-    // One drainer for the whole process, because the ring has one consumer. It
-    // owns both shared stores for the same reason: what it takes off the ring is
-    // taken from everyone else, so it has to put it somewhere every client can
-    // read.
-    let events = Arc::new(EngineEvents::default());
-    let chains = Arc::new(ChainStore::default());
     {
         let (shm, ev, ch) = (args.shm.clone(), events.clone(), chains.clone());
         thread::spawn(move || drain_engine_events(shm, ev, ch));

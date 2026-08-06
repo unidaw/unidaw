@@ -1381,3 +1381,107 @@ fn lane_quantize_tool_converts_its_units() {
     assert!(!bad.ok && bad.error.clone().unwrap_or_default().contains("unknown grid"),
             "an unknown grid must be refused by name: {bad:?}");
 }
+
+/// The agent's `patcher_node` edits land in the DEVICE'S OWN graph, not the shared pool.
+///
+/// This exists because the end-to-end version of the claim could not be trusted. Asking a model
+/// to "add a euclidean node to the patcher" and then reading the published graph tests three
+/// things at once — whether the model picked the right device, whether the command was scoped,
+/// and which graph the UI happened to have open — and the published graph is the POOL unless a
+/// device has been opened, so a correctly scoped edit reads as `owner: 0` exactly like a broken
+/// one. That produced a confident wrong diagnosis ("the agent writes pool-scoped edits") off a
+/// reading that could not have said otherwise.
+///
+/// The saved project can say otherwise. A device's own graph is what gets written to disk, and a
+/// pool-scoped edit saves as zero nodes on every device — which is the failure this guards, and
+/// the one that made per-device patcher state look like it worked for a whole session.
+///
+/// TWO devices, so "it went somewhere" is not the same answer as "it went to the right place".
+#[test]
+fn agent_patcher_edits_are_device_scoped() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agpatch");
+
+    // Both start EMPTY, so any node found afterwards was put there by the tool call below.
+    let empty = |dev_id: u64, kind: &str| {
+        json!({ "device_id": dev_id, "kind": kind, "patcher_node_id": 1, "bypass": false,
+                "patcher": { "nodes": [], "edges": [] } })
+    };
+    let proj = json!({
+        "schema_version": 2,
+        "meta": { "name": "agpatch_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [], "clips": [],
+        "tracks": [ {
+            "track_id": 0, "name": "T", "harmony_quantize": 0, "lines_per_beat": 4,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            "device_chain": [ empty(10, "patcher_event"), empty(20, "patcher_audio") ],
+            "mod_links": [], "placements": []
+        } ]
+    });
+    std::fs::write(engine.proj.join("agpatch_in.uniproj.json"),
+                   serde_json::to_string_pretty(&proj).unwrap()).unwrap();
+    let load = session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"agpatch_in"}) });
+    assert!(load.ok, "load failed: {load:?}");
+
+    /*
+     * DEVICE 0 IS REFUSED, and this is the assertion that matters most here.
+     *
+     * It used to be ACCEPTED and answer `sent: true`. The wire packs the device into 15 bits
+     * under a "has device" flag, and 0 with that flag set is what the engine reads as
+     * pool-scoped — so the tool reported success and put the node in a graph no project saves.
+     *
+     * A model reached it by ordinary reasoning, in as many words: "device should be device #0
+     * since it was added first in the chain". That is a POSITION. Positions start at 0, ids
+     * start at 1, and every device-taking tool here wants the id. A tool that accepts a
+     * plausible wrong value and reports success is worse than one that fails, because the next
+     * call is made with more confidence.
+     */
+    let zero = session.execute(&ToolCall {
+        tool: "patcher_node".into(),
+        args: json!({ "track": 0, "device": 0, "action": "add", "type": "euclidean" }),
+    });
+    assert!(!zero.ok, "device 0 must be refused, not sent: {zero:?}");
+    let why = format!("{zero:?}");
+    assert!(why.contains("observe"),
+            "the refusal has to say where a real id comes from — a model that is only told 'no' \
+             tries the next plausible number: {why}");
+
+    let add = session.execute(&ToolCall {
+        tool: "patcher_node".into(),
+        args: json!({ "track": 0, "device": 10, "action": "add", "type": "euclidean" }),
+    });
+    assert!(add.ok, "patcher_node failed: {add:?}");
+
+    // The engine applies the edit asynchronously; save until the graph shows it, then assert.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let doc = loop {
+        let save = session.execute(&ToolCall { tool: "save".into(), args: json!({"name":"agpatch_out"}) });
+        assert!(save.ok, "save failed: {save:?}");
+        let doc = read_project(&engine.proj, "agpatch_out");
+        let n = track(&doc, 0)["device_chain"].as_array().unwrap().iter()
+            .filter_map(|d| d.get("patcher"))
+            .filter_map(|p| p["nodes"].as_array())
+            .map(|a| a.len()).sum::<usize>();
+        if n > 0 { break doc; }
+        assert!(Instant::now() < deadline,
+                "the node never reached either device's saved graph — a pool-scoped edit saves as \
+                 zero nodes everywhere, which is exactly what this looks like");
+        std::thread::sleep(Duration::from_millis(150));
+    };
+
+    let devices = track(&doc, 0)["device_chain"].as_array().unwrap().clone();
+    let nodes_of = |id: u64| -> usize {
+        devices.iter()
+            .find(|d| d["device_id"].as_u64() == Some(id))
+            .and_then(|d| d.get("patcher"))
+            .and_then(|p| p["nodes"].as_array())
+            .map_or(0, |a| a.len())
+    };
+    assert_eq!(nodes_of(10), 1,
+               "the euclidean belongs to device 10, which is the one the tool was given: {devices:?}");
+    assert_eq!(nodes_of(20), 0,
+               "device 20 was never named and must be untouched — a tool that edits whichever \
+                patcher it finds is worse than one that refuses: {devices:?}");
+}

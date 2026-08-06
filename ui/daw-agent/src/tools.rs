@@ -484,7 +484,7 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             params: json!({
                 "type": "object",
                 "properties": { "track": { "type": "integer", "minimum": 0 },
-                                "device": { "type": "integer", "minimum": 0 } },
+                                "device": { "type": "integer", "minimum": 1 } },
             }),
         },
         ToolSpec {
@@ -533,18 +533,21 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             description: "Add a node to a patcher device's graph, or link two of its nodes. A \
                           patcher is an EVENT graph: it generates or transforms notes and the \
                           track's instrument sounds them, so a patcher alone is silent. \
-                          `device` is the patcher device's id and is REQUIRED: without it the \
-                          edit lands in a shared pool that no project saves. You cannot \
-                          currently discover device ids yourself — ask the person which device \
-                          the patcher is, or work on one they have named. Guessing 0 is wrong \
-                          more often than not.",
+                          `device` is the patcher device's id and is REQUIRED: without the right \
+                          one the edit lands in a shared pool that no project saves. Take it from \
+                          the track's `devices:` line in the observation, which lists each \
+                          device's real id. It is NOT the device's position in the chain, and it \
+                          is never 0. A device you have just ADDED is not in the observation you \
+                          are holding — call `observe` again to learn its id.",
             params: json!({
                 "type": "object",
                 "required": ["track", "device", "action"],
                 "properties": {
                     "track": { "type": "integer", "minimum": 0 },
-                    "device": { "type": "integer", "minimum": 0,
-                                "description": "The patcher device's id, from the chain." },
+                    "device": { "type": "integer", "minimum": 1,
+                                "description": "The patcher device's id from the observation's \
+                                                `devices:` line — NOT its position in the chain. \
+                                                Ids start at 1." },
                     "action": { "type": "string", "enum": ["add", "link", "remove"] },
                     "type": { "type": "string",
                               "enum": ["kernel", "euclidean", "passthru", "audio", "lfo",
@@ -566,7 +569,7 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
                 "type": "object",
                 "required": ["track", "device"],
                 "properties": { "track": { "type": "integer", "minimum": 0 },
-                                "device": { "type": "integer", "minimum": 0 } },
+                                "device": { "type": "integer", "minimum": 1 } },
             }),
         },
         ToolSpec {
@@ -578,7 +581,7 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
                 "type": "object",
                 "required": ["track", "device", "position"],
                 "properties": { "track": { "type": "integer", "minimum": 0 },
-                                "device": { "type": "integer", "minimum": 0 },
+                                "device": { "type": "integer", "minimum": 1 },
                                 "position": { "type": "integer", "minimum": 0 } },
             }),
         },
@@ -590,7 +593,7 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
                 "type": "object",
                 "required": ["track", "device", "on"],
                 "properties": { "track": { "type": "integer", "minimum": 0 },
-                                "device": { "type": "integer", "minimum": 0 },
+                                "device": { "type": "integer", "minimum": 1 },
                                 "on": { "type": "boolean" } },
             }),
         },
@@ -649,7 +652,7 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
                 "type": "object",
                 "required": ["track", "device", "value"],
                 "properties": { "track": { "type": "integer", "minimum": 0 },
-                                "device": { "type": "integer", "minimum": 0 },
+                                "device": { "type": "integer", "minimum": 1 },
                                 "source": { "type": "integer", "minimum": 0 },
                                 "value": { "type": "number", "minimum": 0, "maximum": 1 } },
             }),
@@ -1093,6 +1096,26 @@ fn patcher_node(handle: &EngineHandle, args: &Value) -> ToolResult {
             "patcher_node needs \"track\" and \"device\" — without the device id the edit lands \
              in a shared pool that no project saves");
     };
+    /*
+     * ZERO IS NOT A DEVICE ID. IT IS THE ABSENCE OF ONE, and it used to be accepted.
+     *
+     * The wire packs the device into 15 bits with a "has device" flag above them, and 0 with
+     * the flag set is what the engine reads as pool-scoped — the very thing this tool's own
+     * description warns about. So `device: 0` was sent, answered `sent: true`, and put the node
+     * in a graph no project saves.
+     *
+     * A model reached it by ordinary reasoning: "device should be device #0 since it was added
+     * first in the chain". That is a POSITION, and positions start at 0 while ids start at 1.
+     * The refusal says so, because a tool that accepts a plausible wrong value and reports
+     * success teaches exactly the wrong lesson — the next call is made with more confidence.
+     */
+    if device == 0 {
+        return ToolResult::err(
+            "device 0 is not a device id — it is what \"no device\" means, and the edit would go \
+             to a shared pool that no project saves. Ids start at 1 and are NOT chain positions: \
+             read them from the track's `devices:` line in the observation. If you just added \
+             this device, call `observe` again — the shape you are holding predates it");
+    }
     if device > 0x7FFF {
         return ToolResult::err("a patcher device id must fit 15 bits");
     }

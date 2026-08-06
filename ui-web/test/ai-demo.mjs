@@ -34,6 +34,8 @@
  */
 
 import { chromium } from 'playwright';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { startStack } from './stack.mjs';
 
 const KEY = process.env.ANTHROPIC_API_KEY || process.env.DAW_ENV_FILE;
@@ -112,7 +114,14 @@ const askFor = async (prompt, moved, ms = 120000) => {
     if (n !== last) spoke = true;
     quiet = n === last ? quiet + 2 : 0;
     last = n;
-    if (moved(before, now) && quiet >= 4) break;
+    /*
+     * `spoke &&` HERE TOO. This break had the same flaw the one below is documented for, and
+     * it stayed hidden because it needs a `moved` that is trivially true to show: with
+     * `() => true`, the loop can satisfy "the song moved and it has gone quiet" during the
+     * five to fifteen seconds BEFORE the model's first token, and return a 4-second turn in
+     * which nothing happened. Two checks failed on a model that had not been asked yet.
+     */
+    if (spoke && moved(before, now) && quiet >= 4) break;
     /*
      * "STOPPED TALKING" ONLY COUNTS ONCE IT HAS STARTED.
      *
@@ -236,6 +245,97 @@ const slots = await page.evaluate(() => {
 });
 check(slots > 0, 'and the file is in it — a slot, not just an accepted command',
       `${slots} slot(s)`);
+
+// ---------------------------------------------------------------------------
+// THE PATCHER, WHICH WAS UNANSWERABLE UNTIL THE OBSERVATION CARRIED DEVICE IDS.
+//
+// `patcher_node` has existed for a while and could not be used: it takes a `device`, and
+// nothing the agent could read ever reported one. The engine publishes chains as diffs on a
+// SINGLE-CONSUMER ring, so the agent cannot go and read them either — a second consumer would
+// take entries away from the browser's rack. The sidecar's drainer accumulates them and now
+// hands that accumulation to the observation.
+//
+// THE FIRST VERSION OF THIS CHECK PROVED NOTHING, and the negative control is what said so.
+// It asked for a patcher on an EMPTY track and asserted a node existed anywhere. Device ids
+// start at 1, so the model guessing "device 1" is right without reading anything — and with the
+// device list forcibly disabled the check still passed. A check that passes with its subject
+// removed is measuring the model's luck.
+//
+// So: a device is put on the track FIRST, which pushes the patcher to id 2, and the assertion
+// is on `owner` — which device's graph the node is actually in. A guess of 1 now lands the node
+// in the audio patcher and the event patcher's graph stays empty, which fails.
+//
+// The filler is an AUDIO patcher because a chain holds one instrument and the event patcher the
+// model is about to add must be allowed to land.
+// ---------------------------------------------------------------------------
+await run('new aipatch');
+await page.waitForTimeout(1500);
+const filler = await page.evaluate(() => window.__uni.addDevice(0, 'patcher audio'));
+check(filler === true, 'a filler device takes id 1, so the patcher cannot be guessed at',
+      String(filler));
+await page.waitForTimeout(1500);
+
+const patch = await askFor(
+  'put an event patcher on track 0 and add a euclidean node to it',
+  () => true, 150000);
+
+// The EVENT patcher's id, read from the chain rather than assumed — kind 0 is patcher event.
+const eventId = await page.evaluate(() => {
+  const c = window.__uni.chains()[0];
+  const d = c && c.devices && c.devices.find((x) => x.kind === 0);
+  return d ? d.id : -1;
+});
+check(eventId > 1, 'the model added an event patcher, and it is not device 1',
+      `device ${eventId} :: ${patch.said.slice(-200)}`);
+
+/*
+ * ASK THE SAVED PROJECT, NOT THE PUBLISHED GRAPH.
+ *
+ * Two wrong instruments were tried first and each gave a confident wrong answer:
+ *
+ *   `nodes()` has no `owner` at all — id, type and config only — so it read `[null]`.
+ *
+ *   `patcher()` has owner, but publishes whichever graph the UI has OPEN, and with none
+ *   open that is the shared POOL. It read `[0, 0, 0]`, which is indistinguishable from an
+ *   agent writing pool-scoped edits — and that is what I concluded, wrongly. A deterministic
+ *   test with no model in it (daw-agent's `agent_patcher_edits_are_device_scoped`) shows the
+ *   tool scopes correctly; the measurement was the broken part.
+ *
+ * The device's OWN graph is what gets written to disk, and a pool-scoped edit saves as zero
+ * nodes on every device. So the file answers the question the published graph cannot, which is
+ * the same reason patcher-device.mjs reads it.
+ */
+/*
+ * NEGATIVE CONTROL RUN. With the sidecar's device lookup forced to return nothing, this check
+ * FAILS — device 2 holds 0 nodes and the transcript shows the model hunting instead: it called
+ * `device_params {"device": 1}`, got the Identity plugin back, and never wired anything.
+ *
+ * Worth stating because the FIRST version of this check passed with the lookup blinded. It asked
+ * for a patcher on an empty track and accepted a node anywhere, so "the model guessed 1 and was
+ * right" satisfied it. The filler device and the saved-project reading are what give it teeth.
+ */
+await run('save aipatch');
+await page.waitForTimeout(2500);
+const savedGraph = (() => {
+  try {
+    const doc = JSON.parse(readFileSync(join(stack.dir, 'aipatch.uniproj.json'), 'utf8'));
+    const t0 = (doc.tracks || []).find((t) => t.track_id === 0) || {};
+    const dev = (t0.device_chain || []).find((d) => d.device_id === eventId);
+    const st = dev && (dev.patcher_state || dev.patcher);
+    return { found: !!dev, nodes: (st && st.nodes ? st.nodes.length : 0),
+             // EVERY device's count, because "device 2 has none" and "nothing was added
+             // anywhere" and "it went to device 1" are three different failures and the
+             // first reading cannot tell them apart.
+             chain: (t0.device_chain || []).map((d) => {
+               const g = d.patcher_state || d.patcher;
+               return `${d.device_id}:${d.kind}:${g && g.nodes ? g.nodes.length : 0}n`;
+             }) };
+  } catch (e) { return { found: false, nodes: 0, chain: [String(e).slice(0, 120)] }; }
+})();
+check(savedGraph.nodes > 0,
+      "and the node is in THAT device's own saved graph — it read the id, it did not guess",
+      `${patch.secs}s, device ${eventId} holds ${savedGraph.nodes} node(s); `
+      + `chain ${JSON.stringify(savedGraph.chain)}; said: ${patch.said.slice(-500)}`);
 
 // ---------------------------------------------------------------------------
 // It edits the song it is looking at, rather than starting from a blank one.

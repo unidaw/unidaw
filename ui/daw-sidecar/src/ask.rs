@@ -251,11 +251,16 @@ it has, the beats it spans and the pitch range it covers. To see actual notes, \
 call `observe` with `from_beat` for the part you are working on. A track marked \
 TRUNCATED has more notes than the engine publishes, so do not conclude it ends \
 where the count stops.\n\n\
+A track's `devices:` line lists its chain in audio order with each device's ID. \
+Those IDs are what `patcher_node`, `device_params`, `set_bypass`, `remove_device` \
+and `modulate` mean by `device` — take them from there rather than guessing or \
+asking. A track with no `devices:` line has an empty chain.\n\n\
 The shape is taken before your first tool call and is NOT refreshed as you work \
-— call `observe` again after edits that matter.";
+— call `observe` again after edits that matter. A device you just ADDED will not \
+be in it: add it, then `observe` to learn its id.";
 
 /// The half that does: the song as it stands, plus a warning about the past.
-fn shape_block(session: &AgentSession, has_history: bool) -> String {
+fn shape_block(session: &AgentSession, has_history: bool, devices: &DeviceLookup) -> String {
     // The TEXT form, and the SHAPE rather than every note.
     //
     // This used to embed the whole song as JSON — ~114 bytes per note, which is
@@ -263,7 +268,24 @@ fn shape_block(session: &AgentSession, has_history: bool) -> String {
     // silently. The same song's shape is under a kilobyte and answers the
     // question the prompt above actually poses ("which track is the bass")
     // better than twenty thousand note objects do.
-    let obs = session.observe().to_text();
+    /*
+     * THE CHAINS ARE FILLED IN HERE, and they cannot come from `observe` itself.
+     *
+     * The engine publishes device chains as DIFFS on a single-consumer ring — whoever drains
+     * it takes those entries away from everybody else. daw-agent attaching its own consumer
+     * would silently steal half the browser's chain updates, which is a rack that draws a
+     * device short and never corrects itself. The sidecar's drainer already accumulates them;
+     * this asks that accumulation rather than competing with it.
+     */
+    let mut obs = session.observe();
+    for t in 0..obs.tracks.len() {
+        let track_id = obs.tracks[t].track_id;
+        let list = devices(track_id);
+        if !list.is_empty() {
+            obs.attach_devices(track_id, list);
+        }
+    }
+    let obs = obs.to_text();
     let stale = if has_history {
         // Said out loud because the two contexts disagree by design. Earlier
         // turns describe the song at the moment they were spoken; the person has
@@ -301,11 +323,18 @@ fn mark_cacheable(msg: &mut Value) {
 }
 
 /// One prompt, to as many tool round trips as it takes.
+/// How the caller answers "what is on track N".
+///
+/// A closure rather than a store, because the store is the sidecar's and this crate must not
+/// grow a dependency on it just to read a list.
+pub type DeviceLookup<'a> = dyn Fn(u32) -> Vec<daw_agent::DeviceView> + 'a;
+
 pub fn run(
     session: &AgentSession,
     prompt: &str,
     tx: &Sender<Progress>,
     history: &std::sync::Mutex<History>,
+    devices: &DeviceLookup,
 ) {
     let Some(key) = api_key() else {
         let _ = tx.send(Progress::Failed(
@@ -336,7 +365,7 @@ pub fn run(
     let tools = tools_json(session);
     let system = json!([
         { "type": "text", "text": INSTRUCTIONS, "cache_control": { "type": "ephemeral" } },
-        { "type": "text", "text": shape_block(session, past > 0) },
+        { "type": "text", "text": shape_block(session, past > 0, devices) },
     ]);
 
     // The running conversation. Tool results have to come back in the same
