@@ -132,7 +132,7 @@
           }
         },
         {
-          "device_id": 0,
+          "device_id": 2,
           "kind": "sampler",
           "capability_mask": 4,
           "patcher_node_id": 0,
@@ -145,12 +145,12 @@
         {
           "link_id": 1,
           "src": {
-            "device_id": 0,
+            "device_id": 2,
             "source_id": 3,
             "kind": "lfo"
           },
           "dst": {
-            "device_id": 0,
+            "device_id": 2,
             "target_id": 7,
             "kind": "vst_param",
             "param_uid16": "00112233445566778899aabbccddeeff"
