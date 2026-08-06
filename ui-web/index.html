@@ -8207,6 +8207,31 @@ addEventListener('keydown', (e) => {
   }
   if (k === '[') { state.octave = Math.max(0, state.octave - 1); return done(); }
   if (k === ']') { state.octave = Math.min(9, state.octave + 1); return done(); }
+  /*
+   * NOTE COLUMNS, with shift — beside the octave keys because they are the same kind of thing:
+   * a property of how you are ENTERING notes rather than of the song.
+   *
+   * A second column is what makes a track polyphonic, and it is also how LEGATO is written: two
+   * columns feed a monophonic instrument two overlapping note-ons on one channel, which is what
+   * makes it glide instead of retrigger. Overlap INSIDE one column cannot express that — the OFF
+   * row is a setter with one implicit target, so with two notes sounding it cannot say which one
+   * it ends. Between columns there is no ambiguity, because each column still has at most one
+   * thing sounding.
+   *
+   * The count was reachable only by typing `columns N` at the console, which is a capability
+   * nobody clicking around can find. It is still GLOBAL — every track shows the same number —
+   * and the per-track version is a renderer change, because the cell buffer is
+   * `trackCount * columns` and a ragged grid moves cursor maths, header layout and pooling.
+   * That is tracked separately rather than half-done here.
+   */
+  if (k === '{' || (k === '[' && e.shiftKey)) {
+    uniNoteColumns(Math.max(1, (state.noteColumnsWanted || 1) - 1));
+    return done();
+  }
+  if (k === '}' || (k === ']' && e.shiftKey)) {
+    uniNoteColumns(Math.min(MAX_NOTE_COLUMNS, (state.noteColumnsWanted || 1) + 1));
+    return done();
+  }
   // Edit step: how far the cursor advances after writing a note. 0 stays put,
   // which is how you stack a chord by hand. Essential for entering a rhythm and
   // previously visible in the chrome with no way to change it.

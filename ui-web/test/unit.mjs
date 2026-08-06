@@ -1860,6 +1860,10 @@ const KEY_OPS = {
   '-': { cmd: 'oct' }, '_': { cmd: 'oct' }, '+': { cmd: 'oct' }, '=': { cmd: 'oct' },
   '/': { cmd: 'oct' }, '.': { cmd: 'oct' }, ',': { cmd: 'oct' }, ';': { cmd: 'oct' },
   a: { nav: true },            // note-off in the pitch column; `note` covers writes
+  // NOTE COLUMNS. A second column is what makes a track polyphonic, and it is how a slide is
+  // written — two columns give a monophonic instrument two overlapping note-ons on one channel,
+  // which inside a single column cannot be said at all. `columns N` is the other route.
+  '{': { cmd: 'columns' }, '}': { cmd: 'columns' },
 };
 
 /** The Alt combos, matched on e.code because Option is a compose key on macOS. */

@@ -90,7 +90,11 @@ upper   q 2 w 3 e r 5 t 6 y 7 u i    q = C in (octave)
 At `oct 4`, `z` is C-3 and `q` is C-4 (MIDI 60).
 
 **`[` and `]` move the entry octave** down and up (0–9), and `octave 3` in the console sets it
-outright. The breadcrumb shows the current one. This is the first thing anybody asks after they
+outright. **`shift+]` and `shift+[` add and remove a NOTE COLUMN** — a second column makes a track
+polyphonic, and it is also how you write a slide: two columns feed a monophonic instrument two
+overlapping note-ons on one channel, which makes it glide rather than retrigger. Inside a single
+column that cannot be expressed at all, because the next note-on IS the previous note's end.
+(The count is currently global — every track shows the same number.) The breadcrumb shows the current one. This is the first thing anybody asks after they
 type a note and it comes out an octave from where they wanted it — and both rows move together,
 so `z` and `q` stay one octave apart.
 
