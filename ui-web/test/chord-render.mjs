@@ -35,7 +35,7 @@ import { writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startStack } from './stack.mjs';
-import { readWav, rmsBetween } from './wav.mjs';
+import { envelope, readWav, rmsBetween } from './wav.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const RATE = 44100;
@@ -124,6 +124,27 @@ const chordSaid = await run('chord 1 triad');
 await page.waitForTimeout(1200);
 
 /*
+ * AND A STRUMMED ONE, WELL AFTER THAT.
+ *
+ * The strum is the headline of the runbook's chord section and nothing measured it. `spread` was
+ * decoded away below the UI until this week, so "the model asked for a strum" and "the song
+ * contains one" were separate claims — and even once it crossed the wire, that it CHANGES WHAT
+ * YOU HEAR was still unasserted.
+ *
+ * 480000 nanoticks is a quarter of a second at 120 BPM: long enough that the voices arriving one
+ * after another is a shape in the envelope rather than a rounding difference, and short enough
+ * to still read as one chord.
+ *
+ * `chord <degree> <quality> <inv> <oct> <spread> <ht> <hv>` — the same verb, one argument more.
+ */
+// Row 40, not 64. A row is half a second here, so 64 put the strum at 32s in a 24s render and
+// its window read as silence — the same "window past the end" trap the block chord already has a
+// guard for, which is why that guard is now extended to cover this one too.
+await run('goto 40 0');
+const strumSaid = await run('chord 1 triad 0 4 480000 0 0');
+await page.waitForTimeout(1200);
+
+/*
  * WHERE THEY ACTUALLY LANDED, ASKED RATHER THAN COMPUTED.
  *
  * `goto 32` is thirty-two rows in the CURRENT zoom's row space, and a row is a different
@@ -149,9 +170,22 @@ check(placed.notes.length >= 1, 'the note is in the clip',
 check(placed.chords.length >= 1, 'and the chord is in the clip as a chord EVENT, not as notes',
       `${JSON.stringify(placed.chords)} — said ${JSON.stringify(chordSaid).slice(-70)}`);
 const noteTick = placed.notes.length ? placed.notes[0].tick : 0;
-const chordTick = placed.chords.length ? placed.chords[0].tick : -1;
+/*
+ * SORTED, AND THE STRUM IDENTIFIED BY ITS SPREAD rather than by its position in the list. The
+ * order `chords()` returns is the engine's and not a promise; picking [0] and [1] would silently
+ * compare the block chord against itself the day that changes, and the check would pass.
+ */
+const sorted = [...placed.chords].sort((a, b) => a.tick - b.tick);
+const blockChord = sorted.find((c) => !c.spread);
+const strumChord = sorted.find((c) => c.spread > 0);
+const chordTick = blockChord ? blockChord.tick : -1;
+const strumTick = strumChord ? strumChord.tick : -1;
 check(chordTick > noteTick, 'and they are at different ticks, so one window cannot catch both',
       `note ${noteTick}, chord ${chordTick}`);
+check(!!strumChord && strumTick > chordTick,
+      'the strummed chord is there too, later, and carries its spread',
+      `${JSON.stringify(sorted.map((c) => ({ tick: c.tick, spread: c.spread })))} — said `
+      + `${JSON.stringify(strumSaid).slice(-70)}`);
 
 await run('save chordsong');
 await page.waitForTimeout(2000);
@@ -193,6 +227,7 @@ if (rendered) {
   const secOf = (tick) => (tick / 960000) * 0.5;
   const noteAt = secOf(noteTick);
   const chordAt = secOf(chordTick);
+  const strumAt = secOf(strumTick);
   console.log(`  note at ${noteAt.toFixed(2)}s, chord at ${chordAt.toFixed(2)}s`);
   /*
    * THE WINDOW HAS TO BE INSIDE THE FILE.
@@ -238,6 +273,67 @@ if (rendered) {
     check(chordLevel > 0.005, 'and the CHORD sounds too',
           `${chordLevel.toFixed(5)} against the note's ${noteLevel.toFixed(5)}`);
   }
+}
+
+/*
+ * DOES A STRUM SOUND DIFFERENT FROM A BLOCK CHORD?
+ *
+ * The two chords are the same degree, quality, inversion and octave. The ONLY difference is
+ * `spread`, so anything that separates them in the audio is the strum and nothing else.
+ *
+ * MEASURED AS RISE TIME, not as level. A block chord's voices all start together, so it reaches
+ * its peak within a bucket or two; a strummed one arrives voice by voice across `spread` and
+ * climbs over that time. Comparing PEAKS would prove nothing — both are the same three notes and
+ * end up equally loud, which is exactly why "the strum is on the wire" was as far as the earlier
+ * checks could go.
+ */
+if (rendered) {
+  const { mono, rate } = rendered;
+  const per = 0.01;
+  const env = envelope(mono, rate, per);
+  /**
+   * How long the window SOUNDS for, in seconds.
+   *
+   * DURATION, not rise time. My first metric was time-to-peak, on the theory that a strum climbs
+   * as its voices accumulate — and the envelopes say otherwise. Both chords are flat at 0.144
+   * and the difference is how LONG that lasts:
+   *
+   *     block   0.144 x15 buckets then silence      0.15s
+   *     strum   0.144 x40 buckets then silence      0.40s
+   *
+   * Which is the strum stated plainly: the last voice starts `spread` after the first, so the
+   * chord goes on sounding for `spread` longer. Rise time saw 0.100 against 0.120 and called it
+   * no difference, and it was measuring the wrong feature of the right audio.
+   */
+  const soundsFor = (at0, span) => {
+    const lo = Math.max(0, Math.round(at0 / per));
+    const hi = Math.min(env.length, Math.round((at0 + span) / per));
+    let n = 0;
+    for (let i = lo; i < hi; i++) if (env[i] > 0.005) n++;
+    return n * per;
+  };
+  const at = (tick) => (tick / 960000) * 0.5;
+  const dur = mono.length / rate;
+  check(at(strumTick) + 1.5 < dur,
+        'the strummed chord is inside the rendered take too',
+        `its window ends at ${(at(strumTick) + 1.5).toFixed(2)}s of a ${dur.toFixed(2)}s render — `
+        + `past the end reads as silence and blames the strum`);
+
+  const blockFor = soundsFor(at(chordTick), 1.5);
+  const strumFor = soundsFor(at(strumTick), 1.5);
+  const SPREAD_S = 480000 / 960000 * 0.5;            // 480000 nanoticks at 120 BPM = 0.25s
+  console.log(`  sounds for: block ${blockFor.toFixed(2)}s   strummed ${strumFor.toFixed(2)}s ` +
+              `(spread is ${SPREAD_S.toFixed(2)}s)`);
+  /*
+   * The two chords are the same degree, quality, inversion and octave; `spread` is the only
+   * difference, so the extra duration is the strum and nothing else. Compared against the spread
+   * rather than "is it bigger" — bigger by any amount would also pass on a chord that simply
+   * rang longer for an unrelated reason.
+   */
+  check(Math.abs((strumFor - blockFor) - SPREAD_S) < 0.08,
+        'A STRUM IS AUDIBLY A STRUM — it sounds for exactly `spread` longer than the block chord',
+        `block ${blockFor.toFixed(2)}s, strummed ${strumFor.toFixed(2)}s, difference `
+        + `${(strumFor - blockFor).toFixed(2)}s against a spread of ${SPREAD_S.toFixed(2)}s`);
 }
 
 check(errors.length === 0, 'and nothing threw in the browser', errors.slice(0, 2).join(' | '));
