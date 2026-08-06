@@ -243,8 +243,11 @@ d=json.load(open(sys.argv[1]))
 #
 # NO BACKTICKS IN HERE. This block sits inside python3 -c \"...\", a DOUBLE-QUOTED shell string,
 # so a backtick opens command substitution: the first version of this comment quoted the field
-# names and the shell tried to run `placement.adds` and `mutes`, printing 'command not found'
-# twice per call. Harmless only by luck - the substitutions came back empty and left the comment
+# names -- in BACKTICKS, inside this same double-quoted string -- and the shell duly tried to run
+# them, printing 'command not found' twice per call. The comment WARNING about backticks was
+# written using backticks, so it re-created the bug it documents, on every single call, and
+# survived the fix that was supposed to remove it. Prose about code is still code to the shell.
+# Harmless only by luck - the substitutions came back empty and left the comment
 # a comment.
 print(sum(len(c.get('chords',[])) for c in d.get('clips',[]))
     + sum(len(pl.get('chords',[])) for t in d.get('tracks',[]) for pl in t.get('placements',[])))" "$f" 2>/dev/null || echo 0
@@ -302,7 +305,17 @@ step "load a sample"      "Load demo_kick.wav into the sampler on the track name
 step "write a bassline"   "Write a simple four-bar bassline on the track named Bass, root notes on the beat." n_notes
 step "the harmony lane"   "Set the key to C minor from the start of the song."   h_harmony
 step "lane quantize"      "Quantize the Bass track to a 1/16 grid at full strength." h_quantize
-step "a drum beat"        "Add a track called Drums with a sampler on it, and write a four-bar drum beat: kick on every beat, snare on 2 and 4." n_notes
+# MEASURED BY WHETHER IT CAN SOUND, not by whether notes appeared. This step passed for weeks
+# while producing a SILENT track: the model adds the sampler, writes sixteen notes, and n_notes
+# duly reports 16 -> 32. Today it also tried load_sample twice, got ok=false both times because it
+# GUESSED at file names, said "you'll need to load your own drum samples later", wrote the notes
+# anyway — and still scored a pass. A rehearsal that scores the demo's centrepiece on note count
+# is agreeing with the model's own workaround.
+#
+# THIS STEP IS EXPECTED TO FAIL UNTIL THE AGENT CAN DISCOVER WHAT SAMPLES EXIST. That is the point
+# of putting it here: the failure is true, and the step that lies is worse than the step that
+# fails. The prompt deliberately does NOT name a file, because Jaakko will not name one either.
+step "a drum beat"        "Add a track called Drums with a sampler on it, and write a four-bar drum beat: kick on every beat, snare on 2 and 4." n_sounding
 step "a chord progression" "On a new track called Keys, write a four-bar I-V-vi-IV chord progression, strummed." n_chords
 step "the patcher"        "Put a patcher device on the Bass track."                 n_patcher
 
