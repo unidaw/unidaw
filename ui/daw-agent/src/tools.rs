@@ -225,13 +225,18 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
         // quieter" had nothing under it and the model had to say so.
         ToolSpec {
             name: "delete_note",
-            description: "Delete the note at a tick on a track. Ticks are absolute nanoticks;                           960000 per quarter note.",
+            description: "Delete the note at a tick on a track. Ticks are absolute nanoticks; \
+                          960000 per quarter note. `column` picks the note COLUMN when the track \
+                          has more than one — column 0 is the default and is what a track with a \
+                          single column always uses.",
             params: json!({
                 "type": "object",
                 "required": ["track", "tick"],
                 "properties": {
                     "track": { "type": "integer", "minimum": 0 },
                     "tick": { "type": "integer", "minimum": 0 },
+                    "column": { "type": "integer", "minimum": 0, "maximum": 255,
+                                "description": "Note column / voice lane. Default 0." },
                 },
             }),
         },
@@ -3889,11 +3894,29 @@ fn delete_note(handle: &EngineHandle, args: &Value) -> ToolResult {
     let Some(tick) = arg_u64(args, "tick") else {
         return ToolResult::err("delete_note needs \"tick\"");
     };
+    /*
+     * WHICH COLUMN. This sent none, so `blank` left the flag word at zero and every delete this
+     * tool ever made addressed column 0 — on a track with two columns it removed a DIFFERENT note
+     * and left the one that was asked for.
+     *
+     * The engine reads the column off the low byte of flags (`applyDeleteNote`, same mask as the
+     * write), and `edit_column` is the one owner of that field: it REFUSES rather than clamps,
+     * because bit 15 of the same word is the local-edit scope and a truncation there turns a
+     * document edit into a placement override.
+     *
+     * Found the same day as ten instances of it in the web UI. The rule keeps being re-derived
+     * per call site instead of asked of the reader.
+     */
+    let column = match daw_bridge::layout::edit_column(arg_u64(args, "column").unwrap_or(0)) {
+        Ok(c) => c,
+        Err(e) => return ToolResult::err(e),
+    };
     let mut p = blank(UiCommandType::DeleteNote);
+    p.flags = column;
     p.track_id = track as u32;
     p.note_nanotick_lo = (tick & 0xffff_ffff) as u32;
     p.note_nanotick_hi = (tick >> 32) as u32;
-    send_edit(handle, p, json!({ "deleted": { "track": track, "tick": tick } }))
+    send_edit(handle, p, json!({ "deleted": { "track": track, "tick": tick, "column": column } }))
 }
 
 /// Append a track. No arguments: v1 of AddTrack always appends, because

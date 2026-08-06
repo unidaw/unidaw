@@ -4166,3 +4166,51 @@ fn read_notes(session: &AgentSession, engine: &Engine, tag: &str) -> Vec<(i64, i
         .map(|n| (n["pitch"].as_i64().unwrap_or(-1), n["column"].as_i64().unwrap_or(0)))
         .collect()).unwrap_or_default()
 }
+
+/// DELETE THE NOTE IN THE SECOND COLUMN, and leave the first column's alone.
+///
+/// `delete_note` sent no column, so `blank` left the flag word at zero and every delete it ever
+/// made addressed column 0. On a track with one column — every project until this week — that is
+/// invisible. On a track with two it removes a DIFFERENT note and leaves the one that was asked
+/// for, reporting success either way.
+///
+/// The same defect was found the same day in ten operations in the web UI. The rule keeps being
+/// re-derived at each call site instead of being asked of the reader, which is why the field has
+/// one owner now (`edit_column`) and why this test names the survivor rather than counting.
+#[test]
+fn delete_note_removes_the_note_in_the_column_it_was_given() {
+    let (engine, session) = start_engine("agdelcol");
+
+    // Two notes at the SAME tick, one per column — so a delete that addresses the wrong column
+    // cannot succeed by accident of position. Only the column distinguishes them.
+    for (pitch, column) in [(60u8, 0u64), (67, 1)] {
+        let a = session.execute(&ToolCall {
+            tool: "add_notes".into(),
+            args: json!({"track":0,"pitches":[pitch],"start":0,"step":Q,"duration":Q/2,
+                         "column":column}),
+        });
+        assert!(a.ok, "add_notes into column {column} failed: {a:?}");
+    }
+    let before = read_notes(&session, &engine, "agdelcol_before");
+    assert_eq!(before.len(), 2, "fixture: one note in each column: {before:?}");
+
+    let d = session.execute(&ToolCall {
+        tool: "delete_note".into(),
+        args: json!({"track":0,"tick":0,"column":1}),
+    });
+    assert!(d.ok, "delete_note failed: {d:?}");
+
+    let after = read_notes(&session, &engine, "agdelcol_after");
+    assert_eq!(after.len(), 1, "exactly one note should go: {after:?}");
+    assert_eq!(after[0], (60, 0),
+               "IT DELETED THE WRONG NOTE. Asked for column 1 and column 0's note is the one \
+                missing, which is what a delete that never names its column always does: {after:?}");
+
+    // And the default is still column 0, so every existing caller keeps working.
+    let d0 = session.execute(&ToolCall {
+        tool: "delete_note".into(), args: json!({"track":0,"tick":0}),
+    });
+    assert!(d0.ok, "delete_note without a column failed: {d0:?}");
+    let empty = read_notes(&session, &engine, "agdelcol_empty");
+    assert!(empty.is_empty(), "the default column 0 delete should take the last note: {empty:?}");
+}

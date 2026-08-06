@@ -2260,7 +2260,12 @@ const OP_REGISTRY = {
   note:      { cli: 'note',        agent: 'add_notes' },
   play:      { cli: 'play',        agent: 'transport' },
   // Covered on two.
-  del:       { cli: 'delete-note', agent: null, why: 'gap' },
+  // NOT A GAP — a mismapping. The console's `del` deletes the note at the CURSOR; the agent's
+  // `delete_note` deletes the note at an explicit (track, tick, column), which is how every
+  // cursor op is translated for a surface that has no cursor. It is driven against a live engine
+  // in engine_e2e. Recorded here the same way the other corrections were: the capability EXISTED
+  // and the record was wrong, which is the opposite of re-labelling a gap as exempt.
+  del:       { cli: 'delete-note', agent: 'delete_note' },
   tempo:     { cli: 'set-tempo',   agent: 'set_tempo' },
   // set_mixer takes gain_db, pan, mute and solo — these three were recorded as gaps while
   // the tool that does them was already in the manifest. A stale gap entry is read as a
@@ -2527,6 +2532,42 @@ const OP_REGISTRY = {
  *                 RequestDeviceParams — an engine change, and backend's call. Raised with them.
  *                 Recorded here so it stays visible as a HOLE rather than passing as exempt.
  */
+/*
+ * ── WHERE THIS STANDS 2026-08-07, 02:00 ─────────────────────────────────────────────────────
+ *
+ * The lists began the night at 9 and 11. Everything removed since was BUILT and DRIVEN against a
+ * live engine, or was a mismapping corrected with evidence — `shared`, `new`, `patch`, `transpose`
+ * and `del`. Nothing was moved by re-describing it.
+ *
+ * What is left is three kinds, and only the last is undecided:
+ *
+ * VIEW-ONLY, the owner's own exemption:
+ *   `clear` clears the console LOG; there is no log on the other surfaces.
+ *   `columns` is how many note columns the tracker DRAWS. It sends nothing to the engine and the
+ *   count is derived from the highest column any note uses, so it needs no persistence. The
+ *   capability behind it is not missing: add_notes, delete_note and transpose all take a column.
+ *   `editor` opens a plugin's own GUI window. daw-cli has it; a headless agent asking for a
+ *   window on somebody's screen is a different proposition.
+ *
+ * BLOCKED ON THE ENGINE, which is not an exemption:
+ *   `mods` — the READ. Both surfaces can create modulation and neither can say what exists.
+ *   Modulation reaches the browser only as chain diffs on the single-consumer ring, and control.rs
+ *   has twenty read_* functions and no read_mod_links. Needs a published region or a
+ *   RequestDeviceParams-style mirror. Raised with backend; theirs to rule on.
+ *
+ * UNDECIDED, and stated as a question rather than parked as exempt:
+ *   `copy`, `cut`, `paste`. These are the last cluster that could plausibly be built, and the
+ *   obstacle is not the ops — it is WHERE A CLIPBOARD LIVES. The agent has a session and could
+ *   hold one; daw-cli is a fresh process per invocation and would need a file somewhere, which is
+ *   a design decision with a persistence question attached, not a missing verb.
+ *
+ *   And the shape is probably wrong anyway. What a scriptable surface actually wants is not a
+ *   stateful clipboard but ONE op — duplicate(track, from, to, at) — which needs no state between
+ *   invocations, cannot go stale, and expresses in a single call what copy-then-paste expresses in
+ *   two plus a hidden buffer. `transpose` was built that way tonight for the same reason, and the
+ *   range shape worked. Proposed rather than built, because inventing a fourth clipboard-shaped
+ *   thing at 2am on the morning of a demo is how a good week ends badly.
+ */
 const CLI_GAP = ['clear', 'columns', 'copy', 'cut', 'paste',
                  'mods'];
 /** Ops with no agent tool today. Same rule. */
@@ -2584,7 +2625,7 @@ const CLI_GAP = ['clear', 'columns', 'copy', 'cut', 'paste',
  * verb, and an agent tool would add a caller without adding evidence.
  */
 const AGENT_GAP = ['clear', 'columns', 'copy', 'cut',
-                   'del', 'editor',
+                   'editor',
                    'paste', 'mods'];
 
 test('every dock command is in the op registry', () => {
