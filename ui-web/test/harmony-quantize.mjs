@@ -32,6 +32,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startStack } from './stack.mjs';
 import { readWav, envelope } from './wav.mjs';
+import { detectNotes, noteName } from './notes.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 let pass = 0, fail = 0;
@@ -88,7 +89,18 @@ const kitDev = await page.evaluate(() => {
   }
   return 1;
 });
-await run(`load-sample 0 ${kitDev} waveform_probe.wav`);
+/*
+ * A PITCHED SAMPLE, because this suite now asserts WHICH NOTES SOUND.
+ *
+ * It used `waveform_probe.wav`, which is the peak-pyramid probe asset: stepped level regions with
+ * no pitch in them at all. Against it the detector reported "A-4" for every note in both renders
+ * — a periodicity in the asset, not the note being played — and TWO of the three pitch checks
+ * passed vacuously on that: "the C# is gone" is trivially true when nothing was ever C#, and
+ * "everything is in C major" is trivially true of an A.
+ *
+ * `demo_pluck_c4.wav` is middle C with real harmonics, so a note played at 61 comes back as 61.
+ */
+await run(`load-sample 0 ${kitDev} demo_pluck_c4.wav`);
 await settle(2500);
 const slot = await page.evaluate((d) => {
   const k = window.__uni.samplerKitCached(0, d);
@@ -99,10 +111,23 @@ const slot = await page.evaluate((d) => {
 await run(`slot 0 ${kitDev} ${slot} keylow 36`);
 await run(`slot 0 ${kitDev} ${slot} keyhigh 96`);
 await run(`slot 0 ${kitDev} ${slot} root 60`);
-// `pitchtrack 1` — the slot TRANSPOSES with the note. A fixed-pitch slot plays the
-// same sample whatever key triggers it, which would make a snapped pitch and an
-// unsnapped one produce identical audio and the comparison below vacuous.
-await run(`slot 0 ${kitDev} ${slot} pitchtrack 1`);
+/*
+ * `pitchtrack 1000`, IN MILLI-UNITS — and it was `1` here, which is 0.001.
+ *
+ * The field is `pitch_track_milli`: 1000 is "transpose fully with the note", 0 is "play the
+ * sample at its own pitch whatever key triggers it". Setting 1 asked for a thousandth of a
+ * semitone per semitone, so the slot played every note at middle C — and the comment right above
+ * it said the opposite in capitals.
+ *
+ * That is what made the whole suite nearly vacuous. Its claim is that harmony quantize CHANGES
+ * WHAT YOU HEAR, and with the slot not transposing, re-pitching a note from C# to C moved the
+ * playback rate by 0.001 semitones — about six hundredths of a cent. The two renders differed by
+ * a handful of bytes, `Buffer.compare !== 0` passed, and nothing audible had happened at all.
+ *
+ * Found by asserting PITCHES instead of difference: the detector reported C-4 for a note the clip
+ * stores as C#, in both renders.
+ */
+await run(`slot 0 ${kitDev} ${slot} pitchtrack 1000`);
 await settle(1200);
 
 const zone = await page.evaluate(([d, s]) => {
@@ -217,6 +242,48 @@ const stillStored = await page.evaluate(() =>
 check(stillStored.includes(61),
       'and the note you typed is still the note that is stored — non-destructive',
       JSON.stringify(stillStored));
+
+/*
+ * WHAT PITCHES ACTUALLY SOUNDED — the assertion this suite could not make until there was a note
+ * detector.
+ *
+ * "The two renders differ" is satisfied by ANY difference: a gain change, a dropped note, a click.
+ * It says the flag did something and not that it did the right thing, and the whole claim of the
+ * harmony system is a claim about WHICH NOTES YOU HEAR.
+ *
+ * The song holds C# (61), which C major does not contain. So:
+ *
+ *   quantize OFF  ->  C# sounds, because the note is played as typed
+ *   quantize ON   ->  C or D sounds, because it is re-pitched into the key
+ *
+ * and the stored note stays 61 either way, which is asserted above. That is the feature stated in
+ * full: non-destructive on disk, different in the air.
+ */
+const pitchesIn = (name) => {
+  const path = join(stack.dir, `${name}.wav`);
+  if (!existsSync(path)) return [];
+  const w = readWav(path);
+  // Confident detections only: a half-heard tail is not evidence about a pitch.
+  return detectNotes(w.mono, w.rate, { minConf: 0.6 })
+    .filter((n) => n.level > 0.01)
+    .map((n) => n.midi);
+};
+const plainPitches = pitchesIn('plain');
+const snappedPitches = pitchesIn('snapped');
+console.log(`  unquantized sounded: ${JSON.stringify(plainPitches.map(noteName))}`);
+console.log(`  quantized sounded:   ${JSON.stringify(snappedPitches.map(noteName))}`);
+
+check(plainPitches.includes(61),
+      'UNQUANTIZED, the C# you typed is the C# you hear',
+      `sounded ${JSON.stringify(plainPitches.map(noteName))} — no C# means this render is not `
+      + `playing the note the clip holds, and the comparison below is against the wrong thing`);
+check(snappedPitches.length > 0 && !snappedPitches.includes(61),
+      'QUANTIZED, the C# is gone from the audio — the harmony system is applied',
+      `sounded ${JSON.stringify(snappedPitches.map(noteName))}; a C# still here means the flag `
+      + `reads back on and changes nothing you can hear`);
+check(snappedPitches.every((p) => [0, 2, 4, 5, 7, 9, 11].includes(((p % 12) + 12) % 12)),
+      'and everything that sounds is IN C major — re-pitched, not merely moved',
+      `sounded ${JSON.stringify(snappedPitches.map(noteName))}`);
 
 check(errors.length === 0, 'no page errors', errors.join(' | '));
 
