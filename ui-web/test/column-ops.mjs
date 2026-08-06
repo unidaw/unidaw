@@ -181,39 +181,52 @@ check(start && start.some((n) => n.col === 0 && n.pitch === 60)
         'and column 0\'s does too, 60 -> 62', JSON.stringify(after));
 }
 
-/* ── DELETE, ONE NOTE AT A TIME ────────────────────────────────────────────────────────────
+/* ── THE SELECTION DELETE, REACHED THE ONLY WAY IT CAN BE ──────────────────────────────────
  *
- * ONE note, deliberately, and the reason is a second bug this file is NOT about.
+ * VIA CUT, and finding that out corrected a wrong conclusion of mine that is worth recording.
  *
- * Deleting a selection of SEVERAL notes removes only the LAST one. Measured on a single-column
- * project, so it has nothing to do with columns: two notes selected leaves one, three leaves two.
- * Measured again on the UNPATCHED page, so it is not something this change introduced. It is
- * filed separately; asserting it here would make this suite fail for a reason it does not
- * describe, and a check that fails for two reasons at once tells you neither.
+ * I first wrote this to press Delete, watched two notes go in and one come out, and concluded the
+ * batch delete was dropping ops. It was not. In the tracker `Delete` calls `deleteAtCursor()` and
+ * never `deleteSelection()` — the selection is not consulted at all — so what I was measuring was
+ * the note under the CURSOR being deleted, and the cursor happened to sit on the last row I had
+ * typed on. Three "batch" ops that never existed.
  *
- * So the column question is asked in isolation: select the row that ONLY column 1's note is on,
- * delete it, and see which note goes. `select` spans the whole track, which is fine — the row
- * narrows it to one note.
+ * Worse for this file: `deleteAtCursor` already carried its column correctly before any of tonight
+ * changes. So a Delete-key check here would have passed on the unfixed build and proved nothing
+ * about `deleteSelection`, which is the op that was actually broken.
+ *
+ * `cut` is the gesture that reaches it (copySelection then deleteSelection), so that is what this
+ * drives. Both notes, across both columns.
  */
 {
   const before = await notes('co_predelete');
   check(before && before.length === 2, 'two notes going in', JSON.stringify(before));
 
-  // Row 4 holds column 1's note alone; column 0's is on row 0.
-  const n = await run('select 4 4');
-  check(/1 note/.test(String(n)), 'selecting row 4 picks exactly one note', String(n));
+  const n = await run('select 0 7');
+  check(/2 note/.test(String(n)), 'both notes selected', String(n));
 
-  await page.keyboard.press('Delete');
-  await settle(1200);
-  const after = await notes('co_deleted');
-  check(after && after.length === 1, 'one note removed, one left', JSON.stringify(after));
-  check(after && after.every((x) => x.col !== 1),
-        'AND IT IS COLUMN 1\'S NOTE THAT IS GONE',
-        `${JSON.stringify(after)} — the op carried no column, so the wire defaulted it to 0 and `
-        + 'the delete addressed a different cell entirely');
-  check(after && after.some((x) => x.col === 0 && x.pitch === 62),
-        'COLUMN 0\'S NOTE SURVIVES — the check that catches a delete aimed at the wrong column',
-        JSON.stringify(after));
+  await run('cut');
+  await settle(1400);
+  const after = await notes('co_cut');
+  check(after && after.length === 0,
+        'CUT REMOVES BOTH NOTES, IN BOTH COLUMNS',
+        `${JSON.stringify(after)} — every delete op carried no column, so all of them addressed `
+        + 'column 0: column 0\'s note went twice and column 1\'s survived a cut that reported '
+        + 'success');
+}
+
+/* ── AND THE CLIPBOARD KEPT THE COLUMN, so the paste puts it back where it was ────────────── */
+{
+  await run('goto 0');
+  await settle(200);
+  await run('paste');
+  await settle(1400);
+  const back = await notes('co_pasted');
+  check(back && back.length === 2, 'paste restores two notes', JSON.stringify(back));
+  check(back && back.some((x) => x.col === 0) && back.some((x) => x.col === 1),
+        'ONE IN EACH COLUMN AGAIN — a clipboard without the column collapses them onto column 0, '
+        + 'where the second note replaces the first and half the phrase is gone',
+        JSON.stringify(back));
 }
 
 check(errors.length === 0, 'nothing threw in the browser', errors.slice(0, 3).join(' | '));
