@@ -251,6 +251,9 @@ it has, the beats it spans and the pitch range it covers. To see actual notes, \
 call `observe` with `from_beat` for the part you are working on. A track marked \
 TRUNCATED has more notes than the engine publishes, so do not conclude it ends \
 where the count stops.\n\n\
+The `samples:` line lists every audio file you can load BY NAME — `load_sample` takes a bare \
+name, never a path, and a name not on that line will be refused. If the list is absent or does \
+not have what a request asks for, say so rather than guessing at a file name.\n\n\
 A track's `devices:` line lists its chain in audio order with each device's ID. \
 Those IDs are what `patcher_node`, `device_params`, `set_bypass`, `remove_device` \
 and `modulate` mean by `device` — take them from there rather than guessing or \
@@ -260,7 +263,8 @@ The shape is taken before your first tool call and is NOT refreshed as you work 
 be in it: add it, then `observe` to learn its id.";
 
 /// The half that does: the song as it stands, plus a warning about the past.
-fn shape_block(session: &AgentSession, has_history: bool, devices: &DeviceLookup) -> String {
+fn shape_block(session: &AgentSession, has_history: bool, devices: &DeviceLookup,
+               samples: &[String]) -> String {
     // The TEXT form, and the SHAPE rather than every note.
     //
     // This used to embed the whole song as JSON — ~114 bytes per note, which is
@@ -284,6 +288,15 @@ fn shape_block(session: &AgentSession, has_history: bool, devices: &DeviceLookup
         if !list.is_empty() {
             obs.attach_devices(track_id, list);
         }
+    }
+    /*
+     * WHAT SAMPLES EXIST. Without this the model invents file names: backend's rehearsal watched
+     * it add a track, name it, add a sampler, call load_sample twice with guessed names, take
+     * both refusals, and write the pattern anyway onto a silent track. Every step right except
+     * the one it could not know.
+     */
+    if !samples.is_empty() {
+        obs.attach_samples(samples.to_vec());
     }
     let obs = obs.to_text();
     let stale = if has_history {
@@ -335,6 +348,7 @@ pub fn run(
     tx: &Sender<Progress>,
     history: &std::sync::Mutex<History>,
     devices: &DeviceLookup,
+    samples: &[String],
 ) {
     let Some(key) = api_key() else {
         let _ = tx.send(Progress::Failed(
@@ -365,7 +379,7 @@ pub fn run(
     let tools = tools_json(session);
     let system = json!([
         { "type": "text", "text": INSTRUCTIONS, "cache_control": { "type": "ephemeral" } },
-        { "type": "text", "text": shape_block(session, past > 0, devices) },
+        { "type": "text", "text": shape_block(session, past > 0, devices, samples) },
     ]);
 
     // The running conversation. Tool results have to come back in the same

@@ -2010,7 +2010,14 @@ const SAMPLE_EXTS: [&str; 6] = ["wav", "aif", "aiff", "flac", "ogg", "mp3"];
 /// so a longer file cannot be named by it at all — and a rail that silently omitted those
 /// would answer "why is my sample not in the list" with nothing. It is listed, marked, and
 /// the row says why, the same way a plugin that failed to scan keeps its row.
-fn list_samples(projects: &str) -> String {
+/// The audio files a bare sample name can resolve to, as (name, where, bytes).
+///
+/// ONE SCAN, shared by the browser rail and the agent's observation. The two places searched are
+/// the two the ENGINE resolves against — the project directory and its `audio/` sibling — so this
+/// is a reading of the same rule rather than a second copy of it. An agent-side guess at the
+/// directory would be exactly the duplication that has cost this repo most; the sidecar is handed
+/// DAW_PROJECT_DIR by the same launcher that hands it to the engine, so it can answer honestly.
+fn scan_samples(projects: &str) -> Vec<(String, &'static str, u64)> {
     let mut items: Vec<(String, &str, u64)> = Vec::new();
     let base = std::path::Path::new(projects);
     let audio = base.parent().map(|p| p.join("audio"));
@@ -2027,6 +2034,11 @@ fn list_samples(projects: &str) -> String {
     scan(base, "project", &mut items);
     if let Some(a) = audio.as_ref() { scan(a, "audio", &mut items); }
     items.sort_by(|a, b| a.0.to_ascii_lowercase().cmp(&b.0.to_ascii_lowercase()));
+    items
+}
+
+fn list_samples(projects: &str) -> String {
+    let items = scan_samples(projects);
 
     let mut out = String::from("{\"ok\":true,\"samples\":[");
     for (i, (name, which, bytes)) in items.iter().enumerate() {
@@ -4771,6 +4783,7 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                             let flag = asking.clone();
                             let hist = history.clone();
                             let ch = chains.clone();
+                            let projects2 = projects.clone();
                             thread::spawn(move || {
                                 /*
                                  * WHAT IS ON EACH TRACK, from the store the drainer keeps.
@@ -4795,7 +4808,17 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                     }).collect()
                                 };
                                 match daw_agent::AgentSession::attach(&shm2) {
-                                    Ok(session) => ask::run(&session, &prompt, &tx, &hist, &lookup),
+                                    Ok(session) => {
+                                        /*
+                                         * SCANNED AT ASK TIME, not cached at startup: a person
+                                         * drops a file in and asks for it in the same minute, and
+                                         * a list captured when the sidecar booted would tell the
+                                         * model the file does not exist.
+                                         */
+                                        let names: Vec<String> = scan_samples(&projects2)
+                                            .into_iter().map(|(n, _, _)| n).collect();
+                                        ask::run(&session, &prompt, &tx, &hist, &lookup, &names)
+                                    }
                                     Err(e) => {
                                         let _ = tx.send(ask::Progress::Failed(
                                             format!("could not attach to the engine: {e}")));

@@ -261,6 +261,38 @@ const built = await page.evaluate(() => {
 console.log(`  the AI's sampler part: ${built.notes} note(s) at ${JSON.stringify(built.ticks)}`);
 
 // ---------------------------------------------------------------------------
+// ASKED FOR A DRUM TRACK WITHOUT NAMING A FILE — the case that produced a silent track.
+//
+// Backend's rehearsal: "add a track called Drums with a sampler, and write a four-bar beat". The
+// model added the track, named it, added the sampler, called load_sample TWICE with invented file
+// names, took both refusals, said "I see the samples aren't found — let me write the drum pattern
+// anyway", and left sixteen notes on a silent track. Every step right except the one it could not
+// know: nothing told it what files exist.
+//
+// The observation carries a `samples:` line now. This asks WITHOUT naming a file and requires the
+// slot to resolve — which is only possible if the model read the list rather than guessing.
+// ---------------------------------------------------------------------------
+await run('new aidrumkit');
+await page.waitForTimeout(1500);
+const kit = await askFor(
+  'add a track called Drums with a sampler on it, load a drum sound into it, and write a four bar beat',
+  (a, b) => b.notes > a.notes, 150000);
+const kitSlots = await page.evaluate(() => {
+  for (let t = 0; t < 4; t++) {
+    for (let d = 0; d < 6; d++) {
+      const k = window.__uni.samplerKitCached(t, d);
+      if (k && k.slots && k.slots.length) return { track: t, slots: k.slots.length };
+    }
+  }
+  return { track: -1, slots: 0 };
+});
+console.log(`  the drum kit it built: ${JSON.stringify(kitSlots)} :: ${kit.said.slice(-220)}`);
+check(kitSlots.slots > 0,
+      'asked for a drum sound WITHOUT being told a filename, it loads a real one',
+      `${kit.secs}s, ${JSON.stringify(kitSlots)} — zero slots means it guessed at a name, took the `
+      + `refusal, and wrote the notes anyway onto a silent track`);
+
+// ---------------------------------------------------------------------------
 // THE PATCHER, WHICH WAS UNANSWERABLE UNTIL THE OBSERVATION CARRIED DEVICE IDS.
 //
 // `patcher_node` has existed for a while and could not be used: it takes a `device`, and

@@ -20,6 +20,20 @@ pub struct Observation {
     pub transport: Transport,
     pub song: Song,
     pub tracks: Vec<TrackView>,
+    /// The audio files a bare sample name can resolve to.
+    ///
+    /// Without this the agent GUESSES. Backend's rehearsal caught it doing exactly that: asked
+    /// for a drum track it added the track, named it, added a sampler, called `load_sample` twice
+    /// with invented file names, got two refusals, said "I see the samples aren't found — let me
+    /// write the drum pattern anyway", and left sixteen notes on a silent track. Every step it
+    /// took was the right one; it simply had no way to know what existed.
+    ///
+    /// FILLED BY THE CALLER, like `devices`. Resolution happens engine-side against the project
+    /// directory and its `audio/` sibling, and the sidecar is handed the same DAW_PROJECT_DIR by
+    /// the same launcher — so it can answer from the real directory instead of this crate
+    /// guessing at one, which would be a second copy of the resolution rule.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub samples: Vec<String>,
 }
 
 /// What the song IS, as opposed to where it is playing: tempo, meter, key.
@@ -397,6 +411,9 @@ pub fn observe_window(handle: &EngineHandle, window: Option<Window>) -> Observat
             key_changes: harmony.len(),
         },
         tracks,
+        // Empty here by construction — see `attach_samples`. This crate cannot know the project
+        // directory, and guessing at one would be a second copy of the engine's resolution rule.
+        samples: Vec::new(),
     }
 }
 
@@ -543,6 +560,24 @@ impl Observation {
                 ));
             }
         }
+        /*
+         * THE SAMPLES, LAST, because it is a property of the session rather than of any track and
+         * a reader looking for the song should meet the song first.
+         *
+         * Capped, with the count stated. A project directory with two hundred files would push
+         * the shape past what is worth sending, and a truncated list that does not say it is
+         * truncated invites "the file I want is not there" — which is the same wrong conclusion
+         * as having no list at all.
+         */
+        if !self.samples.is_empty() {
+            const SHOWN: usize = 40;
+            let head: Vec<&str> = self.samples.iter().take(SHOWN).map(|s| s.as_str()).collect();
+            out.push_str(&format!("samples ({}): {}", self.samples.len(), head.join(", ")));
+            if self.samples.len() > SHOWN {
+                out.push_str(&format!(", … and {} more", self.samples.len() - SHOWN));
+            }
+            out.push('\n');
+        }
         out
     }
 }
@@ -558,6 +593,11 @@ impl Observation {
     ///
     /// A track id with no track is ignored rather than erroring: the caller is iterating
     /// its own store, and a chain for a track that has since gone is stale, not invalid.
+    /// Tell the observation which audio files exist, so the agent stops guessing at names.
+    pub fn attach_samples(&mut self, names: Vec<String>) {
+        self.samples = names;
+    }
+
     pub fn attach_devices(&mut self, track_id: u32, devices: Vec<DeviceView>) {
         if let Some(t) = self.tracks.iter_mut().find(|t| t.track_id == track_id) {
             t.devices = devices;
@@ -607,6 +647,7 @@ mod device_view_tests {
                 key_changes: 0,
             },
             tracks,
+            samples: Vec::new(),
         }
     }
 
@@ -649,6 +690,31 @@ mod device_view_tests {
         assert!(text.contains("#2 patcher event (generates) (bypassed)"),
                 "a bypassed device is in the chain and inaudible, and an agent told only that it \
                  exists will 'fix' a silence by adding another one. Got:\n{text}");
+    }
+
+    /// The sample list reaches the text, and says how many there are when it truncates.
+    #[test]
+    fn the_observation_lists_the_samples_that_exist() {
+        let mut obs = bare_observation(vec![bare_track(0)]);
+        assert!(!obs.to_text().contains("samples"),
+                "no list attached means no line — an empty `samples:` reads as 'there are none', \
+                 which is a different claim from 'nobody told me'");
+
+        obs.attach_samples(vec!["demo_kick.wav".into(), "demo_pluck_c4.wav".into()]);
+        let text = obs.to_text();
+        assert!(text.contains("samples (2): demo_kick.wav, demo_pluck_c4.wav"),
+                "the model loads these BY NAME, so the names have to be in front of it: {text}");
+
+        /*
+         * A LONG LIST SAYS IT IS TRUNCATED. Silently showing the first forty invites "the file I
+         * want is not there", which is the same wrong conclusion as having no list at all — and
+         * the model would then guess, which is the behaviour this whole field exists to stop.
+         */
+        let many: Vec<String> = (0..50).map(|i| format!("s{i:02}.wav")).collect();
+        obs.attach_samples(many);
+        let text = obs.to_text();
+        assert!(text.contains("samples (50):"), "the true count is stated: {text}");
+        assert!(text.contains("and 10 more"), "and the remainder is named as a remainder: {text}");
     }
 
     /// A chain for a track that is no longer there is stale, not invalid.
