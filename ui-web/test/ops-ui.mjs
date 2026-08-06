@@ -84,16 +84,28 @@ check((await page.evaluate(() => window.__uni.state().editMode)) === true, 'edit
  * the cursor is where the ops are about to be typed.
  */
 const OPS = [
-  { token: 'ret3',   key: 'retrigger',      want: 3,      glyph: /3/ },
-  { token: 'rv-60',  key: 'retrig_ramp',    want: -60,    glyph: /60/ },
-  { token: 'p60',    key: 'probability',    want: 60,     glyph: /60/ },
-  { token: 's5',     key: 'sound',          want: 5,      glyph: /5/ },
-  { token: 'o80',    key: 'sound_offset',   want: 80,     glyph: /80/ },
-  { token: 'c1:2',   key: 'trig_condition', want: null,   glyph: /1|2/ },
+  { token: 'ret3',   key: 'retrigger',      want: 3,      glyph: 'r' },
+  // `v`, not `r`: `ret` already owns 'r' and two ops sharing a glyph makes a collapsed run
+  // ambiguous, since the glyph is the only thing saying which op it is.
+  { token: 'rv-60',  key: 'retrig_ramp',    want: -60,    glyph: 'v' },
+  { token: 'p60',    key: 'probability',    want: 60,     glyph: 'p' },
+  { token: 's5',     key: 'sound',          want: 5,      glyph: 's' },
+  /*
+   * `o80` MEANS 80/256 OF THE WAY IN, and the engine stores the fraction against 65535 — so the
+   * stored value is 20480, not 80. I expected 80 and the app was right; rowops.js:106 spells the
+   * contract out, including that a multiple of 256 spells back as the tracker form.
+   */
+  { token: 'o80',    key: 'sound_offset',   want: 20480,  glyph: 'o' },
+  /*
+   * `c1:2` packs as ((a-1) << 3 | (b-1)) + 1 so that 0 stays "no condition" — 1:2 is 2. Asserted
+   * as the exact packed value rather than as "present": presence passes on any condition at all,
+   * including one the parser mangled.
+   */
+  { token: 'c1:2',   key: 'trig_condition', want: 2,      glyph: 'c' },
   // `d` is authored as a FRACTION of a beat and stored as ticks, so the wanted value is derived
   // rather than typed: a sixth of 960000 is 160000. Asserting the token back would be asserting
   // the round-trip spelling, which is a different claim and already covered in ops.mjs.
-  { token: 'd1/6',   key: 'delay',          want: 160000, glyph: /6/ },
+  { token: 'd1/6',   key: 'delay',          want: 160000, glyph: 'd' },
 ];
 
 /**
@@ -107,6 +119,32 @@ const OPS = [
  * So the landing is asserted once rather than assumed seven times.
  */
 let fieldChecked = false;
+/**
+ * Back to the NOTE field of a row.
+ *
+ * `goto <row> <track>` moves the row and the track and leaves the cursor on whatever FIELD it
+ * was already in — so after the first op is typed the cursor is sitting on the ops field, and
+ * every `z` after that goes into a field that does not take note keys and is silently refused.
+ *
+ * That is exactly what happened: seven notes were asked for, one was written, and the six
+ * missing ones read as six broken ops rather than as one navigation mistake. The count check
+ * below is what told them apart.
+ */
+const toNoteField = async (row) => {
+  await run(`goto ${row} 0`);
+  await settle(150);
+  for (let i = 0; i < 4; i++) {
+    const f = await page.evaluate(() => {
+      const c = window.__uni.state().cursor;
+      return c && c.col !== undefined ? c.col % 3 : -1;
+    });
+    if (f === 0) return true;
+    await page.keyboard.press('ArrowLeft');
+    await settle(80);
+  }
+  return false;
+};
+
 const toOpsField = async (row) => {
   await run(`goto ${row} 0`);
   await settle(150);
@@ -127,36 +165,60 @@ const toOpsField = async (row) => {
 
 for (let i = 0; i < OPS.length; i++) {
   const { token } = OPS[i];
-  const row = 4 + i * 4;
-  await run(`goto ${row} 0`);
-  await settle(150);
+  // CONSECUTIVE, so all seven are in view at once when the ops column is read below. Spread
+  // four rows apart they ran off the bottom and the last two never appeared — which read as two
+  // undrawn ops rather than as a scrolled window.
+  const row = 4 + i;
+  const onNote = await toNoteField(row);
+  if (!onNote) { check(false, `row ${row}: could not get back to the note field`); continue; }
   await page.keyboard.press('z');            // a note, so the op has something to be on
   await settle(250);
 
   await toOpsField(row);
   /*
-   * `@` OPENS THE BUFFER. Every character then goes in as a keystroke, including the ones with
-   * shift on them — `-` and `:` and `/` are all part of a token grammar, and a suite that typed
-   * only digits would miss exactly the tokens that need punctuation.
+   * `@` OPENS THE BUFFER, then the token is TYPED.
+   *
+   * `keyboard.type()` and not a press() per character. press() takes a KEY, and for a character
+   * that needs shift on this layout it does not produce the character at all — `rv-60` arrived as
+   * retrig_ramp 60 with the sign dropped, and `c1:2` arrived as nothing, while the digits either
+   * side landed perfectly. Two ops that looked broken and were mistyped by the test.
+   *
+   * The punctuation is the reason this suite exists: `-`, `:` and `/` are all part of the token
+   * grammar, and a suite that only managed digits would assert the easy half of it.
    */
   await page.keyboard.press('@');
   await settle(200);
-  for (const ch of token) { await page.keyboard.press(ch); }
+  await page.keyboard.type(token, { delay: 30 });
   await settle(200);
   await page.keyboard.press('Enter');
   await settle(350);
 }
 
 /*
- * THE DRAWN CELLS, before saving. Read from the DOM rather than from the view-model, because the
- * claim is that a person can see the op — a model that holds the right value and a cell that
- * renders it are two different things, and only one of them is on stage.
+ * THE DRAWN CELLS, before saving. From the DOM rather than the view-model, because the claim is
+ * that a person can SEE the op — a model holding the right value and a cell rendering it are two
+ * different things, and only one of them is on stage.
+ *
+ * `.tk-cell.ops`, NOT `.tk-cell`. The first version of this scanned EVERY cell for a substring
+ * and was worthless in both directions: `/3/` and `/6/` matched row numbers and passed while the
+ * ops were silently wrong, and the rest failed for reasons that had nothing to do with the ops
+ * column. tracker.js:744 gives the ops cells their own class; using it means a match can only
+ * have come from an op.
  */
-const drawn = await page.evaluate(() =>
-  [...document.querySelectorAll('.tk-cell')].map((c) => c.textContent || '').join('|'));
+const opsCells = await page.evaluate(() =>
+  [...document.querySelectorAll('.tk-cell.ops')].map((c) => (c.textContent || '').trim())
+    .filter(Boolean));
+console.log(`  ops cells drawn: ${JSON.stringify(opsCells)}`);
+check(opsCells.length > 0, 'the ops column is drawn at all', 'no .tk-cell.ops has any text');
+/*
+ * THE GLYPH IS WHAT IS DRAWN, not the value. A cell shows a run of one letter per op — `opGlyph`
+ * is `op.glyph || op.prefix[0]` — and the runbook's claim is exactly that: "a set of named
+ * per-note ops, every one of which is drawn". Asserting the VALUE here would be asserting
+ * something the column does not attempt, and asserting a bare digit matched row numbers.
+ */
 for (const { token, glyph } of OPS) {
-  check(glyph.test(drawn), `\`${token}\` is drawn in the grid`,
-        `no ${glyph} anywhere in the visible cells`);
+  check(opsCells.some((t) => t.includes(glyph)), `\`${token}\` draws its \`${glyph}\` glyph`,
+        `no ${glyph} in ${JSON.stringify(opsCells)}`);
 }
 
 await run(`save ${SONG}`);
@@ -179,15 +241,8 @@ check(notes.length === OPS.length, `all ${OPS.length} notes were written by the 
 
 for (const { token, key, want } of OPS) {
   const hit = notes.find((n) => n[key] !== undefined);
-  if (want === null) {
-    // The condition packs two numbers into one integer and the packing is ops.mjs's business;
-    // here the claim is only that typing it reaches the engine at all.
-    check(!!hit, `\`${token}\` reaches the engine (\`${key}\` present)`,
-          `no note carries ${key}: ${JSON.stringify(notes.map((n) => Object.keys(n)))}`);
-  } else {
-    check(hit && hit[key] === want, `\`${token}\` reaches the engine as ${key} ${want}`,
-          hit ? `${key} = ${hit[key]}` : `no note carries ${key}`);
-  }
+  check(hit && hit[key] === want, `\`${token}\` reaches the engine as ${key} ${want}`,
+        hit ? `${key} = ${hit[key]}` : `no note carries ${key}`);
 }
 
 /*
@@ -204,7 +259,7 @@ const seeded = await page.evaluate(() => {
 });
 check(seeded && seeded.startsWith('ret3'), 'the buffer opens SEEDED with what the note has',
       JSON.stringify(seeded));
-for (const ch of ' p40') { await page.keyboard.press(ch === ' ' ? 'Space' : ch); }
+await page.keyboard.type(' p40', { delay: 30 });
 await settle(200);
 await page.keyboard.press('Enter');
 await settle(400);
@@ -228,7 +283,7 @@ try {
 await toOpsField(4);
 await page.keyboard.press('@');
 await settle(200);
-for (const ch of ' zz9') { await page.keyboard.press(ch === ' ' ? 'Space' : ch); }
+await page.keyboard.type(' zz9', { delay: 30 });
 await page.keyboard.press('Enter');
 await settle(400);
 const after = await page.evaluate(() => window.__uni.opsTextAtCursor());

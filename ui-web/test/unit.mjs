@@ -3630,3 +3630,41 @@ test('the instrument-kind mirror still matches the engine', async () => {
     + `UI refuses something that is allowed. Fix INSTRUMENT_KINDS in index.html — and if a kind `
     + `is genuinely new, add it to NAMES here too.`);
 });
+
+test('every row op can actually be TYPED into the cell', async () => {
+  /*
+   * THE CELL'S CHARSET IS AN ALLOWLIST AND IT WENT STALE.
+   *
+   * `ENTRY_MODES.ops` filters keystrokes to a regex. It was `/[0-9a-zA-Z /]/` — letters, digits,
+   * space, slash — which covered every op that existed when it was written. v33 added two that
+   * need punctuation and the charset was not revisited:
+   *
+   *   rv-60   a SIGNED total percent   ->  the `-` was dropped, so a -60 ramp applied as +60
+   *   c1:2    a trig condition         ->  the `:` was dropped, so `c12` applied nothing
+   *
+   * Silent both times, and worse than a refusal: the filter drops the character and keeps going,
+   * so the buffer looks fine and commits something else. Every existing test passed because
+   * ops.mjs writes ops through the CONSOLE (`run('ops ret4 rv-60 c1:2')`), which has no charset.
+   *
+   * So the charset is checked against the ops' own documented examples. An op that needs a
+   * character its cell cannot accept now fails here rather than in someone's hands.
+   */
+  const { readFileSync } = await import('node:fs');
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const m = html.match(/ops:\s*\{\s*charset:\s*(\/\[[^\]]*\]\/)/);
+  assert.ok(m, 'ENTRY_MODES.ops charset not found — if it moved, repoint this, do not delete it');
+  const charset = new RegExp(m[1].slice(1, -1));
+
+  const unusable = [];
+  for (const op of ROW_OPS) {
+    // The op's own example is the authority: it is what the help overlay shows and what a
+    // person copies.
+    for (const ch of op.example) {
+      if (!charset.test(ch)) unusable.push(`${op.example} needs ${JSON.stringify(ch)}`);
+    }
+  }
+  assert.deepEqual(unusable, [],
+    'a row op whose own example cannot be typed into the cell. The charset silently DROPS a '
+    + 'character it does not allow rather than refusing the edit, so the op commits as something '
+    + 'else. Add the character to ENTRY_MODES.ops in index.html.');
+});

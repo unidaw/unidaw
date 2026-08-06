@@ -4681,7 +4681,22 @@ const entry = createEntry();
  */
 const ENTRY_MODES = {
   token: { charset: /[0-9a-zA-Z#\-.^~@/]/, max: 12, cancelWhenEmpty: true },
-  ops: { charset: /[0-9a-zA-Z /]/, max: 48, cancelWhenEmpty: false },
+  /*
+   * `-` AND `:` ARE PART OF THE OPS GRAMMAR and were missing from this charset.
+   *
+   * It allowed letters, digits, space and slash, which covered every op that existed when it
+   * was written. v33 then added two that need punctuation — `rv-60`, a SIGNED total percent,
+   * and `c1:2`, a trig condition — and the charset was not revisited.
+   *
+   * The failure is silent and worse than a refusal: the filter drops the character and keeps
+   * typing, so `rv-60` became `rv60` and applied a +60 ramp where a -60 was meant, and `c1:2`
+   * became `c12` and applied nothing at all. Both spell correctly through the CONSOLE, which is
+   * why every existing test passed — ops.mjs writes them with `run('ops ret4 rv-60 c1:2')`.
+   *
+   * unit.mjs now asserts every op's own `example` survives this charset, so an op that needs a
+   * character cannot be added without it.
+   */
+  ops: { charset: /[0-9a-zA-Z /:-]/, max: 48, cancelWhenEmpty: false },
 };
 
 /** Open the cell buffer in one of the modes above. Never call `begin` directly. */
