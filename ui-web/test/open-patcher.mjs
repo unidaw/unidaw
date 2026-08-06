@@ -93,21 +93,29 @@ if (card && card.button) {
 }
 
 /*
- * THE DOUBLE-CLICK IS NOT ASSERTED HERE, and the reason is a SEPARATE BUG I found trying to.
+ * THE DOUBLE-CLICK IS NOT ASSERTED HERE, and the reason is worth writing down because I got it
+ * wrong twice on the way to it.
  *
- * To test the second gesture this needs a state where the patcher is NOT showing. `setView` only
- * changes the top pane and the patcher opens into the second, so the obvious reset does not reset
- * anything. Reloading the page does — and then the rack is EMPTY:
+ * Testing the second gesture needs a state where the patcher is NOT showing. `setView` changes
+ * only the top pane and the patcher opens into the second, so it does not reset. Reloading does
+ * — and then the rack was empty, which I reported as a bug: "refresh the tab and the rack claims
+ * the track has no devices".
  *
- *     chainProbe -> {"cards":0,"notice":"no devices on this track"}
+ * IT IS NOT A BUG. Measured both ways:
+ *     add a device, reload                     -> cards 2 -> 2   (survives)
+ *     `new NAME`, add a device, reload         -> cards 1 -> 0   (gone)
+ * `currentProject` persists across the reload, so the page loads that project FROM DISK — and
+ * `new` wrote the file before the device existed. The device was never saved. Reloading discards
+ * unsaved work, which is what every editor does.
  *
- * twenty seconds after load, on a track that demonstrably has a patcher. The engine publishes
- * device chains as DIFFS on a single-consumer ring; the sidecar drained them for the first page
- * and nothing republishes for the next one. So a person who refreshes the tab gets a rack that
- * says the track has no devices until something changes the chain.
+ * So this suite does the button only, on one page. The double-click path is not covered here and
+ * that is stated rather than faked: getting to a clean precondition for it needs a way to close
+ * the second pane that the test can drive, and inventing one for a test would be the wrong
+ * reason to add API.
  *
- * That is worth more than the assertion it blocked, and it is recorded rather than worked around.
- * The reported bug — the open BUTTON — is asserted above and passes.
+ * (Worth its own question separately: reloading silently discards unsaved changes with no
+ * warning. That is ordinary behaviour and also the kind of thing that loses somebody a song —
+ * which happened tonight for a different reason.)
  */
 
 check(errors.length === 0, 'nothing threw in the browser', errors.slice(0, 3).join(' | '));
