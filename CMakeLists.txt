@@ -1646,6 +1646,16 @@ add_test(NAME undo_ratchet
 )
 set_tests_properties(undo_ratchet PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
 
+# THE DOCUMENT IS A VALUE. Undo is built on captureDocument/applyDocument, so a field either of
+# them drops would be dropped by every undo at once. Loading a preset, saving, loading THAT and
+# saving again must produce identical bytes: the second save came through the pair, so a loss in
+# either half shows up without anybody listing the fields — which is the point, since a
+# hand-listed comparison is how undo came to carry three.
+add_test(NAME document_value
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/document_value_check.sh
+)
+set_tests_properties(document_value PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+
 # A lane's subdivision is settable at last, and it is the LANE's — a one-track fixture cannot
 # tell "set the track I asked for" from "set all of them".
 add_test(NAME lines_per_beat

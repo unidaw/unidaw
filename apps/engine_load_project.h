@@ -87,6 +87,11 @@ struct LoadProjectDeps {
 
 // Returns false and fills *error if the document will not load. On success the engine is
 // holding the new project and every version counter has been bumped.
+// Apply a document the caller already holds. loadProjectFromPath is now a file read plus this.
+// Undo restores the engine to a document it already has, so this is the operation it needs.
+bool applyDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
+                   const std::string& path, std::string* error);
+
 bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path, std::string* error);
 
 }  // namespace daw::engine

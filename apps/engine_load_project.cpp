@@ -16,8 +16,17 @@
 
 namespace daw::engine {
 
-bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
-                         std::string* error) {
+// APPLY A DOCUMENT TO THE ENGINE, with no file involved. The other half of Step 1: the load
+// path knew how to turn a ProjectDocument into live engine state and could only be asked to
+// do it by naming a file. Undo is exactly that operation — restore the engine to a document
+// it already holds — so it needed this to exist as a function.
+//
+// `path` STAYS, and is not a wart: a document's opaque plugin blobs live in a directory
+// beside the file it came from, and loadedProjectDir (which decides where a bare sample name
+// resolves) is derived from it. An in-memory caller passes the path the document belongs to,
+// or empty when it belongs to none — the same string the engine would have had either way.
+bool applyDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
+                   const std::string& path, std::string* error) {
   // Re-bind every dependency to the name the body already uses, so the 943 lines below are
   // the untouched original.
   auto& arrangeMutex = deps.engineState.arrange.arrangeMutex;
@@ -69,10 +78,6 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
   auto& waveformStore = deps.waveformStore;
 
-    daw::ProjectDocument document;
-    if (!daw::loadProject(document, path, error)) {
-      return false;
-    }
     // Hold off aux-child derivation until this load has finished mutating the track set
     // (adopt, tear down leftovers, set liveTrackCount). Cleared on every exit path.
     // Adopt the project's generation seed before anything renders, so generators hash
@@ -733,6 +738,16 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
     resync.clipVersion = clipVersion.load(std::memory_order_acquire);
     emitUiDiff(resync);
     return true;
+}
+
+bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
+                         std::string* error) {
+  // Read the file, then apply it. Everything that was below this point is applyDocument now.
+  daw::ProjectDocument document;
+  if (!daw::loadProject(document, path, error)) {
+    return false;
+  }
+  return applyDocument(deps, document, path, error);
 }
 
 }  // namespace daw::engine
