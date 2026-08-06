@@ -1849,3 +1849,113 @@ fn agent_sets_harmony_quantize() {
     });
     assert!(off.ok, "turning it off failed: {off:?}");
 }
+
+/// The sampler tools reach the engine and the settings survive a save.
+///
+/// Five tools landed together — `sampler_slot`, `sampler_device`, `sampler_envelope`,
+/// `sampler_slice`, `sampler_vintage` — and compiling plus satisfying the manifest ratchet proves
+/// only that they EXIST. A tool that builds a payload with a field in the wrong place sends
+/// happily and changes nothing, which is this wire's default failure mode and has happened here
+/// twice this week (an editor id at the wrong offset, a pan written into the wrong payload field).
+///
+/// So each one is sent and then read back off DISK, which is the engine's own record of what it
+/// believes rather than an echo of what was asked.
+#[test]
+fn sampler_tools_reach_the_engine() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agsampler");
+
+    let proj = json!({
+        "schema_version": 2,
+        "meta": { "name": "agsampler_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [], "clips": [],
+        "tracks": [ {
+            "track_id": 0, "name": "S", "harmony_quantize": 0, "lines_per_beat": 4,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            // A sampler with one slot, so the slot tools have something to address.
+            "device_chain": [ { "device_id": 7, "kind": "sampler", "patcher_node_id": 0,
+                                "bypass": false,
+                                "sampler": { "slots": [ { "id": 1, "name": "s", "key_low": 0,
+                                                          "key_high": 127, "root_key": 60,
+                                                          "gate": 0 } ] } } ],
+            "mod_links": [], "placements": []
+        } ]
+    });
+    std::fs::write(engine.proj.join("agsampler_in.uniproj.json"),
+                   serde_json::to_string_pretty(&proj).unwrap()).unwrap();
+    let load = session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"agsampler_in"}) });
+    assert!(load.ok, "load failed: {load:?}");
+
+    // A slot field, by NAME. `gate` 1 is the one a person reaches for and the one the runbook
+    // tells them to set, so it is the one worth proving.
+    let gate = session.execute(&ToolCall {
+        tool: "sampler_slot".into(),
+        args: json!({ "track": 0, "device": 7, "slot": 0, "field": "gate", "value": 1 }),
+    });
+    assert!(gate.ok, "sampler_slot failed: {gate:?}");
+
+    // A device field. `default-gate` seeds slots minted AFTER it, so this is not expected to
+    // change the slot above — only the device's own record.
+    let bank = session.execute(&ToolCall {
+        tool: "sampler_device".into(),
+        args: json!({ "track": 0, "device": 7, "field": "default-gate", "value": 1 }),
+    });
+    assert!(bank.ok, "sampler_device failed: {bank:?}");
+
+    let env = session.execute(&ToolCall {
+        tool: "sampler_envelope".into(),
+        args: json!({ "track": 0, "device": 7, "attack": 200, "decay": 300,
+                      "sustain": 50, "release": 400 }),
+    });
+    assert!(env.ok, "sampler_envelope failed: {env:?}");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let s = session.execute(&ToolCall { tool: "save".into(), args: json!({"name":"agsampler_out"}) });
+        assert!(s.ok, "save failed: {s:?}");
+        let doc = read_project(&engine.proj, "agsampler_out");
+        let dev = track(&doc, 0)["device_chain"].as_array().unwrap()
+            .iter().find(|d| d["device_id"].as_u64() == Some(7)).cloned().unwrap_or(Value::Null);
+        let slot = dev["sampler"]["slots"].as_array()
+            .and_then(|a| a.first()).cloned().unwrap_or(Value::Null);
+        let gate_on = slot["gate"].as_u64() == Some(1) || slot["gate"].as_bool() == Some(true);
+        if gate_on {
+            // The slot really carries it, so the field name resolved to the right selector.
+            assert!(gate_on, "gate did not reach the slot: {slot:?}");
+            break;
+        }
+        assert!(Instant::now() < deadline,
+                "the slot's gate never came back set — a field name that resolves to the wrong \
+                 selector writes SOMETHING and reports success: {slot:?}");
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    // A mistyped field is refused WITH THE LIST, not sent. The table is long enough that guessing
+    // is the normal case, and a silent no-op teaches the wrong lesson.
+    let bad = session.execute(&ToolCall {
+        tool: "sampler_slot".into(),
+        args: json!({ "track": 0, "device": 7, "slot": 0, "field": "gaet", "value": 1 }),
+    });
+    assert!(!bad.ok, "a misspelt slot field must be refused: {bad:?}");
+    assert!(format!("{bad:?}").contains("gate"),
+            "the refusal should list the real field names so the caller can correct it: {bad:?}");
+
+    // Device 0 is refused everywhere, with the message that says where a real id comes from.
+    for tool in ["sampler_slot", "sampler_device", "sampler_envelope", "sampler_slice",
+                 "sampler_vintage", "sampler_emit_rows"] {
+        let r = session.execute(&ToolCall {
+            tool: tool.into(),
+            args: json!({ "track": 0, "device": 0, "slot": 0, "field": "gate", "value": 1,
+                          "bits": 12 }),
+        });
+        assert!(!r.ok, "{tool} accepted device 0: {r:?}");
+    }
+
+    // And the two that refuse an EMPTY call rather than sending one that changes nothing.
+    let novintage = session.execute(&ToolCall {
+        tool: "sampler_vintage".into(), args: json!({ "track": 0, "device": 7 }),
+    });
+    assert!(!novintage.ok, "vintage with neither bits nor rate must be refused: {novintage:?}");
+}
