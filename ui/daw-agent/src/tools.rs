@@ -3146,14 +3146,19 @@ fn arg_u64(args: &Value, key: &str) -> Option<u64> {
 
 /// Runs one tool against the engine. Unknown tools and malformed args are an
 /// error result, never a silent no-op.
-pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
+/// Run one tool call. The project directory is a CALLER-SUPPLIED FACT, not something this crate
+/// resolves — the same rule `Observation::samples` and `plugins` follow, and for the same reason:
+/// the launcher hands the engine, the sidecar and this process one `DAW_PROJECT_DIR`, and a
+/// second resolution rule living in here would be a second answer to "where do projects live".
+/// `execute` below supplies the environment's answer for callers that have no opinion.
+pub fn execute_in(handle: &EngineHandle, call: &ToolCall, project_dir: &str) -> ToolResult {
     match call.tool.as_str() {
         "observe" => observe_tool(handle, &call.args),
         "add_notes" => add_notes(handle, &call.args),
         "add_chords" => add_chords(handle, &call.args),
         "transport" => transport(handle, &call.args),
         "save" => named(handle, UiCommandType::SaveProject, &call.args, "saved"),
-        "new_project" => new_project_tool(handle, &call.args),
+        "new_project" => new_project_tool(handle, &call.args, project_dir),
         "load" => named(handle, UiCommandType::LoadProject, &call.args, "loaded"),
         "set_track_name" => set_track_name(handle, &call.args),
         "undo" => undo_redo(handle, UiCommandType::Undo),
@@ -3215,6 +3220,12 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "write_automation_point" => write_automation_point(handle, &call.args),
         other => ToolResult::err(format!("unknown tool {other:?}")),
     }
+}
+
+/// `execute_in` with the environment's project directory — for callers with no opinion, which is
+/// every caller that was written before the first tool needed to touch the filesystem.
+pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
+    execute_in(handle, call, &daw_bridge::project::engine_project_dir())
 }
 
 fn add_notes(handle: &EngineHandle, args: &Value) -> ToolResult {
@@ -4043,13 +4054,12 @@ fn set_track_name(handle: &EngineHandle, args: &Value) -> ToolResult {
 /// It refuses to overwrite. The one time this project lost a song, `new kala` had written an
 /// empty file and every later save went to the previously-open preset — so a `new` that clobbers
 /// is not a convenience anybody here wants.
-fn new_project_tool(handle: &EngineHandle, args: &Value) -> ToolResult {
+fn new_project_tool(handle: &EngineHandle, args: &Value, dir: &str) -> ToolResult {
     let name = match args.get("name").and_then(|v| v.as_str()) {
         Some(n) if !n.is_empty() => n,
         _ => return ToolResult::err("needs a non-empty \"name\""),
     };
-    let dir = daw_bridge::project::engine_project_dir();
-    let path = match daw_bridge::project::new_project(&dir, name) {
+    let path = match daw_bridge::project::new_project(dir, name) {
         Ok(p) => p,
         Err(e) => return ToolResult::err(e),
     };
@@ -4122,7 +4132,8 @@ mod tests {
         // wired. A test that keeps its own copy of the thing it checks is checking
         // the copy.
         let src = include_str!("tools.rs");
-        let body = &src[src.find("pub fn execute(").expect("execute exists")..];
+        // execute_in HOLDS the arms; `execute` is the env-defaulting wrapper below it.
+        let body = &src[src.find("pub fn execute_in(").expect("execute_in exists")..];
         let body = &body[..body.find("\n}").expect("execute ends")];
         let arms: Vec<&str> = body
             .match_indices("\" =>")

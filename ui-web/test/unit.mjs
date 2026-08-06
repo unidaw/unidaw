@@ -12,7 +12,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, writeFileSync,
+         mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { lcmGrid, ZOOM_LEVELS, buildViewModel, createBuffer } from '../src/viewmodel.js';
 import { ROW_OPS, OP_MASK, opGlyph, opsRun, opsText, opsPresent, opTokenAt,
@@ -2150,7 +2153,10 @@ const OP_REGISTRY = {
   // Covered on all three.
   load:      { cli: 'load',        agent: 'load' },
   // New this session, all three still owed a programmatic path.
-  new:       { cli: null, agent: null, why: 'gap' },
+  // `new` was a browser feature until 2026-08-06: built as a sidecar websocket message because
+  // the BROWSER cannot write files, which the two surfaces that CAN write files then inherited
+  // for no reason. daw_bridge::project owns the document; all three call it.
+  new:       { cli: 'new', agent: 'new_project' },
   deldevice: { cli: 'remove-device', agent: 'remove_device', why: 'gap' },
   // Bypass reached the ENGINE from daw-cli first (`do set-bypass`, backend's
   // verb) and this app second, so the CLI path is real and the agent's manifest
@@ -2469,7 +2475,7 @@ const OP_REGISTRY = {
  *   `shared` — the agent HAS `shared_clips`; only the CLI lacks it. That is a plain missing verb
  *   with a known shape, not a design question, and it is the cheapest thing on this list.
  */
-const CLI_GAP = ['clear', 'columns', 'copy', 'cut', 'new', 'paste', 'transpose',
+const CLI_GAP = ['clear', 'columns', 'copy', 'cut', 'paste', 'transpose',
                  'mods'];
 /** Ops with no agent tool today. Same rule. */
 // `bypass` joins the list rather than being smuggled past it: the engine takes
@@ -2527,7 +2533,7 @@ const CLI_GAP = ['clear', 'columns', 'copy', 'cut', 'new', 'paste', 'transpose',
  */
 const AGENT_GAP = ['clear', 'columns', 'copy', 'cut',
                    'del', 'editor',
-                   'new', 'paste', 'patch',
+                   'paste', 'patch',
                    'transpose', 'mods'];
 
 test('every dock command is in the op registry', () => {
@@ -4214,4 +4220,320 @@ test('the note detector recovers pitches it was never told', async () => {
   // Silence is silence, not a confident guess.
   assert.deepEqual(detectNotes(new Float64Array(RATE), RATE), [],
     'silence must produce no notes at all');
+});
+
+
+/* ══════════════════════════════════════════════════════════════════════════════════════════
+ * SHIPPED PRESETS, AND THE RUNBOOK THAT OPENS THEM
+ *
+ * Two classes of failure that are invisible until the room hears them: a preset that loads a
+ * DIFFERENT plugin than the one it names, and a runbook that tells you to look for output no
+ * script prints. Both happened this week. Neither had a check.
+ *
+ * Every rule here carries a control that breaks it, and the controls sabotage COPIES in a temp
+ * directory — never the real presets, which a sweep may be reading while this runs.
+ * ══════════════════════════════════════════════════════════════════════════════════════════ */
+
+const PRESET_ROOT = new URL('../..', import.meta.url).pathname.replace(/\/$/, '');
+
+
+/** Every plugin device in every shipped preset, as {file, track, device, ref}. */
+function presetPluginDevices(dir = join(PRESET_ROOT, 'presets/projects')) {
+  const out = [];
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith('.uniproj.json')) continue;
+    const doc = JSON.parse(readFileSync(join(dir, name), 'utf8'));
+    const tracks = [...(doc.tracks || [])];
+    if (doc.master_track) tracks.push({ ...doc.master_track, track_id: 'master' });
+    for (const t of tracks) {
+      for (const d of (t.device_chain || [])) {
+        if (d.vst_ref && (d.kind === 'vst_instrument' || d.kind === 'vst_effect')) {
+          out.push({ file: name, track: t.track_id, device: d.device_id, ref: d.vst_ref,
+                     slot: d.host_slot_index });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/*
+ * `resolveVstRef` from apps/device_chain.cpp, in its published order. A SECOND COPY, and it is
+ * here rather than in the check because the point of the check is to run the engine's rule
+ * against the presets — a rule invented for the test would prove the presets satisfy the test.
+ */
+function resolve(entries, ref) {
+  const usable = (e) => e.scan_status === undefined || e.scan_status === 'ok' || !e.error;
+  const ok = entries.map((e, i) => ({ e, i })).filter(({ e }) => usable(e));
+  if (ref.uid16) {
+    const hit = ok.find(({ e }) => e.uid16 === ref.uid16 || e.uid === ref.uid16);
+    if (hit) return { how: 'uid16', i: hit.i };
+  }
+  if (ref.path && ref.name) {
+    const hit = ok.find(({ e }) => e.path === ref.path && e.name === ref.name);
+    if (hit) return { how: 'path+name', i: hit.i };
+  }
+  if (ref.name) {
+    const hit = ok.find(({ e }) => e.name === ref.name
+                                && (!ref.vendor || e.vendor === ref.vendor));
+    if (hit) return { how: 'vendor+name', i: hit.i };
+  }
+  if (ref.path) {
+    const at = ok.filter(({ e }) => e.path === ref.path);
+    if (at.length === 1) return { how: 'path', i: at[0].i };
+  }
+  return { how: 'none', i: -1 };
+}
+
+test('no shipped preset can silently load a DIFFERENT plugin', () => {
+  /*
+   * MACHINE-INDEPENDENT, and the rule is about the SILENT swap rather than about strength.
+   *
+   * uid16, or path+name, are exact. A NAME with no path is weaker but still safe in the way that
+   * matters: it either finds that product or finds nothing, and nothing is loud. That is how the
+   * portable fixtures are written — the multiout build product lives at a different path in every
+   * build dir — and the engine's own lint calls it a warning for exactly this reason.
+   *
+   * A PATH WITH NO NAME is the dangerous one, and it is the only shape banned here. Zebra2.vst3
+   * holds four products at one path, so rule 4 either declines (silence) or, with a scan that
+   * lists one, hands back whichever came first — a different plugin after any rescan. That is how
+   * a saved Zebra2 came back as ZEBRIFY.
+   *
+   * I first wrote this as "path AND name required" and it failed on multiout, whose plugin is not
+   * in this cache at all because the suites that use it scan their own build dir. The check was
+   * wrong about the world, not the preset.
+   */
+  const weak = presetPluginDevices()
+    .filter((d) => !d.ref.uid16 && !d.ref.name)
+    .map((d) => `${d.file} track ${d.track} device ${d.device}: `
+              + `path=${JSON.stringify(d.ref.path || '')} name=${JSON.stringify(d.ref.name || '')}`);
+  assert.deepEqual(weak, [],
+    'a shipped preset identifies a plugin by PATH ALONE. Zebra2.vst3 holds four products at one '
+    + 'path, so that is a coin flip between them — and the winner changes when the scan is '
+    + 'reordered, with nothing to say so.');
+});
+
+test('and the plugin it names is the one this machine resolves', () => {
+  // The half that needs the cache. Skipping when it is absent would make the check disappear
+  // exactly when the machine is misconfigured, so its absence FAILS.
+  const cachePath = join(PRESET_ROOT, 'build/plugin_cache.json');
+  assert.ok(existsSync(cachePath), `no ${cachePath} — every preset's plugin is unverifiable`);
+  const raw = JSON.parse(readFileSync(cachePath, 'utf8'));
+  const entries = Array.isArray(raw) ? raw : (raw.plugins || raw.entries || []);
+  assert.ok(entries.length > 0, 'the plugin cache is empty');
+
+  const wrong = [];
+  for (const d of presetPluginDevices()) {
+    const r = resolve(entries, d.ref);
+    // NOT RESOLVING is not this check's business — a fixture whose plugin is built into a
+    // suite's own scan dir is absent from this cache by design, and absence is loud anyway.
+    // The runbook presets are held to more than that, one test below.
+    if (r.i < 0) continue;
+    const got = entries[r.i];
+    // The NAME is the promise a preset makes. Resolving to a different product is the silent
+    // swap the whole vst_ref mechanism exists to prevent.
+    if (d.ref.name && got.name !== d.ref.name) {
+      wrong.push(`${d.file} device ${d.device}: names ${d.ref.name}, resolves (${r.how}) to ${got.name}`);
+    }
+  }
+  assert.deepEqual(wrong, [], 'a preset resolves to a different plugin than the one it names');
+});
+
+test('and every plugin the RUNBOOK opens resolves on this machine', () => {
+  /*
+   * A HIGHER BAR, for the presets a person actually opens on the day — and the list is READ FROM
+   * THE RUNBOOK rather than typed here, so a demo that switches projects cannot leave this
+   * checking the old one.
+   *
+   * For these, "resolves to nothing" IS the failure. The device loads as nothing, the track is
+   * silent, and the first anyone knows is the room. Zebra2 loading UNLICENSED on this machine is
+   * the same failure wearing a different hat, and it is why the demo project names Zebralette.
+   */
+  const runbook = readFileSync(join(PRESET_ROOT, 'docs/DEMO.md'), 'utf8');
+  /*
+   * ANY PRESET THE RUNBOOK MENTIONS, not just the one it says to load.
+   *
+   * The narrow reading — names in backticks — finds exactly `generator`, and it is the one the
+   * runbook tells you to open. The wide one finds five, because they are all shipped projects
+   * somebody may open on the day and a silent track is just as bad in any of them. The wide net
+   * costs a preset being held to this because prose happened to name it, which is a cheap price
+   * for not having to guess which four were safe.
+   *
+   * My first attempt derived the list from `load <word>` and found NOTHING, because the only
+   * "load" in the runbook is `load demo_pluck_c4.wav` — a sample, not a project. It reported that
+   * as a failure rather than passing on an empty list, which is the only reason I noticed.
+   */
+  const named = readdirSync(join(PRESET_ROOT, 'presets/projects'))
+    .filter((f) => f.endsWith('.uniproj.json'))
+    .map((f) => f.replace('.uniproj.json', ''))
+    .filter((n) => new RegExp(`\\b${n.replace(/[-]/g, '\\$&')}\\b`).test(runbook));
+  assert.ok(named.length > 0,
+    'the runbook mentions no shipped project at all — this test went blind rather than red');
+
+  const raw = JSON.parse(readFileSync(join(PRESET_ROOT, 'build/plugin_cache.json'), 'utf8'));
+  const entries = Array.isArray(raw) ? raw : (raw.plugins || raw.entries || []);
+  const dead = presetPluginDevices()
+    .filter((d) => named.includes(d.file.replace('.uniproj.json', '')))
+    .filter((d) => resolve(entries, d.ref).i < 0)
+    .map((d) => `${d.file} device ${d.device}: ${JSON.stringify(d.ref)}`);
+  assert.deepEqual(dead, [],
+    `a project the runbook opens (${named.join(', ')}) names a plugin this machine cannot `
+    + 'resolve — that track plays silence and nothing says so until the room hears it');
+});
+
+test('CONTROL: the resolver can tell the two products in one bundle apart', () => {
+  // Without this, both checks above pass on a resolver that returns entry 0 for everything.
+  const raw = JSON.parse(readFileSync(join(PRESET_ROOT, 'build/plugin_cache.json'), 'utf8'));
+  const entries = Array.isArray(raw) ? raw : (raw.plugins || raw.entries || []);
+  const bundle = new Map();
+  for (const e of entries) bundle.set(e.path, (bundle.get(e.path) || 0) + 1);
+  const shared = [...bundle.entries()].find(([, n]) => n > 1);
+  assert.ok(shared, 'no multi-product bundle installed — this control cannot run');
+  const [path] = shared;
+  const members = entries.filter((e) => e.path === path);
+  const a = resolve(entries, { path, name: members[0].name });
+  const b = resolve(entries, { path, name: members[1].name });
+  assert.notEqual(a.i, b.i,
+    `both members of ${path} resolve to the same entry — path+name is not distinguishing them, `
+    + 'so the checks above would pass whatever the presets say');
+  assert.equal(entries[a.i].name, members[0].name);
+  assert.equal(entries[b.i].name, members[1].name);
+});
+
+/*
+ * ── THE NEGATIVE CONTROLS ───────────────────────────────────────────────────────────────────
+ *
+ * The three checks above are green, and green is what they would also be if they could not fail.
+ * So each is re-run against a preset built to break it — in a TEMP DIRECTORY, never by editing
+ * the real ones. A sweep reads these files while this runs, and a sabotage-then-restore that
+ * lands in the window between is a suite failure nobody can explain.
+ */
+const sabotage = (name, mutate) => {
+  const dir = mkdtempSync(join(tmpdir(), 'presetrefs-'));
+  const doc = JSON.parse(readFileSync(join(PRESET_ROOT, `presets/projects/${name}.uniproj.json`), 'utf8'));
+  for (const t of (doc.tracks || [])) {
+    for (const d of (t.device_chain || [])) if (d.vst_ref) mutate(d.vst_ref);
+  }
+  writeFileSync(join(dir, `${name}.uniproj.json`), JSON.stringify(doc));
+  return dir;
+};
+
+test('CONTROL: a path-only ref IS caught', () => {
+  // The check above bans exactly this shape. Strip the name and keep the bundle path — the
+  // Zebra2/Zebralette/ZRev/Zebrify coin flip.
+  const dir = sabotage('maximal', (r) => { r.name = ''; r.uid16 = ''; });
+  const weak = presetPluginDevices(dir).filter((d) => !d.ref.uid16 && !d.ref.name);
+  assert.ok(weak.length > 0,
+    'a preset with a bare bundle path passed the ban — the check cannot fail and proves nothing');
+});
+
+test('CONTROL: a runbook plugin that resolves to nothing IS caught', () => {
+  const raw = JSON.parse(readFileSync(join(PRESET_ROOT, 'build/plugin_cache.json'), 'utf8'));
+  const entries = Array.isArray(raw) ? raw : (raw.plugins || raw.entries || []);
+  // `generator` is the project the runbook tells you to open. Name it after a plugin nobody has.
+  const dir = sabotage('generator', (r) => { r.name = 'NoSuchPluginXYZ'; r.path = ''; r.uid16 = ''; });
+  const dead = presetPluginDevices(dir).filter((d) => resolve(entries, d.ref).i < 0);
+  assert.ok(dead.length > 0,
+    'a runbook project naming an uninstalled plugin resolved anyway — the silent-track check '
+    + 'is blind');
+});
+
+test('CONTROL: a ref that resolves to a DIFFERENT product IS caught', () => {
+  /*
+   * The shape check 2 exists for, and the one I nearly shipped without a control because I could
+   * not think of a way to trigger it.
+   *
+   * It comes from rule 4. A ref carrying a name the scan no longer has, plus a path that holds
+   * exactly one product, skips rules 1-3 and matches on the path alone — handing back whatever
+   * now lives there under a different name. That is a plugin renamed by an update, or a bundle
+   * whose contents changed, and the preset goes on claiming the old one.
+   */
+  const raw = JSON.parse(readFileSync(join(PRESET_ROOT, 'build/plugin_cache.json'), 'utf8'));
+  const entries = Array.isArray(raw) ? raw : (raw.plugins || raw.entries || []);
+  const counts = new Map();
+  for (const e of entries) counts.set(e.path, (counts.get(e.path) || 0) + 1);
+  const lone = entries.find((e) => counts.get(e.path) === 1);
+  assert.ok(lone, 'no single-product bundle in the cache — this control cannot run');
+
+  const r = resolve(entries, { path: lone.path, name: 'NameTheScanNoLongerHas', uid16: '', vendor: '' });
+  assert.equal(r.how, 'path', `expected the bare-path rule to fire, got ${r.how}`);
+  assert.notEqual(entries[r.i].name, 'NameTheScanNoLongerHas',
+    'the resolver returned the name it was given, so check 2 has nothing to compare');
+  assert.equal(entries[r.i].name, lone.name,
+    `it resolved to ${entries[r.i].name} while the ref says NameTheScanNoLongerHas — which is `
+    + 'exactly the mismatch check 2 reports, so that check can fail');
+});
+
+/*
+ * ── THE RUNBOOK MAY NOT QUOTE OUTPUT NOTHING PRINTS ─────────────────────────────────────────
+ *
+ * Found by reading, which is the wrong way to find it. DEMO.md said:
+ *
+ *     Then check the line it prints:
+ *         ask     enabled — key file /Users/jak/src/daw-web/.env
+ *
+ * No version of webstack.sh in this tree prints that. The real line is
+ * "ask: an ANTHROPIC_API_KEY resolves". So the instruction on the morning of the demo was to
+ * look for a string that would never appear — and the failure mode is the worst kind: you scan
+ * the output, do not find it, and cannot tell "not printed" from "I missed it".
+ *
+ * The `say` helper prefixes with "> ", so a quoted line beginning "> " is a claim about what a
+ * script says, and it is checkable against the scripts.
+ */
+const toolScripts = () => readdirSync(join(PRESET_ROOT, 'tools'))
+  .filter((f) => f.endsWith('.sh'))
+  .map((f) => readFileSync(join(PRESET_ROOT, 'tools', f), 'utf8'))
+  .join('\n');
+
+/*
+ * Does any script print this line? Compared on the part BEFORE the em-dash, because the scripts
+ * interpolate after it ($ask_key, a path, a timestamp) and a whole-line match would fail on lines
+ * that are perfectly correct — which pushes the next person to delete the check instead of
+ * fixing the claim.
+ */
+const scriptPrints = (scripts, line) => {
+  const stem = line.split('—')[0].trim();
+  return stem.length <= 6 || scripts.includes(stem);
+};
+
+test('every script line the runbook quotes is a line a script prints', () => {
+  const runbook = readFileSync(join(PRESET_ROOT, 'docs/DEMO.md'), 'utf8');
+  const scripts = toolScripts();
+
+  // Only inside fenced blocks, and only lines starting with the `say` prefix — prose that
+  // happens to begin with "> " is a markdown quote, not a claim about output.
+  const fenced = [...runbook.matchAll(/```[a-z]*\n([\s\S]*?)```/g)].map((m) => m[1]);
+  const quoted = fenced.flatMap((b) => b.split('\n'))
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith('> ') && l.length > 12)
+    .map((l) => l.slice(2).trim());
+
+  // Compared on the DISTINCTIVE PREFIX rather than the whole line: the scripts interpolate
+  // ($WEB, a timestamp), so a whole-line match would fail on lines that are perfectly correct
+  // and push the next person to delete the check instead of the claim.
+  const missing = quoted.filter((line) => !scriptPrints(scripts, line));
+  assert.deepEqual(missing, [],
+    'the runbook tells the reader to look for a line no script in tools/ prints. Not finding it '
+    + 'on the day is indistinguishable from missing it.');
+});
+
+test('CONTROL: an invented output line IS caught', () => {
+  /*
+   * THE CONTROL I FIRST WROTE WAS BUILT ON A FALSE PREMISE, and that is worth the space.
+   *
+   * I "corrected" DEMO.md for quoting `ask     enabled — key file ...`, having grepped
+   * webstack.sh, found `ask: an ANTHROPIC_API_KEY resolves`, and stopped at the first hit. The
+   * script prints BOTH — one says whether a key resolves, the other says which file it came
+   * from — and the runbook was right. This check, still in a scratch file, is what caught it.
+   *
+   * So the control asserts the PREDICATE, not a claim about any particular line: a line nobody
+   * prints must be rejected, and a line somebody does print must be accepted. A control resting
+   * on my reading of a script is a control resting on the thing that was wrong.
+   */
+  const scripts = toolScripts();
+  assert.equal(scriptPrints(scripts, 'no script anywhere prints this sentence'), false,
+    'an invented line was accepted — the check cannot fail and proves nothing');
+  assert.equal(scriptPrints(scripts, 'ask     enabled — key file /somewhere/else/.env'), true,
+    'a line a script really does print was rejected; only the text after the em-dash differs, '
+    + 'which is interpolated and cannot be matched');
 });

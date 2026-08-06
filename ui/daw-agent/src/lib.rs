@@ -17,6 +17,7 @@ pub mod tools;
 pub use harness::{run_agent_loop, CallOutcome, Decider, ScriptedDecider, StepOutcome};
 pub use observe::{observe, DeviceView, NoteView, Observation, PluginView, TrackView, Transport};
 pub use tools::{
+    execute_in,
     execute, manifest_json, tool_manifest, ToolCall, ToolResult, ToolSpec,
 };
 
@@ -26,6 +27,9 @@ use daw_bridge::control::EngineHandle;
 /// writes go to the agent's own SPSC command ring.
 pub struct AgentSession {
     handle: EngineHandle,
+    /// Where projects live, for the tools that touch the filesystem rather than the ring.
+    /// A caller-supplied fact — see `execute_in`.
+    project_dir: String,
 }
 
 impl AgentSession {
@@ -34,7 +38,23 @@ impl AgentSession {
     pub fn attach(shm_name: &str) -> Result<Self, String> {
         Ok(Self {
             handle: EngineHandle::attach_agent(shm_name)?,
+            project_dir: daw_bridge::project::engine_project_dir(),
         })
+    }
+
+    /// Point this session at a project directory other than the environment's.
+    ///
+    /// For a HOST that knows better than the environment does — and for tests, which start an
+    /// engine on a private temp directory passed to the child process only. Without this a test
+    /// would have to mutate the process environment, which is shared by every test in the binary.
+    pub fn with_project_dir(mut self, dir: impl Into<String>) -> Self {
+        self.project_dir = dir.into();
+        self
+    }
+
+    /// Where this session believes projects live.
+    pub fn project_dir(&self) -> &str {
+        &self.project_dir
     }
 
     pub fn handle(&self) -> &EngineHandle {
@@ -53,6 +73,6 @@ impl AgentSession {
 
     /// Run one tool call against the engine.
     pub fn execute(&self, call: &ToolCall) -> ToolResult {
-        execute(&self.handle, call)
+        execute_in(&self.handle, call, &self.project_dir)
     }
 }

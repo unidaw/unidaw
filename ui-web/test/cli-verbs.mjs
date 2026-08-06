@@ -50,7 +50,7 @@ const stack = await startStack({ numBlocks: 8, keepDir: true });
 const cli = (...args) => {
   try {
     return { ok: true, out: execFileSync(join(ROOT, 'ui/target/release/daw-cli'), args,
-      { env: { ...process.env, DAW_UI_SHM_NAME: stack.shm }, encoding: 'utf8', timeout: 15000 }) };
+      { env: { ...process.env, DAW_UI_SHM_NAME: stack.shm, DAW_PROJECT_DIR: stack.dir }, encoding: 'utf8', timeout: 15000 }) };
   } catch (e) {
     return { ok: false, out: String(e.stdout || '') + String(e.stderr || e.message || '') };
   }
@@ -354,6 +354,57 @@ check(rm.ok, 'do remove-device runs', rm.out.slice(0, 160));
 const afterRm = await saved(`${NAME}_g`);
 check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
       'remove-device removes device 3 and leaves 7', JSON.stringify(chainOf(afterRm, 0)));
+
+/* ── do new ─────────────────────────────────────────────────────────────────────────────────
+ * LAST, because it REPLACES the loaded document — everything above needs the fixture.
+ *
+ * `new` was reachable only from the browser: it is a sidecar websocket message, because the
+ * browser cannot write files. daw-cli can, so the limitation was inherited rather than required.
+ *
+ * Three assertions, and the third is the one that matters. A `new` that writes the file is easy;
+ * a `new` that refuses to overwrite one is the behaviour that exists because this project lost a
+ * song to a `new` that was too willing — and a check for "the file appeared" passes on a build
+ * that clobbers.
+ */
+{
+  const fresh = `${NAME}_new`;
+  const made = cli('do', 'new', fresh);
+  check(made.ok, 'do new runs', made.out.slice(0, 200));
+  const path = `${stack.dir}/${fresh}.uniproj.json`;
+  check(existsSync(path), 'and WRITES the project file', path);
+
+  let doc = null;
+  try { doc = JSON.parse(readFileSync(path, 'utf8')); } catch { /* reported next */ }
+  check(doc && Array.isArray(doc.tracks) && doc.tracks.length === 1,
+        'the new document is empty but usable — exactly one track',
+        JSON.stringify(doc && doc.tracks));
+  check(doc && (doc.clips || []).length === 0, 'and no clips', JSON.stringify(doc && doc.clips));
+
+  // IT WAS ACTUALLY LOADED, not merely written. `new` sends LoadProject after the write, and a
+  // file on disk the engine never opened is this verb's most likely failure — the writer and the
+  // reader would simply disagree about the directory, silently.
+  await sleep(1200);
+  const back = await saved(`${fresh}_rt`);
+  // ORDINARY TRACKS, not `tracks.length`. A save always emits the MASTER track alongside them —
+  // id 4294901760 — so the document on disk has two where the one `new` wrote has one. The first
+  // version of this asserted the raw count and failed on a build that was working perfectly: it
+  // was asserting a fact about the save format, and the fact was wrong.
+  const ordinary = (back && back.tracks || []).filter((t) => !t.is_master);
+  check(ordinary.length === 1,
+        'AND THE ENGINE IS IN IT — saving now writes one empty track, not the fixture',
+        JSON.stringify(back && (back.tracks || []).map((t) => [t.track_id, !!t.is_master])));
+  check(back && chainOf(back, 0).length === 0,
+        'the fixture\'s devices are gone, which is what "new" means',
+        JSON.stringify(back && chainOf(back, 0)));
+
+  // THE REFUSAL. Same name, twice.
+  const again = cli('do', 'new', fresh);
+  check(!again.ok, 'a SECOND `new` with the same name is REFUSED, not silently obeyed',
+        `exit ok=${again.ok}, out=${again.out.slice(0, 160)} — overwriting a song is not a thing `
+        + 'to do as a side effect of the shortcut for "start something"');
+  check(/already exists/i.test(again.out),
+        'and it says why', again.out.slice(0, 200));
+}
 
 await stack.stop();
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} (${pass} checks${fail ? `, ${fail} failed` : ''})`);

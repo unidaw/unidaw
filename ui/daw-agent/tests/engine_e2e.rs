@@ -3884,3 +3884,90 @@ fn the_agent_can_chop_a_sample_and_lay_it_out_as_rows() {
         std::thread::sleep(Duration::from_millis(250));
     }
 }
+
+/// A NEW, EMPTY PROJECT FROM THE AGENT — and the refusal that keeps it from eating a song.
+///
+/// `new` was a browser feature: built as a sidecar websocket message because the browser cannot
+/// write files, a limitation the two surfaces that CAN write files then inherited for no reason.
+/// The model could add tracks, notes, devices and samples, and could not start a song.
+///
+/// THE SECOND CALL IS THE POINT. A check that the file appeared passes on a build that clobbers,
+/// and clobbering is not hypothetical here: this project lost half an hour of work to a `new`
+/// that wrote an empty file over the name it was given while every later save went somewhere
+/// else. So the refusal is asserted, and asserted to leave the FIRST file's bytes alone.
+#[test]
+fn new_project_starts_an_empty_song_and_refuses_to_overwrite_one() {
+    let (engine, session) = start_engine("newproj");
+    // The session is pointed at the engine's OWN temp directory. `start_engine` passes
+    // DAW_PROJECT_DIR to the child process only, so a session resolving it from this process's
+    // environment would write somewhere the engine is not reading — the exact failure the tool's
+    // directory rule exists to prevent, and it would look like "the engine ignored the load".
+    let session = session.with_project_dir(engine.proj.to_string_lossy().to_string());
+
+    // Something to lose: a project with content, saved under the name we will then reuse.
+    let before = session.handle().clip_version();
+    let made = session.execute(&ToolCall {
+        tool: "add_notes".into(),
+        args: json!({ "track": 0, "pitches": [60, 64], "start": 0, "step": Q, "duration": Q/2 }),
+    });
+    assert!(made.ok, "add_notes failed: {made:?}");
+    assert!(
+        session.handle().wait_for_clip_version(before, before.wrapping_add(1),
+                                               Duration::from_secs(3)),
+        "the note was never applied, so there is nothing to protect"
+    );
+    let saved = session.execute(&ToolCall {
+        tool: "save".into(), args: json!({ "name": "keepme" }),
+    });
+    assert!(saved.ok, "save failed: {saved:?}");
+    let original = read_project(&engine.proj, "keepme");
+    let original_notes = original["clips"].as_array().map(|c| c.len()).unwrap_or(0);
+    assert!(original_notes > 0, "the project to protect has no clips: {original}");
+
+    // ── THE NEW SONG ────────────────────────────────────────────────────────────────────────
+    let fresh = session.execute(&ToolCall {
+        tool: "new_project".into(), args: json!({ "name": "brandnew" }),
+    });
+    assert!(fresh.ok, "new_project failed: {fresh:?}");
+    let path = engine.proj.join("brandnew.uniproj.json");
+    assert!(path.exists(), "new_project reported success and wrote no file");
+
+    // AND THE ENGINE IS IN IT, not merely the disk. `new` sends LoadProject after writing, and a
+    // file the engine never opened is this tool's most likely failure mode.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let saved_now = session.execute(&ToolCall {
+            tool: "save".into(), args: json!({ "name": "after_new" }),
+        });
+        assert!(saved_now.ok, "save after new failed: {saved_now:?}");
+        let doc = read_project(&engine.proj, "after_new");
+        let clips = doc["clips"].as_array().map(|c| c.len()).unwrap_or(0);
+        if clips == 0 {
+            // NOT `tracks.len() == 1`. A SAVE always emits the master track alongside the
+            // ordinary ones, so the document on disk has two where the document `new` wrote has
+            // one. Asserting the raw count was asserting a fact about the save format that
+            // happens to be false — the check has to say what it means: one ordinary track.
+            let ordinary = doc["tracks"].as_array().unwrap().iter()
+                .filter(|t| t["is_master"] != json!(true))
+                .count();
+            assert_eq!(ordinary, 1, "a new project should have exactly one ordinary track: {doc}");
+            break;
+        }
+        assert!(Instant::now() < deadline,
+                "the engine still holds the old song's {clips} clip(s) after new_project — the \
+                 file was written but never loaded");
+        std::thread::sleep(Duration::from_millis(150));
+        let _ = std::fs::remove_file(engine.proj.join("after_new.uniproj.json"));
+    }
+
+    // ── AND IT WILL NOT EAT A SONG ──────────────────────────────────────────────────────────
+    let again = session.execute(&ToolCall {
+        tool: "new_project".into(), args: json!({ "name": "keepme" }),
+    });
+    assert!(!again.ok, "new_project overwrote an existing project: {again:?}");
+    assert!(again.error.as_deref().unwrap_or("").contains("already exists"),
+            "the refusal should say why, got {again:?}");
+    let after = read_project(&engine.proj, "keepme");
+    assert_eq!(after["clips"].as_array().map(|c| c.len()), Some(original_notes),
+               "the refused `new` changed the existing project anyway");
+}
