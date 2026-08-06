@@ -151,16 +151,19 @@ const toOpsField = async (row) => {
   await page.keyboard.press('ArrowRight');
   await page.keyboard.press('ArrowRight');
   await settle(200);
+  const field = await page.evaluate(() => {
+    const c = window.__uni.state().cursor;
+    return c && c.col !== undefined ? c.col % 3 : -1;
+  });
   if (!fieldChecked) {
     fieldChecked = true;
-    const field = await page.evaluate(() => {
-      const c = window.__uni.state().cursor;
-      return c && c.col !== undefined ? c.col % 3 : -1;
-    });
     check(field === 2, 'two cursor-rights from the note lands on the OPS field',
           `field ${field} — if the tracker gained or lost a field, every token below goes `
           + `somewhere else and is refused without saying so`);
   }
+  // RETURNED, so a caller can tell. It returned nothing before, so `await toOpsField(...)` was
+  // undefined and every caller that checked it reported a failure that had not happened.
+  return field === 2;
 };
 
 for (let i = 0; i < OPS.length; i++) {
@@ -330,18 +333,29 @@ const pickSnd = async (cat, want) => {
 };
 check(await pickSnd('devs', 'sampler') === true, 'a sampler for the ops to be heard through');
 await settle(1500);
-check(await pickSnd('smpl', 'demo_kick') === true, 'with a short, fast-decaying sample in it');
+/*
+ * A PITCHED SAMPLE, not the kick. `demo_kick.wav` is a sine SWEEPING from 160Hz to 45Hz — it has
+ * no stable pitch, and the detector read it as A-1 then A#-1 as the sweep fell. Counting notes
+ * needs a note: `demo_pluck_c4` is middle C with real harmonics, so every strike reports 60 and
+ * a wrong pitch would be visible rather than plausible.
+ */
+check(await pickSnd('smpl', 'demo_pluck') === true, 'with a pitched sample in it');
 await settle(2500);
 
 /*
  * TWO IDENTICAL NOTES, one with a retrigger. Same pitch, same length, same instrument — the op is
  * the only difference, so any difference in the audio is the op.
  */
+/*
+ * SIX-SECOND NOTES, so a retrigger's three strikes fall two seconds apart — wider than the
+ * sample's 1.6s decay, so each is a clean onset. At two seconds the strikes were 0.67s apart and
+ * rang into each other, which merges them into one and makes the count unmeasurable.
+ */
 await run('goto 0 0');
-await run('note 60 3840000');
+await run('note 60 11520000');
 await settle(400);
 await run('goto 16 0');
-await run('note 60 3840000');
+await run('note 60 11520000');
 await settle(600);
 const sndTicks = await page.evaluate(() =>
   (window.__uni.notes() || []).map((n) => n.t ?? n.on).sort((a, b) => a - b));
@@ -360,17 +374,18 @@ if (sndTicks.length === 2) {
 await run(`save ${SONG}snd`);
 await settle(2000);
 
-let plainOnsets = -1, retrigOnsets = -1;
+let plainHits = -1, retrigHits = -1, heard = [];
 try {
   const { execFileSync } = await import('node:child_process');
   const { existsSync, unlinkSync } = await import('node:fs');
   const { fileURLToPath } = await import('node:url');
-  const { readWav, envelope } = await import('./wav.mjs');
+  const { readWav } = await import('./wav.mjs');
+  const { detectNotes, noteName } = await import('./notes.mjs');
   const ROOT = fileURLToPath(new URL('../..', import.meta.url));
   const out = join(stack.dir, 'opstake.wav');
   try { unlinkSync(out); } catch { /* absent is normal */ }
   execFileSync(join(ROOT, 'build', 'daw_engine'),
-               ['--project', `${SONG}snd`, '--render', 'opstake', '--run-seconds', '14'],
+               ['--project', `${SONG}snd`, '--render', 'opstake', '--run-seconds', '18'],
                { cwd: join(ROOT, 'build'),
                  env: { ...process.env, DAW_PROJECT_DIR: stack.dir,
                         DAW_HOST_BINARY: join(ROOT, 'build', 'juce_host_process'),
@@ -378,34 +393,37 @@ try {
                  stdio: ['ignore', 'pipe', 'pipe'], timeout: 180000 });
   if (existsSync(out)) {
     const w = readWav(out);
-    const per = 0.02;
-    const env = envelope(w.mono, w.rate, per);
-    /** Attacks in a window: crossings up through the floor after being below it. */
-    const onsets = (at0, span) => {
-      const lo = Math.max(0, Math.round(at0 / per));
-      const hi = Math.min(env.length, Math.round((at0 + span) / per));
-      let n = 0, below = true;
-      for (let i = lo; i < hi; i++) {
-        if (below && env[i] > 0.02) { n++; below = false; }
-        else if (!below && env[i] < 0.008) below = true;
-      }
-      return n;
-    };
+    /*
+     * DETECTED NOTES, NOT ENVELOPE BUMPS.
+     *
+     * The first version counted rises through a level threshold and got "plain note 3 attacks,
+     * retriggered note 1" — the exact backwards answer, because a decaying sample crosses a
+     * fixed floor several times on the way down and a dense retrigger never falls below it at
+     * all. Counting NOTES at a known PITCH cannot be fooled that way: a strike is a strike
+     * whatever the level around it.
+     */
+    heard = detectNotes(w.mono, w.rate, { minConf: 0.5 });
     const secOf = (tick) => (tick / 960000) * 0.5;
-    plainOnsets = onsets(secOf(sndTicks[0]), 2.0);
-    retrigOnsets = onsets(secOf(sndTicks[1]), 2.0);
-    console.log(`  attacks: plain note ${plainOnsets}, retriggered note ${retrigOnsets}`);
+    const inWindow = (at0, span) => heard.filter((n) => n.at >= at0 - 0.05 && n.at < at0 + span);
+    // 5.5s windows: long enough to hold three strikes two seconds apart, short enough not to
+    // reach the next note.
+    plainHits = inWindow(secOf(sndTicks[0]), 5.5).length;
+    retrigHits = inWindow(secOf(sndTicks[1]), 5.5).length;
+    console.log(`  heard: ${heard.map((n) => `${n.at}s ${n.name}`).join(', ')}`);
   }
 } catch (e) {
   check(false, 'the ops song renders', String(e).slice(0, 180));
 }
 
-check(plainOnsets === 1, 'the plain note is ONE attack — the control for the count',
-      `${plainOnsets} attack(s); anything else and the counter is measuring the sample's shape `
+check(plainHits === 1, 'the plain note is ONE strike — the control for the count',
+      `${plainHits} detected; anything else and the counter is reading the sample's decay `
       + `rather than the strikes`);
-check(retrigOnsets === 3,
-      'AND `ret3` IS THREE — the op reaches the scheduler, not just the clip',
-      `${retrigOnsets} attack(s) against ${plainOnsets} for the identical note without the op`);
+check(retrigHits === 3,
+      'AND `ret3` IS THREE STRIKES — the op reaches the scheduler, not just the clip',
+      `${retrigHits} against ${plainHits} for the identical note without the op`);
+check(heard.length > 0 && heard.every((n) => n.midi === 60),
+      'and every strike is the pitch that was typed — a retrigger repeats the note, not a new one',
+      `${JSON.stringify(heard.map((n) => n.name))}`);
 
 check(errors.length === 0, 'nothing threw', errors.slice(0, 3).join(' | '));
 
