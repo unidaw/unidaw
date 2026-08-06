@@ -3815,3 +3815,80 @@ test('only meter.js decides how long a bar is', async () => {
     + 'private 4 is invisible until somebody writes in 6/8, and then the readout and the ruler '
     + 'disagree about where the playhead is');
 });
+
+test('the note detector recovers pitches it was never told', async () => {
+  /*
+   * THE AUDIO ASSERTIONS IN THIS REPO ALL ASKED "WAS THERE A LEVEL HERE" — peak, RMS,
+   * loud-fraction, envelope shape. None of them can answer the questions that matter about a
+   * DAW: did ALL the notes play, is the harmony system applied to this track, is that a strum.
+   * A track playing entirely the wrong notes has the same RMS as one playing the right ones.
+   *
+   * `notes.mjs` answers those, so it needs its own net. Synthetic tones here — deterministic, no
+   * engine, no render — and the real validation lives where it belongs: rendered engine audio,
+   * in chord-render and harmony-quantize.
+   *
+   * IT WAS WRONG THE FIRST TIME AND THIS IS HOW I KNOW. Written with plain autocorrelation and a
+   * "prefer the shortest nearly-as-good lag" rule to dodge the octave error, it reported a
+   * synthesised C-2 as B-6 and put every other tone exactly one semitone sharp — because at tiny
+   * lags any smooth waveform correlates with itself near 1.0. Calibrating against tones of KNOWN
+   * pitch caught it in one run. Against real audio it would have produced plausible wrong numbers,
+   * which is the shape that gets believed.
+   */
+  const { fundamental, nearestNote, noteName, detectNotes } = await import('./notes.mjs');
+  const RATE = 44100;
+
+  /** A note with harmonics — the case a naive detector gets an octave wrong. */
+  const tone = (midi, seconds = 0.3, harmonics = [1, 0.5, 0.25]) => {
+    const f = 440 * Math.pow(2, (midi - 69) / 12);
+    const n = Math.round(RATE * seconds);
+    const s = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      let v = 0;
+      harmonics.forEach((amp, h) => { v += amp * Math.sin((2 * Math.PI * f * (h + 1) * i) / RATE); });
+      s[i] = v * 0.3;
+    }
+    return s;
+  };
+
+  for (const midi of [36, 43, 48, 55, 60, 64, 67, 72, 79, 84]) {
+    const got = fundamental(tone(midi), RATE);
+    assert.ok(got, `no pitch found for ${noteName(midi)}`);
+    const near = nearestNote(got.freq);
+    assert.equal(near.midi, midi,
+      `${noteName(midi)} came back as ${noteName(near.midi)} (${got.freq.toFixed(1)}Hz)`);
+    assert.ok(Math.abs(near.cents) <= 12, `${noteName(midi)} off by ${near.cents} cents`);
+  }
+
+  /*
+   * THE OCTAVE TRAP, on its own. A tone whose SECOND harmonic is louder than its first is what
+   * makes an FFT-peak detector report an octave up, and it is common in real instruments.
+   */
+  const bright = fundamental(tone(60, 0.3, [0.3, 1.0, 0.6]), RATE);
+  assert.equal(nearestNote(bright.freq).midi, 60,
+    'a tone whose second harmonic dominates is still its own fundamental, not an octave up');
+
+  /*
+   * AND A SEQUENCE, so the onset half is covered too: four notes with silence between them come
+   * back as four notes at the right pitches, in order.
+   */
+  const gap = new Float64Array(Math.round(RATE * 0.25));
+  const want = [60, 64, 67, 72];
+  const parts = [];
+  for (const m of want) { parts.push(tone(m, 0.4), gap); }
+  const seq = new Float64Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of parts) { seq.set(p, at); at += p.length; }
+
+  const found = detectNotes(seq, RATE);
+  assert.deepEqual(found.map((n) => n.midi), want,
+    `a four-note line came back as ${JSON.stringify(found.map((n) => n.name))}`);
+  // And roughly where they were put: 0.65s apart, allowing a frame either way.
+  found.forEach((n, i) => {
+    assert.ok(Math.abs(n.at - i * 0.65) < 0.05,
+      `${n.name} detected at ${n.at}s, expected about ${(i * 0.65).toFixed(2)}s`);
+  });
+
+  // Silence is silence, not a confident guess.
+  assert.deepEqual(detectNotes(new Float64Array(RATE), RATE), [],
+    'silence must produce no notes at all');
+});

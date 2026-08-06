@@ -290,6 +290,123 @@ const after = await page.evaluate(() => window.__uni.opsTextAtCursor());
 check(/ret3/.test(String(after)) && /p40/.test(String(after)),
       'a nonsense token is refused and the existing ops survive', JSON.stringify(after));
 
+// ---------------------------------------------------------------------------
+// AND DOES A ROW OP CHANGE WHAT YOU HEAR?
+//
+// Everything above proves the ops reach the engine and are drawn. None of it proves they DO
+// anything — a retrigger stored perfectly and ignored by the scheduler would pass every check in
+// this file, and that is the exact shape found twice this week (a chord emitting note-ons at
+// peak 0, a patcher graph reaching no instrument).
+//
+// RETRIGGER is the op to measure: `ret3` means three even strikes across the note, so it is
+// COUNTABLE. Probability is deliberately random and delay moves an onset by a fraction of a beat;
+// counting attacks is the assertion that cannot be satisfied by accident.
+//
+// `demo_kick.wav` rather than the pluck: it decays in about half a second, so three strikes
+// across a two-second note fall back to silence between each other and are separable. A sample
+// that rings through the gaps would merge them into one plateau and the count would be 1 either
+// way — which is a measurement that cannot fail.
+// ---------------------------------------------------------------------------
+await run(`new ${SONG}snd`);
+await settle(1400);
+const pickSnd = async (cat, want) => {
+  const open = await page.evaluate(() => {
+    const r = document.querySelector('.br');
+    return !!r && r.offsetParent !== null && getComputedStyle(r).display !== 'none';
+  });
+  if (!open) await page.keyboard.press('Meta+b');
+  await settle(500);
+  return page.evaluate(async ([c, w]) => {
+    const chip = document.querySelector(`.br-chip[data-cat="${c}"]`);
+    if (!chip || chip.disabled) return `${c} unavailable`;
+    chip.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 400));
+    const rows = [...document.querySelectorAll('.br-item')].filter((el) => el.offsetParent !== null);
+    const row = rows.find((el) => (el.textContent || '').toLowerCase().includes(w.toLowerCase()));
+    if (!row) return `no "${w}" in ${c}`;
+    row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    return true;
+  }, [cat, want]);
+};
+check(await pickSnd('devs', 'sampler') === true, 'a sampler for the ops to be heard through');
+await settle(1500);
+check(await pickSnd('smpl', 'demo_kick') === true, 'with a short, fast-decaying sample in it');
+await settle(2500);
+
+/*
+ * TWO IDENTICAL NOTES, one with a retrigger. Same pitch, same length, same instrument — the op is
+ * the only difference, so any difference in the audio is the op.
+ */
+await run('goto 0 0');
+await run('note 60 3840000');
+await settle(400);
+await run('goto 16 0');
+await run('note 60 3840000');
+await settle(600);
+const sndTicks = await page.evaluate(() =>
+  (window.__uni.notes() || []).map((n) => n.t ?? n.on).sort((a, b) => a - b));
+check(sndTicks.length === 2, 'two notes, plain so far', JSON.stringify(sndTicks));
+
+// The second one gets `ret3`, typed, like everything else in this file.
+if (sndTicks.length === 2) {
+  const okField = await toOpsField(16);
+  check(okField, 'the cursor reaches the second note\'s ops field');
+  await page.keyboard.press('@');
+  await settle(200);
+  await page.keyboard.type('ret3', { delay: 30 });
+  await page.keyboard.press('Enter');
+  await settle(600);
+}
+await run(`save ${SONG}snd`);
+await settle(2000);
+
+let plainOnsets = -1, retrigOnsets = -1;
+try {
+  const { execFileSync } = await import('node:child_process');
+  const { existsSync, unlinkSync } = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
+  const { readWav, envelope } = await import('./wav.mjs');
+  const ROOT = fileURLToPath(new URL('../..', import.meta.url));
+  const out = join(stack.dir, 'opstake.wav');
+  try { unlinkSync(out); } catch { /* absent is normal */ }
+  execFileSync(join(ROOT, 'build', 'daw_engine'),
+               ['--project', `${SONG}snd`, '--render', 'opstake', '--run-seconds', '14'],
+               { cwd: join(ROOT, 'build'),
+                 env: { ...process.env, DAW_PROJECT_DIR: stack.dir,
+                        DAW_HOST_BINARY: join(ROOT, 'build', 'juce_host_process'),
+                        DAW_UI_SHM_NAME: `/opsui_${process.pid}` },
+                 stdio: ['ignore', 'pipe', 'pipe'], timeout: 180000 });
+  if (existsSync(out)) {
+    const w = readWav(out);
+    const per = 0.02;
+    const env = envelope(w.mono, w.rate, per);
+    /** Attacks in a window: crossings up through the floor after being below it. */
+    const onsets = (at0, span) => {
+      const lo = Math.max(0, Math.round(at0 / per));
+      const hi = Math.min(env.length, Math.round((at0 + span) / per));
+      let n = 0, below = true;
+      for (let i = lo; i < hi; i++) {
+        if (below && env[i] > 0.02) { n++; below = false; }
+        else if (!below && env[i] < 0.008) below = true;
+      }
+      return n;
+    };
+    const secOf = (tick) => (tick / 960000) * 0.5;
+    plainOnsets = onsets(secOf(sndTicks[0]), 2.0);
+    retrigOnsets = onsets(secOf(sndTicks[1]), 2.0);
+    console.log(`  attacks: plain note ${plainOnsets}, retriggered note ${retrigOnsets}`);
+  }
+} catch (e) {
+  check(false, 'the ops song renders', String(e).slice(0, 180));
+}
+
+check(plainOnsets === 1, 'the plain note is ONE attack — the control for the count',
+      `${plainOnsets} attack(s); anything else and the counter is measuring the sample's shape `
+      + `rather than the strikes`);
+check(retrigOnsets === 3,
+      'AND `ret3` IS THREE — the op reaches the scheduler, not just the clip',
+      `${retrigOnsets} attack(s) against ${plainOnsets} for the identical note without the op`);
+
 check(errors.length === 0, 'nothing threw', errors.slice(0, 3).join(' | '));
 
 await browser.close();
