@@ -3609,3 +3609,186 @@ fn removing_a_track_leaves_the_others_intact() {
         std::thread::sleep(Duration::from_millis(200));
     }
 }
+
+/// The automation READS, and the macro knob — the last three the registry claimed and nothing drove.
+///
+/// `automation` lists which parameters are automated; `automation_points` gives one lane's points.
+/// Both are reads, so they are asserted for AGREEMENT with what was just written rather than for
+/// a shape of their own — a read that invents its own answer is worse than one that is missing.
+///
+/// `set_macro` cannot be read back from the file: a macro's position is runtime state, not a
+/// persisted field. So it is asserted as ACCEPTED, and that limit is stated rather than dressed
+/// up. What it rules out is the shape that has bitten repeatedly today — a tool whose payload the
+/// engine refuses outright — not a wrong value.
+#[test]
+fn the_agent_can_read_its_own_automation_and_turn_a_macro() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("agauto");
+
+    // NOTHING AUTOMATED YET. `found: false` is documented as an ANSWER, so the empty case is
+    // asserted first — otherwise "it reports a lane" cannot be told from "it reports anything".
+    let empty = session.execute(&ToolCall {
+        tool: "automation".into(), args: json!({ "track": 0 }) });
+    assert!(empty.ok, "automation failed on an empty song: {empty:?}");
+    let empty_txt = empty.output.to_string();
+    assert!(!empty_txt.contains("index:0"),
+            "an unautomated song must not list index:0 — {empty_txt}");
+
+    for (tick, value) in [(0u64, 0.2f64), (Q * 2, 0.9)] {
+        let w = session.execute(&ToolCall {
+            tool: "write_automation_point".into(),
+            args: json!({ "track": 0, "param": "index:0", "tick": tick, "value": value }),
+        });
+        assert!(w.ok, "write_automation_point failed: {w:?}");
+        std::thread::sleep(Duration::from_millis(300));
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        let list = session.execute(&ToolCall {
+            tool: "automation".into(), args: json!({ "track": 0 }) });
+        let pts = session.execute(&ToolCall {
+            tool: "automation_points".into(),
+            args: json!({ "track": 0, "param": "index:0" }) });
+        if list.ok && pts.ok {
+            let lt = list.output.to_string();
+            // TWO points, and the VALUES that were written — a read that reported the right
+            // COUNT with invented values would pass a length check.
+            let arr = pts.output["points"].as_array().cloned().unwrap_or_default();
+            let vals: Vec<f64> = arr.iter()
+                .filter_map(|p| p.get(1).and_then(|v| v.as_f64())
+                    .or_else(|| p["value"].as_f64()))
+                .collect();
+            let near = |a: f64, b: f64| (a - b).abs() < 0.02;
+            if lt.contains("index:0") && arr.len() == 2
+                && vals.iter().any(|v| near(*v, 0.2)) && vals.iter().any(|v| near(*v, 0.9)) {
+                break;
+            }
+        }
+        assert!(Instant::now() < deadline,
+                "automation list: {}\npoints: {}",
+                list.output, pts.output);
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // A lane nobody automated answers, rather than erroring — that is the documented contract.
+    let none = session.execute(&ToolCall {
+        tool: "automation_points".into(),
+        args: json!({ "track": 0, "param": "index:99" }) });
+    assert!(none.ok,
+            "an unautomated parameter is an ANSWER (`found: false`), not a failure: {none:?}");
+
+    // THE MACRO. Accepted-only, and said so: the knob's position is runtime state and no save
+    // carries it, so there is nothing on disk to compare against.
+    let macro_set = session.execute(&ToolCall {
+        tool: "set_macro".into(),
+        args: json!({ "track": 0, "device": 1, "value": 0.75 }) });
+    assert!(macro_set.ok, "set_macro failed: {macro_set:?}");
+}
+
+/// CHOP A BREAK AND TURN IT INTO ROWS — the last two the registry claimed and nothing drove.
+///
+/// `sampler_slice` cuts a loaded sample; `sampler_emit_rows` lays the slices out as notes so the
+/// break plays back as itself and becomes editable. They are one gesture in two calls, which is
+/// why they are tested together: emitting rows from an unchopped sample is meaningless, and a
+/// chop nobody can play is half a feature.
+///
+/// `make_slots` is the half that matters. Without it a chop changes the slice set and leaves ONE
+/// slot for the lot — the sample is cut and nothing new is playable. So the slots are asserted,
+/// not the slice count.
+#[test]
+fn the_agent_can_chop_a_sample_and_lay_it_out_as_rows() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agchop");
+
+    let proj = json!({
+        "schema_version": 2,
+        "meta": { "name": "agchop_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [], "clips": [],
+        "tracks": [ {
+            "track_id": 0, "name": "Chop", "harmony_quantize": 0, "lines_per_beat": 4,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            "device_chain": [ { "device_id": 5, "kind": "sampler", "patcher_node_id": 0,
+                                "bypass": false, "sampler": { "slots": [] } } ],
+            "mod_links": [], "placements": []
+        } ]
+    });
+    std::fs::write(engine.proj.join("agchop_in.uniproj.json"),
+                   serde_json::to_string_pretty(&proj).unwrap()).unwrap();
+    assert!(session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"agchop_in"}) }).ok);
+    std::thread::sleep(Duration::from_millis(1500));
+
+    // Something to chop. Without a loaded sample a slice has nothing to cut and the test would
+    // be asserting the shape of a refusal.
+    let loaded = session.execute(&ToolCall {
+        tool: "load_sample".into(),
+        args: json!({ "track": 0, "device": 5, "file": "demo_pluck_c4.wav" }),
+    });
+    assert!(loaded.ok, "load_sample failed: {loaded:?}");
+    std::thread::sleep(Duration::from_millis(1200));
+
+    let slots = |name: &str| -> usize {
+        assert!(session.execute(&ToolCall {
+            tool: "save".into(), args: json!({"name": name}) }).ok);
+        read_project(&engine.proj, name)["tracks"][0]["device_chain"][0]["sampler"]["slots"]
+            .as_array().map_or(0, |a| a.len())
+    };
+    let notes_on_track = |name: &str| -> usize {
+        assert!(session.execute(&ToolCall {
+            tool: "save".into(), args: json!({"name": name}) }).ok);
+        let doc = read_project(&engine.proj, name);
+        doc["clips"].as_array().unwrap().iter()
+            .filter_map(|c| c["notes"].as_array()).map(|n| n.len()).sum()
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let before_slots = loop {
+        let n = slots("agchop_a");
+        if n >= 1 { break n; }
+        assert!(Instant::now() < deadline, "the loaded sample never produced a slot");
+        std::thread::sleep(Duration::from_millis(200));
+    };
+
+    // EQUAL, four ways, WITH SLOTS. `equal` rather than `transient` because a synthetic pluck has
+    // one attack — a transient chop would correctly find one slice and prove nothing about
+    // chopping.
+    let chopped = session.execute(&ToolCall {
+        tool: "sampler_slice".into(),
+        args: json!({ "track": 0, "device": 5, "mode": "equal", "count": 4,
+                      "make_slots": true, "base_key": 48 }),
+    });
+    assert!(chopped.ok, "sampler_slice failed: {chopped:?}");
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let n = slots("agchop_b");
+        // MORE SLOTS THAN BEFORE. A chop without make_slots leaves the count alone — the sample
+        // is cut and nothing new is playable, which is the half that matters.
+        if n > before_slots { break; }
+        assert!(Instant::now() < deadline,
+                "slots stayed at {n} after a 4-way chop with make_slots — the slices exist but \
+                 nothing can play them");
+        std::thread::sleep(Duration::from_millis(250));
+    }
+
+    let before_notes = notes_on_track("agchop_c");
+    let rows = session.execute(&ToolCall {
+        tool: "sampler_emit_rows".into(),
+        args: json!({ "track": 0, "device": 5, "at": 0, "step": Q }),
+    });
+    assert!(rows.ok, "sampler_emit_rows failed: {rows:?}");
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let n = notes_on_track("agchop_d");
+        // One note per slice: more than one, so this cannot pass on a single note standing in
+        // for a chop that never happened.
+        if n >= before_notes + 2 { break; }
+        assert!(Instant::now() < deadline,
+                "notes went {before_notes} -> {n}; a chop laid out as rows should add one per \
+                 slice, and the point of it is that the slices become editable notes");
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}

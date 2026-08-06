@@ -2676,14 +2676,8 @@ test('every suite the runbook cites exists, and the unswept ones are flagged as 
  * capability nobody has ever seen work, and that is worth knowing separately from a bug.
  */
 const AGENT_NEVER_EXERCISED = [
-  // Placement and clip surgery. Reachable, plausible, and never once driven end to end.
-  // Track removal, and the sampler paths the existing sampler tests do not reach.
-  'sampler_emit_rows',
-  'sampler_slice',
-  // Automation and the macro knob.
-  'automation',
-  'automation_points',
-  'set_macro',
+  // EMPTY, and that is the point of keeping the list rather than deleting the check: the next
+  // tool added to the registry without a test lands here and fails, instead of joining a crowd.
 ];
 
 test('every agent tool the registry claims has been driven against a real engine', async () => {
