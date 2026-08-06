@@ -27,6 +27,29 @@ CLI="$ROOT/ui/target/debug/daw-cli"
 
 [ -x "$BUILD/daw_engine" ] || { echo "build daw_engine first"; exit 2; }
 [ -x "$SIDE" ] || { echo "build daw-sidecar first"; exit 2; }
+
+# THE SIDECAR CARRIES THE TOOL MANIFEST, SO A STALE ONE REHEARSES YESTERDAY'S CAPABILITIES.
+#
+# The model can only ask for tools the sidecar advertises, and the sidecar advertises whatever was
+# compiled into it. Rehearse against a binary older than daw-agent's source and the run is a
+# faithful test of a build nobody is going to demo — while looking exactly like a real result.
+#
+# This is not hypothetical. `add_chords` landed at 11:42; the release binary was from 00:44; this
+# script prefers release. The model, offered no chord tool, hand-rolled a progression out of
+# add_notes and the chord step failed. Twenty minutes went into reading that as a model failure.
+#
+# REFUSED, not warned. A warning above a hundred lines of streaming model output is a warning
+# nobody sees, and the whole value of a rehearsal is that its result can be trusted.
+newest_src=$(find "$ROOT/ui/daw-agent/src" "$ROOT/ui/daw-sidecar/src" -name '*.rs' -newer "$SIDE" 2>/dev/null | head -3)
+if [ -n "$newest_src" ]; then
+  echo "REFUSING TO REHEARSE: $SIDE is older than the agent/sidecar source."
+  echo "  newer than the binary:"
+  printf '    %s\n' $newest_src
+  echo "  The sidecar compiles in the TOOL MANIFEST, so the model would be offered a stale set of"
+  echo "  tools and the run would test a build you are not going to demo. Rebuild first:"
+  echo "      ( cd $ROOT/ui && cargo build --release -p daw-sidecar )"
+  exit 2
+fi
 node -e "require.resolve('ws')" >/dev/null 2>&1 || { echo "needs node's 'ws' module"; exit 2; }
 
 SIDECAR_CWD=/Users/jak/src/daw-web/ui
@@ -119,17 +142,72 @@ n_tracks() {
 # A track's published `device` field is the HOSTED PLUGIN's name and stays empty for a sampler,
 # so counting it there reports zero however well the add worked. `get sampler-kit` answers
 # {"found": false} / {"found": true}, which is the actual question.
+# THE KIT READ-BACK IS A REQUEST, NOT A FIELD. `get sampler-kit` writes a request into the ring
+# and reads the answer the engine publishes in reply, so asking the instant after add_device can
+# legitimately answer found:false — the device is there and the answer is not yet. This counted
+# once and reported 0 for a track whose chain held a sampler, failing the step and blaming the
+# model for a round trip nobody waited for.
+#
+# Retried rather than slept: the answer usually arrives immediately, and a fixed sleep would pay
+# the worst case on every call.
 n_samplers(){
-  local n=0 id
+  local n=0 id try
   for id in $(cli get tracks | sed -n 's/.*"track_id": *\([0-9][0-9]*\).*/\1/p'); do
     [ "$id" -gt 100000 ] && continue
-    cli get sampler-kit --track "$id" 2>/dev/null | grep -q '"found": *true' && n=$((n+1))
+    for try in 1 2 3 4 5 6 7 8; do
+      if cli get sampler-kit --track "$id" 2>/dev/null | grep -q '"found": *true'; then
+        n=$((n+1)); break
+      fi
+      sleep 0.25
+    done
   done
   echo "$n"
 }
 # EVERY track's notes, not track 0's. The model routinely makes its own track for a part, and a
 # count that only ever looks at track 0 reports "the song did not change" while the notes are
 # sitting one track over.
+# `get patcher` publishes ONE REGION's graph — it prints `region_device` — so it is a
+# UI-scoped view, not a census. It read 3 nodes before and after adding a patcher, which
+# says nothing about whether the add landed. The device chain is only observable whole
+# through a SAVE, same as the harmony timeline.
+n_patcher(){
+  cli do save rehearsal --force >/dev/null 2>&1
+  local f="$TMP/rehearsal.uniproj.json"
+  [ -f "$f" ] || { echo 0; return; }
+  python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+print(sum(1 for t in d['tracks'] for x in t.get('device_chain',[])
+          if str(x.get('kind','')).startswith('patcher')))" "$f" 2>/dev/null || echo 0
+}
+
+# CHORDS ARE NOT NOTES and are not counted by n_notes — they live in their own array on the clip,
+# because a chord is a DEGREE of the current key and stays one until it sounds. So a progression
+# written by the model is invisible to the note count, and a rehearsal that only counted notes
+# would report "nothing happened" for a step that worked.
+n_chords(){
+  cli do save rehearsal --force >/dev/null 2>&1
+  local f="$TMP/rehearsal.uniproj.json"
+  [ -f "$f" ] || { echo 0; return; }
+  python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+# THE CLIP IS A CHORD'S HOME. The array on a PLACEMENT is not a second home - it is that
+# placement's local-edit overlay (placement.adds, with mutes alongside it for removals), the
+# per-appearance edit scope. It serialises through the same writeEvents as a clip body, which is
+# why it carries the same field name and why counting one and not the other is easy to do by
+# accident. A locally-edited appearance would report 0 chords, which the day before a demo reads
+# as \"it is broken\".
+#
+# NO BACKTICKS IN HERE. This block sits inside python3 -c \"...\", a DOUBLE-QUOTED shell string,
+# so a backtick opens command substitution: the first version of this comment quoted the field
+# names and the shell tried to run `placement.adds` and `mutes`, printing 'command not found'
+# twice per call. Harmless only by luck - the substitutions came back empty and left the comment
+# a comment.
+print(sum(len(c.get('chords',[])) for c in d.get('clips',[]))
+    + sum(len(pl.get('chords',[])) for t in d.get('tracks',[]) for pl in t.get('placements',[])))" "$f" 2>/dev/null || echo 0
+}
+
 n_notes()  {
   local total=0 id
   for id in $(cli get tracks | sed -n 's/.*"track_id": *\([0-9][0-9]*\).*/\1/p'); do
@@ -165,6 +243,9 @@ step "put a sampler on it" "Put a sampler on the track named Bass."         n_sa
 step "write a bassline"   "Write a simple four-bar bassline on the track named Bass, root notes on the beat." n_notes
 step "the harmony lane"   "Set the key to C minor from the start of the song."   h_harmony
 step "lane quantize"      "Quantize the Bass track to a 1/16 grid at full strength." h_quantize
+step "a drum beat"        "Add a track called Drums with a sampler on it, and write a four-bar drum beat: kick on every beat, snare on 2 and 4." n_notes
+step "a chord progression" "On a new track called Keys, write a four-bar I-V-vi-IV chord progression, strummed." n_chords
+step "the patcher"        "Put a patcher device on the Bass track."                 n_patcher
 
 echo
 echo "rehearsed: $PASS passed, $FAIL failed"

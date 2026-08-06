@@ -12,9 +12,12 @@
 // here — there is no row to misproject onto.
 
 import { trackName } from './arrangemodel.js';
+import { DEFAULT_METER, ticksPerBar, ticksPerBeat } from './meter.js';
 
-const TICKS_PER_BAR = 3840000;
-const TICKS_PER_BEAT = 960000;
+// NO PRIVATE BAR OR BEAT LENGTH. 3840000 is a 4/4 bar and 960000 is a QUARTER, and this file
+// draws the piano roll's BAR LINES and RULER from them — so in 6/8 the roll ruled itself in
+// 4/4 while the notes sat where the engine actually put them. The grid and the music
+// disagreeing is the one thing a piano roll must never do. meter.js owns the rule.
 
 /** Which pitches have a black key above them, for drawing the keyboard. */
 const BLACK = [false, true, false, true, false, false, true, false, true, false, true, false];
@@ -140,6 +143,10 @@ export function buildPianoModel(opts, buf) {
   const {
     startTick = 0, width = 1200, height = 600, zoomIndex = 3,
     lowPitch = 36, keyHeight = 10, engine = null,
+    // The grid and ruler are drawn in BARS and BEATS, so this file needs the meter for the same
+    // reason arrangemodel and harmonymodel do. Defaulted so an old caller still works, but
+    // index.html passes it (o.meter = songMeter()).
+    meter = DEFAULT_METER,
     track = 0, allTracks = false, selectedNote = -1,
     // A Set of "track:tick" keys, NOT note ids.
     //
@@ -163,6 +170,8 @@ export function buildPianoModel(opts, buf) {
     // failure the arrangement's fade preview had.
     dragVel = -1,
   } = opts;
+  const perBeat = ticksPerBeat(meter);
+  const perBar = ticksPerBar(meter);
 
   const zoom = PIANO_ZOOM[Math.max(0, Math.min(PIANO_ZOOM.length - 1, zoomIndex))];
   const tpp = zoom.ticksPerPixel;
@@ -198,8 +207,8 @@ export function buildPianoModel(opts, buf) {
   buf.keyCount = k;
 
   let g = 0;
-  const beatPx = TICKS_PER_BEAT / tpp;
-  const step = beatPx >= 8 ? TICKS_PER_BEAT / 4 : beatPx >= 4 ? TICKS_PER_BEAT : TICKS_PER_BAR;
+  const beatPx = perBeat / tpp;
+  const step = beatPx >= 8 ? perBeat / 4 : beatPx >= 4 ? perBeat : perBar;
   // The ABSOLUTE index of the first line — how many steps from tick 0 it is,
   // not where it lands in the array. The renderer recycles the gridline pool as
   // a ring on this number (GUIDELINES 3.4), so a scroll of one step rebinds the
@@ -208,16 +217,16 @@ export function buildPianoModel(opts, buf) {
   buf.gridFirst = firstGrid;
   for (let tick = firstGrid * step; tick < endTick && g < buf.grid.length; tick += step) {
     buf.grid[g] = tick / tpp;                     // content x; see above
-    buf.gridIsBar[g] = tick % TICKS_PER_BAR === 0 ? 1 : 0;
+    buf.gridIsBar[g] = tick % perBar === 0 ? 1 : 0;
     g++;
   }
   buf.gridCount = g;
 
-  const barPx = TICKS_PER_BAR / tpp;
+  const barPx = perBar / tpp;
   const every = barPx >= 48 ? 1 : barPx >= 24 ? 2 : 4;
   let r = 0;
-  for (let bar = Math.floor(startTick / TICKS_PER_BAR); r < buf.ruler.length; bar++) {
-    const tick = bar * TICKS_PER_BAR;
+  for (let bar = Math.floor(startTick / perBar); r < buf.ruler.length; bar++) {
+    const tick = bar * perBar;
     if (tick >= endTick) break;
     if (bar % every !== 0) continue;
     buf.ruler[r] = tick / tpp;                    // content x; see above

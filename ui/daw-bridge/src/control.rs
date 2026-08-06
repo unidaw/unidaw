@@ -519,6 +519,38 @@ impl EngineHandle {
         }
     }
 
+    /// Wait for ONE TRACK's clip version to advance, polling the per-track counter.
+    ///
+    /// wait_for_clip_version above polls the GLOBAL one, which is correct for callers whose base
+    /// also came from the global. It is wrong for a caller whose base came from
+    /// clip_version_for_track: the two counters move on different events, so comparing a
+    /// per-track base against the global returns true as soon as anything anywhere advanced —
+    /// including edits to other tracks — and the caller returns believing its own writes have
+    /// settled when they may not have been applied at all.
+    ///
+    /// That crossing was live in add_notes, whose own comment two lines above the call explains
+    /// that reading the global for the BASE is "exactly the failure the per-track counters were
+    /// introduced to end". The base was right and the wait was not.
+    pub fn wait_for_track_clip_version(
+        &self,
+        track_id: u32,
+        base: u32,
+        target: u32,
+        timeout: std::time::Duration,
+    ) -> bool {
+        let want = target.wrapping_sub(base);
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if self.clip_version_for_track(track_id).wrapping_sub(base) >= want {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_micros(250));
+        }
+    }
+
     pub fn track_count(&self) -> u32 {
         unsafe { std::ptr::read_volatile(&(*self.header).ui_track_count) }
     }

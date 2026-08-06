@@ -5811,6 +5811,8 @@ function drawPiano() {
       break;
     }
   }
+  // Bar lines and the ruler are drawn from the meter, not a private 4/4 — see pianomodel.js.
+  o.meter = songMeter();
   piano.render(buildPianoModel(o, pianoBuf));
   updateChrome();
 }
@@ -5920,7 +5922,7 @@ const paletteHost = document.getElementById('palette');
 
 // The rest of draw()'s argument objects, hoisted for the reason given above
 // _chromeOpts. Every callee destructures on entry and keeps no reference.
-const _minimapOpts = { engine: null, startTick: 0, visibleTicks: 0 };
+const _minimapOpts = { engine: null, startTick: 0, visibleTicks: 0, meter: null };
 const _harmonyOpts = { harmony: null, playheadTick: 0, version: -1,
                        nameHarmony: null, scales: null, meter: null };
 /**
@@ -6173,6 +6175,10 @@ function draw() {
     o.engine = state.useEngine === false ? null : engine;
     o.startTick = state.start * zl.rowNanoticks;
     o.visibleTicks = tracker.poolSize * zl.rowNanoticks;
+    // The minimap rounds the song's extent to a BAR and counts marks per BEAT, so it needs the
+    // meter for the same reason the other four models here do. Without it, it used a private
+    // 4/4 and its marks disagreed with the ruler beside them in any other signature.
+    o.meter = songMeter();
     minimap.render(buildMinimapModel(o, minimapBuf));
   }
 

@@ -11,10 +11,10 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: 789c769
+- as-of-commit: 0bbed99
 - main-cpp-lines: 2191
 - main-function-lines: 1985
-- ctest-entries: 196
+- ctest-entries: 198
 - main-function-ceiling: 1985
 
 ## Why this file cannot quietly go stale
@@ -46,6 +46,60 @@ The reason it is built this way: every stale claim found in this repo was in a f
 *intended* to keep current. `tools/meter_bar_check.sh` carried "THE ANCHOR IS NOT FIXED" for months
 after it was fixed — stale in the direction that gets work done twice, by someone with no reason to
 suspect the first attempt exists.
+
+## 2026-08-06 — rehearsing the demo, and the three things that found
+
+The demo is Friday. `tools/demo_rehearsal.sh` drives the sidecar's command socket with one prompt
+per demo claim and judges each by whether the ENGINE changed, so running it is the only way to
+know the prompted path works today rather than last week. Running it three times found three
+defects, and only one of them was in the product.
+
+**The model could not write chords at all.** `add_notes` was its only way to put anything on a
+track, so every chord it produced was frozen MIDI pitches and the harmony lane had nothing to act
+on — which hollows out the demo's through-line, since "the harmony lane quantizes everything" is
+only interesting if there is harmony to quantize. Chords had existed in the engine, the tracker
+and daw-cli since long before the agent; only the surface anyone would ask through was missing.
+
+`add_chords` writes DEGREES. They are ONE-BASED — `resolveDegree` coerces 0 to 1 and then indexes
+with `degree - 1` — and the first draft of the manifest said 0 was the tonic. That would have
+answered "I-V-vi-IV" with `[0,4,5,3]`, resolving to I-IV-V-iii: **the first chord right by
+accident and every other one wrong**. The one that sounds correct is the one that hides the
+mistake, so 0 is now refused with a message rather than left to the engine's coercion.
+
+**The second write to a track was refused and reported as success.** Prompted for "kick on every
+beat, snare on 2 and 4", the model made two `add_notes` calls, both returned `ok=true`, and the
+saved project held pitch 36 and nothing else. The engine had said so and nobody was listening:
+`clip.version_mismatch base=1..4 current=17 track=2`.
+
+Two counters crossed. `add_notes` takes its base from `clip_version_for_track` — per track,
+correctly, with a comment immediately above it explaining that reading the global is "exactly the
+failure the per-track counters were introduced to end" — and then waited on
+`wait_for_clip_version`, which polls the GLOBAL. The wait was satisfied by activity anywhere in
+the song, so the call returned before its own writes were applied and the next one carried a base
+that was already stale. `wait_for_track_clip_version` polls the right counter; a batch the engine
+refuses ENTIRELY is now an error so the model retries, while a partial one only warns, because a
+retry would duplicate whatever did land.
+
+Mismatches across successive rehearsals went 80 → 4 → 0, and the snare lands.
+
+**The third was the harness lying, twice.** The first rehearsal of the chord tool ran against a
+sidecar built BEFORE the tool existed — the sidecar compiles in the manifest, so the model was
+offered a stale tool list, hand-rolled a progression out of `add_notes`, and the step failed for a
+reason that was not the code's. Twenty minutes went into reading that as a model failure.
+`demo_rehearsal.sh` now refuses to run when the binary is older than the agent source. Separately,
+`n_samplers` asked the kit read-back — a request/response round trip — once, immediately after
+`add_device`, and reported 0 for a track whose chain held a sampler.
+
+### The reproduction that could not fail
+
+Worth recording on its own. The first test written for the dropped-snare bug put kick on every
+beat and snare on beats 2 and 4 **in the same column**, so the snares landed on the kicks' ticks
+and REPLACED them — one note per (tick, column) working exactly as designed. Sixteen notes either
+way. The fixture could not tell "the second write was dropped" from "the second write worked
+perfectly", and it took a diagnostic dump of the actual ticks to see it.
+
+That is the same shape as every other fixture failure in this file: the test was measuring
+something real and it was not the thing under test.
 
 ## 2026-08-05 — an engine object, and what it was actually costing not to have one
 

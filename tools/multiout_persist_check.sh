@@ -117,7 +117,10 @@ ENG=$!
 # the marker that means "ready to be told something".
 wait_for_boot "$TMP/eng1.log" "$ENG" 80 "UI: command thread started"
 DAW_UI_SHM_NAME="$SHM" "$CLI" do load mo --force >/dev/null 2>&1 || true
-sleep 2   # the children are derived from the bus layout after the load settles
+# The children are derived from the bus layout once the load settles, so wait for the FIRST
+# one to be announced rather than for two seconds. The count below still decides the verdict;
+# this only stops us reading it before the engine has said anything.
+wait_for_event "$TMP/eng1.log" "multiout.child_created" 80 "an aux child" >/dev/null 2>&1 || true
 
 CHILDREN=$(grep -c "multiout.child_created" "$TMP/eng1.log" || true)
 [ "$CHILDREN" = "2" ] || fail "expected 2 derived children, got $CHILDREN — nothing to author on"

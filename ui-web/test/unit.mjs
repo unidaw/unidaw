@@ -3779,3 +3779,39 @@ test('the numeral carries the chord quality, the way musicians write it', async 
   assert.equal(triadQuality(0, SIX.stepCents), null);
   assert.equal(nameChord(0, 1, 0, SIX), 'I');
 });
+
+test('only meter.js decides how long a bar is', async () => {
+  // WHY THIS IS A SOURCE SCAN AND NOT A BEHAVIOUR TEST. The rule is one line of arithmetic used
+  // in draw paths that need a DOM, so the only cheap way to keep it in one place is to check
+  // that nobody re-declares it. That is worth doing because the copies are invisible when you
+  // are in 4/4: chrome.js carried `const BEATS_PER_BAR = 4` AND treated a quarter as the beat,
+  // which are two separate 4/4 assumptions stacked. In 6/8 the first counts a six-beat bar in
+  // fours and the second calls an eighth a quarter, so the position readout under the playhead
+  // disagreed with the ruler the notes are drawn against — and every test we have is in 4/4,
+  // where both mistakes are exactly right.
+  //
+  // meter.js is the one place allowed to know it: `ticksPerBeat` is (QUARTER * 4) / denominator
+  // and `ticksPerBar` multiplies by the numerator.
+  const { readFileSync, readdirSync } = await import('node:fs');
+  const dir = new URL('../src/', import.meta.url);
+  const offenders = [];
+  for (const f of readdirSync(dir).filter((n) => n.endsWith('.js') && n !== 'meter.js')) {
+    const src = readFileSync(new URL(f, dir), 'utf8');
+    for (const [i, line] of src.split('\n').entries()) {
+      if (line.trimStart().startsWith('//') || line.trimStart().startsWith('*')) continue;
+      // A named bar/beat length is FINE when it comes from meter.js — arrangemodel, harmonymodel
+      // and viewmodel all legitimately keep one, derived via ticksPerBar(meter). What is not fine
+      // is a NUMBER: only a literal encodes a signature, and 3840000 is a 4/4 bar written out.
+      const decl =
+        /\b(?:const|let|var)\s+\w*(?:BEATS_PER_BAR|TICKS_PER_BAR|BAR_TICKS|BAR_BEATS)\w*\s*=(.*)$/
+          .exec(line);
+      if (decl && /\d/.test(decl[1]) && !/ticksPer(?:Bar|Beat)\s*\(/.test(decl[1])) {
+        offenders.push(`${f}:${i + 1}  ${line.trim()}`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, [],
+    'a bar length declared outside meter.js. Use ticksPerBar(meter) / ticksPerBeat(meter) — a '
+    + 'private 4 is invisible until somebody writes in 6/8, and then the readout and the ruler '
+    + 'disagree about where the playhead is');
+});

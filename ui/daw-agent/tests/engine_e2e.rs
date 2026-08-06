@@ -390,6 +390,197 @@ fn write_past_pattern_end_creates_material() {
 /// Undo/redo of a structural edit is a whole-store swap: after two note adds, one
 /// undo restores the store to a single note, and a redo brings the second back.
 #[test]
+// THE PER-TRACK WAIT DOES NOT FIRE ON ANOTHER TRACK'S EDITS.
+//
+// add_notes takes its base from clip_version_for_track and then waited on wait_for_clip_version,
+// which polls the GLOBAL counter. Crossing them means the wait is satisfied by activity anywhere
+// in the song: the caller returns believing its own writes have settled when the engine may not
+// have applied them, and the next write to that track carries a base that is already stale.
+//
+// This asserts the PRIMITIVE rather than the symptom, because the symptom needs a race and this
+// does not: edit ONE track, then ask the OTHER track's wait to advance. The global has moved a
+// long way; the quiet track has not. A wait that returns true here is reading the wrong counter,
+// whatever it is named.
+fn the_per_track_wait_ignores_other_tracks() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("perwait");
+
+    let added = session.execute(&ToolCall { tool: "add_track".into(), args: json!({}) });
+    assert!(added.ok, "add_track failed: {added:?}");
+    let quiet = added.output["track"].as_u64().unwrap() as u32;
+
+    let h = session.handle();
+    let quiet_base = h.clip_version_for_track(quiet);
+    let global_base = h.clip_version();
+
+    // Sixteen notes onto a DIFFERENT track, so the global counter moves a long way.
+    let busy = session.execute(&ToolCall {
+        tool: "add_notes".into(),
+        args: json!({"track":0,"pitches":[60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60],
+                     "start":0,"step":Q,"duration":Q}),
+    });
+    assert!(busy.ok, "the write to track 0 failed: {busy:?}");
+
+    // The global HAS moved — without this the test cannot tell the counters apart.
+    assert!(h.clip_version().wrapping_sub(global_base) > 0,
+            "the global clip version did not move, so this fixture proves nothing");
+
+    let fired = h.wait_for_track_clip_version(
+        quiet, quiet_base, quiet_base.wrapping_add(1),
+        std::time::Duration::from_millis(250));
+    assert!(!fired,
+            "the per-track wait returned true for a track nothing was written to — it is polling \
+             the global counter. A caller crossing the two returns before its own writes are \
+             applied, and its next write to that track is refused as stale.");
+
+    // And the GLOBAL wait, given a global base, IS satisfied — which is what made the crossing
+    // invisible: the two calls look alike and one of them is nearly always true.
+    assert!(h.wait_for_clip_version(global_base, global_base.wrapping_add(1),
+                                    std::time::Duration::from_millis(250)),
+            "the global wait should see the track-0 edit; if not, the fixture is wrong");
+}
+
+
+#[test]
+// TWO WRITES IN A ROW TO ONE TRACK BOTH LAND.
+//
+// This is the drum beat: "kick on every beat, snare on 2 and 4" is two add_notes calls, and the
+// SECOND one was refused in its entirety while the tool reported ok=true. Measured in a demo
+// rehearsal — the engine logged `clip.version_mismatch base=1..4 current=17 track=2` and the
+// saved project held pitch 36 and nothing else, after the model had said it added both.
+//
+// The cause was two counters being crossed. add_notes takes its base from
+// clip_version_for_track — correctly PER TRACK, with a comment right there explaining that
+// reading the global is the exact failure per-track counters were introduced to end — and then
+// waited on wait_for_clip_version, which polls the GLOBAL. So the wait returned as soon as the
+// global moved for any reason at all, add_notes returned before the track's own writes had been
+// applied, and the next call read a stale per-track version and had every note rejected.
+//
+// A ONE-CALL TEST CANNOT SEE THIS. The first write always succeeds; it is the second that reads
+// the version the first was supposed to have settled.
+fn two_writes_in_a_row_to_a_NEW_track_both_land() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("twowrites");
+
+    // A FRESHLY ADDED TRACK, because that is the case that failed. The same pair of writes to a
+    // track that already existed both land — I checked — so a test on track 0 passes with the
+    // defect present, which is the kind of test this suite exists to not write.
+    let added = session.execute(&ToolCall { tool: "add_track".into(), args: json!({}) });
+    assert!(added.ok, "add_track failed: {added:?}");
+    let track = added.output["track"].as_u64().expect("add_track returns the new id") as u64;
+
+    // Kick: sixteen notes, so the version moves far enough that a stale re-read is unambiguous.
+    let kick = session.execute(&ToolCall {
+        tool: "add_notes".into(),
+        args: json!({"track":track,"pitches":[36,36,36,36,36,36,36,36,36,36,36,36,36,36,36,36],
+                     "start":0,"step":Q,"duration":Q}),
+    });
+    assert!(kick.ok, "the kick write failed: {kick:?}");
+
+    // Snare, immediately after, on the SAME track. OFF the kick's ticks on purpose: one note per
+    // (tick, column) is the tracker's model, so a snare written onto a kick's tick REPLACES it
+    // and the total stays 16 whether or not the second write landed. The first draft of this test
+    // did exactly that and could not tell the two apart.
+    let snare = session.execute(&ToolCall {
+        tool: "add_notes".into(),
+        args: json!({"track":track,"pitches":[38,38,38,38,38,38,38,38],
+                     "start":Q/2,"step":Q*2,"duration":Q/2}),
+    });
+    assert!(snare.ok, "the snare write reported failure: {snare:?}");
+
+    assert!(session.execute(&ToolCall { tool: "save".into(), args: json!({"name":"twowrites"}) }).ok);
+    let doc = read_project(&engine.proj, "twowrites");
+    let all: Vec<(u64, u64)> = doc["clips"].as_array().unwrap().iter()
+        .flat_map(|c| c["notes"].as_array().unwrap())
+        .map(|n| (n["nanotick"].as_u64().unwrap_or(0), n["pitch"].as_u64().unwrap()))
+        .collect();
+    let kicks = all.iter().filter(|(_, p)| *p == 36).count();
+    let snares = all.iter().filter(|(_, p)| *p == 38).count();
+
+    assert_eq!(kicks, 16, "the kick write did not fully land: {all:?}");
+    assert_eq!(snares, 8,
+               "THE SECOND WRITE TO A NEW TRACK WAS DROPPED — {snares} of 8 snares landed. This is \
+                'ask for a kick and a snare, get a kick', and the tool reported success for notes \
+                the engine refused as stale. all={all:?}");
+}
+
+#[test]
+// THE MODEL CAN WRITE A CHORD PROGRESSION, AND THE STRUM SURVIVES THE FILE.
+//
+// Chords were reachable from the tracker and from daw-cli and from nothing the agent could say,
+// so "make the music by prompting" could produce melodies and never harmony. add_chords writes
+// DEGREES, which is the point: the progression follows the harmony lane instead of being frozen
+// into whatever key was current when it was written.
+//
+// SPREAD IS ASSERTED ON PURPOSE. daw-cli's chord command shipped for months sending zero for
+// spread and both humanize fields, so no project written through a tool could contain a strummed
+// chord — the feature existed everywhere except the surface anyone used. A test that only counted
+// chords would pass with the same bug reintroduced here, so this reads the strum back out of the
+// saved file.
+fn add_chords_writes_a_progression_with_a_strum() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("chords");
+
+    // I - V - vi - IV, one per bar, as triads, strummed.
+    let r = session.execute(&ToolCall {
+        tool: "add_chords".into(),
+        args: json!({
+            "track": 0,
+            "degrees": [1, 5, 6, 4],
+            "quality": 1,
+            "octave": 4,
+            "step": Q * 4,
+            "spread": 12000,
+            "humanize_velocity": 8,
+        }),
+    });
+    assert!(r.ok, "add_chords failed: {r:?}");
+    assert_eq!(r.output["sent"].as_u64(), Some(4), "should have sent four chords: {r:?}");
+
+    assert!(session.execute(&ToolCall { tool: "save".into(), args: json!({"name":"chordprog"}) }).ok);
+    let doc = read_project(&engine.proj, "chordprog");
+
+    let mut chords: Vec<&Value> = doc["clips"].as_array().unwrap().iter()
+        .flat_map(|c| c["chords"].as_array().map(|a| a.iter()).into_iter().flatten())
+        .collect();
+    chords.sort_by_key(|c| c["nanotick"].as_u64().unwrap_or(0));
+
+    assert_eq!(chords.len(), 4, "expected four chords in the saved file, got {}: {doc}", chords.len());
+
+    let degrees: Vec<u64> = chords.iter().map(|c| c["degree"].as_u64().unwrap()).collect();
+    // ONE-BASED. resolveDegree indexes with `degree - 1` and coerces 0 to 1, so a 0-based
+    // reading gives the tonic for the first chord by accident and the wrong chord for every
+    // other one — which is why this asserts the exact degrees rather than just the count.
+    assert_eq!(degrees, vec![1, 5, 6, 4],
+               "the progression must be saved in the order it was asked for, as DEGREES");
+
+    // ONE BAR APART, which is add_chords' default step and not add_notes' quarter — a progression
+    // that changed chord every beat is not what a I-V-vi-IV means.
+    let ticks: Vec<u64> = chords.iter().map(|c| c["nanotick"].as_u64().unwrap()).collect();
+    assert_eq!(ticks, vec![0, Q * 4, Q * 8, Q * 12], "chords should be one bar apart");
+
+    // DEGREE 0 IS REFUSED, not quietly turned into the tonic. The engine coerces it, so without
+    // this the 0-based misreading writes a progression whose FIRST chord is right and whose rest
+    // are one degree low — the failure that looks like success.
+    let zero = session.execute(&ToolCall {
+        tool: "add_chords".into(),
+        args: json!({"track": 0, "degrees": [0, 4, 5, 3]}),
+    });
+    assert!(!zero.ok, "degree 0 must be refused, not coerced to the tonic: {zero:?}");
+    assert!(format!("{zero:?}").contains("one-based"),
+            "the refusal must say WHY, or the model will just try 0 again: {zero:?}");
+
+    for c in &chords {
+        assert_eq!(c["quality"].as_u64(), Some(1), "quality did not persist: {c}");
+        assert_eq!(c["spread"].as_u64(), Some(12000),
+                   "THE STRUM DID NOT PERSIST. This is the field daw-cli sent as zero for months, \
+                    so a chord written by a tool could never be anything but a rigid block: {c}");
+        assert_eq!(c["humanize_velocity"].as_u64(), Some(8),
+                   "humanize_velocity did not persist: {c}");
+    }
+}
+
+#[test]
 fn undo_redo_structural_edit() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (engine, session) = start_engine("undo");

@@ -7,7 +7,8 @@
 
 use daw_bridge::control::EngineHandle;
 use daw_bridge::grid::NANOTICKS_PER_QUARTER;
-use daw_bridge::layout::{UiChainCommandPayload, UiChordCommandPayload, UiCommandPayload, UiCommandType,
+use daw_bridge::layout::{UiChainCommandPayload, UiChordCommandPayload,
+                         UiCommandPayload, UiCommandType,
                          UiModLinkCommandPayload, UiModLinkUid16Payload,
                          UiModSourceValuePayload, UiPatcherPresetCommandPayload,
                          UiMarkerCommandPayload, UiArrangeTimeCommandPayload,
@@ -98,29 +99,36 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "add_chords",
-            description: "Write chords onto a track, one per step. A chord is a DEGREE of the \
-                          key in force — not a set of pitches — so it follows the harmony \
-                          timeline and survives a key change. Degrees are 1-based as musicians \
-                          write them: 1 is the tonic. Give `spread` to strum it.",
+            description: "Write a chord progression onto a track, one chord per step. Chords are \
+                          DEGREES OF THE CURRENT KEY, not absolute pitches, and degrees are \
+                          ONE-BASED: 1 is the tonic (I), 4 is the subdominant (IV), 5 is the \
+                          dominant (V), 6 is the relative minor (vi). So a I-V-vi-IV progression \
+                          is degrees [1, 5, 6, 4]. Chords follow the harmony lane — change the \
+                          key and the same progression transposes with it. Use add_notes when \
+                          you want fixed MIDI pitches instead.",
             params: json!({
                 "type": "object",
                 "required": ["track", "degrees"],
                 "properties": {
                     "track": { "type": "integer", "minimum": 0 },
-                    "degrees": { "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": 13 },
-                                 "description": "Scale degrees, 1-based, one per step." },
-                    "quality": { "type": "string", "enum": ["degree", "triad", "seventh"],
-                                 "description": "Default triad. `degree` is the single note." },
-                    "inversion": { "type": "integer", "minimum": 0, "maximum": 3 },
-                    "octave": { "type": "integer", "minimum": 0, "maximum": 9, "description": "Default 4." },
+                    "degrees": { "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": 63 },
+                                 "description": "Scale degrees, one per step, ONE-BASED: 1 = I, 2 = ii, 3 = iii, 4 = IV, 5 = V, 6 = vi, 7 = vii." },
+                    "quality": { "type": "integer", "minimum": 0, "maximum": 2,
+                                 "description": "0 = single note, 1 = triad (default), 2 = seventh." },
+                    "inversion": { "type": "integer", "minimum": 0, "maximum": 3,
+                                   "description": "Rotate the voicing upward N times (default 0)." },
+                    "octave": { "type": "integer", "minimum": 0, "maximum": 9,
+                                "description": "Octave of the chord's lowest note (default 4)." },
                     "start": { "type": "integer", "description": "Onset of the first chord in nanoticks (default 0)." },
-                    "step": { "type": "integer", "description": "Nanoticks between onsets (default a bar = 3840000)." },
+                    "step": { "type": "integer", "description": "Nanoticks between chords (default one BAR of 4/4 = 3840000)." },
                     "duration": { "type": "integer", "description": "Chord length in nanoticks (default = step)." },
                     "spread": { "type": "integer", "minimum": 0,
-                                "description": "Nanoticks between the first voice and the last. \
-                                                0 is a block chord; anything above it is a strum." },
-                    "humanize_timing": { "type": "integer", "minimum": 0, "maximum": 255 },
-                    "humanize_velocity": { "type": "integer", "minimum": 0, "maximum": 255 }
+                                "description": "STRUM: nanoticks between the chord's notes, so they arrive one after another instead of together. 0 = block chord (default). A quarter is 960000, so a gentle strum is a few thousand." },
+                    "humanize_timing": { "type": "integer", "minimum": 0, "maximum": 255,
+                                         "description": "Jitter each strike's timing (default 0)." },
+                    "humanize_velocity": { "type": "integer", "minimum": 0, "maximum": 255,
+                                           "description": "Jitter each strike's velocity (default 0)." },
+                    "column": { "type": "integer", "minimum": 0, "description": "Note column / voice lane (default 0)." }
                 }
             }),
         },
@@ -571,8 +579,9 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             name: "add_device",
             description: "Insert a device into a track's chain at a position (0 is first). \
                           kind: sampler, vst_effect, vst_instrument, or one of the three \
-                          patcher graphs. `sampler` is the engine's own instrument and needs \
-                          nothing else — give it a file with load_sample; a VST needs `plugin`, \
+                          patcher flavours (patcher = event, patcher_instrument, patcher_audio). \
+                          `sampler` is the \
+                          engine's own instrument and needs nothing else; a VST needs `plugin`, \
                           the name as the plugin catalogue reports it.",
             params: json!({
                 "type": "object",
@@ -580,8 +589,8 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
                 "properties": {
                     "track": { "type": "integer", "minimum": 0 },
                     "kind": { "type": "string",
-                              "enum": ["sampler", "vst_effect", "vst_instrument",
-                                       "patcher", "patcher_instrument", "patcher_audio"] },
+                              "enum": ["sampler", "vst_effect", "vst_instrument", "patcher",
+                                       "patcher_instrument", "patcher_audio"] },
                     "position": { "type": "integer", "minimum": 0 },
                 },
             }),
@@ -1848,106 +1857,6 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
     }
 }
 
-/// Write chords, one per step.
-///
-/// A CHORD IS NOT A SET OF PITCHES and the tool is shaped to stop a model treating it as one.
-/// It is a degree, a quality and an inversion resolved against the harmony timeline, which is
-/// what lets a chord track survive a key change — write pitches instead and the key change
-/// moves the notes around them.
-///
-/// The agent had no way to write one at all: `add_notes` was the only thing it could put in a
-/// clip, so "give me a chord progression" produced either a pile of simultaneous notes or a
-/// polite refusal. Chords and strums are on the demo list, and the console has had them since
-/// they existed.
-///
-/// DEGREES ARE 1-BASED HERE, as musicians write them and as the console's `chord` verb takes
-/// them, and 0-based on the wire. The conversion happens once, here, rather than being
-/// explained to a model in the description — a tool whose numbering differs from the way the
-/// domain is spoken about is a tool that gets called wrong.
-fn add_chords(handle: &EngineHandle, args: &Value) -> ToolResult {
-    let track = match arg_u64(args, "track") {
-        Some(t) => t as u32,
-        None => return ToolResult::err("add_chords needs \"track\""),
-    };
-    let degrees: Vec<u16> = match args.get("degrees").and_then(|v| v.as_array()) {
-        Some(arr) => {
-            let mut out = Vec::with_capacity(arr.len());
-            for d in arr {
-                match d.as_u64() {
-                    Some(v) if (1..=13).contains(&v) => out.push(v as u16),
-                    _ => return ToolResult::err(format!("bad degree {d} (expected 1..13)")),
-                }
-            }
-            out
-        }
-        None => return ToolResult::err("add_chords needs \"degrees\" (an array)"),
-    };
-    if degrees.is_empty() {
-        return ToolResult::err("\"degrees\" was empty");
-    }
-    // The engine's own numbering: 0 the degree alone, 1 a triad, 2 a seventh.
-    let quality = match args.get("quality").and_then(|v| v.as_str()) {
-        None | Some("triad") => 1u8,
-        Some("degree") => 0,
-        Some("seventh") => 2,
-        Some(other) => return ToolResult::err(format!("quality must be degree, triad or seventh (got {other})")),
-    };
-    let inversion = arg_u64(args, "inversion").unwrap_or(0).min(3) as u8;
-    let octave = arg_u64(args, "octave").unwrap_or(4).min(9) as u8;
-    let start = arg_u64(args, "start").unwrap_or(0);
-    // A BAR, not a quarter: chords move at the rate a progression does, and a model given the
-    // note default would write four chords into one bar and call it a progression.
-    let step = arg_u64(args, "step").unwrap_or(NANOTICKS_PER_QUARTER * 4);
-    let duration = arg_u64(args, "duration").unwrap_or(step);
-    let spread = arg_u64(args, "spread").unwrap_or(0).min(u32::MAX as u64) as u32;
-    let ht = arg_u64(args, "humanize_timing").unwrap_or(0).min(255) as u8;
-    let hv = arg_u64(args, "humanize_velocity").unwrap_or(0).min(255) as u8;
-
-    // Same optimistic-concurrency protocol add_notes obeys, and per TRACK for the same
-    // reason: the agent is not privileged and must not read the global counter.
-    let mut base = handle.clip_version_for_track(track);
-    let first_base = base;
-    let mut sent = 0usize;
-    for (index, degree) in degrees.iter().enumerate() {
-        let nanotick = start + step * index as u64;
-        let payload = UiChordCommandPayload {
-            command_type: UiCommandType::WriteChord as u16,
-            flags: 0,
-            track_id: track,
-            base_version: base,
-            nanotick_lo: (nanotick & 0xffff_ffff) as u32,
-            nanotick_hi: (nanotick >> 32) as u32,
-            duration_lo: (duration & 0xffff_ffff) as u32,
-            duration_hi: (duration >> 32) as u32,
-            degree: degree - 1,
-            quality,
-            inversion,
-            base_octave: octave,
-            humanize_timing: ht,
-            humanize_velocity: hv,
-            reserved: 0,
-            spread_nanoticks: spread,
-        };
-        if let Err(e) = handle.send_chord_command(payload) {
-            return ToolResult::err(format!("{e} after {sent} chords"));
-        }
-        sent += 1;
-        base = base.wrapping_add(1);
-    }
-    let applied = handle.wait_for_clip_version(
-        first_base,
-        first_base.wrapping_add(sent as u32),
-        std::time::Duration::from_secs(2),
-    );
-    ToolResult::ok(json!({
-        "sent": sent,
-        "first_base_version": first_base,
-        "applied": applied,
-        "track": track,
-        "strum": spread > 0,
-    }))
-}
-
 fn add_notes(handle: &EngineHandle, args: &Value) -> ToolResult {
     let track = match arg_u64(args, "track") {
         Some(t) => t as u32,
@@ -2007,20 +1916,170 @@ fn add_notes(handle: &EngineHandle, args: &Value) -> ToolResult {
         sent += 1;
         base = base.wrapping_add(1);
     }
-    // Wait for the engine to apply this batch (clip version reaches first_base +
-    // sent) before returning, so a following tool call reads a settled version
-    // and doesn't race the ring — no fixed delay between calls.
-    let applied = handle.wait_for_clip_version(
+    // Wait for the engine to apply this batch before returning, so a following tool call reads a
+    // settled version and does not race the ring — no fixed delay between calls.
+    //
+    // PER TRACK, matching the base above. This waited on the GLOBAL counter while taking its base
+    // from the per-track one, so it returned as soon as anything anywhere moved — including an
+    // edit to a different track — and the next call to this same track could read a version that
+    // had not caught up. add_notes' own comment on the base says reading the global is "exactly
+    // the failure the per-track counters were introduced to end"; the wait was doing it.
+    let applied = handle.wait_for_track_clip_version(
+        track,
         first_base,
         first_base.wrapping_add(sent as u32),
         std::time::Duration::from_secs(2),
     );
-    ToolResult::ok(json!({
+    report_batch(handle, "notes", track, first_base, sent, applied)
+}
+
+/// The shared tail of add_notes and add_chords: say what actually landed.
+///
+/// A REFUSED BATCH MUST NOT REPORT SUCCESS. These commands carry an optimistic base version and
+/// the engine drops any whose base is stale, so a whole batch can be thrown away while every send
+/// returns Ok — the ring accepted the bytes, the engine discarded the edit. Observed in a demo
+/// rehearsal: "kick on every beat, snare on 2 and 4" wrote sixteen kicks, had all eight snares
+/// refused, and the model told the user it had added both. The engine said so
+/// (`clip.version_mismatch ... action=resync_requested`) and nothing on this side was listening.
+///
+/// NOTHING LANDED IS AN ERROR, so the model retries and gets it right. A PARTIAL landing is
+/// reported but not an error: a retry would duplicate whatever did land, and a duplicated note is
+/// a worse outcome than a reported shortfall.
+fn report_batch(handle: &EngineHandle, what: &str, track: u32, first_base: u32,
+                sent: usize, applied: bool) -> ToolResult {
+    let now = handle.clip_version_for_track(track);
+    let landed = now.wrapping_sub(first_base) as usize;
+    if !applied && landed == 0 {
+        return ToolResult::err(format!(
+            "the engine refused all {sent} {what} on track {track} as stale (its clip version is \
+             still {now}, the batch was written against {first_base}). Nothing was added. Send \
+             them again — the version will have settled."));
+    }
+    let mut out = json!({
         "sent": sent,
+        "landed": landed.min(sent),
         "first_base_version": first_base,
         "applied": applied,
         "track": track,
-    }))
+    });
+    if landed < sent {
+        if let Value::Object(ref mut m) = out {
+            m.insert("warning".into(), json!(format!(
+                "only {landed} of {sent} {what} were applied; the rest were refused as stale. \
+                 Read the track back before assuming what is there.")));
+        }
+    }
+    ToolResult::ok(out)
+}
+
+// CHORDS ARE DEGREES, WHICH IS THE WHOLE POINT OF HAVING THEM SEPARATE FROM NOTES.
+//
+// add_notes writes fixed MIDI pitches; this writes a degree of the current key, resolved against
+// the harmony timeline at the tick it sounds. So the same progression follows a key change, and
+// "make it minor" is one harmony edit rather than a rewrite of every note.
+//
+// The model could not do this at all before — `add_notes` was the only way to put anything on a
+// track, so every chord it wrote was frozen in whatever key happened to be current, and the
+// harmony lane had nothing to act on. The engine command, the tracker and daw-cli have all had
+// chords since long before the agent existed; only this surface was missing.
+//
+// SPREAD IS THE STRUM and it is why `spread` is offered here rather than left at zero: this
+// surface's daw-cli sibling shipped for months sending zero for spread and both humanize fields,
+// so no chord written through a tool could be anything but a rigid block. Offering them in the
+// manifest is what makes them reachable by asking.
+fn add_chords(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let track = match arg_u64(args, "track") {
+        Some(t) => t as u32,
+        None => return ToolResult::err("add_chords needs \"track\""),
+    };
+    let degrees: Vec<u16> = match args.get("degrees").and_then(|v| v.as_array()) {
+        Some(arr) => {
+            let mut out = Vec::with_capacity(arr.len());
+            for d in arr {
+                match d.as_u64() {
+                    // ONE-BASED, AND 0 IS REFUSED RATHER THAN COERCED. resolveDegree does
+                    // `if (degree == 0) degree = 1;` and then indexes with `degree - 1`, so a 0
+                    // silently becomes the tonic. That is the most expensive kind of wrong here:
+                    // a caller who thinks degrees are 0-based asks for I-V-vi-IV as [0,4,5,3],
+                    // gets the tonic for the first chord BY ACCIDENT and iii-IV-V for the rest,
+                    // and the one chord that sounds right is the one that hides the mistake.
+                    Some(v) if v >= 1 && v <= 63 => out.push(v as u16),
+                    Some(0) => return ToolResult::err(
+                        "degree 0 is not a degree — they are one-based, so 1 is the tonic (I), \
+                         5 is the dominant (V). A I-V-vi-IV progression is [1, 5, 6, 4]."),
+                    // REFUSED, not clamped. A degree is an index into the scale, not a dial —
+                    // 200 is a caller with the wrong idea of the unit, and clamping it to 63
+                    // would write a chord nobody asked for with nothing reporting it.
+                    _ => return ToolResult::err(format!("bad degree {d} (expected 1..63, where 1 is the tonic)")),
+                }
+            }
+            out
+        }
+        None => return ToolResult::err("add_chords needs \"degrees\" (an array of scale degrees, 0 = I)"),
+    };
+    if degrees.is_empty() {
+        return ToolResult::err("\"degrees\" was empty");
+    }
+    let quality = arg_u64(args, "quality").unwrap_or(1).min(2) as u8;
+    let inversion = arg_u64(args, "inversion").unwrap_or(0).min(3) as u8;
+    let octave = arg_u64(args, "octave").unwrap_or(4).min(9) as u8;
+    let start = arg_u64(args, "start").unwrap_or(0);
+    // ONE BAR, not one quarter. add_notes steps by a quarter because it writes a melody; a
+    // progression that changed chord every beat is not what "a I-V-vi-IV" means to anyone.
+    let step = arg_u64(args, "step").unwrap_or(NANOTICKS_PER_QUARTER * 4);
+    let duration = arg_u64(args, "duration").unwrap_or(step);
+    let spread = arg_u64(args, "spread").unwrap_or(0).min(u32::MAX as u64) as u32;
+    // BOTH HUMANIZE FIELDS ARE A BYTE ON THE WIRE. Refused rather than truncated, the same call
+    // daw-cli makes: 300 silently becoming 44 is a different feel from the one asked for.
+    let humanize_timing = match arg_u64(args, "humanize_timing").unwrap_or(0) {
+        v if v <= 255 => v as u8,
+        v => return ToolResult::err(format!("humanize_timing is 0..255 (a byte on the wire), got {v}")),
+    };
+    let humanize_velocity = match arg_u64(args, "humanize_velocity").unwrap_or(0) {
+        v if v <= 255 => v as u8,
+        v => return ToolResult::err(format!("humanize_velocity is 0..255 (a byte on the wire), got {v}")),
+    };
+    let column = arg_u64(args, "column").unwrap_or(0) as u16;
+
+    // The same optimistic-concurrency protocol add_notes follows, and per TRACK for the same
+    // reason: reading the global counter makes every write fail the moment anyone edits
+    // elsewhere.
+    let mut base = handle.clip_version_for_track(track);
+    let first_base = base;
+    let mut sent = 0usize;
+    for (index, degree) in degrees.iter().enumerate() {
+        let nanotick = start + step * index as u64;
+        let payload = UiChordCommandPayload {
+            command_type: UiCommandType::WriteChord as u16,
+            flags: column,
+            track_id: track,
+            base_version: base,
+            nanotick_lo: (nanotick & 0xffff_ffff) as u32,
+            nanotick_hi: (nanotick >> 32) as u32,
+            duration_lo: (duration & 0xffff_ffff) as u32,
+            duration_hi: (duration >> 32) as u32,
+            degree: *degree,
+            quality,
+            inversion,
+            base_octave: octave,
+            humanize_timing,
+            humanize_velocity,
+            reserved: 0,
+            spread_nanoticks: spread,
+        };
+        if let Err(e) = handle.send_chord_command(payload) {
+            return ToolResult::err(format!("{e} after {sent} chords"));
+        }
+        sent += 1;
+        base = base.wrapping_add(1);
+    }
+    let applied = handle.wait_for_track_clip_version(
+        track,
+        first_base,
+        first_base.wrapping_add(sent as u32),
+        std::time::Duration::from_secs(2),
+    );
+    report_batch(handle, "chords", track, first_base, sent, applied)
 }
 
 // Undo or redo the last structural (note/chord) edit. The engine keeps the undo
@@ -2114,9 +2173,10 @@ fn delete_note(handle: &EngineHandle, args: &Value) -> ToolResult {
 fn device_kind_code(name: &str) -> Option<u32> {
     match name {
         "patcher" | "patcher_event" => Some(0),
-        // The other two patcher graphs. The manifest offers all three, so the mapper has to
-        // accept all three — an enum that promises a name this function refuses is a tool that
-        // fails on its own documentation.
+        // The other two patcher flavours. daw-cli has accepted all three since it was written
+        // (patcher_event / patcher_instrument / patcher_audio) while this list had only the
+        // event one, so the same operation had two vocabularies and the agent's was the smaller.
+        // A person at the console could build an instrument patcher and the model could not.
         "patcher_instrument" => Some(1),
         "patcher_audio" => Some(2),
         "vst_instrument" => Some(3),
@@ -2668,7 +2728,8 @@ mod tests {
         // And the other direction: anything the executor accepts should be offered, or nobody
         // will ever ask for it. `patcher_event` is the documented alias for `patcher`, so it is
         // allowed to be accepted without being advertised twice.
-        for name in ["patcher", "vst_instrument", "vst_effect", "sampler"] {
+        for name in ["patcher", "patcher_instrument", "patcher_audio",
+                     "vst_instrument", "vst_effect", "sampler"] {
             assert!(advertised.iter().any(|a| a == name),
                     "the executor accepts {name:?} but add_device does not advertise it, so the \
                      model has no way to know the capability exists");

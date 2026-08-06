@@ -123,7 +123,11 @@ after_command "$TMP" cli do add-device --track 0 --kind sampler --device-id 1 ||
 cli do sampler-load --track 0 --device 1 --root 36 \
     --files s0.wav,s1.wav,s2.wav,s3.wav,s4.wav,s5.wav,s6.wav,s7.wav \
     >"$TMP/kit.json" 2>&1 || fail "the kit load exited non-zero: $(cat "$TMP/kit.json")"
-sleep 2.0
+# WAIT FOR THE EIGHT LOADS, do not guess at how long eight decodes take. The next line counts
+# them, so the thing to wait for is the count reaching eight — and when it does not, the
+# primitive says which of the eight arrived rather than leaving a bare "got 3".
+wait_for_event_count "$TMP/eng.log" '"event":"sampler.loaded"' 8 80 "eight sampler loads" \
+  >/dev/null 2>&1 || true
 LOADS="$(grep -c '"event":"sampler.loaded"' "$TMP/eng.log")"
 [ "$LOADS" = "8" ] || fail "expected 8 sampler.loaded events, got $LOADS — one --files command
         must lay the whole kit down, or 'drop eight one-shots on a track' is eight commands"
