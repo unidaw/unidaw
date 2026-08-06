@@ -34,7 +34,7 @@ function text(parent) {
 }
 
 export class Patcher {
-  constructor(host, { onSelect, onFieldPick, onFieldDrag } = {}) {
+  constructor(host, { onSelect, onFieldPick, onFieldDrag, onLink } = {}) {
     this.host = host;
     this.host.className = 'pt';
     this.onSelect = onSelect;
@@ -43,6 +43,11 @@ export class Patcher {
     // and the keyboard operates on whatever the last click selected.
     this.onFieldPick = onFieldPick;
     this.onFieldDrag = onFieldDrag;
+    // Connecting by POINTER. It was keyboard-only — select a node, press `c`, select another,
+    // press `c` — and the status line said so, which is not the same as being discoverable.
+    // Reported from live use as "I can't click on node edges to create connections": the
+    // instinct is to drag, there was nothing to drag, and the two-step keystroke went unfound.
+    this.onLink = onLink;
 
     // Three layers, and the split matters: `.pt-scroll` is the viewport and
     // `.pt-canvas` is the graph's own extent, so the notice below can stay put
@@ -90,6 +95,58 @@ export class Patcher {
      * keyboard path is untouched and shares the same selection, so the two
      * agree about what "the selected field" means.
      */
+    /*
+     * DRAG FROM A NODE'S HEAD TO ANOTHER NODE TO CONNECT THEM.
+     *
+     * The HEAD, because the rows below it already own the pointer for field drags and a gesture
+     * cannot mean two things. The head is the node's name — grabbing a thing by its title to
+     * point it at another thing is the gesture people arrive with.
+     *
+     * NODE TO NODE, NOT PORT TO PORT. The sidecar resolves the ports from the two node TYPES
+     * (`resolve_link`), which is why the keyboard path never asked for a port id either. Adding
+     * port-level hit targets here would put a second copy of that decision on this side, and the
+     * two would drift — the same argument the config packing already lost once.
+     */
+    this.nodesEl.addEventListener('pointerdown', (e) => {
+      const head = e.target.closest('.pt-head');
+      if (!head || !this.onLink) return;
+      const el = head.closest('.pt-node');
+      if (!el) return;
+      e.preventDefault();
+      const id = Number(el.dataset.id);
+      if (this.onSelect) this.onSelect(id);
+      this._linkDrag = { id, pointerId: e.pointerId };
+      this.nodesEl.setPointerCapture(e.pointerId);
+      el.classList.add('linking');
+      this._linkFromEl = el;
+      this._drawLinkLine(e);
+    });
+    this.nodesEl.addEventListener('pointermove', (e) => {
+      if (this._linkDrag) this._drawLinkLine(e);
+    });
+    const endLink = (e) => {
+      const d = this._linkDrag;
+      if (!d) return;
+      this._linkDrag = null;
+      try { this.nodesEl.releasePointerCapture(d.pointerId); } catch (err) { /* gone */ }
+      if (this._linkFromEl) { this._linkFromEl.classList.remove('linking'); this._linkFromEl = null; }
+      if (this._linkLine) this._linkLine.setAttribute('d', '');
+      // What is UNDER the pointer at the end, not what the event fired on: pointer capture
+      // sends every move and the release to the element that took it, so `e.target` is the
+      // source node for the whole gesture and would connect it to itself every time.
+      const over = document.elementFromPoint(e.clientX, e.clientY);
+      const dst = over && over.closest ? over.closest('.pt-node') : null;
+      if (!dst) return;
+      const dstId = Number(dst.dataset.id);
+      if (dstId === d.id) return;                     // a node cannot connect to itself
+      this.onLink(d.id, dstId);
+    };
+    this.nodesEl.addEventListener('pointerup', endLink);
+    this.nodesEl.addEventListener('pointercancel', endLink);
+    this._linkDrag = null;
+    this._linkFromEl = null;
+    this._linkLine = null;
+
     this.nodesEl.addEventListener('pointerdown', (e) => {
       const el = e.target.closest('.pt-node');
       if (!el) return;
@@ -127,6 +184,26 @@ export class Patcher {
     this.nodesEl.addEventListener('pointercancel', end);
     this._fieldDrag = null;
     this._fieldRow = null;
+  }
+
+  /** The rubber band, from the source node's right edge to the pointer. */
+  _drawLinkLine(e) {
+    if (!this._linkFromEl) return;
+    if (!this._linkLine) {
+      this._linkLine = document.createElementNS(SVG_NS, 'path');
+      this._linkLine.setAttribute('class', 'pt-linkline');
+      this.svg.appendChild(this._linkLine);
+    }
+    const c = this.canvas.getBoundingClientRect();
+    const n = this._linkFromEl.getBoundingClientRect();
+    const x0 = n.right - c.left;
+    const y0 = n.top - c.top + n.height / 2;
+    const x1 = e.clientX - c.left;
+    const y1 = e.clientY - c.top;
+    // The same left-to-right bezier the real cables use, so the preview reads as the thing it
+    // is about to become rather than as a different kind of mark.
+    const dx = Math.max(24, Math.abs(x1 - x0) / 2);
+    this._linkLine.setAttribute('d', `M ${x0} ${y0} C ${x0 + dx} ${y0} ${x1 - dx} ${y1} ${x1} ${y1}`);
   }
 
   _node(i) {

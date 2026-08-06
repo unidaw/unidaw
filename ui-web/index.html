@@ -698,6 +698,19 @@ const patcher = new Patcher(patcherHost, {
     for (let i = 0; i < Math.abs(steps); i++) { if (!nudgePatcher(dir)) break; }
     schedule();
   },
+  /**
+   * Dragging a node's HEAD onto another node connects them.
+   *
+   * Through `linkPatcherNodes`, the same function the keyboard's `c`-then-`c` ends at, for the
+   * reason onFieldDrag gives above: two gestures, one operation, one sender. An in-progress
+   * keyboard arm is cleared, because finishing a link with the mouse and leaving the keyboard
+   * still armed means the next `c` connects something nobody asked for.
+   */
+  onLink: (srcId, dstId) => {
+    state.patchLinkFrom = null;
+    linkPatcherNodes(srcId, dstId);
+    schedule();
+  },
 });
 
 /**
@@ -2162,9 +2175,29 @@ function linkPatcherNode() {
   }
   const from = state.patchLinkFrom;
   state.patchLinkFrom = null;
-  if (from.id === node.id) { state.reject = 'a node cannot connect to itself'; return false; }
-  return sendGraph(patchTarget({ type: 'patchlink', src: from.id, srcType: from.type,
-                                 dst: node.id, dstType: node.type }));
+  return linkPatcherNodes(from.id, node.id);
+}
+
+/**
+ * Connect two nodes by id. THE ONE SENDER — the keyboard's arm/fire and the pointer drag both
+ * come here.
+ *
+ * Written as a function rather than left inline in the keyboard path because there are now two
+ * gestures for one operation, and two senders would be two chances to disagree about scope. The
+ * patcher has already paid for that once: `track: 0` was hardcoded in two places and no device
+ * was named, so edits went to the shared pool and were never saved. `patchTarget` is what fixes
+ * that, and it has to be on every path or it is on none.
+ */
+function linkPatcherNodes(srcId, dstId) {
+  if (srcId === dstId) { state.reject = 'a node cannot connect to itself'; return false; }
+  const nodes = engine ? engine.patcherNodes : [];
+  const src = nodes.find((n) => n.id === srcId);
+  const dst = nodes.find((n) => n.id === dstId);
+  // The TYPES, because the sidecar resolves which ports to use from them. A missing node here
+  // means the graph moved under the gesture; refusing beats sending a link with type 0.
+  if (!src || !dst) { state.reject = 'that node is no longer in the graph'; return false; }
+  return sendGraph(patchTarget({ type: 'patchlink', src: srcId, srcType: src.type,
+                                 dst: dstId, dstType: dst.type }));
 }
 
 /** Drop the pending entries the engine has confirmed. Once per engine frame. */

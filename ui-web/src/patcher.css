@@ -162,3 +162,17 @@
 /* Held for the whole gesture, including after the pointer has left the row —
    pointer capture means the row you grabbed is still the one you are changing. */
 .pt-row.dragging { background: var(--uni-surface-cursor-cell); }
+
+/*
+ * The connect-drag preview. Dashed and bright so it reads as a PROPOSAL rather than as a cable
+ * that already exists — the three real kinds are solid and colour-coded, and a fourth solid line
+ * would just be a fourth kind nobody can name.
+ */
+.pt-linkline {
+  fill: none;
+  stroke: #e8c060;
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+  pointer-events: none;
+}
+.pt-node.linking .pt-head { background: #4a3c18; }
