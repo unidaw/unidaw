@@ -1,54 +1,702 @@
 {
-  "schema_version": 1,
+  "schema_version": 4,
   "meta": {
     "name": "rack",
-    "created_utc": 0,
-    "modified_utc": 0
+    "created_utc": "",
+    "modified_utc": ""
   },
+  "seed": 0,
   "timebase": {
-    "nanoticks_per_quarter": 960000
+    "nanoticks_per_quarter": 960000,
+    "time_sig_numerator": 4,
+    "time_sig_denominator": 4
   },
   "tempo_map": [
     {
       "nanotick": 0,
-      "bpm": 120.0
-    },
-    {
-      "nanotick": 7680000,
-      "bpm": 128.0
+      "bpm": 120
     }
   ],
   "harmony_timeline": [
     {
       "nanotick": 0,
-      "root": 9,
-      "scale_id": 2
+      "root": 1,
+      "scale_id": 2,
+      "flags": 0
+    }
+  ],
+  "clips": [
+    {
+      "id": 3,
+      "name": "Clip",
+      "length": 0,
+      "lines_per_beat": 4,
+      "time_sig_numerator": 4,
+      "time_sig_denominator": 4,
+      "kind": "symbolic",
+      "notes": [
+        {
+          "nanotick": 0,
+          "duration": 720000,
+          "pitch": 37,
+          "velocity": 110,
+          "column": 0,
+          "note_id": 1
+        },
+        {
+          "nanotick": 960000,
+          "duration": 720000,
+          "pitch": 38,
+          "velocity": 110,
+          "column": 0,
+          "note_id": 2
+        },
+        {
+          "nanotick": 1920000,
+          "duration": 720000,
+          "pitch": 36,
+          "velocity": 110,
+          "column": 0,
+          "note_id": 3
+        },
+        {
+          "nanotick": 2880000,
+          "duration": 720000,
+          "pitch": 41,
+          "velocity": 110,
+          "column": 0,
+          "note_id": 4
+        },
+        {
+          "nanotick": 3840000,
+          "duration": 720000,
+          "pitch": 37,
+          "velocity": 110,
+          "column": 0,
+          "note_id": 5
+        },
+        {
+          "nanotick": 4800000,
+          "duration": 720000,
+          "pitch": 34,
+          "velocity": 110,
+          "column": 0,
+          "note_id": 6
+        },
+        {
+          "nanotick": 5760000,
+          "duration": 720000,
+          "pitch": 39,
+          "velocity": 110,
+          "column": 0,
+          "note_id": 7
+        },
+        {
+          "nanotick": 6720000,
+          "duration": 720000,
+          "pitch": 36,
+          "velocity": 110,
+          "column": 0,
+          "note_id": 8
+        },
+        {
+          "nanotick": 7680000,
+          "duration": 720000,
+          "pitch": 38,
+          "velocity": 110,
+          "column": 0,
+          "note_id": 9
+        },
+        {
+          "nanotick": 8640000,
+          "duration": 720000,
+          "pitch": 33,
+          "velocity": 110,
+          "column": 0,
+          "note_id": 10
+        },
+        {
+          "nanotick": 9600000,
+          "duration": 720000,
+          "pitch": 37,
+          "velocity": 110,
+          "column": 0,
+          "note_id": 11
+        },
+        {
+          "nanotick": 10560000,
+          "duration": 720000,
+          "pitch": 40,
+          "velocity": 110,
+          "column": 0,
+          "note_id": 12
+        },
+        {
+          "nanotick": 11520000,
+          "duration": 720000,
+          "pitch": 35,
+          "velocity": 110,
+          "column": 0,
+          "note_id": 13
+        },
+        {
+          "nanotick": 12480000,
+          "duration": 720000,
+          "pitch": 38,
+          "velocity": 110,
+          "column": 0,
+          "note_id": 14
+        },
+        {
+          "nanotick": 13440000,
+          "duration": 720000,
+          "pitch": 36,
+          "velocity": 110,
+          "column": 0,
+          "note_id": 15
+        },
+        {
+          "nanotick": 14400000,
+          "duration": 720000,
+          "pitch": 34,
+          "velocity": 110,
+          "column": 0,
+          "note_id": 16
+        }
+      ],
+      "chords": []
     },
     {
-      "nanotick": 3840000,
-      "root": 5,
-      "scale_id": 1
+      "id": 4,
+      "name": "Clip",
+      "length": 0,
+      "lines_per_beat": 4,
+      "time_sig_numerator": 4,
+      "time_sig_denominator": 4,
+      "kind": "symbolic",
+      "notes": [
+        {
+          "nanotick": 0,
+          "duration": 480000,
+          "pitch": 61,
+          "velocity": 85,
+          "column": 0,
+          "note_id": 1
+        },
+        {
+          "nanotick": 960000,
+          "duration": 480000,
+          "pitch": 63,
+          "velocity": 85,
+          "column": 0,
+          "note_id": 2
+        },
+        {
+          "nanotick": 1920000,
+          "duration": 480000,
+          "pitch": 68,
+          "velocity": 85,
+          "column": 0,
+          "note_id": 3
+        },
+        {
+          "nanotick": 2880000,
+          "duration": 480000,
+          "pitch": 66,
+          "velocity": 85,
+          "column": 0,
+          "note_id": 4
+        },
+        {
+          "nanotick": 3840000,
+          "duration": 480000,
+          "pitch": 61,
+          "velocity": 85,
+          "column": 0,
+          "note_id": 5
+        },
+        {
+          "nanotick": 4800000,
+          "duration": 480000,
+          "pitch": 58,
+          "velocity": 85,
+          "column": 0,
+          "note_id": 6
+        },
+        {
+          "nanotick": 5760000,
+          "duration": 480000,
+          "pitch": 63,
+          "velocity": 85,
+          "column": 0,
+          "note_id": 7
+        },
+        {
+          "nanotick": 6720000,
+          "duration": 480000,
+          "pitch": 61,
+          "velocity": 85,
+          "column": 0,
+          "note_id": 8
+        },
+        {
+          "nanotick": 7680000,
+          "duration": 480000,
+          "pitch": 66,
+          "velocity": 85,
+          "column": 0,
+          "note_id": 9
+        },
+        {
+          "nanotick": 8640000,
+          "duration": 480000,
+          "pitch": 63,
+          "velocity": 85,
+          "column": 0,
+          "note_id": 10
+        },
+        {
+          "nanotick": 9600000,
+          "duration": 480000,
+          "pitch": 61,
+          "velocity": 85,
+          "column": 0,
+          "note_id": 11
+        },
+        {
+          "nanotick": 10560000,
+          "duration": 480000,
+          "pitch": 68,
+          "velocity": 85,
+          "column": 0,
+          "note_id": 12
+        },
+        {
+          "nanotick": 11520000,
+          "duration": 480000,
+          "pitch": 63,
+          "velocity": 85,
+          "column": 0,
+          "note_id": 13
+        },
+        {
+          "nanotick": 12480000,
+          "duration": 480000,
+          "pitch": 66,
+          "velocity": 85,
+          "column": 0,
+          "note_id": 14
+        },
+        {
+          "nanotick": 13440000,
+          "duration": 480000,
+          "pitch": 61,
+          "velocity": 85,
+          "column": 0,
+          "note_id": 15
+        },
+        {
+          "nanotick": 14400000,
+          "duration": 480000,
+          "pitch": 58,
+          "velocity": 85,
+          "column": 0,
+          "note_id": 16
+        }
+      ],
+      "chords": []
     },
     {
-      "nanotick": 7680000,
-      "root": 0,
-      "scale_id": 1
+      "id": 5,
+      "name": "Clip",
+      "length": 0,
+      "lines_per_beat": 4,
+      "time_sig_numerator": 4,
+      "time_sig_denominator": 4,
+      "kind": "symbolic",
+      "notes": [
+        {
+          "nanotick": 0,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 120,
+          "column": 0,
+          "note_id": 13
+        },
+        {
+          "nanotick": 960000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 23
+        },
+        {
+          "nanotick": 2880000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 120,
+          "column": 0,
+          "note_id": 14
+        },
+        {
+          "nanotick": 3840000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 120,
+          "column": 0,
+          "note_id": 4
+        },
+        {
+          "nanotick": 5760000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 120,
+          "column": 0,
+          "note_id": 15
+        },
+        {
+          "nanotick": 7680000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 120,
+          "column": 0,
+          "note_id": 7
+        },
+        {
+          "nanotick": 8880000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 29
+        },
+        {
+          "nanotick": 9600000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 30
+        },
+        {
+          "nanotick": 11520000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 120,
+          "column": 0,
+          "note_id": 17
+        },
+        {
+          "nanotick": 12480000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 24
+        },
+        {
+          "nanotick": 14400000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 120,
+          "column": 0,
+          "note_id": 18
+        },
+        {
+          "nanotick": 17280000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 120,
+          "column": 0,
+          "note_id": 19
+        },
+        {
+          "nanotick": 20160000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 120,
+          "column": 0,
+          "note_id": 20
+        }
+      ],
+      "chords": []
     },
     {
-      "nanotick": 11520000,
-      "root": 7,
-      "scale_id": 1
+      "id": 6,
+      "name": "Clip",
+      "length": 0,
+      "lines_per_beat": 4,
+      "time_sig_numerator": 4,
+      "time_sig_denominator": 4,
+      "kind": "symbolic",
+      "notes": [
+        {
+          "nanotick": 0,
+          "duration": 360000,
+          "pitch": 73,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 21
+        },
+        {
+          "nanotick": 480000,
+          "duration": 360000,
+          "pitch": 73,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 1
+        },
+        {
+          "nanotick": 1200000,
+          "duration": 360000,
+          "pitch": 75,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 2
+        },
+        {
+          "nanotick": 1920000,
+          "duration": 360000,
+          "pitch": 73,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 3
+        },
+        {
+          "nanotick": 2640000,
+          "duration": 240000,
+          "pitch": 70,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 4
+        },
+        {
+          "nanotick": 2880000,
+          "duration": 360000,
+          "pitch": 68,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 22
+        },
+        {
+          "nanotick": 3360000,
+          "duration": 360000,
+          "pitch": 68,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 5
+        },
+        {
+          "nanotick": 4080000,
+          "duration": 360000,
+          "pitch": 73,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 6
+        },
+        {
+          "nanotick": 4800000,
+          "duration": 360000,
+          "pitch": 75,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 7
+        },
+        {
+          "nanotick": 5520000,
+          "duration": 240000,
+          "pitch": 70,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 8
+        },
+        {
+          "nanotick": 5760000,
+          "duration": 360000,
+          "pitch": 73,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 23
+        },
+        {
+          "nanotick": 6240000,
+          "duration": 360000,
+          "pitch": 73,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 9
+        },
+        {
+          "nanotick": 6960000,
+          "duration": 360000,
+          "pitch": 68,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 10
+        },
+        {
+          "nanotick": 7680000,
+          "duration": 360000,
+          "pitch": 75,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 11
+        },
+        {
+          "nanotick": 8400000,
+          "duration": 240000,
+          "pitch": 73,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 12
+        },
+        {
+          "nanotick": 8640000,
+          "duration": 360000,
+          "pitch": 75,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 24
+        },
+        {
+          "nanotick": 9120000,
+          "duration": 360000,
+          "pitch": 70,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 13
+        },
+        {
+          "nanotick": 9840000,
+          "duration": 360000,
+          "pitch": 75,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 14
+        },
+        {
+          "nanotick": 10560000,
+          "duration": 360000,
+          "pitch": 73,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 15
+        },
+        {
+          "nanotick": 11280000,
+          "duration": 240000,
+          "pitch": 68,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 16
+        },
+        {
+          "nanotick": 11520000,
+          "duration": 360000,
+          "pitch": 73,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 25
+        },
+        {
+          "nanotick": 12000000,
+          "duration": 360000,
+          "pitch": 75,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 17
+        },
+        {
+          "nanotick": 12720000,
+          "duration": 360000,
+          "pitch": 70,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 18
+        },
+        {
+          "nanotick": 13440000,
+          "duration": 360000,
+          "pitch": 73,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 19
+        },
+        {
+          "nanotick": 14160000,
+          "duration": 360000,
+          "pitch": 68,
+          "velocity": 70,
+          "column": 0,
+          "note_id": 20
+        }
+      ],
+      "chords": []
+    },
+    {
+      "id": 7,
+      "name": "Clip",
+      "length": 0,
+      "lines_per_beat": 4,
+      "time_sig_numerator": 4,
+      "time_sig_denominator": 4,
+      "kind": "symbolic",
+      "notes": [
+        {
+          "nanotick": 0,
+          "duration": 3840000,
+          "pitch": 49,
+          "velocity": 65,
+          "column": 0,
+          "note_id": 1
+        },
+        {
+          "nanotick": 3840000,
+          "duration": 3840000,
+          "pitch": 52,
+          "velocity": 65,
+          "column": 0,
+          "note_id": 2
+        },
+        {
+          "nanotick": 7680000,
+          "duration": 3840000,
+          "pitch": 56,
+          "velocity": 65,
+          "column": 0,
+          "note_id": 3
+        },
+        {
+          "nanotick": 11520000,
+          "duration": 3840000,
+          "pitch": 50,
+          "velocity": 65,
+          "column": 0,
+          "note_id": 4
+        }
+      ],
+      "chords": []
     }
   ],
   "tracks": [
     {
       "track_id": 0,
-      "name": "Bass",
-      "harmony_quantize": true,
+      "name": "Track 1",
+      "parent_id": 0,
+      "collapsed": false,
+      "harmony_quantize": false,
+      "sound_addressed_only": false,
+      "allow_note_overlap": false,
       "lines_per_beat": 4,
+      "quantize": {
+        "grid_nanoticks": 0,
+        "strength_milli": 0,
+        "swing_milli": 0
+      },
       "mixer": {
-        "gain_db": -2.0,
-        "pan": -0.3,
+        "gain_db": 0,
+        "pan": 0,
         "mute": false,
         "solo": false
       },
@@ -70,6 +718,11 @@
         },
         "audio_out": {
           "kind": "master",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "sidechain": {
+          "kind": "none",
           "track_id": 0,
           "input_id": 0
         },
@@ -78,200 +731,49 @@
       "device_chain": [
         {
           "device_id": 1,
-          "kind": "patcher_event",
-          "capability_mask": 2,
-          "patcher_node_id": 2,
-          "host_slot_index": 0,
+          "kind": "vst_instrument",
+          "capability_mask": 5,
+          "patcher_node_id": 4294967295,
+          "host_slot_index": 13,
           "bypass": false,
-          "patcher": {
-            "nodes": [
-              {
-                "id": 0,
-                "type": "euclidean",
-                "euclidean": {
-                  "steps": 16,
-                  "hits": 5,
-                  "offset": 0,
-                  "duration_ticks": 0,
-                  "degree": 1,
-                  "octave_offset": 0,
-                  "velocity": 100,
-                  "base_octave": 4
-                }
-              },
-              {
-                "id": 1,
-                "type": "random_degree",
-                "random_degree": {
-                  "degree": 8,
-                  "velocity": 100,
-                  "duration_ticks": 0
-                }
-              },
-              {
-                "id": 2,
-                "type": "event_out"
-              }
-            ],
-            "edges": [
-              {
-                "src_node_id": 0,
-                "src_port_id": 1,
-                "dst_node_id": 1,
-                "dst_port_id": 0,
-                "kind": "event"
-              },
-              {
-                "src_node_id": 1,
-                "src_port_id": 1,
-                "dst_node_id": 2,
-                "dst_port_id": 0,
-                "kind": "event"
-              }
-            ]
+          "vst_ref": {
+            "vendor": "u-he",
+            "name": "Zebralette",
+            "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
+            "uid16": ""
           }
-        },
-        {
-          "device_id": 2,
-          "kind": "sampler",
-          "capability_mask": 4,
-          "patcher_node_id": 0,
-          "host_slot_index": 0,
-          "bypass": false,
-          "vst_ref": null
         }
       ],
-      "mod_links": [
+      "mod_links": [],
+      "placements": [
         {
-          "link_id": 1,
-          "src": {
-            "device_id": 2,
-            "source_id": 3,
-            "kind": "lfo"
-          },
-          "dst": {
-            "device_id": 2,
-            "target_id": 7,
-            "kind": "vst_param",
-            "param_uid16": "00112233445566778899aabbccddeeff"
-          },
-          "depth": 0.4,
-          "bias": -0.1,
-          "rate": "block"
+          "clip_id": 3,
+          "id": 3,
+          "at": 0,
+          "length": 0,
+          "notes": [],
+          "chords": [],
+          "mutes": []
         }
-      ],
-      "notes": [
-        {
-          "nanotick": 0,
-          "duration": 960000,
-          "pitch": 33,
-          "velocity": 112,
-          "column": 0,
-          "note_id": 1001
-        },
-        {
-          "nanotick": 1920000,
-          "duration": 960000,
-          "pitch": 33,
-          "velocity": 96,
-          "column": 0,
-          "note_id": 1002,
-          "delay": 160000
-        },
-        {
-          "nanotick": 2880000,
-          "duration": 480000,
-          "pitch": 40,
-          "velocity": 90,
-          "column": 0,
-          "note_id": 1003
-        },
-        {
-          "nanotick": 3840000,
-          "duration": 960000,
-          "pitch": 29,
-          "velocity": 112,
-          "column": 0,
-          "note_id": 1004
-        },
-        {
-          "nanotick": 5760000,
-          "duration": 960000,
-          "pitch": 29,
-          "velocity": 96,
-          "column": 0,
-          "note_id": 1005,
-          "delay": 160000
-        },
-        {
-          "nanotick": 6720000,
-          "duration": 480000,
-          "pitch": 36,
-          "velocity": 90,
-          "column": 0,
-          "note_id": 1006
-        },
-        {
-          "nanotick": 7680000,
-          "duration": 960000,
-          "pitch": 36,
-          "velocity": 112,
-          "column": 0,
-          "note_id": 1007
-        },
-        {
-          "nanotick": 9600000,
-          "duration": 960000,
-          "pitch": 36,
-          "velocity": 96,
-          "column": 0,
-          "note_id": 1008,
-          "delay": 160000
-        },
-        {
-          "nanotick": 10560000,
-          "duration": 480000,
-          "pitch": 43,
-          "velocity": 90,
-          "column": 0,
-          "note_id": 1009
-        },
-        {
-          "nanotick": 11520000,
-          "duration": 960000,
-          "pitch": 31,
-          "velocity": 112,
-          "column": 0,
-          "note_id": 1010
-        },
-        {
-          "nanotick": 13440000,
-          "duration": 960000,
-          "pitch": 31,
-          "velocity": 96,
-          "column": 0,
-          "note_id": 1011,
-          "delay": 160000
-        },
-        {
-          "nanotick": 14400000,
-          "duration": 480000,
-          "pitch": 38,
-          "velocity": 90,
-          "column": 0,
-          "note_id": 1012
-        }
-      ],
-      "chords": []
+      ]
     },
     {
       "track_id": 1,
-      "name": "Pad",
+      "name": "Track 2",
+      "parent_id": 0,
+      "collapsed": false,
       "harmony_quantize": false,
+      "sound_addressed_only": false,
+      "allow_note_overlap": false,
       "lines_per_beat": 4,
+      "quantize": {
+        "grid_nanoticks": 0,
+        "strength_milli": 0,
+        "swing_milli": 0
+      },
       "mixer": {
-        "gain_db": -4.0,
-        "pan": 0.0,
+        "gain_db": -7.020000164,
+        "pan": 0,
         "mute": false,
         "solo": false
       },
@@ -296,65 +798,537 @@
           "track_id": 0,
           "input_id": 0
         },
+        "sidechain": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "pre_fader_send": true
+      },
+      "device_chain": [
+        {
+          "device_id": 1,
+          "kind": "sampler",
+          "capability_mask": 5,
+          "patcher_node_id": 0,
+          "host_slot_index": 0,
+          "bypass": false,
+          "sampler": {
+            "next_slot_id": 2,
+            "next_source_id": 2,
+            "next_mod_set_id": 2,
+            "stem_count": 0,
+            "voice_cap": 64,
+            "default_view": 0,
+            "default_gate": 0,
+            "sources": [
+              {
+                "local_id": 1,
+                "path": "demo_pluck_c4.wav",
+                "content_key": 0
+              }
+            ],
+            "slice_sets": [],
+            "mod_sets": [
+              {
+                "id": 1,
+                "name": "default",
+                "filter_type": 0,
+                "cutoff_milli": 1000,
+                "resonance_milli": 0,
+                "bit_depth": 0,
+                "rate_hz": 0,
+                "next_modulator_id": 2,
+                "modulators": [
+                  {
+                    "id": 1,
+                    "target": 0,
+                    "kind": 0,
+                    "depth_milli": 1000,
+                    "apply": 1,
+                    "rate_milli": 1000,
+                    "time_base": 0,
+                    "editor": 0,
+                    "points": [
+                      {
+                        "t": 0,
+                        "v": 0,
+                        "tension": 0,
+                        "flags": 0
+                      },
+                      {
+                        "t": 1,
+                        "v": 1000,
+                        "tension": 0,
+                        "flags": 0
+                      },
+                      {
+                        "t": 2,
+                        "v": 1000,
+                        "tension": 0,
+                        "flags": 0
+                      },
+                      {
+                        "t": 5000,
+                        "v": 0,
+                        "tension": 0,
+                        "flags": 0
+                      }
+                    ],
+                    "sustain_loop_start": 2,
+                    "sustain_loop_end": 2,
+                    "release_loop_start": 255,
+                    "release_loop_end": 255,
+                    "loop_mode": 1,
+                    "release_fade": 0,
+                    "lfo_frequency_hz": 1,
+                    "lfo_depth": 1,
+                    "lfo_bias": 0,
+                    "lfo_phase_offset": 0
+                  }
+                ]
+              }
+            ],
+            "slots": [
+              {
+                "id": 1,
+                "name": "demo_pluck_c4",
+                "source_local_id": 1,
+                "slice_id": 0,
+                "start_frame": 0,
+                "end_frame": 0,
+                "loop_start_frame": 0,
+                "loop_end_frame": 0,
+                "loop_xfade_frames": 0,
+                "loop_mode": 0,
+                "sustain_loop": 0,
+                "key_low": 0,
+                "key_high": 127,
+                "root_key": 60,
+                "pitch_track_milli": 1000,
+                "tune_cents": 0,
+                "vel_low": 0,
+                "vel_high": 127,
+                "layer_group": 0,
+                "select_mode": 0,
+                "gate": 0,
+                "reverse": 0,
+                "gain_millibels": 0,
+                "pan_thousandths": 0,
+                "voice_group": 0,
+                "nna": 0,
+                "polyphony": 0,
+                "choke_fade_us": 3000,
+                "mod_set_id": 1,
+                "output_stem": 0,
+                "quality": 1
+              }
+            ]
+          }
+        }
+      ],
+      "mod_links": [],
+      "placements": [
+        {
+          "clip_id": 4,
+          "id": 4,
+          "at": 0,
+          "length": 0,
+          "notes": [],
+          "chords": [],
+          "mutes": []
+        }
+      ]
+    },
+    {
+      "track_id": 2,
+      "name": "Track 3",
+      "parent_id": 0,
+      "collapsed": false,
+      "harmony_quantize": false,
+      "sound_addressed_only": false,
+      "allow_note_overlap": false,
+      "lines_per_beat": 4,
+      "quantize": {
+        "grid_nanoticks": 0,
+        "strength_milli": 0,
+        "swing_milli": 0
+      },
+      "mixer": {
+        "gain_db": 0,
+        "pan": 0,
+        "mute": false,
+        "solo": false
+      },
+      "routing": {
+        "midi_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "midi_out": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_out": {
+          "kind": "master",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "sidechain": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "pre_fader_send": true
+      },
+      "device_chain": [
+        {
+          "device_id": 1,
+          "kind": "sampler",
+          "capability_mask": 5,
+          "patcher_node_id": 0,
+          "host_slot_index": 0,
+          "bypass": false,
+          "sampler": {
+            "next_slot_id": 2,
+            "next_source_id": 2,
+            "next_mod_set_id": 2,
+            "stem_count": 0,
+            "voice_cap": 64,
+            "default_view": 0,
+            "default_gate": 0,
+            "sources": [
+              {
+                "local_id": 1,
+                "path": "demo_kick.wav",
+                "content_key": 0
+              }
+            ],
+            "slice_sets": [],
+            "mod_sets": [
+              {
+                "id": 1,
+                "name": "default",
+                "filter_type": 0,
+                "cutoff_milli": 1000,
+                "resonance_milli": 0,
+                "bit_depth": 0,
+                "rate_hz": 0,
+                "next_modulator_id": 2,
+                "modulators": [
+                  {
+                    "id": 1,
+                    "target": 0,
+                    "kind": 0,
+                    "depth_milli": 1000,
+                    "apply": 1,
+                    "rate_milli": 1000,
+                    "time_base": 0,
+                    "editor": 0,
+                    "points": [
+                      {
+                        "t": 0,
+                        "v": 0,
+                        "tension": 0,
+                        "flags": 0
+                      },
+                      {
+                        "t": 1,
+                        "v": 1000,
+                        "tension": 0,
+                        "flags": 0
+                      },
+                      {
+                        "t": 2,
+                        "v": 1000,
+                        "tension": 0,
+                        "flags": 0
+                      },
+                      {
+                        "t": 5000,
+                        "v": 0,
+                        "tension": 0,
+                        "flags": 0
+                      }
+                    ],
+                    "sustain_loop_start": 2,
+                    "sustain_loop_end": 2,
+                    "release_loop_start": 255,
+                    "release_loop_end": 255,
+                    "loop_mode": 1,
+                    "release_fade": 0,
+                    "lfo_frequency_hz": 1,
+                    "lfo_depth": 1,
+                    "lfo_bias": 0,
+                    "lfo_phase_offset": 0
+                  }
+                ]
+              }
+            ],
+            "slots": [
+              {
+                "id": 1,
+                "name": "demo_kick",
+                "source_local_id": 1,
+                "slice_id": 0,
+                "start_frame": 0,
+                "end_frame": 0,
+                "loop_start_frame": 0,
+                "loop_end_frame": 0,
+                "loop_xfade_frames": 0,
+                "loop_mode": 0,
+                "sustain_loop": 0,
+                "key_low": 36,
+                "key_high": 36,
+                "root_key": 36,
+                "pitch_track_milli": 1000,
+                "tune_cents": 0,
+                "vel_low": 0,
+                "vel_high": 127,
+                "layer_group": 0,
+                "select_mode": 0,
+                "gate": 0,
+                "reverse": 0,
+                "gain_millibels": 0,
+                "pan_thousandths": 0,
+                "voice_group": 0,
+                "nna": 0,
+                "polyphony": 0,
+                "choke_fade_us": 3000,
+                "mod_set_id": 1,
+                "output_stem": 0,
+                "quality": 1
+              }
+            ]
+          }
+        }
+      ],
+      "mod_links": [],
+      "placements": [
+        {
+          "clip_id": 5,
+          "id": 5,
+          "at": 0,
+          "length": 0,
+          "notes": [],
+          "chords": [],
+          "mutes": []
+        }
+      ]
+    },
+    {
+      "track_id": 3,
+      "name": "Track 4",
+      "parent_id": 0,
+      "collapsed": false,
+      "harmony_quantize": false,
+      "sound_addressed_only": false,
+      "allow_note_overlap": false,
+      "lines_per_beat": 4,
+      "quantize": {
+        "grid_nanoticks": 0,
+        "strength_milli": 0,
+        "swing_milli": 0
+      },
+      "mixer": {
+        "gain_db": 0,
+        "pan": 0,
+        "mute": false,
+        "solo": false
+      },
+      "routing": {
+        "midi_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "midi_out": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_out": {
+          "kind": "master",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "sidechain": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "pre_fader_send": true
+      },
+      "device_chain": [
+        {
+          "device_id": 1,
+          "kind": "vst_instrument",
+          "capability_mask": 5,
+          "patcher_node_id": 4294967295,
+          "host_slot_index": 13,
+          "bypass": false,
+          "vst_ref": {
+            "vendor": "u-he",
+            "name": "Zebralette",
+            "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
+            "uid16": ""
+          }
+        }
+      ],
+      "mod_links": [],
+      "placements": [
+        {
+          "clip_id": 6,
+          "id": 6,
+          "at": 0,
+          "length": 0,
+          "notes": [],
+          "chords": [],
+          "mutes": []
+        }
+      ]
+    },
+    {
+      "track_id": 4,
+      "name": "Track 5",
+      "parent_id": 0,
+      "collapsed": false,
+      "harmony_quantize": false,
+      "sound_addressed_only": false,
+      "allow_note_overlap": false,
+      "lines_per_beat": 4,
+      "quantize": {
+        "grid_nanoticks": 0,
+        "strength_milli": 0,
+        "swing_milli": 0
+      },
+      "mixer": {
+        "gain_db": 0,
+        "pan": 0,
+        "mute": false,
+        "solo": false
+      },
+      "routing": {
+        "midi_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "midi_out": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_out": {
+          "kind": "master",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "sidechain": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "pre_fader_send": true
+      },
+      "device_chain": [
+        {
+          "device_id": 1,
+          "kind": "vst_instrument",
+          "capability_mask": 5,
+          "patcher_node_id": 4294967295,
+          "host_slot_index": 13,
+          "bypass": false,
+          "vst_ref": {
+            "vendor": "u-he",
+            "name": "Zebralette",
+            "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
+            "uid16": ""
+          }
+        }
+      ],
+      "mod_links": [],
+      "placements": [
+        {
+          "clip_id": 7,
+          "id": 7,
+          "at": 0,
+          "length": 0,
+          "notes": [],
+          "chords": [],
+          "mutes": []
+        }
+      ]
+    },
+    {
+      "track_id": 4294901760,
+      "name": "Master",
+      "is_master": true,
+      "parent_id": 0,
+      "collapsed": false,
+      "harmony_quantize": false,
+      "sound_addressed_only": false,
+      "allow_note_overlap": false,
+      "lines_per_beat": 4,
+      "quantize": {
+        "grid_nanoticks": 0,
+        "strength_milli": 0,
+        "swing_milli": 0
+      },
+      "mixer": {
+        "gain_db": 0,
+        "pan": 0,
+        "mute": false,
+        "solo": false
+      },
+      "routing": {
+        "midi_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "midi_out": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_out": {
+          "kind": "master",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "sidechain": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
         "pre_fader_send": true
       },
       "device_chain": [],
       "mod_links": [],
-      "notes": [],
-      "chords": [
-        {
-          "nanotick": 0,
-          "duration": 3840000,
-          "chord_id": 1,
-          "degree": 0,
-          "quality": 1,
-          "inversion": 0,
-          "base_octave": 4,
-          "column": 0,
-          "spread": 240000,
-          "humanize_timing": 20,
-          "humanize_velocity": 15
-        },
-        {
-          "nanotick": 3840000,
-          "duration": 3840000,
-          "chord_id": 2,
-          "degree": 0,
-          "quality": 2,
-          "inversion": 1,
-          "base_octave": 4,
-          "column": 0,
-          "spread": 240000,
-          "humanize_timing": 0,
-          "humanize_velocity": 12
-        },
-        {
-          "nanotick": 7680000,
-          "duration": 3840000,
-          "chord_id": 3,
-          "degree": 0,
-          "quality": 1,
-          "inversion": 0,
-          "base_octave": 4,
-          "column": 0,
-          "spread": 240000,
-          "humanize_timing": 20,
-          "humanize_velocity": 0
-        },
-        {
-          "nanotick": 11520000,
-          "duration": 3840000,
-          "chord_id": 4,
-          "degree": 4,
-          "quality": 1,
-          "inversion": 2,
-          "base_octave": 4,
-          "column": 0,
-          "spread": 240000,
-          "humanize_timing": 0,
-          "humanize_velocity": 10
-        }
-      ]
+      "placements": []
     }
   ]
 }

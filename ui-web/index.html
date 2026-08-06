@@ -4474,6 +4474,41 @@ const panes = createPanes({
 const palette = new Palette(document.getElementById('palette'), dockApi);
 
 const pianoHost = document.getElementById('piano');
+/*
+ * CLICKING IN A PANE GIVES THAT PANE THE KEYBOARD. One listener, both panes, every view.
+ *
+ * Nothing set `state.pane` on a click. The only things that moved it were the Shift+Fn shortcut
+ * that opens a second pane and the chain card. So which pane the keys went to was decided by how
+ * you had last CHANGED THE LAYOUT, not by where you were working — and with two panes on screen
+ * that is a coin toss the app never showed you the result of.
+ *
+ * Reported as: split with the tracker above and the roll below, select a note in the roll, press
+ * Delete, and the note stays. The keystroke ran the other pane's branch.
+ *
+ * The rule this restores is the app's own, already written for the patcher: "clicking a row must
+ * select it whether or not you then drag, and the keyboard operates on whatever the last click
+ * selected." A click is the plainest statement of where you are working that a person can make.
+ *
+ * CAPTURE PHASE, so it lands before a surface's own handler stops the event; and it only reads
+ * which pane the press was in, so it cannot interfere with what that surface does next. `focus`
+ * goes to the centre with it — otherwise the selection is in a pane and the keys are in a rail.
+ */
+function wirePaneFocus() {
+  const claim = (el, which) => {
+    if (!el) return;
+    el.addEventListener('pointerdown', () => {
+      if (state.pane !== which || state.focus !== 'centre') {
+        state.pane = which;
+        state.focus = 'centre';
+        schedule();
+      }
+    }, true);
+  };
+  claim(document.getElementById('paneTop'), 0);
+  claim(document.getElementById('paneBot'), 1);
+}
+wirePaneFocus();
+
 let pianoBuf = null;
 const piano = new Piano(pianoHost, {
   onNote: (pitch, tick) => {
@@ -4491,7 +4526,11 @@ const piano = new Piano(pianoHost, {
     }
     schedule();
   },
-  onSelect: (id) => { state.selectedNote = id; state.pianoSelection = null; schedule(); },
+  onSelect: (id) => {
+    state.selectedNote = id;
+    state.pianoSelection = null;
+    schedule();
+  },
   onMarquee: (r) => {
     state.pianoMarquee = r;
     // Selected live, not on release: a marquee you cannot see the effect of

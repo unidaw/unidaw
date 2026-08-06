@@ -91,6 +91,11 @@ export const SURFACE_KEYS = {
       ['opt+q / opt+a', 'transpose the selection a semitone'],
       ['opt+w / opt+s', 'transpose it an octave'],
       ['Backspace', 'delete the selected note'],
+      /* One row for both halves of one gesture, beside the arrow keys that do the
+         same two jobs — a reader looking for "how do I move the view" finds the
+         wheel and the keyboard in the same place, which is the only reason this
+         list is ordered rather than alphabetical. */
+      ['wheel / shift+wheel', 'scroll the pitch window / scroll time'],
       ['left/right', 'scroll time'],
       ['up/down', 'shift the pitch window an octave'],
       ['f', 'fit the pitch window to the material'],

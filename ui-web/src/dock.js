@@ -1606,18 +1606,36 @@ export class Dock {
   }
 
   /**
+   * The highlighted text, but only when it is highlighted IN THIS LOG.
+   *
+   * `document.getSelection()` is document-wide, and the harmony card is
+   * selectable prose too — so a bare read would let a control labelled "copy" in
+   * the AGENT header quietly hand back a sentence from a different panel. A
+   * button copies what it is next to or it copies everything; those are the two
+   * answers a person can predict.
+   */
+  logSelection() {
+    const s = document.getSelection();
+    if (!s || s.isCollapsed) return '';
+    const n = s.anchorNode;
+    const el = n && (n.nodeType === 1 ? n : n.parentElement);
+    return el && this.logEl.contains(el) ? s.toString() : '';
+  }
+
+  /**
    * Put the selection, or failing that the whole transcript, on the system
    * clipboard. Returns what it tried to copy, so a script can assert on it
    * without needing clipboard permission.
    *
    * The write can be refused — a page that is not focused, or a browser that has
-   * not granted the permission — and a copy button that silently did nothing
-   * would be exactly the control section 4.5 forbids. So the outcome is reported
-   * into the transcript either way, which is also where a person is already
-   * looking.
+   * not granted the permission, or a page served over plain http to something
+   * that is not localhost, where `navigator.clipboard` does not exist at all —
+   * and a copy button that silently did nothing would be exactly the control
+   * section 4.5 forbids. So the outcome is reported into the transcript either
+   * way, which is also where a person is already looking.
    */
   copy() {
-    const sel = String(document.getSelection() || '');
+    const sel = this.logSelection();
     const text = sel || this.text();
     if (!text) { this.log('err', 'nothing to copy'); this.render(); return ''; }
     const what = (sel ? 'selection' : this.lines.length + ' lines');
