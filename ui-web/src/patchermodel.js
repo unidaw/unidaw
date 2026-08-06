@@ -277,6 +277,46 @@ export function portsForType(type) {
   return PORT_LAYOUT[type] || UNKNOWN_LAYOUT;
 }
 
+/**
+ * Can a link go from `srcType` to `dstType`, and which way round should it actually go?
+ *
+ * ORDER IS NOT SOMETHING A PERSON SHOULD HAVE TO KNOW. The sidecar's `resolve_link` walks the
+ * source's OUTPUTS against the destination's INPUTS, so connecting the two in the wrong order
+ * fails — and it fails with "those two node types have no compatible ports", which is the same
+ * sentence you get for two types that genuinely cannot join. Reported from live use as: "pressing
+ * 'c' it's unclear which order it has to be, lest 'nodes have no compatible ports'".
+ *
+ * The two cases deserve different answers. This one tells them apart, so a gesture in the wrong
+ * order can simply be turned around instead of refused — an output and an input joined by a cable
+ * is the same cable whichever end you grabbed first.
+ *
+ * Returns { src, dst, kind } with `src` as the OUTPUT side, or null when the pair really cannot
+ * connect in either direction. `wantKind` narrows it when a type has several kinds of port (only
+ * `kernel` does today: events and control, both ways).
+ *
+ * MIRRORS resolve_link, which mirrors the engine. Three copies of one rule and this is the third
+ * — kept because PORTS_BY_TYPE is already here and deriving it from the wire is impossible: the
+ * engine publishes a node's TYPE and an edge's port ids, and never says what ports a type owns.
+ */
+export function orientLink(srcType, dstType, wantKind) {
+  const fits = (a, b) => {
+    for (const [, sk, sOut] of (PORTS_BY_TYPE[a] || [])) {
+      if (!sOut) continue;
+      if (wantKind !== undefined && wantKind !== null && wantKind !== sk) continue;
+      for (const [, dk, dOut] of (PORTS_BY_TYPE[b] || [])) {
+        if (dOut || dk !== sk) continue;
+        return sk;
+      }
+    }
+    return null;
+  };
+  const forward = fits(srcType, dstType);
+  if (forward !== null) return { src: srcType, dst: dstType, kind: forward, swapped: false };
+  const reverse = fits(dstType, srcType);
+  if (reverse !== null) return { src: dstType, dst: srcType, kind: reverse, swapped: true };
+  return null;
+}
+
 /** A type's box height: whichever of its rows and its ports needs more room. */
 const NODE_H = NODE_TYPES.map((name, t) => {
   const rows = (CONFIG_FIELDS[name] || []).length;

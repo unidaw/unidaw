@@ -133,7 +133,7 @@ import { createHelp, GLOBAL_KEYS, SURFACE_KEYS } from './src/help.js';
 import { Patcher } from './src/patcher.js';
 import { generatorsFrom } from './src/patchermodel.js';
 import { buildPatcherModel, createPatcherBuffer, configFields, nudgeConfig,
-         describeConfig, NODE_TYPES } from './src/patchermodel.js';
+         describeConfig, NODE_TYPES, orientLink } from './src/patchermodel.js';
 import { createEntry, feed, cancel, begin, parseToken, parseChord, editing, NOTE_KEYS, NOTE_OFF_KEY,
          TOKEN_KEY, pitchOf, pitchToToken, hexValue, shiftDigit } from './src/entry.js';
 
@@ -706,9 +706,9 @@ const patcher = new Patcher(patcherHost, {
    * keyboard arm is cleared, because finishing a link with the mouse and leaving the keyboard
    * still armed means the next `c` connects something nobody asked for.
    */
-  onLink: (srcId, dstId) => {
+  onLink: (srcId, dstId, kind) => {
     state.patchLinkFrom = null;
-    linkPatcherNodes(srcId, dstId);
+    linkPatcherNodes(srcId, dstId, kind);
     schedule();
   },
 });
@@ -2188,7 +2188,7 @@ function linkPatcherNode() {
  * was named, so edits went to the shared pool and were never saved. `patchTarget` is what fixes
  * that, and it has to be on every path or it is on none.
  */
-function linkPatcherNodes(srcId, dstId) {
+function linkPatcherNodes(srcId, dstId, wantKind) {
   if (srcId === dstId) { state.reject = 'a node cannot connect to itself'; return false; }
   const nodes = engine ? engine.patcherNodes : [];
   const src = nodes.find((n) => n.id === srcId);
@@ -2196,8 +2196,29 @@ function linkPatcherNodes(srcId, dstId) {
   // The TYPES, because the sidecar resolves which ports to use from them. A missing node here
   // means the graph moved under the gesture; refusing beats sending a link with type 0.
   if (!src || !dst) { state.reject = 'that node is no longer in the graph'; return false; }
-  return sendGraph(patchTarget({ type: 'patchlink', src: srcId, srcType: src.type,
-                                 dst: dstId, dstType: dst.type }));
+  /*
+   * TURN IT AROUND RATHER THAN REFUSE IT.
+   *
+   * `resolve_link` walks the source's OUTPUTS against the destination's INPUTS, so naming the two
+   * in the wrong order fails — with "those two node types have no compatible ports", which is
+   * ALSO what two genuinely incompatible types get. Reported from live use as not knowing which
+   * order `c` wanted, and being told the nodes were incompatible when they were not.
+   *
+   * `orientLink` tells the two cases apart from the port table. A pair that connects the other way
+   * round is simply turned around; a pair that connects neither way is refused HERE, with a
+   * sentence that does not blame the order.
+   */
+  const o = orientLink(src.type, dst.type, wantKind === null ? undefined : wantKind);
+  if (!o) {
+    state.reject = 'those two nodes have no port in common, in either direction';
+    return false;
+  }
+  const a = o.swapped ? dst : src;
+  const b = o.swapped ? src : dst;
+  const aId = o.swapped ? dstId : srcId;
+  const bId = o.swapped ? srcId : dstId;
+  return sendGraph(patchTarget({ type: 'patchlink', src: aId, srcType: a.type,
+                                 dst: bId, dstType: b.type, kind: o.kind }));
 }
 
 /** Drop the pending entries the engine has confirmed. Once per engine frame. */

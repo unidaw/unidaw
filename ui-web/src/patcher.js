@@ -28,6 +28,14 @@ function div(cls, parent) {
   return el;
 }
 
+/** A port element's edge kind, as the index EDGE_KINDS uses. Null when it says nothing. */
+function kindOfPort(el) {
+  if (el.classList.contains('event')) return 0;
+  if (el.classList.contains('audio')) return 1;
+  if (el.classList.contains('control')) return 2;
+  return null;
+}
+
 function text(parent) {
   parent.appendChild(document.createTextNode(''));
   return parent.firstChild;
@@ -108,14 +116,22 @@ export class Patcher {
      * two would drift — the same argument the config packing already lost once.
      */
     this.nodesEl.addEventListener('pointerdown', (e) => {
-      const head = e.target.closest('.pt-head');
-      if (!head || !this.onLink) return;
-      const el = head.closest('.pt-node');
+      if (!this.onLink) return;
+      // A PORT is the precise grip, the HEAD is the coarse one. Both start the same gesture:
+      // grabbing an output and dropping it on an input is what a patcher is expected to do, and
+      // dragging the whole node at its title is the shortcut for "just connect these two".
+      const port = e.target.closest('.pt-port');
+      const el = (port || e.target.closest('.pt-head'))?.closest('.pt-node');
       if (!el) return;
       e.preventDefault();
       const id = Number(el.dataset.id);
       if (this.onSelect) this.onSelect(id);
-      this._linkDrag = { id, pointerId: e.pointerId };
+      this._linkDrag = { id, pointerId: e.pointerId,
+                         // The kind narrows the link when a type has several (only `kernel`
+                         // does: events and control, both ways). Absent from a head drag, which
+                         // is what lets the type resolution stay in one place.
+                         kind: port ? kindOfPort(port) : null,
+                         fromOutput: port ? port.classList.contains('out') : null };
       this.nodesEl.setPointerCapture(e.pointerId);
       el.classList.add('linking');
       this._linkFromEl = el;
@@ -135,11 +151,21 @@ export class Patcher {
       // sends every move and the release to the element that took it, so `e.target` is the
       // source node for the whole gesture and would connect it to itself every time.
       const over = document.elementFromPoint(e.clientX, e.clientY);
+      const dstPort = over && over.closest ? over.closest('.pt-port') : null;
       const dst = over && over.closest ? over.closest('.pt-node') : null;
       if (!dst) return;
       const dstId = Number(dst.dataset.id);
       if (dstId === d.id) return;                     // a node cannot connect to itself
-      this.onLink(d.id, dstId);
+      /*
+       * WHICHEVER END YOU GRABBED FIRST. Dropping an input onto an output is the same cable as
+       * dropping an output onto an input, and refusing one of them would be the app knowing
+       * something it will not say. `onLink` is told which id was the OUTPUT side; when the drag
+       * started on an input, the two are handed over the other way round.
+       */
+      const startedOnInput = d.fromOutput === false;
+      const kind = d.kind ?? (dstPort ? kindOfPort(dstPort) : null);
+      if (startedOnInput) this.onLink(dstId, d.id, kind);
+      else this.onLink(d.id, dstId, kind);
     };
     this.nodesEl.addEventListener('pointerup', endLink);
     this.nodesEl.addEventListener('pointercancel', endLink);

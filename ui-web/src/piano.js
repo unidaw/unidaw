@@ -1,5 +1,11 @@
 // Piano roll renderer. Same pooling and guarded-write discipline as the others.
 
+// The wheel's unit conversion, shared with the arrangement and the tracker rather
+// than re-derived here. A wheel does not speak one unit — see WHEEL_LINE_PX — and
+// a third private copy of that rule is a third place for Firefox to be sixteen
+// times slower than the machine it was written on.
+import { wheelPixels } from './arrangemodel.js';
+
 function div(cls, parent) {
   const el = document.createElement('div');
   el.className = cls;
@@ -67,12 +73,14 @@ function barLabel(bar) {
 }
 
 export class Piano {
-  constructor(host, { onNote, onSelect, onMarquee, onMarqueeEnd, onDrag, onDragEnd } = {}) {
+  constructor(host, { onNote, onSelect, onMarquee, onMarqueeEnd, onDrag, onDragEnd,
+                      onNav } = {}) {
     this.host = host;
     this.host.className = 'pr';
     this.onNote = onNote; this.onSelect = onSelect;
     this.onMarquee = onMarquee; this.onMarqueeEnd = onMarqueeEnd;
     this.onDrag = onDrag; this.onDragEnd = onDragEnd;
+    this.onNav = onNav;
     /** How close to a note's right edge counts as "resize" rather than "move". */
     this.EDGE = 7;
     /*
