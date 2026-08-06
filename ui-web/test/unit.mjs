@@ -4716,3 +4716,27 @@ test('CONTROL: the column ratchet notices a naked op', () => {
   assert.equal(flags(clothed), false, 'an op that names its column was flagged');
   assert.equal(flags(marked), false, 'a deliberately exempt op was flagged');
 });
+
+/*
+ * THE COLUMN A PANEL SHOWS AND THE COLUMN A COMMAND TAKES ARE DIFFERENT NUMBERS.
+ *
+ * The inspector displays 1-based — musicians count columns from one, and Renoise does too — while
+ * every command that takes a column is 0-based: `add_notes` and `delete_note` say "default 0",
+ * daw-cli takes `--column 0`, and the engine masks the low byte of the flag word.
+ *
+ * Nothing was wrong with either choice. What was wrong is that the screen showed one number and
+ * said nothing about the other, so the short path from "the panel says column 2" to "put a note
+ * in column 2" lands in the THIRD column — correctly, and looking like the model being stupid.
+ *
+ * Found by taking a screenshot of the tracker and reading it, which no assertion in this repo
+ * does. `pitch G-4 (67)` two lines above had already solved the same problem.
+ */
+test('the cell inspector states the column INDEX as well as its number', () => {
+  const src = readFileSync(new URL('../src/inspectmodel.js', import.meta.url), 'utf8');
+  const line = src.split('\n').find((l) => /put\('column'/.test(l));
+  assert.ok(line, 'the inspector still reports a column');
+  assert.match(line, /index/,
+    'the inspector shows a column number with no index beside it. It is 1-based and every '
+    + 'command that takes a column is 0-based, so the number on screen is not the number to '
+    + 'type — say both, the way `pitch` does.');
+});

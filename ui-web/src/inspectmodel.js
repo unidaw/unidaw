@@ -216,7 +216,22 @@ export function buildInspectModel(c, buf) {
     put('velocity', String(note.velocity));
     const len = (Number(note.tOff) || 0) - (Number(note.tOn) || 0);
     put('length', ticksLabel(len, c.ticksPerBeat));
-    put('column', String((note.column | 0) + 1));
+    /*
+     * BOTH NUMBERS, because they are different numbers and this panel already says so elsewhere.
+     *
+     * The display has always been 1-based — musicians count columns from one, and Renoise does
+     * too — while every command that takes a column is 0-BASED: `add_notes` and `delete_note`
+     * document `column` as "default 0", daw-cli takes `--column 0`, and the engine masks the low
+     * byte of the flag word. So the number you READ here was not the number you TYPE, with
+     * nothing on screen admitting it.
+     *
+     * The failure path is short and looks like the model being stupid: read "column 2", ask the
+     * AI to put something in column 2, and it lands in the THIRD column, correctly.
+     *
+     * Two lines above, `pitch` already solves this exact problem — `G-4 (67)`, the name and the
+     * raw value together. This follows it rather than inventing a third convention.
+     */
+    put('column', `${(note.column | 0) + 1} (index ${note.column | 0})`);
 
     /*
      * THE ROW OPS, one line each and named. The tracker collapses all seven into a
