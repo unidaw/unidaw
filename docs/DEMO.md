@@ -197,8 +197,17 @@ rack drawing it perfectly. If you like, add it first anyway; it costs nothing an
 plain on screen.
 
 Opening it for a device is what makes the edits land in that device's own graph — `a` adds a node,
-`t` changes its type, `c` links two, Delete removes. The patcher is an EVENT graph: it generates or
-transforms notes and the track's instrument sounds them, so it needs an instrument after it.
+`t` changes its type, Delete removes. The patcher is an EVENT graph: it generates or transforms
+notes and the track's instrument sounds them, so it needs an instrument after it.
+
+**To connect two nodes, drag one onto the other** — grab a node by its title bar, or by a specific
+port, and drop it on the target. A dashed line follows the pointer. **Either direction works**: an
+output dropped on an input and an input dropped on an output are the same cable, and a pair named
+backwards is turned around rather than refused. Ports are worked out from the two node types, so
+there is never a port number to type.
+
+`c` still does it from the keyboard — press it on the source, then on the destination. It was the
+only way until this week, which is why the status line explains itself while a link is armed.
 
 Three things that will otherwise cost you the moment, all measured:
 
@@ -211,10 +220,17 @@ Three things that will otherwise cost you the moment, all measured:
    the obvious gesture and it is the silent one — worth knowing before you do it on stage rather
    than after. (Backend has flagged to Jaakko whether an event-out should promote a bare gate to
    a default degree; a gate is not a note, so it is a real design call and not a bug.)
-2. **A new node generates nothing.** `a` mints a euclidean with every field at zero — steps 0,
-   hits 0, velocity 0 — so the graph looks right and emits nothing. Set them: `patch <node> steps
-   8`, `patch <node> hits 4`, `patch <node> vel 100`, and `patch <node> base 4` for the octave
-   (0 is four octaves down and inaudibly slow on a sampler).
+2. **A new node now arrives with settings.** It used to mint a euclidean with every field at
+   zero — steps 0, hits 0, velocity 0 — so the graph looked right and emitted nothing, and the
+   card said "no config published" because the engine had never been given any. Adding one
+   through the app now seeds the engine's OWN defaults (steps 16, hits 5, velocity 100, base
+   octave 4), so it sounds immediately. Change them with `patch <node> steps 8`,
+   `patch <node> hits 4`, and so on — `patch <node> base 4` is the octave, and 0 is four octaves
+   down and inaudibly slow on a sampler.
+
+   The seeding is the APP's: a node added through `daw-cli` or by the agent still arrives without
+   a config, because the fix belongs in the engine's `AddPatcherNode` and that is another repo's
+   to make.
 3. **The track needs a clip WITH LENGTH.** With no placement nothing on the track is scheduled
    and the generator never runs. Type a note on it to make the clip — and leave it there: deleting
    it collapses the placement to zero length, which schedules nothing just the same. A long note

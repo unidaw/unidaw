@@ -2649,6 +2649,15 @@ test('every suite the runbook cites exists, and the unswept ones are flagged as 
 /**
  * Agent tools the registry claims that NO engine test has ever called.
  *
+ * WHAT THIS MEASURES, EXACTLY: that a test EXISTS which drives the tool. Not that it passes —
+ * this reads the corpus, and a test file cannot report its own result. So this is one notch
+ * weaker than it looks, and the notch is the same one it was built to catch: existence is not
+ * working. The result is the SWEEP's job, and a tool listed as driven by a test that fails is a
+ * lie this check cannot see.
+ *
+ * That is acceptable only because the two run together. If they ever stop, this becomes a list
+ * that agrees with itself.
+ *
  * The twin of CLI_NEVER_DRIVEN, and it exists because the weaker check was not enough.
  *
  * `the agent really implements every tool the registry claims` verifies that the NAMED TOOL
@@ -2668,17 +2677,7 @@ test('every suite the runbook cites exists, and the unswept ones are flagged as 
  */
 const AGENT_NEVER_EXERCISED = [
   // Placement and clip surgery. Reachable, plausible, and never once driven end to end.
-  'add_clip',
-  'fork_placement',
-  'keep_placement_clip',
-  'move_clip',
-  'remove_clip',
-  'shared_clips',
-  'swap_placement_clip',
-  'trim_clip',
   // Track removal, and the sampler paths the existing sampler tests do not reach.
-  'remove_track',
-  'load_sample',
   'sampler_emit_rows',
   'sampler_slice',
   // Automation and the macro knob.
