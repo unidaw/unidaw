@@ -1963,3 +1963,94 @@ fn sampler_tools_reach_the_engine() {
     });
     assert!(!novintage.ok, "vintage with neither bits nor rate must be refused: {novintage:?}");
 }
+
+/// The master bus and a marker's colour — two things the agent could not reach.
+///
+/// `set_mixer` took a track INDEX, and the master's id is 4294901760: a number no model produces
+/// and one the observation never prints in a form anyone would type. So the one fader every track
+/// passes through was unreachable from this surface. daw-cli hit the identical wall and solved it
+/// with `--track master`; this spells it the same way rather than inventing a second convention.
+///
+/// `edit_marker` accepted a `color` on `add` and nowhere else, so a marker's colour could be
+/// chosen once and never changed — while the console and daw-cli have both had that since the
+/// field existed.
+///
+/// Both read back off DISK, because "sent" is not "landed" on this wire.
+#[test]
+fn the_agent_reaches_the_master_bus_and_recolours_a_marker() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agmaster");
+
+    let proj = json!({
+        "schema_version": 2,
+        "meta": { "name": "agmaster_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [], "clips": [],
+        "tracks": [ {
+            "track_id": 0, "name": "T", "harmony_quantize": 0, "lines_per_beat": 4,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            "device_chain": [], "mod_links": [], "placements": []
+        } ]
+    });
+    std::fs::write(engine.proj.join("agmaster_in.uniproj.json"),
+                   serde_json::to_string_pretty(&proj).unwrap()).unwrap();
+    assert!(session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"agmaster_in"}) }).ok);
+
+    let m = session.execute(&ToolCall {
+        tool: "set_mixer".into(),
+        args: json!({ "track": "master", "gain_db": -6.0, "mute": true }),
+    });
+    assert!(m.ok, "set_mixer on the master failed: {m:?}");
+
+    // A marker to recolour, then the recolour.
+    let add = session.execute(&ToolCall {
+        tool: "edit_marker".into(),
+        args: json!({ "op": "add", "tick": 0, "name": "A", "color": 1 }),
+    });
+    assert!(add.ok, "adding a marker failed: {add:?}");
+    std::thread::sleep(Duration::from_millis(300));
+    let recolour = session.execute(&ToolCall {
+        tool: "edit_marker".into(),
+        args: json!({ "op": "color", "id": 1, "color": 5 }),
+    });
+    assert!(recolour.ok, "recolouring failed: {recolour:?}");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let s = session.execute(&ToolCall { tool: "save".into(), args: json!({"name":"agmaster_out"}) });
+        assert!(s.ok, "save failed: {s:?}");
+        let doc = read_project(&engine.proj, "agmaster_out");
+
+        // The master is a real track slot carrying UI_TRACK_FLAG_MASTER; in the file it is the
+        // track whose id is the master sentinel.
+        let master = doc["tracks"].as_array().unwrap().iter()
+            .find(|t| t["track_id"].as_u64() == Some(0xFFFF_0000)).cloned();
+        let gain = master.as_ref().map(|t| t["mixer"]["gain_db"].as_f64().unwrap_or(0.0));
+        let markers = doc["markers"].as_array().cloned().unwrap_or_default();
+        // `color_rgb` on disk, not `color` — the tool's argument name and the file's field name
+        // are different words for one thing, and looking for the argument's name found nothing
+        // while the recolour had landed perfectly.
+        let coloured = markers.iter().any(|mk| mk["color_rgb"].as_u64() == Some(5));
+
+        // TOLERANCE, because dB goes to the engine as MILLIBELS and comes back through the
+        // integer: -6.0 returns as -6.000000491. Exact equality here would fail forever on a
+        // conversion that is working exactly as designed.
+        if gain.map_or(false, |g| (g + 6.0).abs() < 0.001) && coloured {
+            assert_eq!(master.as_ref().unwrap()["mixer"]["mute"].as_bool(), Some(true),
+                       "the mute went with the gain");
+            break;
+        }
+        assert!(Instant::now() < deadline,
+                "master gain {gain:?} (want -6.0), marker recoloured {coloured} — a command that \
+                 reports sent and does not land is this wire's default failure, which is why this \
+                 reads the file rather than the reply. markers: {markers:?}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // An unknown op is refused rather than silently doing nothing.
+    let bad = session.execute(&ToolCall {
+        tool: "edit_marker".into(), args: json!({ "op": "recolor", "id": 1, "color": 2 }),
+    });
+    assert!(!bad.ok, "an unknown marker op must be refused: {bad:?}");
+}

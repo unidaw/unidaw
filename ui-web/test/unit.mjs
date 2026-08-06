@@ -2221,7 +2221,7 @@ const OP_REGISTRY = {
   delmarker:   { cli: 'marker', agent: 'edit_marker' },
   namemarker:  { cli: 'marker', agent: 'edit_marker' },
   // A marker's colour was write-once everywhere, so no surface owed a verb until now.
-  colormarker: { cli: 'marker', agent: null, why: 'gap' },
+  colormarker: { cli: 'marker', agent: 'edit_marker', why: 'gap' },
   // The clip's name and source path. Reached the engine and this console together;
   // neither the CLI nor the agent has a verb for either yet.
   cliptext:    { cli: 'clip-name', agent: null, why: 'gap' },
@@ -2336,7 +2336,7 @@ const OP_REGISTRY = {
    * Chromatic mode (SetTrackSoundAddressed, 87). Landed engine-side this morning; daw-cli has
    * not caught up, and the agent has no sampler tooling at all.
    */
-  soundaddr: { cli: 'sound-addressed', agent: null, why: 'gap' },
+  soundaddr: { cli: 'sound-addressed', agent: 'set_row_ops', why: 'gap' },
   /*
    * The kit's own settings (SamplerSetDevice, 88). daw-cli has `sampler-device`, so the CLI path
    * is real; the agent has no sampler tooling at all.
@@ -2357,8 +2357,8 @@ const OP_REGISTRY = {
   lpb: { cli: 'lines-per-beat', agent: null, why: 'gap' },
   // The master bus fader and mute (SetTrackMixer addressed to kMasterTrackId). The engine has
   // honoured both on the summed output since the master track landed; nothing could move them.
-  'main-gain': { cli: 'mixer', agent: null, why: 'gap' },
-  'main-mute': { cli: 'mixer', agent: null, why: 'gap' },
+  'main-gain': { cli: 'mixer', agent: 'set_mixer', why: 'gap' },
+  'main-mute': { cli: 'mixer', agent: 'set_mixer', why: 'gap' },
   // A CLIP's own subdivision and meter (opcode 94) — the level the renderer honours FIRST.
   // Backend shipped `daw-cli do clip-grid` with it, so this one has a CLI path from the start.
   'clip-grid': { cli: 'clip-grid', agent: null, why: 'gap' },
@@ -2476,15 +2476,15 @@ const AGENT_GAP = ['clear', 'columns', 'copy', 'cut',
                    'new', 'paste', 'patch',
                    'transpose', 'mods',
                    // With the other sampler verbs: the agent has no sampler tooling at all.
-                   'filter', 'soundaddr',
+                   'filter',
                    'slot-name',
                    'save-patch', 'lpb', 'note-overlap',
                    // A clip's own grid (opcode 94). It HAS a CLI path — `daw-cli do clip-grid`
                    // shipped with the opcode — so it is only in the agent half of the gap.
-                   'clip-grid', 'audio-clip', 'main-gain', 'main-mute', 'del-point',
+                   'clip-grid', 'audio-clip', 'del-point',
                    // With the two above: new commands for fields that had no writer at all,
                    // so the agent manifest owes them a tool rather than having lost one.
-                   'colormarker', 'cliptext', 'envshape',
+                   'cliptext', 'envshape',
                    // With `mods`: a read-back this app has and the agent manifest does not.
                    'kit'];
 

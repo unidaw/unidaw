@@ -536,7 +536,8 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
                 "type": "object",
                 "required": ["track"],
                 "properties": {
-                    "track": { "type": "integer", "minimum": 0 },
+                    "track": { "description": "A track index, or the string \"master\" for the \
+                                               master bus every track passes through." },
                     "gain_db": { "type": "number", "minimum": -60, "maximum": 12 },
                     "pan": { "type": "number", "minimum": -1, "maximum": 1 },
                     "mute": { "type": "boolean" },
@@ -625,15 +626,16 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "edit_marker",
-            description: "Add, remove, rename or move a marker. op=add needs tick (and takes \
-                          name, color); op=remove/rename/move need id; op=rename needs name; \
-                          op=move needs tick. These ops are TOTAL: they move no music and \
+            description: "Add, remove, rename, move or recolour a marker. op=add needs tick (and \
+                          takes name, color); op=remove/rename/move/color need id; op=rename needs \
+                          name; op=move needs tick; op=color needs color. These ops are TOTAL: they move no music and \
                           cannot fail except on a bad id. To move MUSIC, use insert_time.",
             params: json!({
                 "type": "object",
                 "required": ["op"],
                 "properties": {
-                    "op": { "type": "string", "enum": ["add", "remove", "rename", "move"] },
+                    "op": { "type": "string",
+                            "enum": ["add", "remove", "rename", "move", "color"] },
                     "id": { "type": "integer", "minimum": 1 },
                     "tick": { "type": "integer", "minimum": 0 },
                     "name": { "type": "string" },
@@ -1056,7 +1058,11 @@ fn edit_marker(handle: &EngineHandle, args: &Value) -> ToolResult {
         "remove" => (UiCommandType::RemoveMarker, true),
         "rename" => (UiCommandType::RenameMarker, true),
         "move" => (UiCommandType::MoveMarker, true),
-        _ => return ToolResult::err("op must be add, remove, rename or move"),
+        // RECOLOURING AN EXISTING MARKER. `color` was accepted on `add` and nowhere else, so a
+        // marker's colour could be chosen once and never changed — the console and daw-cli have
+        // both had that since the field existed.
+        "color" => (UiCommandType::SetMarkerColor, true),
+        _ => return ToolResult::err("op must be add, remove, rename, move or color"),
     };
     let id = arg_u64(args, "id").unwrap_or(0) as u32;
     if addressed && id == 0 {
@@ -2792,8 +2798,20 @@ fn set_tempo(handle: &EngineHandle, args: &Value) -> ToolResult {
 }
 
 fn set_mixer(handle: &EngineHandle, args: &Value) -> ToolResult {
-    let Some(track) = arg_u64(args, "track") else {
-        return ToolResult::err("set_mixer needs \"track\"");
+    /*
+     * `"track": "master"` REACHES THE MASTER BUS, and without it the one fader every track passes
+     * through was unreachable from this surface: the master's id is 4294901760, which no model
+     * will produce and nothing in the observation prints in a form anyone would type.
+     *
+     * daw-cli hit the identical wall and solved it the identical way (`--track master`), which is
+     * the argument for spelling it the same here rather than inventing a second convention.
+     */
+    let master = arg_str(args, "track") == Some("master");
+    let track = match (master, arg_u64(args, "track")) {
+        (true, _) => daw_bridge::layout::MASTER_TRACK_ID as u64,
+        (false, Some(t)) => t,
+        (false, None) => return ToolResult::err(
+            "set_mixer needs \"track\" — a track index, or the string \"master\" for the master bus"),
     };
     let mut p = blank(UiCommandType::SetTrackMixer);
     p.track_id = track as u32;
@@ -2814,7 +2832,8 @@ fn set_mixer(handle: &EngineHandle, args: &Value) -> ToolResult {
     p.flags = (if mute.unwrap_or(false) { 1 } else { 0 })
             | (if solo.unwrap_or(false) { 2 } else { 0 });
     send_now(handle, p, json!({
-        "track": track, "gain_db": gain_db, "pan": pan, "mute": mute, "solo": solo }))
+        "track": if master { Value::from("master") } else { Value::from(track) },
+        "gain_db": gain_db, "pan": pan, "mute": mute, "solo": solo }))
 }
 
 fn set_loop(handle: &EngineHandle, args: &Value) -> ToolResult {
