@@ -2321,6 +2321,43 @@ fn main() {
                     }
                     code
                 }
+                /*
+                 * `do new NAME` — a new, empty project, and then load it.
+                 *
+                 * The only op on the console that had no CLI verb and was not a fair exemption.
+                 * The browser cannot write files, so `new` was built as a sidecar message; a
+                 * native process has no such excuse, and "start a song" is not a thing that
+                 * should require a browser.
+                 *
+                 * The DOCUMENT comes from daw_bridge::project so this cannot drift from what the
+                 * sidecar writes — a second definition of "empty project" fails quietly, because
+                 * every version of it still loads.
+                 */
+                Some(&"new") => match rest.get(1).copied() {
+                    None => {
+                        eprintln!("daw-cli: do new NAME");
+                        1
+                    }
+                    Some(name) => {
+                    let dir = daw_bridge::project::engine_project_dir();
+                    match daw_bridge::project::new_project(&dir, name) {
+                        Err(e) => {
+                            eprintln!("daw-cli: {e}");
+                            1
+                        }
+                        Ok(path) => {
+                            // LOADED THROUGH THE ORDINARY PATH, exactly as the sidecar does it,
+                            // so a new song arrives by the same route as an opened one.
+                            let code = send_named(&handle, UiCommandType::LoadProject, name);
+                            if code == 0 {
+                                println!("{{ \"new\": \"{}\", \"path\": \"{}\" }}",
+                                         escape(name), escape(&path.to_string_lossy()));
+                            }
+                            code
+                        }
+                    }
+                    }
+                },
                 Some(&"load") => {
                     let project = rest.get(1).copied().unwrap_or("default");
                     let code = send_named(&handle, UiCommandType::LoadProject, project);

@@ -156,6 +156,16 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "new_project",
+            description: "Start a NEW, empty project under this name and switch to it. One track, \
+                          120bpm, 4/4. Refuses if a project by that name already exists — it will \
+                          never overwrite a song. Use `save` to write the current work first.",
+            params: json!({
+                "type": "object", "required": ["name"],
+                "properties": { "name": { "type": "string", "maxLength": 28 } }
+            }),
+        },
+        ToolSpec {
             name: "load",
             description: "Load a saved project by name, restoring its clips and device chains.",
             params: json!({
@@ -3143,6 +3153,7 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "add_chords" => add_chords(handle, &call.args),
         "transport" => transport(handle, &call.args),
         "save" => named(handle, UiCommandType::SaveProject, &call.args, "saved"),
+        "new_project" => new_project_tool(handle, &call.args),
         "load" => named(handle, UiCommandType::LoadProject, &call.args, "loaded"),
         "set_track_name" => set_track_name(handle, &call.args),
         "undo" => undo_redo(handle, UiCommandType::Undo),
@@ -4021,6 +4032,39 @@ fn set_track_name(handle: &EngineHandle, args: &Value) -> ToolResult {
         "the engine did not rename track {track} (the command was sent but the published name \
          never changed)"
     ))
+}
+
+/// A NEW, EMPTY PROJECT — written to disk, then loaded through the ordinary path.
+///
+/// The document comes from `daw_bridge::project`, which is also what the sidecar and daw-cli
+/// write. Three surfaces, one definition of "empty project": a second one fails quietly, because
+/// every plausible variant still LOADS and the song simply starts out different.
+///
+/// It refuses to overwrite. The one time this project lost a song, `new kala` had written an
+/// empty file and every later save went to the previously-open preset — so a `new` that clobbers
+/// is not a convenience anybody here wants.
+fn new_project_tool(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let name = match args.get("name").and_then(|v| v.as_str()) {
+        Some(n) if !n.is_empty() => n,
+        _ => return ToolResult::err("needs a non-empty \"name\""),
+    };
+    let dir = daw_bridge::project::engine_project_dir();
+    let path = match daw_bridge::project::new_project(&dir, name) {
+        Ok(p) => p,
+        Err(e) => return ToolResult::err(e),
+    };
+    // The same route an opened project takes. Reported as `loaded: false` rather than swallowed
+    // if the command does not reach the ring: a file on disk that the engine never opened is the
+    // failure this tool is most likely to have, and the model must be able to see it.
+    let loaded = named(handle, UiCommandType::LoadProject, args, "loaded");
+    if !loaded.ok {
+        return loaded;
+    }
+    ToolResult::ok(json!({
+        "new": name,
+        "path": path.to_string_lossy(),
+        "loaded": true,
+    }))
 }
 
 fn named(handle: &EngineHandle, command: UiCommandType, args: &Value, verb: &str) -> ToolResult {

@@ -1928,29 +1928,6 @@ fn list_plugins(path: &str) -> String {
  * `safe_name` is the same gate `load` and `save` use, so `new` cannot write
  * outside the project directory by a name the other two would have refused.
  */
-fn new_project(dir: &str, name: &str) -> Result<(), &'static str> {
-    if !safe_name(name) { return Err("bad project name"); }
-    let path = std::path::Path::new(dir).join(format!("{name}.uniproj.json"));
-    // Refuses rather than clobbers. Overwriting a song is not something to do as
-    // a side effect of the shortcut for "start something".
-    if path.exists() { return Err("a project by that name already exists"); }
-    let doc = format!(
-        "{{\"schema_version\":4,\
-          \"meta\":{{\"name\":\"{name}\",\"created_utc\":0,\"modified_utc\":0}},\
-          \"timebase\":{{\"nanoticks_per_quarter\":960000,\
-                          \"time_sig_numerator\":4,\"time_sig_denominator\":4}},\
-          \"nanoticks_per_quarter\":960000,\
-          \"tempo_map\":[{{\"nanotick\":0,\"bpm\":120.0}}],\
-          \"harmony_timeline\":[],\"clips\":[],\
-          \"tracks\":[{{\"track_id\":0,\"name\":\"Track 1\",\"harmony_quantize\":false,\
-                        \"lines_per_beat\":4,\
-                        \"mixer\":{{\"gain_db\":0.0,\"pan\":0.0,\"mute\":false,\"solo\":false}},\
-                        \"device_chain\":[],\"mod_links\":[],\"placements\":[]}}]}}");
-    std::fs::create_dir_all(dir).map_err(|_| "cannot create the project directory")?;
-    std::fs::write(&path, doc).map_err(|_| "cannot write the project")?;
-    Ok(())
-}
-
 /// HAS THIS PROJECT ACTUALLY BEEN WRITTEN, and how long ago?
 ///
 /// The FILE, not an ack. `SaveProject`'s outcome goes to `DAW_EVENT("project.save")` and
@@ -2154,14 +2131,6 @@ fn parse_str_value<'a>(txt: &'a str, key: &str) -> Option<&'a str> {
 /// where it becomes `<dir>/<name>.uniproj.json`. Anything that could climb out of
 /// that directory is refused here, at the process boundary that faces the socket,
 /// rather than trusted to be handled two hops away.
-fn safe_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 28
-        && !name.contains(['/', '\\', '\0'])
-        && name != ".."
-        && name != "."
-}
-
 /// Commands that carry a name ride in the same 40-byte slot as the rest; see
 /// `UiPatcherPresetCommandPayload::as_command`.
 fn build_named(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
@@ -2190,7 +2159,7 @@ fn build_named(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
         p.track_id = parse_num(body, "\"track\"").unwrap_or(0).clamp(0, 63) as u32;
         return Some(Ok(p.as_command()));
     }
-    if !safe_name(name) {
+    if !daw_bridge::project::safe_name(name) {
         // Distinct from "unknown command": the command WAS understood and was
         // refused. Collapsing the two would report a rejected name as a typo.
         return Some(Err("bad project name"));
@@ -4892,8 +4861,8 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                          */
                         if is_type(&t, "new") {
                             let name = parse_str(&t, "\"name\"").unwrap_or("untitled");
-                            let reply = match new_project(&projects, name) {
-                                Ok(()) => {
+                            let reply = match daw_bridge::project::new_project(&projects, name) {
+                                Ok(_path) => {
                                     // Load it through the ordinary path, so a new
                                     // song arrives by exactly the same route as an
                                     // opened one and nothing downstream has a
@@ -6895,11 +6864,11 @@ mod tests {
     #[test]
     fn safe_name_refuses_anything_that_could_leave_the_directory() {
         for good in ["maximal", "webtest", "take-2", "a.b_c", "x"] {
-            assert!(safe_name(good), "{good} should be allowed");
+            assert!(daw_bridge::project::safe_name(good), "{good} should be allowed");
         }
         for bad in ["", "..", ".", "../evil", "a/b", "a\\b", "with\0nul",
                     "0123456789012345678901234567890"] {
-            assert!(!safe_name(bad), "{bad:?} should be refused");
+            assert!(!daw_bridge::project::safe_name(bad), "{bad:?} should be refused");
         }
     }
 
