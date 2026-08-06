@@ -196,18 +196,6 @@ class JsonWriter {
   bool arrayEmpty_ = false;
 };
 
-const char* deviceKindToString(DeviceKind kind) {
-  switch (kind) {
-    case DeviceKind::PatcherEvent: return "patcher_event";
-    case DeviceKind::PatcherInstrument: return "patcher_instrument";
-    case DeviceKind::PatcherAudio: return "patcher_audio";
-    case DeviceKind::VstInstrument: return "vst_instrument";
-    case DeviceKind::VstEffect: return "vst_effect";
-    case DeviceKind::Sampler: return "sampler";
-  }
-  return "patcher_event";
-}
-
 bool deviceKindFromString(const std::string& text, DeviceKind& out) {
   if (text == "patcher_event") { out = DeviceKind::PatcherEvent; return true; }
   if (text == "patcher_instrument") { out = DeviceKind::PatcherInstrument; return true; }
@@ -533,6 +521,19 @@ void writePatcherGraph(JsonWriter& writer, const PatcherGraph& graph) {
 }
 
 }  // namespace
+
+const char* deviceKindToString(DeviceKind kind) {
+  switch (kind) {
+    case DeviceKind::PatcherEvent: return "patcher_event";
+    case DeviceKind::PatcherInstrument: return "patcher_instrument";
+    case DeviceKind::PatcherAudio: return "patcher_audio";
+    case DeviceKind::VstInstrument: return "vst_instrument";
+    case DeviceKind::VstEffect: return "vst_effect";
+    case DeviceKind::Sampler: return "sampler";
+  }
+  return "patcher_event";
+}
+
 
 uint32_t projectSchemaVersion() { return kProjectSchemaVersion; }
 

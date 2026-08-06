@@ -1,1862 +1,1862 @@
 {
- "schema_version": 1,
- "meta": {
-  "name": "maximal",
-  "created_utc": "",
-  "modified_utc": ""
- },
- "timebase": {
-  "nanoticks_per_quarter": 960000
- },
- "tempo_map": [
-  {
-   "nanotick": 0,
-   "bpm": 120.0
+  "schema_version": 1,
+  "meta": {
+    "name": "maximal",
+    "created_utc": "",
+    "modified_utc": ""
   },
-  {
-   "nanotick": 7680000,
-   "bpm": 128.0
-  }
- ],
- "harmony_timeline": [
-  {
-   "nanotick": 0,
-   "root": 9,
-   "scale_id": 2
+  "timebase": {
+    "nanoticks_per_quarter": 960000
   },
-  {
-   "nanotick": 3840000,
-   "root": 5,
-   "scale_id": 1
-  },
-  {
-   "nanotick": 7680000,
-   "root": 0,
-   "scale_id": 1
-  },
-  {
-   "nanotick": 11520000,
-   "root": 7,
-   "scale_id": 1
-  }
- ],
- "tracks": [
-  {
-   "track_id": 0,
-   "name": "Bass",
-   "harmony_quantize": true,
-   "lines_per_beat": 4,
-   "mixer": {
-    "gain_db": -2.0,
-    "pan": -0.3,
-    "mute": false,
-    "solo": false
-   },
-   "routing": {
-    "midi_in": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "midi_out": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "audio_in": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "audio_out": {
-     "kind": "master",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "pre_fader_send": true
-   },
-   "device_chain": [
+  "tempo_map": [
     {
-     "device_id": 1,
-     "kind": "patcher_event",
-     "capability_mask": 2,
-     "patcher_node_id": 2,
-     "host_slot_index": 0,
-     "bypass": false,
-     "patcher": {
-      "nodes": [
-       {
-        "id": 0,
-        "type": "euclidean",
-        "euclidean": {
-         "steps": 16,
-         "hits": 5,
-         "offset": 0,
-         "duration_ticks": 0,
-         "degree": 1,
-         "octave_offset": 0,
-         "velocity": 100,
-         "base_octave": 4
+      "nanotick": 0,
+      "bpm": 120.0
+    },
+    {
+      "nanotick": 7680000,
+      "bpm": 128.0
+    }
+  ],
+  "harmony_timeline": [
+    {
+      "nanotick": 0,
+      "root": 9,
+      "scale_id": 2
+    },
+    {
+      "nanotick": 3840000,
+      "root": 5,
+      "scale_id": 1
+    },
+    {
+      "nanotick": 7680000,
+      "root": 0,
+      "scale_id": 1
+    },
+    {
+      "nanotick": 11520000,
+      "root": 7,
+      "scale_id": 1
+    }
+  ],
+  "tracks": [
+    {
+      "track_id": 0,
+      "name": "Bass",
+      "harmony_quantize": true,
+      "lines_per_beat": 4,
+      "mixer": {
+        "gain_db": -2.0,
+        "pan": -0.3,
+        "mute": false,
+        "solo": false
+      },
+      "routing": {
+        "midi_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "midi_out": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_out": {
+          "kind": "master",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "pre_fader_send": true
+      },
+      "device_chain": [
+        {
+          "device_id": 1,
+          "kind": "patcher_event",
+          "capability_mask": 2,
+          "patcher_node_id": 2,
+          "host_slot_index": 0,
+          "bypass": false,
+          "patcher": {
+            "nodes": [
+              {
+                "id": 0,
+                "type": "euclidean",
+                "euclidean": {
+                  "steps": 16,
+                  "hits": 5,
+                  "offset": 0,
+                  "duration_ticks": 0,
+                  "degree": 1,
+                  "octave_offset": 0,
+                  "velocity": 100,
+                  "base_octave": 4
+                }
+              },
+              {
+                "id": 1,
+                "type": "random_degree",
+                "random_degree": {
+                  "degree": 8,
+                  "velocity": 100,
+                  "duration_ticks": 0
+                }
+              },
+              {
+                "id": 2,
+                "type": "event_out"
+              }
+            ],
+            "edges": [
+              {
+                "src_node_id": 0,
+                "src_port_id": 1,
+                "dst_node_id": 1,
+                "dst_port_id": 0,
+                "kind": "event"
+              },
+              {
+                "src_node_id": 1,
+                "src_port_id": 1,
+                "dst_node_id": 2,
+                "dst_port_id": 0,
+                "kind": "event"
+              }
+            ]
+          }
+        },
+        {
+          "device_id": 0,
+          "kind": "vst_instrument",
+          "capability_mask": 5,
+          "patcher_node_id": 0,
+          "host_slot_index": 0,
+          "bypass": false,
+          "vst_ref": {
+            "vendor": "u-he",
+            "name": "Zebralette",
+            "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
+            "uid16": ""
+          }
         }
-       },
-       {
-        "id": 1,
-        "type": "random_degree",
-        "random_degree": {
-         "degree": 8,
-         "velocity": 100,
-         "duration_ticks": 0
-        }
-       },
-       {
-        "id": 2,
-        "type": "event_out"
-       }
       ],
-      "edges": [
-       {
-        "src_node_id": 0,
-        "src_port_id": 1,
-        "dst_node_id": 1,
-        "dst_port_id": 0,
-        "kind": "event"
-       },
-       {
-        "src_node_id": 1,
-        "src_port_id": 1,
-        "dst_node_id": 2,
-        "dst_port_id": 0,
-        "kind": "event"
-       }
-      ]
-     }
-    },
-    {
-     "device_id": 0,
-     "kind": "vst_instrument",
-     "capability_mask": 5,
-     "patcher_node_id": 0,
-     "host_slot_index": 0,
-     "bypass": false,
-     "vst_ref": {
-      "vendor": "u-he",
-      "name": "Zebralette",
-      "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
-      "uid16": ""
-     }
-    }
-   ],
-   "mod_links": [
-    {
-     "link_id": 1,
-     "src": {
-      "device_id": 0,
-      "source_id": 3,
-      "kind": "lfo"
-     },
-     "dst": {
-      "device_id": 0,
-      "target_id": 7,
-      "kind": "vst_param",
-      "param_uid16": "00112233445566778899aabbccddeeff"
-     },
-     "depth": 0.4,
-     "bias": -0.1,
-     "rate": "block"
-    }
-   ],
-   "notes": [
-    {
-     "nanotick": 0,
-     "duration": 960000,
-     "pitch": 33,
-     "velocity": 112,
-     "column": 0,
-     "note_id": 1001
-    },
-    {
-     "nanotick": 1920000,
-     "duration": 960000,
-     "pitch": 33,
-     "velocity": 96,
-     "column": 0,
-     "note_id": 1002,
-     "delay": 160000
-    },
-    {
-     "nanotick": 2880000,
-     "duration": 480000,
-     "pitch": 40,
-     "velocity": 90,
-     "column": 0,
-     "note_id": 1003
-    },
-    {
-     "nanotick": 3840000,
-     "duration": 960000,
-     "pitch": 29,
-     "velocity": 112,
-     "column": 0,
-     "note_id": 1004
-    },
-    {
-     "nanotick": 5760000,
-     "duration": 960000,
-     "pitch": 29,
-     "velocity": 96,
-     "column": 0,
-     "note_id": 1005,
-     "delay": 160000
-    },
-    {
-     "nanotick": 6720000,
-     "duration": 480000,
-     "pitch": 36,
-     "velocity": 90,
-     "column": 0,
-     "note_id": 1006
-    },
-    {
-     "nanotick": 7680000,
-     "duration": 960000,
-     "pitch": 36,
-     "velocity": 112,
-     "column": 0,
-     "note_id": 1007
-    },
-    {
-     "nanotick": 9600000,
-     "duration": 960000,
-     "pitch": 36,
-     "velocity": 96,
-     "column": 0,
-     "note_id": 1008,
-     "delay": 160000
-    },
-    {
-     "nanotick": 10560000,
-     "duration": 480000,
-     "pitch": 43,
-     "velocity": 90,
-     "column": 0,
-     "note_id": 1009
-    },
-    {
-     "nanotick": 11520000,
-     "duration": 960000,
-     "pitch": 31,
-     "velocity": 112,
-     "column": 0,
-     "note_id": 1010
-    },
-    {
-     "nanotick": 13440000,
-     "duration": 960000,
-     "pitch": 31,
-     "velocity": 96,
-     "column": 0,
-     "note_id": 1011,
-     "delay": 160000
-    },
-    {
-     "nanotick": 14400000,
-     "duration": 480000,
-     "pitch": 38,
-     "velocity": 90,
-     "column": 0,
-     "note_id": 1012
-    }
-   ],
-   "chords": []
-  },
-  {
-   "track_id": 1,
-   "name": "Pad",
-   "harmony_quantize": false,
-   "lines_per_beat": 4,
-   "mixer": {
-    "gain_db": -4.0,
-    "pan": 0.0,
-    "mute": false,
-    "solo": false
-   },
-   "routing": {
-    "midi_in": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "midi_out": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "audio_in": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "audio_out": {
-     "kind": "master",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "pre_fader_send": true
-   },
-   "device_chain": [
-    {
-     "device_id": 0,
-     "kind": "vst_instrument",
-     "capability_mask": 5,
-     "patcher_node_id": 0,
-     "host_slot_index": 0,
-     "bypass": false,
-     "vst_ref": {
-      "vendor": "u-he",
-      "name": "Zebralette",
-      "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
-      "uid16": ""
-     }
-    }
-   ],
-   "mod_links": [],
-   "notes": [],
-   "chords": [
-    {
-     "nanotick": 0,
-     "duration": 3840000,
-     "chord_id": 1,
-     "degree": 0,
-     "quality": 1,
-     "inversion": 0,
-     "base_octave": 4,
-     "column": 0,
-     "spread": 240000,
-     "humanize_timing": 20,
-     "humanize_velocity": 15
-    },
-    {
-     "nanotick": 3840000,
-     "duration": 3840000,
-     "chord_id": 2,
-     "degree": 0,
-     "quality": 2,
-     "inversion": 1,
-     "base_octave": 4,
-     "column": 0,
-     "spread": 240000,
-     "humanize_timing": 0,
-     "humanize_velocity": 12
-    },
-    {
-     "nanotick": 7680000,
-     "duration": 3840000,
-     "chord_id": 3,
-     "degree": 0,
-     "quality": 1,
-     "inversion": 0,
-     "base_octave": 4,
-     "column": 0,
-     "spread": 240000,
-     "humanize_timing": 20,
-     "humanize_velocity": 0
-    },
-    {
-     "nanotick": 11520000,
-     "duration": 3840000,
-     "chord_id": 4,
-     "degree": 4,
-     "quality": 1,
-     "inversion": 2,
-     "base_octave": 4,
-     "column": 0,
-     "spread": 240000,
-     "humanize_timing": 0,
-     "humanize_velocity": 10
-    }
-   ]
-  },
-  {
-   "track_id": 2,
-   "name": "Lead",
-   "harmony_quantize": true,
-   "lines_per_beat": 4,
-   "mixer": {
-    "gain_db": -3.0,
-    "pan": 0.4,
-    "mute": false,
-    "solo": false
-   },
-   "routing": {
-    "midi_in": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "midi_out": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "audio_in": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "audio_out": {
-     "kind": "master",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "pre_fader_send": true
-   },
-   "device_chain": [
-    {
-     "device_id": 0,
-     "kind": "vst_instrument",
-     "capability_mask": 5,
-     "patcher_node_id": 0,
-     "host_slot_index": 0,
-     "bypass": false,
-     "vst_ref": {
-      "vendor": "u-he",
-      "name": "Zebralette",
-      "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
-      "uid16": ""
-     }
-    }
-   ],
-   "mod_links": [],
-   "notes": [
-    {
-     "nanotick": 0,
-     "duration": 960000,
-     "pitch": 69,
-     "velocity": 100,
-     "column": 0,
-     "note_id": 1013
-    },
-    {
-     "nanotick": 960000,
-     "duration": 960000,
-     "pitch": 71,
-     "velocity": 100,
-     "column": 0,
-     "note_id": 1014,
-     "probability": 60
-    },
-    {
-     "nanotick": 1920000,
-     "duration": 960000,
-     "pitch": 72,
-     "velocity": 100,
-     "column": 0,
-     "note_id": 1015,
-     "probability": 60
-    },
-    {
-     "nanotick": 2880000,
-     "duration": 960000,
-     "pitch": 74,
-     "velocity": 100,
-     "column": 0,
-     "note_id": 1016,
-     "probability": 60
-    },
-    {
-     "nanotick": 3840000,
-     "duration": 960000,
-     "pitch": 72,
-     "velocity": 100,
-     "column": 0,
-     "note_id": 1017
-    },
-    {
-     "nanotick": 4800000,
-     "duration": 960000,
-     "pitch": 74,
-     "velocity": 100,
-     "column": 0,
-     "note_id": 1018,
-     "probability": 60
-    },
-    {
-     "nanotick": 5760000,
-     "duration": 960000,
-     "pitch": 76,
-     "velocity": 100,
-     "column": 0,
-     "note_id": 1019,
-     "probability": 60
-    },
-    {
-     "nanotick": 6720000,
-     "duration": 960000,
-     "pitch": 77,
-     "velocity": 100,
-     "column": 0,
-     "note_id": 1020,
-     "probability": 60
-    },
-    {
-     "nanotick": 6720000,
-     "duration": 960000,
-     "pitch": 71,
-     "velocity": 105,
-     "column": 1,
-     "note_id": 1021,
-     "retrigger": 4
-    },
-    {
-     "nanotick": 7680000,
-     "duration": 960000,
-     "pitch": 76,
-     "velocity": 100,
-     "column": 0,
-     "note_id": 1022
-    },
-    {
-     "nanotick": 8640000,
-     "duration": 960000,
-     "pitch": 77,
-     "velocity": 100,
-     "column": 0,
-     "note_id": 1023,
-     "probability": 60
-    },
-    {
-     "nanotick": 9600000,
-     "duration": 960000,
-     "pitch": 79,
-     "velocity": 100,
-     "column": 0,
-     "note_id": 1024,
-     "probability": 60
-    },
-    {
-     "nanotick": 10560000,
-     "duration": 960000,
-     "pitch": 69,
-     "velocity": 100,
-     "column": 0,
-     "note_id": 1025,
-     "probability": 60
-    },
-    {
-     "nanotick": 11520000,
-     "duration": 960000,
-     "pitch": 79,
-     "velocity": 100,
-     "column": 0,
-     "note_id": 1026
-    },
-    {
-     "nanotick": 12480000,
-     "duration": 960000,
-     "pitch": 69,
-     "velocity": 100,
-     "column": 0,
-     "note_id": 1027,
-     "probability": 60
-    },
-    {
-     "nanotick": 13440000,
-     "duration": 960000,
-     "pitch": 71,
-     "velocity": 100,
-     "column": 0,
-     "note_id": 1028,
-     "probability": 60
-    },
-    {
-     "nanotick": 14400000,
-     "duration": 960000,
-     "pitch": 72,
-     "velocity": 100,
-     "column": 0,
-     "note_id": 1029,
-     "probability": 60
-    },
-    {
-     "nanotick": 14400000,
-     "duration": 960000,
-     "pitch": 74,
-     "velocity": 105,
-     "column": 1,
-     "note_id": 1030,
-     "retrigger": 4
-    }
-   ],
-   "chords": []
-  },
-  {
-   "track_id": 3,
-   "name": "Arp",
-   "harmony_quantize": true,
-   "lines_per_beat": 3,
-   "mixer": {
-    "gain_db": -5.0,
-    "pan": -0.5,
-    "mute": false,
-    "solo": false
-   },
-   "routing": {
-    "midi_in": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "midi_out": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "audio_in": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "audio_out": {
-     "kind": "master",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "pre_fader_send": true
-   },
-   "device_chain": [
-    {
-     "device_id": 1,
-     "kind": "patcher_event",
-     "capability_mask": 2,
-     "patcher_node_id": 1,
-     "host_slot_index": 0,
-     "bypass": false,
-     "patcher": {
-      "nodes": [
-       {
-        "id": 0,
-        "type": "random_degree",
-        "random_degree": {
-         "degree": 8,
-         "velocity": 100,
-         "duration_ticks": 0
+      "mod_links": [
+        {
+          "link_id": 1,
+          "src": {
+            "device_id": 0,
+            "source_id": 3,
+            "kind": "lfo"
+          },
+          "dst": {
+            "device_id": 0,
+            "target_id": 7,
+            "kind": "vst_param",
+            "param_uid16": "00112233445566778899aabbccddeeff"
+          },
+          "depth": 0.4,
+          "bias": -0.1,
+          "rate": "block"
         }
-       },
-       {
-        "id": 1,
-        "type": "event_out"
-       }
       ],
-      "edges": [
-       {
-        "src_node_id": 0,
-        "src_port_id": 1,
-        "dst_node_id": 1,
-        "dst_port_id": 0,
-        "kind": "event"
-       }
+      "notes": [
+        {
+          "nanotick": 0,
+          "duration": 960000,
+          "pitch": 33,
+          "velocity": 112,
+          "column": 0,
+          "note_id": 1001
+        },
+        {
+          "nanotick": 1920000,
+          "duration": 960000,
+          "pitch": 33,
+          "velocity": 96,
+          "column": 0,
+          "note_id": 1002,
+          "delay": 160000
+        },
+        {
+          "nanotick": 2880000,
+          "duration": 480000,
+          "pitch": 40,
+          "velocity": 90,
+          "column": 0,
+          "note_id": 1003
+        },
+        {
+          "nanotick": 3840000,
+          "duration": 960000,
+          "pitch": 29,
+          "velocity": 112,
+          "column": 0,
+          "note_id": 1004
+        },
+        {
+          "nanotick": 5760000,
+          "duration": 960000,
+          "pitch": 29,
+          "velocity": 96,
+          "column": 0,
+          "note_id": 1005,
+          "delay": 160000
+        },
+        {
+          "nanotick": 6720000,
+          "duration": 480000,
+          "pitch": 36,
+          "velocity": 90,
+          "column": 0,
+          "note_id": 1006
+        },
+        {
+          "nanotick": 7680000,
+          "duration": 960000,
+          "pitch": 36,
+          "velocity": 112,
+          "column": 0,
+          "note_id": 1007
+        },
+        {
+          "nanotick": 9600000,
+          "duration": 960000,
+          "pitch": 36,
+          "velocity": 96,
+          "column": 0,
+          "note_id": 1008,
+          "delay": 160000
+        },
+        {
+          "nanotick": 10560000,
+          "duration": 480000,
+          "pitch": 43,
+          "velocity": 90,
+          "column": 0,
+          "note_id": 1009
+        },
+        {
+          "nanotick": 11520000,
+          "duration": 960000,
+          "pitch": 31,
+          "velocity": 112,
+          "column": 0,
+          "note_id": 1010
+        },
+        {
+          "nanotick": 13440000,
+          "duration": 960000,
+          "pitch": 31,
+          "velocity": 96,
+          "column": 0,
+          "note_id": 1011,
+          "delay": 160000
+        },
+        {
+          "nanotick": 14400000,
+          "duration": 480000,
+          "pitch": 38,
+          "velocity": 90,
+          "column": 0,
+          "note_id": 1012
+        }
+      ],
+      "chords": []
+    },
+    {
+      "track_id": 1,
+      "name": "Pad",
+      "harmony_quantize": false,
+      "lines_per_beat": 4,
+      "mixer": {
+        "gain_db": -4.0,
+        "pan": 0.0,
+        "mute": false,
+        "solo": false
+      },
+      "routing": {
+        "midi_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "midi_out": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_out": {
+          "kind": "master",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "pre_fader_send": true
+      },
+      "device_chain": [
+        {
+          "device_id": 0,
+          "kind": "vst_instrument",
+          "capability_mask": 5,
+          "patcher_node_id": 0,
+          "host_slot_index": 0,
+          "bypass": false,
+          "vst_ref": {
+            "vendor": "u-he",
+            "name": "Zebralette",
+            "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
+            "uid16": ""
+          }
+        }
+      ],
+      "mod_links": [],
+      "notes": [],
+      "chords": [
+        {
+          "nanotick": 0,
+          "duration": 3840000,
+          "chord_id": 1,
+          "degree": 0,
+          "quality": 1,
+          "inversion": 0,
+          "base_octave": 4,
+          "column": 0,
+          "spread": 240000,
+          "humanize_timing": 20,
+          "humanize_velocity": 15
+        },
+        {
+          "nanotick": 3840000,
+          "duration": 3840000,
+          "chord_id": 2,
+          "degree": 0,
+          "quality": 2,
+          "inversion": 1,
+          "base_octave": 4,
+          "column": 0,
+          "spread": 240000,
+          "humanize_timing": 0,
+          "humanize_velocity": 12
+        },
+        {
+          "nanotick": 7680000,
+          "duration": 3840000,
+          "chord_id": 3,
+          "degree": 0,
+          "quality": 1,
+          "inversion": 0,
+          "base_octave": 4,
+          "column": 0,
+          "spread": 240000,
+          "humanize_timing": 20,
+          "humanize_velocity": 0
+        },
+        {
+          "nanotick": 11520000,
+          "duration": 3840000,
+          "chord_id": 4,
+          "degree": 4,
+          "quality": 1,
+          "inversion": 2,
+          "base_octave": 4,
+          "column": 0,
+          "spread": 240000,
+          "humanize_timing": 0,
+          "humanize_velocity": 10
+        }
       ]
-     }
     },
     {
-     "device_id": 0,
-     "kind": "vst_instrument",
-     "capability_mask": 5,
-     "patcher_node_id": 0,
-     "host_slot_index": 0,
-     "bypass": false,
-     "vst_ref": {
-      "vendor": "u-he",
-      "name": "Zebralette",
-      "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
-      "uid16": ""
-     }
+      "track_id": 2,
+      "name": "Lead",
+      "harmony_quantize": true,
+      "lines_per_beat": 4,
+      "mixer": {
+        "gain_db": -3.0,
+        "pan": 0.4,
+        "mute": false,
+        "solo": false
+      },
+      "routing": {
+        "midi_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "midi_out": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_out": {
+          "kind": "master",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "pre_fader_send": true
+      },
+      "device_chain": [
+        {
+          "device_id": 0,
+          "kind": "vst_instrument",
+          "capability_mask": 5,
+          "patcher_node_id": 0,
+          "host_slot_index": 0,
+          "bypass": false,
+          "vst_ref": {
+            "vendor": "u-he",
+            "name": "Zebralette",
+            "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
+            "uid16": ""
+          }
+        }
+      ],
+      "mod_links": [],
+      "notes": [
+        {
+          "nanotick": 0,
+          "duration": 960000,
+          "pitch": 69,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 1013
+        },
+        {
+          "nanotick": 960000,
+          "duration": 960000,
+          "pitch": 71,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 1014,
+          "probability": 60
+        },
+        {
+          "nanotick": 1920000,
+          "duration": 960000,
+          "pitch": 72,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 1015,
+          "probability": 60
+        },
+        {
+          "nanotick": 2880000,
+          "duration": 960000,
+          "pitch": 74,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 1016,
+          "probability": 60
+        },
+        {
+          "nanotick": 3840000,
+          "duration": 960000,
+          "pitch": 72,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 1017
+        },
+        {
+          "nanotick": 4800000,
+          "duration": 960000,
+          "pitch": 74,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 1018,
+          "probability": 60
+        },
+        {
+          "nanotick": 5760000,
+          "duration": 960000,
+          "pitch": 76,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 1019,
+          "probability": 60
+        },
+        {
+          "nanotick": 6720000,
+          "duration": 960000,
+          "pitch": 77,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 1020,
+          "probability": 60
+        },
+        {
+          "nanotick": 6720000,
+          "duration": 960000,
+          "pitch": 71,
+          "velocity": 105,
+          "column": 1,
+          "note_id": 1021,
+          "retrigger": 4
+        },
+        {
+          "nanotick": 7680000,
+          "duration": 960000,
+          "pitch": 76,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 1022
+        },
+        {
+          "nanotick": 8640000,
+          "duration": 960000,
+          "pitch": 77,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 1023,
+          "probability": 60
+        },
+        {
+          "nanotick": 9600000,
+          "duration": 960000,
+          "pitch": 79,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 1024,
+          "probability": 60
+        },
+        {
+          "nanotick": 10560000,
+          "duration": 960000,
+          "pitch": 69,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 1025,
+          "probability": 60
+        },
+        {
+          "nanotick": 11520000,
+          "duration": 960000,
+          "pitch": 79,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 1026
+        },
+        {
+          "nanotick": 12480000,
+          "duration": 960000,
+          "pitch": 69,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 1027,
+          "probability": 60
+        },
+        {
+          "nanotick": 13440000,
+          "duration": 960000,
+          "pitch": 71,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 1028,
+          "probability": 60
+        },
+        {
+          "nanotick": 14400000,
+          "duration": 960000,
+          "pitch": 72,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 1029,
+          "probability": 60
+        },
+        {
+          "nanotick": 14400000,
+          "duration": 960000,
+          "pitch": 74,
+          "velocity": 105,
+          "column": 1,
+          "note_id": 1030,
+          "retrigger": 4
+        }
+      ],
+      "chords": []
+    },
+    {
+      "track_id": 3,
+      "name": "Arp",
+      "harmony_quantize": true,
+      "lines_per_beat": 3,
+      "mixer": {
+        "gain_db": -5.0,
+        "pan": -0.5,
+        "mute": false,
+        "solo": false
+      },
+      "routing": {
+        "midi_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "midi_out": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_out": {
+          "kind": "master",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "pre_fader_send": true
+      },
+      "device_chain": [
+        {
+          "device_id": 1,
+          "kind": "patcher_event",
+          "capability_mask": 2,
+          "patcher_node_id": 1,
+          "host_slot_index": 0,
+          "bypass": false,
+          "patcher": {
+            "nodes": [
+              {
+                "id": 0,
+                "type": "random_degree",
+                "random_degree": {
+                  "degree": 8,
+                  "velocity": 100,
+                  "duration_ticks": 0
+                }
+              },
+              {
+                "id": 1,
+                "type": "event_out"
+              }
+            ],
+            "edges": [
+              {
+                "src_node_id": 0,
+                "src_port_id": 1,
+                "dst_node_id": 1,
+                "dst_port_id": 0,
+                "kind": "event"
+              }
+            ]
+          }
+        },
+        {
+          "device_id": 0,
+          "kind": "vst_instrument",
+          "capability_mask": 5,
+          "patcher_node_id": 0,
+          "host_slot_index": 0,
+          "bypass": false,
+          "vst_ref": {
+            "vendor": "u-he",
+            "name": "Zebralette",
+            "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
+            "uid16": ""
+          }
+        }
+      ],
+      "mod_links": [],
+      "notes": [
+        {
+          "nanotick": 0,
+          "duration": 320000,
+          "pitch": 57,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1031
+        },
+        {
+          "nanotick": 320000,
+          "duration": 320000,
+          "pitch": 60,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1032
+        },
+        {
+          "nanotick": 640000,
+          "duration": 320000,
+          "pitch": 64,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1033
+        },
+        {
+          "nanotick": 960000,
+          "duration": 320000,
+          "pitch": 69,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1034
+        },
+        {
+          "nanotick": 1280000,
+          "duration": 320000,
+          "pitch": 57,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1035
+        },
+        {
+          "nanotick": 1600000,
+          "duration": 320000,
+          "pitch": 60,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1036,
+          "retrigger": 2
+        },
+        {
+          "nanotick": 1920000,
+          "duration": 320000,
+          "pitch": 64,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1037
+        },
+        {
+          "nanotick": 2240000,
+          "duration": 320000,
+          "pitch": 69,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1038
+        },
+        {
+          "nanotick": 2560000,
+          "duration": 320000,
+          "pitch": 57,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1039
+        },
+        {
+          "nanotick": 2880000,
+          "duration": 320000,
+          "pitch": 60,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1040
+        },
+        {
+          "nanotick": 3200000,
+          "duration": 320000,
+          "pitch": 64,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1041
+        },
+        {
+          "nanotick": 3520000,
+          "duration": 320000,
+          "pitch": 69,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1042,
+          "retrigger": 2
+        },
+        {
+          "nanotick": 3840000,
+          "duration": 320000,
+          "pitch": 57,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1043
+        },
+        {
+          "nanotick": 4160000,
+          "duration": 320000,
+          "pitch": 60,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1044
+        },
+        {
+          "nanotick": 4480000,
+          "duration": 320000,
+          "pitch": 64,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1045
+        },
+        {
+          "nanotick": 4800000,
+          "duration": 320000,
+          "pitch": 69,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1046
+        },
+        {
+          "nanotick": 5120000,
+          "duration": 320000,
+          "pitch": 57,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1047
+        },
+        {
+          "nanotick": 5440000,
+          "duration": 320000,
+          "pitch": 60,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1048,
+          "retrigger": 2
+        },
+        {
+          "nanotick": 5760000,
+          "duration": 320000,
+          "pitch": 64,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1049
+        },
+        {
+          "nanotick": 6080000,
+          "duration": 320000,
+          "pitch": 69,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1050
+        },
+        {
+          "nanotick": 6400000,
+          "duration": 320000,
+          "pitch": 57,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1051
+        },
+        {
+          "nanotick": 6720000,
+          "duration": 320000,
+          "pitch": 60,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1052
+        },
+        {
+          "nanotick": 7040000,
+          "duration": 320000,
+          "pitch": 64,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1053
+        },
+        {
+          "nanotick": 7360000,
+          "duration": 320000,
+          "pitch": 69,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1054,
+          "retrigger": 2
+        },
+        {
+          "nanotick": 7680000,
+          "duration": 320000,
+          "pitch": 57,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1055
+        },
+        {
+          "nanotick": 8000000,
+          "duration": 320000,
+          "pitch": 60,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1056
+        },
+        {
+          "nanotick": 8320000,
+          "duration": 320000,
+          "pitch": 64,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1057
+        },
+        {
+          "nanotick": 8640000,
+          "duration": 320000,
+          "pitch": 69,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1058
+        },
+        {
+          "nanotick": 8960000,
+          "duration": 320000,
+          "pitch": 57,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1059
+        },
+        {
+          "nanotick": 9280000,
+          "duration": 320000,
+          "pitch": 60,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1060,
+          "retrigger": 2
+        },
+        {
+          "nanotick": 9600000,
+          "duration": 320000,
+          "pitch": 64,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1061
+        },
+        {
+          "nanotick": 9920000,
+          "duration": 320000,
+          "pitch": 69,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1062
+        },
+        {
+          "nanotick": 10240000,
+          "duration": 320000,
+          "pitch": 57,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1063
+        },
+        {
+          "nanotick": 10560000,
+          "duration": 320000,
+          "pitch": 60,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1064
+        },
+        {
+          "nanotick": 10880000,
+          "duration": 320000,
+          "pitch": 64,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1065
+        },
+        {
+          "nanotick": 11200000,
+          "duration": 320000,
+          "pitch": 69,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1066,
+          "retrigger": 2
+        },
+        {
+          "nanotick": 11520000,
+          "duration": 320000,
+          "pitch": 57,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1067
+        },
+        {
+          "nanotick": 11840000,
+          "duration": 320000,
+          "pitch": 60,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1068
+        },
+        {
+          "nanotick": 12160000,
+          "duration": 320000,
+          "pitch": 64,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1069
+        },
+        {
+          "nanotick": 12480000,
+          "duration": 320000,
+          "pitch": 69,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1070
+        },
+        {
+          "nanotick": 12800000,
+          "duration": 320000,
+          "pitch": 57,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1071
+        },
+        {
+          "nanotick": 13120000,
+          "duration": 320000,
+          "pitch": 60,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1072,
+          "retrigger": 2
+        },
+        {
+          "nanotick": 13440000,
+          "duration": 320000,
+          "pitch": 64,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1073
+        },
+        {
+          "nanotick": 13760000,
+          "duration": 320000,
+          "pitch": 69,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1074
+        },
+        {
+          "nanotick": 14080000,
+          "duration": 320000,
+          "pitch": 57,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1075
+        },
+        {
+          "nanotick": 14400000,
+          "duration": 320000,
+          "pitch": 60,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1076
+        },
+        {
+          "nanotick": 14720000,
+          "duration": 320000,
+          "pitch": 64,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1077
+        },
+        {
+          "nanotick": 15040000,
+          "duration": 320000,
+          "pitch": 69,
+          "velocity": 80,
+          "column": 0,
+          "note_id": 1078,
+          "retrigger": 2
+        }
+      ],
+      "chords": []
+    },
+    {
+      "track_id": 4,
+      "name": "Drums",
+      "harmony_quantize": false,
+      "lines_per_beat": 4,
+      "mixer": {
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "mute": false,
+        "solo": false
+      },
+      "routing": {
+        "midi_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "midi_out": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_out": {
+          "kind": "master",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "pre_fader_send": true
+      },
+      "device_chain": [
+        {
+          "device_id": 0,
+          "kind": "vst_instrument",
+          "capability_mask": 5,
+          "patcher_node_id": 0,
+          "host_slot_index": 0,
+          "bypass": false,
+          "vst_ref": {
+            "vendor": "u-he",
+            "name": "Zebralette",
+            "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
+            "uid16": ""
+          }
+        }
+      ],
+      "mod_links": [],
+      "notes": [
+        {
+          "nanotick": 0,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 115,
+          "column": 0,
+          "note_id": 1079
+        },
+        {
+          "nanotick": 960000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 115,
+          "column": 0,
+          "note_id": 1080
+        },
+        {
+          "nanotick": 1920000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 115,
+          "column": 0,
+          "note_id": 1081
+        },
+        {
+          "nanotick": 2880000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 115,
+          "column": 0,
+          "note_id": 1082
+        },
+        {
+          "nanotick": 960000,
+          "duration": 240000,
+          "pitch": 38,
+          "velocity": 110,
+          "column": 1,
+          "note_id": 1083
+        },
+        {
+          "nanotick": 2880000,
+          "duration": 240000,
+          "pitch": 38,
+          "velocity": 110,
+          "column": 1,
+          "note_id": 1084
+        },
+        {
+          "nanotick": 2400000,
+          "duration": 240000,
+          "pitch": 38,
+          "velocity": 55,
+          "column": 1,
+          "note_id": 1085,
+          "probability": 40
+        },
+        {
+          "nanotick": 0,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1086
+        },
+        {
+          "nanotick": 480000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1087
+        },
+        {
+          "nanotick": 960000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1088
+        },
+        {
+          "nanotick": 1440000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1089
+        },
+        {
+          "nanotick": 1920000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1090
+        },
+        {
+          "nanotick": 2400000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1091
+        },
+        {
+          "nanotick": 2880000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1092,
+          "retrigger": 4
+        },
+        {
+          "nanotick": 3360000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1093
+        },
+        {
+          "nanotick": 3840000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 115,
+          "column": 0,
+          "note_id": 1094
+        },
+        {
+          "nanotick": 4800000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 115,
+          "column": 0,
+          "note_id": 1095
+        },
+        {
+          "nanotick": 5760000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 115,
+          "column": 0,
+          "note_id": 1096
+        },
+        {
+          "nanotick": 6720000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 115,
+          "column": 0,
+          "note_id": 1097
+        },
+        {
+          "nanotick": 4800000,
+          "duration": 240000,
+          "pitch": 38,
+          "velocity": 110,
+          "column": 1,
+          "note_id": 1098
+        },
+        {
+          "nanotick": 6720000,
+          "duration": 240000,
+          "pitch": 38,
+          "velocity": 110,
+          "column": 1,
+          "note_id": 1099
+        },
+        {
+          "nanotick": 6240000,
+          "duration": 240000,
+          "pitch": 38,
+          "velocity": 55,
+          "column": 1,
+          "note_id": 1100,
+          "probability": 40
+        },
+        {
+          "nanotick": 3840000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1101
+        },
+        {
+          "nanotick": 4320000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1102
+        },
+        {
+          "nanotick": 4800000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1103
+        },
+        {
+          "nanotick": 5280000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1104
+        },
+        {
+          "nanotick": 5760000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1105
+        },
+        {
+          "nanotick": 6240000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1106
+        },
+        {
+          "nanotick": 6720000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1107,
+          "retrigger": 4
+        },
+        {
+          "nanotick": 7200000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1108
+        },
+        {
+          "nanotick": 7680000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 115,
+          "column": 0,
+          "note_id": 1109
+        },
+        {
+          "nanotick": 8640000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 115,
+          "column": 0,
+          "note_id": 1110
+        },
+        {
+          "nanotick": 9600000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 115,
+          "column": 0,
+          "note_id": 1111
+        },
+        {
+          "nanotick": 10560000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 115,
+          "column": 0,
+          "note_id": 1112
+        },
+        {
+          "nanotick": 8640000,
+          "duration": 240000,
+          "pitch": 38,
+          "velocity": 110,
+          "column": 1,
+          "note_id": 1113
+        },
+        {
+          "nanotick": 10560000,
+          "duration": 240000,
+          "pitch": 38,
+          "velocity": 110,
+          "column": 1,
+          "note_id": 1114
+        },
+        {
+          "nanotick": 10080000,
+          "duration": 240000,
+          "pitch": 38,
+          "velocity": 55,
+          "column": 1,
+          "note_id": 1115,
+          "probability": 40
+        },
+        {
+          "nanotick": 7680000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1116
+        },
+        {
+          "nanotick": 8160000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1117
+        },
+        {
+          "nanotick": 8640000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1118
+        },
+        {
+          "nanotick": 9120000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1119
+        },
+        {
+          "nanotick": 9600000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1120
+        },
+        {
+          "nanotick": 10080000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1121
+        },
+        {
+          "nanotick": 10560000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1122,
+          "retrigger": 4
+        },
+        {
+          "nanotick": 11040000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1123
+        },
+        {
+          "nanotick": 11520000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 115,
+          "column": 0,
+          "note_id": 1124
+        },
+        {
+          "nanotick": 12480000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 115,
+          "column": 0,
+          "note_id": 1125
+        },
+        {
+          "nanotick": 13440000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 115,
+          "column": 0,
+          "note_id": 1126
+        },
+        {
+          "nanotick": 14400000,
+          "duration": 240000,
+          "pitch": 36,
+          "velocity": 115,
+          "column": 0,
+          "note_id": 1127
+        },
+        {
+          "nanotick": 12480000,
+          "duration": 240000,
+          "pitch": 38,
+          "velocity": 110,
+          "column": 1,
+          "note_id": 1128
+        },
+        {
+          "nanotick": 14400000,
+          "duration": 240000,
+          "pitch": 38,
+          "velocity": 110,
+          "column": 1,
+          "note_id": 1129
+        },
+        {
+          "nanotick": 13920000,
+          "duration": 240000,
+          "pitch": 38,
+          "velocity": 55,
+          "column": 1,
+          "note_id": 1130,
+          "probability": 40
+        },
+        {
+          "nanotick": 11520000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1131
+        },
+        {
+          "nanotick": 12000000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1132
+        },
+        {
+          "nanotick": 12480000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1133
+        },
+        {
+          "nanotick": 12960000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1134
+        },
+        {
+          "nanotick": 13440000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1135
+        },
+        {
+          "nanotick": 13920000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1136
+        },
+        {
+          "nanotick": 14400000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1137,
+          "retrigger": 4
+        },
+        {
+          "nanotick": 14880000,
+          "duration": 240000,
+          "pitch": 42,
+          "velocity": 70,
+          "column": 2,
+          "note_id": 1138
+        }
+      ],
+      "chords": []
+    },
+    {
+      "track_id": 5,
+      "name": "Perc",
+      "harmony_quantize": false,
+      "lines_per_beat": 6,
+      "mixer": {
+        "gain_db": -6.0,
+        "pan": 0.6,
+        "mute": true,
+        "solo": false
+      },
+      "routing": {
+        "midi_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "midi_out": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_out": {
+          "kind": "master",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "pre_fader_send": true
+      },
+      "device_chain": [
+        {
+          "device_id": 0,
+          "kind": "vst_instrument",
+          "capability_mask": 5,
+          "patcher_node_id": 0,
+          "host_slot_index": 0,
+          "bypass": false,
+          "vst_ref": {
+            "vendor": "u-he",
+            "name": "Zebralette",
+            "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
+            "uid16": ""
+          },
+          "euclidean": {
+            "steps": 16,
+            "hits": 7,
+            "offset": 0,
+            "duration_ticks": 240000,
+            "degree": 0,
+            "octave_offset": 0,
+            "velocity": 90,
+            "base_octave": 3
+          }
+        }
+      ],
+      "mod_links": [],
+      "notes": [
+        {
+          "nanotick": 0,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1139,
+          "probability": 50
+        },
+        {
+          "nanotick": 800000,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1140,
+          "probability": 50
+        },
+        {
+          "nanotick": 1600000,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1141,
+          "probability": 50
+        },
+        {
+          "nanotick": 2400000,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1142,
+          "probability": 50
+        },
+        {
+          "nanotick": 3200000,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1143,
+          "probability": 50
+        },
+        {
+          "nanotick": 3840000,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1144,
+          "probability": 50
+        },
+        {
+          "nanotick": 4640000,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1145,
+          "probability": 50
+        },
+        {
+          "nanotick": 5440000,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1146,
+          "probability": 50
+        },
+        {
+          "nanotick": 6240000,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1147,
+          "probability": 50
+        },
+        {
+          "nanotick": 7040000,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1148,
+          "probability": 50
+        },
+        {
+          "nanotick": 7680000,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1149,
+          "probability": 50
+        },
+        {
+          "nanotick": 8480000,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1150,
+          "probability": 50
+        },
+        {
+          "nanotick": 9280000,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1151,
+          "probability": 50
+        },
+        {
+          "nanotick": 10080000,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1152,
+          "probability": 50
+        },
+        {
+          "nanotick": 10880000,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1153,
+          "probability": 50
+        },
+        {
+          "nanotick": 11520000,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1154,
+          "probability": 50
+        },
+        {
+          "nanotick": 12320000,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1155,
+          "probability": 50
+        },
+        {
+          "nanotick": 13120000,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1156,
+          "probability": 50
+        },
+        {
+          "nanotick": 13920000,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1157,
+          "probability": 50
+        },
+        {
+          "nanotick": 14720000,
+          "duration": 160000,
+          "pitch": 60,
+          "velocity": 60,
+          "column": 0,
+          "note_id": 1158,
+          "probability": 50
+        }
+      ],
+      "chords": []
     }
-   ],
-   "mod_links": [],
-   "notes": [
-    {
-     "nanotick": 0,
-     "duration": 320000,
-     "pitch": 57,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1031
-    },
-    {
-     "nanotick": 320000,
-     "duration": 320000,
-     "pitch": 60,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1032
-    },
-    {
-     "nanotick": 640000,
-     "duration": 320000,
-     "pitch": 64,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1033
-    },
-    {
-     "nanotick": 960000,
-     "duration": 320000,
-     "pitch": 69,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1034
-    },
-    {
-     "nanotick": 1280000,
-     "duration": 320000,
-     "pitch": 57,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1035
-    },
-    {
-     "nanotick": 1600000,
-     "duration": 320000,
-     "pitch": 60,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1036,
-     "retrigger": 2
-    },
-    {
-     "nanotick": 1920000,
-     "duration": 320000,
-     "pitch": 64,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1037
-    },
-    {
-     "nanotick": 2240000,
-     "duration": 320000,
-     "pitch": 69,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1038
-    },
-    {
-     "nanotick": 2560000,
-     "duration": 320000,
-     "pitch": 57,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1039
-    },
-    {
-     "nanotick": 2880000,
-     "duration": 320000,
-     "pitch": 60,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1040
-    },
-    {
-     "nanotick": 3200000,
-     "duration": 320000,
-     "pitch": 64,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1041
-    },
-    {
-     "nanotick": 3520000,
-     "duration": 320000,
-     "pitch": 69,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1042,
-     "retrigger": 2
-    },
-    {
-     "nanotick": 3840000,
-     "duration": 320000,
-     "pitch": 57,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1043
-    },
-    {
-     "nanotick": 4160000,
-     "duration": 320000,
-     "pitch": 60,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1044
-    },
-    {
-     "nanotick": 4480000,
-     "duration": 320000,
-     "pitch": 64,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1045
-    },
-    {
-     "nanotick": 4800000,
-     "duration": 320000,
-     "pitch": 69,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1046
-    },
-    {
-     "nanotick": 5120000,
-     "duration": 320000,
-     "pitch": 57,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1047
-    },
-    {
-     "nanotick": 5440000,
-     "duration": 320000,
-     "pitch": 60,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1048,
-     "retrigger": 2
-    },
-    {
-     "nanotick": 5760000,
-     "duration": 320000,
-     "pitch": 64,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1049
-    },
-    {
-     "nanotick": 6080000,
-     "duration": 320000,
-     "pitch": 69,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1050
-    },
-    {
-     "nanotick": 6400000,
-     "duration": 320000,
-     "pitch": 57,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1051
-    },
-    {
-     "nanotick": 6720000,
-     "duration": 320000,
-     "pitch": 60,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1052
-    },
-    {
-     "nanotick": 7040000,
-     "duration": 320000,
-     "pitch": 64,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1053
-    },
-    {
-     "nanotick": 7360000,
-     "duration": 320000,
-     "pitch": 69,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1054,
-     "retrigger": 2
-    },
-    {
-     "nanotick": 7680000,
-     "duration": 320000,
-     "pitch": 57,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1055
-    },
-    {
-     "nanotick": 8000000,
-     "duration": 320000,
-     "pitch": 60,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1056
-    },
-    {
-     "nanotick": 8320000,
-     "duration": 320000,
-     "pitch": 64,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1057
-    },
-    {
-     "nanotick": 8640000,
-     "duration": 320000,
-     "pitch": 69,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1058
-    },
-    {
-     "nanotick": 8960000,
-     "duration": 320000,
-     "pitch": 57,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1059
-    },
-    {
-     "nanotick": 9280000,
-     "duration": 320000,
-     "pitch": 60,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1060,
-     "retrigger": 2
-    },
-    {
-     "nanotick": 9600000,
-     "duration": 320000,
-     "pitch": 64,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1061
-    },
-    {
-     "nanotick": 9920000,
-     "duration": 320000,
-     "pitch": 69,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1062
-    },
-    {
-     "nanotick": 10240000,
-     "duration": 320000,
-     "pitch": 57,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1063
-    },
-    {
-     "nanotick": 10560000,
-     "duration": 320000,
-     "pitch": 60,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1064
-    },
-    {
-     "nanotick": 10880000,
-     "duration": 320000,
-     "pitch": 64,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1065
-    },
-    {
-     "nanotick": 11200000,
-     "duration": 320000,
-     "pitch": 69,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1066,
-     "retrigger": 2
-    },
-    {
-     "nanotick": 11520000,
-     "duration": 320000,
-     "pitch": 57,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1067
-    },
-    {
-     "nanotick": 11840000,
-     "duration": 320000,
-     "pitch": 60,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1068
-    },
-    {
-     "nanotick": 12160000,
-     "duration": 320000,
-     "pitch": 64,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1069
-    },
-    {
-     "nanotick": 12480000,
-     "duration": 320000,
-     "pitch": 69,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1070
-    },
-    {
-     "nanotick": 12800000,
-     "duration": 320000,
-     "pitch": 57,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1071
-    },
-    {
-     "nanotick": 13120000,
-     "duration": 320000,
-     "pitch": 60,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1072,
-     "retrigger": 2
-    },
-    {
-     "nanotick": 13440000,
-     "duration": 320000,
-     "pitch": 64,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1073
-    },
-    {
-     "nanotick": 13760000,
-     "duration": 320000,
-     "pitch": 69,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1074
-    },
-    {
-     "nanotick": 14080000,
-     "duration": 320000,
-     "pitch": 57,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1075
-    },
-    {
-     "nanotick": 14400000,
-     "duration": 320000,
-     "pitch": 60,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1076
-    },
-    {
-     "nanotick": 14720000,
-     "duration": 320000,
-     "pitch": 64,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1077
-    },
-    {
-     "nanotick": 15040000,
-     "duration": 320000,
-     "pitch": 69,
-     "velocity": 80,
-     "column": 0,
-     "note_id": 1078,
-     "retrigger": 2
-    }
-   ],
-   "chords": []
-  },
-  {
-   "track_id": 4,
-   "name": "Drums",
-   "harmony_quantize": false,
-   "lines_per_beat": 4,
-   "mixer": {
-    "gain_db": 0.0,
-    "pan": 0.0,
-    "mute": false,
-    "solo": false
-   },
-   "routing": {
-    "midi_in": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "midi_out": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "audio_in": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "audio_out": {
-     "kind": "master",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "pre_fader_send": true
-   },
-   "device_chain": [
-    {
-     "device_id": 0,
-     "kind": "vst_instrument",
-     "capability_mask": 5,
-     "patcher_node_id": 0,
-     "host_slot_index": 0,
-     "bypass": false,
-     "vst_ref": {
-      "vendor": "u-he",
-      "name": "Zebralette",
-      "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
-      "uid16": ""
-     }
-    }
-   ],
-   "mod_links": [],
-   "notes": [
-    {
-     "nanotick": 0,
-     "duration": 240000,
-     "pitch": 36,
-     "velocity": 115,
-     "column": 0,
-     "note_id": 1079
-    },
-    {
-     "nanotick": 960000,
-     "duration": 240000,
-     "pitch": 36,
-     "velocity": 115,
-     "column": 0,
-     "note_id": 1080
-    },
-    {
-     "nanotick": 1920000,
-     "duration": 240000,
-     "pitch": 36,
-     "velocity": 115,
-     "column": 0,
-     "note_id": 1081
-    },
-    {
-     "nanotick": 2880000,
-     "duration": 240000,
-     "pitch": 36,
-     "velocity": 115,
-     "column": 0,
-     "note_id": 1082
-    },
-    {
-     "nanotick": 960000,
-     "duration": 240000,
-     "pitch": 38,
-     "velocity": 110,
-     "column": 1,
-     "note_id": 1083
-    },
-    {
-     "nanotick": 2880000,
-     "duration": 240000,
-     "pitch": 38,
-     "velocity": 110,
-     "column": 1,
-     "note_id": 1084
-    },
-    {
-     "nanotick": 2400000,
-     "duration": 240000,
-     "pitch": 38,
-     "velocity": 55,
-     "column": 1,
-     "note_id": 1085,
-     "probability": 40
-    },
-    {
-     "nanotick": 0,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1086
-    },
-    {
-     "nanotick": 480000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1087
-    },
-    {
-     "nanotick": 960000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1088
-    },
-    {
-     "nanotick": 1440000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1089
-    },
-    {
-     "nanotick": 1920000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1090
-    },
-    {
-     "nanotick": 2400000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1091
-    },
-    {
-     "nanotick": 2880000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1092,
-     "retrigger": 4
-    },
-    {
-     "nanotick": 3360000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1093
-    },
-    {
-     "nanotick": 3840000,
-     "duration": 240000,
-     "pitch": 36,
-     "velocity": 115,
-     "column": 0,
-     "note_id": 1094
-    },
-    {
-     "nanotick": 4800000,
-     "duration": 240000,
-     "pitch": 36,
-     "velocity": 115,
-     "column": 0,
-     "note_id": 1095
-    },
-    {
-     "nanotick": 5760000,
-     "duration": 240000,
-     "pitch": 36,
-     "velocity": 115,
-     "column": 0,
-     "note_id": 1096
-    },
-    {
-     "nanotick": 6720000,
-     "duration": 240000,
-     "pitch": 36,
-     "velocity": 115,
-     "column": 0,
-     "note_id": 1097
-    },
-    {
-     "nanotick": 4800000,
-     "duration": 240000,
-     "pitch": 38,
-     "velocity": 110,
-     "column": 1,
-     "note_id": 1098
-    },
-    {
-     "nanotick": 6720000,
-     "duration": 240000,
-     "pitch": 38,
-     "velocity": 110,
-     "column": 1,
-     "note_id": 1099
-    },
-    {
-     "nanotick": 6240000,
-     "duration": 240000,
-     "pitch": 38,
-     "velocity": 55,
-     "column": 1,
-     "note_id": 1100,
-     "probability": 40
-    },
-    {
-     "nanotick": 3840000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1101
-    },
-    {
-     "nanotick": 4320000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1102
-    },
-    {
-     "nanotick": 4800000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1103
-    },
-    {
-     "nanotick": 5280000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1104
-    },
-    {
-     "nanotick": 5760000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1105
-    },
-    {
-     "nanotick": 6240000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1106
-    },
-    {
-     "nanotick": 6720000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1107,
-     "retrigger": 4
-    },
-    {
-     "nanotick": 7200000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1108
-    },
-    {
-     "nanotick": 7680000,
-     "duration": 240000,
-     "pitch": 36,
-     "velocity": 115,
-     "column": 0,
-     "note_id": 1109
-    },
-    {
-     "nanotick": 8640000,
-     "duration": 240000,
-     "pitch": 36,
-     "velocity": 115,
-     "column": 0,
-     "note_id": 1110
-    },
-    {
-     "nanotick": 9600000,
-     "duration": 240000,
-     "pitch": 36,
-     "velocity": 115,
-     "column": 0,
-     "note_id": 1111
-    },
-    {
-     "nanotick": 10560000,
-     "duration": 240000,
-     "pitch": 36,
-     "velocity": 115,
-     "column": 0,
-     "note_id": 1112
-    },
-    {
-     "nanotick": 8640000,
-     "duration": 240000,
-     "pitch": 38,
-     "velocity": 110,
-     "column": 1,
-     "note_id": 1113
-    },
-    {
-     "nanotick": 10560000,
-     "duration": 240000,
-     "pitch": 38,
-     "velocity": 110,
-     "column": 1,
-     "note_id": 1114
-    },
-    {
-     "nanotick": 10080000,
-     "duration": 240000,
-     "pitch": 38,
-     "velocity": 55,
-     "column": 1,
-     "note_id": 1115,
-     "probability": 40
-    },
-    {
-     "nanotick": 7680000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1116
-    },
-    {
-     "nanotick": 8160000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1117
-    },
-    {
-     "nanotick": 8640000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1118
-    },
-    {
-     "nanotick": 9120000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1119
-    },
-    {
-     "nanotick": 9600000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1120
-    },
-    {
-     "nanotick": 10080000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1121
-    },
-    {
-     "nanotick": 10560000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1122,
-     "retrigger": 4
-    },
-    {
-     "nanotick": 11040000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1123
-    },
-    {
-     "nanotick": 11520000,
-     "duration": 240000,
-     "pitch": 36,
-     "velocity": 115,
-     "column": 0,
-     "note_id": 1124
-    },
-    {
-     "nanotick": 12480000,
-     "duration": 240000,
-     "pitch": 36,
-     "velocity": 115,
-     "column": 0,
-     "note_id": 1125
-    },
-    {
-     "nanotick": 13440000,
-     "duration": 240000,
-     "pitch": 36,
-     "velocity": 115,
-     "column": 0,
-     "note_id": 1126
-    },
-    {
-     "nanotick": 14400000,
-     "duration": 240000,
-     "pitch": 36,
-     "velocity": 115,
-     "column": 0,
-     "note_id": 1127
-    },
-    {
-     "nanotick": 12480000,
-     "duration": 240000,
-     "pitch": 38,
-     "velocity": 110,
-     "column": 1,
-     "note_id": 1128
-    },
-    {
-     "nanotick": 14400000,
-     "duration": 240000,
-     "pitch": 38,
-     "velocity": 110,
-     "column": 1,
-     "note_id": 1129
-    },
-    {
-     "nanotick": 13920000,
-     "duration": 240000,
-     "pitch": 38,
-     "velocity": 55,
-     "column": 1,
-     "note_id": 1130,
-     "probability": 40
-    },
-    {
-     "nanotick": 11520000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1131
-    },
-    {
-     "nanotick": 12000000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1132
-    },
-    {
-     "nanotick": 12480000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1133
-    },
-    {
-     "nanotick": 12960000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1134
-    },
-    {
-     "nanotick": 13440000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1135
-    },
-    {
-     "nanotick": 13920000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1136
-    },
-    {
-     "nanotick": 14400000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1137,
-     "retrigger": 4
-    },
-    {
-     "nanotick": 14880000,
-     "duration": 240000,
-     "pitch": 42,
-     "velocity": 70,
-     "column": 2,
-     "note_id": 1138
-    }
-   ],
-   "chords": []
-  },
-  {
-   "track_id": 5,
-   "name": "Perc",
-   "harmony_quantize": false,
-   "lines_per_beat": 6,
-   "mixer": {
-    "gain_db": -6.0,
-    "pan": 0.6,
-    "mute": true,
-    "solo": false
-   },
-   "routing": {
-    "midi_in": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "midi_out": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "audio_in": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "audio_out": {
-     "kind": "master",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "pre_fader_send": true
-   },
-   "device_chain": [
-    {
-     "device_id": 0,
-     "kind": "vst_instrument",
-     "capability_mask": 5,
-     "patcher_node_id": 0,
-     "host_slot_index": 0,
-     "bypass": false,
-     "vst_ref": {
-      "vendor": "u-he",
-      "name": "Zebralette",
-      "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
-      "uid16": ""
-     },
-     "euclidean": {
-      "steps": 16,
-      "hits": 7,
-      "offset": 0,
-      "duration_ticks": 240000,
-      "degree": 0,
-      "octave_offset": 0,
-      "velocity": 90,
-      "base_octave": 3
-     }
-    }
-   ],
-   "mod_links": [],
-   "notes": [
-    {
-     "nanotick": 0,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1139,
-     "probability": 50
-    },
-    {
-     "nanotick": 800000,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1140,
-     "probability": 50
-    },
-    {
-     "nanotick": 1600000,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1141,
-     "probability": 50
-    },
-    {
-     "nanotick": 2400000,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1142,
-     "probability": 50
-    },
-    {
-     "nanotick": 3200000,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1143,
-     "probability": 50
-    },
-    {
-     "nanotick": 3840000,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1144,
-     "probability": 50
-    },
-    {
-     "nanotick": 4640000,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1145,
-     "probability": 50
-    },
-    {
-     "nanotick": 5440000,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1146,
-     "probability": 50
-    },
-    {
-     "nanotick": 6240000,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1147,
-     "probability": 50
-    },
-    {
-     "nanotick": 7040000,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1148,
-     "probability": 50
-    },
-    {
-     "nanotick": 7680000,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1149,
-     "probability": 50
-    },
-    {
-     "nanotick": 8480000,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1150,
-     "probability": 50
-    },
-    {
-     "nanotick": 9280000,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1151,
-     "probability": 50
-    },
-    {
-     "nanotick": 10080000,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1152,
-     "probability": 50
-    },
-    {
-     "nanotick": 10880000,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1153,
-     "probability": 50
-    },
-    {
-     "nanotick": 11520000,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1154,
-     "probability": 50
-    },
-    {
-     "nanotick": 12320000,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1155,
-     "probability": 50
-    },
-    {
-     "nanotick": 13120000,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1156,
-     "probability": 50
-    },
-    {
-     "nanotick": 13920000,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1157,
-     "probability": 50
-    },
-    {
-     "nanotick": 14720000,
-     "duration": 160000,
-     "pitch": 60,
-     "velocity": 60,
-     "column": 0,
-     "note_id": 1158,
-     "probability": 50
-    }
-   ],
-   "chords": []
-  }
- ]
+  ]
 }

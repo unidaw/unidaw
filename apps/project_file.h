@@ -18,6 +18,11 @@
 
 namespace daw {
 
+// The `kind` string a device serialises as. Declared here rather than left TU-local because
+// diagnostics elsewhere need to NAME a device's kind, and a second switch over DeviceKind is
+// the shape that goes stale one enum value at a time.
+const char* deviceKindToString(DeviceKind kind);
+
 // Serializable form of a track. This mirrors the engine's `Track` but holds
 // only what belongs in a saved document: no runtime state, no host handles.
 struct MixerSettings {

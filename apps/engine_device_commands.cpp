@@ -79,8 +79,33 @@ void handleOpenPluginEditor(DeviceCommandDeps& deps,
       };
   const auto hostIndex = resolveHostIndexForDevice(deviceId);
   if (!hostIndex) {
-    daw::LogLine() << "UI: OpenPluginEditor failed - device "
-              << deviceId << " not found" << std::endl;
+    // "NOT FOUND" WAS TRUE OF THE SEARCH AND FALSE OF THE WORLD. The resolver above walks only
+    // VstInstrument and VstEffect and skips anything whose plugin path does not resolve, so it
+    // returns nullopt for THREE different situations and the message named the one that is
+    // usually wrong. Point this at a sampler that is plainly in the chain and it said the device
+    // did not exist — sending the reader to look for a missing device, which is exactly the
+    // round the web-UI agent spent before reading the resolver.
+    //
+    // The message is the only thing a caller can see: the engine owns the plugin window, so
+    // there is no second place to look. Say which of the three it is.
+    const daw::Device* present = nullptr;
+    for (const auto& device : devices) {
+      if (device.id == deviceId) { present = &device; break; }
+    }
+    if (present == nullptr) {
+      daw::LogLine() << "UI: OpenPluginEditor failed - track " << trackId
+                << " has no device " << deviceId << std::endl;
+    } else if (present->kind != daw::DeviceKind::VstInstrument &&
+               present->kind != daw::DeviceKind::VstEffect) {
+      daw::LogLine() << "UI: OpenPluginEditor failed - device " << deviceId
+                << " is a " << daw::deviceKindToString(present->kind)
+                << ", which has no plugin editor" << std::endl;
+    } else {
+      daw::LogLine() << "UI: OpenPluginEditor failed - device " << deviceId
+                << " is a " << daw::deviceKindToString(present->kind)
+                << " whose plugin did not resolve, so there is no editor to open"
+                << std::endl;
+    }
     return;
   }
   if (!runtime->hostReady.load(std::memory_order_acquire)) {

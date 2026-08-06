@@ -326,13 +326,50 @@ start_engine() {
 # SIGTERM is a defect somewhere even when the harness cleans up after it, and a recovered leak
 # nobody mentions is how the NEXT one gets attributed to whatever was under test. (The web-UI
 # agent reached the same conclusion from the other side and made their stack.mjs say it too.)
+# A BACKSTOP FOR ORPHANED HOSTS, AND IT HAS NEVER BEEN SEEN TO FIRE. Read that before trusting it.
+#
+# Two juce_host_process children of this repo's build were found alive after 1h28m tonight,
+# reparented to init at 0% CPU, holding their sockets. Orphaned hosts accumulate, hold the audio
+# device, and make "is the machine busy" read yes on an idle box — both agents sharing this
+# machine have been misled by that.
+#
+# THE OBVIOUS EXPLANATION IS DISPROVEN. I assumed a SIGKILLed engine leaves its hosts behind,
+# since HostController::killHostProcess only runs on an orderly shutdown. It does not: a host
+# exits on its own when its socket peer dies. Measured both ways — engine SIGSTOPped so
+# stop_engine must escalate to SIGKILL, and engine SIGKILLed directly with no cleanup path at
+# all — and in both cases every host was gone within seconds WITH THIS REAPER DISABLED. The
+# negative control killed the theory, not the hosts.
+#
+# So the mechanism that produced those two is still unknown, and this code has no demonstrated
+# effect. It is kept because it is eight lines that cannot misfire, not because it is known to
+# help: it kills only pids recorded as children of an engine we have just killed ourselves.
+# `pgrep -P` matches by PARENT rather than command line, so it cannot match a pattern, the other
+# agent's processes, or itself — the three ways this has gone wrong in this repo before. The list
+# must be captured BEFORE the kill, because afterwards the children are reparented to init and
+# nothing can say whose they were.
+#
+# If orphans appear again, note what was running: this reaper firing would be the first real
+# evidence about the cause, so the message below is deliberately loud.
 stop_engine() {
   local pid="${1:-${ENGINE_PID:-}}"
   [ -n "$pid" ] || return 0
-  kill "$pid" 2>/dev/null || return 0
+  local hosts
+  # `|| true` ON THE SUBSTITUTION, and this is the THIRD time today this exact shape has bitten.
+  # `pgrep` EXITS NON-ZERO WHEN IT MATCHES NOTHING — an engine with no live children is the normal
+  # case by cleanup time — and these checks run under `set -euo pipefail`, where an assignment from
+  # a failing command substitution aborts the shell. This function is called from an EXIT trap, so
+  # the abort landed AFTER the check had printed PASS and turned nine green suites red with their
+  # own success message still on screen.
+  #
+  # The general shape: a command whose non-zero exit is a normal ANSWER rather than a failure —
+  # pgrep matching nothing, grep finding nothing, ls on an empty directory, a linter reporting
+  # errors — used inside `x="$(...)"` under set -e. The status belongs to the answer, not to the
+  # assignment.
+  hosts="$(pgrep -P "$pid" 2>/dev/null | tr '\n' ' ' || true)"
+  kill "$pid" 2>/dev/null || { reap_hosts "$hosts"; return 0; }
   local i=0
   while [ "$i" -lt 40 ]; do
-    kill -0 "$pid" 2>/dev/null || { wait "$pid" 2>/dev/null; return 0; }
+    kill -0 "$pid" 2>/dev/null || { wait "$pid" 2>/dev/null; reap_hosts "$hosts"; return 0; }
     sleep 0.25
     i=$((i + 1))
   done
@@ -348,12 +385,28 @@ stop_engine() {
   wait "$pid" 2>/dev/null
   local j=0
   while [ "$j" -lt 40 ]; do
-    kill -0 "$pid" 2>/dev/null || return 0
+    kill -0 "$pid" 2>/dev/null || { reap_hosts "$hosts"; return 0; }
     sleep 0.05
     j=$((j + 1))
   done
   echo "  note: engine $pid survived SIGKILL for 2s, which should not be possible for an ordinary"
   echo "        process — it is most likely stuck in an uninterruptible wait"
+  reap_hosts "$hosts"
+  return 0
+}
+
+# Kill whichever of the recorded child pids are still alive. Silent when there is nothing to do,
+# which is the normal case: an orderly shutdown has already taken them.
+reap_hosts() {
+  local left=0 h
+  for h in ${1:-}; do
+    kill -0 "$h" 2>/dev/null || continue
+    kill -9 "$h" 2>/dev/null
+    left=$((left + 1))
+  done
+  [ "$left" -gt 0 ] && echo "  note: REAPED $left ORPHANED HOST(S). This has never fired in a
+        constructed test — a host normally exits when its engine dies. Whatever run produced this
+        is the one that explains the orphans nobody has accounted for; say what it was."
   return 0
 }
 

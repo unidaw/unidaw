@@ -11,7 +11,7 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: 0bbed99
+- as-of-commit: b1b5c39
 - main-cpp-lines: 2191
 - main-function-lines: 1985
 - ctest-entries: 198
@@ -154,6 +154,47 @@ perfectly", and it took a diagnostic dump of the actual ticks to see it.
 
 That is the same shape as every other fixture failure in this file: the test was measuring
 something real and it was not the thing under test.
+
+## 2026-08-06 (evening) — four diagnostics that pointed away from the answer
+
+Not one of these was a wrong computation. All four were the machine describing itself
+incorrectly, and each cost time proportional to how much the description was trusted.
+
+**A number that meant nothing, printed where a meaning was expected.** `project.plugin_resolved`
+logged `"slot": 0` for every plugin resolved off disk — `resolution.index` is 0 when the match is
+None, and the direct-path case IS the None case. Entry 0 of u-he's Zebra2.vst3 is Zebra2, so a
+project that had correctly loaded Zebralette printed a number saying it had loaded something
+else. I believed the number over the parameter count for several minutes. There is no slot on
+that path — the host picks the class by NAME — so it now says that instead of printing a zero.
+
+**A known-failure note that outlived its defect.** `rust_tests_check`'s header declared
+`multi_bundle_selects_named_subplugin` a genuine failure. It passes, three runs of three. A stale
+note of that kind is worse than none: it tells the next person a working guard is broken, and it
+supplies a ready reason not to run the one thing that would have corrected it.
+
+**A timeout that was a refusal.** `note_overlap` flaked, and the kept evidence said why:
+`write_note received`, then `write_note rejected:version`. The check waited for the NOTE COUNT to
+publish, and the next `daw-cli do` — a fresh process — then read the CLIP VERSION, published on
+its own tick. In the window between them the second writer reads a stale base and is correctly
+refused, and the wait spends its full budget on a note that was never coming. **A refused edit
+never arrives however long you wait**, so the failure message now says to look for
+`rejected:version` before believing slowness.
+
+**"Not found" about a device that was plainly there.** `OpenPluginEditor`'s resolver walks only
+VstInstrument and VstEffect, so it returned nullopt for three different situations and the message
+named the one that is usually wrong. Pointed at a sampler, it sent the reader looking for a
+missing device. It now distinguishes all three, and it uses the existing `deviceKindToString`
+rather than a second switch over DeviceKind — lifted out of an anonymous namespace for the
+purpose, because a duplicated enum table goes stale one value at a time.
+
+**And one where the negative control killed my explanation rather than the bug.** Two orphaned
+host processes were found alive after 1h28m. The obvious cause — a SIGKILLed engine never running
+`killHostProcess` — is DISPROVEN: measured with the engine SIGSTOPped so the harness must
+escalate, and again with a direct SIGKILL and no cleanup path at all, every host was gone within
+seconds *with the new reaper disabled*. A host exits when its socket peer dies. So the orphans are
+real and unexplained, the reaper has no demonstrated effect, and its comment says so in those
+words rather than claiming a fix. The alternative was a confident comment over code that has never
+once fired.
 
 ## 2026-08-06 — the AI could add a sampler and never give it a sound
 
@@ -605,13 +646,49 @@ than shipped — a check-auditing tool that produces confident false accusations
 
 ## Open, and needing a decision rather than work
 
+### Waiting on Jaakko specifically (2026-08-06)
+
+Collected here because the demo follow-up will want them in one place, and because each has been
+sitting in a task list where an owner does not read it.
+
+- **FILL conditional trig — what fill state does a BOUNCE render under?** A FILL trig fires on a
+  fill; an offline render has no performer pressing anything. Rendering it as never-fill, always-
+  fill, or a documented default are all defensible and the choice is musical, not technical.
+- **A sampler track cannot be an audio routing destination** — the sampler overwrites its input
+  rather than mixing into it. Whether a sampler should mix or replace is a design decision.
+- **Should an event-out promote a bare GATE to a default degree?** A euclidean emits gates, which
+  carry no pitch, and the note path skips them deliberately — so `euclidean → out` is silent BY
+  DESIGN and the fix for a user is to put `random` or `slice` between. Promoting silently would
+  make a gate into a note, which it is not. Real design call.
+- **`SamplerSetFilter` writes the filter TYPE unconditionally, with no set-flag.** Cutoff and
+  resonance each have one and can be left alone; type cannot. So a caller adjusting cutoff turns
+  the filter OFF on the way past unless it re-sends the type, and returns success. Found by the
+  web-UI agent, who worked around it by requiring the type in their tool. Adding
+  `SAMPLER_FILTER_SET_TYPE` is a contract change and would be announced before it lands.
+
+### Open and simply not understood
+
+- **Two `juce_host_process` orphans were found alive after 1h28m** and the obvious explanation is
+  disproven: a host exits on its own when its socket peer dies, measured with the engine
+  SIGSTOPped into the SIGKILL path and with a direct SIGKILL, both with the new reaper disabled.
+  The reaper in `tools/lib/engine_wait.sh` has never been observed to fire and says so. The first
+  time it does fire is the first real evidence about the cause.
+
+- ~~**Published meter points carry the requested tick, not the effective one.**~~ **FIXED
+  2026-08-05** — kept for the reasoning, struck so a scanner is not misled by the bullet. The
+  correction used to live only in the paragraph at the bottom of this section, which is precisely
+  how a reader skimming bullets ends up believing a closed item is open.
+  Original text follows.
 - **Published meter points carry the requested tick, not the effective one.** `setMap` snaps a
   signature change forward to the next bar line; the wire publishes the tick that was *asked for*.
   Measured: 3/4 requested at 5 quarters, published as 5, actually begins at 8. Fixing it properly
   means widening `UiTimeSigPoint` and bumping `kShmVersion`, which the equality gate turns into a
   forced rebuild on both sides — so it needs coordination, not just code.
-- **PDC clamps every event in the first `latencySamples_` to sample 0**, collapsing their relative
-  timing. Three candidate fixes, and choosing among them is an owner's call.
+- ~~**PDC clamps every event in the first `latencySamples_` to sample 0**~~ **FIXED 2026-08-05.**
+  Struck for the same reason as the bullet above. Original text: PDC clamps every event in the
+  first `latencySamples_` to sample 0, collapsing their relative timing; three candidate fixes,
+  and choosing among them is an owner's call. (The offset those options traded off turned out to
+  be inert — the "three options" had no options in it.)
 - **CoreAudio workgroups for the host render thread.** Cross-process `os_workgroup` sharing needs
   raw mach ports — JUCE 8's `AudioIODevice::getWorkgroup()` / `AudioWorkgroup::join()` hide the
   handle — plus a dedicated RT render thread in the host, split off the control/instantiation
