@@ -2297,7 +2297,7 @@ const OP_REGISTRY = {
   // among them, so it could not make the one instrument this app implements itself.
   sampler:   { cli: 'add-device', agent: 'add_device' },
   'load-sample': { cli: 'sampler-load', agent: 'load_sample' },
-  slice:     { cli: 'sampler-slice', agent: null, why: 'gap' },
+  slice:     { cli: 'sampler-slice', agent: 'sampler_slice' },
   // Row ops. daw-cli reached the engine FIRST here — `do set-row-ops` shipped with the opcode —
   // so the CLI path is real from day one and only the agent manifest owes it a tool.
   ops:       { cli: 'set-row-ops', agent: 'set_row_ops' },
@@ -2341,7 +2341,7 @@ const OP_REGISTRY = {
    * The kit's own settings (SamplerSetDevice, 88). daw-cli has `sampler-device`, so the CLI path
    * is real; the agent has no sampler tooling at all.
    */
-  bank:      { cli: 'sampler-device', agent: null, why: 'gap' },
+  bank:      { cli: 'sampler-device', agent: 'sampler_device' },
   /*
    * Lay a chop out as notes (SamplerEmitRows). daw-cli has `sampler-emit-rows`, so the CLI path
    * is real; the agent has no sampler tooling at all.
@@ -2485,8 +2485,8 @@ const AGENT_GAP = ['clear', 'columns', 'copy', 'cut',
                    'new', 'paste', 'patch',
                    'transpose', 'mods',
                    // With the other sampler verbs: the agent has no sampler tooling at all.
-                   'filter', 'env', 'soundaddr', 'bank', 'emit',
-                   'slice', 'slot-name', 'vintage',
+                   'filter', 'env', 'soundaddr', 'emit',
+                   'slot-name', 'vintage',
                    'save-patch', 'lpb', 'note-overlap',
                    // A clip's own grid (opcode 94). It HAS a CLI path — `daw-cli do clip-grid`
                    // shipped with the opcode — so it is only in the agent half of the gap.

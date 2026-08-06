@@ -413,6 +413,52 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "sampler_device",
+            description: "Set a sampler DEVICE's own fields, as opposed to one slot's. \
+                          `default-gate` is the one that matters: it seeds the gate of slots \
+                          minted AFTER it and leaves existing ones alone, so set it BEFORE \
+                          loading if you want the samples to stop with the note. 0 is one-shot \
+                          (right for drums), 1 is gated (right for a pad).",
+            params: json!({
+                "type": "object",
+                "required": ["track", "device", "field", "value"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "device": { "type": "integer", "minimum": 1 },
+                    "field": { "type": "string",
+                               "description": "default-gate, voice-cap or default-view. An \
+                                               unknown name comes back with the list." },
+                    "value": { "type": "integer" },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "sampler_slice",
+            description: "CHOP a loaded sample into slices — the break-chopping gesture. \
+                          `transient` finds the attacks; `equal` cuts a fixed number of even \
+                          pieces; `clear` removes the slicing. With `make_slots` each slice gets \
+                          its own slot from `base_key` upward, which is what turns a chop into \
+                          something playable one key per slice instead of one slot for the lot.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "device"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "device": { "type": "integer", "minimum": 1 },
+                    "mode": { "type": "string", "enum": ["transient", "equal", "clear"],
+                              "description": "Default transient." },
+                    "count": { "type": "integer", "minimum": 1, "maximum": 128,
+                               "description": "For mode=equal: how many even pieces." },
+                    "sensitivity": { "type": "integer", "minimum": 0, "maximum": 100,
+                                     "description": "For mode=transient. Default 50." },
+                    "make_slots": { "type": "boolean",
+                                    "description": "Default true — a slot per slice, playable." },
+                    "base_key": { "type": "integer", "minimum": 0, "maximum": 127,
+                                  "description": "First key the slices are laid out from. Default 36." },
+                },
+            }),
+        },
+        ToolSpec {
             name: "set_mixer",
             description: "Set a track's gain, pan, mute or solo. Gain is in dB (0 is unity,                           negative is quieter); pan is -1 hard left to 1 hard right.",
             params: json!({
@@ -1474,6 +1520,102 @@ fn sampler_slot(handle: &EngineHandle, args: &Value) -> ToolResult {
     }
 }
 
+/// A sampler device's own fields — the bank, rather than one slot.
+///
+/// `default-gate` is the reason this is worth having: it SEEDS a slot's gate at mint and leaves
+/// existing slots alone, so setting it after loading changes nothing anyone can hear. An agent
+/// asked for a sustained pad has to set it first and then load, and could do neither.
+fn sampler_device(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(track), Some(device)) = (arg_u64(args, "track"), arg_u64(args, "device")) else {
+        return ToolResult::err("sampler_device needs \"track\" and \"device\"");
+    };
+    if device == 0 {
+        return ToolResult::err(
+            "device 0 is not a device id — read the real one from the track's `devices:` line in \
+             the observation. Ids start at 1 and are not chain positions");
+    }
+    let Some(name) = arg_str(args, "field") else {
+        return ToolResult::err("sampler_device needs \"field\"");
+    };
+    let Some(value) = args.get("value").and_then(|v| v.as_i64()) else {
+        return ToolResult::err("sampler_device needs \"value\"");
+    };
+    // The bridge's own table, not a copy — the same list the console and the CLI resolve against.
+    let Some((_, field)) = daw_bridge::layout::SAMPLER_DEVICE_FIELDS
+        .iter()
+        .find(|(n, _)| *n == name)
+    else {
+        let all: Vec<&str> =
+            daw_bridge::layout::SAMPLER_DEVICE_FIELDS.iter().map(|(n, _)| *n).collect();
+        return ToolResult::err(format!(
+            "no sampler device field called {name:?}. They are: {}", all.join(", ")));
+    };
+
+    let p = daw_bridge::layout::UiSamplerSetDevicePayload {
+        command_type: UiCommandType::SamplerSetDevice as u16,
+        field: *field,
+        track_id: track as u32,
+        device_id: device as u32,
+        value: value.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        reserved: [0; 24],
+    };
+    match handle.send_sampler_set_device(p) {
+        Ok(()) => ToolResult::ok(json!({
+            "sent": true, "track": track, "device": device, "field": name, "value": value,
+        })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
+/// Chop a loaded sample into slices, and optionally lay them out one per key.
+///
+/// `make_slots` defaults to TRUE, which is the opposite of the payload's zero and deliberate: a
+/// chop with no slots is a set of markers nothing can play, and an agent asked to "chop this
+/// break" means the playable thing. Turning it off is available and has to be asked for.
+fn sampler_slice(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(track), Some(device)) = (arg_u64(args, "track"), arg_u64(args, "device")) else {
+        return ToolResult::err("sampler_slice needs \"track\" and \"device\"");
+    };
+    if device == 0 {
+        return ToolResult::err(
+            "device 0 is not a device id — read the real one from the observation's `devices:` line");
+    }
+    let mode = match arg_str(args, "mode").unwrap_or("transient") {
+        "transient" => daw_bridge::layout::SAMPLER_SLICE_TRANSIENT,
+        "equal" => daw_bridge::layout::SAMPLER_SLICE_EQUAL,
+        "clear" => daw_bridge::layout::SAMPLER_SLICE_CLEAR,
+        other => return ToolResult::err(format!(
+            "slice mode must be transient, equal or clear (got {other:?})")),
+    };
+    let count = arg_u64(args, "count").unwrap_or(8).clamp(1, 128) as u32;
+    if mode == daw_bridge::layout::SAMPLER_SLICE_EQUAL && args.get("count").is_none() {
+        return ToolResult::err("mode=equal needs \"count\" — how many pieces to cut it into");
+    }
+    let make_slots = args.get("make_slots").and_then(|v| v.as_bool()).unwrap_or(true);
+
+    let p = daw_bridge::layout::UiSamplerSlicePayload {
+        command_type: UiCommandType::SamplerSlice as u16,
+        mode,
+        track_id: track as u32,
+        device_id: device as u32,
+        source_local_id: arg_u64(args, "source").unwrap_or(0) as u32,
+        sensitivity: arg_u64(args, "sensitivity").unwrap_or(50).clamp(0, 100) as u32,
+        count,
+        max_slices: 128,
+        snap_nanoticks: 0,
+        make_slots: if make_slots { 1 } else { 0 },
+        slot_base_key: arg_u64(args, "base_key").unwrap_or(36).clamp(0, 127) as u8,
+        reserved: [0; 6],
+    };
+    match handle.send_sampler_slice(p) {
+        Ok(()) => ToolResult::ok(json!({
+            "sent": true, "track": track, "device": device,
+            "mode": arg_str(args, "mode").unwrap_or("transient"), "slots": make_slots,
+        })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
 /// Make a modulation link, name its parameter, and turn the knob. THREE commands.
 ///
 /// All three, because a link the engine accepts moves nothing without them: it addresses a
@@ -1828,6 +1970,8 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "harmony_quantize" => harmony_quantize(handle, &call.args),
         "set_row_ops" => set_row_ops(handle, &call.args),
         "sampler_slot" => sampler_slot(handle, &call.args),
+        "sampler_device" => sampler_device(handle, &call.args),
+        "sampler_slice" => sampler_slice(handle, &call.args),
         "set_mixer" => set_mixer(handle, &call.args),
         "set_loop" => set_loop(handle, &call.args),
         "preview_note" => preview_note(handle, &call.args),
