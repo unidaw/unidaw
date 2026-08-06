@@ -64,11 +64,16 @@ d=json.loads(re.sub(r",(\s*])",r"\1",sys.stdin.read() or "[]"))
 print(" ".join("p%d@t%d" % (e["placement"], e["track"]) for e in d) or "none")
 PY
 where() { DAW_UI_SHM_NAME="$SHM" "$CLI" get extents 2>/dev/null | python3 "$TMP/w.py"; }
+# THE SONG'S END, which the move has to carry with it.
+song_end() { DAW_UI_SHM_NAME="$SHM" "$CLI" get arrangement 2>/dev/null \
+             | sed -n 's/.*"song_end_tick": *\([0-9][0-9]*\).*/\1/p' | head -1; }
 
 BEFORE="$(where)"
+END_BEFORE="$(song_end)"
 DAW_UI_SHM_NAME="$SHM" "$CLI" do move-placement --track 0 --placement 1 --at $((2*BAR)) --to-track 1 --force >/dev/null 2>&1 || true
 sleep 0.4
 MOVED="$(where)"
+END_AFTER="$(song_end)"
 DAW_UI_SHM_NAME="$SHM" "$CLI" do undo --force >/dev/null 2>&1 || true
 sleep 0.4
 UNDONE="$(where)"
@@ -81,6 +86,7 @@ echo "before : $BEFORE (expect p1@t0)"
 echo "moved  : $MOVED  (expect p1@t1 — same id, other lane)"
 echo "undone : $UNDONE (expect p1@t0 — atomic restore of both tracks)"
 echo "redone : $REDONE (expect p1@t1)"
+echo "song end: $END_BEFORE -> $END_AFTER (the move pushes the only placement out to 2 bars)"
 
 rm -rf "$TMP"
 ok=1
@@ -88,5 +94,23 @@ ok=1
 [ "$MOVED" = "p1@t1" ]  || { echo "FAIL: cross-track move (id must stay 1, land on track 1)"; ok=0; }
 [ "$UNDONE" = "p1@t0" ] || { echo "FAIL: undo not atomic (clip did not return to track 0)"; ok=0; }
 [ "$REDONE" = "p1@t1" ] || { echo "FAIL: redo"; ok=0; }
-[ "$ok" = "1" ] && echo "cross_track_move_check: PASS — lane drag keeps the id and undo/redo are atomic" \
+# ---- THE SONG END FOLLOWS THE MOVE.
+#
+# The cross-track branch does everything itself — relocate, rebuild both flat clips, both audio
+# renders, the undo entry, both clip versions — and did not recompute the extent. The same-track
+# path gets it through applyPlacementEdit. So dragging the placement that DEFINES the end into
+# another lane left the end where it was: with loopUserSet false the transport keeps looping the
+# old span and the clip that was just moved never sounds. That is the "arrange and piano roll are
+# one data model" gesture, on stage.
+#
+# This check drove exactly that command and asserted only lane and identity, so it passed with the
+# defect present for as long as it existed.
+[ -n "$END_BEFORE" ] && [ -n "$END_AFTER" ] || {
+  echo "FAIL: could not read song_end_tick, so the assertion below proves nothing"; ok=0; }
+[ "${END_AFTER:-0}" -gt "${END_BEFORE:-0}" ] || {
+  echo "FAIL: the song end did not move. It was $END_BEFORE and is $END_AFTER after the only
+        placement was dragged out to bar 2 — the extent is stale, so the loop still covers the
+        old span and the moved clip is outside it."; ok=0; }
+[ "$ok" = "1" ] && echo "cross_track_move_check: PASS — lane drag keeps the id, undo/redo are atomic, and the
+                     song end follows the placement" \
                 || { echo "cross_track_move_check: FAIL"; exit 1; }

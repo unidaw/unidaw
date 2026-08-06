@@ -578,6 +578,14 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
                     "depth": { "type": "number", "minimum": 0, "maximum": 1 },
                     "bias": { "type": "number", "minimum": -1, "maximum": 1 },
                     "value": { "type": "number", "minimum": 0, "maximum": 1 },
+                    // ADVERTISED BECAUSE THE EXECUTOR READS IT. `modulate` has always taken a
+                    // `link` id and the schema never mentioned one, so no model could pass it and
+                    // every call took the AUTO path — which mints a link whose uid16 is all
+                    // zeros. That link is stored, published and fires every block, and the host
+                    // drops the SetParam because a zero uid resolves to no parameter. A visible
+                    // link that moves nothing, reported ok.
+                    "link": { "type": "integer", "minimum": 1,
+                              "description": "Id for this link. Give an unused one to create a link that actually moves the parameter; omit it and the engine mints an automatic link whose uid does not resolve." },
                 },
             }),
         },
@@ -977,7 +985,14 @@ fn add_device(handle: &EngineHandle, args: &Value) -> ToolResult {
     };
     let mut p = chain_blank(UiCommandType::AddDevice, track as u32);
     p.device_kind = kind;
-    p.insert_index = arg_u64(args, "position").unwrap_or(0) as u32;
+    // APPEND WHEN NOT TOLD OTHERWISE. This defaulted to 0, which is HEAD-insert, while every
+    // other producer of this command appends: daw-cli's `--at` defaults to 0xFFFF_FFFF and
+    // UiChainCommandPayload::insertIndex defaults to kChainDeviceIdAuto. So the agent alone put
+    // each new device at the FRONT of the chain, in reverse order of asking — including for the
+    // manifest's own example, where "add a delay, then a reverb after it" produced reverb, delay.
+    // The engine special-cases 0 for deviceId, not for insertIndex, so nothing downstream
+    // corrected it.
+    p.insert_index = arg_u64(args, "position").unwrap_or(0xFFFF_FFFF) as u32;
     match handle.send_chain_command(p) {
         Ok(()) => ToolResult::ok(json!({ "sent": true, "track": track, "kind": kind })),
         Err(e) => ToolResult::err(e),
@@ -1995,12 +2010,36 @@ fn set_mixer(handle: &EngineHandle, args: &Value) -> ToolResult {
     if gain_db.is_none() && pan.is_none() && mute.is_none() && solo.is_none() {
         return ToolResult::err("set_mixer needs at least one of gain_db, pan, mute, solo");
     }
-    let millibels = (gain_db.unwrap_or(0.0) * 100.0).round() as i32;
-    let thousandths = (pan.unwrap_or(0.0).clamp(-1.0, 1.0) * 1000.0).round() as i32;
+    // THE HANDLER WRITES ALL FOUR EVERY CALL. handleSetTrackMixer stores gain, pan, mute and solo
+    // from every payload unconditionally, so an argument the caller did not mention cannot be left
+    // out — it has to be carried through at its CURRENT value or it is reset. Filling the gaps
+    // with defaults, which is what this did, meant "mute the drums" also sent 0 dB and centre pan
+    // and quietly undid a fader move made a moment earlier. Absent is not zero; it is unchanged.
+    //
+    // Read-modify-write against the published strip. Two callers racing can still lose an edit,
+    // which is the same optimistic bargain every other command here makes and is a great deal
+    // better than every partial update resetting three properties.
+    let current = handle.read_mixer();
+    let now = current.get(track as usize);
+    let millibels = match gain_db {
+        Some(db) => (db * 100.0).round() as i32,
+        None => now.map(|m| m.gain_millibels).unwrap_or(0),
+    };
+    let thousandths = match pan {
+        Some(v) => (v.clamp(-1.0, 1.0) * 1000.0).round() as i32,
+        None => now.map(|m| m.pan_thousandths).unwrap_or(0),
+    };
+    let now_mute = now.map(|m| m.flags & 1 != 0).unwrap_or(false);
+    let now_solo = now.map(|m| m.flags & 2 != 0).unwrap_or(false);
     p.value0 = millibels as u32;
-    p.note_pitch = thousandths as u32;
-    p.flags = (if mute.unwrap_or(false) { 1 } else { 0 })
-            | (if solo.unwrap_or(false) { 2 } else { 0 });
+    // PAN GOES IN pluginIndex, which is where the engine reads it from
+    // (engine_trackprops_commands.cpp: `static_cast<int32_t>(payload.pluginIndex) / 1000.0`).
+    // This wrote note_pitch, so every pan the model set was a silent no-op and whatever
+    // pluginIndex happened to hold was interpreted as the pan instead. The engine-side test
+    // hand-builds the payload with the right field, so it passed throughout.
+    p.plugin_index = thousandths as u32;
+    p.flags = (if mute.unwrap_or(now_mute) { 1 } else { 0 })
+            | (if solo.unwrap_or(now_solo) { 2 } else { 0 });
     send_now(handle, p, json!({
         "track": track, "gain_db": gain_db, "pan": pan, "mute": mute, "solo": solo }))
 }

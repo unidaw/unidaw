@@ -1175,6 +1175,68 @@ fn failed_load_surfaces_error() {
 /// Per-track mixer state written via SetTrackMixer is published back verbatim, so
 /// the UI can render a fader at its true position; the mixer version advances.
 #[test]
+// set_mixer THE TOOL, not the payload — and the two are not the same thing.
+//
+// mixer_read_back below sends a hand-built UiCommandPayload, so it proves the ENGINE reads the
+// wire correctly and says nothing about whether the tool fills that wire correctly. Both bugs
+// here lived under a green mixer_read_back for exactly that reason.
+//
+// 1. PAN WENT TO THE WRONG FIELD. The engine reads pan from `payload.pluginIndex`
+//    (engine_trackprops_commands.cpp: `static_cast<int32_t>(payload.pluginIndex) / 1000.0`);
+//    set_mixer wrote it to `note_pitch`. So every pan the model set was a silent no-op and
+//    whatever pluginIndex happened to hold was interpreted as the pan.
+//
+// 2. AN ABSENT ARGUMENT RESET THE OTHERS. The handler stores gain, pan, mute AND solo on every
+//    call, unconditionally. set_mixer filled the ones the caller omitted with defaults
+//    (`gain_db.unwrap_or(0.0)`), so "mute the drums" also sent 0 dB and centre pan — undoing a
+//    fader move made a moment earlier. The codebase's own "absent is not zero" rule, in the tool
+//    the demo drives.
+fn set_mixer_sets_one_thing_without_resetting_the_others() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("mixtool");
+    let h = session.handle();
+
+    let mix = |h: &daw_bridge::control::EngineHandle| h.read_mixer().get(0).copied();
+
+    // Gain only.
+    let a = session.execute(&ToolCall {
+        tool: "set_mixer".into(), args: json!({"track":0,"gain_db":-6.0}) });
+    assert!(a.ok, "set_mixer gain failed: {a:?}");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let m = mix(h).expect("track 0 has a mixer strip");
+    assert!((m.gain_millibels - (-600)).abs() <= 20,
+            "gain did not land: {} millibels, wanted about -600", m.gain_millibels);
+
+    // Pan only. Must ACTUALLY PAN, and must not disturb the gain just set.
+    let b = session.execute(&ToolCall {
+        tool: "set_mixer".into(), args: json!({"track":0,"pan":-0.5}) });
+    assert!(b.ok, "set_mixer pan failed: {b:?}");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let m = mix(h).unwrap();
+    assert!((m.pan_thousandths - (-500)).abs() <= 20,
+            "PAN NEVER REACHED THE ENGINE: {} thousandths, wanted about -500. The engine reads pan \
+             from payload.pluginIndex; check which field the tool writes.", m.pan_thousandths);
+    assert!((m.gain_millibels - (-600)).abs() <= 20,
+            "SETTING PAN RESET THE GAIN to {} millibels. An argument the caller did not mention \
+             must not be written — the handler stores all four every call, so the tool has to \
+             carry the current values through.", m.gain_millibels);
+
+    // Mute only. Must not disturb either of the two already set.
+    let c = session.execute(&ToolCall {
+        tool: "set_mixer".into(), args: json!({"track":0,"mute":true}) });
+    assert!(c.ok, "set_mixer mute failed: {c:?}");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let m = mix(h).unwrap();
+    assert!(m.flags & daw_bridge::layout::MIXER_FLAG_MUTE as u8 != 0,
+            "mute did not land: flags {:#x}", m.flags);
+    assert!((m.gain_millibels - (-600)).abs() <= 20,
+            "MUTING RESET THE GAIN to {} millibels — this is 'mute the drums' undoing a fader \
+             move from a moment earlier, live.", m.gain_millibels);
+    assert!((m.pan_thousandths - (-500)).abs() <= 20,
+            "MUTING RESET THE PAN to {} thousandths", m.pan_thousandths);
+}
+
+#[test]
 fn mixer_read_back() {
     use daw_bridge::layout::{UiCommandPayload, UiCommandType, MIXER_FLAG_MUTE};
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());

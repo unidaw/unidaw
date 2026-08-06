@@ -392,6 +392,18 @@ void handleMovePlacement(PlacementCommandDeps& deps,
           bumpClipVersionFor(src);
           bumpClipVersionFor(dst);
           clipDirty.store(true, std::memory_order_release);
+          // AND THE SONG END, which this branch did everything else itself and forgot.
+          //
+          // The same-track path reaches this through applyPlacementEdit; the cross-track branch
+          // relocates the placement, rebuilds both flat clips, both audio renders, the undo entry
+          // and both clip versions by hand — and never recomputed the extent. So dragging the
+          // placement that DEFINES the song's end into another lane left the end where it was:
+          // with loopUserSet false the transport keeps looping the old span, the clip that was
+          // just moved never sounds, and the loop bracket does not move. Visible in exactly the
+          // "arrange and piano roll are one data model" gesture.
+          //
+          // Safe here: the two-track lock scope has closed above, so there is no re-entrancy.
+          deps.recomputeSongEnd();
         }
         std::cout << "UI: MovePlacement " << placementId << " cross-track " << srcId
                   << " -> " << dstId << (ok ? "" : " (failed)") << std::endl;
