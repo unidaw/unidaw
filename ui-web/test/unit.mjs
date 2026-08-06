@@ -2676,8 +2676,23 @@ test('every suite the runbook cites exists, and the unswept ones are flagged as 
  * capability nobody has ever seen work, and that is worth knowing separately from a bug.
  */
 const AGENT_NEVER_EXERCISED = [
-  // EMPTY, and that is the point of keeping the list rather than deleting the check: the next
-  // tool added to the registry without a test lands here and fails, instead of joining a crowd.
+  /*
+   * THREE, and each is a HARNESS limit with its coverage named — not an unwritten test.
+   *
+   * All three are driven by tests in engine_e2e.rs that are `#[ignore]`d: `load_sample` resolves
+   * a bare name against the loaded project's directory, and the Rust harness makes a fresh temp
+   * dir whose engine output goes to /dev/null, so the refusal cannot be read. The capability is
+   * covered where the tool was built to work — ai-demo.mjs loads a sample the MODEL chose, and
+   * kit/sampler-render/sampler-state all load and play them in the Playwright harness, which
+   * copies presets/ into its project directory.
+   *
+   * Listed here anyway. A tool proven only in another harness is worth knowing about separately
+   * from one proven in this one, and quietly counting it as done is how a list starts agreeing
+   * with itself.
+   */
+  'load_sample',
+  'sampler_slice',
+  'sampler_emit_rows',
 ];
 
 test('every agent tool the registry claims has been driven against a real engine', async () => {
@@ -2686,9 +2701,26 @@ test('every agent tool the registry claims has been driven against a real engine
   const here = new URL('.', import.meta.url).pathname;
   const testsDir = join(here, '../../ui/daw-agent/tests');
 
-  const corpus = readdirSync(testsDir).filter((f) => f.endsWith('.rs'))
+  /*
+   * IGNORED TESTS ARE NOT COVERAGE, and counting them was this check's own version of the bug it
+   * exists to catch. `#[ignore]` means the test does not run — so a tool driven only from inside
+   * one is a tool nothing has ever executed against an engine, which is exactly the state this
+   * list is for. Reading the raw file counted them, and the list and the check disagreed until
+   * one of them was made to lie.
+   *
+   * Each test is `#[test]` preceded by its attributes, so the text between one test and the next
+   * is where an `#[ignore]` for the following test lives.
+   */
+  const raw = readdirSync(testsDir).filter((f) => f.endsWith('.rs'))
     .map((f) => readFileSync(join(testsDir, f), 'utf8')).join('\n');
-  assert.ok(corpus.length > 1000, 'the agent test corpus was read');
+  const chunks = raw.split('#[test]');
+  const corpus = chunks.map((body, i) => {
+    if (i === 0) return '';                       // before the first test: no test to drive
+    const attrs = chunks[i - 1].slice(-400);      // the attributes just above this #[test]
+    return /#\[ignore\]/.test(attrs) ? '' : body;
+  }).join('\n');
+  assert.ok(raw.length > 1000, 'the agent test corpus was read');
+  assert.ok(corpus.length > 1000, 'and it still holds tests that actually run');
 
   const claimed = [...new Set(Object.values(OP_REGISTRY).map((e) => e.agent).filter(Boolean))];
   // `tool: "name"` is how every ToolCall in that corpus is written. Deliberately not a bare name

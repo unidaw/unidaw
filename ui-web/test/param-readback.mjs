@@ -199,5 +199,17 @@ check(errors.length === 0, 'no page errors', errors.join(' | '));
 
 await browser.close();
 await stack.stop();
-console.log(`\n  ${pass} passed, ${fail} failed`);
+/*
+ * THE HOUSE FORMAT, because the sweep reads it.
+ *
+ * `all.mjs` extracts a suite's own verdict with
+ *   /(ALL PASS[^\n]*|\d+ of \d+ FAILED|\d+ FAILURES?|# fail \d+)/
+ * and "11 passed, 0 failed" matches none of those. The sweep reported this suite as
+ * `ok  6s  (no summary line)` — which is what a suite that runs and asserts NOTHING looks like,
+ * so a real result read as a suspicious one and cost a round of investigation to clear.
+ *
+ * The exit code was doing the actual gating the whole time, so nothing was ever wrong. But a
+ * report the reader has to distrust is worth less than the checks behind it.
+ */
+console.log(`\n${fail === 0 ? `ALL PASS (${pass} checks)` : `${fail} of ${pass + fail} FAILED`}`);
 process.exit(fail ? 1 : 0);
