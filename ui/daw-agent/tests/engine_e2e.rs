@@ -3338,3 +3338,135 @@ fn the_agent_can_place_share_move_trim_and_remove_a_clip() {
         std::thread::sleep(Duration::from_millis(200));
     }
 }
+
+/// FORK / SWAP / KEEP — the A/B on a shared clip, and the point of it is that an edit does not leak.
+///
+/// Two placements of one clip are the same notes seen twice, so editing either changes both. That
+/// is the feature, and `fork_placement` is the way out of it: give one placement its own copy and
+/// keep the original as its ALTERNATE. `swap_placement_clip` exchanges the two — the A/B —
+/// and `keep_placement_clip` drops the alternate once you have decided.
+///
+/// THE ASSERTION THAT MATTERS IS THE NON-LEAK. A test that only checks "the clip id changed"
+/// passes on a fork that copies the id and shares the notes, which is the exact bug worth having
+/// a test for. So this EDITS the forked placement's clip and asserts the other placement's clip
+/// still holds what it did — the whole reason anybody forks.
+#[test]
+fn forking_a_shared_clip_stops_an_edit_reaching_the_other_placement() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agfork");
+
+    assert!(session.execute(&ToolCall {
+        tool: "add_notes".into(),
+        args: json!({ "track": 0, "pitches": [60, 62, 64, 65], "start": 0, "step": Q }),
+    }).ok);
+    std::thread::sleep(Duration::from_millis(800));
+
+    /// (placement id, clip id, alternate id) for track 0, plus notes per clip id.
+    let state = |name: &str| -> (Vec<(u64, u64, u64)>, std::collections::HashMap<u64, usize>) {
+        assert!(session.execute(&ToolCall {
+            tool: "save".into(), args: json!({"name": name}) }).ok);
+        let doc = read_project(&engine.proj, name);
+        let mut pl: Vec<(u64, u64, u64)> = doc["tracks"].as_array().unwrap().iter()
+            .find(|t| t["track_id"].as_u64() == Some(0))
+            .and_then(|t| t["placements"].as_array()).cloned().unwrap_or_default()
+            .iter().map(|p| (p["id"].as_u64().unwrap_or(0),
+                             p["clip_id"].as_u64().unwrap_or(0),
+                             p["alternate_clip_id"].as_u64().unwrap_or(0)))
+            .collect();
+        pl.sort();
+        let notes = doc["clips"].as_array().unwrap().iter()
+            .filter_map(|c| Some((c["id"].as_u64()?, c["notes"].as_array().map_or(0, |n| n.len()))))
+            .collect();
+        (pl, notes)
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let (first, clip_id) = loop {
+        let (pl, _) = state("agfork_a");
+        if pl.len() == 1 { break (pl[0].0, pl[0].1); }
+        assert!(Instant::now() < deadline, "one placement to start from, got {pl:?}");
+        std::thread::sleep(Duration::from_millis(200));
+    };
+
+    // A SECOND PLACEMENT OF THE SAME CLIP — the sharing this is all about.
+    assert!(session.execute(&ToolCall {
+        tool: "add_clip".into(),
+        args: json!({ "clip": clip_id, "track": 0, "beat": 8.0, "beats": 4.0 }),
+    }).ok);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let second = loop {
+        let (pl, _) = state("agfork_b");
+        if pl.len() == 2 { break pl.iter().find(|p| p.0 != first).copied().unwrap(); }
+        assert!(Instant::now() < deadline, "add_clip left {pl:?}");
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert_eq!(second.1, clip_id, "both placements must show the same clip to begin with");
+
+    // ── FORK ────────────────────────────────────────────────────────────────────────────────
+    let forked = session.execute(&ToolCall {
+        tool: "fork_placement".into(),
+        args: json!({ "track": 0, "placement": second.0 }),
+    });
+    assert!(forked.ok, "fork_placement failed: {forked:?}");
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let own = loop {
+        let (pl, _) = state("agfork_c");
+        let me = pl.iter().find(|p| p.0 == second.0).copied();
+        if let Some((_, c, alt)) = me {
+            // Its own clip, and the ORIGINAL kept as the alternate — "nothing is lost".
+            if c != clip_id && alt == clip_id { break c; }
+        }
+        assert!(Instant::now() < deadline,
+                "fork left {pl:?}; wanted placement {} on a new clip with {clip_id} as alternate",
+                second.0);
+        std::thread::sleep(Duration::from_millis(200));
+    };
+
+    // ── THE NON-LEAK, which is the whole reason forking exists ──────────────────────────────
+    let (_, before) = state("agfork_d");
+    let other_before = *before.get(&clip_id).unwrap_or(&0);
+    assert!(session.execute(&ToolCall {
+        tool: "add_notes".into(),
+        args: json!({ "track": 0, "pitches": [72], "start": Q * 8, "step": Q }),
+    }).ok);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let (_, now) = state("agfork_e");
+        let mine = *now.get(&own).unwrap_or(&0);
+        let theirs = *now.get(&clip_id).unwrap_or(&0);
+        // The forked clip GREW and the shared one did NOT. Either half alone proves nothing: a
+        // fork that shared the notes would grow both, and a write that silently failed would
+        // grow neither.
+        if mine > 0 && theirs == other_before && mine != theirs { break; }
+        assert!(Instant::now() < deadline,
+                "after editing the forked placement: forked clip {own} has {mine} notes, shared \
+                 clip {clip_id} has {theirs} (was {other_before}). The edit must reach one and \
+                 not the other");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // ── SWAP puts the original back, and KEEP drops the alternate ───────────────────────────
+    assert!(session.execute(&ToolCall {
+        tool: "swap_placement_clip".into(),
+        args: json!({ "track": 0, "placement": second.0 }) }).ok);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let (pl, _) = state("agfork_f");
+        if pl.iter().any(|p| p.0 == second.0 && p.1 == clip_id && p.2 == own) { break; }
+        assert!(Instant::now() < deadline, "swap left {pl:?}; the two should have exchanged");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    assert!(session.execute(&ToolCall {
+        tool: "keep_placement_clip".into(),
+        args: json!({ "track": 0, "placement": second.0 }) }).ok);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let (pl, _) = state("agfork_g");
+        // The alternate is gone and what PLAYS is unchanged — keep is a decision, not a swap.
+        if pl.iter().any(|p| p.0 == second.0 && p.1 == clip_id && p.2 == 0) { break; }
+        assert!(Instant::now() < deadline, "keep left {pl:?}; the alternate should be dropped");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
