@@ -437,6 +437,7 @@ check(before.notes === 0 || true, 'the earlier material survived the tempo chang
  * sections between here and there each start a new song.
  */
 let aiPeak = -1;
+let aiWav = null;
 try {
   const { execFileSync } = await import('node:child_process');
   const { existsSync, unlinkSync } = await import('node:fs');
@@ -454,6 +455,7 @@ try {
                  stdio: ['ignore', 'pipe', 'pipe'], timeout: 180000 });
   if (existsSync(out)) {
     const w = readWav(out);
+    aiWav = w;                       // kept: the note detector reads it below
     aiPeak = envelope(w.mono, w.rate, 0.05).reduce((m, v) => Math.max(m, v), 0);
   }
 } catch (e) {
@@ -464,6 +466,56 @@ check(aiPeak > 0.004,
       'WHAT THE AI BUILT ACTUALLY SOUNDS — device, sample and notes, from one sentence',
       `peak ${aiPeak.toFixed(4)}; a structurally perfect part that is inaudible is the failure `
       + `this repo has found twice this week, and every check above would still pass`);
+
+/*
+ * AND ARE THEY THE NOTES IT SAID IT WROTE?
+ *
+ * A peak is "it made a noise", which is where this check stopped — and a noise is not a phrase.
+ * Every failure mode that matters to a demo audience survives a peak: one note instead of four,
+ * every note at the same pitch, the last three dropped, the whole part a semitone out.
+ *
+ * `demo_pluck_c4.wav` is rooted at middle C, so a slot plays note N at pitch N. That makes the
+ * document and the audio directly comparable: what the model wrote is what you should hear, with
+ * no mapping in between. The project file is the ground truth — not the tool replies, which are
+ * what the model CLAIMED.
+ *
+ * Read as a subset, not an equality. The detector reports what it is confident about and skips
+ * the rest, so "every pitch heard was a pitch written" is the honest direction: it catches a part
+ * playing the wrong notes, and does not fail because a quiet fourth voice went unmeasured.
+ */
+if (aiPeak > 0.004 && aiWav) {
+  const { detectNotes, noteName } = await import('./notes.mjs');
+  const { readFileSync } = await import('node:fs');
+  let written = [];
+  try {
+    const doc = JSON.parse(readFileSync(join(stack.dir, 'aisampler.uniproj.json'), 'utf8'));
+    written = (doc.clips || []).flatMap((c) => (c.notes || []).map((n) => n.pitch ?? n.note))
+                               .filter((p) => Number.isFinite(p));
+  } catch (e) { /* asserted below by being empty */ }
+
+  const heard = detectNotes(aiWav.mono, aiWav.rate, { minConf: 0.5 });
+  const heardPitches = heard.map((h) => h.midi);
+  console.log(`  wrote ${JSON.stringify(written)}  heard `
+              + `${JSON.stringify(heard.map((h) => `${h.name}@${h.at.toFixed(2)}s`))}`);
+
+  check(written.length >= 2,
+        'the model wrote a phrase into the document, not a single note',
+        `pitches on disk: ${JSON.stringify(written)}`);
+
+  // NOT "some sound happened N times": distinct pitches is what separates a phrase from one note
+  // struck repeatedly, and a resampled one-shot repeated is exactly what a broken write looks like.
+  const distinct = new Set(heardPitches);
+  check(distinct.size >= 2,
+        'MORE THAN ONE PITCH IS AUDIBLE — a phrase, not one note struck repeatedly',
+        `heard ${JSON.stringify([...distinct].map(noteName))} from ${heard.length} onsets`);
+
+  const strays = heardPitches.filter((p) => !written.some((w) => Math.abs(w - p) <= 1));
+  check(written.length > 0 && strays.length === 0,
+        'EVERY PITCH HEARD IS A PITCH THE MODEL WROTE — the part plays what the document says',
+        `unaccounted: ${JSON.stringify(strays.map(noteName))} against written `
+        + `${JSON.stringify(written)}. A part transposed as a whole, or playing a different `
+        + `sample's pitch, lands here and nowhere else.`);
+}
 
 check(errors.length === 0, 'no page errors while prompting', errors.join(' | '));
 
