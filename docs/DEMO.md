@@ -302,3 +302,18 @@ DAW_PROJECT_DIR=<the project dir> ./daw_engine --project <name> --render take --
   `DAW_ENV_FILE` set; the startup line tells you which.
 - **A typed note does nothing** → the grid does not have the keyboard. Click it. Check `EDIT`.
 - **The engine is gone** → `tools/webstack.sh` again; `--keep-engine` should prevent it.
+- **Nothing makes any sound at all** — not one track, not the AI's part, nothing. Do NOT start
+  debugging the app; check the device first, because everything upstream of it can be perfectly
+  healthy while this is broken. One command:
+
+  ```
+  grep -E 'Audio output' /tmp/eng_daw_web_ui.log
+  ```
+
+  `Audio output started` means the device ran a real callback and the fault is elsewhere.
+  `OPENED BUT NEVER STARTED` means CoreAudio accepted the device, reported its name and rate, and
+  never ran the IO proc — the app is fine and nothing it does will be heard. Restarting the stack
+  does not usually clear that one; `sudo killall coreaudiod` has, and it cost this project days
+  before anyone thought to check.
+
+  `demo-stack-smoke.mjs` asserts this line, so if you ran the pre-flight you already know.
