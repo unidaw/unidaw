@@ -2076,8 +2076,16 @@ function patchTarget(extra) {
  */
 const patchSeeds = [];
 
-/** Node ids this session has already seeded, so a second frame cannot send it twice. */
+/**
+ * Nodes this session has already seeded, so a second frame cannot send one twice.
+ *
+ * Keyed `owner:id`, not id. A device's graph numbers its own nodes from zero, so id 0 names
+ * one node per device and a bare id would take the second device's new node for the first's.
+ */
 const patchSeeded = new Set();
+
+/** How the seed set names a node: whose graph it is in, then its id in that graph. */
+const seedKey = (n) => n.owner + ':' + n.id;
 
 /** How long a seed waits for its node before it is dropped. */
 const PATCH_SEED_MS = 5000;
@@ -2107,7 +2115,7 @@ function addPatcherNode() {
    */
   if (defaultConfig(type)) {
     const before = new Set();
-    if (engine) for (const n of engine.patcherNodes) before.add(n.id);
+    if (engine) for (const n of engine.patcherNodes) before.add(seedKey(n));
     patchSeeds.push({ type, before,
                       track: msg.track, device: msg.device === undefined ? -1 : msg.device,
                       until: performance.now() + PATCH_SEED_MS });
@@ -2118,18 +2126,29 @@ function addPatcherNode() {
 /**
  * Send the defaults for any node an add is still waiting on. Once per engine frame.
  *
- * WHICH NODE IS THE NEW ONE, given the engine answers an add with nothing but a republished
- * graph: one whose id was not in the graph when the add was sent, of the type that was
- * asked for, carrying no config, that nothing has seeded yet. Smallest id first, so two
- * quick adds of one type are matched in the order they were made.
+ * WHICH NODE TO SEED, given the engine answers an add with nothing but a republished graph.
+ * The published graph is a POOL — every device's graph unioned, each device's nodes re-id'd
+ * by a running base offset (apps/engine_patcher_assemble.cpp) — so it is not enough to
+ * remember the ids and look for a new one, and the failure is not theoretical:
  *
- * TWO GUARDS EXIST FOR ONE REASON, and it is not belt and braces. The pool re-ids every
- * device's nodes by a running base offset (apps/engine_patcher_assemble.cpp), so adding a
- * node to one device SHIFTS the published ids of every device after it and those nodes look
- * new as well. So a candidate must also be one that could not be somebody else's: it has no
- * config yet, and it is joined to nothing. A node the engine has just made for us is
- * unconnected by construction — connecting it is the next thing the user does — while a
- * node in a device's working graph is wired into it.
+ *   - The first DEVICE-scoped edit REPLACES the pool. A patcher device is created with an
+ *     empty graph while the legacy shared pool still holds the preset's nodes, so adding one
+ *     node to the device published a pool of exactly that one node, numbered 0 — an id that
+ *     was already in use before the add. A "new id" rule finds nothing at all here, which is
+ *     the case that matters most: it is what the rack's own patcher card does.
+ *   - Adding to one device SHIFTS every later device's published ids, so nodes nobody
+ *     touched look new.
+ *
+ * So the id is a hint and the other three are the rule: the candidate is of the type that
+ * was asked for, it belongs to the graph the add was addressed to (`owner`, which is the
+ * device id, 0 for the shared pool), it has no config, and it is joined to nothing — a node
+ * the engine has just made is unconnected by construction, while a node in a working graph
+ * is wired into it. An id that is new breaks a tie, so two quick adds of one type are
+ * matched in the order they were made.
+ *
+ * The worst this can do when it guesses wrong is give a node that had NO settings the
+ * settings the engine itself would have used for it. There is no value it can overwrite:
+ * a node that has any is not a candidate.
  */
 function seedNewNodes() {
   if (!patchSeeds.length || !engine) return;
@@ -2138,18 +2157,23 @@ function seedNewNodes() {
   // max+1 of what it holds — so a remembered id outliving its node would refuse to seed the
   // next node to be given that number, which is the same bug this function exists to fix.
   if (patchSeeded.size) {
-    for (const id of patchSeeded) {
-      if (!engine.patcherNodes.some((n) => n.id === id)) patchSeeded.delete(id);
+    for (const key of patchSeeded) {
+      if (!engine.patcherNodes.some((n) => seedKey(n) === key)) patchSeeded.delete(key);
     }
   }
   for (let i = patchSeeds.length - 1; i >= 0; i--) {
     const seed = patchSeeds[i];
+    const mine = seed.device >= 0 ? seed.device : 0;
     let found = null;
     for (const n of engine.patcherNodes) {
-      if (n.type !== seed.type || n.hasConfig) continue;
-      if (seed.before.has(n.id) || patchSeeded.has(n.id)) continue;
+      if (n.type !== seed.type || n.hasConfig || n.owner !== mine) continue;
+      if (patchSeeded.has(seedKey(n))) continue;
       if (engine.patcherEdges.some((e) => e.src === n.id || e.dst === n.id)) continue;
-      if (!found || n.id < found.id) found = n;
+      // A brand-new id wins over a reused one, and the lowest id wins among equals.
+      const fresh = !seed.before.has(seedKey(n));
+      const better = !found || (fresh && !found.fresh)
+        || (fresh === found.fresh && n.id < found.node.id);
+      if (better) found = { node: n, fresh };
     }
     if (!found) {
       // Dropped rather than kept forever: an add the engine refused (a graph that would not
@@ -2159,11 +2183,11 @@ function seedNewNodes() {
       continue;
     }
     const cfg = defaultConfig(seed.type);
-    const msg = { type: 'patchcfg', node: found.id, nodeType: seed.type, track: seed.track };
+    const msg = { type: 'patchcfg', node: found.node.id, nodeType: seed.type, track: seed.track };
     if (seed.device >= 0) msg.device = seed.device;
     for (let k = 0; k < 8; k++) msg['c' + k] = cfg[k];
     if (!conn || !conn.send(msg)) continue;   // no engine: try again next frame, until it expires
-    patchSeeded.add(found.id);
+    patchSeeded.add(seedKey(found.node));
     patchSeeds.splice(i, 1);
   }
 }
@@ -7041,6 +7065,40 @@ function selectedText() {
   if (!el) return '';
   return getComputedStyle(el).userSelect === 'none' ? '' : text;
 }
+
+/**
+ * A PRESS SOMEWHERE UNSELECTABLE DISMISSES THE HIGHLIGHT.
+ *
+ * The browser does this for you — normally. It does not do it here, because
+ * `user-select: none` also means "a press in this region does not touch the
+ * selection", so a highlight made in the agent transcript SURVIVES clicking on
+ * the tracker, the arrangement, the mixer, everything. Measured: it was still
+ * there after a click on a grid cell, indefinitely.
+ *
+ * Which turns the ⌘C rule above into a trap. Select a sentence in the console to
+ * read it, click back into the song, select four notes, press ⌘C — and the copy
+ * goes to a paragraph in a panel you are not looking at, because as far as the
+ * document is concerned it is still highlighted. No error, no reject line: the
+ * worst version, where the application does something reasonable about the wrong
+ * thing. Found by asserting on ⌘C AFTER the click rather than only before it.
+ *
+ * Capture phase, so it runs whatever a surface does with the event afterwards.
+ * `getComputedStyle` is behind the collapsed check, so the ordinary press — no
+ * selection anywhere — costs one boolean.
+ *
+ * `data-keeps-selection` is the exemption, and the console's copy control is the
+ * one thing wearing it: a button whose whole job is to act on the highlight
+ * cannot be a button that destroys it on the way down.
+ */
+addEventListener('pointerdown', (e) => {
+  const sel = document.getSelection();
+  if (!sel || sel.isCollapsed) return;
+  const el = e.target;
+  if (!el || el.nodeType !== 1) return;
+  if (el.closest('[data-keeps-selection]')) return;
+  if (getComputedStyle(el).userSelect !== 'none') return;
+  sel.removeAllRanges();
+}, true);
 
 function copySelection() {
   const picked = notesInSelection();

@@ -187,29 +187,48 @@ if (euclid) {
         `config ${JSON.stringify(cfg)} vs ${JSON.stringify(want)} — all zeros means the seed `
         + 'never landed and the node has eight settings nobody can edit');
 
-  // steps/hits/vel, because a pattern of no hits at no velocity is not a pattern.
-  await run(`patch ${euclid.id} steps 8`);
-  await settle(300);
-  await run(`patch ${euclid.id} hits 4`);
-  await settle(300);
-  await run(`patch ${euclid.id} vel 100`);
-  await settle(300);
   /*
-   * AND THE BASE OCTAVE, which defaults to 0 and is not a detail.
+   * NOW DIAL IT IN — AND `patch` IS A DELTA, NOT AN ASSIGNMENT.
+   *
+   * `patch <node> <field> <n>` nudges the field n steps; the console has no absolute set. This
+   * read `patch id steps 8` and meant it as "steps := 8", which was true only while every
+   * field minted at ZERO, and stopped being true the day an added node got the engine's
+   * defaults: it asked for 16 + 8 = 24 steps and 5 + 4 = 9 hits, and the check that followed
+   * — steps 8, hits 4 — failed on a program that had done exactly what it was told.
+   *
+   * So the wanted VALUE is named and the delta is computed from what the node currently
+   * holds. That is also the only form that keeps saying what it means if the defaults move
+   * again.
+   */
+  const setField = async (name, value) => {
+    const n = await page.evaluate((id) =>
+      (window.__uni.nodes() || []).find((x) => x.id === id), euclid.id);
+    const at = n ? n.fields.indexOf(name) : -1;
+    if (at < 0) return;
+    const delta = value - n.config[at];
+    if (delta) await run(`patch ${euclid.id} ${name} ${delta}`);
+    await settle(300);
+  };
+
+  // steps/hits/vel, because a pattern of no hits at no velocity is not a pattern.
+  await setField('steps', 8);
+  await setField('hits', 4);
+  await setField('vel', 100);
+  /*
+   * AND THE BASE OCTAVE, which is not a detail.
    *
    * Octave 0 puts the emitted note around MIDI 12 — four octaves below the sample's root of 60 —
    * and a sampler transposing down by four octaves plays at a SIXTEENTH of the rate, so a 1.6
    * second pluck becomes twenty-five seconds of near-silence and a ten-second render catches
    * none of it. Silent for a reason that has nothing to do with the graph.
    */
-  await run(`patch ${euclid.id} base 4`);
-  await settle(300);
+  await setField('base', 4);
   /*
-   * AND THE DEGREE, which also mints at 0. Degrees are 1-based everywhere else in this program —
-   * `add_chords` refuses 0 outright — so a node emitting "degree 0" may be emitting nothing at
-   * all. Set explicitly rather than left to a coercion nobody has verified for this node type.
+   * AND THE DEGREE. Degrees are 1-based everywhere else in this program — `add_chords` refuses
+   * 0 outright — so a node emitting "degree 0" may be emitting nothing at all. Set explicitly
+   * rather than left to a coercion nobody has verified for this node type.
    */
-  await run(`patch ${euclid.id} degree 1`);
+  await setField('degree', 1);
   await settle(500);
   const after = await page.evaluate((id) =>
     (window.__uni.nodes() || []).find((n) => n.id === id), euclid.id);

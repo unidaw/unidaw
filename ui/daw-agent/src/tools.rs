@@ -312,8 +312,15 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             description: "THE HARMONY LANE (also called the harmony timeline, or the key lane): \
                           set the KEY from a point in the song onwards. Use this for a key change \
                           or a modulation — \"in C minor\", \"modulate to B minor at bar 3\", \
-                          \"change key halfway\". Call it once per key change, each with its own \
-                          `tick`; a four-bar section with two keys is two calls. \
+                          \"change key halfway\". \
+                          CALL IT ONCE PER KEY CHANGE, each with its own `tick`. \
+                          \"A PROGRESSION IN THE HARMONY LANE\" MEANS SEVERAL CALLS, one per \
+                          bar or section — it does NOT mean one call plus `add_chords`. Asked \
+                          for a four-bar progression in the lane at 120bpm with 960000 ticks per \
+                          quarter, that is four calls at ticks 0, 3840000, 7680000, 11520000, \
+                          each with the root and scale that bar should be in. A single call \
+                          leaves the lane with one entry and the song in one key, which is the \
+                          opposite of a progression. \
                           This does NOT write chords or notes — it says what key the music is in, \
                           and tracks with `harmony_quantize` on then sound in that key. For an \
                           actual chord progression use `add_chords`. \

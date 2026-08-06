@@ -480,7 +480,44 @@ pub fn run(
         let mut results: Vec<Value> = Vec::new();
         for (id, name, input) in calls {
             let call = ToolCall { tool: name.clone(), args: input.clone() };
-            let out = session.execute(&call);
+            let mut out = session.execute(&call);
+            /*
+             * THE observe TOOL GETS THE CHAINS TOO, and until now only the system prompt did.
+             *
+             * `attach_devices` was applied once, to the observation embedded in the opening
+             * context. Every `observe` the model called AFTER that went through
+             * daw_agent::tools, which cannot read the chain — it is published as diffs on a
+             * single-consumer ring and a second consumer would steal the browser's updates —
+             * so it came back with `devices` empty.
+             *
+             * That made the system prompt's own advice impossible to follow. It says, in as
+             * many words: "A device you just ADDED will not be in it: add it, then `observe`
+             * to learn its id." Observing never showed an id. A live session went exactly the
+             * way that guarantees: add a device, observe, see no devices, conclude "the device
+             * wasn't added", remove it, add something else, observe again, see nothing again.
+             * Every step correct, against a reading that could not report the thing it was
+             * being read for.
+             *
+             * Same accumulation, same lookup, same reason as the prompt's copy.
+             */
+            if out.ok && name == "observe" {
+                // ON THE JSON, not through the typed struct. Round-tripping an Observation would
+                // mean deriving Deserialize on eight types purely to add a field that is already
+                // shaped exactly like the one `attach_devices` fills — and every one of those
+                // derives would be a chance for the two paths to disagree about the wire.
+                if let Some(tracks) = out.output.get_mut("tracks").and_then(|v| v.as_array_mut()) {
+                    for t in tracks.iter_mut() {
+                        let Some(id) = t.get("track_id").and_then(|v| v.as_u64()) else { continue };
+                        let list = devices(id as u32);
+                        if list.is_empty() { continue; }
+                        if let Ok(v) = serde_json::to_value(&list) {
+                            if let Some(obj) = t.as_object_mut() {
+                                obj.insert("devices".to_string(), v);
+                            }
+                        }
+                    }
+                }
+            }
             // The model reads this, so a refusal has to carry its reason: an
             // `ok: false` with an empty body teaches it nothing and it will try
             // the same call again.

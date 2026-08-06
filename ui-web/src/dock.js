@@ -1493,15 +1493,19 @@ export class Dock {
      * that never surprises, and it means the button is never the wrong thing to
      * press.
      *
-     * `pointerdown` is prevented for two reasons that both bite. A press
-     * COLLAPSES the current selection before `click` fires, so without this the
-     * button could never see the selection it exists to copy. And a press moves
-     * DOM focus, which this application reads as leaving the console — the same
-     * two-notions-of-focus trap `blur()` below is about.
+     * A press must not destroy the highlight this button exists to copy, and
+     * TWO separate things would. The browser collapses a selection on mousedown,
+     * which `preventDefault` stops; and index.html clears one when a press lands
+     * on anything unselectable, which `data-keeps-selection` exempts it from.
+     * Either one alone leaves the button copying the whole transcript every time
+     * — plausible, and never what was pointed at. `preventDefault` also keeps DOM
+     * focus where it was, which this application reads as still being in the
+     * console: the two-notions-of-focus trap `blur()` below is about.
      */
     this.copyEl = div('dk-copy', head);
     this.copyEl.appendChild(document.createTextNode('copy'));
     this.copyEl.title = 'copy the selection, or the whole transcript';
+    this.copyEl.setAttribute('data-keeps-selection', '');
     this.copyEl.addEventListener('pointerdown', (e) => e.preventDefault());
     this.copyEl.addEventListener('click', () => this.copy());
 

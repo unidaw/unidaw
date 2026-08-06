@@ -461,7 +461,19 @@ const before = await song();
  * asserts the timeline has more than one point: a single key is what you get when the model sets
  * the key once and stops, which is exactly the partial-success shape that was reported.
  */
-const KEY_PROMPT = 'put the song in C minor, then modulate to B minor halfway through';
+/*
+ * THE OWNER'S OWN WORDS, not a sanitised version of them.
+ *
+ * "create a progression in the harmony lane of 4 bars, evil idm style" produced ONE call to
+ * set_harmony and then add_chords for the four chords — a defensible reading (a chord progression
+ * in a key) and not what was asked for. The lane ended with a single entry.
+ *
+ * That is a tool-description failure, not a model failure, so the description now says in as many
+ * words that a progression IN THE LANE is several calls and not one call plus add_chords, with
+ * the four ticks spelled out. Testing it with the sentence that broke it is the only way to know
+ * the wording actually took — a paraphrase would be testing something nobody typed.
+ */
+const KEY_PROMPT = 'create a progression in the harmony lane of 4 bars, evil idm style';
 // `count`, which is harmony.length in the view model — the number of points on the lane. Read
 // off the card's own probe rather than a private path, so this measures what the app displays.
 const keyPoints = () => page.evaluate(() => {
@@ -477,9 +489,12 @@ check(nPoints !== 0,
 // TWO, not one. One point is what a partial apply leaves behind, and it is the exact shape the
 // live report described: the first key change lands, the second is refused against a stale
 // version, and every call still looks successful.
-check(nPoints < 0 || nPoints >= 2,
-      'BOTH key changes land — one is what the version race used to leave',
-      `${nPoints} point(s); asked for C minor then a modulation to B minor`);
+// FOUR, because four bars were asked for. One entry is what "set the key, then write chords"
+// leaves behind, and it is exactly what the owner got.
+check(nPoints < 0 || nPoints >= 4,
+      'A FOUR-BAR PROGRESSION PUTS FOUR POINTS ON THE LANE',
+      `${nPoints} point(s) — one means the model set a key and wrote chords into the clip `
+      + 'instead of moving the lane, which is the reading the description now rules out');
 
 const tempo = await askFor('set the tempo to 96', () => true, 60000);
 await page.waitForTimeout(2000);
