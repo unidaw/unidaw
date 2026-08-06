@@ -14,7 +14,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use daw_agent::{AgentSession, ToolCall};
+use daw_agent::{observe::observe_track, AgentSession, ToolCall};
 use daw_bridge::layout::{UiCommandPayload, UiCommandType};
 use serde_json::{json, Value};
 
@@ -1484,4 +1484,177 @@ fn agent_patcher_edits_are_device_scoped() {
     assert_eq!(nodes_of(20), 0,
                "device 20 was never named and must be untouched — a tool that edits whichever \
                 patcher it finds is worse than one that refuses: {devices:?}");
+}
+
+/// The agent can write row ops, and the observation gives it the note id to aim at.
+///
+/// Two halves of one gap. Seven ops have been published since v23/v32 and no agent tool could set
+/// any of them, so everything an agent produced was a grid of plain notes — no rolls, no ghost
+/// notes, no push or drag. And `NoteView` dropped `note_id`, so even with a tool there was
+/// nothing to address: `delete_note` works on (track, tick), which SetRowOps does not accept.
+///
+/// THE MASK IS WHAT IS REALLY UNDER TEST. It is built from which arguments were SUPPLIED, not
+/// from which are non-zero — a bit clear leaves that op alone, a bit set with value 0 clears it.
+/// Derived from non-zero values instead, removal could not be expressed at all, and an unmentioned
+/// op would be silently zeroed. So this sets one op, checks the others were not touched, and then
+/// clears it by naming it with 0.
+#[test]
+fn agent_writes_row_ops_by_note_id() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agrowops");
+
+    let proj = json!({
+        "schema_version": 2,
+        "meta": { "name": "agrowops_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [],
+        "clips": [ { "id": 1, "name": "c", "length": Q * 16, "lines_per_beat": 4,
+                     "kind": "symbolic", "time_sig_numerator": 4, "time_sig_denominator": 4,
+                     "notes": [ { "nanotick": 0, "duration": Q, "pitch": 60, "velocity": 100,
+                                  "column": 0, "note_id": 1 } ],
+                     "chords": [] } ],
+        "tracks": [ {
+            "track_id": 0, "name": "T", "harmony_quantize": 0, "lines_per_beat": 4,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            "device_chain": [], "mod_links": [],
+            "placements": [ { "clip_id": 1, "at": 0, "length": Q * 16,
+                              "notes": [], "chords": [], "mutes": [] } ]
+        } ]
+    });
+    std::fs::write(engine.proj.join("agrowops_in.uniproj.json"),
+                   serde_json::to_string_pretty(&proj).unwrap()).unwrap();
+    let load = session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"agrowops_in"}) });
+    assert!(load.ok, "load failed: {load:?}");
+
+    /*
+     * THE ID COMES FROM THE OBSERVATION, which is the point. Asking for a window is what makes
+     * notes appear at all — the shape alone is counts and ranges — and the id had to travel with
+     * them for any of this to be usable.
+     */
+    /*
+     * `observe_track`, not `observe`. The whole-song observation deliberately omits notes — it is
+     * the SHAPE, and enumerating every note of every track is what once made it 2.2 MB — so
+     * asking it for a note id returns nothing and would make this test hang on a design decision
+     * rather than a defect.
+     */
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let note_id = loop {
+        let found = observe_track(session.handle(), 0).into_iter()
+            .map(|n| n.note_id).find(|id| *id != 0);
+        if let Some(id) = found { break id; }
+        assert!(Instant::now() < deadline,
+                "no note with an id came back — without one no row op can be addressed, whatever \
+                 the tool does");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+
+    let set = session.execute(&ToolCall {
+        tool: "set_row_ops".into(),
+        args: json!({ "track": 0, "note_id": note_id, "retrigger": 4, "probability": 60 }),
+    });
+    assert!(set.ok, "set_row_ops failed: {set:?}");
+
+    let saved = |name: &str| -> Value {
+        let s = session.execute(&ToolCall { tool: "save".into(), args: json!({"name": name}) });
+        assert!(s.ok, "save failed: {s:?}");
+        read_project(&engine.proj, name)
+    };
+    let first_note = |doc: &Value| -> Value {
+        doc["clips"].as_array().unwrap().iter()
+            .flat_map(|c| c["notes"].as_array().cloned().unwrap_or_default())
+            .next().unwrap_or(Value::Null)
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let n = loop {
+        let n = first_note(&saved("agrowops_a"));
+        if n["retrigger"].as_u64() == Some(4) { break n; }
+        assert!(Instant::now() < deadline, "retrigger never reached the saved note: {n:?}");
+        std::thread::sleep(Duration::from_millis(150));
+    };
+    assert_eq!(n["probability"].as_u64(), Some(60), "probability travelled with it: {n:?}");
+    /*
+     * AND THE ONES NOT NAMED WERE NOT TOUCHED. project_file.cpp omits an inert op, so their
+     * absence is the assertion — if the mask had been derived from values rather than presence,
+     * these would have been written as explicit zeros or, worse, silently cleared.
+     */
+    assert!(n.get("delay").is_none(), "delay was never mentioned and must be untouched: {n:?}");
+    assert!(n.get("sound").is_none(), "sound was never mentioned and must be untouched: {n:?}");
+
+    // NAMING AN OP WITH 0 CLEARS IT — the only way to remove one, and the reason the mask is
+    // built from presence.
+    let clear = session.execute(&ToolCall {
+        tool: "set_row_ops".into(),
+        args: json!({ "track": 0, "note_id": note_id, "probability": 0 }),
+    });
+    assert!(clear.ok, "clearing failed: {clear:?}");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let n = first_note(&saved("agrowops_b"));
+        if n.get("probability").is_none() {
+            assert_eq!(n["retrigger"].as_u64(), Some(4),
+                       "clearing probability must leave retrigger alone: {n:?}");
+            break;
+        }
+        assert!(Instant::now() < deadline, "probability was never cleared: {n:?}");
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    // An empty call is refused rather than sent — a SetRowOps with mask 0 would change nothing
+    // and report success, which is the shape that teaches an agent it did something.
+    let empty = session.execute(&ToolCall {
+        tool: "set_row_ops".into(),
+        args: json!({ "track": 0, "note_id": note_id }),
+    });
+    assert!(!empty.ok, "a call naming no ops must be refused, not sent: {empty:?}");
+}
+
+/// A track that follows the harmony timeline says so in the saved project.
+#[test]
+fn agent_sets_harmony_quantize() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agharmq");
+
+    let proj = json!({
+        "schema_version": 2,
+        "meta": { "name": "agharmq_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [], "clips": [],
+        "tracks": [ {
+            "track_id": 0, "name": "T", "harmony_quantize": 0, "lines_per_beat": 4,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            "device_chain": [], "mod_links": [], "placements": []
+        } ]
+    });
+    std::fs::write(engine.proj.join("agharmq_in.uniproj.json"),
+                   serde_json::to_string_pretty(&proj).unwrap()).unwrap();
+    let load = session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"agharmq_in"}) });
+    assert!(load.ok, "load failed: {load:?}");
+
+    let on = session.execute(&ToolCall {
+        tool: "harmony_quantize".into(), args: json!({ "track": 0 }),
+    });
+    assert!(on.ok, "harmony_quantize failed: {on:?}");
+
+    // Defaults to ON with no `on` argument — the shortest call must not be a no-op.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let doc = {
+            let s = session.execute(&ToolCall { tool: "save".into(), args: json!({"name":"agharmq_out"}) });
+            assert!(s.ok, "save failed: {s:?}");
+            read_project(&engine.proj, "agharmq_out")
+        };
+        let q = &track(&doc, 0)["harmony_quantize"];
+        if q.as_bool() == Some(true) || q.as_u64() == Some(1) { break; }
+        assert!(Instant::now() < deadline,
+                "the track never came to follow the harmony timeline: {q:?}");
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    let off = session.execute(&ToolCall {
+        tool: "harmony_quantize".into(), args: json!({ "track": 0, "on": false }),
+    });
+    assert!(off.ok, "turning it off failed: {off:?}");
 }

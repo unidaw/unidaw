@@ -2288,7 +2288,7 @@ const OP_REGISTRY = {
   slice:     { cli: 'sampler-slice', agent: null, why: 'gap' },
   // Row ops. daw-cli reached the engine FIRST here — `do set-row-ops` shipped with the opcode —
   // so the CLI path is real from day one and only the agent manifest owes it a tool.
-  ops:       { cli: 'set-row-ops', agent: null, why: 'gap' },
+  ops:       { cli: 'set-row-ops', agent: 'set_row_ops' },
   /*
    * `op` sets ONE row op and leaves the other four alone. It shares the CLI's set-row-ops path —
    * the difference is the mask, not the command — so it is not a gap in coverage even though the
@@ -2296,7 +2296,9 @@ const OP_REGISTRY = {
    * mean different things to the engine: one is a replacement of the row, the other is a single
    * bit, and two clients editing different ops on one row only survive the second.
    */
-  op:        { cli: 'set-row-ops', agent: null, why: 'gap' },
+  // `op` sets ONE op and `ops` sets a line of them; both are one SetRowOps with a different
+  // mask, so both map to the same verb and the same tool. Many-to-one, recorded as such.
+  op:        { cli: 'set-row-ops', agent: 'set_row_ops' },
   /*
    * The filter (opcode 86). No CLI verb yet — it landed engine-side this morning and daw-cli has
    * not caught up — so it is recorded as a gap rather than claimed as covered. Recording it as
@@ -2469,11 +2471,9 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
 const AGENT_GAP = ['clear', 'columns', 'copy', 'cut',
                    'del', 'delchord', 'delharmony', 'editor',
                    'new', 'paste', 'patch',
-                   'transpose', 'mods', 'ops',
+                   'transpose', 'mods',
                    // With the other sampler verbs: the agent has no sampler tooling at all.
                    'filter', 'env', 'slot', 'soundaddr', 'bank', 'emit',
-                   // With `ops`, and for the same reason: the agent has no row-op tool at all.
-                   'op',
                    'slice', 'slot-name', 'vintage',
                    'save-patch', 'lpb', 'note-overlap',
                    // A clip's own grid (opcode 94). It HAS a CLI path — `daw-cli do clip-grid`

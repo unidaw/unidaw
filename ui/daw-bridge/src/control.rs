@@ -1386,6 +1386,18 @@ impl EngineHandle {
         )
     }
 
+    /// Write a note's row ops. The MASK in the payload says which of them this command is
+    /// speaking about; a bit clear leaves that op untouched.
+    pub fn send_row_ops(
+        &self,
+        payload: crate::layout::UiSetRowOpsPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSetRowOpsPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSetRowOpsPayload>(),
+        )
+    }
+
     pub fn send_sampler_set_device(
         &self,
         payload: crate::layout::UiSamplerSetDevicePayload,

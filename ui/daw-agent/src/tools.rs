@@ -342,6 +342,42 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "set_row_ops",
+            description: "Set PER-NOTE ops on one note: retrigger, probability, onset delay, \
+                          sound address, sample offset, retrigger volume ramp, trig condition. \
+                          These are what make a tracker part feel played rather than typed — a \
+                          rolled hi-hat, a ghost note that fires two times in three, a snare \
+                          pushed slightly late. Address the note by the `note_id` in the \
+                          observation (call `observe` with `from_beat` to get notes). ONLY the \
+                          fields you name are touched; anything you leave out keeps its current \
+                          value. To REMOVE an op, name it with the value 0.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "note_id"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "note_id": { "type": "integer", "minimum": 1,
+                                 "description": "From the observation's note_id. Not the pitch, \
+                                                 not the index." },
+                    "clip": { "type": "integer", "minimum": 0 },
+                    "retrigger": { "type": "integer", "minimum": 0, "maximum": 255,
+                                   "description": "N even strikes across the note. 0 or 1 = one." },
+                    "probability": { "type": "integer", "minimum": 0, "maximum": 100,
+                                     "description": "Percent chance to sound. 0 = always." },
+                    "delay": { "type": "integer", "minimum": 0,
+                               "description": "Onset delay in nanoticks (960000 per quarter)." },
+                    "sound": { "type": "integer", "minimum": 0, "maximum": 65535,
+                               "description": "Sampler slot to play. 0 = the keymap picks." },
+                    "sound_offset": { "type": "integer", "minimum": 0, "maximum": 65535,
+                                      "description": "Start N/256 into the sample." },
+                    "retrig_ramp": { "type": "integer", "minimum": -128, "maximum": 127,
+                                     "description": "Signed TOTAL percent change in level across \
+                                                     a retrigger's strikes. Needs `retrigger`." },
+                    "trig_condition": { "type": "integer", "minimum": 0, "maximum": 255 },
+                },
+            }),
+        },
+        ToolSpec {
             name: "set_mixer",
             description: "Set a track's gain, pan, mute or solo. Gain is in dB (0 is unity,                           negative is quieter); pan is -1 hard left to 1 hard right.",
             params: json!({
@@ -1262,6 +1298,89 @@ fn harmony_quantize(handle: &EngineHandle, args: &Value) -> ToolResult {
     send_edit(handle, p, json!({ "track": track, "harmony_quantize": on }))
 }
 
+/// Per-note ops, the expressive layer the agent had no access to at all.
+///
+/// Seven ops have been published since v23/v32 and the agent could write none of them, so
+/// everything it produced was a grid of plain notes: no rolls, no ghost notes, no push or drag.
+/// A model asked for "a hi-hat pattern with some swing" could only fake it by moving notes.
+///
+/// THE MASK IS THE WHOLE DESIGN and it is built from which arguments were SUPPLIED, not from
+/// which are non-zero. A bit clear leaves that op alone; a bit SET with a zero value CLEARS it.
+/// Deriving the mask from non-zero values instead would make removal impossible to express —
+/// "probability: 0" and "probability not mentioned" would be the same wire bytes — and removal
+/// is half of editing.
+///
+/// The note is addressed by its full 64-bit EventId, split lo/hi. The AUTHOR lives in bits 48+
+/// and each author counts independently, so truncating to 32 bits drops the author and agent
+/// note (1, 5) silently edits human note (0, 5).
+fn set_row_ops(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(track) = arg_u64(args, "track") else {
+        return ToolResult::err("set_row_ops needs \"track\"");
+    };
+    let Some(note_id) = arg_u64(args, "note_id") else {
+        return ToolResult::err(
+            "set_row_ops needs \"note_id\" — the id from the observation, not the pitch or the \
+             index. Call `observe` with `from_beat` for the bars you are editing; each note \
+             carries its own note_id");
+    };
+    if note_id == 0 {
+        return ToolResult::err("note id 0 is not a note — read a real one from `observe`");
+    }
+
+    use daw_bridge::layout::{
+        ROW_OP_MASK_DELAY, ROW_OP_MASK_PROBABILITY, ROW_OP_MASK_RETRIGGER,
+        ROW_OP_MASK_RETRIG_RAMP, ROW_OP_MASK_SOUND, ROW_OP_MASK_SOUND_OFFSET,
+        ROW_OP_MASK_TRIG_CONDITION,
+    };
+    let mut mask: u16 = 0;
+    let mut named: Vec<&str> = Vec::new();
+    // PRESENCE, not value. `args.get(..).is_some()` is the whole difference between an editor
+    // and a setter.
+    let mut take = |key: &'static str, bit: u16| -> Option<i64> {
+        args.get(key).and_then(|v| v.as_i64()).map(|v| {
+            mask |= bit;
+            named.push(key);
+            v
+        })
+    };
+    let retrigger = take("retrigger", ROW_OP_MASK_RETRIGGER).unwrap_or(0);
+    let probability = take("probability", ROW_OP_MASK_PROBABILITY).unwrap_or(0);
+    let sound = take("sound", ROW_OP_MASK_SOUND).unwrap_or(0);
+    let sound_offset = take("sound_offset", ROW_OP_MASK_SOUND_OFFSET).unwrap_or(0);
+    let delay = take("delay", ROW_OP_MASK_DELAY).unwrap_or(0);
+    let retrig_ramp = take("retrig_ramp", ROW_OP_MASK_RETRIG_RAMP).unwrap_or(0);
+    let trig_condition = take("trig_condition", ROW_OP_MASK_TRIG_CONDITION).unwrap_or(0);
+
+    if mask == 0 {
+        return ToolResult::err(
+            "set_row_ops was given no ops to set, so it would change nothing. Name at least one \
+             of retrigger, probability, delay, sound, sound_offset, retrig_ramp, trig_condition");
+    }
+
+    let p = daw_bridge::layout::UiSetRowOpsPayload {
+        command_type: UiCommandType::SetRowOps as u16,
+        mask,
+        track_id: track as u32,
+        clip_id: arg_u64(args, "clip").unwrap_or(0) as u32,
+        note_id_lo: (note_id & 0xFFFF_FFFF) as u32,
+        note_id_hi: (note_id >> 32) as u32,
+        delay_nanoticks: delay.clamp(0, u32::MAX as i64) as u32,
+        sound: sound.clamp(0, 65535) as u16,
+        sound_offset: sound_offset.clamp(0, 65535) as u16,
+        retrigger: retrigger.clamp(0, 255) as u8,
+        probability: probability.clamp(0, 255) as u8,
+        retrig_ramp: retrig_ramp.clamp(-128, 127) as i8,
+        trig_condition: trig_condition.clamp(0, 255) as u8,
+        reserved: [0; 8],
+    };
+    match handle.send_row_ops(p) {
+        Ok(()) => ToolResult::ok(json!({
+            "sent": true, "track": track, "note_id": note_id, "set": named,
+        })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
 /// Make a modulation link, name its parameter, and turn the knob. THREE commands.
 ///
 /// All three, because a link the engine accepts moves nothing without them: it addresses a
@@ -1614,6 +1733,7 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "set_harmony" => set_harmony(handle, &call.args),
         "set_tempo" => set_tempo(handle, &call.args),
         "harmony_quantize" => harmony_quantize(handle, &call.args),
+        "set_row_ops" => set_row_ops(handle, &call.args),
         "set_mixer" => set_mixer(handle, &call.args),
         "set_loop" => set_loop(handle, &call.args),
         "preview_note" => preview_note(handle, &call.args),

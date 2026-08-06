@@ -150,6 +150,14 @@ pub struct Span {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct NoteView {
+    /// The note's EventId, which is how a row op addresses it.
+    ///
+    /// Published all along (`UiClipNote::note_id`) and dropped here, so the agent's only handle
+    /// on an existing note was (track, tick) — enough for `delete_note`, and not enough for
+    /// `set_row_ops`, which addresses by id. The id is 64 bits because the AUTHOR lives in the
+    /// top 16: agent note (1, 5) and human note (0, 5) are different notes, and a 32-bit id
+    /// would edit whichever one it landed on.
+    pub note_id: u64,
     pub nanotick: u64,
     pub beat: f64,
     pub duration: u64,
@@ -202,6 +210,7 @@ pub fn observe_track(handle: &EngineHandle, track_id: u32) -> Vec<NoteView> {
     let mut notes = Vec::with_capacity(count);
     for note in snap.notes.iter().take(count) {
         notes.push(NoteView {
+            note_id: note.note_id,
             nanotick: note.t_on,
             beat: beats(note.t_on),
             duration: note.t_off.saturating_sub(note.t_on),
