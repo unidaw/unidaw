@@ -577,6 +577,61 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "set_track_grid",
+            description: "A track's rows-per-beat, and whether entering a note over a sounding \
+                          one lets it ring. Give `lines` (1..31), `note_overlap` (true keeps the \
+                          sounding note), or both.",
+            params: json!({
+                "type": "object",
+                "required": ["track"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "lines": { "type": "integer", "minimum": 1, "maximum": 31,
+                               "description": "Rows per beat on this track's lane." },
+                    "note_overlap": { "type": "boolean",
+                                      "description": "False TRUNCATES the sounding note in the \
+                                                      document when a new one starts over it — \
+                                                      the typed length is gone. True lets it \
+                                                      ring." },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "set_clip_grid",
+            description: "A CLIP's own subdivision and meter, which is drawn BEFORE the track's \
+                          and so is the authoritative one. Give at least one of `lines`, \
+                          `numerator`, `denominator`; an omitted field is left alone.",
+            params: json!({
+                "type": "object",
+                "required": ["clip"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "clip": { "type": "integer", "minimum": 0 },
+                    "lines": { "type": "integer", "minimum": 1 },
+                    "numerator": { "type": "integer", "minimum": 1 },
+                    "denominator": { "type": "integer", "minimum": 1 },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "delete_automation_point",
+            description: "Remove the automation point at a tick. `write_automation_point` could \
+                          add one and nothing could take it back, so a stray point had to be \
+                          written over — and a point at the wrong tick still bends the parameter \
+                          on the way past it.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "param", "tick"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "param": { "type": "string",
+                               "description": "The automation clip's id, e.g. \"index:0\"." },
+                    "tick": { "type": "integer", "minimum": 0 },
+                    "target_plugin_index": { "type": "integer", "minimum": 0 },
+                },
+            }),
+        },
+        ToolSpec {
             name: "set_clip_text",
             description: "Name a clip, or point an audio clip at a different file. `field` is \
                           \"name\" or \"source\". An agent that made a clip could not label it, so \
@@ -2059,6 +2114,130 @@ fn delete_harmony(handle: &EngineHandle, args: &Value) -> ToolResult {
     send_edit(handle, p, json!({ "deleted_harmony_at": tick }))
 }
 
+/// A track's rows-per-beat and its note-overlap rule. Two commands, one tool.
+///
+/// Together because they are the same question asked twice — how this track's lane behaves when
+/// you type into it — and an agent setting a 3-rows-per-beat lane almost always wants to say
+/// something about overlap in the same breath. Sent as separate commands because they are
+/// separate opcodes; a caller naming neither is refused rather than sent an empty pair.
+///
+/// RANGE IS THE ENGINE'S TO JUDGE. daw-cli deleted its duplicate range check for a recorded
+/// reason — the engine's identical guard became unreachable and rotted — so this validates that a
+/// field was NAMED and lets the engine refuse the value into `track.lines_per_beat_rejected`.
+fn set_track_grid(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(track) = arg_u64(args, "track") else {
+        return ToolResult::err("set_track_grid needs \"track\"");
+    };
+    let lines = arg_u64(args, "lines");
+    let overlap = args.get("note_overlap").and_then(|v| v.as_bool());
+    if lines.is_none() && overlap.is_none() {
+        return ToolResult::err("set_track_grid needs \"lines\" or \"note_overlap\"");
+    }
+    let mut out = json!({ "track": track });
+    if let Some(n) = lines {
+        let mut p = blank(UiCommandType::SetTrackLinesPerBeat);
+        p.track_id = track as u32;
+        p.value0 = n as u32;
+        if let Err(e) = handle.send_command(p) { return ToolResult::err(e); }
+        out["lines"] = json!(n);
+    }
+    if let Some(on) = overlap {
+        let mut p = blank(UiCommandType::SetTrackAllowNoteOverlap);
+        p.track_id = track as u32;
+        p.value0 = u32::from(on);
+        if let Err(e) = handle.send_command(p) { return ToolResult::err(e); }
+        out["note_overlap"] = json!(on);
+    }
+    out["sent"] = json!(true);
+    ToolResult::ok(out)
+}
+
+/// A clip's own subdivision and meter — drawn BEFORE the track's, so this is the authoritative one.
+///
+/// ABSENT IS NOT ZERO, and here that is structural rather than stylistic: 0 is the packer's "no
+/// grid on this extent" sentinel, so it cannot also mean "leave this alone". Each field carries
+/// its own SET flag, and a call naming none is refused — sending flags:0 would be a command that
+/// travels, is accepted, and does nothing.
+fn set_clip_grid(handle: &EngineHandle, args: &Value) -> ToolResult {
+    use daw_bridge::layout as L;
+    let Some(clip) = arg_u64(args, "clip") else {
+        return ToolResult::err("set_clip_grid needs \"clip\"");
+    };
+    let track = arg_u64(args, "track").unwrap_or(0) as u32;
+    let mut flags = 0u16;
+    let mut lines = 0u32;
+    let mut num = 0u32;
+    let mut den = 0u32;
+    if let Some(v) = arg_u64(args, "lines") { flags |= L::CLIP_GRID_SET_LINES; lines = v as u32; }
+    if let Some(v) = arg_u64(args, "numerator") {
+        flags |= L::CLIP_GRID_SET_NUMERATOR;
+        num = v as u32;
+    }
+    if let Some(v) = arg_u64(args, "denominator") {
+        flags |= L::CLIP_GRID_SET_DENOMINATOR;
+        den = v as u32;
+    }
+    if flags == 0 {
+        return ToolResult::err(
+            "set_clip_grid needs at least one of \"lines\", \"numerator\", \"denominator\" — \
+             flags of 0 is a command that travels and does nothing");
+    }
+    let p = L::UiSetClipGridPayload {
+        command_type: UiCommandType::SetClipGrid as u16,
+        flags,
+        track_id: track,
+        clip_id: clip as u32,
+        lines_per_beat: lines,
+        time_sig_numerator: num,
+        time_sig_denominator: den,
+        reserved: [0; 4],
+    };
+    match handle.send_clip_grid(p) {
+        Ok(()) => ToolResult::ok(json!({
+            "sent": true, "track": track, "clip": clip,
+            "lines": lines, "numerator": num, "denominator": den,
+        })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
+/// Remove the automation point at a tick — the counterpart to `write_automation_point`.
+///
+/// A stray point had to be written over, and a point at the wrong tick still bends the parameter
+/// on the way past it: automation interpolates between points, so an unwanted one is audible for
+/// the whole span either side of it, not only where it sits.
+fn delete_automation_point(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(track), Some(tick)) = (arg_u64(args, "track"), arg_u64(args, "tick")) else {
+        return ToolResult::err("delete_automation_point needs \"track\" and \"tick\"");
+    };
+    let Some(param) = args.get("param").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) else {
+        return ToolResult::err(
+            "delete_automation_point needs \"param\" — the automation clip's id, e.g. \"index:0\"");
+    };
+    let mut param_id = [0u8; 16];
+    let b = param.as_bytes();
+    let take = b.len().min(param_id.len());
+    param_id[..take].copy_from_slice(&b[..take]);
+    let p = daw_bridge::layout::UiAutomationPointPayload {
+        command_type: UiCommandType::DeleteAutomationPoint as u16,
+        flags: 0,
+        track_id: track as u32,
+        // Every plugin on the track publishing this parameter, unless one is named — the same
+        // default `write_automation_point` uses, so a point written without naming a device can
+        // be removed without naming one either.
+        target_plugin_index: arg_u64(args, "target_plugin_index").unwrap_or(u32::MAX as u64) as u32,
+        nanotick_lo: (tick & 0xffff_ffff) as u32,
+        nanotick_hi: (tick >> 32) as u32,
+        value: 0.0,
+        param_id,
+    };
+    match handle.send_automation_point(p) {
+        Ok(()) => ToolResult::ok(json!({
+            "sent": true, "track": track, "param": param, "tick": tick })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
 /// Name a clip, or repoint an audio clip at another file.
 ///
 /// THE FIRST TOOL HERE THAT DOES NOT USE THE RING. A name does not fit the 40-byte ring payload,
@@ -2492,6 +2671,9 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "delete_chord" => delete_chord(handle, &call.args),
         "delete_harmony" => delete_harmony(handle, &call.args),
         "set_clip_text" => set_clip_text(handle, &call.args),
+        "set_track_grid" => set_track_grid(handle, &call.args),
+        "set_clip_grid" => set_clip_grid(handle, &call.args),
+        "delete_automation_point" => delete_automation_point(handle, &call.args),
         "set_mixer" => set_mixer(handle, &call.args),
         "set_loop" => set_loop(handle, &call.args),
         "preview_note" => preview_note(handle, &call.args),

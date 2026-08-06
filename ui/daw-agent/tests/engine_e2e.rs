@@ -2297,3 +2297,107 @@ fn the_agent_can_name_a_clip() {
     }
     assert_eq!(saw, "Verse Bass");
 }
+
+/// Three grid-and-automation writers the agent never had, asserted ON DISK.
+///
+/// `set_track_grid` (rows-per-beat and the note-overlap rule), `set_clip_grid` (the CLIP's own
+/// subdivision, which is drawn BEFORE the track's) and `delete_automation_point` (the counterpart
+/// to a writer that could only add).
+///
+/// Every assertion here reads the SAVED PROJECT rather than the tool's reply, because all three
+/// of these are shapes where an accepted command changes nothing: `set_clip_grid` with flags of 0
+/// travels and does nothing, and `delete_automation_point` with the wrong param id or the wrong
+/// tick is a well-formed removal of a point that is not there.
+#[test]
+fn the_agent_can_set_grids_and_remove_an_automation_point() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("aggrid");
+
+    let proj = json!({
+        "schema_version": 2,
+        "meta": { "name": "aggrid_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [], "clips": [ { "id": 3, "name": "c", "length": Q * 16,
+            "lines_per_beat": 4, "kind": "symbolic", "time_sig_numerator": 4,
+            "time_sig_denominator": 4, "notes": [], "chords": [] } ],
+        "tracks": [ {
+            "track_id": 0, "name": "T", "harmony_quantize": 0, "lines_per_beat": 4,
+            "allow_note_overlap": false,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            "device_chain": [], "mod_links": [],
+            "placements": [ { "clip_id": 3, "at": 0, "length": Q * 16,
+                              "notes": [], "chords": [], "mutes": [] } ]
+        } ]
+    });
+    std::fs::write(engine.proj.join("aggrid_in.uniproj.json"),
+                   serde_json::to_string_pretty(&proj).unwrap()).unwrap();
+    assert!(session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"aggrid_in"}) }).ok);
+
+    // Naming NO field is refused rather than sent: flags of 0 is a command that travels, is
+    // accepted, and does nothing — which would pass any "was it accepted" assertion.
+    let empty = session.execute(&ToolCall {
+        tool: "set_clip_grid".into(), args: json!({ "track": 0, "clip": 3 }) });
+    assert!(!empty.ok, "set_clip_grid naming no field must be refused: {empty:?}");
+    let neither = session.execute(&ToolCall {
+        tool: "set_track_grid".into(), args: json!({ "track": 0 }) });
+    assert!(!neither.ok, "set_track_grid naming no field must be refused: {neither:?}");
+
+    // A point to remove, so the removal has something to prove.
+    assert!(session.execute(&ToolCall {
+        tool: "write_automation_point".into(),
+        args: json!({ "track": 0, "param": "index:0", "tick": Q * 2, "value": 0.75 }),
+    }).ok);
+    assert!(session.execute(&ToolCall {
+        tool: "set_track_grid".into(),
+        args: json!({ "track": 0, "lines": 3, "note_overlap": true }),
+    }).ok);
+    assert!(session.execute(&ToolCall {
+        tool: "set_clip_grid".into(),
+        args: json!({ "track": 0, "clip": 3, "lines": 6, "numerator": 7, "denominator": 8 }),
+    }).ok);
+
+    let points_at = |doc: &Value| -> usize {
+        doc["tracks"].as_array().unwrap().iter()
+            .filter_map(|t| t["automation"].as_array())
+            .flatten()
+            .filter_map(|c| c["points"].as_array())
+            .map(|p| p.len()).sum()
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(6);
+    let mut doc;
+    loop {
+        assert!(session.execute(&ToolCall {
+            tool: "save".into(), args: json!({"name": "aggrid_a"}) }).ok);
+        doc = read_project(&engine.proj, "aggrid_a");
+        let t = &doc["tracks"][0];
+        let c = doc["clips"].as_array().unwrap().iter().find(|c| c["id"] == 3).unwrap().clone();
+        if t["lines_per_beat"] == 3 && t["allow_note_overlap"] == true
+            && c["lines_per_beat"] == 6 && c["time_sig_numerator"] == 7
+            && c["time_sig_denominator"] == 8 && points_at(&doc) == 1 { break; }
+        assert!(Instant::now() < deadline,
+                "track lpb={} overlap={} clip lpb={} sig={}/{} points={} — want 3/true, 6, 7/8, 1",
+                t["lines_per_beat"], t["allow_note_overlap"], c["lines_per_beat"],
+                c["time_sig_numerator"], c["time_sig_denominator"], points_at(&doc));
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    let gone = session.execute(&ToolCall {
+        tool: "delete_automation_point".into(),
+        args: json!({ "track": 0, "param": "index:0", "tick": Q * 2 }),
+    });
+    assert!(gone.ok, "delete_automation_point failed: {gone:?}");
+
+    let deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        assert!(session.execute(&ToolCall {
+            tool: "save".into(), args: json!({"name": "aggrid_b"}) }).ok);
+        let n = points_at(&read_project(&engine.proj, "aggrid_b"));
+        if n == 0 { break; }
+        assert!(Instant::now() < deadline,
+                "{n} automation point(s) remain — a removal with the wrong param id or the wrong \
+                 tick is well-formed, accepted, and removes nothing");
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
