@@ -1843,6 +1843,31 @@ pub const UI_CLIP_EXTENT_HAS_OVERRIDES: u32 = 1 << 22;
 pub const UI_EDIT_SCOPE_LOCAL: u16 = 1 << 15;
 pub const UI_EDIT_COLUMN_MASK: u16 = 0x00FF;
 
+/// An edit column, refused rather than truncated — the single owner of that rule.
+///
+/// SIX CALL SITES HAD SIX CASTS. Three in daw-cli (`do note`, `do phrase`, `do chord`) and three
+/// in daw-agent (`add_notes`, `add_chords`, `delete_chord`), all writing the column into the same
+/// `flags` field. Five were `as u16` and one clamped to `u16::MAX`. Not one of them was the
+/// READER's bound: the engine takes `flags & kUiEditColumnMask`, which is 0x00FF.
+///
+/// AND THE OVERFLOW IS NOT A WRONG COLUMN, IT IS A DIFFERENT KIND OF EDIT. The two constants
+/// above share the field, so 32768 does not land in column 0 — it sets `UI_EDIT_SCOPE_LOCAL` and
+/// turns a document edit into a placement-local override. daw-cli's `do note` even ORs that flag
+/// in explicitly on the next expression, so the collision is visible on one line if anyone looks.
+///
+/// It lives in the layout crate rather than in either binary because both binaries write this
+/// wire and a rule with six sites and no owner is a rule that comes back. The sidecar is the third
+/// producer; it clamps to 0..255 and masks, which is safe but is a fourth spelling of one idea.
+pub fn edit_column(value: u64) -> Result<u16, String> {
+    if value > u64::from(UI_EDIT_COLUMN_MASK) {
+        return Err(format!(
+            "column {value} does not fit the byte the engine reads (0..255). The rest of that \
+             field is FLAG BITS — bit 15 is the local-edit scope — so this would not simply land \
+             in the wrong column, it would change what kind of edit this is"));
+    }
+    Ok(value as u16)
+}
+
 pub const K_UI_MAX_MARKERS: usize = 64;
 pub const K_UI_MAX_TIME_SIG_POINTS: usize = 32;
 

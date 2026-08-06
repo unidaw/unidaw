@@ -263,7 +263,8 @@ fn note_command(
     }
     let velocity = flag_u64(args, "--velocity", Some(100))?;
     let duration = flag_u64(args, "--duration", Some(0))?;
-    let column = flag_u64(args, "--column", Some(0))?;
+    let column = daw_bridge::layout::edit_column(flag_u64(args, "--column", Some(0))?)
+        .map_err(|e| format!("daw-cli: {e}"))?;
     // M3.24: --local records the edit on THIS APPEARANCE (an add or a mute on the
     // placement) instead of on the clip. Default is clip scope, which reaches every
     // placement — today's behaviour, unchanged. It is a flag and never inferred: which
@@ -272,7 +273,7 @@ fn note_command(
     let local = args.iter().any(|a| a == "--local");
     Ok(UiCommandPayload {
         command_type: command as u16,
-        flags: (column as u16) | if local { daw_bridge::layout::UI_EDIT_SCOPE_LOCAL } else { 0 },
+        flags: column | if local { daw_bridge::layout::UI_EDIT_SCOPE_LOCAL } else { 0 },
         track_id: track,
         plugin_index: 0,
         note_pitch: pitch as u32,
@@ -894,7 +895,11 @@ fn write_notes(handle: &EngineHandle, args: &[String]) -> i32 {
         .unwrap_or(NANOTICKS_PER_QUARTER);
     let duration = flag_u64(args, "--duration", Some(step)).unwrap_or(step);
     let velocity = flag_u64(args, "--velocity", Some(100)).unwrap_or(100).min(127);
-    let column = flag_u64(args, "--column", Some(0)).unwrap_or(0);
+    let column = match daw_bridge::layout::edit_column(
+            flag_u64(args, "--column", Some(0)).unwrap_or(0)) {
+        Ok(c) => c,
+        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+    };
 
     // M2.17: the base is this TRACK's version. Each note consumes one, so the run
     // numbers itself from there — and because acceptance is per track, a phrase written
@@ -905,7 +910,7 @@ fn write_notes(handle: &EngineHandle, args: &[String]) -> i32 {
         let nanotick = start + step * index as u64;
         let payload = UiCommandPayload {
             command_type: UiCommandType::WriteNote as u16,
-            flags: column as u16,
+            flags: column,
             track_id: track,
             plugin_index: 0,
             note_pitch: *pitch,
@@ -1159,7 +1164,8 @@ fn chord_command(
         } else {
             UiCommandType::WriteChord as u16
         },
-        flags: flag_u64(args, "--column", Some(0))? as u16,
+        flags: daw_bridge::layout::edit_column(flag_u64(args, "--column", Some(0))?)
+            .map_err(|e| format!("daw-cli: {e}"))?,
         track_id: track,
         base_version,
         nanotick_lo: (nanotick & 0xffff_ffff) as u32,
@@ -3690,7 +3696,14 @@ fn main() {
                     // 0 = derive each row's length from its slice, which reproduces the break as
                     // recorded. An explicit --step re-fits it to a grid instead.
                     let step = flag_u64(&args, "--step", Some(0)).unwrap_or(0);
-                    let column = flag_u64(&args, "--column", Some(0)).unwrap_or(0) as u8;
+                    // A real u8 field here rather than a shared flags word, so an overflow is
+                    // only a wrong column and not a changed edit scope — but it is still silent,
+                    // and the rule has one owner now.
+                    let column = match daw_bridge::layout::edit_column(
+                            flag_u64(&args, "--column", Some(0)).unwrap_or(0)) {
+                        Ok(c) => c as u8,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
                     let velocity = flag_u64(&args, "--velocity", Some(100)).unwrap_or(100) as u8;
                     let payload = UiSamplerEmitRowsPayload {
                         command_type: UiCommandType::SamplerEmitRows as u16,
