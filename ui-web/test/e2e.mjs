@@ -426,13 +426,41 @@ ok(back.every((n, i) => n.pitch === sel[i].pitch), 'and transposes back exactly'
 section('chords');
 const cv = (await E()).clipVersion;
 await page.evaluate(() => window.__uni.run('goto 12 1'));
-// Typed, not called through the API: this is the one path where the keyboard
-// does something the dock cannot, so driving it any other way tests nothing.
+/*
+ * THE WHOLE TOKEN THE RUNBOOK NAMES: `@3^7~80h20`, a strummed and humanised seventh.
+ *
+ * Typed, not called through the API — this is the one path where the keyboard does something
+ * the dock cannot, so driving it any other way tests nothing. It used to stop at `@3^7` and
+ * assert only that `clipVersion` MOVED, which is satisfied by any chord at all: the degree, the
+ * quality and above all the STRUM went unchecked.
+ *
+ * The strum is the part worth having. `~80h20` is the headline of the demo's chord section, its
+ * grammar is unit-tested in isolation (`parseChord`), and the data path is covered from the
+ * `chord` CONSOLE VERB — but nothing asserted that these keystrokes reach the engine. A grammar
+ * test plus a console test can both pass while the keyboard drops a token, and the keyboard is
+ * what a person uses.
+ */
 await page.keyboard.press('@');
-for (const ch of ['3', '^', '7']) { await page.keyboard.press(ch); await frames(); }
+for (const ch of ['3', '^', '7', '~', '8', '0', 'h', '2', '0']) {
+  await page.keyboard.press(ch); await frames();
+}
 await page.keyboard.press('Enter');
 await page.waitForTimeout(1000);
 ok((await E()).clipVersion > cv, 'a chord token writes', `clipVersion ${cv} -> ${(await E()).clipVersion}`);
+
+const typedChord = await page.evaluate(() => (window.__uni.chords() || [])[0] || null);
+ok(typedChord && typedChord.degree === 3, 'the typed DEGREE reaches the engine',
+   JSON.stringify(typedChord));
+/*
+ * `spread > 0` IS the strum. 0 is a legal answer meaning a block chord, not a missing field, so
+ * a check that only asked "is spread defined" would pass on a dropped `~` token.
+ */
+ok(typedChord && typedChord.spread > 0,
+   'and the ~ token really strums it — spread, read back off the wire',
+   `spread ${typedChord && typedChord.spread}`);
+ok(typedChord && (typedChord.humanizeTiming > 0 || typedChord.humanizeVelocity > 0),
+   'and the h token humanises it',
+   `timing ${typedChord && typedChord.humanizeTiming}, velocity ${typedChord && typedChord.humanizeVelocity}`);
 
 section('mixer');
 await page.evaluate(() => window.__uni.view('mixer'));

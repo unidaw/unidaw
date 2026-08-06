@@ -41,7 +41,16 @@ const EXCLUDED = {
   'chop-audible.mjs': 'live capture — see THE CAPTURE PROBLEM below',
   'sound-op-audible.mjs': 'live capture — see THE CAPTURE PROBLEM below',
   'note-off-cuts.mjs': 'live capture — see THE CAPTURE PROBLEM below',
-  'sampler-device-id.mjs': 'live capture — see THE CAPTURE PROBLEM below',
+  /*
+   * `sampler-device-id.mjs` USED TO BE HERE and is not any more. It was held out for the
+   * capture problem below, and it no longer takes a capture — its audio verdict comes from an
+   * offline render, which has no device, no origin and no starvation. The structural half still
+   * drives a live stack, but nothing in it depends on the tap.
+   *
+   * Worth stating because the exclusion outlived its reason by exactly one commit: the suite was
+   * converted in the morning and stayed out of the sweep, so seventeen checks including the one
+   * that catches a sampler landing on the no-device sentinel were running nowhere.
+   */
   'repro-hang.mjs': 'a reproduction script for one bug, not a suite — it is meant to hang',
   'soak.mjs': 'minutes of heap soak; run it deliberately, not on every sweep',
 };
@@ -103,8 +112,10 @@ const only = onlyArg
   : null;
 
 const files = readdirSync(HERE).filter((f) => f.endsWith('.mjs')).sort();
+// `--with-audio` opts the capture suites back in. sampler-device-id is NOT here any more: it
+// renders offline and is swept unconditionally.
 const audioOnes = ['audible.mjs', 'chop-audible.mjs', 'sound-op-audible.mjs',
-                   'note-off-cuts.mjs', 'sampler-device-id.mjs'];
+                   'note-off-cuts.mjs'];
 const skipped = [];
 const suites = files.filter((f) => {
   if (NOT_A_SUITE.has(f)) return false;
