@@ -4534,6 +4534,10 @@ const piano = new Piano(pianoHost, {
     const snapped = Math.max(0, Math.round(tick / step) * step);
     const base = engine ? engine.clipVersion : 0;
     if (conn && conn.send({ type: 'note', track: state.cursor.track, pitch,
+                            /* no-column: a NEW note from the roll, which has no note-column
+                               concept. Column 0 is the default for a new note; borrowing the
+                               TRACKER cursor's column here would be a coupling nobody asked
+                               for. Not the same case as addressing a note that exists. */
                             tick: snapped, dur: step, vel: state.velocity })) {
       state.reject = null;
     } else {
@@ -4620,8 +4624,12 @@ function commitNoteDrag(d) {
     const step = laneRowTicks(src.track);
     const want = Math.max(step, Math.round((dur + dTick) / step) * step);
     if (want === dur) return;
+    // DRAGGING A NOTE'S RIGHT EDGE is the gesture note LENGTH is authored with, and note length
+    // is how legato is written — so this is the one op that most needs to land on the right cell.
+    // Without the column it rewrote column 0 and left the dragged note untouched.
     conn.sendBatch([{ type: 'note', track: src.track, pitch: src.pitch,
-                      tick: src.tOn, dur: want, vel: src.velocity }]);
+                      tick: src.tOn, dur: want, vel: src.velocity,
+                      column: src.column | 0 }]);
     state.reject = null;
     return;
   }
@@ -4634,9 +4642,13 @@ function commitNoteDrag(d) {
   const pitch = src.pitch + dPitch;
   if (pitch < 0 || pitch > 127) { state.reject = 'that would leave MIDI range'; return; }
   if (tick === src.tOn && pitch === src.pitch) return;
+  // BOTH HALVES carry it. A move is a delete of the old cell and a write to the new one; with
+  // the column missing from either, the pair addresses two different notes and the "move" leaves
+  // the original where it was while overwriting something in column 0.
   conn.sendBatch([
-    { type: 'delete', track: src.track, tick: src.tOn },
-    { type: 'note', track: src.track, pitch, tick, dur, vel: src.velocity },
+    { type: 'delete', track: src.track, tick: src.tOn, column: src.column | 0 },
+    { type: 'note', track: src.track, pitch, tick, dur, vel: src.velocity,
+      column: src.column | 0 },
   ]);
   state.reject = null;
 }
@@ -4660,11 +4672,14 @@ function pianoEdit(kind, semitones) {
   if (!conn) { state.reject = 'no engine'; return false; }
   const ops = [];
   for (const n of picked) {
-    if (kind === 'delete') { ops.push({ type: 'delete', track: n.track, tick: n.tOn }); continue; }
+    if (kind === 'delete') {
+      ops.push({ type: 'delete', track: n.track, tick: n.tOn, column: n.column | 0 });
+      continue;
+    }
     const p = n.pitch + semitones;
     if (p < 0 || p > 127) continue;
     ops.push({ type: 'note', track: n.track, pitch: p, tick: n.tOn,
-               dur: Math.max(1, n.tOff - n.tOn), vel: n.velocity });
+               dur: Math.max(1, n.tOff - n.tOn), vel: n.velocity, column: n.column | 0 });
   }
   if (!ops.length) { state.reject = 'transpose would push notes out of MIDI range'; return false; }
   if (!conn.sendBatch(ops)) { state.reject = 'no engine'; return false; }
@@ -7066,7 +7081,15 @@ function notesInSelection() {
     const row = scale === 1 ? n.row : Math.round(n.row * scale);
     if (sel) {
       if (row < sel.r0 || row > sel.r1) continue;
-      const field = n.track * state.columns;          // notes are column 0
+      /*
+       * THE NOTE'S OWN COLUMN, not column 0. This read `n.track * state.columns` under a comment
+       * asserting "notes are column 0", which stopped being true the moment a second note column
+       * existed — and a second note column is the whole of how a slide is written.
+       *
+       * Two failures from one wrong cell index: a drag over column 0 alone SWEPT UP every note in
+       * the track's other columns, and a drag over column 1 alone matched nothing at all.
+       */
+      const field = n.track * state.columns + (n.column | 0) * FIELDS_PER_NOTE;
       if (field < sel.f0 || field > sel.f1) continue;
     } else {
       if (row !== state.cursor.row || n.track !== state.cursor.track) continue;
@@ -7159,9 +7182,14 @@ function copySelection() {
   if (!picked.length) { state.reject = 'nothing to copy'; return false; }
   const org = selectionOrigin();
   const orgTick = org.row * ZOOM_LEVELS[state.zoom].rowNanoticks;
+  // The COLUMN travels with the note. Without it, copying a two-column phrase and pasting it
+  // collapsed both columns onto column 0 — where the second note REPLACES the first, so half the
+  // phrase is silently gone and what is left is monophonic. That is the exact opposite of what
+  // the second column is for.
   clipboard.notes = picked.map(({ n }) => ({
     dt: n.tOn - orgTick, dur: Math.max(1, n.tOff - n.tOn),
     dTrack: n.track - org.track, pitch: n.pitch, velocity: n.velocity,
+    column: n.column | 0,
   }));
   clipboard.span = clipboard.notes.reduce((a, c) => Math.max(a, c.dt + c.dur), 0);
   state.reject = null;
@@ -7173,9 +7201,21 @@ function deleteSelection() {
   if (!picked.length) { state.reject = 'nothing to delete'; return false; }
   if (!conn) { state.reject = 'no engine'; return false; }
   const base = engine ? engine.clipVersion : 0;
-  const ops = picked.map(({ n }) => ({ type: 'delete', track: n.track, tick: n.tOn }));
+  /*
+   * THE COLUMN ON EVERY OP. `note_column()` in the sidecar is `parse_num(...).unwrap_or(0)`, so
+   * an absent column is not "unspecified" — it is a confident edit to column 0. The sidecar's own
+   * comment on the delete arm predicts this exactly: "with more than one note column, deleting by
+   * (track, tick) alone removes whichever the engine matches first".
+   *
+   * So deleting a note in column 1 deleted COLUMN 0's note at that tick — a different note — and
+   * left the selected one sitting there.
+   */
+  const ops = picked.map(({ n }) => ({ type: 'delete', track: n.track, tick: n.tOn,
+                                       column: n.column | 0 }));
   if (!conn.sendBatch(ops)) { state.reject = 'no engine'; return false; }
-  for (const { n, row } of picked) addPending(row, n.track, 0, '', base);
+  for (const { n, row } of picked) {
+    addPending(row, n.track, (n.column | 0) * FIELDS_PER_NOTE, '', base);
+  }
   state.reject = null;
   return true;
 }
@@ -7189,7 +7229,7 @@ function pasteClipboard() {
     const track = state.cursor.track + c.dTrack;
     if (track < 0 || track >= state.tracks) continue;   // pasted off the edge
     ops.push({ type: 'note', track, pitch: c.pitch, tick: atTick + c.dt,
-               dur: c.dur, vel: c.velocity });
+               dur: c.dur, vel: c.velocity, column: c.column | 0 });
   }
   if (!ops.length) { state.reject = 'paste would land off the edge'; return false; }
   if (!conn.sendBatch(ops)) { state.reject = 'no engine'; return false; }
@@ -7211,14 +7251,20 @@ function transposeSelection(semitones) {
   for (const { n, row } of picked) {
     const p = n.pitch + semitones;
     if (p < 0 || p > 127) continue;                     // silently clamping would lose the note
+    /*
+     * A TRANSPOSE IS A REPLACE, and a replace has to land on the SAME CELL. Without the column
+     * this wrote the new pitch into column 0 while the original sat on in column 1 at its old
+     * pitch — so transposing a slide DUPLICATED it, one note moved and one not, and if column 0
+     * already held a note at that tick the transposed copy destroyed it.
+     */
     ops.push({ type: 'note', track: n.track, pitch: p, tick: n.tOn,
-               dur: Math.max(1, n.tOff - n.tOn), vel: n.velocity });
-    marks.push({ row, track: n.track, p });
+               dur: Math.max(1, n.tOff - n.tOn), vel: n.velocity, column: n.column | 0 });
+    marks.push({ row, track: n.track, p, col: (n.column | 0) * FIELDS_PER_NOTE });
   }
   const moved = ops.length;
   if (!moved) { state.reject = 'transpose would push notes out of MIDI range'; return false; }
   if (!conn.sendBatch(ops)) { state.reject = 'no engine'; return false; }
-  for (const m of marks) addPending(m.row, m.track, 0, pitchToToken(m.p), base);
+  for (const m of marks) addPending(m.row, m.track, m.col, pitchToToken(m.p), base);
   if (moved < picked.length) state.reject = (picked.length - moved) + ' note(s) out of range';
   else state.reject = null;
   return true;
@@ -7311,8 +7357,12 @@ function noteCoveringCursor() {
 function rewriteNote(n, { vel = n.velocity, dur = n.tOff - n.tOn } = {}) {
   if (!conn) return false;
   const base = engine ? engine.clipVersion : 0;
+  // REWRITE IN PLACE, so it must address the note it was handed. This one feeds the tracker's
+  // OFF row (a truncation), the velocity field and the roll's length drag — three gestures that
+  // all silently rewrote column 0 instead of the note in front of you.
   const ok = conn.send({ type: 'note', track: n.track, pitch: n.pitch,
-                         tick: n.tOn, dur: Math.max(1, dur), vel });
+                         tick: n.tOn, dur: Math.max(1, dur), vel,
+                         column: n.column | 0 });
   return ok ? base : false;
 }
 
@@ -7427,6 +7477,8 @@ function writePitch(pitch) {
   const base = engine ? engine.clipVersion : 0;
   const dur = laneRowTicks(state.cursor.track);
   if (!conn || !conn.send({ type: 'note', track: state.cursor.track, pitch,
+                            /* no-column: a NEW note entered in the lane, same case as the roll's
+                               click-to-add above. */
                             tick: tickOfCursorRow(), dur, vel: state.velocity })) return false;
   addPending(state.cursor.row, state.cursor.track, 0, pitchToToken(pitch), base);
   return true;
@@ -8006,11 +8058,18 @@ addEventListener('keydown', (e) => {
       if (state.selectedNote < 0) { state.reject = 'select a note first'; return done(); }
       // Delete is by tick on a track, so find the selected note's tick.
       let tick = -1;
+      let delCol = 0;
       if (engine) for (let i = 0; i < engine.noteCount; i++) {
-        if (engine.notes[i].id === state.selectedNote) { tick = engine.notes[i].tOn; break; }
+        if (engine.notes[i].id === state.selectedNote) {
+          tick = engine.notes[i].tOn;
+          delCol = engine.notes[i].column | 0;
+          break;
+        }
       }
       if (tick < 0) { state.reject = 'note is gone'; return done(); }
-      conn && conn.send({ type: 'delete', track: state.cursor.track, tick });
+      // The column comes from the NOTE that was found, not the cursor: this deletes whatever is
+      // selected in the roll, and the roll's selection is not bound to the tracker's cursor.
+      conn && conn.send({ type: 'delete', track: state.cursor.track, tick, column: delCol });
       state.selectedNote = -1;
       return done();
     }

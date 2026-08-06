@@ -4601,3 +4601,73 @@ test('CONTROL: an invented output line IS caught', () => {
     'a line a script really does print was rejected; only the text after the em-dash differs, '
     + 'which is interpolated and cannot be matched');
 });
+
+/*
+ * EVERY NOTE OR DELETE OP NAMES ITS COLUMN.
+ *
+ * A STRUCTURAL check, which this file normally argues against — mirrors should assert behaviour,
+ * not shapes. The exception is a rule with a recognisable syntactic form and a history of being
+ * re-implemented, and this one has both. Three separate waves now:
+ *
+ *   the sidecar's note builder dropped it, so every note the UI ever wrote landed in column 0
+ *   six Rust call sites spelled it six ways, none of them the reader's 0x00FF mask
+ *   fourteen op literals in this page, of which TWELVE never sent it
+ *
+ * Each wave was fixed at its own layer and the next layer was not brought along. Behaviour tests
+ * pin the rule where it is exercised — column-ops.mjs does that for the tracker and the roll — but
+ * no fixture can see a THIRTEENTH literal written by hand tomorrow.
+ *
+ * `note_column()` in the sidecar reads `parse_num(body, "column").unwrap_or(0)`. So an op without
+ * a column is not refused and does not fail; it is a confident edit to column 0. That is why the
+ * absence has to be an error here rather than a warning.
+ *
+ * The exemption is a MARKER IN THE SOURCE, not a list of line numbers or names kept here: a line
+ * number rots the moment anything above it moves, and a list kept in the test is a second copy of
+ * the thing the test is checking.
+ */
+test('every note and delete op names its note column', () => {
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+
+  // The op literals, taken as balanced-brace spans so a nested object cannot end one early.
+  const spans = [];
+  const re = /\{\s*type:\s*'(note|delete)'/g;
+  for (let m = re.exec(html); m; m = re.exec(html)) {
+    let depth = 0, i = m.index, end = -1;
+    for (; i < html.length; i++) {
+      if (html[i] === '{') depth++;
+      else if (html[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+    }
+    if (end > 0) spans.push({ kind: m[1], at: m.index, text: html.slice(m.index, end + 1) });
+  }
+
+  // A BLINDNESS FLOOR. If the literals are ever written another way this parse finds nothing,
+  // and a check that finds nothing passes — which is the failure mode of every structural rule.
+  assert.ok(spans.length >= 12,
+    `only found ${spans.length} note/delete op literals; the parse has gone blind`);
+
+  const naked = spans
+    .filter((s) => !/\bcolumn\s*:/.test(s.text) && !/no-column:/.test(s.text))
+    .map((s) => {
+      const line = html.slice(0, s.at).split('\n').length;
+      return `index.html:${line} (${s.kind}) ${s.text.replace(/\s+/g, ' ').slice(0, 90)}`;
+    });
+
+  assert.deepEqual(naked, [],
+    'a note/delete op with no column. The sidecar defaults a missing column to ZERO, so this is '
+    + 'not an unspecified edit — it is a confident edit to the wrong cell: a delete removes a '
+    + 'DIFFERENT note, a transpose duplicates instead of moving, a paste collapses two columns '
+    + 'onto one. If the note is genuinely NEW and the surface has no column concept, say so with '
+    + 'a /* no-column: why */ marker inside the literal.');
+});
+
+test('CONTROL: the column ratchet notices a naked op', () => {
+  // Asserts the PREDICATE, not the file — the file is green, which is exactly when a structural
+  // check is most likely to have stopped seeing.
+  const naked = "{ type: 'delete', track: n.track, tick: n.tOn }";
+  const clothed = "{ type: 'delete', track: n.track, tick: n.tOn, column: n.column | 0 }";
+  const marked = "{ type: 'note', /* no-column: new note */ track: 0, pitch: 60 }";
+  const flags = (t) => !/\bcolumn\s*:/.test(t) && !/no-column:/.test(t);
+  assert.equal(flags(naked), true, 'a naked op was not flagged — the check cannot fail');
+  assert.equal(flags(clothed), false, 'an op that names its column was flagged');
+  assert.equal(flags(marked), false, 'a deliberately exempt op was flagged');
+});
