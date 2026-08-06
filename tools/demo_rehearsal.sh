@@ -442,6 +442,52 @@ else
   echo "  every track carrying notes or chords has something that can sound it"
 fi
 
+# ---- AND THE ENGINE ACTUALLY PRODUCES AUDIO FROM WHAT THE AI BUILT.
+#
+# The phase above asks whether each part COULD sound — a structural question, answered from the
+# chain and the kit. This one closes the loop: the song the model built by prompting is rendered
+# OFFLINE and the result is measured. Prompt in, audio out, with nothing in between that a
+# count could satisfy.
+#
+# THE OFFLINE RENDER RATHER THAN PLAYBACK, deliberately: no audio device, no dropouts, no
+# dependence on what this machine's default output is doing. The capture tap on this Mac is
+# unusable and a live playback assertion would be measuring CoreAudio.
+#
+# ITS LIMITATION, stated because it is easy to over-read: a whole-song peak is satisfied by ONE
+# loud track. It cannot tell you the drums sounded — that is what the per-track phase above is
+# for, and the two are complementary rather than redundant. Per-track audio would need stems and
+# a solo pass per track.
+echo
+if [ -f "$TMP/rehearsal.uniproj.json" ]; then
+  ( cd "$BUILD" && exec env DAW_PROJECT_DIR="$TMP" ./daw_engine --project rehearsal \
+      --render "$TMP/take" --run-seconds 12 ) >"$TMP/render.log" 2>&1
+  PEAK="$(python3 - "$TMP/take.wav" <<'PYR' 2>/dev/null
+import wave, struct, sys
+try:
+    w = wave.open(sys.argv[1], "rb")
+except Exception:
+    print(-1); raise SystemExit
+n = w.getnframes()
+d = w.readframes(min(n, 44100 * 10))
+s = struct.unpack("<%dh" % (len(d) // 2), d)
+print(max((abs(v) for v in s), default=0))
+PYR
+)"
+  if [ "${PEAK:--1}" = "-1" ]; then
+    echo "  the render wrote no readable wav — see $TMP/render.log"
+    FAIL=$((FAIL+1))
+  elif [ "${PEAK:-0}" -gt 300 ]; then
+    echo "  the song the model built RENDERS AUDIO: peak $PEAK"
+  else
+    echo "  THE WHOLE SONG RENDERS SILENT: peak $PEAK. Every part above can be structurally
+        perfect and this still be zero — that is the point of measuring it."
+    FAIL=$((FAIL+1))
+  fi
+else
+  echo "  no saved project to render, so the audio end of this was not tested at all"
+  FAIL=$((FAIL+1))
+fi
+
 echo
 echo "rehearsed: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
