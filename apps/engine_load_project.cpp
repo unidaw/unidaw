@@ -155,11 +155,11 @@ bool applyDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
                 // claiming it is malformed: drop it rather than park material that no
                 // derivation will ever come asking for.
                 if (t.auxBusIndex != 0) {
+                  // THE WHOLE TRACK. Copying four named fields here is what made a stem's
+                  // collapsed state, chain, quantize, routing and mod links survive the SAVE and
+                  // then vanish on the way back in — which undo hits on every single undo.
                   AuxChildOverlay overlay;
-                  overlay.name = t.name;
-                  overlay.mixer = t.mixer;
-                  overlay.placements = t.placements;
-                  overlay.automationClips = t.automationClips;
+                  overlay.track = t;
                   // The SECOND copy of the adoption rule, and it had the same hole as the first:
                   // a stem's A/B draft was dropped exactly like a slot track's.
                   adoptClipsForPlacements(t.placements, document.clips, overlay.ownedClips);

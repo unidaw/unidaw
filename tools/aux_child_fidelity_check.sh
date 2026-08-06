@@ -132,7 +132,19 @@ PY
   # incomplete undo. Asserted separately because the two could diverge: a field could be saved
   # and still not be restored if undo applied something narrower.
   after_command "$TMP" cli do collapse --track "$STEM_ID" --on 0
+  RESTORED_BEFORE="$(grep -c '"event":"multiout.child_restored"' "$TMP/eng.log" 2>/dev/null || true)"
   after_command "$TMP" cli do undo
+  # WAIT FOR THE CHILD TO BE RE-DERIVED, not merely for undo to have run. applyDocument lifts the
+  # aux-child tracks into an overlay and the CONSUMER thread applies it on its next pass, so
+  # undo.applied is emitted before the stem exists again. Saving on the journal wait alone read
+  # the stem's state before it had been restored and reported "undo did not restore a stem's
+  # property" for a race in this file — the history-vs-published distinction, one layer further
+  # out: here the thing to wait for is neither, it is the derivation.
+  for _ in $(seq 1 60); do
+    NOW="$(grep -c '"event":"multiout.child_restored"' "$TMP/eng.log" 2>/dev/null || true)"
+    [ "${NOW:-0}" -gt "${RESTORED_BEFORE:-0}" ] && break
+    sleep 0.25
+  done
   rm -f "$TMP/auxfid2.uniproj.json"
   cli do save auxfid2 --force
   for _ in $(seq 1 60); do [ -s "$TMP/auxfid2.uniproj.json" ] && break; sleep 0.1; done

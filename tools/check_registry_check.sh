@@ -61,18 +61,6 @@ DECLARED_UNREGISTERED = {
     #
     # Keep the mechanism. The next check that cannot run needs a reason here rather than a quiet
     # absence from CMakeLists, which is what forty-three checks had before this ratchet existed.
-    #
-    # ...and here is the next one, 2026-08-07.
-    "aux_child_fidelity_check.sh":
-        "RED AGAINST A REAL BUG — task #121. It asserts that a property set on an aux-child stem "
-        "survives save/reload and is restored by undo. The engine currently emits NO aux-child "
-        "track to the file at all: the runtime holds collapsed:true for the stem (confirmed in the "
-        "published table) and the save writes only the slot track and the master, so the flag has "
-        "nowhere to live. Registering it now would put a permanent red in the suite, and a "
-        "permanently red check is one people learn to skip — which is how the muting starts. It "
-        "goes into CMakeLists in the same commit that fixes #121, and NOT before. "
-        "Written because a negative control proved the gap: with the five-field aux-child capture "
-        "re-introduced, all eight plausibly-related checks passed.",
 }
 
 checks = sorted(p.name for p in (root / "tools").glob("*_check.sh"))

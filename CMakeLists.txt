@@ -1677,6 +1677,15 @@ add_test(NAME undo_invariants
 )
 set_tests_properties(undo_invariants PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
 
+# A STEM IS A TRACK. Registered the moment it went green — it was DECLARED_UNREGISTERED for one
+# commit while the load half was still narrow, because a permanently red check is one people learn
+# to skip. It exists because a negative control proved the gap: with the five-field aux-child
+# capture re-introduced, all eight plausibly-related checks passed.
+add_test(NAME aux_child_fidelity
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/aux_child_fidelity_check.sh
+)
+set_tests_properties(aux_child_fidelity PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 # THE DOCUMENT IS A VALUE. Undo is built on captureDocument/applyDocument, so a field either of
 # them drops would be dropped by every undo at once. Loading a preset, saving, loading THAT and
 # saving again must produce identical bytes: the second save came through the pair, so a loss in

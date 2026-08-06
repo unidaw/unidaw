@@ -467,12 +467,22 @@ struct TrackRuntime {
 // when applied, which is what makes application happen exactly once, and the whole map is
 // cleared by the next load so a stem whose bus never comes back cannot leak into a
 // different project.
+// WHAT A STEM CARRIES ACROSS A LOAD — the WHOLE authored track, not a list of the parts somebody
+// remembered.
+//
+// This held five fields: name, mixer, placements, ownedClips, automationClips. That is the same
+// hand-picked subset the save side had, sitting on the LOAD side where the review panel did not
+// look — because the finding was written as "captureDocument records four fields" and capture is
+// only half of a round trip. Undo IS the apply half, so the consequence was that a stem's
+// collapsed state, chain, quantize, routing and mod links could be SAVED correctly and still not
+// come back: collapse a stem, un-collapse it, press undo, and it stayed un-collapsed.
+//
+// ProjectTrack is already the complete authored per-track state, so holding one is what makes a
+// field added next year survive without anybody widening this. ownedClips stays separate because
+// clips are a document-level pool that placements reference, not a property of the track.
 struct AuxChildOverlay {
-  std::string name;
-  daw::MixerSettings mixer{};
-  std::vector<daw::ProjectPlacement> placements;
+  daw::ProjectTrack track;
   std::vector<daw::ProjectClip> ownedClips;
-  std::vector<daw::AutomationClip> automationClips;
 };
 
 // PreviewNote (keyjazz): the UI command thread enqueues auditions here and the producer
