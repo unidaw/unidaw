@@ -459,6 +459,35 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "sampler_envelope",
+            description: "Shape a sampler's ADSR — the difference between a pluck and a pad from \
+                          the same sample. Times are MILLISECONDS, sustain is a percentage. \
+                          `target` picks what the envelope moves: volume by default, or pitch or \
+                          cutoff for a sweep. Note that a slot only stops at note-off if its gate \
+                          is 1 (see sampler_device / sampler_slot), so a long release on a \
+                          one-shot changes nothing.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "device"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "device": { "type": "integer", "minimum": 1 },
+                    "attack": { "type": "integer", "minimum": 0, "maximum": 60000,
+                                "description": "Milliseconds to full level. 0 is instant." },
+                    "decay": { "type": "integer", "minimum": 0, "maximum": 60000 },
+                    "sustain": { "type": "integer", "minimum": 0, "maximum": 100,
+                                 "description": "Percent of full level held. 100 = no decay." },
+                    "release": { "type": "integer", "minimum": 0, "maximum": 60000 },
+                    "target": { "type": "string",
+                                "enum": ["volume", "pan", "pitch", "cutoff", "resonance"],
+                                "description": "What the envelope moves. Default volume." },
+                    "depth": { "type": "integer", "minimum": -1000, "maximum": 1000,
+                               "description": "Signed. What FULL travel is worth on the target; \
+                                               on cutoff 1000 is about six octaves. Default 1000." },
+                },
+            }),
+        },
+        ToolSpec {
             name: "set_mixer",
             description: "Set a track's gain, pan, mute or solo. Gain is in dB (0 is unity,                           negative is quieter); pan is -1 hard left to 1 hard right.",
             params: json!({
@@ -1616,6 +1645,68 @@ fn sampler_slice(handle: &EngineHandle, args: &Value) -> ToolResult {
     }
 }
 
+/// A sampler's ADSR — the difference between a pluck and a pad from one sample.
+///
+/// The agent could load a sample, map it and chop it, and had no way to shape how it SOUNDS over
+/// time. Every part it built had the sample's own envelope and nothing else.
+///
+/// TIMES IN MILLISECONDS, sustain as a PERCENT. The payload takes raw units and a `time_base`,
+/// and asking a model to think in those is asking for the units to be wrong — a model reasons in
+/// "a 200ms attack" and this is the layer that should know what that is on the wire.
+fn sampler_envelope(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(track), Some(device)) = (arg_u64(args, "track"), arg_u64(args, "device")) else {
+        return ToolResult::err("sampler_envelope needs \"track\" and \"device\"");
+    };
+    if device == 0 {
+        return ToolResult::err(
+            "device 0 is not a device id — read the real one from the observation's `devices:` line");
+    }
+    let target = match arg_str(args, "target").unwrap_or("volume") {
+        "volume" => 0u8, "pan" => 1, "pitch" => 2, "cutoff" => 3, "resonance" => 4,
+        other => return ToolResult::err(format!(
+            "envelope target must be volume, pan, pitch, cutoff or resonance (got {other:?})")),
+    };
+    /*
+     * DEFAULTS THAT MAKE A SOUND. An all-zero ADSR is instant attack, instant decay and zero
+     * sustain — silence — and this wire's failure mode for a wrong payload is a silent no-op, so
+     * an omitted field must not mean "zero". Sustain defaults to FULL and the times to short,
+     * which is the sample playing as it always did.
+     */
+    let attack = arg_u64(args, "attack").unwrap_or(0).min(60_000) as u32;
+    let decay = arg_u64(args, "decay").unwrap_or(0).min(60_000) as u32;
+    let release = arg_u64(args, "release").unwrap_or(50).min(60_000) as u32;
+    let sustain = args.get("sustain").and_then(|v| v.as_i64()).unwrap_or(100).clamp(0, 100);
+    let depth = args.get("depth").and_then(|v| v.as_i64()).unwrap_or(1000).clamp(-1000, 1000);
+
+    let p = daw_bridge::layout::UiSamplerEnvelopePayload {
+        command_type: UiCommandType::SamplerSetEnvelope as u16,
+        flags: 0,
+        track_id: track as u32,
+        device_id: device as u32,
+        mod_set_id: arg_u64(args, "mod_set").unwrap_or(0) as u32,
+        modulator_id: 0,
+        // 0 = milliseconds, which is what this tool's arguments are in.
+        time_base: 0,
+        reserved1: 0,
+        attack,
+        decay,
+        release,
+        sustain_milli: (sustain * 10) as i16,
+        rate_milli: 1000,
+        target,
+        reserved2: 0,
+        depth_milli: depth as i16,
+    };
+    match handle.send_sampler_envelope(p) {
+        Ok(()) => ToolResult::ok(json!({
+            "sent": true, "track": track, "device": device,
+            "attack_ms": attack, "decay_ms": decay, "sustain_pct": sustain,
+            "release_ms": release, "target": arg_str(args, "target").unwrap_or("volume"),
+        })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
 /// Make a modulation link, name its parameter, and turn the knob. THREE commands.
 ///
 /// All three, because a link the engine accepts moves nothing without them: it addresses a
@@ -1972,6 +2063,7 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "sampler_slot" => sampler_slot(handle, &call.args),
         "sampler_device" => sampler_device(handle, &call.args),
         "sampler_slice" => sampler_slice(handle, &call.args),
+        "sampler_envelope" => sampler_envelope(handle, &call.args),
         "set_mixer" => set_mixer(handle, &call.args),
         "set_loop" => set_loop(handle, &call.args),
         "preview_note" => preview_note(handle, &call.args),

@@ -2321,7 +2321,7 @@ const OP_REGISTRY = {
    * The envelope (opcode 82). daw-cli has `sampler-env` — it is what proved a loaded slot is
    * silent without one — so the CLI path is real; the agent has no sampler tooling at all.
    */
-  env:       { cli: 'sampler-env', agent: null, why: 'gap' },
+  env:       { cli: 'sampler-env', agent: 'sampler_envelope' },
   /*
    * One slot field (SamplerSetSlot). daw-cli has `sampler-slot`, so the CLI path is real; the
    * agent has no sampler tooling at all.
@@ -2485,7 +2485,7 @@ const AGENT_GAP = ['clear', 'columns', 'copy', 'cut',
                    'new', 'paste', 'patch',
                    'transpose', 'mods',
                    // With the other sampler verbs: the agent has no sampler tooling at all.
-                   'filter', 'env', 'soundaddr', 'emit',
+                   'filter', 'soundaddr', 'emit',
                    'slot-name', 'vintage',
                    'save-patch', 'lpb', 'note-overlap',
                    // A clip's own grid (opcode 94). It HAS a CLI path — `daw-cli do clip-grid`
