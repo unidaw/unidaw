@@ -77,7 +77,7 @@ writeFileSync(`${stack.dir}/${NAME}.uniproj.json`, JSON.stringify({
       device_chain: [
         { device_id: 3, kind: 'sampler', patcher_node_id: 0, bypass: false,
           sampler: { slots: [{ id: 1, name: 'a', key_low: 0, key_high: 127, root_key: 60, gate: 0 }] } },
-        { device_id: 7, kind: 'gain', patcher_node_id: 0, bypass: false },
+        { device_id: 7, kind: 'patcher_event', patcher_node_id: 0, bypass: false },
       ],
       mod_links: [], placements: [],
     },
@@ -90,8 +90,22 @@ writeFileSync(`${stack.dir}/${NAME}.uniproj.json`, JSON.stringify({
   ],
 }, null, 2));
 
+/*
+ * THE LOAD IS ASSERTED BY ITS CONTENT, NOT BY THE EXIT CODE — and that distinction cost this
+ * file its first run.
+ *
+ * The fixture originally gave one device `kind: 'gain'`. There is no such DeviceKind, and
+ * `loadProject` answers an unknown kind by ABANDONING THE WHOLE PARSE — `setError(...); return
+ * false` — so nothing loaded at all. `do load` had already exited 0, because the command was
+ * accepted by the ring; the engine's refusal happens later and elsewhere. Every subsequent check
+ * then ran against the engine's DEFAULT project and reported that seven CLI verbs were broken.
+ *
+ * That is exactly the shape this suite exists to catch, arriving first in the suite's own fixture.
+ * So the load is confirmed by finding the fixture's own devices, and `cli.ok` is never treated as
+ * evidence that anything happened.
+ */
 const load = cli('do', 'load', NAME);
-check(load.ok, 'the fixture loads', load.out.slice(0, 200));
+check(load.ok, 'do load is accepted (this alone proves nothing — see below)', load.out.slice(0, 200));
 
 /** Save and read the project back — the ground truth for every structural assertion here. */
 const saved = async (tag) => {
@@ -111,9 +125,16 @@ const chainOf = (doc, track) =>
 
 const ENGINE_LOG = join(stack.root, 'engine.log');
 
-const before = await saved(`${NAME}_a`);
+let before = null;
+for (let i = 0; i < 30; i++) {
+  before = await saved(`${NAME}_a${i}`);
+  if (JSON.stringify(chainOf(before, 0)) === '[3,7]') break;
+  await sleep(200);
+}
 check(JSON.stringify(chainOf(before, 0)) === '[3,7]',
-      'the fixture starts with devices [3,7] on track 0', JSON.stringify(chainOf(before, 0)));
+      'THE FIXTURE ACTUALLY LOADED: devices [3,7] are on track 0',
+      `${JSON.stringify(chainOf(before, 0))} — an unknown device kind makes loadProject abandon `
+      + 'the whole parse while `do load` still exits 0');
 
 /* ── set-tempo ──────────────────────────────────────────────────────────────────────────────
  * POSITIONAL, not flagged: `do set-tempo <bpm> [position]`, and with no position it FLATTENS
@@ -156,8 +177,14 @@ check(macro.ok && /"sent"/.test(macro.out), 'do macro is accepted by the engine'
  * whole-pool path, which for a project with per-device graphs edits a graph that is never saved.
  * So both are addressed at device 1 on track 1, and the assertion reads the DEVICE's graph.
  */
+/*
+ * A PAIR THAT CAN LEGALLY CONNECT. Two euclideans cannot: a euclidean emits gates and has no
+ * event INPUT, so the engine answers `patcher_device_edit.rejected ... reason=invalid_port` and
+ * the graph saves with two nodes and no edge — which reads exactly like the verb being broken.
+ * euclidean -> event-out is the shape the app itself builds.
+ */
 const addA = cli('do', 'patcher-node', '--track', '1', '--device', '1', '--type', 'euclidean');
-const addB = cli('do', 'patcher-node', '--track', '1', '--device', '1', '--type', 'euclidean');
+const addB = cli('do', 'patcher-node', '--track', '1', '--device', '1', '--type', 'event-out');
 check(addA.ok && addB.ok, 'two patcher nodes are added to work on', (addA.out + addB.out).slice(0, 160));
 
 const nodesOf = (doc) => {
@@ -168,19 +195,29 @@ const withNodes = await saved(`${NAME}_d`);
 const nodeCount = nodesOf(withNodes).length;
 check(nodeCount >= 2, 'the device graph holds the two new nodes', String(nodeCount));
 
+// The node ids the ENGINE assigned, not 0 and 1 — the same lesson as the clip ids: what a
+// fixture or a caller names is not what the runtime holds.
+const ids = nodesOf(withNodes).map((n) => n.id);
 const conn = cli('do', 'patcher-connect', '--track', '1', '--device', '1',
-                 '--src', '0', '--dst', '1', '--kind', '0');
+                 '--src', String(ids[0]), '--dst', String(ids[1]), '--kind', 'event');
 check(conn.ok, 'do patcher-connect runs', conn.out.slice(0, 160));
 const afterConn = await saved(`${NAME}_e`);
+// `edges`, not `connections` — project_file.cpp writes `writer.beginArray("edges")`. The first
+// version of this guessed three key names and not that one, so it read [] off a graph that had
+// the edge in it and reported patcher-connect broken. Guessing at a schema is how a test comes to
+// disagree with a working feature.
 const edgesOf = (doc) => {
   const dev = doc?.tracks?.find((t) => t.track_id === 1)?.device_chain?.[0];
-  return dev?.patcher?.connections ?? dev?.patcher?.edges ?? dev?.graph?.connections ?? [];
+  return dev?.patcher?.edges ?? dev?.graph?.edges ?? [];
 };
 check(edgesOf(afterConn).length >= 1,
       'patcher-connect leaves a connection in the SAVED device graph',
-      JSON.stringify(edgesOf(afterConn)).slice(0, 120));
+      JSON.stringify(edgesOf(afterConn)).slice(0, 120)
+      + ' :: ' + ((readFileSync(ENGINE_LOG, 'utf8')
+                    .match(/[^\n]*patcher_device_edit.rejected[^\n]*/g) || []).slice(-1).join('')));
 
-const unnode = cli('do', 'patcher-unnode', '--track', '1', '--device', '1', '--node', '1');
+const unnode = cli('do', 'patcher-unnode', '--track', '1', '--device', '1',
+                   '--node', String(ids[1]));
 check(unnode.ok, 'do patcher-unnode runs', unnode.out.slice(0, 160));
 const afterUnnode = await saved(`${NAME}_f`);
 check(nodesOf(afterUnnode).length === nodeCount - 1,
@@ -188,33 +225,38 @@ check(nodesOf(afterUnnode).length === nodeCount - 1,
       `${nodeCount} -> ${nodesOf(afterUnnode).length}`);
 
 /* ── open-editor ────────────────────────────────────────────────────────────────────────────
- * THE ONE WITH A KNOWN HISTORY. It was built as a UiChainCommandPayload where the engine reads a
- * UiCommandPayload; both are 40 bytes, so the size check passed and the engine read `deviceKind`
- * (offset 16) as the device id — 0 for every call, every device, every track. The button had
- * never worked once.
+ * THE ONE WITH A KNOWN HISTORY, and the one whose positive case cannot be asserted here.
  *
- * The engine owns the plugin window, so success is not observable from here. The ENGINE LOG is,
- * and it names its refusal: "OpenPluginEditor failed - device N not found". Asserting the absence
- * of that line for a device that exists is the strongest check available, and it is exactly the
- * one that would have caught the original bug — it printed "device 0 not found" every time.
+ * The bug this branch is named for: it was built as a UiChainCommandPayload where the engine reads
+ * a UiCommandPayload. Both are 40 bytes, so the size check passed and the engine read `deviceKind`
+ * (offset 16) as the device id — 0 for every call, every device, every track.
+ *
+ * `handleOpenPluginEditor` resolves a host index by walking the chain for VstInstrument and
+ * VstEffect devices ONLY. A sampler has no plugin editor, so it is refused, correctly — this
+ * suite's fixture has no hosted plugin and cannot have one that is guaranteed present on any
+ * machine. So the positive case is out of reach and is NOT faked with a weaker assertion.
+ *
+ * What IS asserted is that the command REACHES the engine and is decoded: the refusal names the
+ * device id that was sent. Under the original bug the id was always 0 no matter what was asked
+ * for, so "asked for 4242, refused 4242" is precisely the evidence that the payload arrives
+ * intact — the one thing the wire bug destroyed, testable without a plugin.
  */
-const editor = cli('do', 'open-editor', '--track', '0', '--device', '3');
-check(editor.ok, 'do open-editor runs', editor.out.slice(0, 160));
-await sleep(1000);
-const log = existsSync(ENGINE_LOG) ? readFileSync(ENGINE_LOG, 'utf8') : '';
-check(!/OpenPluginEditor failed/.test(log),
-      'the engine does not refuse open-editor for a device that exists',
-      (log.match(/OpenPluginEditor failed[^\n]*/) || [''])[0]);
-// The control: the same verb aimed at a device id that is NOT in the chain must be refused, or
-// the check above passes because the engine never says anything about this command at all.
 const badEditor = cli('do', 'open-editor', '--track', '0', '--device', '4242');
-check(badEditor.ok, 'open-editor for a missing device still exits 0 (the CLI cannot know)',
-      badEditor.out.slice(0, 120));
-await sleep(1000);
+check(badEditor.ok, 'do open-editor runs', badEditor.out.slice(0, 160));
+await sleep(1200);
+const log = existsSync(ENGINE_LOG) ? readFileSync(ENGINE_LOG, 'utf8') : '';
+check(/OpenPluginEditor failed - device 4242/.test(log),
+      'open-editor DELIVERS THE DEVICE ID IT WAS GIVEN — the wire bug always sent 0',
+      (log.match(/OpenPluginEditor failed[^\n]*/) || ['no refusal line at all'])[0]);
+// And the id is read from the right offset in both directions: a different id must be echoed
+// differently, or the check above would pass on any constant.
+const badEditor2 = cli('do', 'open-editor', '--track', '0', '--device', '777');
+check(badEditor2.ok, 'open-editor runs a second time', badEditor2.out.slice(0, 120));
+await sleep(1200);
 const log2 = existsSync(ENGINE_LOG) ? readFileSync(ENGINE_LOG, 'utf8') : '';
-check(/OpenPluginEditor failed/.test(log2),
-      'NEGATIVE CONTROL: a missing device IS refused, so the check above is not blind',
-      'no refusal appeared — the engine may not be reading this command at all');
+check(/OpenPluginEditor failed - device 777/.test(log2),
+      'CONTROL: a different device id is echoed differently, so the check above is not constant',
+      (log2.match(/OpenPluginEditor failed - device \d+/g) || []).join(' | '));
 
 /* ── remove-device ──────────────────────────────────────────────────────────────────────────
  * Last, because it destroys the fixture. By ID, and the surviving id is asserted rather than the

@@ -3885,6 +3885,19 @@ fn main() {
                     };
                     let payload = L::UiPatcherGraphCommandPayload {
                         command_type: UiCommandType::ConnectPatcherNodes as u16,
+                        // --device WAS ACCEPTED AND SILENTLY IGNORED. This line was missing while
+                        // patcher-node, patcher-unnode and patcher-config all had it, so the one
+                        // verb that JOINS two nodes was the one that could not say which graph it
+                        // meant. Without the flag the command takes the legacy whole-pool path:
+                        // the nodes went onto the device's graph and the edge between them went
+                        // into the shared pool, which is never saved. The graph reloaded with two
+                        // nodes and nothing connecting them, and every surface reported success.
+                        //
+                        // Found by cli-verbs.mjs, which is the first thing ever to run this verb.
+                        // The sidecar sets these flags for every patcher edit including connect,
+                        // so daw-cli was the only producer with the hole — a second copy agreeing
+                        // on names and differing in behaviour.
+                        flags: patcher_device_flags(&args),
                         track_id: track,
                         src_node_id: src,
                         dst_node_id: dst,
