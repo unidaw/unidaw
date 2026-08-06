@@ -140,7 +140,7 @@
           "bypass": false,
           "vst_ref": {
             "vendor": "u-he",
-            "name": "Zebra2",
+            "name": "Zebralette",
             "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
             "uid16": ""
           }
@@ -313,7 +313,7 @@
           "bypass": false,
           "vst_ref": {
             "vendor": "u-he",
-            "name": "Zebra2",
+            "name": "Zebralette",
             "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
             "uid16": ""
           }
@@ -420,7 +420,7 @@
           "bypass": false,
           "vst_ref": {
             "vendor": "u-he",
-            "name": "Zebra2",
+            "name": "Zebralette",
             "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
             "uid16": ""
           }
@@ -667,7 +667,7 @@
           "bypass": false,
           "vst_ref": {
             "vendor": "u-he",
-            "name": "Zebra2",
+            "name": "Zebralette",
             "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
             "uid16": ""
           }
@@ -1114,7 +1114,7 @@
           "bypass": false,
           "vst_ref": {
             "vendor": "u-he",
-            "name": "Zebra2",
+            "name": "Zebralette",
             "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
             "uid16": ""
           }
@@ -1657,7 +1657,7 @@
           "bypass": false,
           "vst_ref": {
             "vendor": "u-he",
-            "name": "Zebra2",
+            "name": "Zebralette",
             "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
             "uid16": ""
           },

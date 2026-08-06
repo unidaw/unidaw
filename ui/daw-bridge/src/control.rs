@@ -500,6 +500,33 @@ impl EngineHandle {
     /// There is no engine->reader notification channel in the lock-free SHM, so
     /// this polls the published version at a short interval — it returns as soon
     /// as the engine acks (about one audio block), not after a padded sleep.
+    /// Wait for the HARMONY version to advance past `base`.
+    ///
+    /// The harmony timeline has its own counter and its own exact-match gate
+    /// (`requireMatchingHarmonyVersion` demands `baseVersion == current`), so a caller that sends
+    /// a harmony edit and returns immediately leaves the NEXT caller reading a version the engine
+    /// has not reached yet. That one is refused, silently, into a resync diff nothing reads.
+    ///
+    /// Found from a live report: asking the agent for a key change across four bars produced
+    /// "refused an edit composed against version" several times over and landed two of the four.
+    /// Each tool call re-read the counter correctly; the counter simply had not moved yet.
+    pub fn wait_for_harmony_version(
+        &self,
+        base: u32,
+        timeout: std::time::Duration,
+    ) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if self.harmony_version() != base {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_micros(250));
+        }
+    }
+
     pub fn wait_for_clip_version(
         &self,
         base: u32,

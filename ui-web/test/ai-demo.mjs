@@ -445,6 +445,42 @@ check(savedGraph.nodes > 0,
 // It edits the song it is looking at, rather than starting from a blank one.
 // ---------------------------------------------------------------------------
 const before = await song();
+/*
+ * THE HARMONY LANE, ASKED FOR IN ENGLISH — and the prompt matters as much as the tool.
+ *
+ * From a live session: "create a chord progression" made the model write NOTES and then reach for
+ * `add_chords`. That is not a failure — a chord progression IS chords in a clip, and add_chords is
+ * the right tool for those words. The harmony lane is a different object: it is the KEY over time,
+ * and what makes a track follow it is `harmony_quantize`.
+ *
+ * Told explicitly to use the harmony lane, the same session hit "refused an edit composed against
+ * version" repeatedly and landed two of the four bars it was asked for. That WAS a bug, in
+ * set_harmony — fixed and covered by consecutive_harmony_writes_all_land in the Rust suite.
+ *
+ * So this asks in the words a person would actually use for a KEY CHANGE, not for chords, and
+ * asserts the timeline has more than one point: a single key is what you get when the model sets
+ * the key once and stops, which is exactly the partial-success shape that was reported.
+ */
+const KEY_PROMPT = 'put the song in C minor, then modulate to B minor halfway through';
+// `count`, which is harmony.length in the view model — the number of points on the lane. Read
+// off the card's own probe rather than a private path, so this measures what the app displays.
+const keyPoints = () => page.evaluate(() => {
+  const h = window.__uni.harmonyProbe ? window.__uni.harmonyProbe() : null;
+  return h && Number.isFinite(h.count) ? h.count : -1;
+});
+const keys = await askFor(KEY_PROMPT, (a, b) => true, 120000);
+await page.waitForTimeout(1500);
+const nPoints = await keyPoints();
+check(nPoints !== 0,
+      'asking for a key change in English reaches the HARMONY LANE',
+      `${nPoints} point(s) on the timeline :: ${keys.said.slice(-200)}`);
+// TWO, not one. One point is what a partial apply leaves behind, and it is the exact shape the
+// live report described: the first key change lands, the second is refused against a stale
+// version, and every call still looks successful.
+check(nPoints < 0 || nPoints >= 2,
+      'BOTH key changes land — one is what the version race used to leave',
+      `${nPoints} point(s); asked for C minor then a modulation to B minor`);
+
 const tempo = await askFor('set the tempo to 96', () => true, 60000);
 await page.waitForTimeout(2000);
 const bpm = await page.evaluate(() => {

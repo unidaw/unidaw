@@ -2778,3 +2778,57 @@ fn the_agent_can_save_a_patcher_preset() {
         std::thread::sleep(Duration::from_millis(200));
     }
 }
+
+/// FOUR KEY CHANGES IN A ROW ALL LAND — the case a live session found broken.
+///
+/// Reported from real use: "create a chord progression using the harmony lane" over four bars
+/// produced several "refused an edit composed against version" and landed two of the four points.
+///
+/// `requireMatchingHarmonyVersion` demands `baseVersion == current` EXACTLY. `set_harmony` read
+/// the counter, sent, and returned immediately — so the second call read a version the engine had
+/// not reached yet, and its edit was refused into a resync diff that no tool reads. Every call
+/// looked successful from the caller's side; the timeline simply had holes in it.
+///
+/// Asserts FOUR POINTS ON DISK, because the failure mode is partial success: two of four is what
+/// was actually reported, and any check that stops at "the first one worked" passes on it.
+#[test]
+fn consecutive_harmony_writes_all_land() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agharm");
+
+    // C minor, G minor, A minor, B minor — one per bar, the shape that was asked for.
+    let want = [(0u64, 0u64, 2u64), (Q * 4, 7, 2), (Q * 8, 9, 2), (Q * 12, 11, 2)];
+    for (i, (tick, root, scale)) in want.iter().enumerate() {
+        let r = session.execute(&ToolCall {
+            tool: "set_harmony".into(),
+            args: json!({ "tick": tick, "root": root, "scale": scale }),
+        });
+        assert!(r.ok, "set_harmony {i} failed: {r:?}");
+        // The tool now reports whether the engine actually took it, rather than assuming.
+        assert_eq!(r.output["applied"].as_bool(), Some(true),
+                   "set_harmony {i} was sent but never applied — this is the exact shape of the \
+                    live report: the call succeeds and the point is not there. {r:?}");
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        assert!(session.execute(&ToolCall {
+            tool: "save".into(), args: json!({"name": "agharm_out"}) }).ok);
+        let doc = read_project(&engine.proj, "agharm_out");
+        let pts = doc["harmony_timeline"].as_array().cloned().unwrap_or_default();
+        if pts.len() == want.len() {
+            let mut got: Vec<(u64, u64)> = pts.iter()
+                .map(|p| (p["nanotick"].as_u64().unwrap_or(0), p["root"].as_u64().unwrap_or(99)))
+                .collect();
+            got.sort();
+            let expect: Vec<(u64, u64)> = want.iter().map(|(t, r, _)| (*t, *r)).collect();
+            assert_eq!(got, expect, "the four key changes are not the four that were asked for");
+            break;
+        }
+        assert!(Instant::now() < deadline,
+                "{} of {} key changes reached the timeline — partial success is the reported \
+                 failure, and a check that only looks at the first one passes on it",
+                pts.len(), want.len());
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}

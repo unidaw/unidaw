@@ -105,7 +105,9 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
                           dominant (V), 6 is the relative minor (vi). So a I-V-vi-IV progression \
                           is degrees [1, 5, 6, 4]. Chords follow the harmony lane — change the \
                           key and the same progression transposes with it. Use add_notes when \
-                          you want fixed MIDI pitches instead.",
+                          you want fixed MIDI pitches instead, and `set_harmony` when what is \
+                          wanted is the KEY rather than chords (a modulation, \"put it in C \
+                          minor\", anything about the harmony lane itself).",
             params: json!({
                 "type": "object",
                 "required": ["track", "degrees"],
@@ -307,9 +309,16 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "set_harmony",
-            description: "Set the key from a point in the song onwards. `root` is a pitch \
-                          class, 0 = C through 11 = B. `scale` is the engine's scale id: \
-                          1 major, 2 minor, 3 dorian, 4 mixolydian.",
+            description: "THE HARMONY LANE (also called the harmony timeline, or the key lane): \
+                          set the KEY from a point in the song onwards. Use this for a key change \
+                          or a modulation — \"in C minor\", \"modulate to B minor at bar 3\", \
+                          \"change key halfway\". Call it once per key change, each with its own \
+                          `tick`; a four-bar section with two keys is two calls. \
+                          This does NOT write chords or notes — it says what key the music is in, \
+                          and tracks with `harmony_quantize` on then sound in that key. For an \
+                          actual chord progression use `add_chords`. \
+                          `root` is a pitch class, 0 = C through 11 = B. `scale` is the engine's \
+                          scale id: 1 major, 2 minor, 3 dorian, 4 mixolydian.",
             params: json!({
                 "type": "object",
                 "required": ["root", "scale"],
@@ -2250,7 +2259,10 @@ fn delete_harmony(handle: &EngineHandle, args: &Value) -> ToolResult {
     if let Err(e) = handle.send_command(p) {
         return ToolResult::err(e);
     }
-    ToolResult::ok(json!({ "deleted_harmony_at": tick, "base": base }))
+    // Waited on for the same reason as set_harmony: the counter this read is what the NEXT
+    // harmony edit will compose against.
+    let applied = handle.wait_for_harmony_version(base, std::time::Duration::from_secs(2));
+    ToolResult::ok(json!({ "deleted_harmony_at": tick, "base": base, "applied": applied }))
 }
 
 /// Save the current patcher graph as a named preset.
@@ -3683,7 +3695,22 @@ fn set_harmony(handle: &EngineHandle, args: &Value) -> ToolResult {
     if let Err(e) = handle.send_command(p) {
         return ToolResult::err(e);
     }
-    ToolResult::ok(json!({ "root": root, "scale": scale, "tick": tick, "base": base }))
+    /*
+     * WAIT FOR IT TO LAND, because the next call reads this counter.
+     *
+     * `requireMatchingHarmonyVersion` demands an EXACT match. Returning as soon as the command is
+     * queued means a caller writing a key change per bar composes bars 2, 3 and 4 against a
+     * version the engine has not reached, and each is refused into a resync diff no tool reads.
+     * Reported from live use: four bars asked for, two landed, several "refused an edit composed
+     * against version" in between.
+     *
+     * add_notes and add_chords already solve this by tracking the base across their own run. This
+     * tool sends ONE command, so the equivalent is to wait for it — which also makes `applied`
+     * honest rather than assumed.
+     */
+    let applied = handle.wait_for_harmony_version(base, std::time::Duration::from_secs(2));
+    ToolResult::ok(json!({
+        "root": root, "scale": scale, "tick": tick, "base": base, "applied": applied }))
 }
 
 fn set_tempo(handle: &EngineHandle, args: &Value) -> ToolResult {
