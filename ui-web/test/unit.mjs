@@ -4740,3 +4740,61 @@ test('the cell inspector states the column INDEX as well as its number', () => {
     + 'command that takes a column is 0-based, so the number on screen is not the number to '
     + 'type — say both, the way `pitch` does.');
 });
+
+/*
+ * NO MUTATION IS MOUSE-ONLY.
+ *
+ * THE BLIND SPOT THIS CLOSES. OP_REGISTRY is keyed on CONSOLE COMMANDS, so an operation that
+ * exists only as a mouse gesture has no row in it and cannot appear in any gap list. That is the
+ * owner's own framing — "mouse-only means unnameable means unscriptable" — and it is how patcher
+ * connection stayed invisible to the parity machinery while being reported as missing from live
+ * use.
+ *
+ * WHY THIS SHAPE RATHER THAN ENUMERATING GESTURES. Mouse handling has no uniform syntax to parse:
+ * pointerdown listeners, onclick, drag callbacks, spread across patcher.js, piano.js, chain.js and
+ * arrange.js. A regex sweep over those would be noisy and dominated by view-only interactions, and
+ * a noisy ratchet earns a hurried allowlist that later readers trust. But every mouse handler ends
+ * up calling dockApi — so if no dockApi method is console-unreachable without a reason, then no
+ * capability is mouse-only, whatever the gestures look like.
+ *
+ * MEASURED BEFORE IT WAS WRITTEN: 109 methods, 101 called by some console command, 8 not. Small
+ * enough to name individually, which is what makes this honest rather than a label.
+ */
+const API_NOT_ON_THE_CONSOLE = {
+  // READS. The console has no use for a getter; these feed the renderer and the panels.
+  opsTextAtCursor: 'read — what the ops cell says, for the token buffer',
+  noteIdAtCursor: 'read — the id under the cursor, for selection',
+  samplerKitCached: 'read — the kit already fetched, so a redraw does not re-request it',
+  selectedClip: 'read — which placement is selected',
+  scaleNames: 'read — the engine\'s scale registry, for the tuning panel',
+  // A SECOND ENTRY POINT for a capability the console already reaches by another name: `ops`
+  // calls opsAtCursor. Not a gap — the same edit, one door along.
+  rowOps: 'the `ops` command reaches this capability through opsAtCursor',
+  // DRIVEN BY A KEY, and therefore already governed by the key ratchet above, which requires
+  // every key to have a console command or a recorded reason. Enter auditions the cursor's row.
+  playRow: 'Enter in the tracker; covered by the key ratchet, not by a verb',
+  // The console's own log. Making the console able to write to itself is not a capability.
+  log: 'internal — the console writes its own transcript',
+};
+
+test('no capability is reachable only by mouse', () => {
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const at = html.indexOf('const dockApi = {');
+  assert.ok(at > 0, 'dockApi was found');
+  const body = html.slice(at, html.indexOf('\n};', at));
+  const methods = [...new Set([...body.matchAll(/^  ([A-Za-z_][A-Za-z0-9_]*)\s*:/gm)]
+    .map((m) => m[1]))];
+  // BLINDNESS FLOOR. If the parse stops matching, `unreached` goes empty and this passes while
+  // checking nothing — the failure mode every source-reading test has to guard against.
+  assert.ok(methods.length > 100, `dockApi was actually parsed: ${methods.length} methods`);
+
+  const dock = readFileSync(new URL('../src/dock.js', import.meta.url), 'utf8');
+  const called = new Set([...dock.matchAll(/api\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]));
+  assert.ok(called.size > 50, `the console's calls were parsed: ${called.size}`);
+
+  const unreached = methods.filter((m) => !called.has(m)).sort();
+  assert.deepEqual(unreached, Object.keys(API_NOT_ON_THE_CONSOLE).sort(),
+    'a dockApi method no console command can reach. If a MOUSE gesture is the only way to get at '
+    + 'it, that is the mouse-only capability the owner\'s rule forbids — give it a verb. If it is '
+    + 'a read, an internal, or covered by a key, say which in API_NOT_ON_THE_CONSOLE.');
+});
