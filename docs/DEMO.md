@@ -93,8 +93,13 @@ list is a drum kit and each file stays on its own key.
 `kit 0 1` prints what is in it, slot by slot.
 
 **For a sustained sound, set the slot's gate.** A freshly loaded slot is a one-shot: it plays the
-whole file and note length does nothing. `sampler-slot --field gate --value 1` makes it stop with
-the note. Drums want the default; a pad does not. See rough edge 3.
+whole file and note length does nothing.
+
+```
+slot 0 1 0 gate 1          track 0, device 1, slot 0 — stop with the note
+```
+
+Drums want the default; a pad does not. See rough edge 3.
 
 ## 4. Chords and strums
 
@@ -201,12 +206,8 @@ DAW_PROJECT_DIR=<the project dir> ./daw_engine --project <name> --render take --
    difference between a drum and a pad, and it is per slot.
 
    It defaults to 0 and neither load nor slice sets it, so every slot you make by hand is a
-   one-shot. If you want to *show* note length mattering, set it:
-
-   ```
-   sampler-slot --field gate --value 1        one slot
-   sampler-device --field default-gate        seeds new slots at mint
-   ```
+   one-shot. From the console, `slot <track> <device> <slot> gate 1` — `gate` is one of the slot
+   fields, so this needs nothing outside the app.
 
    (I had this in here as "do not build a demo moment on note length" — wrong, and it would have
    talked you out of something you can do. `apps/sampler_engine.h:309`.)
