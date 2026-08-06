@@ -3971,3 +3971,114 @@ fn new_project_starts_an_empty_song_and_refuses_to_overwrite_one() {
     assert_eq!(after["clips"].as_array().map(|c| c.len()), Some(original_notes),
                "the refused `new` changed the existing project anyway");
 }
+
+/// SETTING A EUCLIDEAN'S STEPS AND HITS — and not resetting everything else in the process.
+///
+/// daw-cli has had `patcher-config` since the patcher existed. The agent could add a euclidean
+/// node and then not tell it how many steps to take, so the model could build the skeleton of a
+/// generator and never make it play anything particular. That is the same shape as the link bug:
+/// the model does the right thing, the capability is absent, and it reads as giving up halfway.
+///
+/// THE SECOND EDIT IS THE POINT. The wire carries all eight values every time — there is no
+/// "change one field" command — so a tool that packed the given fields over the DEFAULTS would
+/// quietly undo the previous edit. Asking for `hits` after setting `steps` must leave the steps
+/// alone, and nothing but a second call can show that.
+#[test]
+fn patcher_config_sets_a_node_and_a_later_partial_edit_keeps_the_rest() {
+    let (engine, session) = start_engine("agcfg");
+    let proj = json!({
+        "schema_version": 2,
+        "meta": { "name": "agcfg_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [], "clips": [],
+        "tracks": [ {
+            "track_id": 0, "name": "T", "harmony_quantize": 0, "lines_per_beat": 4,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            "device_chain": [ json!({ "device_id": 10, "kind": "patcher_event",
+                                      "patcher_node_id": 1, "bypass": false,
+                                      "patcher": { "nodes": [], "edges": [] } }) ],
+            "mod_links": [], "placements": []
+        } ]
+    });
+    std::fs::write(engine.proj.join("agcfg_in.uniproj.json"),
+                   serde_json::to_string_pretty(&proj).unwrap()).unwrap();
+    assert!(session.execute(&ToolCall {
+        tool: "load".into(), args: json!({"name":"agcfg_in"}) }).ok);
+    std::thread::sleep(Duration::from_millis(1200));
+
+    let add = session.execute(&ToolCall {
+        tool: "patcher_node".into(),
+        args: json!({ "track": 0, "device": 10, "action": "add", "type": "euclidean" }),
+    });
+    assert!(add.ok, "patcher_node add failed: {add:?}");
+
+    // The node id, from the published graph rather than guessed. `addPatcherNode` mints ids and
+    // the tool's reply does not carry one, so waiting for the node to APPEAR is also how this
+    // avoids racing the engine's asynchronous apply.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let node_id = loop {
+        let v = session.handle().read_patcher();
+        if let Some(n) = v.nodes.iter().find(|n| n.owner_device_id == 10) {
+            break u64::from(n.id);
+        }
+        assert!(Instant::now() < deadline, "the added node never appeared in the published graph");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+
+    // A node with no config is refused nothing: it takes the ENGINE'S defaults and the edit lands
+    // on top of them.
+    let first = session.execute(&ToolCall {
+        tool: "patcher_config".into(),
+        args: json!({ "track": 0, "device": 10, "node": node_id, "steps": 8, "hits": 3 }),
+    });
+    assert!(first.ok, "patcher_config failed: {first:?}");
+
+    let read_cfg = |want_steps: i32| -> [i32; 8] {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let v = session.handle().read_patcher();
+            if let Some(n) = v.nodes.iter().find(|n| u64::from(n.id) == node_id) {
+                if n.has_config != 0 && n.config[0] == want_steps {
+                    return n.config;
+                }
+            }
+            assert!(Instant::now() < deadline,
+                    "the config never reached the published node (wanted steps={want_steps})");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    let cfg = read_cfg(8);
+    assert_eq!(cfg[0], 8, "steps");
+    assert_eq!(cfg[1], 3, "hits");
+    assert_eq!(cfg[5], 100, "velocity should be the engine's default, not zero: {cfg:?}");
+    assert_eq!(cfg[3], 1, "degree should be the engine's 1-based default, not zero: {cfg:?}");
+
+    // ── THE PARTIAL EDIT ────────────────────────────────────────────────────────────────────
+    let second = session.execute(&ToolCall {
+        tool: "patcher_config".into(),
+        args: json!({ "track": 0, "device": 10, "node": node_id, "hits": 5 }),
+    });
+    assert!(second.ok, "the second patcher_config failed: {second:?}");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let after = loop {
+        let v = session.handle().read_patcher();
+        if let Some(n) = v.nodes.iter().find(|n| u64::from(n.id) == node_id) {
+            if n.config[1] == 5 { break n.config; }
+        }
+        assert!(Instant::now() < deadline, "the second edit never landed");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(after[1], 5, "hits");
+    assert_eq!(after[0], 8,
+               "STEPS WAS RESET BY AN EDIT THAT DID NOT MENTION IT — the wire sends all eight \
+                values, so a partial edit has to build on the node's CURRENT config and not on \
+                the defaults: {after:?}");
+
+    // A node that is not there is refused rather than configured into the void.
+    let ghost = session.execute(&ToolCall {
+        tool: "patcher_config".into(),
+        args: json!({ "track": 0, "device": 10, "node": 9999, "steps": 4 }),
+    });
+    assert!(!ghost.ok, "configuring a node that does not exist reported success: {ghost:?}");
+}

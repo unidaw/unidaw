@@ -2723,3 +2723,145 @@ mod wire_layout {
         assert_eq!(std::mem::size_of::<UiSamplerSlotEntry>(), 80);
     }
 }
+
+/// A PATCHER NODE'S CONFIG, PACKED INTO THE 16 BYTES THE ENGINE EXPECTS.
+///
+/// The read side hands back eight i32 per node; the write side is an explicit little-endian
+/// layout that DIFFERS per node type and is deliberately not a C++ struct memcpy — that coupled
+/// the wire to padding and truncated Euclidean. So a caller sends the same eight values it read,
+/// and the packing happens once.
+///
+///   Euclidean(1)    steps u16@0, hits u16@2, offset u16@4, degree u8@6,
+///                   octaveOffset i8@7, velocity u8@8, baseOctave u8@9,
+///                   pad u16@10, durationTicks u32@12
+///   Lfo(4)          freqMilliHz i32@0, depthMilli i32@4, biasMilli i32@8, phaseMilli i32@12
+///   RandomDegree(5) degree u8@0, velocity u8@1, pad u16@2, durationTicks u32@4
+///   SliceSelect(7)  base u16@0, count u16@2
+///
+/// ── WHY IT MOVED HERE ───────────────────────────────────────────────────────────────────────
+///
+/// There were two, and they did not agree. The sidecar CLAMPED every field; daw-cli cast straight
+/// into the width, so `--steps 70000` wrapped to 4464 while the same request through the browser
+/// arrived as 65535. Same op, same engine, two answers — and neither surface could tell you which
+/// one it had made, because a wrapped value is a perfectly ordinary number on arrival.
+///
+/// CLAMPING, not refusing, because the read-back is what a caller sends back: a value the engine
+/// itself published must survive a round trip, and clamping is what the sidecar has always done.
+///
+/// The eight values are POSITIONAL, in the order the published config reports them — the same
+/// order `CONFIG_FIELDS` names in ui-web/src/patchermodel.js. Positional because that is what the
+/// read side gives; a struct here would need a name for every field of every type and would then
+/// be a second place to keep those names right.
+pub fn pack_patcher_node_config(node_type: u32, c: &[i64; 8]) -> Result<[u8; 16], &'static str> {
+    let mut cfg = [0u8; 16];
+    match node_type {
+        PATCHER_NODE_EUCLIDEAN => {
+            cfg[0..2].copy_from_slice(&(c[0].clamp(0, 65535) as u16).to_le_bytes());
+            cfg[2..4].copy_from_slice(&(c[1].clamp(0, 65535) as u16).to_le_bytes());
+            cfg[4..6].copy_from_slice(&(c[2].clamp(0, 65535) as u16).to_le_bytes());
+            cfg[6] = c[3].clamp(0, 255) as u8;
+            cfg[7] = (c[4].clamp(-128, 127) as i8) as u8;
+            cfg[8] = c[5].clamp(0, 255) as u8;
+            cfg[9] = c[6].clamp(0, 255) as u8;
+            cfg[12..16].copy_from_slice(&(c[7].clamp(0, u32::MAX as i64) as u32).to_le_bytes());
+        }
+        PATCHER_NODE_LFO => {
+            for i in 0..4 {
+                let v = c[i].clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+                cfg[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+            }
+        }
+        PATCHER_NODE_RANDOM_DEGREE => {
+            cfg[0] = c[0].clamp(0, 255) as u8;
+            cfg[1] = c[1].clamp(0, 255) as u8;
+            cfg[4..8].copy_from_slice(&(c[2].clamp(0, u32::MAX as i64) as u32).to_le_bytes());
+        }
+        // Two SLOT ADDRESSES, packed as they are and not scaled. A count of 0 would be an empty
+        // range for a node whose whole job is to pick from one, so the low bound is 1; a base of
+        // 0 is legal and is the sampler's own "let the keymap pick from the pitch" sentinel,
+        // which is a setting rather than an unset value.
+        PATCHER_NODE_SLICE_SELECT => {
+            cfg[0..2].copy_from_slice(&(c[0].clamp(0, 65535) as u16).to_le_bytes());
+            cfg[2..4].copy_from_slice(&(c[1].clamp(1, 65535) as u16).to_le_bytes());
+        }
+        // A type with no layout is REFUSED rather than sent as zeros, which the engine would
+        // apply — silently reconfiguring a node to nothing.
+        _ => return Err("no config layout for that node type"),
+    }
+    Ok(cfg)
+}
+
+/// The engine's own defaults for each configurable node type, in the same positional order
+/// `pack_patcher_node_config` takes.
+///
+/// These are not invented: they are the member initialisers of `PatcherEuclideanConfig` and
+/// friends in apps/patcher_abi.h, and the values the Rust kernel falls back to for a node whose
+/// config block is null. `AddPatcherNode` mints a node with NO config struct, so a caller that
+/// wants to change ONE field has to send all eight — and without these it would have to invent
+/// the other seven, which is how a node acquires settings nobody chose.
+pub fn default_patcher_node_config(node_type: u32) -> Option<[i64; 8]> {
+    match node_type {
+        // steps, hits, offset, degree, octaveOffset, velocity, baseOctave, durationTicks.
+        // DEGREE 1, not 0: degrees are 1-based throughout this program, and 1 is what the kernel
+        // uses for a euclidean with no config.
+        PATCHER_NODE_EUCLIDEAN => Some([16, 5, 0, 1, 0, 100, 4, 0]),
+        // Milli-units: 1.0 Hz, depth 1.0, bias 0, phase 0.
+        PATCHER_NODE_LFO => Some([1000, 1000, 0, 0, 0, 0, 0, 0]),
+        PATCHER_NODE_RANDOM_DEGREE => Some([8, 100, 0, 0, 0, 0, 0, 0]),
+        PATCHER_NODE_SLICE_SELECT => Some([1, 8, 0, 0, 0, 0, 0, 0]),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod patcher_config_tests {
+    use super::*;
+
+    #[test]
+    fn euclidean_lands_on_the_documented_offsets() {
+        let cfg = pack_patcher_node_config(PATCHER_NODE_EUCLIDEAN,
+                                           &[16, 5, 3, 2, -1, 100, 4, 480000]).unwrap();
+        assert_eq!(u16::from_le_bytes([cfg[0], cfg[1]]), 16, "steps");
+        assert_eq!(u16::from_le_bytes([cfg[2], cfg[3]]), 5, "hits");
+        assert_eq!(u16::from_le_bytes([cfg[4], cfg[5]]), 3, "offset");
+        assert_eq!(cfg[6], 2, "degree");
+        assert_eq!(cfg[7] as i8, -1, "octaveOffset is SIGNED");
+        assert_eq!(cfg[8], 100, "velocity");
+        assert_eq!(cfg[9], 4, "baseOctave");
+        assert_eq!(u32::from_le_bytes([cfg[12], cfg[13], cfg[14], cfg[15]]), 480000, "duration");
+    }
+
+    #[test]
+    fn out_of_range_values_clamp_rather_than_wrap() {
+        // THE DIVERGENCE THIS FUNCTION EXISTS TO END. daw-cli cast straight into the width, so
+        // 70000 steps arrived as 4464 — a plausible number for a node to be set to, and no way
+        // to tell it from one somebody chose.
+        let cfg = pack_patcher_node_config(PATCHER_NODE_EUCLIDEAN,
+                                           &[70000, 5, 0, 1, 0, 100, 4, 0]).unwrap();
+        assert_eq!(u16::from_le_bytes([cfg[0], cfg[1]]), 65535, "steps must clamp, not wrap");
+        assert_ne!(u16::from_le_bytes([cfg[0], cfg[1]]), 70000u32 as u16);
+    }
+
+    #[test]
+    fn slice_select_will_not_be_given_an_empty_range() {
+        let cfg = pack_patcher_node_config(PATCHER_NODE_SLICE_SELECT, &[0, 0, 0, 0, 0, 0, 0, 0])
+            .unwrap();
+        assert_eq!(u16::from_le_bytes([cfg[0], cfg[1]]), 0, "base 0 is the keymap sentinel");
+        assert_eq!(u16::from_le_bytes([cfg[2], cfg[3]]), 1, "count clamps up to 1");
+    }
+
+    #[test]
+    fn a_type_with_no_layout_is_refused_rather_than_zeroed() {
+        assert!(pack_patcher_node_config(PATCHER_NODE_PASSTHROUGH, &[0; 8]).is_err());
+        assert!(default_patcher_node_config(PATCHER_NODE_PASSTHROUGH).is_none());
+    }
+
+    #[test]
+    fn the_defaults_pack() {
+        for t in [PATCHER_NODE_EUCLIDEAN, PATCHER_NODE_LFO, PATCHER_NODE_RANDOM_DEGREE,
+                  PATCHER_NODE_SLICE_SELECT] {
+            let d = default_patcher_node_config(t).expect("a default");
+            pack_patcher_node_config(t, &d).expect("packs");
+        }
+    }
+}

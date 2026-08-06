@@ -2286,7 +2286,11 @@ const OP_REGISTRY = {
   addnode:   { cli: 'patcher-node', agent: 'patcher_node', why: 'gap' },
   delnode:   { cli: 'patcher-unnode', agent: 'patcher_node', why: 'gap' },
   link:      { cli: 'patcher-connect', agent: 'patcher_node', why: 'gap' },
-  patch:     { cli: 'patcher-config', agent: null, why: 'gap' },
+  // The agent could ADD a euclidean node and then not tell it how many steps to take, which is
+  // the same shape as the link bug: the model does the right thing, the capability is absent, and
+  // it reads as the model giving up halfway. `patcher_config` takes named fields and builds on
+  // the node's CURRENT config, because the wire carries all eight values every time.
+  patch:     { cli: 'patcher-config', agent: 'patcher_config' },
   // View state. An agent has no viewport to address.
   // Edit mode is a property of the KEYBOARD, and an agent has no keyboard — it
   // calls add_notes, which writes regardless. So this is view state for the same
@@ -2533,7 +2537,7 @@ const CLI_GAP = ['clear', 'columns', 'copy', 'cut', 'paste', 'transpose',
  */
 const AGENT_GAP = ['clear', 'columns', 'copy', 'cut',
                    'del', 'editor',
-                   'paste', 'patch',
+                   'paste',
                    'transpose', 'mods'];
 
 test('every dock command is in the op registry', () => {
@@ -3335,7 +3339,7 @@ test('the canonical text form round-trips what the engine published', () => {
 
 
 
-test('every node type this UI can edit has a config layout in the sidecar', async () => {
+test('every node type this UI can edit has a config layout on the wire', async () => {
   /*
    * THE GAP THIS CLOSES, hit for real: SliceSelect arrived with `{base, count}`, the patcher
    * view grew rows for them, and `build_patcher_config` had no arm for type 7 — so every nudge
@@ -3346,12 +3350,29 @@ test('every node type this UI can edit has a config layout in the sidecar', asyn
    * this side's are the types with CONFIG_FIELDS entries — a type with no fields has nothing to
    * send and is correctly absent from both.
    */
-  const { readFileSync } = await import('node:fs');
-  const rs = readFileSync(new URL('../../ui/daw-sidecar/src/main.rs', import.meta.url), 'utf8');
-  const fn = rs.slice(rs.indexOf('fn build_patcher_config'));
+  /*
+   * THE PACKER MOVED, AND THIS CHECK FOLLOWED IT RATHER THAN BEING DELETED.
+   *
+   * It used to read `build_patcher_config` in the sidecar. There were two packers by then — the
+   * sidecar's, which clamped, and daw-cli's, which cast straight into each field's width — so the
+   * same edit made two different nodes depending on the surface. Both now call
+   * `pack_patcher_node_config` in daw-bridge, and this reads THAT, because a ratchet pointed at a
+   * function nobody calls any more passes on anything.
+   *
+   * The arms are named constants there rather than bare numbers, which is why this maps the names
+   * back to their indices: the constants are also read from source, so a renumbered node type
+   * cannot make the two sides agree by accident.
+   */
+  const rs = readFileSync(new URL('../../ui/daw-bridge/src/layout.rs', import.meta.url), 'utf8');
+  const nums = Object.fromEntries([...rs.matchAll(
+    /pub const (PATCHER_NODE_[A-Z_]+): u32 = (\d+);/g)].map((m) => [m[1], Number(m[2])]));
+  assert.ok(Object.keys(nums).length >= 6, `parsed the node type constants: ${Object.keys(nums)}`);
+  const fn = rs.slice(rs.indexOf('pub fn pack_patcher_node_config'));
   const body = fn.slice(0, fn.indexOf('\n}\n'));
-  const arms = new Set([...body.matchAll(/^\s{8}(\d+) => \{/gm)].map((m) => Number(m[1])));
-  assert.ok(arms.size >= 3, `parsed the sidecar's config layouts: ${[...arms]}`);
+  const arms = new Set([...body.matchAll(/^\s{8}(PATCHER_NODE_[A-Z_]+) => \{/gm)]
+    .map((m) => nums[m[1]])
+    .filter((n) => n !== undefined));
+  assert.ok(arms.size >= 3, `parsed the wire's config layouts: ${[...arms]}`);
 
   // The types this UI draws editable fields for, by their index in NODE_TYPES.
   // `configFields(type)` takes the type INDEX and returns [{name, index}], empty for a type
@@ -3359,7 +3380,7 @@ test('every node type this UI can edit has a config layout in the sidecar', asyn
   const editable = NODE_TYPES.map((_, i) => i).filter((i) => configFields(i).length > 0);
   for (const t of editable) {
     assert.ok(arms.has(t),
-      `node type ${t} (${NODE_TYPES[t]}) has editable fields here and no layout in the sidecar`);
+      `node type ${t} (${NODE_TYPES[t]}) has editable fields here and no layout on the wire`);
   }
 });
 

@@ -653,55 +653,59 @@ fn parse_node_type(raw: &str) -> Result<u32, String> {
 /// engine reads it field by field rather than memcpy'ing a struct, because a raw copy
 /// truncated Euclidean and coupled the wire to C++ padding. Building it here by the same
 /// documented layout keeps the two ends honest.
+/// The 16-byte node config, from this verb's flags.
+///
+/// READS THE FLAGS, PACKS NOWHERE. `daw_bridge::layout::pack_patcher_node_config` owns the byte
+/// layout and the clamping; this only decides which flag supplies which of the eight positional
+/// values, and what a missing flag defaults to. Before that split this function cast straight
+/// into each field's width while the sidecar clamped, so `--steps 70000` set 4464 here and 65535
+/// through the browser — the same op, the same engine, two answers, and a wrapped value is an
+/// ordinary-looking number on arrival.
 fn build_node_config(args: &[String], node_type: u32) -> Result<[u8; 16], String> {
     use daw_bridge::layout as L;
-    let mut cfg = [0u8; 16];
-    let put_u16 = |c: &mut [u8; 16], at: usize, v: u16| {
-        c[at] = (v & 0xff) as u8;
-        c[at + 1] = (v >> 8) as u8;
-    };
-    let put_u32 = |c: &mut [u8; 16], at: usize, v: u32| {
-        c[at] = (v & 0xff) as u8;
-        c[at + 1] = ((v >> 8) & 0xff) as u8;
-        c[at + 2] = ((v >> 16) & 0xff) as u8;
-        c[at + 3] = ((v >> 24) & 0xff) as u8;
-    };
-    if node_type == L::PATCHER_NODE_EUCLIDEAN {
-        // 0 MEANS 0 (M0.6): these are sent verbatim, so `--hits 0` is silence and not
-        // "use the default five".
-        put_u16(&mut cfg, 0, flag_u64(args, "--steps", Some(16))? as u16);
-        put_u16(&mut cfg, 2, flag_u64(args, "--hits", Some(5))? as u16);
-        put_u16(&mut cfg, 4, flag_u64(args, "--offset", Some(0))? as u16);
-        cfg[6] = flag_u64(args, "--degree", Some(1))? as u8;
-        cfg[7] = (flag_i64(args, "--octave-offset", 0)? as i8) as u8;
-        cfg[8] = flag_u64(args, "--velocity", Some(100))? as u8;
-        cfg[9] = flag_u64(args, "--base-octave", Some(4))? as u8;
-        put_u32(&mut cfg, 12, flag_u64(args, "--duration", Some(0))? as u32);
+    // 0 MEANS 0 (M0.6): these are sent verbatim, so `--hits 0` is silence and not "use the
+    // default five". The defaults below are the ENGINE'S, from default_patcher_node_config.
+    let fields: [i64; 8] = if node_type == L::PATCHER_NODE_EUCLIDEAN {
+        [
+            flag_u64(args, "--steps", Some(16))? as i64,
+            flag_u64(args, "--hits", Some(5))? as i64,
+            flag_u64(args, "--offset", Some(0))? as i64,
+            flag_u64(args, "--degree", Some(1))? as i64,
+            flag_i64(args, "--octave-offset", 0)?,
+            flag_u64(args, "--velocity", Some(100))? as i64,
+            flag_u64(args, "--base-octave", Some(4))? as i64,
+            flag_u64(args, "--duration", Some(0))? as i64,
+        ]
     } else if node_type == L::PATCHER_NODE_RANDOM_DEGREE {
-        cfg[0] = flag_u64(args, "--degree", Some(8))? as u8;
-        cfg[1] = flag_u64(args, "--velocity", Some(100))? as u8;
-        put_u32(&mut cfg, 4, flag_u64(args, "--duration", Some(0))? as u32);
+        [
+            flag_u64(args, "--degree", Some(8))? as i64,
+            flag_u64(args, "--velocity", Some(100))? as i64,
+            flag_u64(args, "--duration", Some(0))? as i64,
+            0, 0, 0, 0, 0,
+        ]
     } else if node_type == L::PATCHER_NODE_SLICE_SELECT {
-        // [base u16][count u16]. `count` is the SIZE of the range, so 0 and 1 both mean
-        // "always base" — a range being empty, not a sentinel. `base` of 0 is clamped to 1 by
-        // the node, because sound address 0 MEANS "no address, use the keymap" and a node
-        // configured with it would look set up and do nothing.
-        put_u16(&mut cfg, 0, flag_u64(args, "--base", Some(1))? as u16);
-        put_u16(&mut cfg, 2, flag_u64(args, "--count", Some(8))? as u16);
+        [
+            flag_u64(args, "--base", Some(1))? as i64,
+            flag_u64(args, "--count", Some(8))? as i64,
+            0, 0, 0, 0, 0, 0,
+        ]
     } else if node_type == L::PATCHER_NODE_LFO {
         // Milli-units on the wire, mirroring the read-back; the engine stores floats.
-        let milli = |v: f64| ((v * 1000.0).round() as i32) as u32;
-        put_u32(&mut cfg, 0, milli(flag_f64(args, "--freq", 1.0)?));
-        put_u32(&mut cfg, 4, milli(flag_f64(args, "--depth", 1.0)?));
-        put_u32(&mut cfg, 8, milli(flag_f64(args, "--bias", 0.0)?));
-        put_u32(&mut cfg, 12, milli(flag_f64(args, "--phase", 0.0)?));
+        let milli = |v: f64| (v * 1000.0).round() as i64;
+        [
+            milli(flag_f64(args, "--freq", 1.0)?),
+            milli(flag_f64(args, "--depth", 1.0)?),
+            milli(flag_f64(args, "--bias", 0.0)?),
+            milli(flag_f64(args, "--phase", 0.0)?),
+            0, 0, 0, 0,
+        ]
     } else {
         return Err(
             "--type: only euclidean, random-degree, slice-select and lfo carry a config"
                 .to_string(),
         );
-    }
-    Ok(cfg)
+    };
+    L::pack_patcher_node_config(node_type, &fields).map_err(|e| e.to_string())
 }
 
 /// AddModLink / RemoveModLink. The engine validates that both devices exist and that

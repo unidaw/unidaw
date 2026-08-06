@@ -1035,6 +1035,51 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "patcher_config",
+            description: "Set a patcher node's parameters — a euclidean's steps and hits, an \
+                          LFO's rate, a random node's degree range. A node arrives from \
+                          `patcher_node add` with NO config, so this is how it gets one, and \
+                          without it a generator you have built plays whatever the defaults are. \
+                          Give only the fields you want to change: the rest keep the values the \
+                          node already has. `device` is the patcher device's id, the same one \
+                          `patcher_node` takes, and it is never 0.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "device", "node"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "device": { "type": "integer", "minimum": 1,
+                                "description": "The patcher device's id from the observation, \
+                                                NOT its position in the chain." },
+                    "node": { "type": "integer", "minimum": 0,
+                              "description": "The node id, as reported when it was added." },
+                    "steps": { "type": "integer", "minimum": 0, "maximum": 64,
+                               "description": "euclidean: how many slots the pattern has." },
+                    "hits": { "type": "integer", "minimum": 0, "maximum": 64,
+                              "description": "euclidean: how many of them sound. 0 is silence, \
+                                              not a default." },
+                    "offset": { "type": "integer", "minimum": 0, "maximum": 63,
+                                "description": "euclidean: rotate the pattern." },
+                    "degree": { "type": "integer", "minimum": 0, "maximum": 12,
+                                "description": "euclidean: which scale degree it plays (1-based). \
+                                                random: the TOP of the range it picks from." },
+                    "octave_offset": { "type": "integer", "minimum": -4, "maximum": 4 },
+                    "velocity": { "type": "integer", "minimum": 0, "maximum": 127 },
+                    "base_octave": { "type": "integer", "minimum": 0, "maximum": 9 },
+                    "duration": { "type": "integer", "minimum": 0,
+                                  "description": "Note length in nanoticks. 0 means half a step." },
+                    "freq": { "type": "number", "description": "lfo: rate in Hz." },
+                    "depth": { "type": "number", "description": "lfo: 0..1." },
+                    "bias": { "type": "number", "description": "lfo: -1..1." },
+                    "phase": { "type": "number", "description": "lfo: 0..1." },
+                    "base": { "type": "integer", "minimum": 0, "maximum": 127,
+                              "description": "slice: the first sound address it may pick." },
+                    "count": { "type": "integer", "minimum": 1, "maximum": 128,
+                               "description": "slice: how many addresses the range covers." }
+                }
+            }),
+        },
+        ToolSpec {
             name: "remove_device",
             description: "Take a device out of a chain. NOT undoable, and the device's \
                           settings go with it.",
@@ -1587,6 +1632,134 @@ fn load_sample(handle: &EngineHandle, args: &Value) -> ToolResult {
 ///
 /// So the tool refuses without it rather than defaulting to the pool. A tool whose default is
 /// the silently-wrong option is a tool that is usually wrong.
+/// A PATCHER NODE'S PARAMETERS — the half of building a generator the agent did not have.
+///
+/// daw-cli has had `patcher-config` since the patcher existed; the agent could add a euclidean
+/// node and then not tell it how many steps to take. That is the same shape as the link bug
+/// found last night — the model does the right thing, the capability is absent, and the result
+/// looks like the model giving up halfway.
+///
+/// ── PARTIAL EDITS BUILD ON WHAT IS THERE ───────────────────────────────────────────────────
+///
+/// The wire carries all eight values every time; there is no "change only this field" command.
+/// So a tool that packed the given fields over the DEFAULTS would silently reset everything the
+/// caller had set before — ask for `hits: 3` after setting `steps: 8` and the steps go back to
+/// 16. The node's current config is published, so this reads it and overrides on top.
+///
+/// Falling back to the engine's defaults only when the node has no config yet (`has_config == 0`,
+/// which is how every freshly added node arrives) — and refusing outright if the node cannot be
+/// found, because packing defaults for a node that is not there would report success for an edit
+/// that configured nothing.
+fn patcher_config(handle: &EngineHandle, args: &Value) -> ToolResult {
+    use daw_bridge::layout as L;
+    let Some(track) = arg_u64(args, "track") else {
+        return ToolResult::err("patcher_config needs \"track\"");
+    };
+    let Some(device) = arg_u64(args, "device") else {
+        return ToolResult::err(
+            "patcher_config needs \"device\" — the patcher device's id. Without it the edit goes \
+             to a shared pool that no project saves");
+    };
+    if device == 0 || device > 0x7FFF {
+        return ToolResult::err(
+            "device 0 is not a device id — ids start at 1 and are NOT chain positions. Read it \
+             from the track's `devices:` line in the observation");
+    }
+    let Some(node_id) = arg_u64(args, "node") else {
+        return ToolResult::err("patcher_config needs \"node\" — the node id");
+    };
+
+    // THE NODE AS IT IS NOW. Matched on the node id within this device's nodes: the published
+    // region is the ASSEMBLED POOL, a union of every device's graph, so an id alone is ambiguous
+    // across devices and matching it alone would configure somebody else's node.
+    let view = handle.read_patcher();
+    let Some(node) = view.nodes.iter().find(
+        |n| n.id == node_id as u32 && u64::from(n.owner_device_id) == device) else {
+        return ToolResult::err(format!(
+            "no node {node_id} on device {device}. The published graph has {}. If you just added \
+             this node, the shape you are holding predates it — call `observe` again",
+            view.nodes.iter().filter(|n| u64::from(n.owner_device_id) == device)
+                .map(|n| n.id.to_string()).collect::<Vec<_>>().join(", ")));
+    };
+    let node_type = u32::from(node.node_type);
+
+    let mut fields: [i64; 8] = if node.has_config != 0 {
+        let mut f = [0i64; 8];
+        for (i, v) in node.config.iter().enumerate() { f[i] = i64::from(*v); }
+        f
+    } else {
+        match L::default_patcher_node_config(node_type) {
+            Some(d) => d,
+            None => return ToolResult::err(
+                "that node type carries no config — only euclidean, random, lfo and slice do"),
+        }
+    };
+
+    // WHICH ARGUMENT FILLS WHICH SLOT, per type. The positions are the published read order, and
+    // the packing itself is daw_bridge's — this only names the slots.
+    let set = |f: &mut [i64; 8], at: usize, key: &str| {
+        if let Some(v) = args.get(key).and_then(|v| v.as_i64()) { f[at] = v; }
+    };
+    let set_milli = |f: &mut [i64; 8], at: usize, key: &str| {
+        if let Some(v) = args.get(key).and_then(|v| v.as_f64()) {
+            f[at] = (v * 1000.0).round() as i64;
+        }
+    };
+    match node_type {
+        L::PATCHER_NODE_EUCLIDEAN => {
+            set(&mut fields, 0, "steps");
+            set(&mut fields, 1, "hits");
+            set(&mut fields, 2, "offset");
+            set(&mut fields, 3, "degree");
+            set(&mut fields, 4, "octave_offset");
+            set(&mut fields, 5, "velocity");
+            set(&mut fields, 6, "base_octave");
+            set(&mut fields, 7, "duration");
+        }
+        L::PATCHER_NODE_RANDOM_DEGREE => {
+            set(&mut fields, 0, "degree");
+            set(&mut fields, 1, "velocity");
+            set(&mut fields, 2, "duration");
+        }
+        L::PATCHER_NODE_LFO => {
+            set_milli(&mut fields, 0, "freq");
+            set_milli(&mut fields, 1, "depth");
+            set_milli(&mut fields, 2, "bias");
+            set_milli(&mut fields, 3, "phase");
+        }
+        L::PATCHER_NODE_SLICE_SELECT => {
+            set(&mut fields, 0, "base");
+            set(&mut fields, 1, "count");
+        }
+        _ => return ToolResult::err(
+            "that node type carries no config — only euclidean, random, lfo and slice do"),
+    }
+
+    let config = match L::pack_patcher_node_config(node_type, &fields) {
+        Ok(c) => c,
+        Err(e) => return ToolResult::err(e),
+    };
+    let payload = L::UiPatcherNodeConfigPayload {
+        command_type: UiCommandType::SetPatcherNodeConfig as u16,
+        // The device flag, without which the edit is pool-scoped — the failure that made
+        // daw-cli's own patcher-config report success while changing nothing a project saves.
+        flags: L::UI_PATCHER_FLAG_HAS_DEVICE_ID | (device as u16),
+        track_id: track as u32,
+        node_id: node_id as u32,
+        config_type: node_type,
+        config,
+        ..Default::default()
+    };
+    match handle.send_patcher_node_config(payload) {
+        Ok(()) => ToolResult::ok(json!({
+            "node": node_id,
+            "device": device,
+            "config": fields.to_vec(),
+        })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
 fn patcher_node(handle: &EngineHandle, args: &Value) -> ToolResult {
     let (Some(track), Some(device)) = (arg_u64(args, "track"), arg_u64(args, "device")) else {
         return ToolResult::err(
@@ -3208,6 +3381,7 @@ pub fn execute_in(handle: &EngineHandle, call: &ToolCall, project_dir: &str) -> 
         "add_device" => add_device(handle, &call.args),
         "load_sample" => load_sample(handle, &call.args),
         "patcher_node" => patcher_node(handle, &call.args),
+        "patcher_config" => patcher_config(handle, &call.args),
         "remove_device" => chain_edit(handle, &call.args, UiCommandType::RemoveDevice),
         "move_device" => move_device(handle, &call.args),
         "set_bypass" => set_bypass(handle, &call.args),

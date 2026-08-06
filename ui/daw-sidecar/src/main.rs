@@ -2734,45 +2734,17 @@ fn build_patcher_config(body: &str) -> Option<Result<UiPatcherNodeConfigPayload,
     if !is_type(body, "patchcfg") { return None; }
     let n = |k: &str| parse_num(body, k).unwrap_or(0);
     let node_type = n("\"nodeType\"") as u32;
-    let mut cfg = [0u8; 16];
-    // The eight values as read from UiPatcherNode.config, in that order.
+    // The eight values as read from UiPatcherNode.config, in that order — packed by the bridge,
+    // which is also what daw-cli and the agent tool call. This block used to be the only one that
+    // CLAMPED; daw-cli cast straight into the width, so the same request made two different
+    // nodes depending on which surface you asked from.
     let c: Vec<i64> = (0..8).map(|i| parse_num(body, &format!("\"c{i}\"")).unwrap_or(0)).collect();
-    match node_type {
-        1 => {
-            cfg[0..2].copy_from_slice(&(c[0].clamp(0, 65535) as u16).to_le_bytes());
-            cfg[2..4].copy_from_slice(&(c[1].clamp(0, 65535) as u16).to_le_bytes());
-            cfg[4..6].copy_from_slice(&(c[2].clamp(0, 65535) as u16).to_le_bytes());
-            cfg[6] = c[3].clamp(0, 255) as u8;
-            cfg[7] = (c[4].clamp(-128, 127) as i8) as u8;
-            cfg[8] = c[5].clamp(0, 255) as u8;
-            cfg[9] = c[6].clamp(0, 255) as u8;
-            cfg[12..16].copy_from_slice(&(c[7].clamp(0, u32::MAX as i64) as u32).to_le_bytes());
-        }
-        4 => {
-            for i in 0..4 {
-                let v = c[i].clamp(i32::MIN as i64, i32::MAX as i64) as i32;
-                cfg[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
-            }
-        }
-        5 => {
-            cfg[0] = c[0].clamp(0, 255) as u8;
-            cfg[1] = c[1].clamp(0, 255) as u8;
-            cfg[4..8].copy_from_slice(&(c[2].clamp(0, u32::MAX as i64) as u32).to_le_bytes());
-        }
-        // SliceSelect(7): base u16@0, count u16@2 — `PatcherSliceSelectConfig` in patcher_abi.h.
-        //
-        // Two SLOT ADDRESSES, so they are packed as they are and not scaled. A count of 0 would
-        // be an empty range for a node whose whole job is to pick from one, so the low bound is
-        // 1; a base of 0 is legal and means the sampler's own "let the keymap pick from the
-        // pitch" sentinel, which is a setting rather than an unset value.
-        7 => {
-            cfg[0..2].copy_from_slice(&(c[0].clamp(0, 65535) as u16).to_le_bytes());
-            cfg[2..4].copy_from_slice(&(c[1].clamp(1, 65535) as u16).to_le_bytes());
-        }
-        // A type with no layout is refused rather than sent as zeros, which the
-        // engine would apply.
-        _ => return Some(Err("no config layout for that node type")),
-    }
+    let mut fields = [0i64; 8];
+    fields.copy_from_slice(&c[..8]);
+    let cfg = match daw_bridge::layout::pack_patcher_node_config(node_type, &fields) {
+        Ok(c) => c,
+        Err(e) => return Some(Err(e)),
+    };
     let cfg_flags = match patcher_edit_flags(body) { Ok(f) => f, Err(e) => return Some(Err(e)) };
     Some(Ok(UiPatcherNodeConfigPayload {
         command_type: UiCommandType::SetPatcherNodeConfig as u16,
