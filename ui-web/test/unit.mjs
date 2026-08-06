@@ -2314,7 +2314,7 @@ const OP_REGISTRY = {
    * One slot field (SamplerSetSlot). daw-cli has `sampler-slot`, so the CLI path is real; the
    * agent has no sampler tooling at all.
    */
-  slot:      { cli: 'sampler-slot', agent: null, why: 'gap' },
+  slot:      { cli: 'sampler-slot', agent: 'sampler_slot' },
   // Naming a pad. The CLI shipped with opcode 90; the agent has no sampler tooling at all, which
   // is the same recorded gap every other sampler verb carries.
   'slot-name': { cli: 'sampler-slot-name', agent: null, why: 'gap' },
@@ -2473,7 +2473,7 @@ const AGENT_GAP = ['clear', 'columns', 'copy', 'cut',
                    'new', 'paste', 'patch',
                    'transpose', 'mods',
                    // With the other sampler verbs: the agent has no sampler tooling at all.
-                   'filter', 'env', 'slot', 'soundaddr', 'bank', 'emit',
+                   'filter', 'env', 'soundaddr', 'bank', 'emit',
                    'slice', 'slot-name', 'vintage',
                    'save-patch', 'lpb', 'note-overlap',
                    // A clip's own grid (opcode 94). It HAS a CLI path — `daw-cli do clip-grid`

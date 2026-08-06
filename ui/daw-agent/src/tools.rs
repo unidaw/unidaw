@@ -378,6 +378,33 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "sampler_slot",
+            description: "Shape one slot of a sampler: its key range, root, tuning, gain, pan, \
+                          looping, and whether it honours note-off. The agent could LOAD a \
+                          sample and not shape it, which left every slot at its mint defaults. \
+                          The one worth knowing: `gate` 0 is a one-shot that ignores note length \
+                          (right for drums) and 1 stops with the note (right for a pad) — a \
+                          freshly loaded slot is 0, so a sustained sound needs this. Get the \
+                          device id from the track's `devices:` line and the slot from the kit.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "device", "slot", "field", "value"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "device": { "type": "integer", "minimum": 1 },
+                    "slot": { "type": "integer", "minimum": 0 },
+                    "field": { "type": "string",
+                               "description": "One of the sampler slot fields, e.g. gate, root, \
+                                               key-low, key-high, tune-cents, gain-mb, pan, \
+                                               reverse, loop-mode, start-frame, end-frame. A \
+                                               name it does not know comes back with the list." },
+                    "value": { "type": "integer",
+                               "description": "Units are the field's own: gain-mb is millibels, \
+                                               tune-cents is cents, gate and reverse are 0 or 1." },
+                },
+            }),
+        },
+        ToolSpec {
             name: "set_mixer",
             description: "Set a track's gain, pan, mute or solo. Gain is in dB (0 is unity,                           negative is quieter); pan is -1 hard left to 1 hard right.",
             params: json!({
@@ -1381,6 +1408,63 @@ fn set_row_ops(handle: &EngineHandle, args: &Value) -> ToolResult {
     }
 }
 
+/// Shape one sampler slot.
+///
+/// The agent could put a sampler on a track and give it a file, and then nothing: every slot
+/// stayed at its mint defaults. That is a real limit rather than a cosmetic one — `gate` defaults
+/// to 0, a one-shot that ignores note length, so an agent asked for a sustained pad produced
+/// something that plays the whole file however short the note.
+///
+/// THE FIELD IS NAMED, NOT NUMBERED, and the names come from the bridge's own table rather than
+/// a copy: `SAMPLER_SLOT_FIELDS` is the same list the console and the CLI resolve against, so
+/// this cannot drift from them. A number here would silently write a different field the day one
+/// is inserted — which is exactly why the engine made them names.
+fn sampler_slot(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(track), Some(device), Some(slot)) =
+        (arg_u64(args, "track"), arg_u64(args, "device"), arg_u64(args, "slot"))
+    else {
+        return ToolResult::err("sampler_slot needs \"track\", \"device\" and \"slot\"");
+    };
+    if device == 0 {
+        return ToolResult::err(
+            "device 0 is not a device id — read the real one from the track's `devices:` line in \
+             the observation. Ids start at 1 and are not chain positions");
+    }
+    let Some(name) = arg_str(args, "field") else {
+        return ToolResult::err("sampler_slot needs \"field\"");
+    };
+    let Some(value) = args.get("value").and_then(|v| v.as_i64()) else {
+        return ToolResult::err("sampler_slot needs \"value\"");
+    };
+    // The refusal LISTS the fields. A caller who mistypes one otherwise gets a no-op and no idea
+    // which spelling was wrong — and this table is long enough that guessing is the normal case.
+    let Some((_, field)) = daw_bridge::layout::SAMPLER_SLOT_FIELDS
+        .iter()
+        .find(|(n, _)| *n == name)
+    else {
+        let all: Vec<&str> = daw_bridge::layout::SAMPLER_SLOT_FIELDS.iter().map(|(n, _)| *n).collect();
+        return ToolResult::err(format!(
+            "no sampler slot field called {name:?}. They are: {}", all.join(", ")));
+    };
+
+    let p = daw_bridge::layout::UiSamplerSetSlotPayload {
+        command_type: UiCommandType::SamplerSetSlot as u16,
+        field: *field,
+        track_id: track as u32,
+        device_id: device as u32,
+        slot_id: slot as u32,
+        value: value.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        reserved: [0; 20],
+    };
+    match handle.send_sampler_set_slot(p) {
+        Ok(()) => ToolResult::ok(json!({
+            "sent": true, "track": track, "device": device, "slot": slot,
+            "field": name, "value": value,
+        })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
 /// Make a modulation link, name its parameter, and turn the knob. THREE commands.
 ///
 /// All three, because a link the engine accepts moves nothing without them: it addresses a
@@ -1734,6 +1818,7 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "set_tempo" => set_tempo(handle, &call.args),
         "harmony_quantize" => harmony_quantize(handle, &call.args),
         "set_row_ops" => set_row_ops(handle, &call.args),
+        "sampler_slot" => sampler_slot(handle, &call.args),
         "set_mixer" => set_mixer(handle, &call.args),
         "set_loop" => set_loop(handle, &call.args),
         "preview_note" => preview_note(handle, &call.args),
