@@ -216,24 +216,7 @@ export class Chain {
        * Kinds 0..2 ARE the patcher kinds, so the kind alone already separates a patcher from a
        * plugin; the node id was never what made the distinction.
        */
-      if (c.kind <= 2) {
-        if (this.onOpenPatcher) this.onOpenPatcher(this.vm.track, c.id, pos);
-      } else if (this.onOpenEditor) {
-        /*
-         * AN OBJECT, which is what the handler destructures.
-         *
-         * This passed two positional arguments while `onOpenEditor` takes
-         * `({ track, device })`, so destructuring a NUMBER gave undefined for both
-         * and double-clicking a VST card opened nothing at all. Silent in every
-         * direction: no throw, no message, and the other call site (the open button)
-         * passes the object correctly, so the feature demonstrably worked.
-         *
-         * `onOpenPatcher` above really is positional — the two callbacks have
-         * different shapes, which is how this happened and why they now look
-         * different on the page.
-         */
-        this.onOpenEditor({ track: this.vm.track, device: c.id });
-      }
+      this._openCard(pos, c.id);
     });
     // Scroll does not bubble, but it does fire on the way DOWN — so one capturing
     // listener on the container sees every card's list. Per-card listeners would
@@ -528,9 +511,22 @@ export class Chain {
     const opener = e.target.closest('.dv-open');
     if (opener) {
       const c = opener.closest('.dv-card');
-      if (c && this.onOpenEditor) {
-        this.onOpenEditor({ track: this.vm ? this.vm.track : -1, device: c._devId });
-      }
+      /*
+       * THE KIND DECIDES HERE TOO, and it did not — which is the whole of "clicking the open
+       * button on a patcher device should open the patcher, but doesn't".
+       *
+       * The button always called `onOpenEditor`, the PLUGIN's own window. A patcher has no
+       * plugin, so the engine skipped it and logged to its own stderr: the button looked inert
+       * for exactly the reason the double-click used to, and that one was fixed here months ago
+       * by branching on kind.
+       *
+       * Two openers, one rule, and only one of them knew it. So the rule moves out of the
+       * dblclick handler and both call it — a second copy is what let these drift in the first
+       * place, and the comment above the dblclick already says the kind is what separates a
+       * patcher from a plugin.
+       */
+      const pos = c ? Number(c.dataset.pos) : -1;
+      if (c) this._openCard(pos, c._devId);
       return;
     }
     const gate = e.target.closest('.dv-gat');
@@ -695,6 +691,29 @@ export class Chain {
     this._said = s;
     this.said.nodeValue = s;
     this.saidEl.classList.toggle('on', !!s);
+  }
+
+  /**
+   * Open whatever this card IS — the patcher's graph, or the plugin's window.
+   *
+   * ONE RULE, TWO OPENERS. Kinds 0..2 are the patcher kinds, so the kind alone separates a
+   * patcher from a plugin; a patcher device the engine has not yet given a node is exactly the
+   * one you need to open, because you open it to BUILD the graph.
+   *
+   * The two callbacks have different SHAPES — `onOpenPatcher` is positional and `onOpenEditor`
+   * takes an object — which has already caused one silent failure here (two positional arguments
+   * destructured as an object gave undefined for both, and double-clicking a VST card opened
+   * nothing). Keeping that difference in one place is the point of this function.
+   */
+  _openCard(pos, devId) {
+    const track = this.vm ? this.vm.track : -1;
+    const card = this.vm && this.vm.cards ? this.vm.cards[pos] : null;
+    const kind = card ? card.kind : -1;
+    if (kind >= 0 && kind <= 2) {
+      if (this.onOpenPatcher) this.onOpenPatcher(track, devId, pos);
+    } else if (this.onOpenEditor) {
+      this.onOpenEditor({ track, device: devId });
+    }
   }
 
   render(vm) {
