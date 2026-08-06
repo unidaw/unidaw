@@ -147,13 +147,35 @@ flag() {
 notecount() {
   cli get notes --track 0 2>/dev/null | grep -oE '"note_count": [0-9]+' | grep -oE '[0-9]+$'
 }
-wait_notes() {  # wait_notes <want> <what>
+# THE CLIP VERSION, WHICH IS THE FACT THE NEXT WRITER ACTUALLY READS. An edit carries the version
+# it was written against and is REFUSED if that has moved, and each `daw-cli do` is a fresh process
+# that reads the version when it starts. So waiting for the NOTE COUNT is waiting on the wrong
+# published fact: count and version are published on their own ticks, and in the window where the
+# count has advanced but the version has not, the next writer reads a stale base and its write is
+# correctly refused. That is what happened — history.jsonl from the failing run reads
+# `write_note received` then `write_note rejected:version`, and wait_notes then spent its whole
+# 20s budget waiting for a second note that was never going to arrive.
+#
+# The comment on the deletes below already worked this out for THAT gesture. This one had the same
+# hazard and a wait that could not see it.
+trackver() {
+  cli get tracks 2>/dev/null \
+    | sed -n 's/.*"track_id": *0,.*"clip_version": *\([0-9][0-9]*\).*/\1/p' | head -1
+}
+wait_notes() {  # wait_notes <want> <what> [version-before]
+  local want_ver="${3:-}"
   for _ in $(seq 1 80); do
-    [ "$(notecount)" = "$1" ] && return 0
+    if [ "$(notecount)" = "$1" ]; then
+      # Both, when a base version was supplied: the count says the edit is visible, the version
+      # says the NEXT edit will be accepted.
+      [ -z "$want_ver" ] && return 0
+      [ "$(trackver)" != "$want_ver" ] && return 0
+    fi
     sleep 0.25
   done
-  fail "$2: the engine published $(notecount) notes, waited 20s for $1. Under a parallel ctest an
-        edit can take far longer than any fixed sleep, which is why this waits for the VALUE"
+  fail "$2: the engine published $(notecount) notes, waited 20s for $1 (clip_version $(trackver)).
+        If the count is short by one, look for \"rejected:version\" in history.jsonl before
+        blaming slowness: a refused edit never arrives however long this waits."
 }
 
 enter_pair() {  # a 4-quarter note at 0, then a note one quarter in — the gesture under test
@@ -162,10 +184,21 @@ enter_pair() {  # a 4-quarter note at 0, then a note one quarter in — the gest
   # not landed before the next command was sent, and the second note then truncated nothing. A
   # check that is right three times in four is worse than no check, because the one failure reads
   # as a real defect in note entry.
+  local v0 v1
+  v0="$(trackver)"
+  # A GUARD THAT CANNOT SILENTLY DISABLE ITSELF. wait_notes treats an empty base version as "no
+  # version condition", so if trackver ever stopped parsing — a renamed field, a reordered line —
+  # this would quietly go back to waiting on the count alone and the flake would return wearing
+  # the same green tick it wore before. Assert the value exists rather than trust the parse.
+  case "${v0:-}" in
+    ''|*[!0-9]*) fail "trackver parsed '$v0' from \`get tracks\`, which is not a version. The
+        version wait below would silently do nothing and this check would flake again." ;;
+  esac
   cli do note --track 0 --nanotick 0 --pitch 60 --duration $((Q*4)) --column 0 >/dev/null 2>&1
-  wait_notes 1 "after entering the first note"
+  wait_notes 1 "after entering the first note" "$v0"
+  v1="$(trackver)"
   cli do note --track 0 --nanotick $Q --pitch 67 --duration $((Q*3)) --column 0 >/dev/null 2>&1
-  wait_notes 2 "after entering the second note"
+  wait_notes 2 "after entering the second note" "$v1"
 }
 
 # ---- DEFAULT OFF. The old behaviour is the default, and that is checked rather than assumed: a

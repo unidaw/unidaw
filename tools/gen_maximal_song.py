@@ -14,7 +14,13 @@ import json, sys, os
 Q = 960_000          # nanoticks per quarter
 BAR = 4 * Q
 SIX = Q // 4         # a 16th
-ZEBRA = {"vendor": "u-he", "name": "Zebra2",
+# ZEBRALETTE, NOT ZEBRA2, and the path is unchanged because they are the SAME BUNDLE —
+# Zebra2.vst3 holds Zebra2, Zebralette, ZRev and Zebrify, and the name is what tells them apart
+# (plugin_cache matches on path AND name for exactly this reason). Zebralette is the free member:
+# Zebra2 loads unlicensed here and logs "Could not read lic from file", which for a u-he plugin
+# means it is free to degrade the audio at a time of its choosing. Not something to find out
+# during a demo. generator.uniproj.json already referenced Zebralette; this was the outlier.
+ZEBRA = {"vendor": "u-he", "name": "Zebralette",
          "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3", "uid16": ""}
 
 _nid = 1000

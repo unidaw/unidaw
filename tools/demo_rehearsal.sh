@@ -356,7 +356,15 @@ clips = {c.get("id"): c for c in d.get("clips", [])}
 for t in d.get("tracks", []):
     if t.get("is_master"):
         continue
-    content = 0
+    # BOTH PROJECT FORMATS. schema_version 4 keeps notes in CLIPS that placements point at;
+    # schema_version 1 keeps them FLAT on the track. Counting only clips is not a partial answer,
+    # it is a zero for every schema-1 track — so this phase would report "every track that carries
+    # notes has an instrument" about a song whose notes it never looked at, which is the precise
+    # failure it exists to catch, one level up. Five of the nine shipped presets are schema 1,
+    # including maximal, which has 162 notes, no clips at all, and renders at peak 0.66.
+    #
+    # The rehearsal happens to save schema 4 today. That is luck, not a reason.
+    content = len(t.get("notes", [])) + len(t.get("chords", []))
     for pl in t.get("placements", []):
         c = clips.get(pl.get("clip_id"))
         if c:

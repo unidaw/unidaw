@@ -439,7 +439,20 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
                    std::string(resolution.match == daw::VstMatch::None && onDisk
                                    ? "direct_path"
                                    : daw::vstMatchToString(resolution.match)))
-            .field("slot", static_cast<uint64_t>(resolution.index));
+            // SLOT ONLY WHEN A MATCH PRODUCED ONE. resolution.index is 0 when the match is
+            // None, and "direct_path" IS the None case — so this field printed `"slot":0` for
+            // every plugin resolved off disk, which reads as "loaded entry 0 of the bundle".
+            // For u-he's Zebra2.vst3, entry 0 is Zebra2 and entry 2 is Zebralette, so a project
+            // that correctly loaded Zebralette reported a slot saying it had loaded Zebra2.
+            // That cost a real investigation: the number was believed over the parameter count,
+            // which is the fact that actually distinguishes them (777 params is Zebra2).
+            //
+            // The host picks the class BY NAME (platform_juce/juce_wrapper.cpp, desiredName),
+            // and that name is not an index into anything the cache knows — so on this path
+            // there is no slot to report, and reporting a zero is worse than reporting nothing.
+            .field("slot", resolution.match == daw::VstMatch::None
+                               ? std::string("n/a — resolved by path, class chosen by name")
+                               : std::to_string(resolution.index));
       }
     }
 

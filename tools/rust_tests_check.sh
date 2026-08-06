@@ -22,10 +22,17 @@
 #   daw-agent's engine_e2e — it starts real engines and loads vendor plugins, which is what the
 #   C++ checks in this suite already do under proper isolation, and running two engine fleets
 #   from one ctest invocation is how the shared-segment collisions in this project started. It is
-#   still COMPILED by the gate above. It currently has one genuine failure
-#   (multi_bundle_selects_named_subplugin: a project naming Zebralette inside the Zebra2 bundle
-#   gets "Identity"), tracked separately — this check does not paper over it, it declines to run
-#   it here.
+#   still COMPILED by the gate above.
+#
+#   THE "ONE GENUINE FAILURE" THIS USED TO NAME IS FIXED. It said
+#   multi_bundle_selects_named_subplugin failed — a project naming Zebralette inside the Zebra2
+#   bundle getting "Identity". Re-run 2026-08-06: it passes, three times out of three. The note
+#   outlived the defect, and a stale known-failure line is worse than none: it tells the next
+#   person a working guard is broken, and it supplies a ready reason not to run the thing that
+#   would have shown otherwise. Verified by:
+#       ( cd ui && cargo test --release -p daw-agent --test engine_e2e \
+#           multi_bundle_selects_named_subplugin )
+#   If it ever fails again, say so with the date and re-verify before writing it down.
 #
 #   tools/rust_tests_check.sh
 set -uo pipefail
