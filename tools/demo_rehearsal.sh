@@ -130,6 +130,39 @@ n_samplers(){
 # EVERY track's notes, not track 0's. The model routinely makes its own track for a part, and a
 # count that only ever looks at track 0 reports "the song did not change" while the notes are
 # sitting one track over.
+# `get patcher` publishes ONE REGION's graph — it prints `region_device` — so it is a
+# UI-scoped view, not a census. It read 3 nodes before and after adding a patcher, which
+# says nothing about whether the add landed. The device chain is only observable whole
+# through a SAVE, same as the harmony timeline.
+n_patcher(){
+  cli do save rehearsal --force >/dev/null 2>&1
+  local f="$TMP/rehearsal.uniproj.json"
+  [ -f "$f" ] || { echo 0; return; }
+  python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+print(sum(1 for t in d['tracks'] for x in t.get('device_chain',[])
+          if str(x.get('kind','')).startswith('patcher')))" "$f" 2>/dev/null || echo 0
+}
+
+# CHORDS ARE NOT NOTES and are not counted by n_notes — they live in their own array on the clip,
+# because a chord is a DEGREE of the current key and stays one until it sounds. So a progression
+# written by the model is invisible to the note count, and a rehearsal that only counted notes
+# would report "nothing happened" for a step that worked.
+n_chords(){
+  cli do save rehearsal --force >/dev/null 2>&1
+  local f="$TMP/rehearsal.uniproj.json"
+  [ -f "$f" ] || { echo 0; return; }
+  python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+# BOTH PLACES. A chord can sit on a CLIP or, for a placement-local edit, on the PLACEMENT —
+# the project format writes a 'chords' array in each. Counting only clips would report 0 for a
+# step that worked, which in a rehearsal reads as 'the demo is broken' the day before the demo.
+print(sum(len(c.get('chords',[])) for c in d.get('clips',[]))
+    + sum(len(pl.get('chords',[])) for t in d.get('tracks',[]) for pl in t.get('placements',[])))" "$f" 2>/dev/null || echo 0
+}
+
 n_notes()  {
   local total=0 id
   for id in $(cli get tracks | sed -n 's/.*"track_id": *\([0-9][0-9]*\).*/\1/p'); do
@@ -165,6 +198,9 @@ step "put a sampler on it" "Put a sampler on the track named Bass."         n_sa
 step "write a bassline"   "Write a simple four-bar bassline on the track named Bass, root notes on the beat." n_notes
 step "the harmony lane"   "Set the key to C minor from the start of the song."   h_harmony
 step "lane quantize"      "Quantize the Bass track to a 1/16 grid at full strength." h_quantize
+step "a drum beat"        "Add a track called Drums with a sampler on it, and write a four-bar drum beat: kick on every beat, snare on 2 and 4." n_notes
+step "a chord progression" "On a new track called Keys, write a four-bar I-V-vi-IV chord progression, strummed." n_chords
+step "the patcher"        "Put a patcher device on the Bass track."                 n_patcher
 
 echo
 echo "rehearsed: $PASS passed, $FAIL failed"

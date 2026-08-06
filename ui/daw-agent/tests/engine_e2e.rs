@@ -390,6 +390,82 @@ fn write_past_pattern_end_creates_material() {
 /// Undo/redo of a structural edit is a whole-store swap: after two note adds, one
 /// undo restores the store to a single note, and a redo brings the second back.
 #[test]
+// THE MODEL CAN WRITE A CHORD PROGRESSION, AND THE STRUM SURVIVES THE FILE.
+//
+// Chords were reachable from the tracker and from daw-cli and from nothing the agent could say,
+// so "make the music by prompting" could produce melodies and never harmony. add_chords writes
+// DEGREES, which is the point: the progression follows the harmony lane instead of being frozen
+// into whatever key was current when it was written.
+//
+// SPREAD IS ASSERTED ON PURPOSE. daw-cli's chord command shipped for months sending zero for
+// spread and both humanize fields, so no project written through a tool could contain a strummed
+// chord — the feature existed everywhere except the surface anyone used. A test that only counted
+// chords would pass with the same bug reintroduced here, so this reads the strum back out of the
+// saved file.
+fn add_chords_writes_a_progression_with_a_strum() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("chords");
+
+    // I - V - vi - IV, one per bar, as triads, strummed.
+    let r = session.execute(&ToolCall {
+        tool: "add_chords".into(),
+        args: json!({
+            "track": 0,
+            "degrees": [1, 5, 6, 4],
+            "quality": 1,
+            "octave": 4,
+            "step": Q * 4,
+            "spread": 12000,
+            "humanize_velocity": 8,
+        }),
+    });
+    assert!(r.ok, "add_chords failed: {r:?}");
+    assert_eq!(r.output["sent"].as_u64(), Some(4), "should have sent four chords: {r:?}");
+
+    assert!(session.execute(&ToolCall { tool: "save".into(), args: json!({"name":"chordprog"}) }).ok);
+    let doc = read_project(&engine.proj, "chordprog");
+
+    let mut chords: Vec<&Value> = doc["clips"].as_array().unwrap().iter()
+        .flat_map(|c| c["chords"].as_array().map(|a| a.iter()).into_iter().flatten())
+        .collect();
+    chords.sort_by_key(|c| c["nanotick"].as_u64().unwrap_or(0));
+
+    assert_eq!(chords.len(), 4, "expected four chords in the saved file, got {}: {doc}", chords.len());
+
+    let degrees: Vec<u64> = chords.iter().map(|c| c["degree"].as_u64().unwrap()).collect();
+    // ONE-BASED. resolveDegree indexes with `degree - 1` and coerces 0 to 1, so a 0-based
+    // reading gives the tonic for the first chord by accident and the wrong chord for every
+    // other one — which is why this asserts the exact degrees rather than just the count.
+    assert_eq!(degrees, vec![1, 5, 6, 4],
+               "the progression must be saved in the order it was asked for, as DEGREES");
+
+    // ONE BAR APART, which is add_chords' default step and not add_notes' quarter — a progression
+    // that changed chord every beat is not what a I-V-vi-IV means.
+    let ticks: Vec<u64> = chords.iter().map(|c| c["nanotick"].as_u64().unwrap()).collect();
+    assert_eq!(ticks, vec![0, Q * 4, Q * 8, Q * 12], "chords should be one bar apart");
+
+    // DEGREE 0 IS REFUSED, not quietly turned into the tonic. The engine coerces it, so without
+    // this the 0-based misreading writes a progression whose FIRST chord is right and whose rest
+    // are one degree low — the failure that looks like success.
+    let zero = session.execute(&ToolCall {
+        tool: "add_chords".into(),
+        args: json!({"track": 0, "degrees": [0, 4, 5, 3]}),
+    });
+    assert!(!zero.ok, "degree 0 must be refused, not coerced to the tonic: {zero:?}");
+    assert!(format!("{zero:?}").contains("one-based"),
+            "the refusal must say WHY, or the model will just try 0 again: {zero:?}");
+
+    for c in &chords {
+        assert_eq!(c["quality"].as_u64(), Some(1), "quality did not persist: {c}");
+        assert_eq!(c["spread"].as_u64(), Some(12000),
+                   "THE STRUM DID NOT PERSIST. This is the field daw-cli sent as zero for months, \
+                    so a chord written by a tool could never be anything but a rigid block: {c}");
+        assert_eq!(c["humanize_velocity"].as_u64(), Some(8),
+                   "humanize_velocity did not persist: {c}");
+    }
+}
+
+#[test]
 fn undo_redo_structural_edit() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (engine, session) = start_engine("undo");
