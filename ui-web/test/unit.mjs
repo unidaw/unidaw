@@ -2160,10 +2160,10 @@ const OP_REGISTRY = {
   // The agent grew `add_chords` — a degree/quality/inversion write with a strum, not a
   // pile of simultaneous notes. Both surfaces now, so no `why` and no gap entry.
   chord:     { cli: 'chord', agent: 'add_chords' },
-  delchord:  { cli: null,    agent: null, why: 'gap' },
+  delchord:  { cli: 'chord',    agent: null, why: 'gap' },
   // The engine has taken DeleteHarmony since before this UI existed and nothing sent it,
   // so a key change could be added to the timeline and never taken off.
-  delharmony: { cli: null,   agent: null, why: 'gap' },
+  delharmony: { cli: 'harmony',   agent: null, why: 'gap' },
   // M1.13. daw-cli shipped `do quantize` with the engine, so the CLI path is real
   // from day one; the agent's manifest still owes it a tool.
   quantize:  { cli: 'quantize', agent: 'set_lane_quantize' },
@@ -2187,7 +2187,7 @@ const OP_REGISTRY = {
    * `session.execute`. Recorded rather than papered over: an agent CAN modulate and cannot
    * yet check its own work.
    */
-  autopoint:   { cli: null, agent: 'write_automation_point', why: 'gap' },
+  autopoint:   { cli: 'automation', agent: 'write_automation_point', why: 'gap' },
   automation:  { cli: 'automation', agent: 'automation' },
   curve:       { cli: 'automation-points', agent: 'automation_points', why: 'gap' },
   mods:        { cli: null, agent: null, why: 'gap' },
@@ -2221,7 +2221,7 @@ const OP_REGISTRY = {
   delmarker:   { cli: 'marker', agent: 'edit_marker' },
   namemarker:  { cli: 'marker', agent: 'edit_marker' },
   // A marker's colour was write-once everywhere, so no surface owed a verb until now.
-  colormarker: { cli: null, agent: null, why: 'gap' },
+  colormarker: { cli: 'marker', agent: null, why: 'gap' },
   // The clip's name and source path. Reached the engine and this console together;
   // neither the CLI nor the agent has a verb for either yet.
   cliptext:    { cli: 'clip-name', agent: null, why: 'gap' },
@@ -2357,8 +2357,8 @@ const OP_REGISTRY = {
   lpb: { cli: 'lines-per-beat', agent: null, why: 'gap' },
   // The master bus fader and mute (SetTrackMixer addressed to kMasterTrackId). The engine has
   // honoured both on the summed output since the master track landed; nothing could move them.
-  'main-gain': { cli: null, agent: null, why: 'gap' },
-  'main-mute': { cli: null, agent: null, why: 'gap' },
+  'main-gain': { cli: 'mixer', agent: null, why: 'gap' },
+  'main-mute': { cli: 'mixer', agent: null, why: 'gap' },
   // A CLIP's own subdivision and meter (opcode 94) — the level the renderer honours FIRST.
   // Backend shipped `daw-cli do clip-grid` with it, so this one has a CLI path from the start.
   'clip-grid': { cli: 'clip-grid', agent: null, why: 'gap' },
@@ -2442,10 +2442,8 @@ const OP_REGISTRY = {
  * placement list. `get transport` is a READ and is NOT seek, which is the kind of near-miss that
  * makes a guessed mapping worse than an admitted gap.
  */
-const CLI_GAP = ['clear', 'columns', 'copy', 'cut',
-                 'delchord', 'delharmony', 'new', 'paste', 'transpose',
-                 'main-gain', 'main-mute', 'colormarker',
-                 'mods', 'autopoint', 'shared'];
+const CLI_GAP = ['clear', 'columns', 'copy', 'cut', 'new', 'paste', 'transpose',
+                 'mods', 'shared'];
 /** Ops with no agent tool today. Same rule. */
 // `bypass` joins the list rather than being smuggled past it: the engine takes
 // the command and daw-cli sends it, but the agent's manifest has no tool for it,
