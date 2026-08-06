@@ -2229,3 +2229,71 @@ fn the_agent_can_delete_a_chord_and_a_key_change() {
         std::thread::sleep(Duration::from_millis(150));
     }
 }
+
+/// The agent can name a clip — the first tool here that does not use the ring.
+///
+/// A name does not fit the 40-byte ring payload, so `set_clip_text` rides the bulk carrier. That
+/// is the only reason the agent never had it, and it is why this test exists at all: every other
+/// tool is a fixed-size struct whose wire is exercised a hundred times over, and this one has a
+/// header-plus-bytes layout with exactly one caller.
+///
+/// Asserts the NAME ON DISK, not that the command was accepted. A bulk send with a stale
+/// base_version or a wrong field id is accepted by the carrier and dropped by the engine.
+#[test]
+fn the_agent_can_name_a_clip() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("agname");
+
+    let proj = json!({
+        "schema_version": 2,
+        "meta": { "name": "agname_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [], "clips": [ { "id": 7, "name": "before", "length": Q * 16,
+            "lines_per_beat": 4, "kind": "symbolic", "time_sig_numerator": 4,
+            "time_sig_denominator": 4, "notes": [], "chords": [] } ],
+        "tracks": [ {
+            "track_id": 0, "name": "T", "harmony_quantize": 0, "lines_per_beat": 4,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            "device_chain": [], "mod_links": [],
+            "placements": [ { "clip_id": 7, "at": 0, "length": Q * 16,
+                              "notes": [], "chords": [], "mutes": [] } ]
+        } ]
+    });
+    std::fs::write(engine.proj.join("agname_in.uniproj.json"),
+                   serde_json::to_string_pretty(&proj).unwrap()).unwrap();
+    assert!(session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"agname_in"}) }).ok);
+
+    // Addressing first: a rename that cannot say WHICH clip is the failure this tool refuses to
+    // have, so the refusal is asserted rather than assumed.
+    let no_clip = session.execute(&ToolCall {
+        tool: "set_clip_text".into(), args: json!({ "field": "name", "text": "x" }),
+    });
+    assert!(!no_clip.ok, "a missing clip id must be refused, not defaulted to clip 0: {no_clip:?}");
+
+    let sent = session.execute(&ToolCall {
+        tool: "set_clip_text".into(),
+        args: json!({ "track": 0, "clip": 7, "field": "name", "text": "Verse Bass" }),
+    });
+    assert!(sent.ok, "set_clip_text failed: {sent:?}");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut saw = String::new();
+    loop {
+        let s = session.execute(&ToolCall {
+            tool: "save".into(), args: json!({"name": "agname_out"}) });
+        assert!(s.ok, "save failed: {s:?}");
+        let doc = read_project(&engine.proj, "agname_out");
+        saw = doc["clips"].as_array().unwrap().iter()
+            .find(|c| c["id"] == 7)
+            .and_then(|c| c["name"].as_str())
+            .unwrap_or("<missing>").to_string();
+        if saw == "Verse Bass" { break; }
+        assert!(Instant::now() < deadline,
+                "the clip is still named {saw:?} — a bulk send with a stale base_version or a \
+                 wrong field id is ACCEPTED by the carrier and dropped by the engine, so \
+                 `sent: true` proves nothing here");
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    assert_eq!(saw, "Verse Bass");
+}

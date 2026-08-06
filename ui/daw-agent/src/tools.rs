@@ -577,6 +577,26 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "set_clip_text",
+            description: "Name a clip, or point an audio clip at a different file. `field` is \
+                          \"name\" or \"source\". An agent that made a clip could not label it, so \
+                          everything it built was called whatever the engine defaulted to.",
+            params: json!({
+                "type": "object",
+                "required": ["clip", "field", "text"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "clip": { "type": "integer", "minimum": 0,
+                              "description": "REQUIRED. There is no sensible default: renaming \
+                                              whichever clip happens to be at 0 is a silent \
+                                              wrong-target edit." },
+                    "field": { "type": "string", "enum": ["name", "source"] },
+                    "text": { "type": "string",
+                              "description": "An empty name is a legal clear." },
+                },
+            }),
+        },
+        ToolSpec {
             name: "set_mixer",
             description: "Set a track's gain, pan, mute or solo. Gain is in dB (0 is unity,                           negative is quieter); pan is -1 hard left to 1 hard right.",
             params: json!({
@@ -2039,6 +2059,76 @@ fn delete_harmony(handle: &EngineHandle, args: &Value) -> ToolResult {
     send_edit(handle, p, json!({ "deleted_harmony_at": tick }))
 }
 
+/// Name a clip, or repoint an audio clip at another file.
+///
+/// THE FIRST TOOL HERE THAT DOES NOT USE THE RING. A name does not fit the 40-byte ring payload,
+/// so this rides the BULK CARRIER as an opcode-98 header followed by the bytes — which is the only
+/// reason the agent never had it: every other tool is a fixed-size struct and this one is not.
+///
+/// Shape is checked here, domain in the engine. Whether the clip exists, is audio, or the path
+/// resolves is the engine's to answer — daw-cli refuses on exactly these two grounds and no more,
+/// for the same reason, and this is deliberately the same line.
+fn set_clip_text(handle: &EngineHandle, args: &Value) -> ToolResult {
+    // REQUIRED, not defaulted to 0. Falling back to clip 0 would rename whichever clip happens to
+    // be there — a silent wrong-target edit that reports success. daw-cli refuses the same way.
+    let Some(clip) = arg_u64(args, "clip") else {
+        return ToolResult::err("set_clip_text needs \"clip\" — there is no default clip, and \
+                                renaming whichever one is at 0 is a silent wrong-target edit");
+    };
+    let track = arg_u64(args, "track").unwrap_or(0) as u32;
+    let field = args.get("field").and_then(|v| v.as_str()).unwrap_or("");
+    let is_name = match field {
+        "name" => true,
+        "source" | "path" => false,
+        _ => return ToolResult::err("set_clip_text needs \"field\": \"name\" or \"source\""),
+    };
+    // An ABSENT text is an error; an EMPTY one is a legal clear. Defaulting the missing case to ""
+    // would let a typo'd argument erase a name and report that it worked.
+    let Some(text) = args.get("text").and_then(|v| v.as_str()) else {
+        return ToolResult::err("set_clip_text needs \"text\" (an empty string is a legal clear)");
+    };
+    // The same limit and the same reason as the engine's, so a name that cannot land fails here
+    // instead of becoming a rejection line in a log nobody reads.
+    if is_name && text.len() >= daw_bridge::layout::UI_CLIP_EXTENT_NAME_BYTES {
+        return ToolResult::err(format!(
+            "the name is {} bytes; the published field holds {} (the engine refuses rather than \
+             truncating)",
+            text.len(),
+            daw_bridge::layout::UI_CLIP_EXTENT_NAME_BYTES - 1));
+    }
+
+    let bytes = text.as_bytes();
+    let header = daw_bridge::layout::UiClipTextHeader {
+        command_type: UiCommandType::SetClipText as u16,
+        field: if is_name {
+            daw_bridge::layout::CLIP_TEXT_FIELD_NAME
+        } else {
+            daw_bridge::layout::CLIP_TEXT_FIELD_SOURCE_PATH
+        },
+        track_id: track,
+        clip_id: clip as u32,
+        text_bytes: bytes.len() as u32,
+        // The track's CURRENT clip version, so an ordinary edit does not have to know the gate
+        // exists. A stale one is refused by the engine, which is what the gate is for.
+        base_version: handle.clip_version_for_track(track),
+    };
+    let mut buf = Vec::with_capacity(std::mem::size_of_val(&header) + bytes.len());
+    buf.extend_from_slice(unsafe {
+        std::slice::from_raw_parts(
+            &header as *const daw_bridge::layout::UiClipTextHeader as *const u8,
+            std::mem::size_of::<daw_bridge::layout::UiClipTextHeader>(),
+        )
+    });
+    buf.extend_from_slice(bytes);
+    match handle.send_bulk(&buf) {
+        Ok(()) => ToolResult::ok(json!({
+            "sent": true, "track": track, "clip": clip,
+            "field": if is_name { "name" } else { "source" }, "text": text,
+        })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
 /// Make a modulation link, name its parameter, and turn the knob. THREE commands.
 ///
 /// All three, because a link the engine accepts moves nothing without them: it addresses a
@@ -2401,6 +2491,7 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "sampler_kit" => sampler_kit(handle, &call.args),
         "delete_chord" => delete_chord(handle, &call.args),
         "delete_harmony" => delete_harmony(handle, &call.args),
+        "set_clip_text" => set_clip_text(handle, &call.args),
         "set_mixer" => set_mixer(handle, &call.args),
         "set_loop" => set_loop(handle, &call.args),
         "preview_note" => preview_note(handle, &call.args),
