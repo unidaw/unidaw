@@ -10,8 +10,17 @@
 
 namespace daw::engine {
 
-bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path,
-                       std::string* error) {
+// THE DOCUMENT AS A VALUE — everything the engine would write, without writing it.
+//
+// Lifted out of saveProjectToPath VERBATIM. This is the whole of Step 1 of the undo work:
+// undo needs the complete authored state, and the only code that ever knew how to gather it
+// was welded to a file path. `saveProjectToPath` is now this function plus a name plus a
+// write, which is the honest description of what saving is.
+//
+// NOT a new projection of the state — the same one, called from two places. A second
+// gatherer would drift from this one field at a time, and a field that undo forgets is
+// exactly the defect being fixed.
+daw::ProjectDocument captureDocument(SaveProjectDeps& deps) {
   auto& arrangeMutex = deps.engineState.arrange.arrangeMutex;
   auto& harmonyEvents = deps.harmonyTimeline.harmonyEvents;
   auto& liveTrackCount = deps.liveTrackCount;
@@ -32,17 +41,7 @@ bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path,
   auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
   const auto& songBarGrid = deps.songBarGrid;
   const auto& trackIsPersisted = deps.trackIsPersisted;
-  {
-    daw::ProjectDocument document;
-    // The file is "<name>.uniproj.json", so one stem() still leaves ".uniproj".
-    std::string stem = std::filesystem::path(path).stem().string();
-    const std::string suffix = ".uniproj";
-    if (stem.size() > suffix.size() &&
-        stem.compare(stem.size() - suffix.size(), suffix.size(), suffix) == 0) {
-      stem.erase(stem.size() - suffix.size());
-    }
-    document.meta.name = stem;
-    document.nanoticksPerQuarter = daw::NanotickConverter::kNanoticksPerQuarter;
+  daw::ProjectDocument document;
     document.seed = projectSeed.load(std::memory_order_relaxed);
     {
       // LIVE state, so the save reads the ENGINE's copy — not whatever the document loaded with.
@@ -403,6 +402,40 @@ bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path,
         target = &devices.front();
       }
       target->patcher = patcherGraphState.graph;
+    }
+  return document;
+}
+
+bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path,
+                       std::string* error) {
+  // ONLY the aliases the WRITE still needs. The other eighteen went with the body into
+  // captureDocument, and -Werror=unused-variable is what named them: after moving a block, the
+  // parent's dead bindings are the compiler's list of what the block actually used, which is a
+  // better answer than reading the body and deciding.
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
+  {
+    daw::ProjectDocument document = captureDocument(deps);
+    // The file is "<name>.uniproj.json", so one stem() still leaves ".uniproj".
+    std::string stem = std::filesystem::path(path).stem().string();
+    const std::string suffix = ".uniproj";
+    if (stem.size() > suffix.size() &&
+        stem.compare(stem.size() - suffix.size(), suffix.size(), suffix) == 0) {
+      stem.erase(stem.size() - suffix.size());
+    }
+    document.meta.name = stem;
+    document.nanoticksPerQuarter = daw::NanotickConverter::kNanoticksPerQuarter;
+    // The runtimes list is rebuilt rather than threaded out of captureDocument: the blob
+    // writer below needs it, and returning it would make the capture's signature about
+    // saving again. Same filter, four lines, no shared mutable state.
+    std::vector<TrackRuntime*> runtimes;
+    {
+      std::lock_guard<std::mutex> lock(tracksMutex);
+      for (auto& runtime : tracks) {
+        if (runtime) {
+          runtimes.push_back(runtime.get());
+        }
+      }
     }
     if (!daw::saveProject(document, path, error)) {
       return false;
