@@ -62,7 +62,12 @@ upper   q 2 w 3 e r 5 t 6 y 7 u i    q = C in (octave)
 At `oct 4`, `z` is C-3 and `q` is C-4 (MIDI 60).
 
 Worth showing: the third field is not one hex effect but a set of named per-note ops, every one
-of which is drawn. `ops` and `op` set them from the console.
+of which is drawn. Type them into the cell — `@` opens the buffer seeded with what is there, so
+`@` then `ret3` gives three even strikes across the note — or set them from the console with `ops`
+and `op`.
+
+`ops-ui.mjs` types all seven with real keystrokes and then renders: `ret3` produces three strikes
+at the typed pitch against one for the same note without it.
 
 ## 2. One song, three views
 
@@ -140,8 +145,12 @@ harmony-quantize 0 on      snap track 0's notes to it
 ```
 
 Out-of-key notes then **sound** in key while the note you typed stays what you typed —
-non-destructive, like timing quantize. `harmony-quantize.mjs` proves it by rendering the same song
-twice and requiring the audio to differ.
+non-destructive, like timing quantize.
+
+`harmony-quantize.mjs` proves it by PITCH now, not by difference: it writes a C# into C major and
+detects what actually comes out of the render — **C#-4 with quantize off, C-4 with it on**, and
+everything sounding in key, while the clip still holds 61 either way. It used to assert only that
+the two renders differed, which it was passing on a difference of six hundredths of a cent.
 
 ## 6. The patcher
 
