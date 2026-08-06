@@ -3958,7 +3958,22 @@ const dockApi = {
    */
   newSong: (name) => {
     if (!conn || !conn.canSend()) { state.reject = 'no engine'; return false; }
-    conn.send({ type: 'new', name: name || 'untitled' });
+    const n = name || 'untitled';
+    conn.send({ type: 'new', name: n });
+    /*
+     * AND IT IS NOW THE CURRENT PROJECT. This line was missing, and it cost a real song.
+     *
+     * `save` and `load` both set `state.currentProject`; `new` did not. So after `new kala` the
+     * app still believed you were in whatever was open before, and the next save — the browser's
+     * ⌘S, the console's bare `save`, anything that defaults to "the current one" — wrote to THAT
+     * name instead. The owner did `new kala`, worked for half an hour, saved, and the work landed
+     * in `rack`, a shipped preset. `kala.uniproj.json` sat there holding the empty document `new`
+     * had written, which is the most convincing possible evidence that nothing had been saved.
+     *
+     * Nothing warned, because from the app's point of view nothing was wrong: it saved the
+     * current project, and the current project was stale.
+     */
+    state.currentProject = n;
     return true;
   },
   /** Open a plugin's own editor window. The engine has had OpenPluginEditor since
