@@ -2513,6 +2513,60 @@ test('the CLI really implements every path the registry claims', async () => {
   }
 });
 
+/**
+ * Registry CLI verbs that NOTHING in the repository invokes.
+ *
+ * The check above proves a dispatch arm exists. It cannot prove the arm works, and the gap
+ * between those two is where this wire fails: a verb that parses its flags, builds a payload with
+ * a field at the wrong offset and sends it looks identical in the source to one that works. The
+ * engine ignores a malformed command, daw-cli exits 0, and the parity list stays green. That is
+ * not hypothetical — `open-editor` built a `UiChainCommandPayload` where the engine reads a
+ * `UiCommandPayload`; both are 40 bytes, so it passed the size check and the engine read
+ * `deviceKind` as the device id. It answered "device 0 not found" for every device on every
+ * track, for as long as the verb had existed, with the registry counting it as covered.
+ *
+ * The audit that produced this list found SEVEN such verbs. `cli-verbs.mjs` now drives them
+ * against a live engine, so the list is empty — and an empty list is the point: a NEW verb added
+ * to the registry and never exercised lands here and fails.
+ *
+ * NOT A CLAIM THAT THE VERBS ARE CORRECT. "Something runs it" is weaker than "it does the right
+ * thing", and the suites are where the second lives. This is the floor beneath them.
+ */
+const CLI_NEVER_DRIVEN = [];
+
+test('every CLI verb the registry claims is actually driven by something', async () => {
+  const { readFileSync, readdirSync, statSync } = await import('node:fs');
+  const { join } = await import('node:path');
+
+  const here = new URL('.', import.meta.url).pathname;
+  const root = join(here, '../..');
+  const files = [];
+  const walk = (d) => {
+    for (const name of readdirSync(d)) {
+      if (['node_modules', 'target', '.git'].includes(name)) continue;
+      const p = join(d, name);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (/\.(mjs|sh|py)$/.test(name)) files.push(p);
+    }
+  };
+  walk(join(root, 'ui-web/test'));
+  walk(join(root, 'tools'));
+  const corpus = files.map((p) => readFileSync(p, 'utf8')).join('\n');
+
+  const claimed = [...new Set(Object.values(OP_REGISTRY).map((e) => e.cli).filter(Boolean))];
+  // `do <verb>` or `get <verb>`, as a shell word or an argv element — the two shapes every
+  // caller in this repo uses. Deliberately NOT a bare name match: half these verbs are ordinary
+  // English words that appear in prose ("macro", "extents"), and matching those is how a list
+  // like this decays into agreeing with itself.
+  const driven = (v) => new RegExp(`(do|get)[\\s"',]+${v}\\b`).test(corpus);
+  const never = claimed.filter((v) => !driven(v)).sort();
+
+  assert.deepEqual(never, [...CLI_NEVER_DRIVEN].sort(),
+    'a CLI verb the registry counts as covered that nothing in the repo runs — exercise it in '
+    + 'cli-verbs.mjs, or say here why it cannot be. A dispatch arm nobody calls is a green row '
+    + 'over untested code.');
+});
+
 test('every AI prompt in the runbook is one a test actually asks', async () => {
   /*
    * THE RUNBOOK PROMISED TWO THINGS NO RUN HAD EVER MADE.
