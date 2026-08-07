@@ -5135,8 +5135,49 @@ removed is the whole command");
                     match harmony_command(&args, base) {
                         Ok(payload) => match handle.send_command(payload) {
                             Ok(()) => {
-                                println!("{{ \"sent\": \"harmony\", \"base_version\": {base} }}");
-                                0
+                                /*
+                                 * WAIT FOR THE ENGINE TO TAKE IT, and say so — this used to print
+                                 * "sent" and exit 0 the instant the command was queued.
+                                 *
+                                 * A PROCESS BOUNDARY IS NOT A SYNCHRONISATION PRIMITIVE, which is
+                                 * the assumption that made this look safe. Each invocation spawns,
+                                 * attaches, reads the counter and sends — milliseconds of real
+                                 * work — so it seemed impossible for two of them to quote the same
+                                 * base. Measured (ui-web/test/cli-harmony-rapid.mjs), four
+                                 * back-to-back processes quoted `1,1,1,2` and TWO of the four key
+                                 * changes reached the document. The engine refused the losers in
+                                 * silence and every process exited 0.
+                                 *
+                                 * Same defect the page had and the sidecar had, third surface.
+                                 * Optimistic concurrency needs the base you quote to be the state
+                                 * your edit was composed against; a writer that fires again before
+                                 * its previous edit lands has invalidated its own base, and no
+                                 * amount of reading harder fixes that.
+                                 *
+                                 * BOUNDED, and a timeout is reported as FAILURE rather than
+                                 * assumed to be success: a write that may or may not have landed
+                                 * is the one outcome a script can do nothing with.
+                                 */
+                                let deadline = Instant::now() + Duration::from_millis(750);
+                                let mut applied = false;
+                                while Instant::now() < deadline {
+                                    // Any move off the quoted value means the engine went through
+                                    // it. Testing for `base + 1` would be wrong as soon as a
+                                    // second writer exists.
+                                    if handle.harmony_version() != base { applied = true; break; }
+                                    std::thread::sleep(Duration::from_millis(1));
+                                }
+                                if applied {
+                                    println!(
+                                        "{{ \"applied\": true, \"harmony\": true, \"base_version\": {base} }}");
+                                    0
+                                } else {
+                                    eprintln!(
+                                        "daw-cli: the harmony write was not acknowledged — the \
+                                         engine's harmony version is still {base}. It was most \
+                                         likely refused for a stale base; nothing was written.");
+                                    1
+                                }
                             }
                             Err(err) => {
                                 eprintln!("daw-cli: {err}");
