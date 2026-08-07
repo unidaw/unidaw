@@ -7,6 +7,37 @@ an unverified step in a runbook is worse than an absent one, because it reads li
 
 ---
 
+## Where things stand this morning
+
+Written 2026-08-07 04:30, so it can be read in two minutes before you start.
+
+**The gates are green.** 55 Playwright suites, 143 unit tests, 184 Rust tests. Both suites that
+the sweep deliberately EXCLUDES — because one needs a running stack and the other costs money —
+were run by hand and passed: the stack smoke test 5/5, and the AI suite 23/23 against a real model.
+The release binaries match the committed source, so what launches is what was tested.
+
+**One change affects a step you will perform.** §1 tells you to drag a note's right edge in the
+roll to make an overlap. Until last night that drag rewrote the FIRST note column and left the note
+you were dragging alone — along with cut, paste, transpose and selection, ten operations in all
+that sent no column and so aimed at column 0. Fixed, with `column-ops.mjs` asserting it against the
+saved project; nine of its eighteen checks fail against the old build.
+
+**Two things want your judgement, and I did not decide them alone:**
+
+1. In the tracker, `Delete` clears only the note under the cursor, not the selection — `cut` (`x`)
+   is what clears a range. Renoise clears the selection with Delete. That is a design call.
+2. `transpose` on the CLI and the agent REFUSES a track whose clips are shared, rather than
+   guessing. A flattened track repeats a shared clip's notes once per appearance, so writing them
+   back edits one clip several times; two notes became three when I tried it. The UI's selection
+   transpose is unaffected. A tool that cannot describe its own edit should not perform it, but
+   you may want it to do something rather than nothing.
+
+**Known and not blocking:** there is no engine opcode to remove a patcher edge, so undoing a wrong
+connection means deleting the node; and modulation can be created from the CLI and the agent but
+not READ back from either. Both are with the engine side.
+
+---
+
 ## Before you start
 
 ```
