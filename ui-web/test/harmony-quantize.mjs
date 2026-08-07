@@ -81,14 +81,40 @@ check(after > before || after > 0, 'a key change lands on the harmony timeline',
 // comparison below would be between two identical empty renders.
 // ---------------------------------------------------------------------------
 await run('sampler 0');
-await settle(1200);
-const kitDev = await page.evaluate(() => {
+/*
+ * WAIT FOR THE KIT, AND SAY SO IF IT NEVER COMES — this slept 1200ms and then GUESSED.
+ *
+ * `samplerKitCached` is a cache filled by the reply to `samplerKit`, so reading it after a fixed
+ * sleep is a race. The old code scanned six devices and, finding nothing, fell back to `return 1`.
+ * That guess is what made the failure unreadable: every later `slot 0 <dev> ...` addressed a
+ * device that might not be the sampler, and the first visible symptom was `zone` coming back null
+ * about thirty lines further down — "the sample answers a RANGE of keys — null", which is what
+ * sweep 21 printed and which says nothing about the actual cause.
+ *
+ * ASKS ON EVERY POLL, like sampler-device-id.mjs does, because a request can be answered before
+ * this page was listening; polling at 500ms rather than every frame keeps that from becoming a
+ * request storm. A guess is replaced by a check that fails where the problem is.
+ */
+const kitFound = await page.waitForFunction(() => {
   for (let d = 0; d < 6; d++) {
+    window.__uni.samplerKit(0, d);
     const k = window.__uni.samplerKitCached(0, d);
-    if (k) return d;
+    /*
+     * `k.found`, NOT just `k`. Asking about a device that holds no sampler still gets an ANSWER
+     * — an empty kit — and the page caches it, so a truthy kit means "the engine replied", not
+     * "there is a sampler here". The original code tested `if (k)` and this rewrite copied it;
+     * a control that scanned devices 90-95 selected device 90 quite happily and only fell over
+     * two checks later. `found` is the field that distinguishes the two.
+     */
+    if (k && k.found) return { dev: d };
   }
-  return 1;
-});
+  return null;
+}, null, { timeout: 20000, polling: 500 }).then((h) => h.jsonValue()).catch(() => null);
+check(kitFound !== null,
+      'the sampler answers with a kit, so the device id below is read and not guessed',
+      'no kit from any of devices 0-5 in 20s — everything after this would have been aimed at a '
+      + 'guessed device, which is how this failed as an unrelated null further down');
+const kitDev = kitFound ? kitFound.dev : 1;
 /*
  * A PITCHED SAMPLE, because this suite now asserts WHICH NOTES SOUND.
  *
@@ -101,11 +127,20 @@ const kitDev = await page.evaluate(() => {
  * `demo_pluck_c4.wav` is middle C with real harmonics, so a note played at 61 comes back as 61.
  */
 await run(`load-sample 0 ${kitDev} demo_pluck_c4.wav`);
-await settle(2500);
-const slot = await page.evaluate((d) => {
+/*
+ * AND THE SLOT, for the same reason: this also slept and then fell back to `1`. A wrong slot id
+ * makes every `slot 0 <dev> <slot> ...` below land on nothing, and the suite goes on to render
+ * and compare two files that were never configured.
+ */
+const slotFound = await page.waitForFunction((d) => {
+  window.__uni.samplerKit(0, d);
   const k = window.__uni.samplerKitCached(0, d);
-  return k && k.slots && k.slots.length ? k.slots[0].slot : 1;
-}, kitDev);
+  return (k && k.slots && k.slots.length) ? { slot: k.slots[0].slot } : null;
+}, kitDev, { timeout: 20000, polling: 500 }).then((h) => h.jsonValue()).catch(() => null);
+check(slotFound !== null,
+      'and the loaded sample appears as a slot in that kit',
+      `no slot on device ${kitDev} in 20s — the slot id below would have been a guess`);
+const slot = slotFound ? slotFound.slot : 1;
 // A wide zone, NOT fixed pitch: the sample must transpose with the note, or a snapped
 // pitch and an unsnapped one play the identical sample and the renders match.
 await run(`slot 0 ${kitDev} ${slot} keylow 36`);
