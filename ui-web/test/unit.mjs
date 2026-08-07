@@ -2284,9 +2284,10 @@ const OP_REGISTRY = {
   paste:     { cli: null, agent: null, why: 'gap' },
   // A RANGE on the other two surfaces, not a selection — a selection is view state a headless
   // caller does not have and should not simulate. Both call plan_transpose in daw-bridge, so the
-  // skip-never-clamp and half-open-range rules cannot drift apart. Both REFUSE a track with a
-  // shared clip: a flattened track repeats a shared clip's notes per appearance, so writing them
-  // back edits one clip several times and the result is not what the range describes.
+  // skip-never-clamp and half-open-range rules cannot drift apart. A SHARED clip is transposed
+  // ONCE and every appearance follows (dedupe_by_clip_cell); it used to be refused, which the
+  // owner ruled against. The engine forks a clip whose edit would reach another track, so one
+  // track's transpose cannot silently retune another — asserted in cli-verbs.mjs.
   transpose: { cli: 'transpose', agent: 'transpose' },
   loop:      { cli: 'loop', agent: 'set_loop', why: 'gap' },
   // `transport` with action=seek IS this op; it was recorded as having no tool at all.

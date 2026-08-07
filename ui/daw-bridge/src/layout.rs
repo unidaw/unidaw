@@ -2930,6 +2930,48 @@ pub fn plan_transpose(
     plan
 }
 
+/// ONE EDIT PER CLIP NOTE, not one per appearance.
+///
+/// `read_track_clip` publishes a FLATTENED track: a clip placed three times contributes its notes
+/// three times, at three different track ticks. Transposing that list verbatim writes to the same
+/// clip once per appearance, and the result is not what the range describes — measured on a
+/// fixture with one clip placed three times, two notes became three.
+///
+/// The fix is not to refuse. Editing a shared clip is SUPPOSED to change every appearance — that
+/// is what sharing means, and `shared_clips` exists to tell you so before you do it. What must not
+/// happen is the same clip note being written several times over.
+///
+/// So each note is resolved to the clip cell it actually occupies — (clip id, tick WITHIN the
+/// clip, column) — and only the FIRST appearance of each cell is kept. The rest are the same music
+/// seen again.
+///
+/// A note that falls in no published extent is kept as-is: better to transpose something the
+/// extents could not explain than to drop it silently, and the extent table truncates at 256.
+pub fn dedupe_by_clip_cell(
+    notes: &[UiClipNote],
+    extents: &[UiClipExtent],
+    track: u32,
+) -> Vec<UiClipNote> {
+    use std::collections::HashSet;
+    let mut seen: HashSet<(u32, u64, u8)> = HashSet::new();
+    let mut out = Vec::with_capacity(notes.len());
+    for n in notes {
+        // The placement covering this tick, on this track. Extents are half-open: a note at
+        // exactly `end_tick` belongs to whatever comes next, the same rule plan_transpose uses.
+        let cell = extents.iter()
+            .find(|e| e.track_id == track && n.t_on >= e.start_tick && n.t_on < e.end_tick)
+            .map(|e| {
+                let span = e.end_tick.saturating_sub(e.start_tick).max(1);
+                (e.clip_id, (n.t_on - e.start_tick) % span, n.column)
+            });
+        match cell {
+            Some(key) => { if seen.insert(key) { out.push(*n); } }
+            None => out.push(*n),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod transpose_tests {
     use super::*;
@@ -2980,5 +3022,62 @@ mod transpose_tests {
     fn nothing_in_range_is_an_empty_plan_rather_than_a_panic() {
         let p = plan_transpose(&[note(0, 480, 60, 0)], 5000, 6000, 1);
         assert!(p.moved.is_empty() && p.skipped == 0);
+    }
+}
+
+#[cfg(test)]
+mod clip_cell_tests {
+    use super::*;
+
+    fn note(t_on: u64, pitch: u8, column: u8) -> UiClipNote {
+        UiClipNote { t_on, t_off: t_on + 100, pitch, velocity: 100, column, ..Default::default() }
+    }
+    fn ext(placement_id: u32, clip_id: u32, start: u64, end: u64) -> UiClipExtent {
+        UiClipExtent { placement_id, clip_id, track_id: 0, flags: 0,
+                       start_tick: start, end_tick: end, name: [0; 32] }
+    }
+
+    #[test]
+    fn one_clip_placed_twice_yields_one_edit_per_note() {
+        // Clip 1 at 0..1000 and again at 2000..3000. Its note sits at clip-tick 0 both times.
+        let extents = [ext(1, 1, 0, 1000), ext(2, 1, 2000, 3000)];
+        let notes = [note(0, 60, 0), note(2000, 60, 0)];
+        let kept = dedupe_by_clip_cell(&notes, &extents, 0);
+        assert_eq!(kept.len(), 1, "the same clip cell seen twice is ONE edit: {kept:?}");
+        assert_eq!(kept[0].t_on, 0, "and it is the first appearance");
+    }
+
+    #[test]
+    fn different_clips_are_not_merged() {
+        let extents = [ext(1, 1, 0, 1000), ext(2, 2, 2000, 3000)];
+        let notes = [note(0, 60, 0), note(2000, 60, 0)];
+        assert_eq!(dedupe_by_clip_cell(&notes, &extents, 0).len(), 2,
+                   "two DIFFERENT clips are two edits, even at the same clip-relative tick");
+    }
+
+    #[test]
+    fn the_same_tick_in_different_columns_is_two_notes() {
+        let extents = [ext(1, 1, 0, 1000)];
+        let notes = [note(0, 60, 0), note(0, 67, 1)];
+        assert_eq!(dedupe_by_clip_cell(&notes, &extents, 0).len(), 2,
+                   "column is part of the cell — collapsing these would silently drop a voice");
+    }
+
+    #[test]
+    fn a_note_outside_every_extent_is_kept() {
+        // The extent table truncates at 256. Dropping what it cannot explain would silently skip
+        // part of the edit; transposing it is the recoverable direction.
+        let extents = [ext(1, 1, 0, 1000)];
+        let notes = [note(5000, 60, 0)];
+        assert_eq!(dedupe_by_clip_cell(&notes, &extents, 0).len(), 1);
+    }
+
+    #[test]
+    fn another_track_s_extents_do_not_claim_these_notes() {
+        let mut e = ext(1, 1, 0, 1000);
+        e.track_id = 3;
+        let notes = [note(0, 60, 0), note(0, 60, 0)];
+        // No extent for track 0, so both are kept rather than merged against track 3's clip.
+        assert_eq!(dedupe_by_clip_cell(&notes, &[e], 0).len(), 2);
     }
 }

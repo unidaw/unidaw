@@ -3465,32 +3465,21 @@ fn transpose(handle: &EngineHandle, args: &Value) -> ToolResult {
     }
 
     /*
-     * SHARED CLIPS ARE REFUSED, and this is a limit rather than a bug I hid.
+     * SHARED CLIPS ARE TRANSPOSED, ONCE EACH — they used to be refused.
      *
-     * `read_track_clip` gives a FLATTENED track: a clip placed three times contributes its notes
-     * three times, at three different track ticks. Writing each of those back edits the SAME clip
-     * repeatedly, and what comes out is not what a caller would predict — measured on a fixture
-     * with one clip placed three times, two notes became three.
+     * `read_track_clip` publishes a FLATTENED track, so a clip placed three times contributes its
+     * notes three times. Writing that list back edits the same clip once per appearance; measured
+     * on a three-placement fixture, two notes became three. I refused the case rather than guess
+     * at it, and the owner's ruling is that it should do something.
      *
-     * The honest options were to work out the clip-relative semantics properly or to decline, and
-     * declining is what a tool should do with an edit it cannot describe. `get shared` /
-     * `shared_clips` is the read that tells you which clips this affects — it exists for exactly
-     * this question — and forking a placement first makes the edit unambiguous.
+     * It should, and refusing was the wrong instinct: editing a shared clip is SUPPOSED to change
+     * every appearance — that is what sharing means, and `shared_clips` exists to say so in
+     * advance. The only real defect was writing one clip cell several times over.
+     *
+     * So the notes are resolved to the clip cells they occupy and only the first appearance of
+     * each is kept. The reply says how many were folded away, because "I transposed 4 of your 12
+     * notes" is alarming until you know the other 8 were the same music seen again.
      */
-    let extents = handle.read_clip_extents();
-    let uses = daw_bridge::layout::clip_appearances(&extents);
-    let shared_here: Vec<u32> = extents.iter()
-        .filter(|e| e.track_id == track)
-        .filter(|e| uses.get(&e.clip_id).copied().unwrap_or(1) > 1)
-        .map(|e| e.clip_id)
-        .collect();
-    if !shared_here.is_empty() {
-        return ToolResult::err(format!(
-            "track {track} plays clip(s) {shared_here:?} that appear more than once, and a range \
-             transpose over a shared clip edits it once per appearance — the result is not what \
-             the range describes. Use `shared_clips` to see what is shared, and fork the \
-             placement first if you want to change only one of them"));
-    }
     let Some(snap) = handle.read_track_clip(track) else {
         return ToolResult::err(format!("track {track} has no clip to read"));
     };
@@ -3518,8 +3507,10 @@ fn transpose(handle: &EngineHandle, args: &Value) -> ToolResult {
              {}..{}", snap.window_start_nanotick, snap.window_end_nanotick));
     }
     let n = (snap.note_count as usize).min(snap.notes.len());
-    let plan = daw_bridge::layout::plan_transpose(
-        &snap.notes[..n], win_from, win_to, semitones as i32);
+    let extents = handle.read_clip_extents();
+    let unique = daw_bridge::layout::dedupe_by_clip_cell(&snap.notes[..n], &extents, track);
+    let folded = n.saturating_sub(unique.len());
+    let plan = daw_bridge::layout::plan_transpose(&unique, win_from, win_to, semitones as i32);
 
     if plan.moved.is_empty() {
         // A REFUSAL, not an empty success. "Nothing was in range" and "everything in range would
@@ -3577,6 +3568,9 @@ fn transpose(handle: &EngineHandle, args: &Value) -> ToolResult {
         "from": win_from,
         "to": win_to,
         "clipped_to_window": win_from != from || win_to != to,
+        // How many appearances were folded into the clip note they share. 0 on an ordinary track;
+        // non-zero means the edit reaches every appearance, which is what sharing is for.
+        "shared_appearances_folded": folded,
     }))
 }
 

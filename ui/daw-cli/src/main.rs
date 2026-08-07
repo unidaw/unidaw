@@ -2383,21 +2383,6 @@ fn main() {
                         eprintln!("daw-cli: --to must be after --from (the range is half-open)");
                         std::process::exit(2);
                     }
-                    // SHARED CLIPS ARE REFUSED — same rule and same reason as the agent tool:
-                    // a flattened track repeats a shared clip's notes per appearance, so writing
-                    // them back edits one clip several times and the result is not what the range
-                    // describes. `get shared` is the read that says which clips those are.
-                    let extents = handle.read_clip_extents();
-                    let uses = daw_bridge::layout::clip_appearances(&extents);
-                    let shared_here: Vec<u32> = extents.iter()
-                        .filter(|e| e.track_id == track)
-                        .filter(|e| uses.get(&e.clip_id).copied().unwrap_or(1) > 1)
-                        .map(|e| e.clip_id)
-                        .collect();
-                    if !shared_here.is_empty() {
-                        eprintln!("daw-cli: track {track} plays shared clip(s) {shared_here:?}; a range transpose would edit one clip once per appearance. See `get shared`, and fork the placement first.");
-                        std::process::exit(1);
-                    }
                     let Some(snap) = handle.read_track_clip(track) else {
                         eprintln!("daw-cli: track {track} has no clip to read");
                         std::process::exit(1);
@@ -2414,9 +2399,17 @@ fn main() {
                                   snap.window_start_nanotick, snap.window_end_nanotick);
                         std::process::exit(1);
                     }
+                    // ONE EDIT PER CLIP CELL, not one per appearance — see the agent tool's
+                    // note. A shared clip is transposed once and every appearance follows, which
+                    // is what sharing means; writing it once per appearance is what turned two
+                    // notes into three.
                     let n = (snap.note_count as usize).min(snap.notes.len());
+                    let extents = handle.read_clip_extents();
+                    let unique = daw_bridge::layout::dedupe_by_clip_cell(
+                        &snap.notes[..n], &extents, track);
+                    let folded = n.saturating_sub(unique.len());
                     let plan = daw_bridge::layout::plan_transpose(
-                        &snap.notes[..n], win_from, win_to, semitones);
+                        &unique, win_from, win_to, semitones);
                     if plan.moved.is_empty() {
                         eprintln!("daw-cli: nothing to transpose ({} skipped as out of MIDI range)",
                                   plan.skipped);
@@ -2455,8 +2448,8 @@ fn main() {
                         let applied = handle.wait_for_track_clip_version(
                             track, first_base, first_base.wrapping_add(sent as u32),
                             Duration::from_secs(2));
-                        println!("{{ \"transposed\": {sent}, \"skipped\": {}, \"semitones\": {semitones}, \"track\": {track}, \"applied\": {applied}, \"from\": {win_from}, \"to\": {win_to}, \"clipped_to_window\": {} }}",
-                                 plan.skipped, win_from != from || win_to != to);
+                        println!("{{ \"transposed\": {sent}, \"skipped\": {}, \"semitones\": {semitones}, \"track\": {track}, \"applied\": {applied}, \"from\": {win_from}, \"to\": {win_to}, \"clipped_to_window\": {}, \"shared_appearances_folded\": {} }}",
+                                 plan.skipped, win_from != from || win_to != to, folded);
                         0
                     }
                 }

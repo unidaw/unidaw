@@ -356,43 +356,65 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
       'remove-device removes device 3 and leaves 7', JSON.stringify(chainOf(afterRm, 0)));
 
 /* ── do transpose ───────────────────────────────────────────────────────────────────────────
- * A RANGE, not a selection — the console's transpose acts on what is selected, and a selection is
- * view state this surface does not have. Same arithmetic as the agent's tool: both call
- * plan_transpose in daw-bridge, so the two cannot answer differently.
+ * A RANGE, not a selection. Same arithmetic as the agent's tool — both call plan_transpose.
  *
- * THIS FIXTURE IS THE REFUSAL CASE, and by accident rather than design — it places one clip three
- * times so that `get shared` has something to count. That is exactly the shape a range transpose
- * cannot describe: `read_track_clip` flattens the track, so a clip placed three times contributes
- * its notes three times, and writing them back edits ONE clip repeatedly. Measured before the
- * guard existed: two notes became three.
+ * THIS FIXTURE IS THE HARD CASE, by accident: clip 1 is placed twice on track 0 AND once on track
+ * 1, because `get shared` needed something to count. Two separate things happen here and the test
+ * has to tell them apart.
  *
- * So this asserts the refusal and the reason. The positive case is covered against a live engine
- * on a track with no shared clips, in daw-agent's engine_e2e
- * (transpose_moves_notes_in_place_and_keeps_their_column).
+ *  1. A flattened track repeats a shared clip's notes once per appearance, so a naive transpose
+ *     writes the same clip cell twice. `dedupe_by_clip_cell` folds them — reported as
+ *     `shared_appearances_folded`.
+ *  2. THE ENGINE FORKS a clip whose edit would reach ANOTHER TRACK. Measured: track 0's placements
+ *     come back pointing at new clips while track 1 keeps the original, untouched.
+ *
+ * I first asserted "the number of clip notes does not change" and it failed at 2 -> 3. That was
+ * the FORK, which is correct and desirable, not the repeated write. The count is the wrong
+ * observable here; what matters is that track 0 moved and TRACK 1 DID NOT.
  */
 {
+  // Notes as each TRACK hears them: follow its placements to the clips they name.
+  const heard = (doc, track) => {
+    if (!doc) return null;
+    const clips = new Map((doc.clips || []).map((c) => [c.id, c]));
+    const t = (doc.tracks || []).find((x) => x.track_id === track);
+    if (!t) return null;
+    return (t.placements || [])
+      .flatMap((pl) => ((clips.get(pl.clip_id) || {}).notes || []).map((n) => n.pitch))
+      .sort((a, b) => a - b);
+  };
+
   const before = await saved(`${NAME}_t0`);
-  const pitchesOf = (doc) => (doc ? (doc.clips || []) : [])
-    .flatMap((c) => (c.notes || []).map((n) => n.pitch)).sort((a, b) => a - b);
-  const p0 = pitchesOf(before);
-  check(p0.length > 0, 'the fixture has notes', JSON.stringify(p0));
+  const t0before = heard(before, 0);
+  const t1before = heard(before, 1);
+  check(JSON.stringify(t0before) === '[60,60,67]',
+        'track 0 hears the shared clip twice plus its own', JSON.stringify(t0before));
+  check(JSON.stringify(t1before) === '[60]',
+        'and track 1 hears the SAME shared clip', JSON.stringify(t1before));
 
   const up = cli('do', 'transpose', '--track', '0', '--semitones', '12');
-  check(!up.ok,
-        'TRANSPOSE OVER A SHARED CLIP IS REFUSED, not silently done three times',
+  check(up.ok, 'do transpose runs on a track with a SHARED clip', up.out.slice(0, 220));
+  let rep = null;
+  try { rep = JSON.parse(up.out); } catch { /* reported next */ }
+  check(rep && rep.transposed === 2,
+        'it writes TWO edits, not three — the repeated appearance is folded',
         up.out.slice(0, 220));
-  check(/shared/i.test(up.out) && /get shared/.test(up.out),
-        'and the refusal names the read that explains it',
-        `${up.out.slice(0, 220)} — a refusal that does not say what to do next is one the caller `
-        + 'works around');
+  check(rep && rep.shared_appearances_folded === 1,
+        'AND SAYS SO, because "transposed 2 of your 3 notes" is alarming until you know the '
+        + 'third was the same music seen again',
+        up.out.slice(0, 220));
 
-  await sleep(800);
+  await sleep(1400);
   const after = await saved(`${NAME}_t1`);
-  check(JSON.stringify(pitchesOf(after)) === JSON.stringify(p0),
-        'AND NOTHING MOVED — a refusal that half-applies is worse than no refusal',
-        `${JSON.stringify(p0)} -> ${JSON.stringify(pitchesOf(after))}`);
+  check(JSON.stringify(heard(after, 0)) === '[72,72,79]',
+        'EVERY NOTE TRACK 0 HEARS IS AN OCTAVE UP, both appearances of the shared clip included',
+        JSON.stringify(heard(after, 0)));
+  check(JSON.stringify(heard(after, 1)) === '[60]',
+        'AND TRACK 1 IS UNTOUCHED — the engine forks a clip whose edit would reach another '
+        + 'track, so transposing one track cannot silently retune another',
+        `${JSON.stringify(t1before)} -> ${JSON.stringify(heard(after, 1))}`);
 
-  // The two argument refusals, which do not depend on the fixture's shape.
+  // The argument refusals, which do not depend on the fixture's shape.
   const zero = cli('do', 'transpose', '--track', '0', '--semitones', '0');
   check(!zero.ok, '0 semitones is REFUSED as a non-edit', zero.out.slice(0, 160));
   const backwards = cli('do', 'transpose', '--track', '0', '--semitones', '1',
