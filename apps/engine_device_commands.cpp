@@ -166,11 +166,35 @@ void handleSetDeviceParam(DeviceCommandDeps& deps,
     }
   }
   bool forwarded = false;
+  bool mirrored = false;
   if (runtime && found) {
     const float normalized =
         std::clamp(static_cast<float>(sp.valueMilli) / 1000.0f, 0.0f, 1.0f);
-    std::lock_guard<std::mutex> lock(runtime->controllerMutex);
-    forwarded = runtime->controller.sendSetParam(pluginIndex, sp.uid16, normalized);
+    {
+      std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+      forwarded = runtime->controller.sendSetParam(pluginIndex, sp.uid16, normalized);
+    }
+    // RECORD IT IN THE ENGINE'S OWN MIRROR, not only in the host process (task #117).
+    //
+    // This write was missing entirely. The value went over the control socket and nowhere else, so
+    // the ENGINE never knew it: a knob turn was lost on host restart, and it could not be saved,
+    // because the save path reads plugin params from this map.
+    //
+    // It is also why plugin params sit outside undo, and why this is the FIRST task of stage 5
+    // rather than a part of it: undo restores a captured document, capture reads this mirror, and
+    // UNDO CANNOT RESTORE WHAT WAS NEVER RECORDED — however complete the rest of the machinery is.
+    //
+    // The host remains the authority while it lives; this is the engine's durable copy of what it
+    // was told, which is exactly what a restart, a save, and an undo each need.
+    //
+    // The wire carries uid16 as a C array and the mirror keys on std::array, so the key is copied
+    // rather than assigned — the automation path (engine_render_track.cpp:528) already holds an
+    // std::array and writes the same map directly.
+    std::array<uint8_t, 16> paramKey{};
+    std::memcpy(paramKey.data(), sp.uid16, sizeof(sp.uid16));
+    std::lock_guard<std::mutex> lock(runtime->paramMirrorMutex);
+    runtime->paramMirror[paramKey] = ParamMirrorEntry{normalized, pluginIndex};
+    mirrored = true;
   }
   // Always log the write. The host stores the value atomically, but it only
   // takes effect when the plugin next processes a block — so on a headless
@@ -186,6 +210,7 @@ void handleSetDeviceParam(DeviceCommandDeps& deps,
       .field("valueMilli", sp.valueMilli)
       .field("found", found)
       .field("forwarded", forwarded)
+      .field("mirrored", mirrored)
       .field("playing", playing.load(std::memory_order_acquire))
       .field("audioActive", audioActive);
   }

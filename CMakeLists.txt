@@ -1709,6 +1709,14 @@ add_test(NAME undo_invariants
 )
 set_tests_properties(undo_invariants PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
 
+# A KNOB TURN MUST REACH THE ENGINE, not only the plugin host. Stage 5's first task: undo restores
+# a captured document and capture reads paramMirror, so a param that never lands there cannot be
+# restored however complete the rest of the undo machinery is.
+add_test(NAME param_mirror
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/param_mirror_check.sh
+)
+set_tests_properties(param_mirror PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 # A STEM IS A TRACK. Registered the moment it went green — it was DECLARED_UNREGISTERED for one
 # commit while the load half was still narrow, because a permanently red check is one people learn
 # to skip. It exists because a negative control proved the gap: with the five-field aux-child
