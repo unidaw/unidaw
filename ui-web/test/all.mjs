@@ -191,11 +191,56 @@ console.log(`running ${suites.length} engine-backed suites, one at a time\n`);
 const results = [];
 for (const f of suites) {
   process.stdout.write(`  ${f.padEnd(24)}`);
-  const r = await run(f);
+  let r = await run(f);
+  /*
+   * ONE RETRY, AND THE RESULT SAYS WHICH KIND OF FAILURE IT WAS.
+   *
+   * This is NOT here to make red sweeps green. It is here because the sweep had stopped
+   * carrying information. Four consecutive sweeps each reported one to three failures, a
+   * DIFFERENT suite every time, and every one of them passed when run on its own:
+   *
+   *   19  demo-walk, sampler-from-ui, sampler-render      all passed alone
+   *   20  e2e (hung at 1569s vs 312s)                     passed alone, 429 checks
+   *   21  e2e, harmony-quantize, params                   params was REAL and is fixed
+   *   22  full-song, sampler-device-id                    passed alone, twice
+   *
+   * With that noise floor a green sweep and a red sweep say the same thing, and the honest
+   * reading of "3 of 64 FAILED" became "run them again and see" — which is what a person then
+   * did by hand, every time, for hours.
+   *
+   * So the sweep does it, and REPORTS THE DIFFERENCE, which is the part that matters:
+   *
+   *   ok            passed first time
+   *   ok (FLAKY)    failed, then passed — counted as a PASS for the exit code, and listed
+   *                 separately at the end so it cannot be mistaken for a clean run
+   *   FAIL          failed twice — a real failure, and the exit code says so
+   *
+   * A suite that fails twice in a row is not flakiness on this evidence: the observed rate is
+   * around one suite in forty per sweep, so two in a row is far outside it.
+   *
+   * WHAT THIS DELIBERATELY DOES NOT DO is hide the flake. A flaky suite is a defect in the
+   * gate and stays visible under its own heading, because the failure mode this project keeps
+   * writing down is a check that passes for the wrong reason — and "retry until green" with no
+   * record would be exactly that, built into the harness.
+   */
+  let flaky = false;
+  if (r.code !== 0) {
+    const first = r;
+    const second = await run(f);
+    if (second.code === 0) {
+      flaky = true;
+      r = { ...second, firstOut: first.out, firstSummary: first.summary, firstSecs: first.secs };
+    } else {
+      r = { ...second, firstSummary: first.summary };
+    }
+  }
+  r.flaky = flaky;
   results.push(r);
-  console.log(`${r.code === 0 ? 'ok  ' : 'FAIL'}  ${r.secs.toFixed(0)}s  ${r.summary}`);
+  const label = r.code !== 0 ? 'FAIL' : (flaky ? 'ok (FLAKY)' : 'ok  ');
+  console.log(`${label}  ${r.secs.toFixed(0)}s  ${r.summary}`);
 }
 
+const flakes = results.filter((r) => r.flaky);
 const failed = results.filter((r) => r.code !== 0);
 
 /*
@@ -209,13 +254,32 @@ for (const r of failed) {
   console.log(lines.slice(0, 20).map((l) => '  ' + l.trim()).join('\n') || '  (no FAIL lines — check the suite\'s own output)');
 }
 
+/*
+ * THE FLAKES GET THEIR OWN HEADING, and their FIRST run's failing lines.
+ *
+ * A suite that passes on retry is not a pass — it is a suite that cannot be trusted to say
+ * anything, and the failing lines from the run that failed are the only evidence of why. They
+ * are printed here rather than discarded, because the next person to look at this is trying to
+ * work out whether one root cause explains several of them (so far: kit answers and chain
+ * snapshots that intermittently do not arrive in the time the suite allows).
+ */
+if (flakes.length) {
+  console.log(`\n${flakes.length} FLAKY — failed, then passed on a retry. Not a clean sweep:`);
+  for (const r of flakes) {
+    console.log(`  ${r.file.padEnd(24)} first run: ${r.firstSummary} (${(r.firstSecs || 0).toFixed(0)}s)`);
+    const lines = (r.firstOut || '').split('\n').filter((l) => /FAIL|not ok|Error|error:/i.test(l));
+    console.log(lines.slice(0, 6).map((l) => '      ' + l.trim()).join('\n'));
+  }
+}
+
 if (skipped.length) {
   console.log(`\n${skipped.length} NOT RUN, and why:`);
   for (const [f, why] of skipped) console.log(`  ${f.padEnd(24)} ${why}`);
   console.log('  (--with-audio adds the five that measure sound through a live capture)');
 }
 
+const flakeNote = flakes.length ? ` — ${flakes.length} FLAKY (${flakes.map((r) => r.file).join(', ')})` : '';
 console.log(`\n${failed.length === 0
-  ? `all ${results.length} suites passed`
-  : `${failed.length} of ${results.length} suites FAILED: ${failed.map((r) => r.file).join(', ')}`}`);
+  ? `all ${results.length} suites passed${flakeNote}`
+  : `${failed.length} of ${results.length} suites FAILED: ${failed.map((r) => r.file).join(', ')}${flakeNote}`}`);
 process.exit(failed.length === 0 ? 0 : 1);
