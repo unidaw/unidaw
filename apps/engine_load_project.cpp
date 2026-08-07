@@ -57,9 +57,6 @@ bool applyDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
   auto& loadedProjectDir = deps.engineState.loadedProject.loadedProjectDir;
   auto& loadedProjectPath = deps.engineState.loadedProject.loadedProjectPath;
   auto& loadedTempoMap = deps.engineState.songTiming.loadedTempoMap;
-  auto& loopEndNanotick = deps.engineState.transport.loopEndNanotick;
-  auto& loopStartNanotick = deps.engineState.transport.loopStartNanotick;
-  auto& loopUserSet = deps.engineState.transport.loopUserSet;
   auto& markerList = deps.engineState.arrange.markerList;
   auto& masterTrack = deps.masterTrack;
   auto& meterSnapshot = deps.engineState.songTiming.meterSnapshot;
@@ -252,8 +249,8 @@ bool applyDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
     if (arrangementEnd == 0) {
       arrangementEnd = patternTicks;  // empty project keeps the default bar
     }
-    loopStartNanotick.store(0, std::memory_order_release);
-    loopEndNanotick.store(arrangementEnd, std::memory_order_release);
+    // songEndNanotick is DERIVED FROM THE DOCUMENT, so it belongs here and is correct on undo.
+    // The LOOP is not: see the note in loadProjectFromPath, which is where resetting it moved to.
     songEndNanotick.store(arrangementEnd, std::memory_order_release);
     // v29: install the arrangement — the markers and the song's METER MAP.
     //
@@ -306,8 +303,6 @@ bool applyDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
         std::memory_order_relaxed);
     arrangeVersion.fetch_add(1, std::memory_order_acq_rel);
     automationVersion.fetch_add(1, std::memory_order_acq_rel);
-    // A load replaces the song, so any hand-set loop belonged to the OLD one.
-    loopUserSet.store(false, std::memory_order_release);
 
     // Grow the track set to fit the document, so a project with more tracks than
     // the engine currently holds loads in full rather than dropping the tail.
@@ -738,6 +733,25 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
     return false;
   }
   if (!applyDocument(deps, document, path, error)) { return false; }
+
+  // A LOAD REPLACES THE SONG, so any hand-set loop belonged to the OLD one — and this is the only
+  // place that is true. It used to live inside applyDocument, which was correct until UNDO started
+  // applying documents through the same function: every undo then reset the loop to the whole
+  // arrangement. Set a loop over bars 5-9, type a note, press Ctrl-Z, and it was gone. Confirmed by
+  // probe (loop_start 1920000000 -> 0) before this moved.
+  //
+  // The loop is SESSION state, not authored state — SetLoopRange is deliberately classified
+  // non-mutating, so the loop is not in the document and undo has nothing to restore it from.
+  // Moving the reset rather than gating it with a flag keeps that distinction visible: applying a
+  // document and replacing the session are two different things, and only one of them is undo.
+  {
+    auto& transport = deps.engineState.transport;
+    transport.loopStartNanotick.store(0, std::memory_order_release);
+    transport.loopEndNanotick.store(
+        deps.engineState.songTiming.songEndNanotick.load(std::memory_order_acquire),
+        std::memory_order_release);
+    transport.loopUserSet.store(false, std::memory_order_release);
+  }
   // SEEDED FROM WHAT THE ENGINE NOW HOLDS, NOT FROM THE PARSED FILE.
   //
   // `document` is passed to applyDocument BY NON-CONST REFERENCE and comes back GUTTED: the
