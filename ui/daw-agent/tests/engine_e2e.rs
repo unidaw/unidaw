@@ -4228,6 +4228,16 @@ fn delete_note_removes_the_note_in_the_column_it_was_given() {
 #[test]
 fn copy_and_paste_carry_the_note_column() {
     let (engine, session) = start_engine("agclip");
+    /*
+     * ITS OWN PROJECT DIRECTORY, and this is not tidiness — it is the fix for a real failure.
+     *
+     * The clipboard is keyed to the PROJECT DIR, which is what makes it shared between daw-cli and
+     * the agent. Tests run concurrently in one binary, so two of them using the default directory
+     * share one clipboard: this test's neighbour wrote two notes and the cut test below pasted
+     * THOSE instead of its own three. It passed alone and failed in the suite, which is the
+     * signature of shared state rather than a broken op.
+     */
+    let session = session.with_project_dir(engine.proj.to_string_lossy().to_string());
 
     // One note per column, at the same tick, so only the column tells them apart.
     for (pitch, column) in [(60u8, 0u64), (67, 1)] {
@@ -4284,6 +4294,9 @@ fn copy_and_paste_carry_the_note_column() {
 #[test]
 fn cut_takes_the_notes_and_keeps_them_on_the_clipboard() {
     let (engine, session) = start_engine("agcut");
+    // Its own clipboard — see the note in copy_and_paste_carry_the_note_column. Sharing the
+    // default directory with a concurrent test is what made this fail in the suite and pass alone.
+    let session = session.with_project_dir(engine.proj.to_string_lossy().to_string());
     let a = session.execute(&ToolCall {
         tool: "add_notes".into(),
         args: json!({"track":0,"pitches":[60,62,64],"start":0,"step":Q,"duration":Q/2}),
