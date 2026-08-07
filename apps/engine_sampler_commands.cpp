@@ -701,13 +701,34 @@ void handleSamplerSetSlot(SamplerCommandDeps& deps,
   }
   bool applied = false;
   const char* why = "no_such_slot";
+  /*
+   * THREE DIFFERENT FAILURES USED TO COME OUT AS "no slot N — re-read the kit, it has moved".
+   *
+   * The loop below skipped any device that was not a sampler OR did not match the id, and `why`
+   * started at "no_such_slot", so naming a device that does not exist, naming one that is not a
+   * sampler, and naming a real sampler's missing slot were indistinguishable to the caller. The
+   * advice the UI prints for that reason — re-read the kit — cannot help with the first two.
+   *
+   * `engine_bulk_edit.cpp` already makes this distinction (`sawSampler ? NoSuchSlot :
+   * NoSuchDevice`) on its own path. This site never got it.
+   *
+   * Two flags rather than one: "the id is not on this track" and "the id is on this track but it
+   * is a patcher" are separate mistakes. The second is the one with history — a load addressed to
+   * device 0 went to the patcher and looked exactly like a sampler ignoring it.
+   */
+  bool sawDevice = false;
+  bool sawSampler = false;
   {
     std::lock_guard<std::mutex> lock(runtime->trackMutex);
     for (auto& d : runtime->track.chain.devices) {
+      // deviceId 0 still means "the first sampler on the track", so it cannot count as naming
+      // a device: with 0 there is no wrong id to report, only a track with no sampler on it.
+      if (p.deviceId != 0 && d.id == p.deviceId) sawDevice = true;
       if (d.kind != daw::DeviceKind::Sampler ||
           (p.deviceId != 0 && d.id != p.deviceId)) {
         continue;
       }
+      sawSampler = true;
       for (auto& slot : d.sampler.slots) {
         if (slot.id != p.slotId) {
           continue;
@@ -847,6 +868,13 @@ void handleSamplerSetSlot(SamplerCommandDeps& deps,
     }
   }
   if (!applied) {
+    // ONLY WHEN NO SAMPLER WAS REACHED. Inside the loop `why` may already have been set to
+    // no_such_mod_set / no_such_source / no_such_slice / unknown_field, and those are more
+    // specific than anything decidable out here — the loop body only runs once a sampler has
+    // been found, so overriding them would replace a precise answer with a vaguer one.
+    if (!sawSampler) {
+      why = sawDevice ? "not_a_sampler" : "no_such_device";
+    }
     reportSamplerReject(daw::UiCommandType::SamplerSetSlot, samplerReasonFor(why),
                         p.trackId, p.deviceId, static_cast<uint16_t>(p.slotId));
     DAW_EVENT("sampler.set_slot_rejected")

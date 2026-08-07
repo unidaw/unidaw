@@ -75,6 +75,9 @@ void testSamplerReasonFor() {
   CHECK(samplerReasonFor("no_such_modulator") == R::NoSuchModulator);
   CHECK(samplerReasonFor("no_such_source") == R::NoSuchSource);
   CHECK(samplerReasonFor("no_such_slice") == R::NoSuchSliceSet);
+  // Addressing the wrong DEVICE, which used to be indistinguishable from a missing slot.
+  CHECK(samplerReasonFor("no_such_device") == R::NoSuchDevice);
+  CHECK(samplerReasonFor("not_a_sampler") == R::NotASampler);
 
   // The fallback is the whole point of deriving this from the log string: a `why` nobody mapped
   // must still produce a legal wire code rather than reading off the end of a table.

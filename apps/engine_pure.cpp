@@ -29,6 +29,12 @@ daw::UiSamplerRejectReason samplerReasonFor(const char* why) {
   if (std::strcmp(why, "no_such_modulator") == 0) return R::NoSuchModulator;
   if (std::strcmp(why, "no_such_source") == 0) return R::NoSuchSource;
   if (std::strcmp(why, "no_such_slice") == 0) return R::NoSuchSliceSet;
+  // ADDRESSING THE WRONG DEVICE IS NOT A MISSING SLOT. Without these two, SamplerSetSlot's
+  // "device not found" and "device is not a sampler" both fell through to BadValue, and the
+  // handler could not have distinguished them anyway — see the sawDevice/sawSampler pass in
+  // engine_sampler_commands.cpp. The recoveries are different and the message has to be too.
+  if (std::strcmp(why, "no_such_device") == 0) return R::NoSuchDevice;
+  if (std::strcmp(why, "not_a_sampler") == 0) return R::NotASampler;
   return R::BadValue;  // unknown_field, and anything added later that nobody mapped
 }
 
