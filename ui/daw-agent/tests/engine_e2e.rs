@@ -4320,3 +4320,50 @@ fn cut_takes_the_notes_and_keeps_them_on_the_clipboard() {
     assert_eq!(read_notes(&session, &engine, "agcut_c").len(), 3,
                "the cut phrase pastes back");
 }
+
+/// OPENING A PLUGIN'S OWN WINDOW, which the console and daw-cli could do and the agent could not.
+///
+/// WHAT THIS CAN AND CANNOT ASSERT, stated plainly because the gap matters. Opening an editor
+/// changes no document state: there is no reply region, nothing is written to the project, and a
+/// headless test cannot see whether a window appeared on anybody's screen. So this asserts that the
+/// command is BUILT and ACCEPTED against a live engine — the tool is wired to a real opcode with
+/// the device id in the field the engine reads it from — and it does not pretend to more.
+///
+/// That is worth a test rather than an exemption. The failure this catches is the ordinary one for
+/// a new tool: a name in the manifest with no dispatch arm, or an id written into `plugin_index`
+/// instead of `value0`, either of which returns "ok" to a caller and does nothing at all.
+#[test]
+fn open_editor_is_accepted_for_a_real_device() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("ed");
+    let session = session.with_project_dir(engine.proj.to_string_lossy().to_string());
+
+    let add = session.execute(&ToolCall {
+        tool: "add_device".into(), args: json!({ "track": 0, "kind": "sampler" }) });
+    assert!(add.ok, "add_device failed: {add:?}");
+
+    // The device's STABLE id, read back from the saved document rather than assumed to be 1 —
+    // position and id are different things on this wire and conflating them is a known trap.
+    let deadline = Instant::now() + Duration::from_secs(6);
+    let device_id = loop {
+        assert!(session.execute(&ToolCall {
+            tool: "save".into(), args: json!({ "name": "ed_a" }) }).ok);
+        let chain = read_project(&engine.proj, "ed_a")["tracks"][0]["device_chain"]
+            .as_array().cloned().unwrap_or_default();
+        if let Some(id) = chain.first().and_then(|d| d["device_id"].as_u64()) { break id; }
+        assert!(Instant::now() < deadline, "the sampler never reached the saved chain");
+        std::thread::sleep(Duration::from_millis(200));
+    };
+
+    let open = session.execute(&ToolCall {
+        tool: "open_editor".into(), args: json!({ "track": 0, "device": device_id }) });
+    assert!(open.ok, "open_editor failed for track 0 device {device_id}: {open:?}");
+    assert_eq!(open.output["device"], json!(device_id),
+               "the reply names the device it was asked for: {open:?}");
+
+    // AND IT REFUSES WHAT IT CANNOT ADDRESS. Without this the assertion above is satisfied by a
+    // tool that returns ok unconditionally, which is the failure mode being guarded against.
+    let bad = session.execute(&ToolCall {
+        tool: "open_editor".into(), args: json!({ "track": 0 }) });
+    assert!(!bad.ok, "open_editor with no device must be refused, got: {bad:?}");
+}

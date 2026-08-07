@@ -2242,7 +2242,9 @@ const OP_REGISTRY = {
   // The two that change TIME rather than a label, and they are deliberately not marker ops.
   time:        { cli: 'time', agent: 'insert_time' },
   timesig:     { cli: 'time-sig', agent: 'set_time_signature' },
-  editor:    { cli: 'open-editor', agent: null, why: 'gap' },
+  // The agent could describe a plugin but not SHOW one, so "open the reverb" was the one
+  // request it had to answer with prose about a window it could not open. Built 2026-08-07.
+  editor:    { cli: 'open-editor', agent: 'open_editor' },
   // v22 (AddTrack=46/RemoveTrack=47). daw-cli shipped its verbs in the same
   // commit the engine did, so these are covered on the CLI from day one; the
   // agent manifest still owes them.
@@ -2633,7 +2635,7 @@ const CLI_GAP = ['clear', 'columns', 'mods'];
  * of a refusal line in the engine log — `cli-verbs.mjs` makes exactly that assertion for the CLI
  * verb, and an agent tool would add a caller without adding evidence.
  */
-const AGENT_GAP = ['clear', 'columns', 'editor', 'mods'];
+const AGENT_GAP = ['clear', 'columns', 'mods'];
 
 test('every dock command is in the op registry', () => {
   // The forcing function: a new command cannot be added without deciding whether

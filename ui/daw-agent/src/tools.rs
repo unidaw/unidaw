@@ -1179,6 +1179,21 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
                                 "on": { "type": "boolean" } },
             }),
         },
+        ToolSpec {
+            name: "open_editor",
+            description: "Open a plugin's own editor window, the way double-clicking it in the \
+                          rack does. Use it when the person asks to SEE a plugin, or when a \
+                          parameter has no name worth reading and its own interface is the only \
+                          honest way to show what it does. It opens a window on the person's \
+                          screen and returns nothing to read: you cannot inspect a plugin this \
+                          way, only show it. `device_params` is what to call to read one.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "device"],
+                "properties": { "track": { "type": "integer", "minimum": 0 },
+                                "device": { "type": "integer", "minimum": 1 } },
+            }),
+        },
         /*
          * MODULATION. Three commands make one working link, and every one of them is
          * load-bearing — the description says so, because an agent that sends only the first
@@ -3452,6 +3467,7 @@ pub fn execute_in(handle: &EngineHandle, call: &ToolCall, project_dir: &str) -> 
         "remove_device" => chain_edit(handle, &call.args, UiCommandType::RemoveDevice),
         "move_device" => move_device(handle, &call.args),
         "set_bypass" => set_bypass(handle, &call.args),
+        "open_editor" => open_editor(handle, &call.args),
         "modulate" => modulate(handle, &call.args),
         "unmodulate" => unmodulate(handle, &call.args),
         "set_macro" => set_macro(handle, &call.args),
@@ -4034,6 +4050,30 @@ fn blank(cmd: UiCommandType) -> UiCommandPayload {
         note_nanotick_lo: 0, note_nanotick_hi: 0,
         note_duration_lo: 0, note_duration_hi: 0, base_version: 0,
     }
+}
+
+/// Open a plugin's own window. The console and daw-cli have had this since the rack existed;
+/// the agent had not, so "show me the reverb" was the one request it could only answer with
+/// prose about a window it could not open.
+///
+/// NOTHING COMES BACK, and the tool says so rather than letting the model infer otherwise. The
+/// engine opens a window on the person's screen; there is no reply region and no acknowledgement
+/// that the plugin drew anything. A model that expected to READ the plugin this way would report
+/// what it could not have seen, so the description points at `device_params` for that.
+fn open_editor(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(track), Some(device)) = (arg_u64(args, "track"), arg_u64(args, "device")) else {
+        return ToolResult::err("open_editor needs \"track\" and \"device\"");
+    };
+    let mut p = blank(UiCommandType::OpenPluginEditor);
+    p.track_id = track as u32;
+    // The device id rides in value0, which is where the engine reads it from — the same
+    // placement daw-cli's open-editor uses. `plugin_index` is a different thing and is left 0.
+    p.value0 = device as u32;
+    if let Err(e) = handle.send_command(p) { return ToolResult::err(e); }
+    ToolResult::ok(json!({
+        "opened": true, "track": track, "device": device,
+        "note": "a window was asked for on the person's screen; nothing is readable from here",
+    }))
 }
 
 fn delete_note(handle: &EngineHandle, args: &Value) -> ToolResult {
