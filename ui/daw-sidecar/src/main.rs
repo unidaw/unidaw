@@ -3204,8 +3204,68 @@ fn is_global_scope(command_type: u16) -> bool {
 /// An EXPLICIT base is honoured. `daw-cli do note --base V` models an author who
 /// read a version, thought, and wrote; overriding that would turn optimistic
 /// concurrency into no concurrency at all.
+/// HARMONY IS ARBITRATED BY A THIRD COUNTER, and quoting either clip counter to it is a
+/// coin toss.
+///
+/// `WriteHarmony` and `DeleteHarmony` do not reach `requireMatchingClipVersion` at all —
+/// `engine_note_commands.cpp` sends them to `requireMatchingHarmonyVersion`, which compares
+/// against `harmonyTimeline.harmonyVersion`. Neither clip counter has any relationship to it.
+///
+/// So every key change written from this sidecar presented a CLIP version to a HARMONY
+/// arbiter. It matched only while the two counters happened to be equal, which is exactly
+/// what they are on a fresh project — so the FIRST key change lands and later ones are
+/// refused, silently, once any note edit has moved the clip counter out from under it.
+/// That is the reported symptom precisely: four scale changes requested, one arrived.
+///
+/// The comment on `is_global_scope` said "harmony has its own counter entirely and never
+/// reaches this" — true of the arbiter it was describing, and false of THIS function, which
+/// every harmony command does reach. A rule stated about one layer, relied on at another.
+fn is_harmony_scope(command_type: u16) -> bool {
+    command_type == UiCommandType::WriteHarmony as u16
+        || command_type == UiCommandType::DeleteHarmony as u16
+}
+
+/// Send an arbitrated harmony command AND WAIT FOR THE ENGINE TO TAKE IT.
+///
+/// READING THE COUNTER FRESH IS NOT ENOUGH, which is the part that took a log line to see.
+/// `resolve_base` reads the live header, so four rapid writes each get a genuinely current
+/// read — and all four read the SAME value, because the engine had not processed the first
+/// one yet. The engine took one and refused three, every refusal saying `base:1 current:2`
+/// within the same millisecond.
+///
+/// Optimistic concurrency assumes the base you quote is the state your edit was composed
+/// against. A sender that fires again before its previous edit lands is quoting a version it
+/// has already invalidated itself. No amount of reading harder fixes that: the only cure is to
+/// not send the second edit until the first has been taken.
+///
+/// So this WAITS for the counter to move past the base that was quoted, and returns the failure
+/// when it does not. That is also the honest answer to "did that work" — the console used to
+/// report success on the SEND, which is why three refusals in a row looked like silence.
+///
+/// BOUNDED, because an unbounded wait on another process's progress is a hang. The timeout is
+/// generous relative to a command-thread pass and is reported as a failure rather than assumed
+/// to be a success, since a write that may or may not have landed is the one outcome a caller
+/// can do nothing with.
+fn send_harmony_and_await(handle: &EngineHandle, p: UiCommandPayload) -> Result<(), String> {
+    let quoted = p.base_version;
+    handle.send_command(p)?;
+    let deadline = Instant::now() + Duration::from_millis(750);
+    while Instant::now() < deadline {
+        // Any move off the quoted value means the engine has been through it. Comparing for
+        // "quoted + 1" would be wrong the moment a second writer exists.
+        if handle.harmony_version() != quoted { return Ok(()); }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    Err("harmony write was not acknowledged".into())
+}
+
 fn resolve_base(handle: &EngineHandle, track_id: u32, sent: u32, command_type: u16) -> u32 {
     if sent != 0 { return sent; }
+    // The HEADER's counter, not `harmony_region_version()`. The header is bumped on the
+    // command thread as the edit is taken; the region is refilled later by the consumer and
+    // therefore LAGS. Basing on the lagging one would quote a version the engine has already
+    // moved past — a stale base dressed up as a fresh read.
+    if is_harmony_scope(command_type) { return handle.harmony_version(); }
     // A global-scope command still needs a base — it is arbitrated, just against
     // the other counter. Returning 0 here dropped every Undo silently, which is
     // the same failure this function exists to fix, one counter over.
@@ -5539,7 +5599,14 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                             Ok(mut p) => {
                                 p.base_version = resolve_base(&handle, p.track_id,
                                                               p.base_version, p.command_type);
-                                match handle.send_command(p) {
+                                // Harmony waits for its own apply; see send_harmony_and_await.
+                                // Everything else keeps the fire-and-forget path it had.
+                                let sent = if is_harmony_scope(p.command_type) {
+                                    send_harmony_and_await(&handle, p)
+                                } else {
+                                    handle.send_command(p)
+                                };
+                                match sent {
                                 Ok(()) => format!("{{\"ok\":true,\"type\":{}}}", p.command_type),
                                 Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                             }},

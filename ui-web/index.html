@@ -293,8 +293,10 @@ const stageEl = document.getElementById('stage');
  */
 function deleteHarmony(tick) {
   if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
-  conn.send({ type: 'delharmony', tick: Math.max(0, Math.round(tick || 0)),
-              base: engine ? engine.harmonyVersion : 0 });
+  // NO BASE FROM HERE. See setHarmony below for the whole argument — `engine.harmonyVersion`
+  // is a copy that updates a frame late, and quoting it is how three of four rapid writes got
+  // refused in silence.
+  conn.send({ type: 'delharmony', tick: Math.max(0, Math.round(tick || 0)) });
   state.reject = null;
   schedule();
   return true;
@@ -304,20 +306,31 @@ function setHarmony(root, scale, tick) {
   if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
   const r = ((Math.round(root) % 12) + 12) % 12;
   const sc = Math.max(0, Math.round(scale) || 0);
+  /*
+   * THE BASE IS NOT STAMPED HERE ANY MORE, and the reason is the bug this page caused twice.
+   *
+   * `requireMatchingHarmonyVersion(payload.baseVersion, ...)` guards this command, so it does
+   * need a base. This used to send `engine.harmonyVersion` — the PAGE'S COPY, refreshed from
+   * shared memory a frame after the engine bumps it. Between the write and that refresh the
+   * copy is stale by one, so:
+   *
+   *   four key changes written back to back all quote the SAME base. The engine takes the
+   *   first, moves its counter, and refuses the other three — silently, because the console
+   *   answers "key set" on the SEND, not on the apply.
+   *
+   * That is the reported symptom exactly: four scale changes asked for, one on the lane. The
+   * earlier comment here blamed base 0 and stamping fixed THAT, so the fix looked right and
+   * traded a bug that fires after a load for one that fires whenever you type quickly.
+   *
+   * A client cannot win this by reading harder. It holds a published mirror, and the counter
+   * it must match lives on the other side of a frame. The SIDECAR can read the live header at
+   * send time, so sending no base at all is not laziness — it hands the decision to the only
+   * participant that can be current. `resolve_base` there routes harmony to the harmony
+   * counter (it used to hand it a CLIP version, which is why omitting the base looked broken
+   * and pushed us into stamping in the first place).
+   */
   conn.send({ type: 'harmony', root: r, scale: sc,
-              tick: Math.max(0, Math.round(tick || 0)),
-              /**
-               * The HARMONY version, not the clip's.
-               *
-               * `requireMatchingHarmonyVersion(payload.baseVersion, ...)` guards
-               * this command, and sending nothing means base 0 — which matches
-               * only on an engine whose harmony has never changed. So it worked
-               * on a fresh start and was SILENTLY REFUSED after any project load,
-               * while the console still answered "key set". A command that
-               * reports success and does nothing is the worst of the three
-               * possible outcomes.
-               */
-              base: engine ? engine.harmonyVersion : 0 });
+              tick: Math.max(0, Math.round(tick || 0)) });
   state.reject = null;
   schedule();
   return true;
