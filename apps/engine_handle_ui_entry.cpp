@@ -88,10 +88,34 @@ void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
       seedHistoryIfEmpty();
     }
 
+    // GESTURE BRACKETING, decided BEFORE the command runs so the guard below sees the right state.
+    //
+    // BEGIN opens after this command commits (it must commit, or an interrupted drag would leave
+    // nothing to undo); END closes before the guard, so the final command amends and the gesture
+    // is done. A NON-GESTURE command force-closes an open one: a UI that died mid-drag must not
+    // wedge every later edit into a single step, and the log says when that happened.
+    if (deps.documentHistory != nullptr) {
+      const bool wantsBegin = (header.flags & daw::kUiCmdFlagGestureBegin) != 0;
+      const bool wantsEnd = (header.flags & daw::kUiCmdFlagGestureEnd) != 0;
+      if (wantsEnd) {
+        deps.documentHistory->endGesture();
+      } else if (!wantsBegin && deps.documentHistory->gestureOpen() &&
+                 commandUndoPolicy(commandType) == UndoPolicy::Version) {
+        deps.documentHistory->endGesture();
+        DAW_EVENT("undo.gesture_force_closed")
+            .field("by", std::string(daw::uiCommandTypeName(commandType)));
+      }
+    }
+
     struct RecordVersion {
       HandleUiEntryDeps& d;
       UndoPolicy policy;
       const char* label;
+      // SAMPLED AT CONSTRUCTION, NOT READ AT DESTRUCTION — and the difference is a bug I wrote and
+      // caught by tracing it. beginGesture() runs after this guard is built but before it fires, so
+      // reading gestureOpen() in the destructor would make the drag's FIRST command amend instead
+      // of commit, leaving an interrupted drag with no step to undo to.
+      bool amendForGesture;
       ~RecordVersion() {
         if (policy == UndoPolicy::None || d.documentHistory == nullptr || !d.captureDocument) {
           return;
@@ -99,6 +123,13 @@ void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
         // AN AUDITION KEEPS THE HISTORY HONEST WITHOUT ADDING TO IT. See commandUndoPolicy: the
         // swap must not consume an undo step, but the cursor's version still has to follow the
         // live document or the next undo flips the placement back as collateral.
+        // MID-GESTURE COMMANDS AMEND. The drag's first command opened the step; every one after
+        // it rewrites that step instead of adding another, so a 1000-command knob drag is ONE undo
+        // step holding the final value. Inert until a client sets the flags.
+        if (policy == UndoPolicy::Version && amendForGesture) {
+          d.documentHistory->amend(d.captureDocument());
+          return;
+        }
         if (policy == UndoPolicy::Amend) {
           d.documentHistory->amend(d.captureDocument());
           DAW_EVENT("undo.version_amended")
@@ -126,7 +157,15 @@ void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
             .field("bytes", static_cast<uint64_t>(d.documentHistory->bytes()));
       }
     } recordVersion{deps, commandUndoPolicy(commandType),
-                    daw::engine::commandLabel(commandType)};
+                    daw::engine::commandLabel(commandType),
+                    deps.documentHistory != nullptr && deps.documentHistory->gestureOpen()};
+
+    // Opened AFTER the guard is built, so THIS command still commits and the drag has a step to
+    // undo to even if the pointer never comes back up.
+    if (deps.documentHistory != nullptr &&
+        (header.flags & daw::kUiCmdFlagGestureBegin) != 0) {
+      deps.documentHistory->beginGesture();
+    }
 
     // ---- BULK CHUNK (83). Intercepted BEFORE the journal: a 17-chunk envelope would otherwise
     // write 17 indistinguishable lines and bury the command it spells. The ASSEMBLED command

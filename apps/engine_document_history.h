@@ -135,6 +135,25 @@ class DocumentHistory {
     versions_[cursor_] = std::move(doc);
   }
 
+  // A GESTURE IS ONE UNDO STEP. See kUiCmdFlagGestureBegin in event_payloads.h for why the UI has
+  // to tell us rather than the engine guessing.
+  //
+  // beginGesture() only marks the state; the command carrying BEGIN still commits normally, so the
+  // step exists from the first movement and an interrupted drag is still undoable. Everything
+  // after it amends until endGesture().
+  void beginGesture() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    gestureOpen_ = true;
+  }
+  void endGesture() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    gestureOpen_ = false;
+  }
+  bool gestureOpen() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return gestureOpen_;
+  }
+
   // Undo and redo are the same motion with the sign flipped. Both return the version to apply,
   // or nullptr when there is nowhere to go — the caller does not need to know which end it is at.
   const daw::ProjectDocument* undo() {
@@ -215,6 +234,9 @@ class DocumentHistory {
   }
 
   mutable std::mutex mutex_;
+  // OPEN MEANS "AMEND, DO NOT PUSH". Force-closed by the command bracket when a non-gesture
+  // command arrives, so a UI that dies mid-drag cannot wedge every later edit into one step.
+  bool gestureOpen_ = false;
   // WHAT SAVE WOULD WRITE FOR versions_[cursor_], cached so the unchanged-document test costs one
   // serialization per edit rather than two. Every path that moves cursor_ must refresh it; a stale
   // cache does not merely mislead a log line, it decides whether an edit is recorded at all.

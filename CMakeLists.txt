@@ -697,6 +697,16 @@ target_include_directories(document_compare_tests PRIVATE
   ${Boost_INCLUDE_DIRS}
 )
 
+# GESTURE COALESCING: a drag is one undo step, and an interrupted drag is still undoable.
+add_executable(gesture_undo_tests
+  apps/gesture_undo_tests_main.cpp
+)
+target_include_directories(gesture_undo_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(gesture_undo_tests PRIVATE engine_commands)
+
 add_executable(engine_clip_helpers_tests
   apps/engine_clip_helpers_tests_main.cpp
 )
@@ -1688,6 +1698,11 @@ add_test(NAME document_compare
   COMMAND document_compare_tests
 )
 set_tests_properties(document_compare PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
+
+add_test(NAME gesture_undo
+  COMMAND gesture_undo_tests
+)
+set_tests_properties(gesture_undo PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
 
 add_test(NAME undo_ratchet
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/undo_ratchet_check.sh
