@@ -79,7 +79,7 @@ const fixture = (name) => ({
   schema_version: 4, meta: { name, created_utc: 0, modified_utc: 0 },
   nanoticks_per_quarter: Q, tempo_map: [{ nanotick: 0, bpm: 120 }],
   harmony_timeline: [],
-  clips: [{ id: 1, name: 'BEFORE', length: Q * 4, lines_per_beat: 4, kind: 'symbolic',
+  clips: [{ id: 1, name: `BEFORE_${name}`, length: Q * 4, lines_per_beat: 4, kind: 'symbolic',
             time_sig_numerator: 4, time_sig_denominator: 4, chords: [],
             notes: [{ nanotick: 0, duration: Q, pitch: 60, velocity: 100, column: 0, note_id: 1 }] }],
   tracks: [{
@@ -109,78 +109,87 @@ const savedName = async (tag) => {
 
 console.log('\nrenaming a clip the moment a project opens\n');
 
-writeFileSync(join(stack.dir, 'renrace.uniproj.json'), JSON.stringify(fixture('renrace'), null, 2));
-writeFileSync(join(stack.dir, 'renrace2.uniproj.json'), JSON.stringify(fixture('renrace2'), null, 2));
-
-/* ── IN THE WINDOW ──────────────────────────────────────────────────────────────────────────
- * Wait only until the clip is visible — that is the earliest a person could click it — and rename
- * at once. Waiting longer would step outside the very window this is about.
- */
-const t0 = Date.now();
-await run('load renrace');
-await page.waitForFunction(
-  () => { const e = window.__uni.engineState(); return e && e.noteCount > 0; },
-  null, { timeout: 10000 }).catch(() => {});
 /*
- * `.clip`, NOT `.id`. `__uni.clips()` returns { id: placementId, clip: clipId, ... } and
- * `cliptext` wants the CLIP. This fixture has one of each and both are 1, so passing the wrong
- * field would have worked here and tested nothing — the kind of accident that only shows up on a
- * project where the numbers have drifted apart.
+ * ── FIVE ATTEMPTS, NOT ONE ──────────────────────────────────────────────────────────────────
+ *
+ * THE LESSON THIS FILE WAS BOUGHT WITH. I ran the race once, saw it pass, and reported that
+ * backend's fault "does not reach this tree". It is INTERMITTENT — the window is a single consumer
+ * pass — so one green run cannot establish absence, and the mechanism IS present here:
+ * `bumpAllTrackClipVersions()` is called from engine_load_project.cpp on the load path, exactly as
+ * it is on their branch inside applyDocument.
+ *
+ * So the suite tries repeatedly. Five is not a proof either — nothing here can prove the absence of
+ * a rare fault — but it is five times the chance of catching one, for about fifteen seconds.
  */
-const clipId = await page.evaluate(() => (window.__uni.clips() || [])[0]?.clip);
-check(clipId !== undefined, 'the loaded project has a clip to rename', String(clipId));
+const ATTEMPTS = 5;
+for (let i = 0; i < ATTEMPTS; i++) {
+  writeFileSync(join(stack.dir, `renrace${i}.uniproj.json`),
+                JSON.stringify(fixture(`renrace${i}`), null, 2));
+}
+writeFileSync(join(stack.dir, 'renrace_ctl.uniproj.json'),
+              JSON.stringify(fixture('renrace_ctl'), null, 2));
 
-// FOUR arguments: <track> <clip> name|source <text>. Two would be refused by the
-// console's own gate, and this suite would then report 'the rename did not land' for a
-// reason that has nothing to do with the race it is about.
-/*
- * HOW TIGHT THE WINDOW ACTUALLY WAS. A race test that waits too long is a test that did not try,
- * and it reports "does not reproduce" in exactly the same words as one that did. So the gap
- * between the load and the rename is measured and asserted: if it grew past a second, the run
- * says nothing about the race and must say so rather than passing.
+let landed = 0;
+let worstGap = 0;
+const refusals = [];
+for (let i = 0; i < ATTEMPTS; i++) {
+  /*
+   * WAIT FOR *THIS* PROJECT, not for "some notes exist".
+   *
+   * The first version waited on `noteCount > 0`, which after the first iteration was ALREADY TRUE
+   * from the previous project — so attempts 1..4 fired the rename 5ms in, before the new document
+   * had loaded at all, and reported 1/5 landed. That reads exactly like backend's race and is not:
+   * it is renaming a clip in a project that is not open yet. The giveaway was the gap collapsing
+   * from 37ms to 5ms, because a load does not finish in five milliseconds.
+   *
+   * Each fixture now starts with its OWN clip name, so "this project is open" is observable
+   * instead of inferred.
+   */
+  const t0 = Date.now();
+  await run(`load renrace${i}`);
+  await page.waitForFunction(
+    (want) => ((window.__uni.clips() || [])[0] || {}).name === want,
+    `BEFORE_renrace${i}`, { timeout: 10000 }).catch(() => {});
+  const id = await page.evaluate(() => (window.__uni.clips() || [])[0]?.clip);
+  // `.clip`, NOT `.id` — clips() returns { id: placementId, clip: clipId } and cliptext wants the
+  // CLIP. Both are 1 in this fixture, so the wrong field would pass while testing nothing.
+  // FOUR arguments: <track> <clip> name|source <text>. Two are refused by the console's gate,
+  // which would read as the race reproducing when nothing had been sent.
+  await run(`cliptext 0 ${id} name TOOK${i}`);
+  const gap = Date.now() - t0;
+  worstGap = Math.max(worstGap, gap);
+  await settle(1000);
+  const got = await savedName(`renrace${i}_out`);
+  if (got === `TOOK${i}`) landed += 1;
+  else refusals.push(`attempt ${i}: name is ${JSON.stringify(got)} after ${gap}ms`);
+}
+
+check(worstGap < 1500,
+      `every rename went out inside the window — worst gap ${worstGap}ms`,
+      `${worstGap}ms is too long to say anything about a race that resolves in one consumer pass`);
+check(landed === ATTEMPTS,
+      `A CLIP RENAMED RIGHT AFTER A LOAD LANDS, ${ATTEMPTS} times out of ${ATTEMPTS}`,
+      `${landed}/${ATTEMPTS} landed. ${refusals.join('; ')} — backend task #120 reproduces here. `
+      + 'The engine log should say clip.version_mismatch; if it does not, the cause is something '
+      + 'else and their diagnosis must not be assumed');
+
+/* ── OUTSIDE THE WINDOW, the control ───────────────────────────────────────────────────────
+ * A race that never fires proves nothing unless the same edit is seen to work when it cannot be
+ * racing. This separates "no race here" from "SetClipText is broken outright".
  */
-const gap = Date.now() - t0;
-check(gap < 1000,
-      `the rename went out ${gap}ms after the load — inside the window`,
-      `${gap}ms is too long to say anything about a race that resolves in the publish interval`);
-const r1 = await run(`cliptext 0 ${clipId} name IMMEDIATE`);
-check(!/not|error|refus/i.test(String(r1)), 'the rename command was ACCEPTED', String(r1));
-await settle(1200);
-const immediate = await savedName('renrace_out');
-const immediateLanded = immediate === 'IMMEDIATE';
-
-/* ── OUTSIDE IT, the control ────────────────────────────────────────────────────────────── */
-await run('load renrace2');
+await run('load renrace_ctl');
 await settle(3000);
 const clipId2 = await page.evaluate(() => (window.__uni.clips() || [])[0]?.clip);
 const r2 = await run(`cliptext 0 ${clipId2} name SETTLED`);
 check(!/not|error|refus/i.test(String(r2)), 'the control rename was accepted', String(r2));
 await settle(1200);
-const settled = await savedName('renrace2_out');
+const settled = await savedName('renrace_ctl_out');
 const settledLanded = settled === 'SETTLED';
 
 check(settledLanded,
       'CONTROL: the same rename lands after a generous settle',
       `clip name is ${JSON.stringify(settled)} — if this fails the race is not what is wrong, `
       + 'SetClipText is broken outright');
-
-if (settledLanded && !immediateLanded) {
-  // REPRODUCED. Assert the CAUSE from the engine's own mouth rather than inferring it.
-  const log = join(stack.dir, '..', 'engine.log');
-  const text = existsSync(log) ? readFileSync(log, 'utf8') : '';
-  const mismatch = /clip\.version_mismatch/.test(text);
-  check(false,
-        'a clip renamed right after a load LANDS',
-        `got ${JSON.stringify(immediate)}, expected "IMMEDIATE" — backend's task #120 reproduces `
-        + `in this tree. engine log says clip.version_mismatch: ${mismatch}`);
-  note(mismatch ? 'confirmed by clip.version_mismatch in the engine log'
-                : 'NOT accompanied by clip.version_mismatch — so it may be a different cause; '
-                  + 'do not assume backend\'s diagnosis without this line');
-} else {
-  check(immediateLanded,
-        'A CLIP RENAMED RIGHT AFTER A LOAD LANDS — backend task #120 does not reach this tree',
-        `got ${JSON.stringify(immediate)}, expected "IMMEDIATE"`);
-}
 
 check(errors.length === 0, 'nothing threw in the browser', errors.slice(0, 3).join(' | '));
 
