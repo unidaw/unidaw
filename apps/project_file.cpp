@@ -1085,7 +1085,18 @@ bool deserializeProject(const std::string& json,
             device.capabilityMask = capabilityMaskForKind(device.kind);
           }
           device.patcherNodeId = deviceTree.get<uint32_t>("patcher_node_id", 0);
-          device.hostSlotIndex = deviceTree.get<uint32_t>("host_slot_index", 0);
+          // DEFAULT TO UNRESOLVED, NOT 0 — because 0 IS A VALID CACHE INDEX. A file with no
+          // host_slot_index (hand-written, older, or produced by a tool that omits it) silently
+          // pointed the device at the FIRST PLUGIN IN THE SCAN, which loads and plays and is the
+          // wrong instrument. The sentinel says "nobody has resolved this yet", which is what an
+          // absent key actually means, and resolveDeviceSlot then does its job from vst_ref.
+          //
+          // The field conflates two things and that is why it keeps causing trouble: a DERIVED
+          // cache index, and an AUTHORED load-mode (kHostSlotIndexDirect = "load by path, not from
+          // the scan" — fixtures set it deliberately). Splitting those is stage 3 work; making the
+          // absent case safe is not, and does not wait for it.
+          device.hostSlotIndex =
+              deviceTree.get<uint32_t>("host_slot_index", kHostSlotIndexUnresolved);
           device.bypass = deviceTree.get<bool>("bypass", false);
           if (const auto ref = deviceTree.get_child_optional("vst_ref")) {
             device.vstRef.vendor = ref->get<std::string>("vendor", "");

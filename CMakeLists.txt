@@ -675,6 +675,19 @@ target_include_directories(engine_document_history_tests PRIVATE
 )
 target_link_libraries(engine_document_history_tests PRIVATE engine_commands)
 
+# THE FIELD VISITOR — stage 3's foundation. Header-only, so this links nothing: the point is that
+# the walk COMPILES against the real structs and that FieldKind separates what a differ compares
+# from what it must ignore. It asserts behaviour, never a field COUNT — a count is a second
+# hand-maintained list of the thing the visitor exists to abolish, and it goes stale in the
+# dangerous direction (passing while a field silently stops being visited).
+add_executable(document_visitor_tests
+  apps/document_visitor_tests_main.cpp
+)
+target_include_directories(document_visitor_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+
 add_executable(engine_clip_helpers_tests
   apps/engine_clip_helpers_tests_main.cpp
 )
@@ -1656,6 +1669,11 @@ add_test(NAME document_history
   COMMAND engine_document_history_tests
 )
 set_tests_properties(document_history PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
+
+add_test(NAME document_visitor
+  COMMAND document_visitor_tests
+)
+set_tests_properties(document_visitor PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
 
 add_test(NAME undo_ratchet
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/undo_ratchet_check.sh
