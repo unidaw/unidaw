@@ -1440,6 +1440,14 @@ add_test(NAME block_placement_rule
 set_tests_properties(block_placement_rule PROPERTIES
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
 
+# The sidecar's copy of the engine's scope rule must pick the SAME counter the engine
+# arbitrates against. Source-parsed on both sides; no engine needed, hence the short timeout.
+add_test(NAME version_arbiter
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/version_arbiter_check.sh
+)
+set_tests_properties(version_arbiter PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
+
 add_test(NAME note_off_edge
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/note_off_edge_check.sh
 )
