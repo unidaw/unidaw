@@ -1397,7 +1397,24 @@ struct UiHarmonyEvent {
 
 struct UiHarmonySnapshot {
   uint32_t eventCount = 0;
-  uint32_t reserved[3]{};
+  /// THE VERSION THESE EVENTS ARE, written AFTER them by the thread that fills this region.
+  ///
+  /// Took one of the three reserved words, so the layout is unchanged and this is not an ABI
+  /// break. It also FAILS SAFE: a reader built before this field sees 0, never matches its cache,
+  /// and re-reads every frame — slower, never wrong.
+  ///
+  /// WHY IT HAS TO LIVE HERE rather than being read from the header. `uiHarmonyVersion` is bumped
+  /// on the COMMAND thread the moment a write is accepted; this region is refilled by the CONSUMER
+  /// on its next pass. So the header's version runs AHEAD of these events, and a reader that
+  /// stamps "cached at version N" from the header and then reads here caches a short list and
+  /// declares it current. The version never moves again, so it never re-reads.
+  ///
+  /// Live cost: four key changes written, all four accepted and all four present in this region —
+  /// and two on screen, permanently, surviving a page reload, because the stale copy was in the
+  /// sidecar. UiPatcherRegion has carried its own `version` since it existed; harmony was the odd
+  /// one out and that asymmetry was the whole bug.
+  uint32_t version = 0;
+  uint32_t reserved[2]{};
   UiHarmonyEvent events[kUiMaxHarmonyEvents]{};
 };
 

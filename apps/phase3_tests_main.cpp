@@ -489,7 +489,7 @@ bool runSnapshotTest() {
       {960, 5, 2, 0},
   };
   daw::UiHarmonySnapshot harmonySnapshot;
-  daw::buildUiHarmonySnapshot(harmonyEvents, harmonySnapshot);
+  daw::buildUiHarmonySnapshot(harmonyEvents, harmonySnapshot, 7);
   if (harmonySnapshot.eventCount != 2 ||
       harmonySnapshot.events[1].root != 5 ||
       harmonySnapshot.events[1].scaleId != 2) {

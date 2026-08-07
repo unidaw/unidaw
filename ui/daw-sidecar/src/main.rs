@@ -1300,13 +1300,57 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
     }
 
     // Keyed on the engine's own harmony version, which moves only on a change.
-    if !out.harmony_ever_read || f_harmony_stale(out) {
+    /*
+     * INVALIDATE ON THE DATA AS WELL AS THE CLOCK.
+     *
+     * The version gate alone was wrong, and it failed in the worst way: PERMANENTLY, and through a
+     * reload. `ui_harmony_version` is bumped on the command thread; the region is refilled by the
+     * consumer on its next pass. So the version can be AHEAD of the region — and this code stamped
+     * `read_at = version` and THEN read, caching whatever happened to be published at that instant
+     * and declaring it current. The version never moved again, so it never re-read.
+     *
+     * Live: four key changes written, all acknowledged by the engine, all four present in the
+     * document AND in the published region — and two on screen. Reloading the page did not help,
+     * because the stale copy was here, not in the browser.
+     *
+     * The count is one u32 and no copy. It catches precisely the case the version misses: the
+     * region grew while the version stood still.
+     *
+     * THIS IS A STOPGAP FOR A MISSING FIELD. UiPatcherRegion carries its own `version`, written by
+     * the thread that fills it, so a reader there can answer "is my copy current?" from ONE
+     * consistent read. UiHarmonySnapshot has `event_count` and three RESERVED words and no
+     * version, which is why this has to triangulate. Proposed to backend: put the version in
+     * reserved[0]. Old readers see 0, treat the cache as always stale, and re-read every frame —
+     * slower, never wrong. It fails safe, which is the property worth having.
+     */
+    /*
+     * GATED ON THE REGION'S OWN VERSION, which is the whole fix rather than a workaround for it.
+     *
+     * This used to compare `ui_harmony_version` from the HEADER against what it had last read.
+     * That version is bumped on the COMMAND thread when a write is accepted; the region is
+     * refilled by the CONSUMER on its next pass. So the header could say 5 while the region still
+     * held the events of version 3 — and this code stamped "read at 5", cached three events, and
+     * never looked again, because the header never moved past 5.
+     *
+     * Live cost: four key changes written, all four accepted, all four in the region — two on
+     * screen, permanently, surviving a reload, because the stale copy was HERE and not in the page.
+     *
+     * `UiHarmonySnapshot::version` is written by the thread that fills the region, after the
+     * events, under the lock that guards them. Comparing against THAT answers "is my copy
+     * current?" from one consistent read, with no assumption about what another thread has got to
+     * yet. It is what UiPatcherRegion has always done; harmony was the odd one out.
+     *
+     * An engine without the field publishes 0, which never equals a cached version and so re-reads
+     * every frame: slower, never wrong.
+     */
+    let region_version = h.harmony_region_version();
+    if !out.harmony_ever_read || region_version != out.harmony_read_at {
         out.harmony_ever_read = true;
-        out.harmony_read_at = out.harmony_version;
         out.harmony.clear();
         for e in h.read_harmony() {
             out.harmony.push((e.nanotick, e.root, e.scale_id));
         }
+        out.harmony_read_at = region_version;
     }
 
     let pv = h.patcher_version();

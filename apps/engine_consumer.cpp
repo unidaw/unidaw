@@ -415,7 +415,11 @@ void writeUiHarmonySnapshotTo(UiWriterDeps& deps) {
     auto* snapshot = reinterpret_cast<daw::UiHarmonySnapshot*>(
         reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiHarmonyOffset);
     std::lock_guard<std::mutex> lock(harmonyMutex);
-    daw::buildUiHarmonySnapshot(harmonyEvents, *snapshot);
+    // The version AS OF THIS FILL, read under the same lock that guards the events. That pairing
+    // is the entire point: the number and the data leave here together.
+    daw::buildUiHarmonySnapshot(
+        harmonyEvents, *snapshot,
+        deps.harmonyTimeline.harmonyVersion.load(std::memory_order_acquire));
 }
 
 }  // namespace

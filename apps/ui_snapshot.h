@@ -35,7 +35,11 @@ ClipWindowResult buildUiClipWindowSnapshot(const MusicalClip& clip,
                                            UiClipWindowSnapshot& snapshot,
                                            const LaneQuantize& quantize = LaneQuantize{});
 
+/// `version` is stamped into the region AFTER the events, so a reader can invalidate its cache
+/// from one consistent read instead of against the header's counter, which a different thread
+/// moves at a different time.
 void buildUiHarmonySnapshot(const std::vector<HarmonyEvent>& events,
-                            UiHarmonySnapshot& snapshot);
+                            UiHarmonySnapshot& snapshot,
+                            uint32_t version);
 
 }  // namespace daw

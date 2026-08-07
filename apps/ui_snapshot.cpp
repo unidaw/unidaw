@@ -125,7 +125,8 @@ ClipWindowResult buildUiClipWindowSnapshot(const MusicalClip& clip,
 }
 
 void buildUiHarmonySnapshot(const std::vector<HarmonyEvent>& events,
-                            UiHarmonySnapshot& snapshot) {
+                            UiHarmonySnapshot& snapshot,
+                            uint32_t version) {
   std::memset(&snapshot, 0, sizeof(UiHarmonySnapshot));
   const uint32_t count = static_cast<uint32_t>(
       std::min<size_t>(events.size(), kUiMaxHarmonyEvents));
@@ -137,6 +138,10 @@ void buildUiHarmonySnapshot(const std::vector<HarmonyEvent>& events,
     snapshot.events[i].scaleId = event.scaleId;
     snapshot.events[i].flags = event.flags;
   }
+  // LAST, and deliberately so. A reader that sees this version is guaranteed to be looking at the
+  // events that go with it; a reader that catches the write half-done sees the OLD version and
+  // re-reads. Writing it first would publish a promise the events had not kept yet.
+  snapshot.version = version;
 }
 
 }  // namespace daw

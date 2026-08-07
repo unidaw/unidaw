@@ -977,7 +977,12 @@ pub struct UiHarmonyEvent {
 #[derive(Clone, Copy, Debug)]
 pub struct UiHarmonySnapshot {
     pub event_count: u32,
-    pub reserved: [u32; 3],
+    /// The version these events ARE — written after them, by the thread that fills the region.
+    /// Mirrors `UiHarmonySnapshot::version` in apps/shared_memory.h. Gate a cache on THIS, never
+    /// on the header's `ui_harmony_version`, which the command thread moves before the consumer
+    /// republishes. 0 from an engine that predates the field, which reads as "always stale".
+    pub version: u32,
+    pub reserved: [u32; 2],
     pub events: [UiHarmonyEvent; K_UI_MAX_HARMONY_EVENTS],
 }
 

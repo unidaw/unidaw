@@ -720,6 +720,43 @@ impl EngineHandle {
 
     /// The published harmony timeline (root/scale changes over time), under the
     /// seqlock. Populated from the project's harmony_timeline on load.
+    /// HOW MANY EVENTS THE REGION ACTUALLY HOLDS, without copying them.
+    ///
+    /// Exists because the harmony region — unlike the patcher's — carries NO version of its own,
+    /// so a reader has to invalidate its cache against `ui_harmony_version` in the header, which
+    /// is written by a different thread at a different time. When the version runs ahead of the
+    /// region (the command thread bumps it; the consumer republishes on its next pass) a reader
+    /// that stamps "read at version N" before reading caches a SHORT LIST FOREVER: the version
+    /// never moves again, so it never re-reads. Four key changes written, two displayed, and a
+    /// reload does not help because the cache is in the sidecar, not the page.
+    ///
+    /// A count is one u32 and catches exactly that. It is a stopgap for a missing field, not a
+    /// design — the real fix is for the region to carry the version it corresponds to, which is
+    /// what `UiPatcherRegion` already does and what the three reserved words here are for.
+    /// THE VERSION THE PUBLISHED EVENTS ARE — written into the region after them, by the thread
+    /// that fills it. Gate a cache on this, never on `harmony_version()` from the header: that one
+    /// is bumped on the command thread and can run ahead of what is actually published.
+    ///
+    /// 0 from an engine that predates the field, which never matches a cache and so reads as
+    /// "always stale" — slower, never wrong.
+    pub fn harmony_region_version(&self) -> u32 {
+        let off = unsafe { (*self.header).ui_harmony_offset };
+        if off == 0 {
+            return 0;
+        }
+        let snap = self._mmap.as_ptr().wrapping_add(off as usize) as *const UiHarmonySnapshot;
+        unsafe { std::ptr::read_volatile(&(*snap).version) }
+    }
+
+    pub fn harmony_event_count(&self) -> u32 {
+        let off = unsafe { (*self.header).ui_harmony_offset };
+        if off == 0 {
+            return 0;
+        }
+        let snap = self._mmap.as_ptr().wrapping_add(off as usize) as *const UiHarmonySnapshot;
+        (unsafe { (*snap).event_count }).min(K_UI_MAX_HARMONY_EVENTS as u32)
+    }
+
     pub fn read_harmony(&self) -> Vec<UiHarmonyEvent> {
         loop {
             let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };

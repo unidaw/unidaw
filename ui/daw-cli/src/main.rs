@@ -2238,6 +2238,27 @@ fn main() {
                 }
                 Some(&"audio-sources") => get_audio_sources(&handle),
                 Some(&"automation") => get_automation(&handle),
+                /*
+                 * `get harmony` — the PUBLISHED timeline, which is a different thing from the one
+                 * in the saved document and that difference is the whole reason this exists.
+                 *
+                 * A harmony write bumps the harmony VERSION, which is what set_harmony waits on;
+                 * the region every client draws from is republished separately. So "applied: true"
+                 * and "the lane shows it" are two claims, and until now no surface could compare
+                 * them. Reported from live use: four key changes written, all acknowledged, two
+                 * visible.
+                 */
+                Some(&"harmony") => {
+                    let events = handle.read_harmony();
+                    println!("[");
+                    for (i, e) in events.iter().enumerate() {
+                        let comma = if i + 1 == events.len() { "" } else { "," };
+                        println!("  {{ \"nanotick\": {}, \"root\": {}, \"scale_id\": {} }}{comma}",
+                                 e.nanotick, e.root, e.scale_id);
+                    }
+                    println!("]");
+                    0
+                }
                 Some(&"extents") => get_extents(&handle),
                 // `get shared [--track N]`. The agent has had `shared_clips` since the
                 // scratch-placement work; this is the same answer from the other surface.
