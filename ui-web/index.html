@@ -8315,8 +8315,26 @@ addEventListener('keydown', (e) => {
   if (k === 'f' || k === 'F') { state.followPlayhead = !state.followPlayhead; return done(); }
   if (k === 'Escape') { state.reject = null; return done(); }
 
-  // 5. Editing at the cursor.
+  // 5. Editing at the cursor — or over the SELECTION, if there is one.
   if (k === 'Backspace' || k === 'Delete') {
+    /*
+     * A SELECTION IS WHAT DELETE ACTS ON when one exists. Owner's ruling.
+     *
+     * This only ever called `deleteAtCursor`, so selecting a range and pressing Delete removed the
+     * single note under the cursor and left the rest — and `cut` (x) was the only way to clear a
+     * range. Renoise clears the selection with Delete and so does every tracker anyone arrives
+     * from, which makes the old behaviour a silent no-op four times out of five: you watch one
+     * note vanish and assume the key did not take.
+     *
+     * NO CURSOR STEP AFTER A RANGE DELETE. Stepping is the note-entry idiom — type, advance — and
+     * it makes sense for the single-cell case below. Advancing after clearing a block would leave
+     * the cursor somewhere nobody asked for, one row past a region that is now empty.
+     */
+    if (state.selection) {
+      if (!deleteSelection()) { schedule(); return done(); }
+      schedule();
+      return done();
+    }
     deleteAtCursor();
     state.cursor.row += state.editStep; follow();
     return done();
