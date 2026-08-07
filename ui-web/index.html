@@ -831,6 +831,44 @@ function describeEngineEvent(e) {
       default: return `${at}: the sampler refused that (reason ${e.reason}, target ${e.target})`;
     }
   }
+  /*
+   * A REFUSED CHAIN EDIT, WHICH READ AS "chain error on track 0 (code 3)".
+   *
+   * Three error families reach this line — chain-error, routing-error and mod-error — and only
+   * the generic fallback below was wording them, so a device that would not move told you a
+   * number. The codes are not documented on the wire; they are positional, assigned in
+   * `engine_chain_commands.cpp` at the four points where an operation reports it changed nothing:
+   *
+   *   1  daw::addDevice returned false        the insert did not happen
+   *   2  daw::removeDeviceById returned false there is no such device on that track
+   *   3  daw::moveDeviceById returned false   the move did not happen
+   *   4  none of setDeviceBypass /            the device is there and nothing it was asked to
+   *      setDevicePatcherNodeId /             change actually changed
+   *      setDeviceHostSlotIndex changed anything
+   *
+   * WORDED FROM THE CALL EACH ONE GUARDS, not from a guess at intent — a wrong explanation sends
+   * the reader somewhere a raw number would not have, which is the mistake the clip reasons made
+   * (everything that was not UnknownTrack was reported as a concurrency problem). Where the
+   * engine's own reason is "the operation reported no change", that is what this says.
+   */
+  /*
+   * NO DEVICE ID IN THE MESSAGE, because the event does not carry one. `UiChainErrorPayload` has
+   * `device_id`, but the sidecar's decoder forwards only kind, code and track — so `e.device` is
+   * undefined here, and writing it into a sentence would print the word "undefined" at somebody.
+   * Caught before this shipped by checking the decoder rather than the payload. Forwarding the id
+   * would make all four of these better and is a small change on that side; it is not made here.
+   */
+  if (e.kind === 'chain-error') {
+    const where = e.track === MASTER_TRACK_ID ? 'the master' : `track ${e.track}`;
+    if (e.code === 1) return `${where}: that device could not be added to the chain`;
+    if (e.code === 2) return `${where}: there is no such device to remove`;
+    if (e.code === 3) return `${where}: that device could not be moved there`;
+    if (e.code === 4) {
+      return `${where}: nothing changed — the bypass, patcher node or plugin slot it was asked `
+           + 'to set is already what it is, or that device does not take it';
+    }
+    return `${where}: the chain refused that (code ${e.code})`;
+  }
   return `${e.kind.replace('-', ' ')} on track ${e.track} (code ${e.code})`;
 }
 
