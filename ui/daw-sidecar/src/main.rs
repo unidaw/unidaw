@@ -5220,13 +5220,30 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                     "{{\"error\":\"a clip name must be under {CLIP_NAME_BYTES} bytes                                       and this is {} — the engine refuses rather than shortening,                                       so a longer one would change nothing\"}}",
                                     bytes.len())
                             } else {
+                                let track_id =
+                                    parse_num(&t, "\"track\"").unwrap_or(0).max(0) as u32;
                                 let header = UiClipTextHeader {
                                     command_type: UiCommandType::SetClipText as u16,
                                     field: field.unwrap(),
-                                    track_id: parse_num(&t, "\"track\"").unwrap_or(0).max(0) as u32,
+                                    track_id,
                                     clip_id: parse_num(&t, "\"clip\"").unwrap_or(0).max(0) as u32,
                                     text_bytes: bytes.len() as u32,
-                                    base_version: parse_num(&t, "\"base\"").unwrap_or(0).max(0) as u32,
+                                    // THROUGH `resolve_base`, like every other arbitrated command.
+                                    //
+                                    // This site built its own header and sent it with `send_bulk`,
+                                    // so it never reached the one function that knows which counter
+                                    // a command is judged against — the fourth send path in this
+                                    // file and the only one that had been missed.
+                                    //
+                                    // `SetClipText` is arbitrated PER TRACK. An unstamped base of 0
+                                    // matches only an engine nothing has been edited on, so a clip
+                                    // rename was refused in silence after any edit at all; and the
+                                    // page's old workaround of stamping the GLOBAL counter was
+                                    // wrong in the same way, just less often.
+                                    base_version: resolve_base(
+                                        &handle, track_id,
+                                        parse_num(&t, "\"base\"").unwrap_or(0).max(0) as u32,
+                                        UiCommandType::SetClipText as u16),
                                 };
                                 let mut buf = Vec::with_capacity(20 + bytes.len());
                                 buf.extend_from_slice(unsafe {

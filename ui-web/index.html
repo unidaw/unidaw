@@ -3771,10 +3771,28 @@ const dockApi = {
     if (f !== 'name' && f !== 'source' && f !== 'path') {
       state.reject = 'a clip text field is name or source'; schedule(); return false;
     }
+    /*
+     * NO BASE FROM HERE, for the same reason as setHarmony above — and this one was quoting the
+     * wrong COUNTER as well as a stale value.
+     *
+     * `SetClipText` is arbitrated PER TRACK (it is not in `uiCommandIsGlobalScope`, so
+     * `requireMatchingClipVersion` compares it against that track's `trackClipVersion`). This
+     * sent `engine.clipVersion`, the GLOBAL one. The two are equal only until the first edit and
+     * then diverge permanently — the sidecar measured `maximal` at global 5, track 0 at 5 and
+     * every other track at 1.
+     *
+     * So renaming a clip worked on whichever track was edited last and was refused everywhere
+     * else, silently, because this path has no retry. That reads exactly like "renaming right
+     * after a load is refused" — which is how it was reported and why it was chased as a load
+     * race for two days. It is not a race. It is the wrong counter, and it is reproducible with
+     * no load involved at all: edit track 0, rename a clip on track 1.
+     *
+     * The sidecar resolves it per-track when no base is sent, which is the only side that can
+     * read the current per-track counter — those are not on the wire.
+     */
     const ok = conn.send({ type: 'cliptext', track: Number(track) || 0,
                            clip: Number(clip) || 0, field: f,
-                           text: String(text === undefined ? '' : text),
-                           base: engine ? engine.clipVersion : 0 });
+                           text: String(text === undefined ? '' : text) });
     if (!ok) { state.reject = 'no engine'; schedule(); return false; }
     state.reject = null; schedule(); return true;
   },
