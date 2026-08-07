@@ -266,8 +266,15 @@ for (const f of suites) {
    *                 separately at the end so it cannot be mistaken for a clean run
    *   FAIL          failed twice — a real failure, and the exit code says so
    *
-   * A suite that fails twice in a row is not flakiness on this evidence: the observed rate is
-   * around one suite in forty per sweep, so two in a row is far outside it.
+   * WHAT "FAIL" DOES AND DOES NOT MEAN. It was written here that two failures in a row put a
+   * suite far outside the observed flake rate and so made it a real bug. That is WRONG, and
+   * sweep 25 showed it: open-patcher failed BOTH attempts and then passed three times out of
+   * three when run alone. The retry runs seconds after the first, against whatever state the
+   * preceding suites left behind — so any cause that persists across both attempts survives the
+   * retry untouched, and the second run is not an independent sample.
+   *
+   * So FAIL means "failed twice", nothing more. It is worth more attention than FLAKY and it is
+   * still not proof. Run it alone before believing it.
    *
    * WHAT THIS DELIBERATELY DOES NOT DO is hide the flake. A flaky suite is a defect in the
    * gate and stays visible under its own heading, because the failure mode this project keeps
