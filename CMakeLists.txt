@@ -1717,6 +1717,15 @@ add_test(NAME param_mirror
 )
 set_tests_properties(param_mirror PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# UNDO MUST NOT RE-PUSH SAVED PLUGIN STATE. Plugin blobs are not in the document, so an undo that
+# pushes them overwrites LIVE state with LAST-SAVED state — it discards unsaved plugin work rather
+# than restoring anything. Counts project.state_restored across a load and an undo: a load must
+# emit them, an undo must emit none.
+add_test(NAME undo_plugin_state
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/undo_plugin_state_check.sh
+)
+set_tests_properties(undo_plugin_state PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 # A STEM IS A TRACK. Registered the moment it went green — it was DECLARED_UNREGISTERED for one
 # commit while the load half was still narrow, because a permanently red check is one people learn
 # to skip. It exists because a negative control proved the gap: with the five-field aux-child

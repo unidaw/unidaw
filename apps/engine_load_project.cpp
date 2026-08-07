@@ -647,6 +647,49 @@ bool applyDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
     // Reported from the UI as "a track disappears on load"; the file was right both times.
     liveTrackCount.store(liveTrackExtent, std::memory_order_release);
 
+    // PLUGIN STATE IS RESTORED BY loadProjectFromPath, NOT HERE. See the note there: pushing
+    // saved blobs is a FILE-OPEN action, and undo runs this same function.
+
+
+    // Publish the audio source + clip descriptor tables (contract §2.1). Version-gated like
+    // deviceParams: write both tables, then bump `version` last behind a release fence so a
+    // reader seeing the new version sees complete tables.
+    //
+    // BOTH HALVES, ONE DEFINITION, and the load is just another caller. The source loop used to
+    // be inline here under "these change only at load, so no seqlock" — true until a command
+    // could add a source, which SetClipText (98) now can. It is in publishAudioClipTable with
+    // the clip loop it has to stay consistent with.
+    publishAudioClipTable();
+
+    // The UI's mirror is now arbitrarily stale, so force a full resync rather
+    // than trying to describe the change as a diff.
+    bumpAllTrackClipVersions();
+    clipDirty.store(true, std::memory_order_release);
+    daw::UiDiffPayload resync{};
+    resync.diffType = static_cast<uint16_t>(daw::UiDiffType::ResyncNeeded);
+    resync.clipVersion = clipVersion.load(std::memory_order_acquire);
+    emitUiDiff(resync);
+    return true;
+}
+
+// PUSH THE SAVED PLUGIN BLOBS BACK INTO THE HOSTS — a FILE-OPEN action, and only that.
+//
+// This lived inside applyDocument until undo started calling that function. Plugin state is NOT in
+// ProjectDocument (Device has no params field; the blobs live in <project>/.state/*.bin), so undo
+// was not restoring anything here — it was OVERWRITING LIVE STATE WITH LAST-SAVED STATE. Tweak a
+// cutoff, do not save, type a note, press Ctrl-Z: the note came back AND the plugin snapped to
+// whatever was on disk. Review finding #123 item 6.
+//
+// Moving it rather than gating it with a flag, for the same reason as the loop region in 53b77d5:
+// applying a document and replacing the session are two different operations, and only one of them
+// is undo. A bool would have hidden that distinction behind a parameter nobody reads.
+//
+// The body below is the block from applyDocument, moved verbatim.
+static void restorePluginStateFromDisk(LoadProjectDeps& deps,
+                                       const daw::ProjectDocument& document,
+                                       const std::string& path) {
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
     // Restore plugin state. The chain was just rebuilt from the project above,
     // so on a clean reopen the live chain matches the saved one and state lands;
     // if a live reconcile diverged it is reported rather than pushed into the
@@ -703,26 +746,6 @@ bool applyDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
             .field("ok", ok);
       }
     }
-
-    // Publish the audio source + clip descriptor tables (contract §2.1). Version-gated like
-    // deviceParams: write both tables, then bump `version` last behind a release fence so a
-    // reader seeing the new version sees complete tables.
-    //
-    // BOTH HALVES, ONE DEFINITION, and the load is just another caller. The source loop used to
-    // be inline here under "these change only at load, so no seqlock" — true until a command
-    // could add a source, which SetClipText (98) now can. It is in publishAudioClipTable with
-    // the clip loop it has to stay consistent with.
-    publishAudioClipTable();
-
-    // The UI's mirror is now arbitrarily stale, so force a full resync rather
-    // than trying to describe the change as a diff.
-    bumpAllTrackClipVersions();
-    clipDirty.store(true, std::memory_order_release);
-    daw::UiDiffPayload resync{};
-    resync.diffType = static_cast<uint16_t>(daw::UiDiffType::ResyncNeeded);
-    resync.clipVersion = clipVersion.load(std::memory_order_acquire);
-    emitUiDiff(resync);
-    return true;
 }
 
 bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
@@ -733,6 +756,11 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
     return false;
   }
   if (!applyDocument(deps, document, path, error)) { return false; }
+
+  // OPENING A FILE pushes its saved plugin blobs into the hosts. Undo must not: the blobs are not
+  // in the document, so re-pushing them reverts unsaved plugin edits rather than restoring
+  // anything. See restorePluginStateFromDisk.
+  restorePluginStateFromDisk(deps, document, path);
 
   // A LOAD REPLACES THE SONG, so any hand-set loop belonged to the OLD one — and this is the only
   // place that is true. It used to live inside applyDocument, which was correct until UNDO started
