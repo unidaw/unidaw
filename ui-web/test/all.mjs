@@ -21,7 +21,8 @@
  */
 
 import { spawn } from 'node:child_process';
-import { readdirSync } from 'node:fs';
+import { readdirSync, statSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -113,6 +114,41 @@ const NOT_A_SUITE = new Set([
  * as "stuck", so the remaining suites still get to run and the report says which one hung.
  */
 const HANG_MS = 12 * 60 * 1000;
+
+/*
+ * OLD STACK DIRECTORIES ARE PRUNED BEFORE THE SWEEP STARTS.
+ *
+ * Most suites call `startStack({ keepDir: true })` so their engine log and saved projects survive
+ * for debugging — which is right, and is how several bugs were found today. Nothing ever removed
+ * them. Measured 2026-08-08: 1257 `uni-e2e-*` directories holding 19 GB, on a disk at 92%.
+ *
+ * Whether that pressure contributes to the flakes this harness now reports is NOT established,
+ * and this is not offered as a fix for them. It is a leak either way: a day of sweeps should not
+ * cost twenty gigabytes, and a directory with twelve hundred siblings is a worse place to create
+ * the next one.
+ *
+ * SIX HOURS, so anything from the current session is untouched — a suite is killed at twelve
+ * minutes, so nothing this old can still be running — and today's failures stay inspectable for
+ * the rest of a working day. Failures are exactly what keepDir is for.
+ *
+ * Best effort: a directory that will not delete is not worth failing a sweep over.
+ */
+function pruneOldStacks() {
+  const dir = tmpdir();
+  const cutoff = Date.now() - 6 * 60 * 60 * 1000;
+  let gone = 0;
+  try {
+    for (const name of readdirSync(dir)) {
+      if (!name.startsWith('uni-e2e-')) continue;
+      const p = join(dir, name);
+      try {
+        if (statSync(p).mtimeMs < cutoff) { rmSync(p, { recursive: true, force: true }); gone++; }
+      } catch { /* vanished, or not ours to remove */ }
+    }
+  } catch { /* no temp dir to read: nothing to prune */ }
+  if (gone) console.log(`pruned ${gone} stack director${gone === 1 ? 'y' : 'ies'} older than 6h\n`);
+}
+pruneOldStacks();
 
 const argv = process.argv.slice(2);
 const withAudio = argv.includes('--with-audio');
