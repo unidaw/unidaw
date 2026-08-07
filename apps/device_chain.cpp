@@ -139,6 +139,14 @@ bool setDeviceHostSlotIndex(TrackChain& chain, uint32_t deviceId, uint32_t hostS
   if (it == chain.devices.end()) {
     return false;
   }
+  // THE INDEX AND THE MODE MOVE TOGETHER. A caller writing kHostSlotIndexDirect is saying "load by
+  // path"; that used to be the ONLY way to say it, and resolveDeviceSlot recovered the intent by
+  // reading the index back. It no longer does — the authored mode is checked at the top of resolve
+  // now — so a producer that sets the index without the mode leaves a Direct device that a failed
+  // resolve would clobber to Unresolved. device_chain_tests caught exactly that:
+  // "Direct is intentional and must survive a failed resolve".
+  it->loadMode = hostSlotIndex == kHostSlotIndexDirect ? VstLoadMode::ByPath
+                                                       : VstLoadMode::ByReference;
   it->hostSlotIndex = hostSlotIndex;
   return true;
 }
@@ -193,6 +201,9 @@ Device makeVstInstrumentDevice(uint32_t hostSlotIndex) {
   instrument.id = kDeviceIdAuto;
   instrument.kind = DeviceKind::VstInstrument;
   instrument.capabilityMask = capabilityMaskForKind(DeviceKind::VstInstrument);
+  // Same rule as setDeviceHostSlotIndex: the index and the authored mode move together.
+  instrument.loadMode = hostSlotIndex == kHostSlotIndexDirect ? VstLoadMode::ByPath
+                                                              : VstLoadMode::ByReference;
   instrument.hostSlotIndex = hostSlotIndex;
   return instrument;
 }
@@ -209,7 +220,18 @@ VstResolution resolveDeviceSlot(const PluginCache& cache, Device& device) {
   // AUTHORED INTENT FIRST. ByPath means "load the file at vst_ref.path, do not consult the scan" —
   // it used to be spelled by writing kHostSlotIndexDirect into the index itself, which is how an
   // authored decision ended up living in a derived cache field.
-  if (device.loadMode == VstLoadMode::ByPath) {
+  // EITHER SPELLING OF "LOAD BY PATH" IS HONOURED: the authored load_mode, or an IN-MEMORY index
+  // already set to Direct.
+  //
+  // The split made the index derived because a PERSISTED index is stale on any other machine — that
+  // is where every one of the three historical bugs came from. An in-memory Direct is not stale: it
+  // is a producer saying "load by path" in the only spelling that existed before load_mode, and
+  // device_chain_tests asserts it ("Direct is intentional and must survive a failed resolve"), as
+  // do the fixtures and the fake instrument. Reading it here is a COMPATIBILITY READ over live
+  // state, not a revival of the stale-index bug: nothing loads it from a file any more.
+  if (device.loadMode == VstLoadMode::ByPath ||
+      device.hostSlotIndex == kHostSlotIndexDirect) {
+    device.loadMode = VstLoadMode::ByPath;
     device.hostSlotIndex = kHostSlotIndexDirect;
     return resolution;
   }

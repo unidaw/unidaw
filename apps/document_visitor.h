@@ -85,10 +85,30 @@ enum class FieldKind : uint8_t {
 //     void field(const char* name, T& value, FieldKind kind = FieldKind::Authored);
 //   };
 //
-// visitFields is declared per struct in document_visitor_fields.h and must be kept in the SAME
-// ORDER as the struct's declaration — the round-trip checks do not care about order, but a reader
-// diffing the two lists does, and that reader is the mechanism that catches a missing field.
+// FIELDS ARE NAMED BY MEMBER POINTER, NOT BY REFERENCE TO ONE OBJECT'S MEMBER.
+//
+// The first version passed `T& value` and handed the visitor `field(name, value.member)`. That is
+// fine for serialize, hash and collect — and it CANNOT DO A PAIRWISE COMPARE, which is what undo
+// actually needs: field() had no way to reach the corresponding member of a second object. I found
+// this by trying to write the comparer, which is the cheapest possible moment to find it, because
+// nothing consumes the walk yet.
+//
+// A member pointer is a description of WHICH field, independent of any instance, so a visitor
+// applies it to as many objects as it likes: one for serialize, two for compare, N for a merge.
+// The alternatives were all worse — a second pairwise overload per struct doubles the declarations
+// this exists to abolish; buffering both walks loses the short-circuit; and a digest visitor trades
+// a hash collision for a SILENTLY LOST UNDO STEP, which is not a probability worth accepting in the
+// mechanism that decides whether the user's edit is recorded.
+//
+//   struct MyVisitor {
+//     template <typename C, typename M>
+//     void field(const char* name, M C::*member, FieldKind kind = FieldKind::Authored);
+//   };
+//   visitFields<ProjectTrack>(myVisitor);
+//
+// The field list must be kept in the SAME ORDER as the struct's declaration — nothing mechanical
+// enforces it, and the reader diffing the two lists is what catches a field somebody forgot.
 template <typename T, typename V>
-void visitFields(T& value, V& visitor);
+void visitFields(V& visitor);
 
 }  // namespace daw

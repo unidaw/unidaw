@@ -20,14 +20,19 @@
 namespace {
 
 // Collects what a differ would see: the names it would compare, and the name it would key on.
+//
+// Takes MEMBER POINTERS now, not values — which is the whole point of the rewrite: the same field
+// description can be applied to one object (serialize) or two (compare). This visitor ignores the
+// pointer entirely and only records the name and kind, which is exactly what a classification test
+// should do.
 struct CollectingVisitor {
   std::vector<std::string> compared;   // Authored — the fields a change is measured in
   std::vector<std::string> identity;   // Identity — which object this is
   std::vector<std::string> ignored;    // Derived + Session — must not produce a diff
 
-  template <typename T>
-  void field(const char* name, T& value, daw::FieldKind kind = daw::FieldKind::Authored) {
-    (void)value;
+  template <typename C, typename M>
+  void field(const char* name, M C::*member, daw::FieldKind kind = daw::FieldKind::Authored) {
+    (void)member;
     switch (kind) {
       case daw::FieldKind::Authored: compared.emplace_back(name); break;
       case daw::FieldKind::Identity: identity.emplace_back(name); break;
@@ -35,20 +40,20 @@ struct CollectingVisitor {
       case daw::FieldKind::Session:  ignored.emplace_back(name); break;
     }
   }
-
-  // Nested structs recurse. Without this a whole sub-struct is silently skipped and every
-  // consumer of the walk inherits the hole.
-  void field(const char* name, daw::TrackRoute& value,
-             daw::FieldKind kind = daw::FieldKind::Authored) {
-    (void)kind;
-    const std::string prefix = std::string(name) + ".";
-    CollectingVisitor inner;
-    daw::visitFields(value, inner);
-    for (const auto& n : inner.compared) { compared.push_back(prefix + n); }
-    for (const auto& n : inner.identity) { identity.push_back(prefix + n); }
-    for (const auto& n : inner.ignored)  { ignored.push_back(prefix + n); }
-  }
 };
+
+// Recursion is now the CALLER's business rather than an overload on the visitor: the walk describes
+// fields, and whoever wants to descend does so by naming the nested type. That is strictly clearer
+// — the old version needed one overload per nested type on every visitor that cared.
+template <typename Nested>
+void collectNested(const char* prefix, CollectingVisitor& into) {
+  CollectingVisitor inner;
+  daw::visitFields<Nested>(inner);
+  const std::string p = std::string(prefix) + ".";
+  for (const auto& n : inner.compared) { into.compared.push_back(p + n); }
+  for (const auto& n : inner.identity) { into.identity.push_back(p + n); }
+  for (const auto& n : inner.ignored)  { into.ignored.push_back(p + n); }
+}
 
 bool contains(const std::vector<std::string>& haystack, const std::string& needle) {
   for (const auto& s : haystack) {
@@ -70,9 +75,8 @@ void expect(bool cond, const char* what) {
 int main() {
   // ---- a differ must not see a derived scan index as a change -------------------------------
   {
-    daw::Device device;
     CollectingVisitor v;
-    daw::visitFields(device, v);
+    daw::visitFields<daw::Device>(v);
 
     expect(!contains(v.compared, "host_slot_index"),
            "host_slot_index must NOT be among the fields a differ compares — it is a cache index "
@@ -92,9 +96,10 @@ int main() {
 
   // ---- nesting must recurse -----------------------------------------------------------------
   {
-    daw::TrackRouting routing;
     CollectingVisitor v;
-    daw::visitFields(routing, v);
+    daw::visitFields<daw::TrackRouting>(v);
+    collectNested<daw::TrackRoute>("audio_out", v);
+    collectNested<daw::TrackRoute>("sidechain", v);
 
     expect(contains(v.compared, "audio_out.kind"),
            "the walk must RECURSE into TrackRoute — a sub-struct visited as an opaque leaf is a "
@@ -108,9 +113,8 @@ int main() {
 
   // ---- a route's track_id names ANOTHER object, so it is content, not identity ---------------
   {
-    daw::TrackRoute route;
     CollectingVisitor v;
-    daw::visitFields(route, v);
+    daw::visitFields<daw::TrackRoute>(v);
 
     expect(contains(v.compared, "track_id"),
            "TrackRoute::track_id must be COMPARED: re-pointing a send at another track is a real "
@@ -134,9 +138,8 @@ int main() {
   // fails loudly and someone reads this comment. A "ProjectTrack has 18 fields" assertion would go
   // stale in the DANGEROUS direction — it passes while a field silently stops being visited.
   {
-    daw::ProjectTrack track;
     CollectingVisitor v;
-    daw::visitFields(track, v);
+    daw::visitFields<daw::ProjectTrack>(v);
 
     for (const char* dropped : {"chain", "quantize", "collapsed", "routing", "mod_links",
                                 "lines_per_beat", "harmony_quantize", "sound_addressed_only",
@@ -166,9 +169,8 @@ int main() {
   // it — which was the original defect exactly, TrackStoreState carrying three fields while 55 of
   // 70 mutating commands had nowhere to record.
   {
-    daw::ProjectDocument doc;
     CollectingVisitor v;
-    daw::visitFields(doc, v);
+    daw::visitFields<daw::ProjectDocument>(v);
 
     expect(contains(v.compared, "tracks") && contains(v.compared, "clips"),
            "the document walk must reach tracks and clips — they are the heavy leaves stage 3 will "

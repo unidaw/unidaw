@@ -688,6 +688,15 @@ target_include_directories(document_visitor_tests PRIVATE
   ${Boost_INCLUDE_DIRS}
 )
 
+# STRUCTURAL EQUALITY over the visitor — header-only like the visitor itself.
+add_executable(document_compare_tests
+  apps/document_compare_tests_main.cpp
+)
+target_include_directories(document_compare_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+
 add_executable(engine_clip_helpers_tests
   apps/engine_clip_helpers_tests_main.cpp
 )
@@ -1674,6 +1683,11 @@ add_test(NAME document_visitor
   COMMAND document_visitor_tests
 )
 set_tests_properties(document_visitor PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
+
+add_test(NAME document_compare
+  COMMAND document_compare_tests
+)
+set_tests_properties(document_compare PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
 
 add_test(NAME undo_ratchet
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/undo_ratchet_check.sh

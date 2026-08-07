@@ -285,7 +285,18 @@ int main(int argc, char** argv) {
   require(track.chain.devices[0].kind == daw::DeviceKind::VstInstrument,
           "device kind lost");
   require(track.chain.devices[0].bypass, "device bypass lost");
-  require(track.chain.devices[0].hostSlotIndex == 1, "host slot lost");
+  // hostSlotIndex IS NO LONGER PERSISTED, deliberately (3c4fd45). It is an index into THIS
+  // machine's plugin scan, and saving it caused the same bug three times — most memorably
+  // rack.uniproj.json asking for Identity and getting an Analog Heat with 256 parameters. The
+  // AUTHORED half is load_mode; the index is recomputed by resolveDeviceSlot on every load, so a
+  // freshly parsed document correctly carries the "nobody has resolved this yet" sentinel.
+  //
+  // This assertion used to read `hostSlotIndex == 1` and is changed rather than deleted: the
+  // round trip still has something to prove here, it is just a different thing.
+  require(track.chain.devices[0].hostSlotIndex == daw::kHostSlotIndexUnresolved,
+          "a parsed device must carry the unresolved sentinel, not a slot index from the file");
+  require(track.chain.devices[0].loadMode == daw::VstLoadMode::ByReference,
+          "load_mode is the authored half and must survive the round trip");
   require(track.chain.devices[0].vstRef.uid16 == "00112233445566778899aabbccddeeff",
           "vst_ref uid16 lost");
   require(track.chain.devices[0].vstRef.vendor == "Acme", "vst_ref vendor lost");

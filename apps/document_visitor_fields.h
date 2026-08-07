@@ -27,53 +27,64 @@
 
 namespace daw {
 
-template <typename V>
-void visitFields(MixerSettings& v, V& visit) {
-  visit.field("gain_db", v.gainDb);
-  visit.field("pan", v.pan);
-  visit.field("mute", v.mute);
-  visit.field("solo", v.solo);
+// A TAG so the per-struct lists can be found by overload resolution on the TYPE alone — there is no
+// object to deduce from any more, and partial specialisation of a function template is not allowed.
+template <typename T>
+struct TypeTag {};
+
+// The entry point every visitor calls: visitFields<ProjectTrack>(myVisitor).
+template <typename T, typename V>
+void visitFields(V& visitor) {
+  visitFields_(TypeTag<T>{}, visitor);
 }
 
 template <typename V>
-void visitFields(LaneQuantize& v, V& visit) {
-  visit.field("grid_nanoticks", v.gridNanoticks);
-  visit.field("strength_milli", v.strengthMilli);
-  visit.field("swing_milli", v.swingMilli);
+void visitFields_(TypeTag<MixerSettings>, V& visit) {
+  visit.field("gain_db", &MixerSettings::gainDb);
+  visit.field("pan", &MixerSettings::pan);
+  visit.field("mute", &MixerSettings::mute);
+  visit.field("solo", &MixerSettings::solo);
 }
 
 template <typename V>
-void visitFields(TrackRoute& v, V& visit) {
-  visit.field("kind", v.kind);
+void visitFields_(TypeTag<LaneQuantize>, V& visit) {
+  visit.field("grid_nanoticks", &LaneQuantize::gridNanoticks);
+  visit.field("strength_milli", &LaneQuantize::strengthMilli);
+  visit.field("swing_milli", &LaneQuantize::swingMilli);
+}
+
+template <typename V>
+void visitFields_(TypeTag<TrackRoute>, V& visit) {
+  visit.field("kind", &TrackRoute::kind);
   // NOT Identity: this NAMES ANOTHER OBJECT rather than this one. A differ comparing routes must
   // compare it by value — "the send now points at track 4" is a real change — where an Identity
   // field would be used to decide WHICH route this is. Getting that backwards would make a
   // re-pointed send look like a different route instead of a changed one.
-  visit.field("track_id", v.trackId);
-  visit.field("input_id", v.inputId);
+  visit.field("track_id", &TrackRoute::trackId);
+  visit.field("input_id", &TrackRoute::inputId);
 }
 
 template <typename V>
-void visitFields(TrackRouting& v, V& visit) {
-  visit.field("midi_in", v.midiIn);
-  visit.field("midi_out", v.midiOut);
-  visit.field("audio_in", v.audioIn);
-  visit.field("audio_out", v.audioOut);
-  visit.field("sidechain", v.sidechain);
-  visit.field("pre_fader_send", v.preFaderSend);
+void visitFields_(TypeTag<TrackRouting>, V& visit) {
+  visit.field("midi_in", &TrackRouting::midiIn);
+  visit.field("midi_out", &TrackRouting::midiOut);
+  visit.field("audio_in", &TrackRouting::audioIn);
+  visit.field("audio_out", &TrackRouting::audioOut);
+  visit.field("sidechain", &TrackRouting::sidechain);
+  visit.field("pre_fader_send", &TrackRouting::preFaderSend);
 }
 
 // THE STRUCT THAT MOTIVATED FieldKind. Read the hostSlotIndex note below before changing anything
 // here; it is the one field in the document that is two things at once.
 template <typename V>
-void visitFields(Device& v, V& visit) {
+void visitFields_(TypeTag<Device>, V& visit) {
   // Stable, minted as max+1 by nextDeviceId, collision-rejected by addDevice, persisted as
   // "device_id" and used for lookup by every command path. This is what lets a differ say
   // "device 7 changed" rather than "the third element differs".
-  visit.field("device_id", v.id, FieldKind::Identity);
-  visit.field("kind", v.kind);
-  visit.field("capability_mask", v.capabilityMask);
-  visit.field("patcher_node_id", v.patcherNodeId);
+  visit.field("device_id", &Device::id, FieldKind::Identity);
+  visit.field("kind", &Device::kind);
+  visit.field("capability_mask", &Device::capabilityMask);
+  visit.field("patcher_node_id", &Device::patcherNodeId);
   // THE SPLIT IS DONE. loadMode is the authored half — HOW to locate this plugin — and is
   // serialized; hostSlotIndex is purely a cache index into this machine's scan, written only by
   // resolveDeviceSlot and no longer persisted at all.
@@ -82,42 +93,42 @@ void visitFields(Device& v, V& visit) {
   // which produced the same bug three times: rack.uniproj.json loading an Analog Heat where
   // Identity was asked for, a master effect resolving to the engine's default and muting the mix,
   // and every loader having to REMEMBER to re-resolve.
-  visit.field("load_mode", v.loadMode);
-  visit.field("host_slot_index", v.hostSlotIndex, FieldKind::Derived);
-  visit.field("bypass", v.bypass);
+  visit.field("load_mode", &Device::loadMode);
+  visit.field("host_slot_index", &Device::hostSlotIndex, FieldKind::Derived);
+  visit.field("bypass", &Device::bypass);
 }
 
 
 // ---- placements and clips ---------------------------------------------------------------------
 
 template <typename V>
-void visitFields(ProjectPlacement& v, V& visit) {
+void visitFields_(TypeTag<ProjectPlacement>, V& visit) {
   // TWO ids, and they mean opposite things. `id` is THIS placement; `clipId` names the clip it
   // plays, which is content — dragging a placement onto a different clip is an edit, not a
   // different placement.
-  visit.field("id", v.id, FieldKind::Identity);
-  visit.field("clip_id", v.clipId);
-  visit.field("at", v.at);
-  visit.field("length_nanoticks", v.lengthNanoticks);
-  visit.field("adds", v.adds);
-  visit.field("mutes", v.mutes);
-  visit.field("local_edits", v.localEdits);
+  visit.field("id", &ProjectPlacement::id, FieldKind::Identity);
+  visit.field("clip_id", &ProjectPlacement::clipId);
+  visit.field("at", &ProjectPlacement::at);
+  visit.field("length_nanoticks", &ProjectPlacement::lengthNanoticks);
+  visit.field("adds", &ProjectPlacement::adds);
+  visit.field("mutes", &ProjectPlacement::mutes);
+  visit.field("local_edits", &ProjectPlacement::localEdits);
   // THE OTHER TAKE, and the field that taught this codebase the cost of a half-implemented one:
   // save emitted it, the parser read it, and the load never rebuilt ownedClips from it — so an
   // A/B draft survived until you reopened the project and then silently vanished. It is authored
   // work and it is compared. See engine_clip_adoption.h.
-  visit.field("alternate_clip_id", v.alternateClipId);
+  visit.field("alternate_clip_id", &ProjectPlacement::alternateClipId);
 }
 
 template <typename V>
-void visitFields(ProjectClip& v, V& visit) {
-  visit.field("id", v.id, FieldKind::Identity);
-  visit.field("name", v.name);
-  visit.field("length_nanoticks", v.lengthNanoticks);
-  visit.field("lines_per_beat", v.linesPerBeat);
-  visit.field("time_sig_numerator", v.timeSigNumerator);
-  visit.field("time_sig_denominator", v.timeSigDenominator);
-  visit.field("kind", v.kind);
+void visitFields_(TypeTag<ProjectClip>, V& visit) {
+  visit.field("id", &ProjectClip::id, FieldKind::Identity);
+  visit.field("name", &ProjectClip::name);
+  visit.field("length_nanoticks", &ProjectClip::lengthNanoticks);
+  visit.field("lines_per_beat", &ProjectClip::linesPerBeat);
+  visit.field("time_sig_numerator", &ProjectClip::timeSigNumerator);
+  visit.field("time_sig_denominator", &ProjectClip::timeSigDenominator);
+  visit.field("kind", &ProjectClip::kind);
   // ONLY ONE OF THESE IS MEANINGFUL, decided by `kind` — a symbolic clip's `audio` and an audio
   // clip's `clip` are both default-constructed noise. A differ that compares the inactive one
   // reports a change whenever an unused default shifts, and a serializer that writes it bloats
@@ -127,8 +138,8 @@ void visitFields(ProjectClip& v, V& visit) {
   // Left as plain Authored deliberately, so the limitation is visible in the one place a reader
   // will look, rather than encoded as a silent omission. Resolve it before the differ ships:
   // either a conditional-field concept, or a variant that makes the dead half unrepresentable.
-  visit.field("clip", v.clip);
-  visit.field("audio", v.audio);
+  visit.field("clip", &ProjectClip::clip);
+  visit.field("audio", &ProjectClip::audio);
 }
 
 
@@ -142,53 +153,53 @@ void visitFields(ProjectClip& v, V& visit) {
 // own list. This is the list.
 
 template <typename V>
-void visitFields(ProjectTrack& v, V& visit) {
-  visit.field("track_id", v.trackId, FieldKind::Identity);
-  visit.field("name", v.name);
-  visit.field("is_master", v.isMaster, FieldKind::Identity);
+void visitFields_(TypeTag<ProjectTrack>, V& visit) {
+  visit.field("track_id", &ProjectTrack::trackId, FieldKind::Identity);
+  visit.field("name", &ProjectTrack::name);
+  visit.field("is_master", &ProjectTrack::isMaster, FieldKind::Identity);
   // parentId/isAuxChild/auxBusIndex say WHICH LANE THIS IS in a derived hierarchy, not what the
   // user typed. A stem's trackId depends on how many slot tracks exist, so a differ must key on
   // the (parent, bus) pair rather than on trackId — engine_save_project.cpp:250 already records
   // that a saved child id "would reattach a stem's material to the wrong lane".
-  visit.field("parent_id", v.parentId, FieldKind::Identity);
-  visit.field("is_aux_child", v.isAuxChild, FieldKind::Identity);
-  visit.field("aux_bus_index", v.auxBusIndex, FieldKind::Identity);
-  visit.field("collapsed", v.collapsed);
-  visit.field("harmony_quantize", v.harmonyQuantize);
-  visit.field("sound_addressed_only", v.soundAddressedOnly);
-  visit.field("allow_note_overlap", v.allowNoteOverlap);
-  visit.field("automation_clips", v.automationClips);
-  visit.field("lines_per_beat", v.linesPerBeat);
-  visit.field("quantize", v.quantize);
-  visit.field("mixer", v.mixer);
-  visit.field("routing", v.routing);
-  visit.field("chain", v.chain);
-  visit.field("mod_links", v.modLinks);
-  visit.field("placements", v.placements);
+  visit.field("parent_id", &ProjectTrack::parentId, FieldKind::Identity);
+  visit.field("is_aux_child", &ProjectTrack::isAuxChild, FieldKind::Identity);
+  visit.field("aux_bus_index", &ProjectTrack::auxBusIndex, FieldKind::Identity);
+  visit.field("collapsed", &ProjectTrack::collapsed);
+  visit.field("harmony_quantize", &ProjectTrack::harmonyQuantize);
+  visit.field("sound_addressed_only", &ProjectTrack::soundAddressedOnly);
+  visit.field("allow_note_overlap", &ProjectTrack::allowNoteOverlap);
+  visit.field("automation_clips", &ProjectTrack::automationClips);
+  visit.field("lines_per_beat", &ProjectTrack::linesPerBeat);
+  visit.field("quantize", &ProjectTrack::quantize);
+  visit.field("mixer", &ProjectTrack::mixer);
+  visit.field("routing", &ProjectTrack::routing);
+  visit.field("chain", &ProjectTrack::chain);
+  visit.field("mod_links", &ProjectTrack::modLinks);
+  visit.field("placements", &ProjectTrack::placements);
 }
 
 
 // ---- chain, mod links, and the document itself --------------------------------------------------
 
 template <typename V>
-void visitFields(TrackChain& v, V& visit) {
+void visitFields_(TypeTag<TrackChain>, V& visit) {
   // A chain is ORDER-SIGNIFICANT: devices process in sequence, so "the compressor moved after the
   // EQ" is a real edit. A differ must therefore compare this as a SEQUENCE keyed by device id —
   // matching devices by id to find what changed, and by position to find what MOVED. Those are two
   // questions and a naive element-wise compare answers neither: insert one device at the head and
   // every later element reads as modified.
-  visit.field("devices", v.devices);
+  visit.field("devices", &TrackChain::devices);
 }
 
 template <typename V>
-void visitFields(ModLink& v, V& visit) {
-  visit.field("link_id", v.linkId, FieldKind::Identity);
-  visit.field("source", v.source);
-  visit.field("target", v.target);
-  visit.field("depth", v.depth);
-  visit.field("bias", v.bias);
-  visit.field("rate", v.rate);
-  visit.field("enabled", v.enabled);
+void visitFields_(TypeTag<ModLink>, V& visit) {
+  visit.field("link_id", &ModLink::linkId, FieldKind::Identity);
+  visit.field("source", &ModLink::source);
+  visit.field("target", &ModLink::target);
+  visit.field("depth", &ModLink::depth);
+  visit.field("bias", &ModLink::bias);
+  visit.field("rate", &ModLink::rate);
+  visit.field("enabled", &ModLink::enabled);
 }
 
 // THE WHOLE AUTHORED DOCUMENT. This is what a version IS — DocumentHistory holds these and undo
@@ -196,23 +207,23 @@ void visitFields(ModLink& v, V& visit) {
 // from here is outside undo no matter how many handlers can edit it, which was the original defect
 // (TrackStoreState carried three fields and 55 of 70 commands had nowhere to record).
 template <typename V>
-void visitFields(ProjectDocument& v, V& visit) {
-  visit.field("meta", v.meta);
-  visit.field("nanoticks_per_quarter", v.nanoticksPerQuarter);
-  visit.field("markers", v.markers);
-  visit.field("time_sig_map", v.timeSigMap);
-  visit.field("song_time_sig_numerator", v.songTimeSigNumerator);
-  visit.field("song_time_sig_denominator", v.songTimeSigDenominator);
-  visit.field("seed", v.seed);
-  visit.field("tempo_map", v.tempoMap);
-  visit.field("harmony_timeline", v.harmonyTimeline);
+void visitFields_(TypeTag<ProjectDocument>, V& visit) {
+  visit.field("meta", &ProjectDocument::meta);
+  visit.field("nanoticks_per_quarter", &ProjectDocument::nanoticksPerQuarter);
+  visit.field("markers", &ProjectDocument::markers);
+  visit.field("time_sig_map", &ProjectDocument::timeSigMap);
+  visit.field("song_time_sig_numerator", &ProjectDocument::songTimeSigNumerator);
+  visit.field("song_time_sig_denominator", &ProjectDocument::songTimeSigDenominator);
+  visit.field("seed", &ProjectDocument::seed);
+  visit.field("tempo_map", &ProjectDocument::tempoMap);
+  visit.field("harmony_timeline", &ProjectDocument::harmonyTimeline);
   // THE HEAVY LEAVES, and the reason stage 3 exists at all. stress-512 holds 80,896 MusicalEvents
   // at 112 B inside these two, which is ~9.1 MB per version and ~0.9 GB for a 100-entry history.
   // Once the walk is proven, these become shared_ptr<const T> and a version costs ~100 bytes —
   // with NO change to DocumentHistory's interface or to undo's behaviour, which is precisely why
   // correctness was allowed to ship before representation.
-  visit.field("clips", v.clips);
-  visit.field("tracks", v.tracks);
+  visit.field("clips", &ProjectDocument::clips);
+  visit.field("tracks", &ProjectDocument::tracks);
 }
 
 }  // namespace daw

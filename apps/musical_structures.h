@@ -343,6 +343,9 @@ struct NotePayload {
   // trigConditionFires, and note that the pass index it takes must come from the transport.
   int8_t retrigRamp = 0;
   uint8_t trigCondition = 0;
+
+  // Plain value; the compiler writes the comparison. Reached by the document walk.
+  friend bool operator==(const NotePayload&, const NotePayload&) = default;
 };
 // PINNED, still. The point was never "32 forever" — it is that this struct is copied per note per
 // block, so a growth must be a decision somebody wrote down rather than a field that drifted in.
@@ -362,23 +365,39 @@ struct ChordPayload {
   uint16_t humanizeTiming = 0;
   uint16_t humanizeVelocity = 0;
   uint64_t durationNanoticks = 0;
+
+  // Plain value; the compiler writes the comparison. Reached by the document walk.
+  friend bool operator==(const ChordPayload&, const ChordPayload&) = default;
 };
 
 struct MusicalParamPayload {
   std::array<uint8_t, 16> uid16{};
   float value = 0.0f;
+
+  // Plain value; the compiler writes the comparison. Reached by the document walk.
+  friend bool operator==(const MusicalParamPayload&, const MusicalParamPayload&) = default;
 };
 
 struct MusicalEventPayload {
   NotePayload note;
   MusicalParamPayload param;
   ChordPayload chord;
+
+  // Plain value; the compiler writes the comparison. Reached by the document walk.
+  friend bool operator==(const MusicalEventPayload&, const MusicalEventPayload&) = default;
 };
 
 struct MusicalEvent {
   uint64_t nanotickOffset = 0;
   MusicalEventType type = MusicalEventType::Note;
   MusicalEventPayload payload;
+
+  // The document walk reaches events through MusicalClip and asks whether the user changed
+  // anything. A DEFAULTED comparison compares all three payload variants even though `type`
+  // selects one — deliberately: the inactive ones are always default-constructed, so this is
+  // exact in practice, and where it is not it errs toward reporting a change that did not
+  // happen (a spurious undo step) rather than missing one that did (a lost edit).
+  friend bool operator==(const MusicalEvent&, const MusicalEvent&) = default;
 };
 
  class MusicalClip {
