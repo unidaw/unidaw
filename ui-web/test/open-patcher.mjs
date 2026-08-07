@@ -51,11 +51,43 @@ console.log('\nopening a patcher from its card\n');
 await run('new openpatch');
 await settle(1200);
 await page.evaluate(() => window.__uni.addDevice(0, 'patcher event'));
-await settle(1600);
 
 // The rack has to be on screen for its card to be clickable.
 await page.evaluate(() => window.__uni.setView('tracker'));
-await settle(600);
+
+/*
+ * WAIT FOR THE CARD, DO NOT SLEEP TOWARDS IT.
+ *
+ * This slept 1600ms after `addDevice` and another 600ms after `setView`, then looked for
+ * `.dv-card`. The device's arrival is a round trip — command out, chain diff back, render — and
+ * 2.2 seconds is a guess about how long that takes, not a fact about it. In sweep 25 it was not
+ * enough: open-patcher failed BOTH attempts with "the patcher card is on screen" and then passed
+ * three times out of three when run alone, which is what a sleep that is nearly long enough looks
+ * like. Its engine and sidecar logs are line-for-line the same story as a passing run's — nothing
+ * went wrong, the suite simply looked too early.
+ *
+ * The same shape has now been fixed in params.mjs, harmony-quantize.mjs and e2e.mjs. It is worth
+ * stating plainly: several of the "intermittent engine flakes" chased across two days were suites
+ * timing their own guesses against a machine that was busier than the one the guess was written
+ * on.
+ */
+/*
+ * AND THE CONDITION IS GEOMETRY, NOT EXISTENCE. Waiting for `.dv-card` to exist was not enough:
+ * the first version of this fix passed that wait and then failed the CLICK, because the card is
+ * in the DOM before the tracker view has laid out and its button's rectangle is still zero-sized.
+ * A click at those coordinates lands nowhere. The suite measures a rect and clicks it, so the
+ * thing to wait for is a rect worth clicking.
+ */
+const cardArrived = await page.waitForFunction(() => {
+  const btn = document.querySelector('.dv-card .dv-open');
+  if (!btn) return false;
+  const r = btn.getBoundingClientRect();
+  return r.width > 0 && r.height > 0;
+}, null, { timeout: 15000 }).then(() => true).catch(() => false);
+check(cardArrived, 'the device card arrives, laid out, after adding a patcher',
+      'no .dv-card .dv-open with a non-zero rect in 15s — the add did not produce a clickable '
+      + 'card, which is a different failure from the button being missing and is reported '
+      + 'separately for that reason');
 
 const measure = () => page.evaluate(() => {
   const el = document.querySelector('.dv-card');
