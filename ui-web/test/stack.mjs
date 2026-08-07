@@ -483,10 +483,61 @@ try {
       }
       // The engine spawns plugin hosts of its own; they exit with it, but give
       // them a moment before the directory goes.
-      if (!keepDir) { try { rmSync(root, { recursive: true, force: true }); } catch {} }
+      /*
+       * `DAW_KEEP_STACK=1` OVERRIDES, so a sweep can keep what a suite would have thrown away.
+       *
+       * The suites that flake are the ones that do NOT pass keepDir — kit.mjs and params.mjs both
+       * flaked on 2026-08-08 and both delete their directory on the way out, so the engine log
+       * that would say WHY was gone before the runner even learned the suite had failed. The
+       * runner cannot pass keepDir either: it does not construct the stack, the suite does.
+       *
+       * An environment variable is the one channel that reaches every suite without editing all
+       * sixty-four of them. all.mjs sets it; a hand-run suite is unaffected and still cleans up
+       * after itself.
+       *
+       * The disk cost is bounded by the prune at the top of all.mjs — six hours, which was added
+       * after a day of sweeps left 1257 directories and 19 GB behind.
+       */
+      const keep = keepDir || process.env.DAW_KEEP_STACK === '1';
+      if (!keep) { try { rmSync(root, { recursive: true, force: true }); } catch {} }
     }, 500);
   };
-  process.on('exit', stop);
+
+  /*
+   * THE SAME WORK, SYNCHRONOUSLY, FOR THE EXIT PATH — because the version above never finished.
+   *
+   * `stop()` sends SIGTERM immediately and then does the two things that matter inside a
+   * `setTimeout`: escalate to SIGKILL for anything that ignored it, and remove the directory.
+   * THIRTY-THREE SUITES call `stack.stop()` without awaiting it and then `process.exit(...)`,
+   * which cancels pending timers — so for those, neither ever ran. The exit handler registered
+   * here had the identical problem: an 'exit' listener cannot await, so its timer is dead on
+   * arrival.
+   *
+   * The consequences are the two leaks that have cost the most time on this project, and the
+   * comment above already predicted one of them: "a survivor holds the audio device and the next
+   * run blocks on it, which reads as SILENCE rather than as a leak". That is the shape of every
+   * sweep-only flake seen on 2026-08-07/08 — silent renders, kit answers that never arrive,
+   * chains that never publish, none of it reproducible when the suite is run alone. The other is
+   * 1257 stack directories and 19 GB.
+   *
+   * `Atomics.wait` is the only way to pause inside an exit handler. The event loop is stopped, so
+   * `p.exitCode` cannot update while we wait and a process that died politely still looks alive —
+   * hence SIGKILL is sent unconditionally afterwards. Signalling an already-dead child is an
+   * ESRCH we catch, which is a far better trade than leaving one running.
+   */
+  let reaped = false;
+  const reapSync = () => {
+    if (reaped) return;
+    reaped = true;
+    for (const p of procs) { try { p.kill('SIGTERM'); } catch {} }
+    try {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+    } catch { /* no SharedArrayBuffer: fall through and kill immediately */ }
+    for (const p of procs) { try { p.kill('SIGKILL'); } catch {} }
+    const keep = keepDir || process.env.DAW_KEEP_STACK === '1';
+    if (!keep) { try { rmSync(root, { recursive: true, force: true }); } catch {} }
+  };
+  process.on('exit', reapSync);
 
   return { url: `http://127.0.0.1:${base}/index.html`, dir, root, shm, base,
            capture, captureOffset, audioStartedAt, runSeconds, stop,

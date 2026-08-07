@@ -188,7 +188,22 @@ const SUMMARY = /(ALL PASS[^\n]*|\d+ of \d+ FAILED|\d+ FAILURES?|# fail \d+)/g;
 
 const run = (file) => new Promise((resolve) => {
   const started = process.hrtime.bigint();
-  const child = spawn(process.execPath, [join(HERE, file)], { cwd: join(HERE, '..', '..') });
+  /*
+   * EVERY SUITE KEEPS ITS STACK DIRECTORY DURING A SWEEP.
+   *
+   * The suites that flake are exactly the ones that do not ask for keepDir, so the engine log
+   * naming the cause was deleted before this runner learned the suite had failed — kit.mjs and
+   * params.mjs both flaked on 2026-08-08 and both take their evidence with them. The runner
+   * cannot pass keepDir (the suite constructs its own stack), so it says so through the
+   * environment and stack.mjs honours it.
+   *
+   * Bounded by pruneOldStacks() above: six hours, which is long enough to read today's failure
+   * and short enough that a day of sweeps does not cost twenty gigabytes again.
+   */
+  const child = spawn(process.execPath, [join(HERE, file)], {
+    cwd: join(HERE, '..', '..'),
+    env: { ...process.env, DAW_KEEP_STACK: '1' },
+  });
   let out = '';
   child.stdout.on('data', (d) => { out += d; });
   child.stderr.on('data', (d) => { out += d; });
