@@ -206,6 +206,13 @@ VstResolution resolveDeviceSlot(const PluginCache& cache, Device& device) {
   if (device.vstRef.empty()) {
     return resolution;
   }
+  // AUTHORED INTENT FIRST. ByPath means "load the file at vst_ref.path, do not consult the scan" —
+  // it used to be spelled by writing kHostSlotIndexDirect into the index itself, which is how an
+  // authored decision ended up living in a derived cache field.
+  if (device.loadMode == VstLoadMode::ByPath) {
+    device.hostSlotIndex = kHostSlotIndexDirect;
+    return resolution;
+  }
   resolution = resolveVstRef(cache, device.vstRef.uid16, device.vstRef.path,
                              device.vstRef.vendor, device.vstRef.name);
   if (resolution.match != VstMatch::None) {
@@ -219,8 +226,15 @@ VstResolution resolveDeviceSlot(const PluginCache& cache, Device& device) {
   const bool onDisk = !device.vstRef.path.empty() &&
                       std::filesystem::exists(device.vstRef.path, ec);
   if (onDisk) {
+    // The scan does not know it but the file is there, so fall back to loading by path — and
+    // RECORD that as the authored mode, because it is now how this device wants to be located.
+    device.loadMode = VstLoadMode::ByPath;
     device.hostSlotIndex = kHostSlotIndexDirect;
-  } else if (device.hostSlotIndex != kHostSlotIndexDirect) {
+  } else {
+    // NO LONGER `else if (hostSlotIndex != Direct)`. That branch read the PERSISTED index to
+    // decide, so a stale Direct from another machine kept a missing plugin looking loadable — the
+    // exact shape that muted the master bus. The authored mode is checked at the top of this
+    // function now, so reaching here means: by reference, not in the scan, not on disk. Missing.
     device.hostSlotIndex = kHostSlotIndexUnresolved;
   }
   return resolution;

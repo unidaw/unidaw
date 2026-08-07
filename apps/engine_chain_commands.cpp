@@ -59,6 +59,15 @@ void handleAddDevice(ChainCommandDeps& deps,
       device.id = chainPayload.deviceId != 0 ? chainPayload.deviceId : daw::kDeviceIdAuto;
       device.kind = static_cast<daw::DeviceKind>(chainPayload.deviceKind);
       device.patcherNodeId = chainPayload.patcherNodeId;
+      // THE WIRE IS UNCHANGED, and the translation happens here at the boundary. AddDevice still
+      // carries a hostSlotIndex, and kHostSlotIndexDirect on it still means "load by path" — the
+      // same sentence the file format used before load_mode existed. Translating it into the
+      // authored field at the point of entry keeps load_mode REACHABLE (persisted_field_reach
+      // caught that the split had orphaned it: a field the format remembers and nothing can write)
+      // without an opcode or SHM change.
+      device.loadMode = chainPayload.hostSlotIndex == daw::kHostSlotIndexDirect
+                            ? daw::VstLoadMode::ByPath
+                            : daw::VstLoadMode::ByReference;
       device.hostSlotIndex = chainPayload.hostSlotIndex;
       // Record the DURABLE plugin identity too, not just the volatile scan index.
       // hostSlotIndex names a different plugin the moment anything is installed or

@@ -39,6 +39,27 @@ constexpr uint32_t kHostSlotIndexDirect = 0xFFFFFFFEu;
 // wrong. A loud report followed by a quiet substitution is not a report.
 constexpr uint32_t kHostSlotIndexUnresolved = 0xFFFFFFFFu;
 
+// HOW SHOULD THIS PLUGIN BE LOCATED? — the authored half of what host_slot_index used to conflate.
+//
+// That field held three different kinds of thing in one uint32_t: a scan index (derived), Direct
+// ("load by path", AUTHORED INTENT that fixtures set as input), and Unresolved (derived). Storing
+// a derived cache index as authored data has now caused the same class of bug three times:
+//   - rack.uniproj.json asked for Identity and got an Analog Heat with 256 parameters, because a
+//     stale index was used verbatim when the ref did not resolve (see the note above);
+//   - a saved master effect inherited a stale Direct, resolved to the engine's DEFAULT plugin, and
+//     muted the whole mix (engine_load_project.cpp:467);
+//   - and every loader has to REMEMBER to re-resolve, which is a rule enforced by discipline.
+//
+// Splitting them means the index has exactly one writer — resolveDeviceSlot — so no site can
+// inherit a stale one, and vstRef is the sole durable identity. It also unblocks the differ: a
+// scan index compared between two machines reports changes nobody made.
+enum class VstLoadMode : uint8_t {
+  // Find the plugin by its vst_ref (uid16, then vendor/name) in the scan. The normal case.
+  ByReference = 0,
+  // Load the file at vst_ref.path directly, without consulting the scan. What Direct meant.
+  ByPath = 1,
+};
+
 enum DeviceCapability : uint8_t {
   DeviceCapabilityNone = 0,
   DeviceCapabilityConsumesMidi = 1 << 0,
@@ -66,7 +87,11 @@ struct Device {
   uint8_t capabilityMask = DeviceCapabilityNone;
   uint32_t patcherNodeId = 0;
   // Runtime-only: resolved from vstRef against the current plugin cache.
-  uint32_t hostSlotIndex = 0;
+  // AUTHORED: how to locate the plugin. Serialized as "load_mode".
+  VstLoadMode loadMode = VstLoadMode::ByReference;
+  // DERIVED: where it landed in THIS machine's scan. Written ONLY by resolveDeviceSlot, and no
+  // longer persisted — a saved index is a stale index on any other machine, or after any rescan.
+  uint32_t hostSlotIndex = kHostSlotIndexUnresolved;
   bool bypass = false;
   bool hasEuclideanConfig = false;
   PatcherEuclideanConfig euclideanConfig{};

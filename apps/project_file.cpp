@@ -709,9 +709,16 @@ std::string serializeProject(const ProjectDocument& document) {
       writer.key("kind", std::string(deviceKindToString(device.kind)));
       writer.key("capability_mask", static_cast<uint32_t>(device.capabilityMask));
       writer.key("patcher_node_id", device.patcherNodeId);
-      // host_slot_index is a runtime index into a directory scan and is written
-      // only so older readers still work; vst_ref is the durable identity.
-      writer.key("host_slot_index", device.hostSlotIndex);
+      // load_mode is the AUTHORED half of what host_slot_index used to conflate: how to LOCATE
+      // this plugin. vst_ref remains the durable identity.
+      //
+      // host_slot_index IS NO LONGER WRITTEN. It is an index into THIS machine's scan, which is
+      // stale on any other machine and after any rescan — and persisting it caused the same class
+      // of bug three times (rack.uniproj.json loading an Analog Heat for Identity; a master effect
+      // resolving to the engine's default and muting the mix). resolveDeviceSlot is its only
+      // writer now, so no loader can inherit one.
+      writer.key("load_mode",
+                 device.loadMode == daw::VstLoadMode::ByPath ? "by_path" : "by_reference");
       writer.key("bypass", device.bypass);
       if (!device.vstRef.empty()) {
         writer.beginChildObject("vst_ref");
@@ -1095,8 +1102,23 @@ bool deserializeProject(const std::string& json,
           // cache index, and an AUTHORED load-mode (kHostSlotIndexDirect = "load by path, not from
           // the scan" — fixtures set it deliberately). Splitting those is stage 3 work; making the
           // absent case safe is not, and does not wait for it.
-          device.hostSlotIndex =
-              deviceTree.get<uint32_t>("host_slot_index", kHostSlotIndexUnresolved);
+          // MIGRATION, one way. A file written before the split says by_path by carrying
+          // kHostSlotIndexDirect in the index; anything else meant "find it in the scan". The old
+          // key is still READ, but only to recover the authored intent — never to set the index,
+          // which resolveDeviceSlot owns.
+          const std::string loadMode = deviceTree.get<std::string>("load_mode", "");
+          if (loadMode == "by_path") {
+            device.loadMode = daw::VstLoadMode::ByPath;
+          } else if (loadMode == "by_reference") {
+            device.loadMode = daw::VstLoadMode::ByReference;
+          } else {
+            const uint32_t legacy =
+                deviceTree.get<uint32_t>("host_slot_index", kHostSlotIndexUnresolved);
+            device.loadMode = (legacy == kHostSlotIndexDirect) ? daw::VstLoadMode::ByPath
+                                                               : daw::VstLoadMode::ByReference;
+          }
+          // Never restored from the file: a scan index the loader did not compute is a stale one.
+          device.hostSlotIndex = kHostSlotIndexUnresolved;
           device.bypass = deviceTree.get<bool>("bypass", false);
           if (const auto ref = deviceTree.get_child_optional("vst_ref")) {
             device.vstRef.vendor = ref->get<std::string>("vendor", "");

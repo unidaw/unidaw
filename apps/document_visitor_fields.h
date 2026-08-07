@@ -74,14 +74,15 @@ void visitFields(Device& v, V& visit) {
   visit.field("kind", v.kind);
   visit.field("capability_mask", v.capabilityMask);
   visit.field("patcher_node_id", v.patcherNodeId);
-  // DERIVED, AND ALSO NOT — the field is a cache index recomputed by resolveDeviceSlot from
-  // vstRef on every load, EXCEPT when it holds kHostSlotIndexDirect, which is authored intent
-  // ("load by path, not from the scan") that fixtures set as input.
+  // THE SPLIT IS DONE. loadMode is the authored half — HOW to locate this plugin — and is
+  // serialized; hostSlotIndex is purely a cache index into this machine's scan, written only by
+  // resolveDeviceSlot and no longer persisted at all.
   //
-  // Marked Derived here because that is what it is for the ~all case, and because a differ that
-  // compares a scan index reports changes nobody made. But this annotation is A PLACEHOLDER FOR A
-  // SPLIT, not the answer: the authored half needs its own field (a load-mode) before the
-  // serializer is rebuilt on this walk. Doing the split later means migrating a format twice.
+  // Before the split one uint32_t meant three things (a scan index, "load by path", "not found"),
+  // which produced the same bug three times: rack.uniproj.json loading an Analog Heat where
+  // Identity was asked for, a master effect resolving to the engine's default and muting the mix,
+  // and every loader having to REMEMBER to re-resolve.
+  visit.field("load_mode", v.loadMode);
   visit.field("host_slot_index", v.hostSlotIndex, FieldKind::Derived);
   visit.field("bypass", v.bypass);
 }
