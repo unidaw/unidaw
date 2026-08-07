@@ -2715,12 +2715,33 @@ section('the patcher shows one device\'s graph, not the pool');
      'the track\'s own patcher is shown without hunting for it',
      JSON.stringify(idle.nodes));
 
+  /*
+   * A MISSING CARD FAILS A CHECK; IT DOES NOT KILL THE SUITE.
+   *
+   * `cards[0].click()` on an empty list threw `Cannot read properties of undefined`, which is an
+   * uncaught TypeError, which ends the node process. Two consequences, both bad, and both seen:
+   * the sweep recorded "(no summary line)" for a suite that had already reported its real
+   * failure two lines earlier, and the ~200 checks after this point never ran at all — so a
+   * chain that failed to publish looked like e2e "hanging" or "dying" rather than like the one
+   * assertion it actually was.
+   *
+   * The chain being empty here is a real intermittent (sweep 21 and again on 2026-08-08: "a
+   * patcher device lands on the MASTER chain — []"), and it is the same family as the sampler
+   * kit answers that do not arrive. Whatever that turns out to be, the suite's job is to say so
+   * and carry on.
+   */
   const cards = await visible('.dv-card');
-  await cards[0].click();                       // the patcher device
-  await page.waitForTimeout(700);
-  const onPatcher = await drawn();
-  ok(onPatcher.nodes.join(',') === 'euclidean,random,out',
-     'selecting the patcher device draws ITS graph', JSON.stringify(onPatcher.nodes));
+  ok(cards.length > 0,
+     'there are device cards to select',
+     `${cards.length} — the chain published nothing, so the graph checks below cannot run. This `
+     + 'used to throw and take the rest of the suite with it');
+  if (cards.length > 0) {
+    await cards[0].click();                     // the patcher device
+    await page.waitForTimeout(700);
+    const onPatcher = await drawn();
+    ok(onPatcher.nodes.join(',') === 'euclidean,random,out',
+       'selecting the patcher device draws ITS graph', JSON.stringify(onPatcher.nodes));
+  }
 
   /*
    * AND THE INSTRUMENT BESIDE IT DRAWS NOTHING. Every device carries a
@@ -2728,18 +2749,24 @@ section('the patcher shows one device\'s graph, not the pool');
    * be told from a real root by its value. Selecting the instrument used to show
    * node 0's subgraph, which is the euclidean belonging to the device next to it.
    */
-  await cards[1].click();
-  await page.waitForTimeout(700);
-  const onVst = await drawn();
-  /*
-   * Selecting the INSTRUMENT falls back to the track's patcher rather than
-   * showing node 0's subgraph — which is what a VST's `patcher_node_id` of 0
-   * used to select, and node 0 is the euclidean belonging to the device beside
-   * it.
-   */
-  ok(onVst.nodes.join(',') === 'euclidean,random,out',
-     'and the instrument falls back to the track\'s patcher, not to node 0',
-     JSON.stringify(onVst.nodes));
+  // Guarded for the same reason as the card above: an empty chain must fail a check, not throw.
+  if (cards.length > 1) {
+    await cards[1].click();
+    await page.waitForTimeout(700);
+    const onVst = await drawn();
+    /*
+     * Selecting the INSTRUMENT falls back to the track's patcher rather than
+     * showing node 0's subgraph — which is what a VST's `patcher_node_id` of 0
+     * used to select, and node 0 is the euclidean belonging to the device beside
+     * it.
+     */
+    ok(onVst.nodes.join(',') === 'euclidean,random,out',
+       'and the instrument falls back to the track\'s patcher, not to node 0',
+       JSON.stringify(onVst.nodes));
+  } else {
+    ok(false, 'and the instrument falls back to the track\'s patcher, not to node 0',
+       `only ${cards.length} device card(s) — the chain did not publish both`);
+  }
 
   // A track with no devices at all: the pool still holds track 1's nodes, and
   // none of them belong here.
@@ -3992,29 +4019,32 @@ section('every insert says what it is putting out');
   await page.waitForTimeout(300);
   const silent = await drawnFill();
   /*
-   * "EMPTY" IS UNDER A PIXEL, not exactly zero. A cut voice leaves a peak meter
-   * holding 1% — which is -59.4 dB on this scale, and 1% of a 64px bar is less
-   * than one pixel. Asserting `=== '0%'` failed on that and would have failed on
-   * any implementation with a peak hold, which is every implementation worth
-   * having. The claim is that the meter draws NOTHING VISIBLE; that is what is
-   * checked.
-   */
-  /*
-   * "EMPTY" IS THE RMS BAR, and the PEAK is asserted separately and loosely.
+   * "EMPTY" IS UNDER A PIXEL, NOT EXACTLY ZERO — and this file carried two comments saying
+   * opposite things while the code followed the stricter one.
    *
-   * Two goes at this. `=== '0%'` failed at 1%, then `< 2` failed at 4% — because
-   * what is left after every voice is cut is not silence, it is the plugin's own
-   * noise floor at around -58 dB. That is real output and the meter is right to
-   * show it; a peak meter that read exactly zero on a running synth would be the
-   * broken one.
+   * The history, because it is why this is worded carefully: `=== '0%'` was tried and failed at
+   * 1%, then `< 2` was tried on the PEAK bar and failed at 4%, because what is left after every
+   * voice is cut is not silence — it is the plugin's own noise floor at around -58 dB. The
+   * conclusion drawn then was "the RMS bar must be exactly 0, average level of nothing is
+   * nothing", and that is what shipped.
    *
-   * So the RMS bar has to be empty — average level of nothing is nothing — and the
-   * peak only has to be far below where it was playing. Which is the honest claim:
-   * a cut voice leaves a noise floor, not a void.
+   * IT IS NOT RELIABLY TRUE. Sweep 23 caught this as the single failing check in 429, reading
+   * `{width:'1%', tick:'17%'}` on a machine that was NOT starved (`machine()` would have excused
+   * it). RMS of a noise floor is small but not zero, and 1% is simply where it quantises — so
+   * whether this passes depends on which side of the 0%/1% boundary the floor lands, which is a
+   * coin toss and not a statement about the app.
+   *
+   * So the claim is the one the first comment always made: the bar draws NOTHING VISIBLE. 1% of
+   * a 64px bar is 0.64px. Under two percent is under a pixel.
+   *
+   * THIS DOES NOT MAKE THE CHECK VACUOUS, which is the thing to be careful about when loosening
+   * a bound. `loudEnough` below is what the same bar read while playing, and a meter stuck near
+   * zero fails THAT. The two together pin both ends; neither does it alone.
    */
-  audibleOr(silent.width === '0%' ? { ok: true } : machine(),
+  const silentPct = parseInt(silent.width, 10) || 0;
+  audibleOr(silentPct < 2 ? { ok: true } : machine(),
      'and with every voice cut, its level bar is empty',
-     JSON.stringify(silent));
+     `${JSON.stringify(silent)} — "empty" is under a pixel on a 64px bar, not exactly 0%`);
   /*
    * `loudEnough` IS WHAT IT WAS PLAYING, so if it was never playing this comparison is between
    * two zeros and passes by accident — or, at load, fails for a reason that is not the app.
