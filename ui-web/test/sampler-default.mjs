@@ -84,7 +84,28 @@ const pick = async (cat, want) => {
 };
 
 check(await pick('devs', 'sampler') === true, 'a sampler goes on the track from the rail');
-await settle(1500);
+/*
+ * AND IT ACTUALLY ARRIVED — because `pick` returning true does not mean it did.
+ *
+ * `pick` finds a row and dispatches a pointerdown; `true` is "I dispatched an event". Whether the
+ * app acted on it is a different question, and the check above cannot fail for the reason its
+ * name gives. That is not theoretical: sampler-default flaked in sweep 26, and the failing run's
+ * engine log has NO sampler.kit_published at all, no sampler.loaded and no render_built — six
+ * lines that its passing retry has. The device add never reached the engine, while "a sampler
+ * goes on the track from the rail" reported PASS, and the first visible failure was "the engine
+ * answers with a kit — no kit arrived" thirty lines later.
+ *
+ * So wait for the device to exist, and say so here if it does not. A dispatched event is not an
+ * outcome.
+ */
+const samplerArrived = await page.waitForFunction(() => {
+  const c = window.__uni.chainProbe();
+  return !!(c && c.titles && c.titles.some((t) => /sampler/i.test(String(t))));
+}, null, { timeout: 15000, polling: 500 }).then(() => true).catch(() => false);
+check(samplerArrived,
+      'and the chain really holds a sampler, not just a click that was dispatched',
+      'no sampler in the chain within 15s — the rail row was clicked and nothing came of it, '
+      + 'which is what made this suite fail later as "no kit arrived"');
 /*
  * A MUSICAL ONE-SHOT, NOT THE PROBE ASSET. `demo_pluck_c4.wav` is middle C with its attack in
  * the first millisecond (tools/make_demo_samples.py). The probe files that used to be the only
