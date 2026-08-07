@@ -89,8 +89,32 @@ const type = async (line) => {
 };
 
 await page.evaluate(() => window.__uni.loadProject('pmeta'));
+/*
+ * THE PLUGIN'S OWN CARD, NOT CARD ZERO — and this was a 1-in-4 flake for as long as the suite
+ * has existed.
+ *
+ * This waited for `c.params[0] > 0`: the parameter count of the FIRST device in the chain. The
+ * fixture above deliberately puts a patcher at position 0 (see its comment — a source has to be
+ * before the plugin or every `map` is refused for the wrong reason), so once the chain has
+ * settled the shape is:
+ *
+ *     titles: ["patcher event #5", "Identity"]      params: [0, 2]
+ *
+ * `params[0]` is the PATCHER's count, which is correctly and permanently 0. The suite passed only
+ * when it happened to sample an intermediate publish where Identity was the only card and
+ * therefore index 0 — measured at 0.0s on every passing run, and never at all on the others.
+ * Waiting longer could not help: 120s failed exactly as 45s did.
+ *
+ * So the check now finds the card by NAME and asks whether IT published parameters. Position is
+ * an accident of the fixture; the plugin is the thing under test.
+ */
 const loaded = await page.waitForFunction(
-  () => { const c = window.__uni.chainProbe(); return c && c.params && c.params[0] > 0; },
+  () => {
+    const c = window.__uni.chainProbe();
+    if (!c || !c.params || !c.titles) return false;
+    const i = c.titles.findIndex((t) => String(t).includes('Identity'));
+    return i >= 0 && c.params[i] > 0;
+  },
   null, { timeout: 45000 }).then(() => true).catch(() => false);
 check(loaded, 'the plugin loads and publishes its parameters');
 await page.waitForTimeout(1500);
