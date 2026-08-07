@@ -2279,9 +2279,18 @@ const OP_REGISTRY = {
   stop:      { cli: 'stop',          agent: 'transport',      why: 'gap' },
   // Document operations with NO programmatic path at all. The real hole.
   clear:     { cli: null, agent: null, why: 'gap' },
-  copy:      { cli: null, agent: null, why: 'gap' },
-  cut:       { cli: null, agent: null, why: 'gap' },
-  paste:     { cli: null, agent: null, why: 'gap' },
+  /*
+   * A CLIPBOARD IS STATE, which is the only reason these outlived every other row. daw-cli EXITS
+   * between the copy and the paste, so there was nowhere to put it — not a missing op, a missing
+   * place. `daw_bridge::clipboard` is a file beside the projects, which also makes it SHARED: copy
+   * from the CLI and paste from the agent, or the other way round.
+   *
+   * `cut` is copy with `--cut` / `cut: true` rather than a third verb, because it is one on every
+   * surface that has it — the console's `x` is copySelection then deleteSelection.
+   */
+  copy:      { cli: 'copy',  agent: 'copy_notes' },
+  cut:       { cli: 'cut',   agent: 'copy_notes' },
+  paste:     { cli: 'paste', agent: 'paste_notes' },
   // A RANGE on the other two surfaces, not a selection — a selection is view state a headless
   // caller does not have and should not simulate. Both call plan_transpose in daw-bridge, so the
   // skip-never-clamp and half-open-range rules cannot drift apart. A SHARED clip is transposed
@@ -2569,8 +2578,7 @@ const OP_REGISTRY = {
  *   range shape worked. Proposed rather than built, because inventing a fourth clipboard-shaped
  *   thing at 2am on the morning of a demo is how a good week ends badly.
  */
-const CLI_GAP = ['clear', 'columns', 'copy', 'cut', 'paste',
-                 'mods'];
+const CLI_GAP = ['clear', 'columns', 'mods'];
 /** Ops with no agent tool today. Same rule. */
 // `bypass` joins the list rather than being smuggled past it: the engine takes
 // the command and daw-cli sends it, but the agent's manifest has no tool for it,
@@ -2625,9 +2633,7 @@ const CLI_GAP = ['clear', 'columns', 'copy', 'cut', 'paste',
  * of a refusal line in the engine log — `cli-verbs.mjs` makes exactly that assertion for the CLI
  * verb, and an agent tool would add a caller without adding evidence.
  */
-const AGENT_GAP = ['clear', 'columns', 'copy', 'cut',
-                   'editor',
-                   'paste', 'mods'];
+const AGENT_GAP = ['clear', 'columns', 'editor', 'mods'];
 
 test('every dock command is in the op registry', () => {
   // The forcing function: a new command cannot be added without deciding whether

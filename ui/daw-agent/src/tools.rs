@@ -99,6 +99,39 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "copy_notes",
+            description: "Copy a RANGE of a track's notes to the clipboard, or CUT them (copy and \
+                          delete). Pastes with `paste_notes`, which can put them on a different \
+                          track or at a different tick. The clipboard is a file beside the \
+                          projects, so it survives between calls and is shared with daw-cli.",
+            params: json!({
+                "type": "object", "required": ["track"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "from": { "type": "integer", "minimum": 0, "description": "First nanotick." },
+                    "to": { "type": "integer", "minimum": 0,
+                            "description": "One PAST the last nanotick, so two adjacent ranges do \
+                                            not share a note." },
+                    "cut": { "type": "boolean",
+                             "description": "Delete the notes after copying them. Default false." }
+                }
+            }),
+        },
+        ToolSpec {
+            name: "paste_notes",
+            description: "Write the clipboard onto a track at a tick. Positions are RELATIVE to \
+                          where the copy started, so a phrase keeps its shape wherever it lands, \
+                          and each note keeps its own note COLUMN.",
+            params: json!({
+                "type": "object", "required": ["track", "at"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "at": { "type": "integer", "minimum": 0,
+                            "description": "Nanotick the first copied note lands on." }
+                }
+            }),
+        },
+        ToolSpec {
             name: "transpose",
             description: "Move existing notes on a track up or down by semitones, in place. A \
                           RANGE of the timeline, not a selection — give `from` and `to` in \
@@ -3359,6 +3392,8 @@ pub fn execute_in(handle: &EngineHandle, call: &ToolCall, project_dir: &str) -> 
     match call.tool.as_str() {
         "observe" => observe_tool(handle, &call.args),
         "add_notes" => add_notes(handle, &call.args),
+        "copy_notes" => copy_notes(handle, &call.args, project_dir),
+        "paste_notes" => paste_notes(handle, &call.args, project_dir),
         "transpose" => transpose(handle, &call.args),
         "add_chords" => add_chords(handle, &call.args),
         "transport" => transport(handle, &call.args),
@@ -3432,6 +3467,126 @@ pub fn execute_in(handle: &EngineHandle, call: &ToolCall, project_dir: &str) -> 
 /// every caller that was written before the first tool needed to touch the filesystem.
 pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
     execute_in(handle, call, &daw_bridge::project::engine_project_dir())
+}
+
+/// COPY OR CUT A RANGE, onto a clipboard that outlives the call.
+///
+/// The last rows on the parity lists, and the obstacle was never the ops — it was that a clipboard
+/// is STATE, and daw-cli exits between the copy and the paste. `daw_bridge::clipboard` puts it in
+/// a file beside the projects, which also makes it shared: copy from the agent, paste from the
+/// CLI, or the other way round.
+///
+/// RELATIVE TO THE FIRST NOTE, not to `from`. A copy that starts at a bar line and one that starts
+/// at the first note must paste identically — that is what a person means by "copy this phrase".
+fn copy_notes(handle: &EngineHandle, args: &Value, project_dir: &str) -> ToolResult {
+    let Some(track) = arg_u64(args, "track") else {
+        return ToolResult::err("copy_notes needs \"track\"");
+    };
+    let track = track as u32;
+    let from = arg_u64(args, "from").unwrap_or(0);
+    let to = arg_u64(args, "to").unwrap_or(u64::MAX);
+    if to <= from {
+        return ToolResult::err("\"to\" must be after \"from\" — the range is half-open");
+    }
+    let cutting = args.get("cut").and_then(|v| v.as_bool()).unwrap_or(false);
+    let Some(snap) = handle.read_track_clip(track) else {
+        return ToolResult::err(format!("track {track} has no clip to read"));
+    };
+    let n = (snap.note_count as usize).min(snap.notes.len());
+    let picked: Vec<_> = snap.notes[..n].iter()
+        .filter(|x| x.t_on >= from && x.t_on < to)
+        .copied()
+        .collect();
+    if picked.is_empty() {
+        return ToolResult::err(format!("no notes on track {track} between {from} and {to}"));
+    }
+    let origin = picked.iter().map(|x| x.t_on).min().unwrap_or(0);
+    let notes: Vec<_> = picked.iter().map(|x| daw_bridge::clipboard::ClipboardNote {
+        dt: x.t_on - origin,
+        duration: x.t_off.saturating_sub(x.t_on).max(1),
+        pitch: x.pitch, velocity: x.velocity, column: x.column, d_track: 0,
+    }).collect();
+    let path = match daw_bridge::clipboard::store(project_dir, &notes) {
+        Ok(p) => p,
+        Err(e) => return ToolResult::err(e),
+    };
+
+    let mut deleted = 0usize;
+    if cutting {
+        let first = handle.clip_version_for_track(track);
+        let mut base = first;
+        for x in &picked {
+            let column = match daw_bridge::layout::edit_column(u64::from(x.column)) {
+                Ok(c) => c,
+                Err(e) => return ToolResult::err(e),
+            };
+            let mut p = blank(UiCommandType::DeleteNote);
+            p.flags = column;
+            p.track_id = track;
+            p.note_nanotick_lo = (x.t_on & 0xffff_ffff) as u32;
+            p.note_nanotick_hi = (x.t_on >> 32) as u32;
+            p.base_version = base;
+            if handle.send_command(p).is_err() { break }
+            deleted += 1;
+            base = base.wrapping_add(1);
+        }
+        handle.wait_for_track_clip_version(
+            track, first, first.wrapping_add(deleted as u32), std::time::Duration::from_secs(2));
+    }
+    ToolResult::ok(json!({
+        "copied": notes.len(), "deleted": deleted, "track": track,
+        "clipboard": path.to_string_lossy(),
+    }))
+}
+
+/// WRITE THE CLIPBOARD ONTO A TRACK, at a tick.
+///
+/// Each note keeps its own COLUMN, which is the field the page's clipboard used to drop — a
+/// two-column phrase collapsed onto column 0, where the second note replaced the first and half
+/// of it silently disappeared.
+fn paste_notes(handle: &EngineHandle, args: &Value, project_dir: &str) -> ToolResult {
+    let Some(track) = arg_u64(args, "track") else {
+        return ToolResult::err("paste_notes needs \"track\"");
+    };
+    let track = track as u32;
+    let Some(at) = arg_u64(args, "at") else {
+        return ToolResult::err("paste_notes needs \"at\" — the nanotick to paste onto");
+    };
+    let notes = match daw_bridge::clipboard::load(project_dir) {
+        Ok(v) => v,
+        Err(e) => return ToolResult::err(e),
+    };
+    if notes.is_empty() {
+        // "Nothing copied" and "clipboard corrupt" are different answers, and load() keeps them
+        // apart so this can say which.
+        return ToolResult::err("the clipboard is empty — call copy_notes first");
+    }
+    let first = handle.clip_version_for_track(track);
+    let mut base = first;
+    let mut sent = 0usize;
+    for m in &notes {
+        let column = match daw_bridge::layout::edit_column(u64::from(m.column)) {
+            Ok(c) => c,
+            Err(e) => return ToolResult::err(e),
+        };
+        let tick = at.saturating_add(m.dt);
+        let mut p = blank(UiCommandType::WriteNote);
+        p.flags = column;
+        p.track_id = track;
+        p.note_pitch = u32::from(m.pitch);
+        p.value0 = u32::from(m.velocity);
+        p.note_nanotick_lo = (tick & 0xffff_ffff) as u32;
+        p.note_nanotick_hi = (tick >> 32) as u32;
+        p.note_duration_lo = (m.duration & 0xffff_ffff) as u32;
+        p.note_duration_hi = (m.duration >> 32) as u32;
+        p.base_version = base;
+        if handle.send_command(p).is_err() { break }
+        sent += 1;
+        base = base.wrapping_add(1);
+    }
+    let applied = handle.wait_for_track_clip_version(
+        track, first, first.wrapping_add(sent as u32), std::time::Duration::from_secs(2));
+    ToolResult::ok(json!({ "pasted": sent, "track": track, "at": at, "applied": applied }))
 }
 
 /// MOVE NOTES THAT ALREADY EXIST, in place.

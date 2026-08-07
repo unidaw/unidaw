@@ -423,6 +423,104 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
         backwards.out.slice(0, 160));
 }
 
+/* ── do copy / cut / paste ──────────────────────────────────────────────────────────────────
+ * The last rows on the parity lists, and the obstacle was never the ops: a clipboard is STATE and
+ * daw-cli exits between the copy and the paste. It lives in a file beside the projects now, which
+ * also means this surface and the agent share one — copy with either, paste with the other.
+ *
+ * ASSERTED ON THE SAVED PROJECT, and on the PITCHES rather than the count. A paste that lands the
+ * wrong notes in the right number is exactly what dropping a field looks like.
+ */
+{
+  const pitchesAt = (doc, lo, hi) => {
+    if (!doc) return null;
+    const clips = new Map((doc.clips || []).map((c) => [c.id, c]));
+    const t = (doc.tracks || []).find((x) => x.track_id === 0);
+    if (!t) return null;
+    const out = [];
+    for (const pl of (t.placements || [])) {
+      for (const n of ((clips.get(pl.clip_id) || {}).notes || [])) {
+        const tick = pl.at + n.nanotick;
+        if (tick >= lo && tick < hi) out.push(n.pitch);
+      }
+    }
+    return out.sort((a, b) => a - b);
+  };
+
+  const before = await saved(`${NAME}_c0`);
+  const src = pitchesAt(before, 0, Q * 4);
+  check(src && src.length > 0, 'there is a phrase to copy', JSON.stringify(src));
+
+  const cp = cli('do', 'copy', '--track', '0', '--from', '0', '--to', String(Q * 4));
+  check(cp.ok, 'do copy runs', cp.out.slice(0, 200));
+  let rep = null;
+  try { rep = JSON.parse(cp.out); } catch { /* next check reports it */ }
+  check(rep && rep.copied === src.length,
+        'and copies every note in the range', `${cp.out.slice(0, 160)} vs ${JSON.stringify(src)}`);
+  check(rep && typeof rep.clipboard === 'string' && rep.clipboard.length > 0,
+        'and says WHERE the clipboard is — a file, so it survives this process exiting',
+        cp.out.slice(0, 200));
+
+  const ps = cli('do', 'paste', '--track', '0', '--at', String(Q * 40));
+  check(ps.ok, 'do paste runs', ps.out.slice(0, 200));
+  await sleep(1400);
+  const after = await saved(`${NAME}_c1`);
+  const landed = pitchesAt(after, Q * 40, Q * 48);
+  check(JSON.stringify(landed) === JSON.stringify(src),
+        'AND THE SAME PITCHES LAND WHERE IT WAS PASTED',
+        `${JSON.stringify(landed)} expected ${JSON.stringify(src)} — asserting the COUNT would `
+        + 'pass on a paste that put the wrong notes there in the right number');
+  check(JSON.stringify(pitchesAt(after, 0, Q * 4)) === JSON.stringify(src),
+        'and the ORIGINAL is still where it was — copy is not cut',
+        JSON.stringify(pitchesAt(after, 0, Q * 4)));
+
+  /*
+   * CUT, which is copy with the delete. Driven here because the parity ratchet noticed the row was
+   * CLAIMED and never run — the exact failure the owner named: an unexercised arm turns the list
+   * green while proving nothing.
+   *
+   * Asserted on both halves. A cut that removes the notes and loses them is a delete; a cut that
+   * keeps them and removes nothing is a copy.
+   */
+  {
+    const had = pitchesAt(await saved(`${NAME}_c2`), Q * 40, Q * 48);
+    check(had.length > 0, 'the pasted phrase is there to cut', JSON.stringify(had));
+
+    const ct = cli('do', 'cut', '--track', '0', '--from', String(Q * 40), '--to', String(Q * 48));
+    check(ct.ok, 'do cut runs', ct.out.slice(0, 200));
+    let cr = null;
+    try { cr = JSON.parse(ct.out); } catch { /* next check reports it */ }
+    check(cr && cr.deleted === had.length,
+          'and it DELETES what it took', `${ct.out.slice(0, 160)} vs ${JSON.stringify(had)}`);
+
+    await sleep(1400);
+    const gone = pitchesAt(await saved(`${NAME}_c3`), Q * 40, Q * 48);
+    check(gone.length === 0, 'the range really is empty afterwards', JSON.stringify(gone));
+
+    // AND THE CLIPBOARD SURVIVED IT — a cut that loses what it cut is just a delete.
+    const back = cli('do', 'paste', '--track', '0', '--at', String(Q * 60));
+    check(back.ok, 'the cut phrase pastes back', back.out.slice(0, 160));
+    await sleep(1400);
+    const restored = pitchesAt(await saved(`${NAME}_c4`), Q * 60, Q * 68);
+    check(JSON.stringify(restored) === JSON.stringify(had),
+          'AND IT IS THE SAME PHRASE — cut keeps what it took',
+          `${JSON.stringify(restored)} expected ${JSON.stringify(had)}`);
+  }
+
+  // An empty clipboard is a refusal. Emptied by pointing at a directory with no clipboard file.
+  const nowhere = (() => {
+    try {
+      return { ok: true, out: execFileSync(join(ROOT, 'ui/target/release/daw-cli'),
+        ['do', 'paste', '--track', '0', '--at', '0'],
+        { env: { ...process.env, DAW_UI_SHM_NAME: stack.shm,
+                 DAW_PROJECT_DIR: `${stack.dir}/no_clipboard_here` },
+          encoding: 'utf8', timeout: 15000 }) };
+    } catch (e) { return { ok: false, out: String(e.stdout || '') + String(e.stderr || '') }; }
+  })();
+  check(!nowhere.ok, 'pasting with NOTHING COPIED is refused, not reported as 0 pasted',
+        nowhere.out.slice(0, 160));
+}
+
 /* ── do new ─────────────────────────────────────────────────────────────────────────────────
  * LAST, because it REPLACES the loaded document — everything above needs the fixture.
  *

@@ -4214,3 +4214,96 @@ fn delete_note_removes_the_note_in_the_column_it_was_given() {
     let empty = read_notes(&session, &engine, "agdelcol_empty");
     assert!(empty.is_empty(), "the default column 0 delete should take the last note: {empty:?}");
 }
+
+/// COPY A TWO-COLUMN PHRASE AND PASTE IT SOMEWHERE ELSE, columns intact.
+///
+/// The last rows on the parity lists. The obstacle was never the ops — it was that a clipboard is
+/// STATE, and daw-cli exits between the copy and the paste. It lives in a file beside the projects
+/// now, which also means the two surfaces share one clipboard.
+///
+/// THE COLUMN IS THE ASSERTION. The page's clipboard dropped it for years, so a two-column phrase
+/// pasted onto column 0 where the second note REPLACED the first and half the phrase silently
+/// disappeared. A check on the note count alone would pass on exactly that: two notes in, two
+/// notes out, one of them wrong.
+#[test]
+fn copy_and_paste_carry_the_note_column() {
+    let (engine, session) = start_engine("agclip");
+
+    // One note per column, at the same tick, so only the column tells them apart.
+    for (pitch, column) in [(60u8, 0u64), (67, 1)] {
+        let a = session.execute(&ToolCall {
+            tool: "add_notes".into(),
+            args: json!({"track":0,"pitches":[pitch],"start":0,"step":Q,"duration":Q/2,
+                         "column":column}),
+        });
+        assert!(a.ok, "add_notes column {column} failed: {a:?}");
+    }
+    assert_eq!(read_notes(&session, &engine, "agclip_a").len(), 2);
+
+    let copied = session.execute(&ToolCall {
+        tool: "copy_notes".into(), args: json!({"track":0,"from":0,"to":Q}),
+    });
+    assert!(copied.ok, "copy_notes failed: {copied:?}");
+    assert_eq!(copied.output["copied"], json!(2), "both notes copied: {copied:?}");
+
+    // Paste four bars later, onto the same track.
+    let pasted = session.execute(&ToolCall {
+        tool: "paste_notes".into(), args: json!({"track":0,"at":Q*16}),
+    });
+    assert!(pasted.ok, "paste_notes failed: {pasted:?}");
+
+    let after = read_notes(&session, &engine, "agclip_b");
+    assert_eq!(after.len(), 4, "two originals plus two pasted: {after:?}");
+    let in_col1: Vec<_> = after.iter().filter(|n| n.1 == 1).collect();
+    assert_eq!(in_col1.len(), 2,
+               "THE PASTED PHRASE KEPT ITS SECOND COLUMN. Dropping it collapses both notes onto \
+                column 0, where the second REPLACES the first and half the phrase is gone — and \
+                the note COUNT alone cannot see that: {after:?}");
+    assert!(in_col1.iter().all(|n| n.0 == 67), "and it is the right pitch: {after:?}");
+
+    /*
+     * AN EMPTY CLIPBOARD IS A REFUSAL, not a silent no-op reported as success.
+     *
+     * POINTED AT ITS OWN ENGINE'S DIRECTORY, and that is the point rather than a detail. The
+     * clipboard is keyed to the PROJECT DIR, not to an engine or a session — which is what makes
+     * it shared between daw-cli and the agent. So a second engine does NOT get a fresh clipboard
+     * by existing; it gets one by looking somewhere else. My first version of this assumed the
+     * former and saw the previous test's two notes paste happily.
+     */
+    let (engine2, session2) = start_engine("agclip2");
+    let session2 = session2.with_project_dir(engine2.proj.to_string_lossy().to_string());
+    let none = session2.execute(&ToolCall {
+        tool: "paste_notes".into(), args: json!({"track":0,"at":0}),
+    });
+    assert!(!none.ok, "pasting an empty clipboard reported success: {none:?}");
+    drop(engine2);
+    drop(engine);
+}
+
+/// CUT REMOVES WHAT IT COPIED, and the copy still pastes.
+#[test]
+fn cut_takes_the_notes_and_keeps_them_on_the_clipboard() {
+    let (engine, session) = start_engine("agcut");
+    let a = session.execute(&ToolCall {
+        tool: "add_notes".into(),
+        args: json!({"track":0,"pitches":[60,62,64],"start":0,"step":Q,"duration":Q/2}),
+    });
+    assert!(a.ok, "add_notes failed: {a:?}");
+    assert_eq!(read_notes(&session, &engine, "agcut_a").len(), 3);
+
+    let cut = session.execute(&ToolCall {
+        tool: "copy_notes".into(), args: json!({"track":0,"from":0,"to":Q*3,"cut":true}),
+    });
+    assert!(cut.ok, "cut failed: {cut:?}");
+    assert_eq!(cut.output["deleted"], json!(3), "all three removed: {cut:?}");
+    assert!(read_notes(&session, &engine, "agcut_b").is_empty(),
+            "cut must leave the range empty");
+
+    // AND THE CLIPBOARD SURVIVED THE DELETION — a cut that loses what it cut is a delete.
+    let back = session.execute(&ToolCall {
+        tool: "paste_notes".into(), args: json!({"track":0,"at":Q*8}),
+    });
+    assert!(back.ok, "paste after cut failed: {back:?}");
+    assert_eq!(read_notes(&session, &engine, "agcut_c").len(), 3,
+               "the cut phrase pastes back");
+}

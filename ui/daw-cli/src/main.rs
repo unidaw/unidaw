@@ -2370,6 +2370,129 @@ fn main() {
                  * rules as the agent's tool — both call plan_transpose — so the answer cannot
                  * differ by which surface asked.
                  */
+                /*
+                 * `do copy|cut|paste` — a RANGE, and a clipboard that outlives the process.
+                 *
+                 * These sat on the parity lists longer than anything else, and the obstacle was
+                 * never the ops: it was that daw-cli EXITS between the copy and the paste, so
+                 * there was nowhere to put it. `daw_bridge::clipboard` is a file beside the
+                 * projects, which also means the CLI and the agent share one clipboard — copy
+                 * with either, paste with the other.
+                 *
+                 * Notes are stored RELATIVE to the copy's origin, exactly as the page's clipboard
+                 * does. An absolute clipboard can only be pasted back where it came from.
+                 */
+                Some(&"copy") | Some(&"cut") => {
+                    let cutting = rest.first().copied() == Some(&"cut");
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let from = flag_u64(&args, "--from", Some(0)).unwrap_or(0);
+                    let to = flag_u64(&args, "--to", Some(u64::MAX)).unwrap_or(u64::MAX);
+                    if to <= from {
+                        eprintln!("daw-cli: --to must be after --from (the range is half-open)");
+                        std::process::exit(2);
+                    }
+                    let Some(snap) = handle.read_track_clip(track) else {
+                        eprintln!("daw-cli: track {track} has no clip to read");
+                        std::process::exit(1);
+                    };
+                    let n = (snap.note_count as usize).min(snap.notes.len());
+                    let picked: Vec<_> = snap.notes[..n].iter()
+                        .filter(|x| x.t_on >= from && x.t_on < to)
+                        .collect();
+                    if picked.is_empty() {
+                        eprintln!("daw-cli: no notes on track {track} between {from} and {to}");
+                        std::process::exit(1);
+                    }
+                    // RELATIVE TO THE FIRST NOTE, not to `from`: a copy that starts at a bar line
+                    // and a copy that starts at the first note must paste identically, which is
+                    // what a person means by "copy this phrase".
+                    let origin = picked.iter().map(|x| x.t_on).min().unwrap_or(0);
+                    let notes: Vec<_> = picked.iter().map(|x| {
+                        daw_bridge::clipboard::ClipboardNote {
+                            dt: x.t_on - origin,
+                            duration: x.t_off.saturating_sub(x.t_on).max(1),
+                            pitch: x.pitch, velocity: x.velocity, column: x.column,
+                            d_track: 0,
+                        }
+                    }).collect();
+                    let dir = daw_bridge::project::engine_project_dir();
+                    match daw_bridge::clipboard::store(&dir, &notes) {
+                        Err(e) => { eprintln!("daw-cli: {e}"); 1 }
+                        Ok(path) => {
+                            let mut deleted = 0usize;
+                            if cutting {
+                                let first = handle.clip_version_for_track(track);
+                                let mut base = first;
+                                for x in &picked {
+                                    let column = match daw_bridge::layout::edit_column(
+                                        u64::from(x.column)) { Ok(c) => c, Err(_) => 0 };
+                                    let mut p = UiCommandPayload {
+                                        command_type: UiCommandType::DeleteNote as u16,
+                                        flags: column, track_id: track, plugin_index: 0,
+                                        note_pitch: 0, value0: 0,
+                                        note_nanotick_lo: (x.t_on & 0xffff_ffff) as u32,
+                                        note_nanotick_hi: (x.t_on >> 32) as u32,
+                                        note_duration_lo: 0, note_duration_hi: 0,
+                                        base_version: base,
+                                    };
+                                    p.base_version = base;
+                                    if handle.send_command(p).is_err() { break }
+                                    deleted += 1;
+                                    base = base.wrapping_add(1);
+                                }
+                                handle.wait_for_track_clip_version(
+                                    track, first, first.wrapping_add(deleted as u32),
+                                    Duration::from_secs(2));
+                            }
+                            println!("{{ \"{}\": {}, \"deleted\": {deleted}, \"track\": {track}, \"clipboard\": \"{}\" }}",
+                                     if cutting { "cut" } else { "copied" }, notes.len(),
+                                     escape(&path.to_string_lossy()));
+                            0
+                        }
+                    }
+                }
+                Some(&"paste") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let at = flag_u64(&args, "--at", Some(0)).unwrap_or(0);
+                    let dir = daw_bridge::project::engine_project_dir();
+                    let notes = match daw_bridge::clipboard::load(&dir) {
+                        Ok(v) => v,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(1) }
+                    };
+                    if notes.is_empty() {
+                        // "Nothing copied" and "clipboard corrupt" are different answers; load()
+                        // keeps them apart and so does this.
+                        eprintln!("daw-cli: the clipboard is empty — copy something first");
+                        std::process::exit(1);
+                    }
+                    let first = handle.clip_version_for_track(track);
+                    let mut base = first;
+                    let mut sent = 0usize;
+                    for m in &notes {
+                        let column = match daw_bridge::layout::edit_column(u64::from(m.column)) {
+                            Ok(c) => c,
+                            Err(e) => { eprintln!("daw-cli: {e}"); break }
+                        };
+                        let tick = at.saturating_add(m.dt);
+                        let p = UiCommandPayload {
+                            command_type: UiCommandType::WriteNote as u16,
+                            flags: column, track_id: track, plugin_index: 0,
+                            note_pitch: u32::from(m.pitch), value0: u32::from(m.velocity),
+                            note_nanotick_lo: (tick & 0xffff_ffff) as u32,
+                            note_nanotick_hi: (tick >> 32) as u32,
+                            note_duration_lo: (m.duration & 0xffff_ffff) as u32,
+                            note_duration_hi: (m.duration >> 32) as u32,
+                            base_version: base,
+                        };
+                        if handle.send_command(p).is_err() { break }
+                        sent += 1;
+                        base = base.wrapping_add(1);
+                    }
+                    let applied = handle.wait_for_track_clip_version(
+                        track, first, first.wrapping_add(sent as u32), Duration::from_secs(2));
+                    println!("{{ \"pasted\": {sent}, \"track\": {track}, \"at\": {at}, \"applied\": {applied} }}");
+                    if sent == notes.len() { 0 } else { 1 }
+                }
                 Some(&"transpose") => {
                     let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
                     let semitones = match flag_i64(&args, "--semitones", 0) {
