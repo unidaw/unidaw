@@ -132,6 +132,50 @@ for c in $CLIP_ARB; do
   fi
 done
 
+# ── 3. A NEW SEND PATH IS THE WAY THIS GETS MISSED ──────────────────────────────────────────
+#
+# The classification above was RIGHT for SetClipText and the rename was still refused, because the
+# cliptext path builds its own `UiClipTextHeader` and ships it with `send_bulk` — it never reached
+# `resolve_base` at all. Getting the rule right does not help a caller that does not consult it.
+#
+# There is no clean syntactic test for "consults resolve_base": the payload built in
+# `build_command` is resolved by its CALLERS, several frames away, so proximity gives false
+# positives and a whole-file grep gives false negatives. So this does the honest thing instead —
+# it pins the number of send paths. All 10 below were read by hand on 2026-08-07:
+#
+#   3251 send_harmony_and_await   resolved (harmony counter)
+#   4192 Stop, last client gone   not arbitrated
+#   4205 Quit, last client gone   not arbitrated
+#   4948 LoadProject              not arbitrated
+#   4996 chord, batch             resolved per track
+#   5002 build_command, batch     resolved
+#   5179 SamplerSetSlotName       not arbitrated, carries no base
+#   5256 cliptext                 resolved  <- the one that was missed
+#   5606 chord, single            resolved
+#   5624 build_command, single    resolved
+#
+# THE RECEIVER IS NOT ALWAYS CALLED `handle`. This first counted `handle.send_*`, reported 8, and
+# its own negative control — a send appended through a binding named `h` — did not trip it. The two
+# real sites at 4192/4205 use `h`, so they had never been in the audited set at all while the list
+# above claimed they were. A guard keyed to an incidental variable name is blind in precisely the
+# way the thing it guards was. Both turned out benign (Stop and Quit are not arbitrated), which is
+# luck, not vindication.
+#
+# If this count changes, ONE of two things is true and both need a person: a send path was added
+# (audit whether its command is arbitrated, and route it through `resolve_base` if so), or one was
+# removed (drop it from the list above). Adjusting the number without doing that is how the next
+# one gets missed.
+SEND_SITES=$(grep -cE '\.send_command\(|\.send_bulk\(|\.send_chord_command\(' "$RUST")
+if [ "$SEND_SITES" -ne 10 ]; then
+  fail=1
+  note "FAIL  the sidecar has $SEND_SITES engine-send paths; 10 were audited when this was written."
+  note "      A send path that builds its own payload can bypass resolve_base entirely — that is"
+  note "      exactly how SetClipText stayed broken while its classification was correct."
+  note "      Audit the new one, then update the count and the list in this file."
+else
+  note "PASS  10 engine-send paths, the number audited"
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo "FAILED"
   exit 1
