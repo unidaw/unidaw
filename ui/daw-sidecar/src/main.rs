@@ -3247,16 +3247,31 @@ fn is_harmony_scope(command_type: u16) -> bool {
 /// to be a success, since a write that may or may not have landed is the one outcome a caller
 /// can do nothing with.
 fn send_harmony_and_await(handle: &EngineHandle, p: UiCommandPayload) -> Result<(), String> {
-    let quoted = p.base_version;
+    /*
+     * THE VERSION NOW, NOT THE BASE THE CALLER QUOTED — and the difference is the whole
+     * correctness of this function.
+     *
+     * This first compared against `p.base_version`. For a base this side RESOLVED that is the
+     * same number, so it looked right and passed every test written against it. For an EXPLICIT
+     * base it is not: a caller quoting a stale 999999 makes `harmony_version() != quoted` true
+     * on the very first read, so the wait returned Ok instantly and reported SUCCESS for a write
+     * the engine was about to refuse. The one case this function exists to catch was the one
+     * case it could not see.
+     *
+     * Caught by harmony-refusal-visible.mjs, which forces a refusal with a bogus base and then
+     * asks whether a person is told. It was not.
+     */
+    let before = handle.harmony_version();
     handle.send_command(p)?;
     let deadline = Instant::now() + Duration::from_millis(750);
     while Instant::now() < deadline {
-        // Any move off the quoted value means the engine has been through it. Comparing for
-        // "quoted + 1" would be wrong the moment a second writer exists.
-        if handle.harmony_version() != quoted { return Ok(()); }
+        // Any move off the pre-send value means the engine has been through it. Comparing for
+        // "before + 1" would be wrong the moment a second writer exists.
+        if handle.harmony_version() != before { return Ok(()); }
         std::thread::sleep(Duration::from_millis(1));
     }
-    Err("harmony write was not acknowledged".into())
+    Err("the harmony write was refused — it was composed against a version the engine has \
+         already moved past, and nothing was written".into())
 }
 
 fn resolve_base(handle: &EngineHandle, track_id: u32, sent: u32, command_type: u16) -> u32 {
