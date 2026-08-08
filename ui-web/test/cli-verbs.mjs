@@ -1406,6 +1406,49 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
           + `cutoff=${JSON.stringify(sets2[0]?.cutoff_milli)}`);
   }
 
+  // ── position, which leaves no trace in the document at all ──────────────────────────────────
+  //
+  // The playhead is transport state, not project state, so `saved()` cannot see it and a check
+  // built the way every other one in this file is built would have nothing to look at. `get
+  // transport` is the reader that can, which is also why this verb sat unexercised: the obvious
+  // place to look for its effect is the one place it never appears.
+  //
+  // Read BEFORE as well as after: asserting the tick alone would pass on an engine that happened
+  // to already be there, and 0 is exactly where a freshly booted engine sits.
+  //
+  // BAR*2 and not something past the end: asking for BAR*7 put the playhead at 19199999, one tick
+  // short of BAR*5, which is where this fixture's content ends. The engine CLAMPS a seek beyond
+  // the song rather than refusing it, so a test that seeks past the end asserts the clamp and not
+  // the verb.
+  const readTransport = () => {
+    const r = cli('get', 'transport');
+    try { return JSON.parse(String(r.out)); } catch { return null; }
+  };
+  const posBefore = readTransport();
+  const POS_TICK = BAR * 2;
+  const po = cli('do', 'position', '--nanotick', String(POS_TICK));
+  check(po.ok, 'do position is accepted', po.out.slice(0, 140));
+  let posAfter = null;
+  for (let i = 0; i < 40; i++) {
+    posAfter = readTransport();
+    if (posAfter && Number(posAfter.playhead_nanotick ?? -1) === POS_TICK) break;
+    await sleep(100);
+  }
+  console.log(`  transport before: ${JSON.stringify(posBefore)?.slice(0, 120)}`);
+  console.log(`  transport after:  ${JSON.stringify(posAfter)?.slice(0, 120)}`);
+  // `playhead_nanotick`, not `nanotick` or `position`. Both of my first guesses read as
+  // undefined, which Number() turns into NaN and my ?? chain turned into -1 — a value that
+  // compares unequal to everything and so reported the move as failed while the transport had in
+  // fact moved. Read the reader's own output before naming its fields.
+  const tickOf = (t) => Number(t?.playhead_nanotick ?? -1);
+  check(tickOf(posAfter) === POS_TICK,
+        'POSITION MOVES THE PLAYHEAD — read back through get transport, the only surface that '
+        + 'shows it',
+        `before=${tickOf(posBefore)} after=${tickOf(posAfter)}, wanted ${POS_TICK}`);
+  check(tickOf(posBefore) !== POS_TICK,
+        'and it was not already there, so the check above means something',
+        `before was already ${tickOf(posBefore)}`);
+
   // ── remove-track, which must remove THAT track and leave the rest ────────────────────────
   //
   // Asserted on WHICH track went, not just the count. A remove that took the wrong one leaves the
