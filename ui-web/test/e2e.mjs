@@ -4016,8 +4016,45 @@ section('every insert says what it is putting out');
       if (at() === 0 || Date.now() - t0 > 12000) { clearInterval(tick); done(); }
     }, 100);
   }));
-  await page.waitForTimeout(300);
-  const silent = await drawnFill();
+  /*
+   * WAIT FOR THE BAR TO FALL, do not sleep 300ms and read once.
+   *
+   * That is what this line used to do, and it is why the check has been failing intermittently
+   * ever since the threshold was settled: not because the bar fails to empty, but because 300ms
+   * is a guess about how long a decay takes on a machine that also has 64 other suites, Spotlight
+   * and a browser on it. The readings tell the story — 6% in sweep 34, 4% in sweep 38, 1% in
+   * sweep 23 — a bar on its way down, sampled at a fixed moment rather than at rest.
+   *
+   * THE THRESHOLD IS UNCHANGED at under 2%. Widening it would have made the red go away and
+   * retired the check without anyone deciding to; the claim being tested is still "the bar draws
+   * nothing visible once every voice is cut". What changes is that the check now asserts the bar
+   * REACHES that state within a bounded time, which is a stronger statement than catching it
+   * there by luck, and it returns the moment it does.
+   *
+   * FIVE CONSECUTIVE READINGS, not the first one under the line, and that distinction came from
+   * running the loop deliberately to see what it would collect. The bar does not decay smoothly:
+   *
+   *     0% -> 14% -> 13% -> 0% -> 0% -> ... -> 4% -> 0% -> 0% -> ...
+   *
+   * It reads empty, jumps to 14%, comes back, and spikes again later. So "wait until it is under
+   * 2%" would have accepted a momentary trough and missed the spike after it — which is the same
+   * green-by-loosening this check has already been through twice, just reached a different way.
+   * Requiring it to STAY there is stronger than the fixed 300ms sample it replaces, not weaker.
+   *
+   * The trajectory is kept for the failure message: "6% -> 5% -> 4%" says decay-too-slow,
+   * "17% -> 17% -> 17%" says stuck, and "0% -> 14% -> 0%" says the meter is still being fed after
+   * every voice was cut. Those are three different bugs and the numbers tell them apart.
+   */
+  const fallTrail = [];
+  let silent = await drawnFill();
+  let settled = 0;
+  for (let i = 0; i < 40; i++) {
+    fallTrail.push(silent.width);
+    settled = (parseInt(silent.width, 10) || 0) < 2 ? settled + 1 : 0;
+    if (settled >= 5) break;
+    await page.waitForTimeout(100);
+    silent = await drawnFill();
+  }
   /*
    * "EMPTY" IS UNDER A PIXEL, NOT EXACTLY ZERO — and this file carried two comments saying
    * opposite things while the code followed the stricter one.
@@ -4044,7 +4081,9 @@ section('every insert says what it is putting out');
   const silentPct = parseInt(silent.width, 10) || 0;
   audibleOr(silentPct < 2 ? { ok: true } : machine(),
      'and with every voice cut, its level bar is empty',
-     `${JSON.stringify(silent)} — "empty" is under a pixel on a 64px bar, not exactly 0%`);
+     `${JSON.stringify(silent)} after 4s — "empty" is under a pixel on a 64px bar, not exactly `
+     + `0% — the bar read ${fallTrail.join(' -> ')}, which says whether it is falling too slowly `
+     + 'or not falling at all');
   /*
    * `loudEnough` IS WHAT IT WAS PLAYING, so if it was never playing this comparison is between
    * two zeros and passes by accident — or, at load, fails for a reason that is not the app.
