@@ -2820,7 +2820,7 @@ test('every suite the runbook cites exists, and the unswept ones are flagged as 
  * instructions for this very task.
  *
  * MEASURED 2026-08-08: of 69 verbs the registry claims, 37 were not so much as MENTIONED in any
- * suite that invokes daw-cli. Pinned so the number can only go down. It is 9 now. time-sig,
+ * suite that invokes daw-cli. Pinned so the number can only go down. It is 7 now. time-sig,
  * lines-per-beat, remove-track, harmony-quantize, clip-name, set-bypass, note-overlap, marker,
  * add-device, unmod-link, time and the four placement verbs are driven in cli-verbs.mjs and
  * asserted from the SAVED DOCUMENT — or, for the refusals, from the exit code and the sentence,
@@ -2852,8 +2852,8 @@ test('every suite the runbook cites exists, and the unswept ones are flagged as 
  * fail this test rather than silently turning a row green.
  */
 const CLI_NEVER_EXERCISED = [
-  'arrangement', 'audio-clip', 'patcher-config', 'patcher-save', 'position',
-  'sampler-emit-rows', 'sampler-env-draw', 'sampler-kit', 'scratch',
+  'audio-clip', 'patcher-config', 'patcher-save', 'position', 'sampler-emit-rows',
+  'sampler-env-draw', 'scratch',
 ];
 
 const AGENT_NEVER_EXERCISED = [

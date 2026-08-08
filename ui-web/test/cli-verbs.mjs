@@ -1279,6 +1279,30 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
     }
   }
 
+  // ── two READERS, checked against writes this file already made ──────────────────────────────
+  //
+  // A reader is the verb whose breakage the saved document cannot show: it can return an empty
+  // list while the file on disk is perfectly correct. So neither of these is asserted against
+  // itself — `get arrangement` is checked for the marker THIS FILE added in the marker batch
+  // above, and `get sampler-kit` for the slot name IT renamed. A reader that returned a canned
+  // empty answer, or echoed its own arguments, fails both.
+  const arr = cli('get', 'arrangement');
+  console.log(`  get arrangement said: ${arr.out.trim().slice(0, 200)}`);
+  check(arr.ok, 'get arrangement runs', arr.out.slice(0, 140));
+  check(/CLIVMARK/.test(arr.out),
+        'GET ARRANGEMENT SHOWS THE MARKER THIS FILE ADDED — not a canned empty list',
+        `no CLIVMARK in ${JSON.stringify(arr.out.slice(0, 240))}`);
+
+  if (samplerDev) {
+    const kit = cli('get', 'sampler-kit', '--track', '0',
+                    '--device', String(samplerDev.device_id));
+    console.log(`  get sampler-kit said: ${kit.out.trim().slice(0, 200)}`);
+    check(kit.ok, 'get sampler-kit runs', kit.out.slice(0, 140));
+    check(/clivslot/.test(kit.out),
+          'GET SAMPLER-KIT SHOWS THE SLOT NAME THIS FILE SET — the reader reflects real state',
+          `no clivslot in ${JSON.stringify(kit.out.slice(0, 240))}`);
+  }
+
   // ── remove-track, which must remove THAT track and leave the rest ────────────────────────
   //
   // Asserted on WHICH track went, not just the count. A remove that took the wrong one leaves the
