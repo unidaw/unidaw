@@ -1238,6 +1238,47 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
         'DELETE-AUTOMATION REMOVES THAT POINT — read back through the same reader',
         `still ${JSON.stringify(leftAuto.points.slice(0, 6))}`);
 
+  // ── the sampler's tone verbs, which write into a MOD SET ────────────────────────────────────
+  //
+  // filter_type/cutoff_milli/resonance_milli and bit_depth/rate_hz all live on a mod_set
+  // (sampler_serialize.h:120), and this fixture's sampler starts with mod_sets: []. No CLI verb
+  // creates one — there is sampler-env, sampler-lfo, sampler-slice and the rest, but nothing that
+  // adds a mod set — so I expected both verbs to be unreachable here.
+  //
+  // THEY ARE NOT: the ENGINE materialises one on first write, id 1 and name "default", carrying a
+  // default envelope modulator. So `--mod-set 0` is not an id, it selects the default set, and the
+  // set that appears is numbered 1. That is worth pinning precisely because it is not what the
+  // flag's name suggests — a future reader matching id === 0 would find nothing and conclude the
+  // write was lost. The check below takes id 0 OR the first set for that reason.
+  if (samplerDev) {
+    const devId2 = String(samplerDev.device_id);
+    const sf = cli('do', 'sampler-filter', '--track', '0', '--device', devId2,
+                   '--mod-set', '0', '--cutoff', '800', '--resonance', '200');
+    check(sf.ok, 'do sampler-filter is accepted by the CLI', sf.out.slice(0, 140));
+    const sv = cli('do', 'sampler-vintage', '--track', '0', '--device', devId2,
+                   '--mod-set', '0', '--bits', '8');
+    check(sv.ok, 'do sampler-vintage is accepted by the CLI', sv.out.slice(0, 140));
+
+    const afterTone = await saved('cliv_batch_tone');
+    const sets = afterTone?.tracks?.find((t) => t.track_id === 0)
+      ?.device_chain?.find((d) => d.device_id === samplerDev.device_id)?.sampler?.mod_sets ?? [];
+    console.log(`  mod_sets after both writes: ${JSON.stringify(sets)}`);
+    const set0 = sets.find((m) => m.id === 0) ?? sets[0];
+    check(set0 !== undefined,
+          'A MOD SET EXISTS TO CARRY THE TONE — if this fails, both verbs are unreachable on a '
+          + 'sampler that has no mod set and the CLI says nothing about it',
+          `mod_sets=${JSON.stringify(sets)}`);
+    if (set0) {
+      check(set0.cutoff_milli === 800 && set0.resonance_milli === 200,
+            'SAMPLER-FILTER REACHES THE MOD SET — cutoff and resonance both',
+            `set=${JSON.stringify(set0)}`);
+      check(set0.bit_depth === 8,
+            'SAMPLER-VINTAGE REACHES THE MOD SET — bit_depth is 8, and the filter set a moment '
+            + 'ago survived it',
+            `set=${JSON.stringify(set0)}`);
+    }
+  }
+
   // ── remove-track, which must remove THAT track and leave the rest ────────────────────────
   //
   // Asserted on WHICH track went, not just the count. A remove that took the wrong one leaves the
