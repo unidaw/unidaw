@@ -5941,9 +5941,26 @@ struct EngineEvents {
 const ENGINE_EVENT_CAP: usize = 64;
 
 impl EngineEvents {
+    /// THE SEQUENCE IS RESERVED UNDER THE LOCK, and that is the whole point.
+    ///
+    /// It used to be `fetch_add` FIRST and lock second, which leaves a window where `next_seq`
+    /// has already moved to N+1 and the queue does not yet hold N. A client polling in that
+    /// window reads `newest = N+1`, finds nothing at or past its cursor, advances its cursor to
+    /// N+1 anyway — and when the item finally lands as N it is filtered out by `*s >= after`
+    /// forever. The event is lost SILENTLY, and `missed` reports 0 because
+    /// `oldest.saturating_sub(after)` underflows and clamps.
+    ///
+    /// That is task #52: an engine refusal the page never shows. The probe read
+    /// "engine events seen 0->0, missed 0->0" — not one event delivered all run, and the
+    /// transport convinced it had lost nothing. It took a busy machine to hit, because the thread
+    /// has to be preempted between the two lines, which is why it appeared in four consecutive
+    /// sweeps and in none of 17 targeted runs.
+    ///
+    /// `since()` takes the lock before reading `next_seq`, so with the increment moved inside a
+    /// reader now sees either both the new sequence AND its item, or neither.
     fn push(&self, json: String) {
-        let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
         let mut q = self.items.lock().unwrap();
+        let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
         q.push_back((seq, json));
         while q.len() > ENGINE_EVENT_CAP { q.pop_front(); }
     }
@@ -7447,6 +7464,61 @@ mod tests {
         c.resize(32, 0);
         let json = decode_engine_event(&entry(&c)).expect("chain error");
         assert_eq!(json, "{\"kind\":\"chain-error\",\"code\":2,\"track\":4}");
+    }
+
+    #[test]
+    fn a_client_polling_while_events_arrive_loses_none_of_them() {
+        // TASK #52, as a test rather than a story.
+        //
+        // The old push() reserved its sequence with fetch_add BEFORE taking the lock, so a reader
+        // could see next_seq at N+1 while the queue still lacked N. It then advanced its cursor
+        // past N and filtered N out forever, reporting missed=0 the whole time. On a live system
+        // that is an engine refusal the user never sees.
+        //
+        // One writer, one reader polling as fast as it can — the same shape as the drain thread
+        // and a client loop. The assertion is on the COUNT COLLECTED, because the failure is
+        // silent: with the bug, the reader simply ends up with fewer than were pushed and nothing
+        // anywhere says so. 2000 is enough to hit the window reliably on a loaded machine and
+        // costs milliseconds on an idle one.
+        use std::sync::Arc;
+        const N: u64 = 2000;
+        let ev = Arc::new(EngineEvents::default());
+        let writer = {
+            let ev = Arc::clone(&ev);
+            std::thread::spawn(move || {
+                for i in 0..N { ev.push(format!("{{\"i\":{i}}}")); }
+            })
+        };
+        let mut cursor = 0u64;
+        let mut got = 0usize;
+        let mut missed_total = 0u64;
+        while got < N as usize {
+            let (msgs, c, missed) = ev.since(cursor);
+            got += msgs.len();
+            missed_total += missed;
+            cursor = c;
+            if writer.is_finished() && cursor >= N { 
+                let (last, c2, m2) = ev.since(cursor);
+                got += last.len(); missed_total += m2; cursor = c2;
+                break;
+            }
+        }
+        writer.join().unwrap();
+        let (tail, _, m3) = ev.since(cursor);
+        got += tail.len();
+        missed_total += m3;
+        // DELIVERED + REPORTED-MISSED == PUSHED. Not "missed is zero": with a cap of
+        // {ENGINE_EVENT_CAP} and a writer this fast the reader really does fall behind, and
+        // saying so is the queue working as designed — my first version asserted missed==0 and
+        // failed on correct behaviour.
+        //
+        // The invariant the BUG breaks is that nothing vanishes SILENTLY. With the sequence
+        // reserved outside the lock, a cursor advances past an item that had not landed yet and
+        // the loss is counted nowhere: got falls short and missed does not make up the
+        // difference, because saturating_sub clamps the underflow to 0.
+        assert_eq!(got as u64 + missed_total, N,
+                   "delivered {got} + reported-missed {missed_total} != {N} pushed: the shortfall \
+                    is events that disappeared without the client being told");
     }
 
     #[test]
