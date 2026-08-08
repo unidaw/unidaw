@@ -471,7 +471,21 @@ try {
    * SUBSHELL, so the kill reaps the subshell and leaves the engine. Worth knowing when reading
    * any of those scripts.
    */
-  const stop = () => {
+  /*
+   * RETURNS A PROMISE, so `await stack.stop()` actually waits for the part that matters.
+   *
+   * It used to return undefined. `await undefined` resolves on the next tick, so every suite that
+   * carefully wrote `await stack.stop()` was in exactly the same position as the thirty-three that
+   * do not await it: the SIGTERM had gone out, and the `setTimeout` holding the SIGKILL escalation
+   * and the directory removal had not run yet. Then `process.exit(...)` cancelled it.
+   *
+   * Found because full-song.mjs — which DOES await — was named by the sweep's new stray reaper as
+   * leaving an engine and a sidecar running. It awaits correctly; the await was a no-op.
+   *
+   * The exit-handler path (reapSync, below) still exists and still matters: it covers the suites
+   * that never call stop() at all, and the case where a suite throws before reaching it.
+   */
+  const stop = () => new Promise((resolveStop) => {
     for (const p of procs) { try { p.kill('SIGTERM'); } catch {} }
     setTimeout(() => {
       const stubborn = procs.filter((p) => p.exitCode === null && p.signalCode === null);
@@ -500,8 +514,9 @@ try {
        */
       const keep = keepDir || process.env.DAW_KEEP_STACK === '1';
       if (!keep) { try { rmSync(root, { recursive: true, force: true }); } catch {} }
+      resolveStop();
     }, 500);
-  };
+  });
 
   /*
    * THE SAME WORK, SYNCHRONOUSLY, FOR THE EXIT PATH — because the version above never finished.
