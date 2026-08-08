@@ -95,7 +95,7 @@ await settle(1300);
   console.log(`  the reject line says: ${JSON.stringify(said)}`);
 
   check(arrived, 'REMOVING A DEVICE THAT IS NOT THERE IS REPORTED AT ALL',
-        'nothing reached the reject line in 8s — the engine refused (there is no device 999) and '
+        'nothing reached the reject line in 25s — the engine refused (there is no device 999) and '
         + 'the app said nothing, which is the failure this file is about');
   check(/no such device to remove/.test(said),
         'and it SAYS SO, rather than printing a code',
