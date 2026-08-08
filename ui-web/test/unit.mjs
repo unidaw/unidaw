@@ -2820,9 +2820,10 @@ test('every suite the runbook cites exists, and the unswept ones are flagged as 
  * instructions for this very task.
  *
  * MEASURED 2026-08-08: of 69 verbs the registry claims, 37 were not so much as MENTIONED in any
- * suite that invokes daw-cli. Pinned so the number can only go down. It is 34 now: time-sig,
- * lines-per-beat and remove-track are driven in cli-verbs.mjs and asserted from the SAVED
- * DOCUMENT, which is what tells an arm that works from an arm that merely exists.
+ * suite that invokes daw-cli. Pinned so the number can only go down. It is 31 now. time-sig, lines-per-beat,
+ * remove-track, harmony-quantize, clip-name and set-bypass are driven in cli-verbs.mjs and
+ * asserted from the SAVED DOCUMENT, which is what tells an arm that works from an arm that
+ * merely exists.
  *
  * THE MATCHER IS DELIBERATELY LOOSE, and this is the honest caveat. The agent test can look for
  * `tool: "name"` because every ToolCall is written that way. daw-cli is invoked several ways —
@@ -2842,12 +2843,11 @@ test('every suite the runbook cites exists, and the unswept ones are flagged as 
  */
 const CLI_NEVER_EXERCISED = [
   'add-device', 'add-placement', 'arrangement', 'audio-clip', 'automation-points', 'clip-grid',
-  'clip-name', 'delete-automation', 'delete-note', 'harmony-quantize', 'marker', 'mod-link',
-  'move-placement', 'note-overlap', 'patcher-config', 'patcher-save', 'position', 'quantize',
-  'remove-placement', 'resize-placement', 'sampler-device', 'sampler-emit-rows',
-  'sampler-env-draw', 'sampler-filter', 'sampler-kit', 'sampler-slot', 'sampler-slot-name',
-  'sampler-vintage', 'scratch', 'set-bypass', 'set-row-ops', 'sound-addressed', 'time',
-  'unmod-link',
+  'delete-automation', 'delete-note', 'marker', 'mod-link', 'move-placement', 'note-overlap',
+  'patcher-config', 'patcher-save', 'position', 'quantize', 'remove-placement',
+  'resize-placement', 'sampler-device', 'sampler-emit-rows', 'sampler-env-draw',
+  'sampler-filter', 'sampler-kit', 'sampler-slot', 'sampler-slot-name', 'sampler-vintage',
+  'scratch', 'set-row-ops', 'sound-addressed', 'time', 'unmod-link',
 ];
 
 const AGENT_NEVER_EXERCISED = [

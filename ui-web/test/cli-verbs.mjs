@@ -585,6 +585,20 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
  * file's own header says so, and it is the reason a green row proved nothing in the first place.
  */
 {
+  /*
+   * RELOAD THE FIXTURE FIRST. This batch is appended to a suite whose sixty preceding checks have
+   * already removed devices, moved them and edited clips — so "the fixture has a sampler at device
+   * 3" is true of the file and false of the engine by the time we get here. The first version of
+   * this block asserted against the original fixture and read `bypass=undefined` from a chain that
+   * no longer had any devices in it, which looked like set-bypass failing.
+   *
+   * A batch that depends on state has to establish it.
+   */
+  const reload = cli('do', 'load', NAME);
+  check(reload.ok, 'the fixture reloads, so this batch starts from known state',
+        reload.out.slice(0, 120));
+  await sleep(1200);
+
   const before = await saved('cliv_batch_before');
   const tracksBefore = (before?.tracks ?? []).length;
   check(tracksBefore >= 2, 'two or more tracks to work with', String(tracksBefore));
@@ -614,6 +628,53 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
   check(lines === 8,
         'LINES-PER-BEAT REACHES THE TRACK — 8 is stored',
         `track 0 lines_per_beat=${lines}`);
+
+  // ── harmony-quantize, a per-track flag ───────────────────────────────────────────────────
+  const hq = cli('do', 'harmony-quantize', '--track', '0', '--on', '1');
+  check(hq.ok, 'do harmony-quantize is accepted', hq.out.slice(0, 120));
+  const afterHq = await saved('cliv_batch_hq');
+  const hqOn = afterHq?.tracks?.find((t) => t.track_id === 0)?.harmony_quantize;
+  check(hqOn === true || hqOn === 1,
+        'HARMONY-QUANTIZE REACHES THE TRACK — the flag is stored on',
+        `track 0 harmony_quantize=${JSON.stringify(hqOn)}`);
+
+  // ── clip-name ────────────────────────────────────────────────────────────────────────────
+  //
+  // --clip is REQUIRED by the verb (its own comment calls an absent one a silent-wrong-target
+  // trap), so the id comes from the document rather than being assumed to be 1.
+  const clipId = afterHq?.clips?.[0]?.id;
+  check(clipId !== undefined, 'a clip to rename', String(clipId));
+  const cn = cli('do', 'clip-name', '--track', '0', '--clip', String(clipId), '--name', 'CLIVERB');
+  check(cn.ok, 'do clip-name is accepted', cn.out.slice(0, 120));
+  const afterCn = await saved('cliv_batch_cn');
+  const nameNow = afterCn?.clips?.find((c) => c.id === clipId)?.name;
+  check(nameNow === 'CLIVERB',
+        'CLIP-NAME REACHES THE CLIP — the name is stored',
+        `clip ${clipId} name=${JSON.stringify(nameNow)}`);
+
+  // ── set-bypass, on a device this fixture actually has ────────────────────────────────────
+  //
+  // Device 3 is the sampler the fixture puts on track 0. Read the flag back per DEVICE, because
+  // a bypass written to the wrong insert leaves the same number of devices bypassed as the right
+  // one — the same trap remove-track has below.
+  const sb = cli('do', 'set-bypass', '--track', '0', '--device', '3', '--bypass', '1');
+  check(sb.ok, 'do set-bypass is accepted', sb.out.slice(0, 120));
+  const afterSb = await saved('cliv_batch_sb');
+  const dev3 = (afterSb?.tracks?.find((t) => t.track_id === 0)?.device_chain ?? [])
+    .find((d) => d.device_id === 3);
+  const dev7 = (afterSb?.tracks?.find((t) => t.track_id === 0)?.device_chain ?? [])
+    .find((d) => d.device_id === 7);
+  check(dev3?.bypass === true,
+        'SET-BYPASS REACHES DEVICE 3 — bypassed in the document',
+        `device 3 bypass=${JSON.stringify(dev3?.bypass)}`);
+  /*
+   * EXPLICITLY FALSE, not merely "not true". `dev7?.bypass !== true` passes when the device is
+   * ABSENT and the field undefined — which is exactly what happened before the reload above, so
+   * this check reported the flag going to the right insert while there were no inserts at all.
+   */
+  check(dev7 !== undefined && dev7.bypass === false,
+        'and device 7 beside it is untouched — the flag went to the named insert',
+        `device 7 = ${JSON.stringify(dev7)}`);
 
   // ── remove-track, which must remove THAT track and leave the rest ────────────────────────
   //
