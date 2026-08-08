@@ -804,6 +804,124 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
         'and the master id is not printed as a raw number either',
         JSON.stringify(badMaster.out.slice(0, 160)));
 
+  // ── THE PLACEMENT FAMILY, all four verbs against one arrangement ────────────────────────────
+  //
+  // placement.mjs already covers placements END TO END, but it drives them through the PAGE
+  // (say({type:'placement', op:'move'})) and uses daw-cli only to READ them back with
+  // `get extents`. So all four CLI verbs were genuinely undriven, which is the distinction the
+  // pin list is for: a verb named in a suite is not a verb a suite runs.
+  //
+  // Read back through `get extents` rather than the saved document, because the document stores
+  // placements as a per-track LIST with no id in it — {clip_id, at, length, ...} — and these
+  // verbs address a placement BY id. Asserting on list position would pass for a move that hit
+  // the wrong placement, which is the whole failure mode.
+  const extents = () => {
+    const r = cli('get', 'extents');
+    const out = [];
+    for (const line of String(r.out).split('\n')) {
+      // One JSON object per line with a trailing comma the array form does not want, and `id` is
+      // spelled `placement`. Same parse as placement.mjs, for the same reasons.
+      const t = line.trim().replace(/,$/, '');
+      if (!t.startsWith('{')) continue;
+      try {
+        const o = JSON.parse(t);
+        if (o.placement !== undefined) out.push(o);
+      } catch { /* not a placement line */ }
+    }
+    return out;
+  };
+
+  // The CLI returns as soon as the command is on the ring; the engine applies it a moment later.
+  // Reading extents straight after the call found the arrangement unchanged and reported the add
+  // as lost when the engine log said `AddPlacement clip 1 -> placement 11`. So: WAIT for the
+  // condition, do not sleep a guessed interval — the same rule the rest of this repo follows.
+  const waitExtents = async (pred, ms = 4000) => {
+    const deadline = Date.now() + ms;
+    let last = extents();
+    while (Date.now() < deadline) {
+      if (pred(last)) return last;
+      await new Promise((r) => setTimeout(r, 100));
+      last = extents();
+    }
+    return last;
+  };
+
+  const BEAT = 960000;
+  const BAR = BEAT * 4;
+  const startExtents = extents();
+  console.log(`  the fixture holds ${startExtents.length} placement(s)`);
+
+  if (startExtents.length === 0) {
+    check(false, 'the fixture has a placement to work from',
+          'get extents returned none — the four placement checks below cannot run, and a batch '
+          + 'that silently skips is exactly the shape this file exists to catch');
+  } else {
+    const seed = startExtents[0];
+
+    // ADD, addressed by --clip (the others take --placement). A count alone would pass for an add
+    // that landed on the wrong track or at the wrong tick, so the new one is found by its `at`.
+    const addAt = BAR * 12;
+    const ap = cli('do', 'add-placement', '--track', String(seed.track),
+                   '--clip', String(seed.clip), '--at', String(addAt), '--length', String(BAR));
+    check(ap.ok, 'do add-placement is accepted', ap.out.slice(0, 120));
+    const afterAdd = await waitExtents((e) => e.length === startExtents.length + 1);
+    const mine = afterAdd.find((e) => e.start === addAt && e.track === seed.track);
+    check(afterAdd.length === startExtents.length + 1 && mine !== undefined,
+          'ADD-PLACEMENT REACHES THE ARRANGEMENT — at the tick it was given, on the named track',
+          `${startExtents.length} -> ${afterAdd.length}, `
+          + `starts ${JSON.stringify(afterAdd.map((e) => e.start))}`);
+
+    if (mine) {
+      // MOVE it, and check the OTHERS did not move. A move that dragged everything would satisfy
+      // an assertion about the target alone.
+      const others = afterAdd.filter((e) => e.placement !== mine.placement)
+        .map((e) => [e.placement, e.start]);
+      const moveTo = BAR * 20;
+      const mp = cli('do', 'move-placement', '--track', String(seed.track),
+                     '--placement', String(mine.placement), '--at', String(moveTo));
+      check(mp.ok, 'do move-placement is accepted', mp.out.slice(0, 120));
+      const moved = (await waitExtents((es) =>
+        es.find((e) => e.placement === mine.placement)?.start === moveTo))
+        .find((e) => e.placement === mine.placement);
+      check(moved?.start === moveTo,
+            'MOVE-PLACEMENT MOVES THAT PLACEMENT — addressed by id, not by list position',
+            `placement ${mine.placement} start=${JSON.stringify(moved?.start)}, wanted ${moveTo}`);
+      const othersNow = extents().filter((e) => e.placement !== mine.placement)
+        .map((e) => [e.placement, e.start]);
+      check(JSON.stringify(others) === JSON.stringify(othersNow),
+            'and every other placement stayed where it was',
+            `${JSON.stringify(others)} -> ${JSON.stringify(othersNow)}`);
+
+      // RESIZE. end-start is the length the engine actually holds; --length is what we asked for.
+      const rp = cli('do', 'resize-placement', '--track', String(seed.track),
+                     '--placement', String(mine.placement), '--length', String(BAR * 3));
+      check(rp.ok, 'do resize-placement is accepted', rp.out.slice(0, 120));
+      const resized = (await waitExtents((es) => {
+        const m = es.find((e) => e.placement === mine.placement);
+        return m !== undefined && m.end - m.start === BAR * 3;
+      })).find((e) => e.placement === mine.placement);
+      check(resized !== undefined && resized.end - resized.start === BAR * 3,
+            'RESIZE-PLACEMENT CHANGES THE LENGTH, and leaves the start alone',
+            `start=${JSON.stringify(resized?.start)} end=${JSON.stringify(resized?.end)} `
+            + `length=${resized ? resized.end - resized.start : 'gone'}, wanted ${BAR * 3}`);
+
+      // REMOVE, and the count must come back to where the add left it minus one — with the SEED
+      // still present, so a remove that took the wrong placement fails here.
+      const xp = cli('do', 'remove-placement', '--track', String(seed.track),
+                     '--placement', String(mine.placement));
+      check(xp.ok, 'do remove-placement is accepted', xp.out.slice(0, 120));
+      const afterRemove = await waitExtents((es) =>
+        es.find((e) => e.placement === mine.placement) === undefined);
+      check(afterRemove.find((e) => e.placement === mine.placement) === undefined,
+            'REMOVE-PLACEMENT REMOVES THAT PLACEMENT',
+            `${JSON.stringify(afterRemove.map((e) => e.placement))} still has it`);
+      check(afterRemove.find((e) => e.placement === seed.placement) !== undefined,
+            'and the placement it was NOT asked to remove is still there',
+            `seed ${seed.placement} gone from `
+            + `${JSON.stringify(afterRemove.map((e) => e.placement))}`);
+    }
+  }
+
   // ── remove-track, which must remove THAT track and leave the rest ────────────────────────
   //
   // Asserted on WHICH track went, not just the count. A remove that took the wrong one leaves the

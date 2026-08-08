@@ -2820,11 +2820,13 @@ test('every suite the runbook cites exists, and the unswept ones are flagged as 
  * instructions for this very task.
  *
  * MEASURED 2026-08-08: of 69 verbs the registry claims, 37 were not so much as MENTIONED in any
- * suite that invokes daw-cli. Pinned so the number can only go down. It is 26 now. time-sig,
+ * suite that invokes daw-cli. Pinned so the number can only go down. It is 22 now. time-sig,
  * lines-per-beat, remove-track, harmony-quantize, clip-name, set-bypass, note-overlap, marker,
- * add-device, unmod-link and time are driven in cli-verbs.mjs and asserted from the SAVED DOCUMENT
- * (or, for the refusals, from the exit code and the sentence), which is what tells an arm that
- * works from an arm that merely exists.
+ * add-device, unmod-link, time and the four placement verbs are driven in cli-verbs.mjs and
+ * asserted from the SAVED DOCUMENT — or, for the refusals, from the exit code and the sentence,
+ * and for placements from `get extents`, because the document stores them as an unlabelled
+ * per-track list and addressing by list position would pass for a move that hit the wrong one.
+ * That is what tells an arm that works from an arm that merely exists.
  *
  * ONE OF THOSE NINE ARGUED BACK, and it is worth recording. `add-device --kind sampler` on a track
  * that already has one is REFUSED by the engine (chain.rejected, reason add_failed) — a track takes
@@ -2850,9 +2852,8 @@ test('every suite the runbook cites exists, and the unswept ones are flagged as 
  * fail this test rather than silently turning a row green.
  */
 const CLI_NEVER_EXERCISED = [
-  'add-placement', 'arrangement', 'audio-clip', 'automation-points', 'clip-grid',
-  'delete-automation', 'delete-note', 'mod-link', 'move-placement', 'patcher-config',
-  'patcher-save', 'position', 'quantize', 'remove-placement', 'resize-placement',
+  'arrangement', 'audio-clip', 'automation-points', 'clip-grid', 'delete-automation',
+  'delete-note', 'mod-link', 'patcher-config', 'patcher-save', 'position', 'quantize',
   'sampler-device', 'sampler-emit-rows', 'sampler-env-draw', 'sampler-filter', 'sampler-kit',
   'sampler-slot', 'sampler-slot-name', 'sampler-vintage', 'scratch', 'set-row-ops',
   'sound-addressed',
