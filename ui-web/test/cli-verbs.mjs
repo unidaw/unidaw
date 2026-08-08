@@ -717,6 +717,12 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
     .map((d) => d.device_id);
   const ad = cli('do', 'add-device', '--track', '0', '--kind', 'vst_effect');
   check(ad.ok, 'do add-device is accepted', ad.out.slice(0, 120));
+  // "applied" and not "unknown": the engine's ChainSnapshot is the POSITIVE signal, and without it
+  // every chain command would sit out the full 750ms refusal window before reporting success —
+  // which is not merely slow, it changes the timing of anything driving several edits in sequence.
+  check(/"applied"/.test(ad.out) && !/unknown/.test(ad.out),
+        'and it reports APPLIED on the engine\'s own acknowledgement, not by timing out',
+        `${JSON.stringify(ad.out.trim())} — "unknown" here means the positive signal never arrived`);
   const afterAd = await saved('cliv_batch_ad');
   const chainAfter = (afterAd?.tracks?.find((t) => t.track_id === 0)?.device_chain ?? [])
     .map((d) => d.device_id);
@@ -726,6 +732,30 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
   check(chainBefore.every((id) => chainAfter.includes(id)),
         'and the devices already there are still there',
         `${JSON.stringify(chainBefore)} -> ${JSON.stringify(chainAfter)}`);
+
+  // ── AND THE REFUSAL THE LEGAL ADD ABOVE IS THE CONTROL FOR ──────────────────────────────────
+  //
+  // Track 0 already has a sampler (device 3), and a track takes one head-of-chain instrument, so
+  // this add is refused. The engine has always said so — chain.rejected in the log, a rejected:
+  // line in history.jsonl, a ChainError on the ring for the UI — and daw-cli alone printed
+  // {"sent": "add-device"} and exited 0. That is what this asserts: the ANSWER, not the send.
+  //
+  // The legal add directly above is the negative control and it is not optional. A tool that
+  // reported a refusal for everything would satisfy every assertion here on its own.
+  const ad2 = cli('do', 'add-device', '--track', '0', '--kind', 'sampler');
+  check(!ad2.ok,
+        'A REFUSED ADD-DEVICE EXITS NON-ZERO — it used to exit 0 and say "sent"',
+        `exit was 0 and it said: ${JSON.stringify(ad2.out.slice(0, 160))}`);
+  check(/head-of-chain instrument/.test(ad2.out),
+        'and it SAYS WHY, rather than printing a code',
+        `${JSON.stringify(ad2.out.slice(0, 200))} — "chain error 1" is the same fact and tells the `
+        + 'reader nothing they can act on');
+  const afterAd2 = await saved('cliv_batch_ad2');
+  const chainNow = (afterAd2?.tracks?.find((t) => t.track_id === 0)?.device_chain ?? [])
+    .map((d) => d.device_id);
+  check(chainNow.length === chainAfter.length,
+        'and the refusal was real — the chain is unchanged',
+        `${JSON.stringify(chainAfter)} -> ${JSON.stringify(chainNow)}`);
 
   // ── remove-track, which must remove THAT track and leave the rest ────────────────────────
   //

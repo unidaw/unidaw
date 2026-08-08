@@ -1168,6 +1168,115 @@ fn await_clip_outcome(
     ClipOutcome::Unknown
 }
 
+/// WHAT THE ENGINE DID WITH THE CHAIN COMMAND WE JUST SENT.
+///
+/// `add-device --kind sampler` on a track that already has one is REFUSED — a track takes one
+/// head-of-chain instrument — and this tool printed `{"sent": "add-device"}` and exited 0. The
+/// refusal existed: the engine logged `chain.rejected reason=add_failed`, journalled it, and put a
+/// `ChainError` on the ring for the UI. Every surface learned about it except the one that asked.
+/// That is the same defect as the clip path above, one command family over, and it was found by
+/// driving the verb rather than by reading it (ui-web/test/cli-verbs.mjs, batch 3).
+///
+/// NO BASE VERSION IS AVAILABLE HERE. Chain commands are not arbitrated — only nine commands are,
+/// and these are not among them — so `await_clip_outcome`'s trick of matching on the base we sent
+/// cannot be used, and neither can a version counter, because the chain has none this side reads.
+/// What the ring does carry is BOTH answers: a `ChainSnapshot` for the track means the engine
+/// rebuilt that chain, a `ChainError` for the track means it refused. Matching on the track is
+/// therefore the whole correlation, which is exact for one operator driving one CLI and NOT exact
+/// if something else is editing the same track at the same moment. Sharpening that needs a command
+/// id on the wire, which the 40-byte payload has no room for.
+///
+/// THE RING IS PEEKED, NOT DRAINED, for the reason `await_clip_outcome` gives: the real UI is its
+/// consumer and a tool that drained here would steal diffs from the app it is observing.
+enum ChainOutcome {
+    Applied,
+    Refused { code: u16 },
+    /// Neither answer arrived in time. Reported as unknown and exits 0 — announcing a refusal we
+    /// did not observe would be worse than the silence it replaces.
+    Unknown,
+}
+
+/// The engine's chain codes, worded. Mirrors `errorScopeName("chain", code)` in engine_pure.cpp
+/// — {1 add_failed, 2 remove_failed, 3 move_failed, 4 update_failed} — but says what the reader
+/// can do about it, because "chain error 1" and "that track already has an instrument" are the
+/// same fact and only one of them is actionable.
+fn chain_refusal_sentence(code: u16) -> String {
+    match code {
+        1 => "the device could not be added — a track takes one head-of-chain instrument, so a \
+              second sampler or VST instrument on a track that has one is refused"
+            .to_string(),
+        2 => "there is no such device to remove".to_string(),
+        3 => "the device could not be moved to that position".to_string(),
+        4 => "the update changed nothing — the device id may not exist on that track".to_string(),
+        _ => format!("chain error code {code}, which this build has no wording for"),
+    }
+}
+
+fn await_chain_outcome(handle: &EngineHandle, track: u32, before_len: usize) -> ChainOutcome {
+    for _ in 0..150 {
+        let diffs = handle.peek_ui_diffs();
+        for (diff_type, payload) in diffs.iter().skip(before_len) {
+            let u16at = |o: usize| u16::from_le_bytes([payload[o], payload[o + 1]]);
+            let u32at = |o: usize| {
+                u32::from_le_bytes([payload[o], payload[o + 1], payload[o + 2], payload[o + 3]])
+            };
+            // trackId sits at offset 4 in BOTH payloads (UiChainDiffPayload and
+            // UiChainErrorPayload, event_payloads.h) — they are the same 40 bytes with different
+            // fields after it, which is exactly why the type is checked first and never the size.
+            if u32at(4) != track {
+                continue;
+            }
+            if *diff_type == daw_bridge::layout::UiDiffType::ChainError as u16 {
+                return ChainOutcome::Refused { code: u16at(2) };
+            }
+            if *diff_type == daw_bridge::layout::UiDiffType::ChainSnapshot as u16 {
+                return ChainOutcome::Applied;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    ChainOutcome::Unknown
+}
+
+/// Sends a chain command, waits for the engine's answer, and reports it. Returns the exit code.
+///
+/// ONE function rather than the same block pasted into add-device, remove-device, move-device and
+/// set-bypass: four copies of a rule is how this project got a chord tee that disagreed with
+/// itself and a mixer with two writers. `extra` is a pre-formatted JSON fragment because the verbs
+/// each have their own interesting fields, and that is the only part that genuinely differs.
+fn send_chain_reporting(
+    handle: &EngineHandle,
+    payload: UiChainCommandPayload,
+    verb: &str,
+    track: u32,
+    extra: &str,
+) -> i32 {
+    let before_len = handle.peek_ui_diffs().len();
+    match handle.send_chain_command(payload) {
+        Ok(()) => match await_chain_outcome(handle, track, before_len) {
+            ChainOutcome::Refused { code } => {
+                eprintln!(
+                    "daw-cli: the engine refused {verb} on track {track}: {}",
+                    chain_refusal_sentence(code)
+                );
+                1
+            }
+            ChainOutcome::Applied => {
+                println!("{{ \"applied\": {verb:?}, \"track\": {track}{extra} }}");
+                0
+            }
+            ChainOutcome::Unknown => {
+                println!("{{ \"sent\": {verb:?}, \"track\": {track}{extra}, \"applied\": \"unknown\" }}");
+                0
+            }
+        },
+        Err(err) => {
+            eprintln!("daw-cli: {err}");
+            1
+        }
+    }
+}
+
 fn chord_command(
     args: &[String],
     base_version: u32,
@@ -2891,10 +3000,8 @@ fn main() {
                         bypass,
                         reserved: [0; 4],
                     };
-                    match handle.send_chain_command(payload) {
-                        Ok(()) => { println!("{{ \"sent\": \"set-bypass\", \"track\": {track}, \"device\": {device}, \"bypass\": {bypass} }}"); 0 }
-                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
-                    }
+                    send_chain_reporting(&handle, payload, "set-bypass", track,
+                                        &format!(", \"device\": {device}, \"bypass\": {bypass}"))
                 }
                 Some(&"add-device") => {
                     // --track accepts a numeric id or "master"; --kind is a device kind
@@ -2956,18 +3063,8 @@ fn main() {
                                 bypass: 0,
                                 reserved: [0; 4],
                             };
-                            match handle.send_chain_command(payload) {
-                                Ok(()) => {
-                                    println!(
-                                        "{{ \"sent\": \"add-device\", \"track\": {track}, \"kind\": {kind_arg:?} }}"
-                                    );
-                                    0
-                                }
-                                Err(err) => {
-                                    eprintln!("daw-cli: {err}");
-                                    1
-                                }
-                            }
+                            send_chain_reporting(&handle, payload, "add-device", track,
+                                                &format!(", \"kind\": {kind_arg:?}"))
                         }
                     }
                 }
@@ -4163,14 +4260,9 @@ fn main() {
                         bypass: 0,
                         reserved: [0u8; 4],
                     };
-                    match handle.send_chain_command(payload) {
-                        Ok(()) => {
-                            let verb = if removing { "remove-device" } else { "move-device" };
-                            println!("{{ \"sent\": {verb:?}, \"device\": {device} }}");
-                            0
-                        }
-                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
-                    }
+                    send_chain_reporting(&handle, payload,
+                                        if removing { "remove-device" } else { "move-device" },
+                                        track, &format!(", \"device\": {device}"))
                 }
                 Some(&"patcher-node") | Some(&"patcher-unnode") => {
                     let removing = rest.first() == Some(&"patcher-unnode");
