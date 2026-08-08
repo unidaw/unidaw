@@ -922,6 +922,92 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
     }
   }
 
+  // ── sound-addressed, a per-track rule stored under a DIFFERENT name than the verb ───────────
+  //
+  // Saved as `sound_addressed_only` (project_file.cpp:675), not `sound_addressed`. Reading back
+  // the verb's own name would find undefined and read exactly like a flag that never arrived,
+  // which is how the note-overlap check in batch 3 nearly went wrong too.
+  const sa = cli('do', 'sound-addressed', '--track', '0', '--on', '1');
+  check(sa.ok, 'do sound-addressed is accepted', sa.out.slice(0, 120));
+  const afterSa = await saved('cliv_batch_sa');
+  const soundOnly = afterSa?.tracks?.find((t) => t.track_id === 0)?.sound_addressed_only;
+  check(soundOnly === true || soundOnly === 1,
+        'SOUND-ADDRESSED REACHES THE TRACK — under its stored name, not the verb name',
+        `track 0 sound_addressed_only=${JSON.stringify(soundOnly)}`);
+
+  // ── clip-grid: the CLIP's own subdivision, which outranks the track's ────────────────────────
+  //
+  // The clip's grid is drawn BEFORE the track's, so this is the authoritative one. Track 0 was set
+  // to lines-per-beat 8 by batch 1, so asserting the CLIP moved to 3 also proves the two are
+  // separate fields — a writer that set the track's would leave the clip at its fixture value and
+  // pass a check that only looked for "something changed".
+  const clipBefore = (await saved('cliv_batch_cg0'))?.clips?.find((c) => c.id === 1);
+  const cg = cli('do', 'clip-grid', '--track', '0', '--clip', '1', '--lines', '3');
+  check(cg.ok, 'do clip-grid is accepted', cg.out.slice(0, 120));
+  const afterCg = await saved('cliv_batch_cg');
+  const clip1 = afterCg?.clips?.find((c) => c.id === 1);
+  check(clip1?.lines_per_beat === 3,
+        'CLIP-GRID REACHES THE CLIP — lines_per_beat is 3 on clip 1',
+        `was ${JSON.stringify(clipBefore?.lines_per_beat)}, now `
+        + `${JSON.stringify(clip1?.lines_per_beat)}`);
+  const track0Lines = afterCg?.tracks?.find((t) => t.track_id === 0)?.lines_per_beat;
+  check(track0Lines !== 3,
+        'and it did NOT write the TRACK grid instead — the two are separate fields',
+        `track 0 lines_per_beat=${JSON.stringify(track0Lines)}, which must not be the 3 we sent `
+        + 'to the clip');
+
+  // ── delete-note, against a note this check puts there itself ────────────────────────────────
+  //
+  // The first version of this deleted the fixture's own note (pitch 60 on clip 1, addressed
+  // through track 0) and reported the delete as lost. It was not: by this point in the file
+  // track 0's placements no longer reference clip 1 at all — an earlier shared-edit gave track 0
+  // its own copy (clip 7, empty) and left clip 1 on track 1. The engine received the delete,
+  // found nothing at that address, and correctly did nothing.
+  //
+  // That is the same trap batch 2 fell into: asserting against the fixture as WRITTEN after sixty
+  // checks have rewritten it. So this writes its own note first, at a pitch nothing else uses,
+  // and reads back the clip TRACK 0 ACTUALLY HOLDS rather than the one the fixture started with.
+  const clipOnTrack0 = (doc) =>
+    doc?.tracks?.find((t) => t.track_id === 0)?.placements?.[0]?.clip_id;
+  const notesOf = (doc, id) => (doc?.clips?.find((c) => c.id === id)?.notes ?? []);
+
+  const DN_TICK = BAR * 2;
+  const DN_PITCH = 71;
+  const wn = cli('do', 'note', '--track', '0', '--nanotick', String(DN_TICK),
+                 '--pitch', String(DN_PITCH));
+  check(wn.ok, 'do note is accepted (the setup for delete-note)', wn.out.slice(0, 120));
+  const afterWn = await saved('cliv_batch_wn');
+  const target = clipOnTrack0(afterWn);
+  // BY PITCH, NOT BY TICK. --nanotick is SONG time; the note is stored CLIP-RELATIVE. Track 0
+  // holds clip 7 twice, at 0 and at BAR*2, so a note written at song tick BAR*2 lands at
+  // clip-relative 0 — and asserting on the tick we sent read [[0,71]] and called a note that was
+  // exactly where it belonged missing. DN_PITCH is unused by anything else in this fixture, which
+  // is what makes the pitch alone a sufficient address here.
+  const hasMine = (doc) => notesOf(doc, target).some((n) => n.pitch === DN_PITCH);
+  check(target !== undefined && hasMine(afterWn),
+        'the note to delete is really there first — on the clip track 0 HOLDS, not the one the '
+        + 'fixture started with',
+        `clip ${JSON.stringify(target)} notes=${JSON.stringify(
+          notesOf(afterWn, target).map((n) => [n.nanotick, n.pitch]))}`);
+
+  const othersBefore = notesOf(afterWn, target)
+    .filter((n) => n.pitch !== DN_PITCH).map((n) => [n.nanotick, n.pitch]);
+  const dn = cli('do', 'delete-note', '--track', '0', '--nanotick', String(DN_TICK),
+                 '--pitch', String(DN_PITCH));
+  check(dn.ok, 'do delete-note is accepted', dn.out.slice(0, 120));
+  const afterDn = await saved('cliv_batch_dn');
+  check(!hasMine(afterDn),
+        'DELETE-NOTE REMOVES THAT NOTE from the clip track 0 holds',
+        `clip ${target} still has ${JSON.stringify(
+          notesOf(afterDn, target).map((n) => [n.nanotick, n.pitch]))}`);
+  check(JSON.stringify(notesOf(afterDn, target)
+          .filter((n) => n.pitch !== DN_PITCH).map((n) => [n.nanotick, n.pitch]))
+        === JSON.stringify(othersBefore),
+        'and every other note in that clip survived — a delete that cleared the clip would pass '
+        + 'the check above',
+        `${JSON.stringify(othersBefore)} -> ${JSON.stringify(notesOf(afterDn, target)
+          .filter((n) => n.pitch !== DN_PITCH).map((n) => [n.nanotick, n.pitch]))}`);
+
   // ── remove-track, which must remove THAT track and leave the rest ────────────────────────
   //
   // Asserted on WHICH track went, not just the count. A remove that took the wrong one leaves the
