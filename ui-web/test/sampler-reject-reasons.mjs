@@ -161,6 +161,34 @@ for (const c of cases) {
         `reject moved to ${JSON.stringify(await reject())} — reporting an error must not become one`);
 }
 
+/* ── A FILE THAT EXISTS AND WILL NOT DECODE ───────────────────────────────────────────────────
+ *
+ * UiSamplerRejectReason::LoadFailed (10) was DEFINED, WORDED in index.html, and never emitted by
+ * anything — counted across apps/*.cpp when auditing which reasons are reachable. So dragging in a
+ * corrupt or unsupported file produced a slot that exists, plays silence, and explains nothing:
+ * the engine wrote sampler.source_missing to its own log and no client heard about it.
+ *
+ * A file that EXISTS but is garbage, not a missing path: a name that resolves to nothing may be
+ * refused earlier and for a different reason, which would test the wrong branch. This one reaches
+ * decodeAudioFile and fails there, which is the branch LoadFailed belongs to.
+ */
+{
+  const broken = 'clivbroken.wav';
+  writeFileSync(join(stack.root, 'audio', broken), Buffer.from('not a wav, not even close'));
+  const before = await reject();
+  await page.evaluate((name) => window.__uni.send({
+    type: 'samplerload', track: 0, device: 3, name, root: 60, fixed: 1,
+  }), broken);
+  const said = await page.waitForFunction(
+    (prev) => String((window.__uni.state() || {}).reject || '') !== prev,
+    before, { timeout: 25000 }).then(() => reject()).catch(() => '');
+  console.log(`  the reject line says: ${JSON.stringify(said)}`);
+  check(/would not load/.test(said),
+        'A SAMPLE THAT WILL NOT DECODE SAYS SO — LoadFailed had wording and no emitter',
+        `${JSON.stringify(said)} — silence here is the original bug: a slot that exists, plays `
+        + 'nothing, and explains nothing');
+}
+
 check(errors.length === 0, 'nothing threw in the browser', errors.slice(0, 3).join(' | '));
 
 await browser.close();

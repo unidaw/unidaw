@@ -1450,6 +1450,17 @@ int main(int argc, char** argv) {
             .field("device", deviceId)
             .field("source", static_cast<uint32_t>(src.localId))
             .field("path", path);
+        // AND TELL THE CLIENT, not only this log. UiSamplerRejectReason::LoadFailed has been
+        // defined since the reason enum was written and the web UI has had wording ready for it
+        // ("the sample would not load"), and NOTHING IN THE ENGINE EVER EMITTED IT: a corrupt or
+        // unsupported file produced a slot that exists, plays silence, and explains nothing.
+        //
+        // Same shape as the twenty sampler refusals that used to end in this log and nowhere
+        // else, with one site left over. The target is the SOURCE id, because this loop is over
+        // st.sources and a slot is not what failed — the file behind it is.
+        reportSamplerReject(daw::UiCommandType::SamplerLoad,
+                            daw::UiSamplerRejectReason::LoadFailed, trackId, deviceId,
+                            static_cast<uint16_t>(src.localId));
         continue;
       }
       // REGISTERED FOR DISPLAY BEFORE THE CHANNELS ARE MOVED OUT — the pyramid rides on `dec`
