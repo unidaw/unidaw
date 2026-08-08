@@ -1381,6 +1381,31 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
     try { rmSync(presetPath); } catch { /* already gone */ }
   }
 
+  // ── sampler-env-draw: an envelope shape, asserted point by point ────────────────────────────
+  //
+  // Reachable only because the tone batch above already caused a mod set to exist — the envelope
+  // lives on a modulator inside it. Drawn with four points whose values are deliberately not the
+  // defaults the engine seeds a modulator with (0/1000/1000/0 at t 0/1/2/5000), so a check that
+  // found the SEEDED envelope and called it ours would fail.
+  if (samplerDev) {
+    const ed = cli('do', 'sampler-env-draw', '--track', '0', '--target', 'amp',
+                   '--points', '0,100;250,900;600,400;1000,0');
+    check(ed.ok, 'do sampler-env-draw is accepted', ed.out.slice(0, 160));
+    const afterEd = await saved('cliv_batch_ed');
+    const sets2 = afterEd?.tracks?.find((t) => t.track_id === 0)
+      ?.device_chain?.find((d) => d.device_id === samplerDev.device_id)?.sampler?.mod_sets ?? [];
+    const mods = sets2[0]?.modulators ?? [];
+    const pts = (mods[0]?.points ?? []).map((pt) => [pt.t, pt.v]);
+    console.log(`  envelope points now: ${JSON.stringify(pts)}`);
+    check(JSON.stringify(pts) === JSON.stringify([[0, 100], [250, 900], [600, 400], [1000, 0]]),
+          'SAMPLER-ENV-DRAW REACHES THE MODULATOR — the four points drawn, in order',
+          `points=${JSON.stringify(pts)}, wanted [[0,100],[250,900],[600,400],[1000,0]]`);
+    check(sets2[0]?.bit_depth === 8 && sets2[0]?.cutoff_milli === 800,
+          'and drawing an envelope left the tone settings on that mod set alone',
+          `bit_depth=${JSON.stringify(sets2[0]?.bit_depth)} `
+          + `cutoff=${JSON.stringify(sets2[0]?.cutoff_milli)}`);
+  }
+
   // ── remove-track, which must remove THAT track and leave the rest ────────────────────────
   //
   // Asserted on WHICH track went, not just the count. A remove that took the wrong one leaves the
