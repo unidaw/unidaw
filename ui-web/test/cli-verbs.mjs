@@ -676,6 +676,57 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
         'and device 7 beside it is untouched — the flag went to the named insert',
         `device 7 = ${JSON.stringify(dev7)}`);
 
+  // ── note-overlap, a per-track flag ───────────────────────────────────────────────────────
+  //
+  // This is the flag the tracker's OFF row depends on: with it on, a note is allowed to run past
+  // the next one instead of being truncated at edit time. Stored as `allow_note_overlap`
+  // (project_file.cpp:677), not under the verb's own name.
+  const no = cli('do', 'note-overlap', '--track', '0', '--on', '1');
+  check(no.ok, 'do note-overlap is accepted', no.out.slice(0, 120));
+  const afterNo = await saved('cliv_batch_no');
+  const overlap = afterNo?.tracks?.find((t) => t.track_id === 0)?.allow_note_overlap;
+  check(overlap === true || overlap === 1,
+        'NOTE-OVERLAP REACHES THE TRACK — allow_note_overlap is stored on',
+        `track 0 allow_note_overlap=${JSON.stringify(overlap)}`);
+
+  // ── marker add, which is song-scoped ─────────────────────────────────────────────────────
+  //
+  // `--nanotick` is REQUIRED by the verb — its own comment says defaulting it would "silently put
+  // the marker at tick 0, which looks like a no-op and is not" — so the tick is passed and then
+  // asserted, not just the count.
+  const markersBefore = (afterNo?.markers ?? []).length;
+  const mk = cli('do', 'marker', 'add', '--nanotick', '1920000', '--name', 'CLIVMARK');
+  check(mk.ok, 'do marker add is accepted', mk.out.slice(0, 120));
+  const afterMk = await saved('cliv_batch_mk');
+  const mine = (afterMk?.markers ?? []).find((m) => m.name === 'CLIVMARK');
+  check(mine !== undefined,
+        'MARKER ADD REACHES THE DOCUMENT — by name, not just by count',
+        `${markersBefore} -> ${JSON.stringify((afterMk?.markers ?? []).map((m) => m.name))}`);
+  check(mine?.nanotick === 1920000,
+        'and at the tick it was given, not at 0',
+        `nanotick=${JSON.stringify(mine?.nanotick)}`);
+
+  // ── add-device, appended to a chain we can count before and after ────────────────────────
+  //
+  // `vst_effect` and not `sampler`: track 0's fixture already has a sampler at device 3, and a
+  // track takes ONE head-of-chain instrument, so the engine refuses the second one
+  // (chain.rejected, reason add_failed). daw-cli exits 0 on that refusal and says nothing — which
+  // is a real gap, but it is the CLI's silent-refusal shape and not add-device's, so it is filed
+  // rather than asserted here. Effects stack, so this asserts the add on a kind that can be added.
+  const chainBefore = (afterMk?.tracks?.find((t) => t.track_id === 0)?.device_chain ?? [])
+    .map((d) => d.device_id);
+  const ad = cli('do', 'add-device', '--track', '0', '--kind', 'vst_effect');
+  check(ad.ok, 'do add-device is accepted', ad.out.slice(0, 120));
+  const afterAd = await saved('cliv_batch_ad');
+  const chainAfter = (afterAd?.tracks?.find((t) => t.track_id === 0)?.device_chain ?? [])
+    .map((d) => d.device_id);
+  check(chainAfter.length === chainBefore.length + 1,
+        'ADD-DEVICE REACHES THE CHAIN — one more device on track 0',
+        `${JSON.stringify(chainBefore)} -> ${JSON.stringify(chainAfter)}`);
+  check(chainBefore.every((id) => chainAfter.includes(id)),
+        'and the devices already there are still there',
+        `${JSON.stringify(chainBefore)} -> ${JSON.stringify(chainAfter)}`);
+
   // ── remove-track, which must remove THAT track and leave the rest ────────────────────────
   //
   // Asserted on WHICH track went, not just the count. A remove that took the wrong one leaves the

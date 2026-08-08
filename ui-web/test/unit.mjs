@@ -2820,10 +2820,17 @@ test('every suite the runbook cites exists, and the unswept ones are flagged as 
  * instructions for this very task.
  *
  * MEASURED 2026-08-08: of 69 verbs the registry claims, 37 were not so much as MENTIONED in any
- * suite that invokes daw-cli. Pinned so the number can only go down. It is 31 now. time-sig, lines-per-beat,
- * remove-track, harmony-quantize, clip-name and set-bypass are driven in cli-verbs.mjs and
- * asserted from the SAVED DOCUMENT, which is what tells an arm that works from an arm that
- * merely exists.
+ * suite that invokes daw-cli. Pinned so the number can only go down. It is 28 now. time-sig,
+ * lines-per-beat, remove-track, harmony-quantize, clip-name, set-bypass, note-overlap, marker and
+ * add-device are driven in cli-verbs.mjs and asserted from the SAVED DOCUMENT, which is what tells
+ * an arm that works from an arm that merely exists.
+ *
+ * ONE OF THOSE NINE ARGUED BACK, and it is worth recording. `add-device --kind sampler` on a track
+ * that already has one is REFUSED by the engine (chain.rejected, reason add_failed) — a track takes
+ * one head-of-chain instrument. daw-cli still exited 0 and printed nothing about it, so the only
+ * place the refusal appeared was the engine log. The batch drives `vst_effect` instead, which
+ * stacks; the sampler case is the CLI's silent-refusal shape, filed as its own concern rather than
+ * asserted here as if it were add-device's fault.
  *
  * THE MATCHER IS DELIBERATELY LOOSE, and this is the honest caveat. The agent test can look for
  * `tool: "name"` because every ToolCall is written that way. daw-cli is invoked several ways —
@@ -2842,12 +2849,12 @@ test('every suite the runbook cites exists, and the unswept ones are flagged as 
  * fail this test rather than silently turning a row green.
  */
 const CLI_NEVER_EXERCISED = [
-  'add-device', 'add-placement', 'arrangement', 'audio-clip', 'automation-points', 'clip-grid',
-  'delete-automation', 'delete-note', 'marker', 'mod-link', 'move-placement', 'note-overlap',
-  'patcher-config', 'patcher-save', 'position', 'quantize', 'remove-placement',
-  'resize-placement', 'sampler-device', 'sampler-emit-rows', 'sampler-env-draw',
-  'sampler-filter', 'sampler-kit', 'sampler-slot', 'sampler-slot-name', 'sampler-vintage',
-  'scratch', 'set-row-ops', 'sound-addressed', 'time', 'unmod-link',
+  'add-placement', 'arrangement', 'audio-clip', 'automation-points', 'clip-grid',
+  'delete-automation', 'delete-note', 'mod-link', 'move-placement', 'patcher-config',
+  'patcher-save', 'position', 'quantize', 'remove-placement', 'resize-placement',
+  'sampler-device', 'sampler-emit-rows', 'sampler-env-draw', 'sampler-filter', 'sampler-kit',
+  'sampler-slot', 'sampler-slot-name', 'sampler-vintage', 'scratch', 'set-row-ops',
+  'sound-addressed', 'time', 'unmod-link',
 ];
 
 const AGENT_NEVER_EXERCISED = [
