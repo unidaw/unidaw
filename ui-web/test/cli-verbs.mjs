@@ -1074,6 +1074,71 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
           `root_key=${JSON.stringify(named?.root_key)}`);
   }
 
+  // A note to survive the quantize below AND to carry the row op further down. Written first
+  // because the clip is EMPTY at this point — delete-note took the only one — and "the stored
+  // notes are unchanged" compared [] with [] passes however badly quantize misbehaves. A live
+  // check over nothing is still a check about nothing.
+  const ro = cli('do', 'note', '--track', '0', '--nanotick', String(BAR), '--pitch', '73');
+  check(ro.ok, 'do note is accepted (the setup for quantize and set-row-ops)', ro.out.slice(0, 120));
+  const afterRo = await saved('cliv_batch_ro');
+  const rowNote = notesOf(afterRo, target).find((n) => n.pitch === 73);
+  check(rowNote?.note_id !== undefined,
+        'the note that must survive quantize, and carry the row op, is really there',
+        `notes=${JSON.stringify(notesOf(afterRo, target).map((n) => [n.pitch, n.note_id]))}`);
+
+  // ── quantize, which changes what SOUNDS and never the stored notes ──────────────────────────
+  //
+  // So there is nothing to assert in the note list, and a check that looked there would find the
+  // notes untouched and call a working verb broken. The lane's setting is the artifact: a
+  // `quantize` child object on the track, written UNCONDITIONALLY even when off, so a file always
+  // states what the lane does. All three fields are asserted because they travel in one payload
+  // and a writer that dropped two of them would still move the first.
+  // Snapshotted BEFORE the call. The first version of this compared notesOf(afterQz, target) with
+  // the same expression spelled differently and could not fail — the exact shape this repo keeps
+  // catching: a green check that passes with the bug present.
+  const notesBeforeQz = JSON.stringify(
+    notesOf(afterRo, target).map((n) => [n.nanotick, n.pitch, n.duration]));
+  const qz = cli('do', 'quantize', '--track', '0', '--grid', String(Q / 2),
+                 '--strength', '800', '--swing', '120');
+  check(qz.ok, 'do quantize is accepted', qz.out.slice(0, 120));
+  const afterQz = await saved('cliv_batch_qz');
+  const lane = afterQz?.tracks?.find((t) => t.track_id === 0)?.quantize;
+  check(lane?.grid_nanoticks === Q / 2 && lane?.strength_milli === 800
+        && lane?.swing_milli === 120,
+        'QUANTIZE REACHES THE LANE — grid, strength and swing all three',
+        `quantize=${JSON.stringify(lane)}, wanted `
+        + `{grid_nanoticks:${Q / 2}, strength_milli:800, swing_milli:120}`);
+  const notesAfterQz = JSON.stringify(
+    notesOf(afterQz, target).map((n) => [n.nanotick, n.pitch, n.duration]));
+  check(notesAfterQz === notesBeforeQz && notesBeforeQz !== '[]',
+        'and the stored notes are BYTE-FOR-BYTE what they were, which is what non-destructive '
+        + 'means — over a clip that HAS a note, so the comparison is about something',
+        `${notesBeforeQz} -> ${notesAfterQz}`);
+
+  // ── set-row-ops, addressed by NOTE ID ───────────────────────────────────────────────────────
+  //
+  // Row ops live on a note, so this writes its own note and reads the id back rather than
+  // guessing one. Only the ops NAMED on the command line are touched — that is the mask — so the
+  // check also pins that the note's pitch and position did not move: a handler that rewrote the
+  // note wholesale to set one field would pass a check that only looked at probability.
+  //
+  // `probability` is written to the file ONLY when > 0 (project_file.cpp:332), so absent is the
+  // default rather than a missing write. 50 is chosen to be unambiguous either way.
+  if (rowNote?.note_id !== undefined) {
+    const sro = cli('do', 'set-row-ops', '--track', '0', '--clip', String(target),
+                    '--note', String(rowNote.note_id), '--prob', '50');
+    check(sro.ok, 'do set-row-ops is accepted', sro.out.slice(0, 140));
+    const afterSro = await saved('cliv_batch_sro');
+    const withOp = notesOf(afterSro, target).find((n) => n.note_id === rowNote.note_id);
+    check(withOp?.probability === 50,
+          'SET-ROW-OPS REACHES THAT NOTE — probability is 50',
+          `note ${rowNote.note_id} = ${JSON.stringify(withOp)}`);
+    check(withOp?.pitch === 73 && withOp?.nanotick === rowNote.nanotick,
+          'and setting one op did not move the note it was set on',
+          `pitch=${JSON.stringify(withOp?.pitch)} nanotick=${JSON.stringify(withOp?.nanotick)}, `
+          + `was pitch=73 nanotick=${rowNote.nanotick}`);
+  }
+
   // ── remove-track, which must remove THAT track and leave the rest ────────────────────────
   //
   // Asserted on WHICH track went, not just the count. A remove that took the wrong one leaves the
