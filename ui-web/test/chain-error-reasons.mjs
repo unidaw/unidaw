@@ -81,7 +81,16 @@ await settle(1300);
   await page.evaluate(() => window.__uni.send({ type: 'deldevice', track: 0, device: 999 }));
   const arrived = await page.waitForFunction(
     (prev) => String((window.__uni.state() || {}).reject || '') !== prev,
-    before, { timeout: 8000 }).then(() => true).catch(() => false);
+    // 8s was too tight. In sweep 34 this wait expired on the first run of all three
+    // reject-reason suites at once, each reporting an EMPTY reject line, and each passed on a
+    // retry that took a fifth of the time. The sweep's own machine line said why: it started at
+    // load 6,71 against sweep 33's 4,75, with Spotlight indexing throughout. The refusal was
+    // real and on its way; this side simply stopped listening first.
+    //
+    // Raised rather than slept on: the assertion is unchanged and a passing run still returns as
+    // soon as the reject line moves, so the only cost is how long a GENUINE silence takes to be
+    // reported. 25s buys the loaded case without turning a real regression into a slow one.
+    before, { timeout: 25000 }).then(() => true).catch(() => false);
   const said = arrived ? await reject() : '';
   console.log(`  the reject line says: ${JSON.stringify(said)}`);
 
@@ -113,7 +122,7 @@ await settle(1300);
   await page.evaluate(() => window.__uni.send({ type: 'mod', op: 'remove', track: 0, link: 999 }));
   const arrived = await page.waitForFunction(
     (prev) => String((window.__uni.state() || {}).reject || '') !== prev,
-    before, { timeout: 8000 }).then(() => true).catch(() => false);
+    before, { timeout: 25000 }).then(() => true).catch(() => false);
   const said = arrived ? await reject() : '';
   console.log(`  the reject line says: ${JSON.stringify(said)}`);
   check(/no such modulation link/.test(said),

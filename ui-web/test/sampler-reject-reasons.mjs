@@ -105,7 +105,16 @@ const refuse = async (over) => {
   try {
     await page.waitForFunction(
       (prev) => String((window.__uni.state() || {}).reject || '') !== prev,
-      before, { timeout: 8000 });
+    // 8s was too tight. In sweep 34 this wait expired on the first run of all three
+    // reject-reason suites at once, each reporting an EMPTY reject line, and each passed on a
+    // retry that took a fifth of the time. The sweep's own machine line said why: it started at
+    // load 6,71 against sweep 33's 4,75, with Spotlight indexing throughout. The refusal was
+    // real and on its way; this side simply stopped listening first.
+    //
+    // Raised rather than slept on: the assertion is unchanged and a passing run still returns as
+    // soon as the reject line moves, so the only cost is how long a GENUINE silence takes to be
+    // reported. 25s buys the loaded case without turning a real regression into a slow one.
+      before, { timeout: 25000 });
   } catch { return ''; }
   return reject();
 };
