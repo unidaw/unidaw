@@ -1008,6 +1008,72 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
         `${JSON.stringify(othersBefore)} -> ${JSON.stringify(notesOf(afterDn, target)
           .filter((n) => n.pitch !== DN_PITCH).map((n) => [n.nanotick, n.pitch]))}`);
 
+  // ── the sampler's own verbs, against the sampler the fixture already has ─────────────────────
+  //
+  // Field names are HYPHENATED — voice-cap, default-gate, root — and the tables live in
+  // daw-bridge/src/layout.rs. Worth stating because my first attempt to read them used a
+  // [a-z_]+ pattern, which cannot see a hyphen and returned a confident, wrong list.
+  //
+  // The device id is READ from the document rather than assumed to be 3: earlier batches add and
+  // remove devices on this track, and a check that hard-codes an id passes or fails for reasons
+  // that have nothing to do with the verb under test.
+  const samplerDoc = await saved('cliv_batch_s0');
+  const samplerDev = samplerDoc?.tracks?.find((t) => t.track_id === 0)
+    ?.device_chain?.find((d) => d.sampler !== undefined);
+  check(samplerDev !== undefined,
+        'track 0 still has a sampler to drive — read from the document, not assumed to be id 3',
+        `chain is ${JSON.stringify((samplerDoc?.tracks?.find((t) => t.track_id === 0)
+          ?.device_chain ?? []).map((d) => [d.device_id, d.kind]))}`);
+
+  if (samplerDev) {
+    const devId = String(samplerDev.device_id);
+    const slotId = String(samplerDev.sampler.slots?.[0]?.id ?? 1);
+    const readDev = (doc) => doc?.tracks?.find((t) => t.track_id === 0)
+      ?.device_chain?.find((d) => d.device_id === samplerDev.device_id);
+
+    // sampler-device: a DEVICE-wide field. voice_cap in the document, --field voice-cap on the
+    // wire — the verb's word and the stored word differ again.
+    const capBefore = samplerDev.sampler.voice_cap;
+    const sd = cli('do', 'sampler-device', '--track', '0', '--device', devId,
+                   '--field', 'voice-cap', '--value', '12');
+    check(sd.ok, 'do sampler-device is accepted', sd.out.slice(0, 140));
+    const afterSd = await saved('cliv_batch_sd');
+    check(readDev(afterSd)?.sampler?.voice_cap === 12,
+          'SAMPLER-DEVICE REACHES THE DEVICE — voice_cap is 12',
+          `was ${JSON.stringify(capBefore)}, now `
+          + `${JSON.stringify(readDev(afterSd)?.sampler?.voice_cap)}`);
+
+    // sampler-slot: a SLOT field. --field root writes root_key, so this also pins that the two
+    // names refer to one thing.
+    const rootBefore = samplerDev.sampler.slots?.[0]?.root_key;
+    const ss = cli('do', 'sampler-slot', '--track', '0', '--device', devId, '--slot', slotId,
+                   '--field', 'root', '--value', '72');
+    check(ss.ok, 'do sampler-slot is accepted', ss.out.slice(0, 140));
+    const afterSs = await saved('cliv_batch_ss');
+    const slotAfter = readDev(afterSs)?.sampler?.slots
+      ?.find((sl) => String(sl.id) === slotId);
+    check(slotAfter?.root_key === 72,
+          'SAMPLER-SLOT REACHES THAT SLOT — --field root writes root_key',
+          `was ${JSON.stringify(rootBefore)}, now ${JSON.stringify(slotAfter?.root_key)}`);
+    check(readDev(afterSs)?.sampler?.voice_cap === 12,
+          'and the device-wide field set a moment ago is still 12 — a slot write must not '
+          + 'rewrite the device',
+          `voice_cap=${JSON.stringify(readDev(afterSs)?.sampler?.voice_cap)}`);
+
+    // sampler-slot-name, the one verb here whose stored name matches its own.
+    const sn = cli('do', 'sampler-slot-name', '--track', '0', '--device', devId,
+                   '--slot', slotId, '--name', 'clivslot');
+    check(sn.ok, 'do sampler-slot-name is accepted', sn.out.slice(0, 140));
+    const afterSn = await saved('cliv_batch_sn');
+    const named = readDev(afterSn)?.sampler?.slots?.find((sl) => String(sl.id) === slotId);
+    check(named?.name === 'clivslot',
+          'SAMPLER-SLOT-NAME REACHES THE SLOT',
+          `name=${JSON.stringify(named?.name)}`);
+    check(named?.root_key === 72,
+          'and renaming did not undo the root it was given',
+          `root_key=${JSON.stringify(named?.root_key)}`);
+  }
+
   // ── remove-track, which must remove THAT track and leave the rest ────────────────────────
   //
   // Asserted on WHICH track went, not just the count. A remove that took the wrong one leaves the
