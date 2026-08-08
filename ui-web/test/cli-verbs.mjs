@@ -28,7 +28,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { startStack } from './stack.mjs';
 
@@ -1301,6 +1301,84 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
     check(/clivslot/.test(kit.out),
           'GET SAMPLER-KIT SHOWS THE SLOT NAME THIS FILE SET — the reader reflects real state',
           `no clivslot in ${JSON.stringify(kit.out.slice(0, 240))}`);
+  }
+
+  // ── the patcher: a node configured, then the graph saved as a preset ────────────────────────
+  //
+  // WHY --device IS PASSED TO patcher-node: without it the edit goes to the SHARED POOL rather
+  // than this device's own graph, and a project with per-device graphs then saves nothing. That
+  // is a data-loss shape this repo has already been bitten by once.
+  //
+  // patcher-config TAKES --device TOO, and it is not optional. The usage text lists only
+  // --track --node --type, which is what I believed on the first attempt; the arm actually calls
+  // patcher_device_flags(&args) like every other patcher verb. Without the flag the edit goes to
+  // the SHARED POOL, which since patcher-is-a-device is not the graph anything renders or saves —
+  // and it reports success. My first run wrote steps 8 / hits 3, saw them in the preset (which
+  // reads the live graph), and found the project's device node still bare {id, type}. That looked
+  // exactly like a serialization bug and was a missing flag in my own command line.
+  const patchDoc = await saved('cliv_batch_pc0');
+  const patchDev = patchDoc?.tracks?.find((t) => t.track_id === 0)
+    ?.device_chain?.find((d) => String(d.kind).includes('patcher'));
+  check(patchDev !== undefined,
+        'track 0 still has a patcher device to drive',
+        `chain=${JSON.stringify((patchDoc?.tracks?.find((t) => t.track_id === 0)
+          ?.device_chain ?? []).map((d) => [d.device_id, d.kind]))}`);
+
+  if (patchDev) {
+    const pdev = String(patchDev.device_id);
+    const pn = cli('do', 'patcher-node', '--track', '0', '--device', pdev, '--type', 'euclidean');
+    check(pn.ok, 'do patcher-node is accepted', pn.out.slice(0, 140));
+
+    const afterPn = await saved('cliv_batch_pn');
+    const devAfter = afterPn?.tracks?.find((t) => t.track_id === 0)
+      ?.device_chain?.find((d) => d.device_id === patchDev.device_id);
+    console.log(`  patcher device keys after add: ${JSON.stringify(Object.keys(devAfter ?? {}))}`);
+    const nodes = devAfter?.patcher?.nodes ?? devAfter?.nodes ?? [];
+    console.log(`  nodes: ${JSON.stringify(nodes).slice(0, 200)}`);
+    const euclid = nodes.find((n) => String(n.type).includes('euclid'));
+    check(euclid !== undefined,
+          'PATCHER-NODE REACHES THE DEVICE GRAPH — an euclidean node is saved on the device',
+          `nodes=${JSON.stringify(nodes).slice(0, 200)}`);
+
+    if (euclid) {
+      const pc = cli('do', 'patcher-config', '--track', '0', '--device', pdev,
+                     '--node', String(euclid.id),
+                     '--type', 'euclidean', '--steps', '8', '--hits', '3');
+      check(pc.ok, 'do patcher-config is accepted', pc.out.slice(0, 140));
+      const afterPc = await saved('cliv_batch_pc');
+      const nodes2 = (afterPc?.tracks?.find((t) => t.track_id === 0)
+        ?.device_chain?.find((d) => d.device_id === patchDev.device_id)?.patcher?.nodes) ?? [];
+      const euclid2 = nodes2.find((n) => n.id === euclid.id);
+      check(euclid2?.euclidean?.steps === 8 && euclid2?.euclidean?.hits === 3,
+            'PATCHER-CONFIG REACHES THAT NODE — steps 8 and hits 3 on the DEVICE graph, which '
+            + 'is where a project reads them from, and NOT merely in the shared pool',
+            `node ${euclid.id} = ${JSON.stringify(euclid2)}`);
+    }
+
+    // patcher-save writes the graph to <stack>/patcher/<name>.json. Asserted by reading the file
+    // and finding the node in it — not merely that a file appeared, which a canned empty preset
+    // would also satisfy.
+    const ps = cli('do', 'patcher-save', 'clivpatch');
+    check(ps.ok, 'do patcher-save is accepted', ps.out.slice(0, 140));
+    // NOT under the stack dir: the engine resolves this as ../presets/patcher relative to its own
+    // cwd, so a preset saved by a test lands in the REPO's presets/patcher and shows up as an
+    // untracked file in git status. Asserted where it really goes, and removed afterwards so a
+    // test run does not leave the working tree dirty.
+    const presetPath = `${ROOT}/presets/patcher/clivpatch.json`;
+    let preset = null;
+    for (let i = 0; i < 40; i++) {
+      if (existsSync(presetPath)) {
+        try { preset = JSON.parse(readFileSync(presetPath, 'utf8')); break; } catch { /* mid-write */ }
+      }
+      await sleep(150);
+    }
+    check(preset !== null,
+          'PATCHER-SAVE WRITES THE PRESET FILE',
+          `nothing readable at ${presetPath}`);
+    check((preset?.nodes ?? []).some((n) => String(n.type).includes('euclid')),
+          'and the preset contains the node that was added — not a canned empty graph',
+          `preset=${JSON.stringify(preset).slice(0, 200)}`);
+    try { rmSync(presetPath); } catch { /* already gone */ }
   }
 
   // ── remove-track, which must remove THAT track and leave the rest ────────────────────────
