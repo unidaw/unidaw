@@ -1139,6 +1139,61 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
           + `was pitch=73 nanotick=${rowNote.nanotick}`);
   }
 
+  // ── mod-link, which is refused unless modulation flows FORWARD ──────────────────────────────
+  //
+  // The source must not sit later in the chain than the target, so source and target are taken
+  // from the chain AS IT IS at this point — first device and last device — rather than from
+  // hard-coded ids. Earlier batches add and remove devices on this track, so any id written here
+  // would be a guess about the state sixty checks from now.
+  //
+  // unmod-link's REFUSAL is asserted further up; this is the pair that proves the verb does the
+  // thing it refuses to do wrongly — create a link, then take it away again by the id it was
+  // given.
+  const chainDoc = await saved('cliv_batch_ml0');
+  const chainNow2 = chainDoc?.tracks?.find((t) => t.track_id === 0)?.device_chain ?? [];
+  check(chainNow2.length >= 2,
+        'track 0 has at least two devices, so a forward link is possible at all',
+        `chain is ${JSON.stringify(chainNow2.map((d) => [d.device_id, d.kind]))}`);
+
+  if (chainNow2.length >= 2) {
+    const src = chainNow2[0].device_id;
+    const dst = chainNow2[chainNow2.length - 1].device_id;
+    const linksBefore = (chainDoc?.tracks?.find((t) => t.track_id === 0)?.mod_links ?? []).length;
+    const mkl = cli('do', 'mod-link', '--track', '0',
+                    '--source-device', String(src), '--target-device', String(dst),
+                    '--source-kind', 'macro', '--target-kind', 'vst',
+                    '--source-id', '0', '--target-id', '0', '--depth', '0.5');
+    check(mkl.ok, 'do mod-link is accepted', mkl.out.slice(0, 160));
+    const afterMkl = await saved('cliv_batch_ml');
+    const links = afterMkl?.tracks?.find((t) => t.track_id === 0)?.mod_links ?? [];
+    // `src` and `dst`, NOT source/target. I read the writer in project_file.cpp and got the leaf
+    // keys — device_id, source_id, kind — without the object names they sit under, so the first
+    // version of this looked for L.source.device_id, found undefined on a link that was perfectly
+    // correct, and reported the verb broken.
+    const mineLink = links.find((L) => L.src?.device_id === src && L.dst?.device_id === dst);
+    check(links.length === linksBefore + 1 && mineLink !== undefined,
+          'MOD-LINK REACHES THE TRACK — a link from the first device to the last',
+          `${linksBefore} -> ${links.length}: ${JSON.stringify(
+            links.map((L) => [L.link_id, L.src?.device_id, L.dst?.device_id]))}`);
+    check(mineLink?.depth === 0.5 && mineLink?.src?.kind === 'macro'
+          && mineLink?.dst?.kind === 'vst_param',
+          'and it carries the depth and both kinds it was given, not just the endpoints',
+          `depth=${JSON.stringify(mineLink?.depth)} src.kind=${JSON.stringify(mineLink?.src?.kind)}`
+          + ` dst.kind=${JSON.stringify(mineLink?.dst?.kind)}`);
+
+    if (mineLink) {
+      // And back off again, by the id the engine assigned — which is the whole reason link_id
+      // exists and the reason daw-cli refuses to print the AUTO sentinel as if it were one.
+      const uml = cli('do', 'unmod-link', '--track', '0', '--link', String(mineLink.link_id));
+      check(uml.ok, 'do unmod-link is accepted for a link that DOES exist', uml.out.slice(0, 160));
+      const afterUml = await saved('cliv_batch_uml');
+      const left = afterUml?.tracks?.find((t) => t.track_id === 0)?.mod_links ?? [];
+      check(left.find((L) => L.link_id === mineLink.link_id) === undefined,
+            'UNMOD-LINK REMOVES THAT LINK — the round trip closes',
+            `link ${mineLink.link_id} still in ${JSON.stringify(left.map((L) => L.link_id))}`);
+    }
+  }
+
   // ── remove-track, which must remove THAT track and leave the rest ────────────────────────
   //
   // Asserted on WHICH track went, not just the count. A remove that took the wrong one leaves the
