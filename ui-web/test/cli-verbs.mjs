@@ -773,6 +773,26 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
         'AND A REFUSED MOD-LINK REMOVAL SAYS THERE IS NO SUCH LINK',
         `exit=${ml.ok ? 0 : 'nonzero'} said ${JSON.stringify(ml.out.slice(0, 160))}`);
 
+  // ── AND THE GLOBAL SCOPE, which the track matcher could not see ─────────────────────────────
+  //
+  // The journal writes "global" for song-wide commands and "master" for the master track, NOT
+  // track:4294967295 and track:4294901760 — so a matcher that only knew the track form missed
+  // every refusal on both. 4/5 is a typo, not a time signature, and the engine refuses rather than
+  // clamping it to 4/4; the successful time-sig in batch 1 above is this check's control.
+  const badSig = cli('do', 'time-sig', '--nanotick', '0', '--sig', '4/5');
+  check(!badSig.ok && /time signature/.test(badSig.out),
+        'A REFUSED TIME-SIG EXITS NON-ZERO AND NAMES THE TYPO',
+        `exit=${badSig.ok ? 0 : 'nonzero'} said ${JSON.stringify(badSig.out.slice(0, 160))}`);
+  check(!/4294967295/.test(badSig.out),
+        'and it does NOT report the global sentinel as if it were a track id',
+        `${JSON.stringify(badSig.out.slice(0, 160))} — 4294967295 in a track field is a number a `
+        + 'reader will try to use');
+
+  const zeroBars = cli('do', 'time', 'insert', '--nanotick', '0', '--bars', '0');
+  check(!zeroBars.ok,
+        'AND A ZERO-BAR RIPPLE IS REPORTED AS THE NON-EDIT IT IS',
+        `exit=${zeroBars.ok ? 0 : 'nonzero'} said ${JSON.stringify(zeroBars.out.slice(0, 160))}`);
+
   // ── remove-track, which must remove THAT track and leave the rest ────────────────────────
   //
   // Asserted on WHICH track went, not just the count. A remove that took the wrong one leaves the

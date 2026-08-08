@@ -1194,6 +1194,14 @@ fn refusal_sentence(reason: &str) -> String {
                               after its target is refused — move the source earlier or pick a \
                               later target",
         "version" => "the edit quoted a base version the engine has already moved past",
+        "invalid_signature" => "that is not a time signature — the denominator must be a power of \
+                                two, and 4/5 is refused rather than quietly clamped to 4/4, which \
+                                would put the ruler somewhere nobody asked for",
+        "zero_delta" => "a ripple of zero bars would change nothing",
+        "no_track" => "there is no such track",
+        "automation_in_removed_bars" => "the bars being removed carry automation, which would be \
+                                         destroyed — clear it first, or remove a range that does \
+                                         not cover it",
         other => return format!("the engine called it {other:?}"),
     }
     .to_string()
@@ -1209,6 +1217,12 @@ const CHAIN_FAMILY: DiffFamily =
     DiffFamily { ok_type: daw_bridge::layout::UiDiffType::ChainSnapshot as u16 };
 const ROUTING_FAMILY: DiffFamily =
     DiffFamily { ok_type: daw_bridge::layout::UiDiffType::RoutingSnapshot as u16 };
+/// GLOBAL-scope commands have no per-track snapshot to wait on, so `ok_type` is None (0), which
+/// never matches a real diff: the journal carries both answers for these — "received" when the
+/// engine acted, "rejected:<reason>" when it did not.
+const GLOBAL_FAMILY: DiffFamily =
+    DiffFamily { ok_type: daw_bridge::layout::UiDiffType::None as u16 };
+
 const MOD_FAMILY: DiffFamily =
     DiffFamily { ok_type: daw_bridge::layout::UiDiffType::ModSnapshot as u16 };
 
@@ -1216,30 +1230,45 @@ fn history_path() -> std::path::PathBuf {
     std::path::Path::new(&daw_bridge::project::engine_project_dir()).join("history.jsonl")
 }
 
-/// The first refusal for `scope` written to the journal after `offset`, if any.
+/// What the journal says about `scope` after `offset`.
 ///
 /// Substring matching on a line the engine writes without spaces
 /// (`{"seq":1,...,"scope":"track:0","op":"chain","outcome":"rejected:add_failed",...}`) rather
 /// than a JSON parse: the two keys are unambiguous and this avoids taking a dependency to read one
 /// field out of one line.
-fn journal_refusal_since(offset: u64, scope: &str) -> Option<String> {
+///
+/// A REJECTION ANYWHERE IN THE TAIL BEATS AN ACCEPTANCE, whatever their order, because some
+/// handlers journal "received" as the command arrives and the refusal only afterwards
+/// (engine_clip_edit.cpp writes exactly that pair). Returning on the first line seen would read
+/// the arrival as the answer.
+enum JournalSays {
+    Refused(String),
+    Received,
+}
+
+fn journal_since(offset: u64, scope: &str) -> Option<JournalSays> {
     use std::io::{Read, Seek};
     let mut file = std::fs::File::open(history_path()).ok()?;
     file.seek(std::io::SeekFrom::Start(offset)).ok()?;
     let mut tail = String::new();
     file.read_to_string(&mut tail).ok()?;
     let want_scope = format!("\"scope\":\"{scope}\"");
+    let mut received = false;
     for line in tail.lines() {
         if !line.contains(&want_scope) {
             continue;
         }
-        let Some(at) = line.find("\"outcome\":\"rejected:") else {
-            continue;
-        };
-        let rest = &line[at + "\"outcome\":\"rejected:".len()..];
-        return Some(rest.split('"').next().unwrap_or("").to_string());
+        if let Some(at) = line.find("\"outcome\":\"rejected:") {
+            let rest = &line[at + "\"outcome\":\"rejected:".len()..];
+            return Some(JournalSays::Refused(
+                rest.split('"').next().unwrap_or("").to_string(),
+            ));
+        }
+        if line.contains("\"outcome\":\"received\"") || line.contains("\"outcome\":\"ok\"") {
+            received = true;
+        }
     }
-    None
+    received.then_some(JournalSays::Received)
 }
 
 /// WHAT THE ENGINE DID WITH THE COMMAND WE JUST SENT.
@@ -1277,6 +1306,20 @@ enum ChainOutcome {
     Unknown,
 }
 
+/// The journal's word for a command's scope. NOT `format!("track:{id}")` — the master track is
+/// written as "master" and a global command as "global" (engine_history_journal.cpp), so a matcher
+/// that only knew the track form would silently miss every refusal on the master track and every
+/// global one. `kUiGlobalScope` is the id the engine itself passes for global.
+const UI_GLOBAL_SCOPE: u32 = 0xFFFF_FFFF;
+
+fn journal_scope(track: u32) -> String {
+    match track {
+        UI_GLOBAL_SCOPE => "global".to_string(),
+        daw_bridge::layout::MASTER_TRACK_ID => "master".to_string(),
+        id => format!("track:{id}"),
+    }
+}
+
 fn await_outcome(
     handle: &EngineHandle,
     family: &DiffFamily,
@@ -1284,11 +1327,24 @@ fn await_outcome(
     before_len: usize,
     journal_at: u64,
 ) -> ChainOutcome {
-    let scope = format!("track:{track}");
+    let scope = journal_scope(track);
     for _ in 0..150 {
-        if let Some(reason) = journal_refusal_since(journal_at, &scope) {
-            return ChainOutcome::Refused { reason };
+        match journal_since(journal_at, &scope) {
+            Some(JournalSays::Refused(reason)) => return ChainOutcome::Refused { reason },
+            // An acceptance is only believed after a grace period, for the reason journal_since
+            // gives: the pair is written back to back under one lock, so 20ms is generous, and
+            // believing the arrival immediately would report a refused edit as applied.
+            Some(JournalSays::Received) => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                return match journal_since(journal_at, &scope) {
+                    Some(JournalSays::Refused(reason)) => ChainOutcome::Refused { reason },
+                    _ => ChainOutcome::Applied,
+                };
+            }
+            None => {}
         }
+        // A family with no snapshot type has no ring signal to wait on — the journal is the whole
+        // answer, and `ok_type` of None (0) never matches a real diff.
         for (diff_type, payload) in handle.peek_ui_diffs().iter().skip(before_len) {
             let track_id =
                 u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
@@ -1324,20 +1380,30 @@ fn report_outcome_from(
     before_len: usize,
     journal_at: u64,
 ) -> i32 {
+    // NEVER print the global sentinel as if it were a track. 4294967295 in a "track" field is a
+    // number a reader will try to use, and the master track's 4294901760 is no better — both get
+    // the journal's own word for the scope instead.
+    let (where_json, where_prose) = match track {
+        UI_GLOBAL_SCOPE => ("\"scope\": \"global\"".to_string(), "for the song".to_string()),
+        daw_bridge::layout::MASTER_TRACK_ID => {
+            ("\"track\": \"master\"".to_string(), "on the master track".to_string())
+        }
+        id => (format!("\"track\": {id}"), format!("on track {id}")),
+    };
     match await_outcome(handle, family, track, before_len, journal_at) {
         ChainOutcome::Refused { reason } => {
             eprintln!(
-                "daw-cli: the engine refused {verb} on track {track}: {}",
+                "daw-cli: the engine refused {verb} {where_prose}: {}",
                 refusal_sentence(&reason)
             );
             1
         }
         ChainOutcome::Applied => {
-            println!("{{ \"applied\": {verb:?}, \"track\": {track}{extra} }}");
+            println!("{{ \"applied\": {verb:?}, {where_json}{extra} }}");
             0
         }
         ChainOutcome::Unknown => {
-            println!("{{ \"sent\": {verb:?}, \"track\": {track}{extra}, \"applied\": \"unknown\" }}");
+            println!("{{ \"sent\": {verb:?}, {where_json}{extra}, \"applied\": \"unknown\" }}");
             0
         }
     }
@@ -4883,12 +4949,15 @@ fn main() {
                         denominator: den,
                         ..Default::default()
                     };
-                    match handle.send_arrange_time_command(payload) {
-                        Ok(()) => {
-                            println!("{{ \"sent\": \"time-sig\", \"nanotick\": {tick}, \"sig\": \"{num}/{den}\", \"flatten\": {flatten} }}");
-                            0
+                    {
+                        let (before_len, journal_at) = outcome_marks(&handle);
+                        match handle.send_arrange_time_command(payload) {
+                            Ok(()) => report_outcome_from(
+                                &handle, &GLOBAL_FAMILY, "time-sig", UI_GLOBAL_SCOPE,
+                                &format!(", \"nanotick\": {tick}, \"sig\": \"{num}/{den}\", \"flatten\": {flatten}"),
+                                before_len, journal_at),
+                            Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                         }
-                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }
                 // v29: THE RIPPLE, as its own command. `--bars` is signed: positive inserts,
@@ -4923,12 +4992,15 @@ removed is the whole command");
                         delta: if sub == "insert" { bars } else { -bars },
                         ..Default::default()
                     };
-                    match handle.send_arrange_time_command(payload) {
-                        Ok(()) => {
-                            println!("{{ \"sent\": \"time {sub}\", \"nanotick\": {tick}, \"bars\": {bars} }}");
-                            0
+                    {
+                        let (before_len, journal_at) = outcome_marks(&handle);
+                        match handle.send_arrange_time_command(payload) {
+                            Ok(()) => report_outcome_from(
+                                &handle, &GLOBAL_FAMILY, &format!("time {sub}"), UI_GLOBAL_SCOPE,
+                                &format!(", \"nanotick\": {tick}, \"bars\": {bars}"),
+                                before_len, journal_at),
+                            Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                         }
-                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }
                 Some(&"routing") => match routing_command(&args) {

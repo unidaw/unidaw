@@ -2820,11 +2820,11 @@ test('every suite the runbook cites exists, and the unswept ones are flagged as 
  * instructions for this very task.
  *
  * MEASURED 2026-08-08: of 69 verbs the registry claims, 37 were not so much as MENTIONED in any
- * suite that invokes daw-cli. Pinned so the number can only go down. It is 27 now. time-sig,
+ * suite that invokes daw-cli. Pinned so the number can only go down. It is 26 now. time-sig,
  * lines-per-beat, remove-track, harmony-quantize, clip-name, set-bypass, note-overlap, marker,
- * add-device and unmod-link are driven in cli-verbs.mjs and asserted from the SAVED DOCUMENT (or,
- * for the refusals, from the exit code and the sentence), which is what tells an arm that works
- * from an arm that merely exists.
+ * add-device, unmod-link and time are driven in cli-verbs.mjs and asserted from the SAVED DOCUMENT
+ * (or, for the refusals, from the exit code and the sentence), which is what tells an arm that
+ * works from an arm that merely exists.
  *
  * ONE OF THOSE NINE ARGUED BACK, and it is worth recording. `add-device --kind sampler` on a track
  * that already has one is REFUSED by the engine (chain.rejected, reason add_failed) — a track takes
@@ -2855,7 +2855,7 @@ const CLI_NEVER_EXERCISED = [
   'patcher-save', 'position', 'quantize', 'remove-placement', 'resize-placement',
   'sampler-device', 'sampler-emit-rows', 'sampler-env-draw', 'sampler-filter', 'sampler-kit',
   'sampler-slot', 'sampler-slot-name', 'sampler-vintage', 'scratch', 'set-row-ops',
-  'sound-addressed', 'time',
+  'sound-addressed',
 ];
 
 const AGENT_NEVER_EXERCISED = [
