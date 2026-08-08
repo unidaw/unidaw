@@ -116,6 +116,34 @@ const loaded = await page.waitForFunction(
     return i >= 0 && c.params[i] > 0;
   },
   null, { timeout: 45000 }).then(() => true).catch(() => false);
+/*
+ * WHEN THIS TIMES OUT, SAY WHAT THE PAGE ACTUALLY HAD.
+ *
+ * This suite flakes, roughly one sweep in three, and the engine logs cannot explain it. The
+ * differential (sweep 27, the failing run against its own retry, both kept by the sweep) shows
+ * the engine doing everything right in BOTH: project.plugin_resolved for Identity,
+ * chain.reconciled with plugins:1, "Host: reconciled chain to 1 plugin(s)". The one difference is
+ * that the failing run received NO device.params_query at all — and that request comes from the
+ * PAGE, when it renders the rack. So the question is what the page had, and nothing on disk
+ * records it.
+ *
+ * A bare `check(loaded, ...)` throws that away: it reports "the plugin loads and publishes its
+ * parameters" failed, which is the one thing already known. So on failure only, dump the probe —
+ * whether the chain arrived at all, which cards it holds, and what parameter counts they carry.
+ * That distinguishes "no chain reached the page", "the chain reached it without Identity" and
+ * "Identity is there with zero parameters", which are three different bugs wearing one symptom.
+ *
+ * Costs nothing on the happy path and turns the next occurrence into evidence instead of another
+ * round of this.
+ */
+if (!loaded) {
+  const probe = await page.evaluate(() => {
+    const c = window.__uni.chainProbe();
+    return c ? { known: c.known, version: c.version, cards: c.cards, titles: c.titles,
+                 params: c.params, notice: c.notice } : null;
+  }).catch(() => null);
+  console.log(`  PROBE on failure: ${JSON.stringify(probe)}`);
+}
 check(loaded, 'the plugin loads and publishes its parameters');
 await page.waitForTimeout(1500);
 
