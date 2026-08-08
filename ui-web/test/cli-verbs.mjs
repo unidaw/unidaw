@@ -1475,6 +1475,65 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
         `${JSON.stringify(idsBefore)} -> ${JSON.stringify(idsAfter)}`);
 }
 
+/*
+ * ── audio-clip, which needs a project this file's fixture cannot be ─────────────────────────────
+ *
+ * Every check above runs against `cliverbs`, whose clips are SYMBOLIC. audio-clip edits fields
+ * that only exist on an audio clip, so it was unreachable there — which is most of the reason it
+ * stayed unexercised while simpler verbs came off the list.
+ *
+ * `waveform` is the fixture the stack already ships and audio-clip.mjs already uses; that suite
+ * drives the op through the PAGE console (`window.__uni.run('audio-clip ...')`), so the CLI arm
+ * was still never run. Loading it here at the end, after every cliverbs assertion is done, gets
+ * the verb a real subject without a second fixture to maintain.
+ *
+ * The fields live under an `audio` CHILD OBJECT — {source_path, source_start_frame, gain_db,
+ * fade_in, fade_out} — not at the top of the clip, which is why a first look at the clip's own
+ * keys shows nothing about fades at all.
+ */
+{
+  const wl = cli('do', 'load', 'waveform');
+  check(wl.ok, 'do load waveform is accepted', wl.out.slice(0, 140));
+  let wdoc = null;
+  for (let i = 0; i < 40; i++) {
+    wdoc = await saved('cliv_wave0');
+    if ((wdoc?.clips ?? []).some((c) => c.kind === 'audio')) break;
+    await sleep(150);
+  }
+  const audioClip = (wdoc?.clips ?? []).find((c) => c.kind === 'audio');
+  check(audioClip !== undefined,
+        'the waveform project really has an AUDIO clip to edit — not the symbolic ones above',
+        `clips=${JSON.stringify((wdoc?.clips ?? []).map((c) => [c.id, c.kind]))}`);
+
+  if (audioClip) {
+    const trackOf = (wdoc?.tracks ?? []).find((t) =>
+      (t.placements ?? []).some((pl) => pl.clip_id === audioClip.id));
+    const trk = String(trackOf?.track_id ?? 0);
+    const fadeBefore = audioClip.audio?.fade_in ?? 0;
+
+    const ac = cli('do', 'audio-clip', '--track', trk, '--clip', String(audioClip.id),
+                   '--field', 'fade-in', '--value', String(Q * 2));
+    check(ac.ok, 'do audio-clip is accepted', ac.out.slice(0, 140));
+    const afterAc = await saved('cliv_wave1');
+    const clipAfter = (afterAc?.clips ?? []).find((c) => c.id === audioClip.id);
+    check(clipAfter?.audio?.fade_in === Q * 2,
+          'AUDIO-CLIP REACHES THE CLIP — fade_in is stored under the audio child object',
+          `was ${fadeBefore}, now ${JSON.stringify(clipAfter?.audio?.fade_in)}, wanted ${Q * 2}`);
+
+    // A second field, because one write proves the path and two prove the FIELD SELECTOR: a verb
+    // that ignored --field and always wrote fade-in would pass the check above on its own.
+    const ac2 = cli('do', 'audio-clip', '--track', trk, '--clip', String(audioClip.id),
+                    '--field', 'fade-out', '--value', String(Q));
+    check(ac2.ok, 'do audio-clip is accepted for a second field', ac2.out.slice(0, 140));
+    const afterAc2 = await saved('cliv_wave2');
+    const clip2 = (afterAc2?.clips ?? []).find((c) => c.id === audioClip.id);
+    check(clip2?.audio?.fade_out === Q && clip2?.audio?.fade_in === Q * 2,
+          'and --field SELECTS: fade-out moved and fade-in kept the value it was given',
+          `fade_in=${JSON.stringify(clip2?.audio?.fade_in)} `
+          + `fade_out=${JSON.stringify(clip2?.audio?.fade_out)}`);
+  }
+}
+
 await stack.stop();
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} (${pass} checks${fail ? `, ${fail} failed` : ''})`);
 process.exit(fail === 0 ? 0 : 1);
