@@ -2809,6 +2809,45 @@ test('every suite the runbook cites exists, and the unswept ones are flagged as 
  * appears there and was broken in a branch. It is a floor: a tool nothing has ever called is a
  * capability nobody has ever seen work, and that is worth knowing separately from a bug.
  */
+/*
+ * THE CLI COLUMN CLAIMS A VERB EXISTS. NOTHING CHECKED THAT ANYTHING EVER RUNS IT.
+ *
+ * The parity check above greps daw-cli's SOURCE for the verb name, which answers "is there an arm
+ * for this?" and not "does that arm work?". The agent column has had a driven-against-an-engine
+ * floor for a while (AGENT_NEVER_EXERCISED, below); the CLI column has had nothing, so a verb
+ * could be added, listed in the registry, turn its row green, and never once be executed. That is
+ * the exact failure this project keeps writing down, and the runbook warns about it in the
+ * instructions for this very task.
+ *
+ * MEASURED 2026-08-08: of 69 verbs the registry claims, 37 are not so much as MENTIONED in any
+ * suite that invokes daw-cli. They are pinned here so the number can only go down.
+ *
+ * THE MATCHER IS DELIBERATELY LOOSE, and this is the honest caveat. The agent test can look for
+ * `tool: "name"` because every ToolCall is written that way. daw-cli is invoked several ways —
+ * cli-verbs.mjs has a `cli('do', 'verb')` helper, placement.mjs builds a path and calls
+ * execFileSync directly, kit.mjs does its own thing — so this only asks whether the verb appears
+ * as a QUOTED STRING anywhere in a suite that touches daw-cli. That over-counts: a verb named in
+ * a comment passes. It cannot under-count, which is the direction that matters for a floor.
+ *
+ * My first attempt matched `cli('do', 'verb')` exactly and reported 52 missing. That was a
+ * property of the pattern, not of the suite — the same mistake as counting `handle.send_*` and
+ * missing two send paths spelled `h.send_*`. Check what a matcher can see before believing its
+ * count.
+ *
+ * TO SHRINK THIS LIST: drive the verb in a suite against a live stack and assert what it CHANGED,
+ * then delete the line. Adding a verb to daw-cli and to the registry without doing that will now
+ * fail this test rather than silently turning a row green.
+ */
+const CLI_NEVER_EXERCISED = [
+  'add-device', 'add-placement', 'arrangement', 'audio-clip', 'automation-points', 'clip-grid',
+  'clip-name', 'delete-automation', 'delete-note', 'harmony-quantize', 'lines-per-beat',
+  'marker', 'mod-link', 'move-placement', 'note-overlap', 'patcher-config', 'patcher-save',
+  'position', 'quantize', 'remove-placement', 'remove-track', 'resize-placement',
+  'sampler-device', 'sampler-emit-rows', 'sampler-env-draw', 'sampler-filter', 'sampler-kit',
+  'sampler-slot', 'sampler-slot-name', 'sampler-vintage', 'scratch', 'set-bypass',
+  'set-row-ops', 'sound-addressed', 'time', 'time-sig', 'unmod-link',
+];
+
 const AGENT_NEVER_EXERCISED = [
   /*
    * THREE, and each is a HARNESS limit with its coverage named — not an unwritten test.
@@ -2828,6 +2867,34 @@ const AGENT_NEVER_EXERCISED = [
   'sampler_slice',
   'sampler_emit_rows',
 ];
+
+test('every CLI verb the registry claims is at least mentioned by a suite that runs daw-cli', async () => {
+  const { readFileSync, readdirSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const here = new URL('.', import.meta.url).pathname;
+
+  // Only suites that actually invoke daw-cli. A verb named in a suite that never runs the binary
+  // is not evidence of anything, and counting those would make this floor agree with itself.
+  const files = readdirSync(here).filter((f) => f.endsWith('.mjs') && f !== 'unit.mjs');
+  const corpus = files
+    .map((f) => readFileSync(join(here, f), 'utf8'))
+    .filter((t) => t.includes('daw-cli'))
+    .join('\n');
+  assert.ok(corpus.length > 1000, 'the daw-cli-driving corpus was read');
+
+  const claimed = [...new Set(Object.values(OP_REGISTRY).map((e) => e.cli).filter(Boolean))];
+  assert.ok(claimed.length > 40, `the registry still claims CLI verbs (${claimed.length})`);
+
+  const never = claimed.filter((v) => !corpus.includes(`'${v}'`) && !corpus.includes(`"${v}"`))
+                       .sort();
+
+  assert.deepEqual(never, [...CLI_NEVER_EXERCISED].sort(),
+    'the set of registry-claimed CLI verbs that no daw-cli-running suite even mentions changed. '
+    + 'Growing it means a verb was added and never driven — which turns a registry row green '
+    + 'while proving nothing, and is the failure the parity check cannot see because it greps '
+    + "daw-cli's own source. Shrinking it is good: drive the verb against a live stack, assert "
+    + 'what it CHANGED, and delete the line.');
+});
 
 test('every agent tool the registry claims has been driven against a real engine', async () => {
   const { readFileSync, readdirSync } = await import('node:fs');
