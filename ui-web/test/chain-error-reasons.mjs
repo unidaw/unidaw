@@ -96,6 +96,32 @@ await settle(1300);
         'the raw code is gone from the sentence', JSON.stringify(said));
 }
 
+/* ── AND A MODULATION REFUSAL, the other family that was printing a code ───────────────────
+ *
+ * `mod-error` was worded at the same time as `chain-error` and needs the same treatment: a
+ * sentence that has never been rendered is a sentence nobody has checked. Removing a link that is
+ * not there is the one mod code that can be provoked without building a chain first
+ * (kModErrLinkMissing = 2, engine_modlink_commands.cpp).
+ *
+ * THE ONE THAT MATTERS MOST IS CODE 5, the order violation — modulation flows forward, so a
+ * source later in the chain than its target is refused, and refusing it silently is what makes a
+ * knob that will not move look like a broken knob. It needs two devices and a backwards link to
+ * provoke; params.mjs already exercises that path, and it is left there rather than duplicated.
+ */
+{
+  const before = await reject();
+  await page.evaluate(() => window.__uni.send({ type: 'mod', op: 'remove', track: 0, link: 999 }));
+  const arrived = await page.waitForFunction(
+    (prev) => String((window.__uni.state() || {}).reject || '') !== prev,
+    before, { timeout: 8000 }).then(() => true).catch(() => false);
+  const said = arrived ? await reject() : '';
+  console.log(`  the reject line says: ${JSON.stringify(said)}`);
+  check(/no such modulation link/.test(said),
+        'REMOVING A MODULATION LINK THAT IS NOT THERE SAYS SO',
+        `${JSON.stringify(said)} — "mod error on track 0 (code 2)" is the same fact and tells the `
+        + 'reader nothing they can act on');
+}
+
 check(errors.length === 0, 'nothing threw in the browser', errors.slice(0, 3).join(' | '));
 
 await browser.close();

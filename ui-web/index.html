@@ -869,6 +869,42 @@ function describeEngineEvent(e) {
     }
     return `${where}: the chain refused that (code ${e.code})`;
   }
+  /*
+   * ROUTING AND MODULATION REFUSALS, the other two families that reached the generic line.
+   *
+   * Unlike the chain codes these are NAMED in the engine, so the wording is a translation rather
+   * than an inference: `kRoutingErr*` in engine_track_commands.cpp and `kModErr*` in
+   * engine_modlink_commands.cpp.
+   *
+   * THE ORDER VIOLATION IS THE ONE THAT MATTERS. Modulation flows forward — a source later in the
+   * chain than its target would be read a block after it was written — so the engine refuses it,
+   * and refusing it silently is what makes a knob that will not move look like a broken knob. The
+   * engine's own comment records that this check was once stricter than the LOADER's, so
+   * rack.uniproj.json shipped a link that worked on load and could never be recreated by hand.
+   * Same-device is legal and is the common case with per-device patchers; only backwards is not.
+   */
+  if (e.kind === 'routing-error') {
+    const where = e.track === MASTER_TRACK_ID ? 'the master' : `track ${e.track}`;
+    if (e.code === 1) return `${where} does not exist — that routing change went nowhere`;
+    if (e.code === 2) return `${where}: that is not a routing kind this build knows`;
+    if (e.code === 3) {
+      return `${where}: one of those routing targets is not a track that can be routed to`;
+    }
+    return `${where}: the routing was refused (code ${e.code})`;
+  }
+  if (e.kind === 'mod-error') {
+    const where = e.track === MASTER_TRACK_ID ? 'the master' : `track ${e.track}`;
+    if (e.code === 1) return `${where} does not exist — that modulation change went nowhere`;
+    if (e.code === 2) return `${where} has no such modulation link`;
+    if (e.code === 3) return `${where}: that is not a modulation source or target kind`;
+    if (e.code === 4) return `${where}: that device is not in the chain`;
+    if (e.code === 5) {
+      return `${where}: modulation flows FORWARD — the source has to sit before its target in `
+           + 'the chain, or the value arrives a block late. Same device is fine; backwards is not';
+    }
+    if (e.code === 6) return `${where} already has that modulation link`;
+    return `${where}: the modulation was refused (code ${e.code})`;
+  }
   return `${e.kind.replace('-', ' ')} on track ${e.track} (code ${e.code})`;
 }
 
