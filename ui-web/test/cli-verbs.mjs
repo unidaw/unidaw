@@ -572,6 +572,75 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
         'and it says why', again.out.slice(0, 200));
 }
 
+/*
+ * ── A BATCH OF VERBS THAT HAD NEVER BEEN RUN ────────────────────────────────────────────────
+ *
+ * unit.mjs pins CLI_NEVER_EXERCISED: of 69 verbs the registry claims, 37 were not so much as
+ * MENTIONED by any suite that invokes daw-cli. The parity check greps daw-cli's SOURCE, so those
+ * rows were green on the strength of an arm existing, which is not the same as an arm working —
+ * the agent side learned that when `patcher_node` sent every link to port 0 and reported success.
+ *
+ * These three are the first batch off that list. Each is asserted from the SAVED DOCUMENT rather
+ * than from the exit code, because daw-cli exits 0 for a command the engine then drops — this
+ * file's own header says so, and it is the reason a green row proved nothing in the first place.
+ */
+{
+  const before = await saved('cliv_batch_before');
+  const tracksBefore = (before?.tracks ?? []).length;
+  check(tracksBefore >= 2, 'two or more tracks to work with', String(tracksBefore));
+
+  // ── time-sig, song-scoped ────────────────────────────────────────────────────────────────
+  const ts = cli('do', 'time-sig', '--sig', '7/8');
+  check(ts.ok, 'do time-sig is accepted', ts.out.slice(0, 120));
+  const afterTs = await saved('cliv_batch_ts');
+  /*
+   * `timebase.time_sig_*`, which is where project_file.cpp writes the SONG signature (its
+   * beginChildObject("timebase") at line 553). My first version guessed the clip's own pair and
+   * read undefined — a wrong PATH reporting as a product failure, which is the shape this whole
+   * batch exists to avoid. A clip carries its own time_sig_* for a clip-level override; the song
+   * default is not there.
+   */
+  const num = afterTs?.timebase?.time_sig_numerator;
+  const den = afterTs?.timebase?.time_sig_denominator;
+  check(num === 7 && den === 8,
+        'TIME-SIG REACHES THE DOCUMENT — 7/8 is stored, not just accepted',
+        `numerator=${num} denominator=${den}`);
+
+  // ── lines-per-beat, per track ────────────────────────────────────────────────────────────
+  const lpb = cli('do', 'lines-per-beat', '--track', '0', '--lines', '8');
+  check(lpb.ok, 'do lines-per-beat is accepted', lpb.out.slice(0, 120));
+  const afterLpb = await saved('cliv_batch_lpb');
+  const lines = afterLpb?.tracks?.find((t) => t.track_id === 0)?.lines_per_beat;
+  check(lines === 8,
+        'LINES-PER-BEAT REACHES THE TRACK — 8 is stored',
+        `track 0 lines_per_beat=${lines}`);
+
+  // ── remove-track, which must remove THAT track and leave the rest ────────────────────────
+  //
+  // Asserted on WHICH track went, not just the count. A remove that took the wrong one leaves the
+  // same number behind, and a count check would pass for it.
+  /*
+   * NOT THE MASTER. `kMasterTrackId` is 0xFFFF0000 (4294901760) and it appears in the saved
+   * tracks list, so "the last track" selected it — and the engine correctly refuses to remove the
+   * master. My first version did exactly that and reported "remove-track does not remove track
+   * 4294901760", which is the engine being right and the test being wrong.
+   */
+  const MASTER = 0xFFFF0000;
+  const idsBefore = (afterLpb?.tracks ?? []).map((t) => t.track_id).filter((i) => i !== MASTER);
+  const victim = idsBefore[idsBefore.length - 1];
+  const rm = cli('do', 'remove-track', '--track', String(victim));
+  check(rm.ok, 'do remove-track is accepted', rm.out.slice(0, 120));
+  const afterRm = await saved('cliv_batch_rm');
+  const idsAfter = (afterRm?.tracks ?? []).map((t) => t.track_id).filter((i) => i !== MASTER);
+  check(!idsAfter.includes(victim),
+        `REMOVE-TRACK REMOVES TRACK ${victim} — from the document, not just the reply`,
+        `${JSON.stringify(idsBefore)} -> ${JSON.stringify(idsAfter)}`);
+  check(idsAfter.length === idsBefore.length - 1 && idsBefore.filter((i) => i !== victim)
+          .every((i) => idsAfter.includes(i)),
+        'and leaves every other track alone',
+        `${JSON.stringify(idsBefore)} -> ${JSON.stringify(idsAfter)}`);
+}
+
 await stack.stop();
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} (${pass} checks${fail ? `, ${fail} failed` : ''})`);
 process.exit(fail === 0 ? 0 : 1);
