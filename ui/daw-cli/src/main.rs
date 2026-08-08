@@ -1168,68 +1168,135 @@ fn await_clip_outcome(
     ClipOutcome::Unknown
 }
 
-/// WHAT THE ENGINE DID WITH THE CHAIN COMMAND WE JUST SENT.
+/// The engine's refusal reasons, worded.
+///
+/// The reason NAMES come from the engine — `errorScopeName` in engine_pure.cpp writes them into
+/// the journal as `rejected:<name>` — so this maps a name to a sentence rather than a number to a
+/// name, and an unmapped reason falls through to the engine's own word, which is already better
+/// than a code. What a sentence adds is what the reader can DO: "order_violation" and "modulation
+/// flows forward, so the source must sit before its target" are the same fact and only one of them
+/// is actionable.
+fn refusal_sentence(reason: &str) -> String {
+    match reason {
+        "add_failed" => "the device could not be added — a track takes one head-of-chain \
+                         instrument, so a second sampler or VST instrument on a track that has \
+                         one is refused",
+        "remove_failed" => "there is no such device to remove",
+        "move_failed" => "the device could not be moved to that position",
+        "update_failed" => "the update changed nothing — the device id may not exist on that track",
+        "track_missing" => "there is no such track",
+        "link_missing" => "there is no such modulation link",
+        "link_exists" => "that link already exists",
+        "invalid_kind" => "that is not a kind this engine knows",
+        "invalid_target" => "the route has no such target",
+        "invalid_device" => "one of the devices in the link does not exist on that track",
+        "order_violation" => "modulation flows FORWARD along the chain, so a source that sits \
+                              after its target is refused — move the source earlier or pick a \
+                              later target",
+        "version" => "the edit quoted a base version the engine has already moved past",
+        other => return format!("the engine called it {other:?}"),
+    }
+    .to_string()
+}
+
+/// The diff type the engine publishes for this family when it ACTED. Used as the fast positive
+/// signal only — see `await_outcome` for why the refusal does not come from the ring.
+struct DiffFamily {
+    ok_type: u16,
+}
+
+const CHAIN_FAMILY: DiffFamily =
+    DiffFamily { ok_type: daw_bridge::layout::UiDiffType::ChainSnapshot as u16 };
+const ROUTING_FAMILY: DiffFamily =
+    DiffFamily { ok_type: daw_bridge::layout::UiDiffType::RoutingSnapshot as u16 };
+const MOD_FAMILY: DiffFamily =
+    DiffFamily { ok_type: daw_bridge::layout::UiDiffType::ModSnapshot as u16 };
+
+fn history_path() -> std::path::PathBuf {
+    std::path::Path::new(&daw_bridge::project::engine_project_dir()).join("history.jsonl")
+}
+
+/// The first refusal for `scope` written to the journal after `offset`, if any.
+///
+/// Substring matching on a line the engine writes without spaces
+/// (`{"seq":1,...,"scope":"track:0","op":"chain","outcome":"rejected:add_failed",...}`) rather
+/// than a JSON parse: the two keys are unambiguous and this avoids taking a dependency to read one
+/// field out of one line.
+fn journal_refusal_since(offset: u64, scope: &str) -> Option<String> {
+    use std::io::{Read, Seek};
+    let mut file = std::fs::File::open(history_path()).ok()?;
+    file.seek(std::io::SeekFrom::Start(offset)).ok()?;
+    let mut tail = String::new();
+    file.read_to_string(&mut tail).ok()?;
+    let want_scope = format!("\"scope\":\"{scope}\"");
+    for line in tail.lines() {
+        if !line.contains(&want_scope) {
+            continue;
+        }
+        let Some(at) = line.find("\"outcome\":\"rejected:") else {
+            continue;
+        };
+        let rest = &line[at + "\"outcome\":\"rejected:".len()..];
+        return Some(rest.split('"').next().unwrap_or("").to_string());
+    }
+    None
+}
+
+/// WHAT THE ENGINE DID WITH THE COMMAND WE JUST SENT.
 ///
 /// `add-device --kind sampler` on a track that already has one is REFUSED — a track takes one
 /// head-of-chain instrument — and this tool printed `{"sent": "add-device"}` and exited 0. The
 /// refusal existed: the engine logged `chain.rejected reason=add_failed`, journalled it, and put a
 /// `ChainError` on the ring for the UI. Every surface learned about it except the one that asked.
-/// That is the same defect as the clip path above, one command family over, and it was found by
-/// driving the verb rather than by reading it (ui-web/test/cli-verbs.mjs, batch 3).
+/// Found by driving the verb (ui-web/test/cli-verbs.mjs), not by reading it.
 ///
-/// NO BASE VERSION IS AVAILABLE HERE. Chain commands are not arbitrated — only nine commands are,
-/// and these are not among them — so `await_clip_outcome`'s trick of matching on the base we sent
-/// cannot be used, and neither can a version counter, because the chain has none this side reads.
-/// What the ring does carry is BOTH answers: a `ChainSnapshot` for the track means the engine
-/// rebuilt that chain, a `ChainError` for the track means it refused. Matching on the track is
-/// therefore the whole correlation, which is exact for one operator driving one CLI and NOT exact
-/// if something else is editing the same track at the same moment. Sharpening that needs a command
-/// id on the wire, which the 40-byte payload has no room for.
+/// THE REFUSAL COMES FROM THE JOURNAL, NOT THE RING, and that is the whole design. The first
+/// version of this read `ChainError` off the ring like `await_clip_outcome` does, and it worked
+/// for chain and mod and MISSED the routing refusal entirely — `peek_ui_diffs` returns only the
+/// window between the ring's read and write cursors, so a diff the sidecar has already consumed is
+/// gone before a bystander can see it. The refusal was real and recorded (routing.rejected,
+/// track_missing) and the tool still printed "unknown". A signal that a live UI can eat is not a
+/// signal a correctness check may rest on. history.jsonl is an append-only FILE with no consumer to
+/// race, it carries the engine's own reason name, and it covers families the ring has no error type
+/// for at all.
 ///
-/// THE RING IS PEEKED, NOT DRAINED, for the reason `await_clip_outcome` gives: the real UI is its
-/// consumer and a tool that drained here would steal diffs from the app it is observing.
+/// THE RING IS STILL READ, for the POSITIVE answer only. A snapshot for the track means the engine
+/// rebuilt it, and without that every successful command would sit out the full refusal window —
+/// which is not merely slow, it changes the timing of anything driving several edits in sequence.
+/// Losing that one to the same race costs latency and nothing else, which is the difference.
+///
+/// CORRELATION IS BY SCOPE, i.e. by track, for one operator driving one CLI. It is NOT exact
+/// against something else editing the same track at the same moment; sharpening it needs a command
+/// id on the wire, and the 40-byte payload has no room for one.
 enum ChainOutcome {
     Applied,
-    Refused { code: u16 },
+    Refused { reason: String },
     /// Neither answer arrived in time. Reported as unknown and exits 0 — announcing a refusal we
-    /// did not observe would be worse than the silence it replaces.
+    /// did not observe would be worse than the silence it replaces. Also where a build with
+    /// DAW_NO_HISTORY lands when the ring race goes against it.
     Unknown,
 }
 
-/// The engine's chain codes, worded. Mirrors `errorScopeName("chain", code)` in engine_pure.cpp
-/// — {1 add_failed, 2 remove_failed, 3 move_failed, 4 update_failed} — but says what the reader
-/// can do about it, because "chain error 1" and "that track already has an instrument" are the
-/// same fact and only one of them is actionable.
-fn chain_refusal_sentence(code: u16) -> String {
-    match code {
-        1 => "the device could not be added — a track takes one head-of-chain instrument, so a \
-              second sampler or VST instrument on a track that has one is refused"
-            .to_string(),
-        2 => "there is no such device to remove".to_string(),
-        3 => "the device could not be moved to that position".to_string(),
-        4 => "the update changed nothing — the device id may not exist on that track".to_string(),
-        _ => format!("chain error code {code}, which this build has no wording for"),
-    }
-}
-
-fn await_chain_outcome(handle: &EngineHandle, track: u32, before_len: usize) -> ChainOutcome {
+fn await_outcome(
+    handle: &EngineHandle,
+    family: &DiffFamily,
+    track: u32,
+    before_len: usize,
+    journal_at: u64,
+) -> ChainOutcome {
+    let scope = format!("track:{track}");
     for _ in 0..150 {
-        let diffs = handle.peek_ui_diffs();
-        for (diff_type, payload) in diffs.iter().skip(before_len) {
-            let u16at = |o: usize| u16::from_le_bytes([payload[o], payload[o + 1]]);
-            let u32at = |o: usize| {
-                u32::from_le_bytes([payload[o], payload[o + 1], payload[o + 2], payload[o + 3]])
-            };
-            // trackId sits at offset 4 in BOTH payloads (UiChainDiffPayload and
-            // UiChainErrorPayload, event_payloads.h) — they are the same 40 bytes with different
-            // fields after it, which is exactly why the type is checked first and never the size.
-            if u32at(4) != track {
-                continue;
-            }
-            if *diff_type == daw_bridge::layout::UiDiffType::ChainError as u16 {
-                return ChainOutcome::Refused { code: u16at(2) };
-            }
-            if *diff_type == daw_bridge::layout::UiDiffType::ChainSnapshot as u16 {
+        if let Some(reason) = journal_refusal_since(journal_at, &scope) {
+            return ChainOutcome::Refused { reason };
+        }
+        for (diff_type, payload) in handle.peek_ui_diffs().iter().skip(before_len) {
+            let track_id =
+                u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
+            // trackId sits at offset 4 in every one of these payloads (event_payloads.h). Dispatch
+            // on the TYPE and never on the size: a device_chain_ui_tests comment records a version
+            // that keyed on size, and since UiChainDiffPayload and UiChainErrorPayload are both 40
+            // bytes it routed every error into the snapshot path.
+            if track_id == track && *diff_type == family.ok_type {
                 return ChainOutcome::Applied;
             }
         }
@@ -1238,12 +1305,52 @@ fn await_chain_outcome(handle: &EngineHandle, track: u32, before_len: usize) -> 
     ChainOutcome::Unknown
 }
 
-/// Sends a chain command, waits for the engine's answer, and reports it. Returns the exit code.
+/// Reports what the engine did with a command already sent. Returns the exit code.
 ///
-/// ONE function rather than the same block pasted into add-device, remove-device, move-device and
-/// set-bypass: four copies of a rule is how this project got a chord tee that disagreed with
-/// itself and a mixer with two writers. `extra` is a pre-formatted JSON fragment because the verbs
-/// each have their own interesting fields, and that is the only part that genuinely differs.
+/// ONE function rather than the same block pasted into add-device, remove-device, move-device,
+/// set-bypass, routing, mod-link and mod-depth: seven copies of a rule is how this project got a
+/// chord tee that disagreed with itself and a mixer with two writers. `extra` is a pre-formatted
+/// JSON fragment because the verbs each have their own interesting fields, and that is the only
+/// part that genuinely differs.
+///
+/// The caller takes `before_len` and `journal_at` BEFORE sending: both are "everything past here is
+/// mine" marks, and a waiter that started from zero would report somebody else's refusal.
+fn report_outcome_from(
+    handle: &EngineHandle,
+    family: &DiffFamily,
+    verb: &str,
+    track: u32,
+    extra: &str,
+    before_len: usize,
+    journal_at: u64,
+) -> i32 {
+    match await_outcome(handle, family, track, before_len, journal_at) {
+        ChainOutcome::Refused { reason } => {
+            eprintln!(
+                "daw-cli: the engine refused {verb} on track {track}: {}",
+                refusal_sentence(&reason)
+            );
+            1
+        }
+        ChainOutcome::Applied => {
+            println!("{{ \"applied\": {verb:?}, \"track\": {track}{extra} }}");
+            0
+        }
+        ChainOutcome::Unknown => {
+            println!("{{ \"sent\": {verb:?}, \"track\": {track}{extra}, \"applied\": \"unknown\" }}");
+            0
+        }
+    }
+}
+
+/// The marks a caller must take before sending: the ring's length and the journal's length.
+fn outcome_marks(handle: &EngineHandle) -> (usize, u64) {
+    (
+        handle.peek_ui_diffs().len(),
+        std::fs::metadata(history_path()).map(|m| m.len()).unwrap_or(0),
+    )
+}
+
 fn send_chain_reporting(
     handle: &EngineHandle,
     payload: UiChainCommandPayload,
@@ -1251,25 +1358,10 @@ fn send_chain_reporting(
     track: u32,
     extra: &str,
 ) -> i32 {
-    let before_len = handle.peek_ui_diffs().len();
+    let (before_len, journal_at) = outcome_marks(handle);
     match handle.send_chain_command(payload) {
-        Ok(()) => match await_chain_outcome(handle, track, before_len) {
-            ChainOutcome::Refused { code } => {
-                eprintln!(
-                    "daw-cli: the engine refused {verb} on track {track}: {}",
-                    chain_refusal_sentence(code)
-                );
-                1
-            }
-            ChainOutcome::Applied => {
-                println!("{{ \"applied\": {verb:?}, \"track\": {track}{extra} }}");
-                0
-            }
-            ChainOutcome::Unknown => {
-                println!("{{ \"sent\": {verb:?}, \"track\": {track}{extra}, \"applied\": \"unknown\" }}");
-                0
-            }
-        },
+        Ok(()) => report_outcome_from(
+            handle, &CHAIN_FAMILY, verb, track, extra, before_len, journal_at),
         Err(err) => {
             eprintln!("daw-cli: {err}");
             1
@@ -4416,38 +4508,44 @@ fn main() {
                         bias: flag_f64(&args, "--bias", 0.0).unwrap_or(0.0) as f32,
                         ..Default::default()
                     };
-                    match handle.send_mod_link_command(payload) {
-                        Ok(()) => {
-                            println!("{{ \"sent\": \"mod-depth\", \"track\": {}, \"link\": {link}, \"depth\": {depth} }}", payload.track_id);
-                            0
+                    {
+                        let (before_len, journal_at) = outcome_marks(&handle);
+                        match handle.send_mod_link_command(payload) {
+                            Ok(()) => report_outcome_from(
+                                &handle, &MOD_FAMILY, "mod-depth", payload.track_id,
+                                &format!(", \"link\": {link}, \"depth\": {depth}"), before_len,
+                                journal_at),
+                            Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                         }
-                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }
                 Some(&"mod-link") | Some(&"unmod-link") => {
                     let removing = rest.first() == Some(&"unmod-link");
                     match mod_link_command(&args, removing) {
-                        Ok(payload) => match handle.send_mod_link_command(payload) {
-                            Ok(()) => {
-                                // NEVER print the AUTO sentinel as if it were the id. It read
-                                // back as 4294967295, which a caller would then pass to
-                                // `unmod-link --link` and match nothing. The engine now names the
-                                // id it assigned on the event stream (modlink.added).
-                                let auto = payload.link_id == daw_bridge::layout::MOD_LINK_ID_AUTO;
-                                println!(
-                                    "{{ \"sent\": {:?}, \"track\": {}, \"link\": {} }}",
-                                    if removing { "unmod-link" } else { "mod-link" },
-                                    payload.track_id,
-                                    if auto {
+                        Ok(payload) => {
+                            let (before_len, journal_at) = outcome_marks(&handle);
+                            match handle.send_mod_link_command(payload) {
+                                Ok(()) => {
+                                    // NEVER print the AUTO sentinel as if it were the id. It read
+                                    // back as 4294967295, which a caller would then pass to
+                                    // `unmod-link --link` and match nothing. The engine now names
+                                    // the id it assigned on the event stream (modlink.added).
+                                    let auto =
+                                        payload.link_id == daw_bridge::layout::MOD_LINK_ID_AUTO;
+                                    let link = if auto {
                                         "\"auto — see modlink.added on the event stream\"".to_string()
                                     } else {
                                         payload.link_id.to_string()
-                                    }
-                                );
-                                0
+                                    };
+                                    report_outcome_from(
+                                        &handle, &MOD_FAMILY,
+                                        if removing { "unmod-link" } else { "mod-link" },
+                                        payload.track_id, &format!(", \"link\": {link}"),
+                                        before_len, journal_at)
+                                }
+                                Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                             }
-                            Err(err) => { eprintln!("daw-cli: {err}"); 1 }
-                        },
+                        }
                         Err(err) => { eprintln!("daw-cli: {err}"); 2 }
                     }
                 }
@@ -4834,16 +4932,15 @@ removed is the whole command");
                     }
                 }
                 Some(&"routing") => match routing_command(&args) {
-                    Ok(payload) => match handle.send_routing_command(payload) {
-                        Ok(()) => {
-                            println!(
-                                "{{ \"sent\": \"routing\", \"track\": {}, \"replaced_all_routes\": true }}",
-                                payload.track_id
-                            );
-                            0
+                    Ok(payload) => {
+                        let (before_len, journal_at) = outcome_marks(&handle);
+                        match handle.send_routing_command(payload) {
+                            Ok(()) => report_outcome_from(
+                                &handle, &ROUTING_FAMILY, "routing", payload.track_id,
+                                ", \"replaced_all_routes\": true", before_len, journal_at),
+                            Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                         }
-                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
-                    },
+                    }
                     Err(err) => { eprintln!("daw-cli: {err}"); 2 }
                 },
                 Some(&"stop") => {

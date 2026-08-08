@@ -757,6 +757,22 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
         'and the refusal was real — the chain is unchanged',
         `${JSON.stringify(chainAfter)} -> ${JSON.stringify(chainNow)}`);
 
+  // ── THE SAME ANSWER FOR THE OTHER TWO FAMILIES THAT HAVE ONE ────────────────────────────────
+  //
+  // routing and mod are the other two families in errorScopeName, they publish the same
+  // {errorCode@2, trackId@4} shape, and daw-cli exited 0 on both. One waiter serves all three, so
+  // these two checks are what stop that generalisation from being a claim: a family whose codes
+  // are mapped but whose diff types are wrong would still print "sent" and pass nothing here.
+  const rt = cli('do', 'routing', '--track', '4242', '--audio-out', 'master');
+  check(!rt.ok && /no such track/.test(rt.out),
+        'A REFUSED ROUTING EDIT SAYS THERE IS NO SUCH TRACK',
+        `exit=${rt.ok ? 0 : 'nonzero'} said ${JSON.stringify(rt.out.slice(0, 160))}`);
+
+  const ml = cli('do', 'unmod-link', '--track', '0', '--link', '9999');
+  check(!ml.ok && /no such modulation link/.test(ml.out),
+        'AND A REFUSED MOD-LINK REMOVAL SAYS THERE IS NO SUCH LINK',
+        `exit=${ml.ok ? 0 : 'nonzero'} said ${JSON.stringify(ml.out.slice(0, 160))}`);
+
   // ── remove-track, which must remove THAT track and leave the rest ────────────────────────
   //
   // Asserted on WHICH track went, not just the count. A remove that took the wrong one leaves the
