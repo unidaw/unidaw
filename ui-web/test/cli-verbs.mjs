@@ -1449,6 +1449,45 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
         'and it was not already there, so the check above means something',
         `before was already ${tickOf(posBefore)}`);
 
+  // ── scratch fork: give ONE appearance of a shared clip its own copy ─────────────────────────
+  //
+  // The whole point of the feature is that editing one placement of a shared clip does not change
+  // the others, so the check has to be about the OTHERS as much as the target. This fixture is
+  // built for it: a clip placed more than once, which is also why `get shared` exists.
+  //
+  // Addressed by placement id and asserted on clip_id, both read from `get extents` — the saved
+  // document numbers placements only by their position in a per-track list, and a fork that
+  // reattached the wrong appearance would keep that list the same length and look identical.
+  const beforeFork = extents();
+  const clipCounts = beforeFork.reduce((m, e) => m.set(e.clip, (m.get(e.clip) || 0) + 1), new Map());
+  const sharedClip = [...clipCounts.entries()].find(([, n]) => n > 1)?.[0];
+  const victimPl = beforeFork.find((e) => e.clip === sharedClip);
+  check(victimPl !== undefined,
+        'a clip really is placed more than once, so forking one appearance means something',
+        `placements=${JSON.stringify(beforeFork.map((e) => [e.placement, e.clip]))}`);
+
+  if (victimPl) {
+    const siblings = beforeFork
+      .filter((e) => e.clip === sharedClip && e.placement !== victimPl.placement)
+      .map((e) => e.placement);
+    const sf = cli('do', 'scratch', 'fork', '--track', String(victimPl.track),
+                   '--placement', String(victimPl.placement));
+    check(sf.ok, 'do scratch fork is accepted', sf.out.slice(0, 140));
+    const afterFork = await waitExtents((es) =>
+      es.find((e) => e.placement === victimPl.placement)?.clip !== sharedClip);
+    const forked = afterFork.find((e) => e.placement === victimPl.placement);
+    check(forked !== undefined && forked.clip !== sharedClip,
+          'SCRATCH FORK GIVES THAT APPEARANCE ITS OWN CLIP',
+          `placement ${victimPl.placement} was on clip ${sharedClip}, now `
+          + `${JSON.stringify(forked?.clip)}`);
+    const siblingsNow = afterFork.filter((e) => siblings.includes(e.placement))
+      .map((e) => e.clip);
+    check(siblingsNow.length === siblings.length && siblingsNow.every((c) => c === sharedClip),
+          'and every OTHER appearance still shares the original — which is the entire point',
+          `siblings ${JSON.stringify(siblings)} are now on clips ${JSON.stringify(siblingsNow)}, `
+          + `all should still be ${sharedClip}`);
+  }
+
   // ── remove-track, which must remove THAT track and leave the rest ────────────────────────
   //
   // Asserted on WHICH track went, not just the count. A remove that took the wrong one leaves the
