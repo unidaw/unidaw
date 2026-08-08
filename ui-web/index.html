@@ -4436,6 +4436,10 @@ const dockApi = {
                    * on the chrome. `dock.js`'s `refusal()` reads it from here.
                    */
                   reject: state.reject,
+                  // See onEngineEvent: these separate "never delivered" from "delivered and
+                  // dropped here", which is the whole question in task #52.
+                  engineEventsSeen: state.engineEventsSeen || 0,
+                  engineEventsMissed: state.engineEventsMissed || 0,
                   selectedMarker: state.selectedMarker }),
   /*
    * A CURATED SUMMARY, not the store — which is the right shape and cost me a debugging round
@@ -8853,6 +8857,20 @@ conn = WANTS_ENGINE ? connectEngine({
     schedule();
   },
   onEngineEvent: (list, missed) => {
+    /*
+     * COUNTED, because task #52 is "the engine refused and the page never said so" and the two
+     * explanations for it need different fixes. If `engineEventsSeen` moved and the reject line
+     * did not, the event arrived and something here dropped it. If it did not move, nothing was
+     * delivered and the loss is upstream — the ring, the sidecar's drain, or the socket.
+     *
+     * `missed` is what the transport already knew and only ever wrote to the dock, where a test
+     * cannot read it and a person only sees it if they are looking. Surfacing it costs two
+     * numbers and turns the next occurrence into evidence instead of another mystery: the bug
+     * survived 13 deliberate reproduction attempts, so the next sighting will be in a sweep, and
+     * whatever is not recorded then is gone.
+     */
+    state.engineEventsSeen = (state.engineEventsSeen || 0) + list.length;
+    state.engineEventsMissed = (state.engineEventsMissed || 0) + (missed || 0);
     for (const e of list) {
       const text = describeEngineEvent(e);
       // A resync is NOT a refusal. It means the engine swapped a whole track

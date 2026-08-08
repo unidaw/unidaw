@@ -53,6 +53,23 @@ await page.waitForTimeout(1500);
 const run = (c) => page.evaluate((x) => window.__uni.run(x), c);
 const settle = (ms) => page.waitForTimeout(ms);
 const reject = () => page.evaluate(() => String(window.__uni.state().reject || ''));
+/*
+ * WHAT THE PAGE HAS RECEIVED, for task #52.
+ *
+ * When this file fails, the reject line is empty and the engine log shows the refusal was
+ * produced — and that alone cannot say whether the event reached the page. These two counters
+ * can: if `seen` moved across the send and the reject line did not, the event arrived and was
+ * dropped in the page; if `seen` did not move, nothing was delivered and the loss is upstream in
+ * the ring, the sidecar's drain, or the socket. `missed` is the transport's own count of messages
+ * it knows it lost, which until now only ever reached the dock.
+ *
+ * Printed on failure rather than asserted: this is a probe, and a probe that fails the suite for
+ * its own reasons would bury the thing it exists to measure.
+ */
+const eventCounts = () => page.evaluate(() => {
+  const st = window.__uni.state() || {};
+  return { seen: st.engineEventsSeen || 0, missed: st.engineEventsMissed || 0 };
+});
 
 console.log('\na refused chain edit explains itself\n');
 
@@ -78,6 +95,7 @@ await settle(1300);
  */
 {
   const before = await reject();
+  const countsBefore = await eventCounts();
   await page.evaluate(() => window.__uni.send({ type: 'deldevice', track: 0, device: 999 }));
   const arrived = await page.waitForFunction(
     (prev) => String((window.__uni.state() || {}).reject || '') !== prev,
@@ -94,6 +112,11 @@ await settle(1300);
   const said = arrived ? await reject() : '';
   console.log(`  the reject line says: ${JSON.stringify(said)}`);
 
+  if (!arrived) {
+    console.log(`  PROBE (#52): engine events before=${JSON.stringify(countsBefore)} `
+                + `after=${JSON.stringify(await eventCounts())} — if seen did not move, nothing `
+                + 'was delivered and the loss is upstream of the page');
+  }
   check(arrived, 'REMOVING A DEVICE THAT IS NOT THERE IS REPORTED AT ALL',
         'nothing reached the reject line in 25s — the engine refused (there is no device 999) and '
         + 'the app said nothing, which is the failure this file is about');
