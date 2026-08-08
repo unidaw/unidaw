@@ -1194,6 +1194,50 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
     }
   }
 
+  // ── automation: written with one verb, READ BACK with another, then deleted ─────────────────
+  //
+  // `automation-points` and `delete-automation` are the two pinned verbs here; `do automation` is
+  // the setup. Note that automation-points is a GET, not a DO — a detail that matters because a
+  // reader is exactly the verb whose breakage is invisible from the document: it can return
+  // nothing at all and the file on disk still looks right.
+  //
+  // So this asserts BOTH surfaces: the point comes back from the reader AND it is in the saved
+  // document. A reader that returned a hard-coded empty list would pass neither, and one that
+  // echoed its own input would pass only the first.
+  const AUTO_TICK = BAR * 3;
+  const AUTO_PARAM = 1;
+  const au = cli('do', 'automation', '--track', '0', '--param', String(AUTO_PARAM),
+                 '--nanotick', String(AUTO_TICK), '--value', '0.25');
+  check(au.ok, 'do automation is accepted (the setup)', au.out.slice(0, 140));
+
+  // The reader prints ONE object with the points NESTED inside it — {track_id, param, found,
+  // discrete, points:[{nanotick,value}]} — not one object per line the way `get extents` does.
+  // My first parser treated the wrapper as a point, so the write check failed on a point that was
+  // present and correct, and the delete check PASSED VACUOUSLY: it looked for a top-level
+  // nanotick that never existed either way, and would have reported success on a delete that did
+  // nothing. Two different bugs from one wrong assumption about the shape.
+  const readPoints = () => {
+    const r = cli('get', 'automation-points', '--track', '0', '--param', String(AUTO_PARAM));
+    const raw = String(r.out);
+    let wrapper = null;
+    try { wrapper = JSON.parse(raw); } catch { /* not JSON at all */ }
+    return { ok: r.ok, raw, found: wrapper?.found, points: wrapper?.points ?? [] };
+  };
+  const got = readPoints();
+  check(got.ok, 'get automation-points runs', got.raw.slice(0, 140));
+  const mineAuto = got.points.find((pt) => pt.nanotick === AUTO_TICK);
+  check(mineAuto !== undefined,
+        'AUTOMATION-POINTS READS BACK THE POINT THAT WAS WRITTEN',
+        `points=${JSON.stringify(got.points.slice(0, 6))} raw=${got.raw.slice(0, 160)}`);
+
+  const dau = cli('do', 'delete-automation', '--track', '0', '--param', String(AUTO_PARAM),
+                  '--nanotick', String(AUTO_TICK));
+  check(dau.ok, 'do delete-automation is accepted', dau.out.slice(0, 140));
+  const leftAuto = readPoints();
+  check(leftAuto.points.find((pt) => pt.nanotick === AUTO_TICK) === undefined,
+        'DELETE-AUTOMATION REMOVES THAT POINT — read back through the same reader',
+        `still ${JSON.stringify(leftAuto.points.slice(0, 6))}`);
+
   // ── remove-track, which must remove THAT track and leave the rest ────────────────────────
   //
   // Asserted on WHICH track went, not just the count. A remove that took the wrong one leaves the
