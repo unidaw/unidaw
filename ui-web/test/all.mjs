@@ -20,13 +20,16 @@
  *   node test/all.mjs --only kit,ops   just these
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
 import { readdirSync, statSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+// This worktree's root. Used to tell OUR engine processes from the other agent's, which run
+// from a different checkout and must never be touched.
+const ROOT = join(HERE, '..', '..');
 
 /*
  * WHY EACH EXCLUSION, in the file rather than in someone's head. A reason nobody
@@ -238,11 +241,64 @@ const run = (file) => new Promise((resolve) => {
   });
 });
 
+/*
+ * BETWEEN SUITES THERE SHOULD BE NO ENGINE AT ALL, and when there is, NAME WHO LEFT IT.
+ *
+ * Sweep 29 ran with an engine and sidecar alive from three minutes in — still running thirty-two
+ * minutes later, while every suite before the one then executing had reported ok. Nothing noticed.
+ * A survivor is not just untidy: stack.mjs's own comment says "a survivor holds the audio device
+ * and the next run blocks on it, which reads as SILENCE rather than as a leak", and the suite
+ * running alongside that orphan (chrome.mjs) hung past the twelve-minute kill and then passed on
+ * its retry once the orphan was gone. That is suggestive, not proof — but an invisible leak cannot
+ * be investigated at all, and a named one can.
+ *
+ * MATCHED BY THIS REPO'S OWN BINARY PATHS, never by process name. `pkill -f daw_engine` is
+ * recorded in this project's notes as a mistake that has cost real time: the other agent runs its
+ * engine from a different checkout, and a pattern kill takes theirs too. ROOT is this worktree, so
+ * a process outside it is somebody else's and is left strictly alone.
+ *
+ * Killed rather than merely reported, because the next suite inherits the problem otherwise; the
+ * warning is what makes the leak findable.
+ */
+const reapStrays = (afterFile) => {
+  let out = '';
+  try {
+    out = execSync('ps -eo pid=,args=', { encoding: 'utf8' });
+  } catch { return; }
+  const mine = [];
+  for (const line of out.split('\n')) {
+    const m = line.trim().match(/^(\d+)\s+(.*)$/);
+    if (!m) continue;
+    const [, pid, args] = m;
+    if (!args.includes(ROOT)) continue;                 // not from this worktree: not ours
+    if (!/build\/daw_engine|target\/release\/daw-sidecar/.test(args)) continue;
+    mine.push(Number(pid));
+  }
+  if (!mine.length) return;
+  console.log(`\n  !! ${afterFile} left ${mine.length} engine/sidecar process(es) running — `
+            + 'killing them. A survivor holds the audio device and the next suite blocks on it, '
+            + 'which reads as silence rather than as a leak.');
+  for (const pid of mine) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
+};
+
+/*
+ * CLEAR THE DECK FIRST, so the attribution below is honest.
+ *
+ * reapStrays names the suite that just ran, which is right during the sweep and wrong for
+ * anything already running when it started — a hand-run suite that leaked, or a stack somebody
+ * left up. Without this the first suite gets blamed for it, and a wrong name in a leak report is
+ * worse than no report: it sends the next reader to a suite that is innocent.
+ */
+reapStrays('(before the sweep started)');
+
 console.log(`running ${suites.length} engine-backed suites, one at a time\n`);
 const results = [];
 for (const f of suites) {
   process.stdout.write(`  ${f.padEnd(24)}`);
   let r = await run(f);
+  // Before anything else, including the retry: a survivor from THIS suite must not be inherited
+  // by the next one, and the retry is a "next one" too.
+  reapStrays(f);
   /*
    * ONE RETRY, AND THE RESULT SAYS WHICH KIND OF FAILURE IT WAS.
    *
@@ -285,6 +341,7 @@ for (const f of suites) {
   if (r.code !== 0) {
     const first = r;
     const second = await run(f);
+    reapStrays(f);
     if (second.code === 0) {
       flaky = true;
       r = { ...second, firstOut: first.out, firstSummary: first.summary, firstSecs: first.secs };
