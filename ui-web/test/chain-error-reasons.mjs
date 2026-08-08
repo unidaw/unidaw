@@ -112,14 +112,20 @@ await settle(1300);
   const said = arrived ? await reject() : '';
   console.log(`  the reject line says: ${JSON.stringify(said)}`);
 
-  if (!arrived) {
-    console.log(`  PROBE (#52): engine events before=${JSON.stringify(countsBefore)} `
-                + `after=${JSON.stringify(await eventCounts())} — if seen did not move, nothing `
-                + 'was delivered and the loss is upstream of the page');
-  }
+  // IN THE DETAIL STRING, not a console.log of its own. Sweep 36 caught this failure with the
+  // probe already in place and the answer never reached the report: the runner extracts only the
+  // suite's PASS/FAIL lines, so a bare console.log is discarded exactly when it matters. A
+  // diagnostic has to travel on the same line as the failure it explains.
+  const countsAfter = await eventCounts();
+  const probe = `[#52 probe] engine events seen ${countsBefore.seen}->${countsAfter.seen}, `
+    + `missed ${countsBefore.missed}->${countsAfter.missed}: `
+    + (countsAfter.seen === countsBefore.seen
+        ? 'NOTHING was delivered to the page, so the loss is upstream — ring, sidecar drain or socket'
+        : 'the page DID receive events, so the refusal was delivered and dropped here');
   check(arrived, 'REMOVING A DEVICE THAT IS NOT THERE IS REPORTED AT ALL',
-        'nothing reached the reject line in 25s — the engine refused (there is no device 999) and '
-        + 'the app said nothing, which is the failure this file is about');
+        probe + ' — '
+        + 'nothing reached the reject line in 25s — the engine refused (there is no device 999) '
+        + 'and the app said nothing, which is the failure this file is about');
   check(/no such device to remove/.test(said),
         'and it SAYS SO, rather than printing a code',
         `${JSON.stringify(said)} — "chain error on track 0 (code 2)" is the same fact and tells `
