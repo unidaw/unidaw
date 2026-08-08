@@ -291,7 +291,40 @@ const reapStrays = (afterFile) => {
  */
 reapStrays('(before the sweep started)');
 
-console.log(`running ${suites.length} engine-backed suites, one at a time\n`);
+/*
+ * WHAT ELSE IS ON THIS MACHINE, recorded at both ends of the sweep.
+ *
+ * Sweep 32 reported two failures and four flaky suites. Every one of them was a TIMING shape — an
+ * offline render that hit spawnSync ETIMEDOUT, a chain that had not been published yet, a device
+ * not yet visible — and none was a wrong answer. sampler-device-id took 1050s and timed out inside
+ * the sweep, then passed STANDALONE in 50s on the same binaries. The cause was mds_stores at 84%
+ * CPU and two mediaanalysisd processes at 48% and 18%, all running for two days: load average 6.
+ *
+ * The report had no way to say that, so it said "FAILED" instead — and a gate that cannot tell a
+ * slow machine from a broken build is one a reader has to second-guess every time. This does not
+ * excuse anything and must not: a failure is still a failure and the exit code is unchanged. It
+ * just puts the one measurement that distinguishes the two cases in the report, so nobody has to
+ * think to run `ps -r` an hour later and hope the evidence is still there. It usually is not.
+ *
+ * `%cpu` and not just elapsed time, because the daemons that do this have been up for days — a
+ * check by age alone sees nothing unusual about any of them.
+ */
+function machineLoad() {
+  try {
+    const load = execSync('uptime', { encoding: 'utf8' }).trim().replace(/^.*load averages?:/, '').trim();
+    const top = execSync("ps -r -eo %cpu=,comm= | head -3", { encoding: 'utf8' })
+      .trim().split('\n')
+      .map((l) => {
+        const [pct, ...rest] = l.trim().split(/\s+/);
+        return `${rest.join(' ').split('/').pop()} ${pct}%`;
+      }).join(', ');
+    return { load, top };
+  } catch { return { load: '?', top: '?' }; }
+}
+
+const loadBefore = machineLoad();
+console.log(`running ${suites.length} engine-backed suites, one at a time`);
+console.log(`  machine at start: load ${loadBefore.load} · busiest: ${loadBefore.top}\n`);
 const results = [];
 for (const f of suites) {
   process.stdout.write(`  ${f.padEnd(24)}`);
@@ -394,6 +427,15 @@ if (skipped.length) {
 }
 
 const flakeNote = flakes.length ? ` — ${flakes.length} FLAKY (${flakes.map((r) => r.file).join(', ')})` : '';
+if (failed.length || flakes.length) {
+  const after = machineLoad();
+  console.log(`\nMACHINE, for reading the above: load was ${loadBefore.load} at the start and `
+              + `${after.load} now · busiest now: ${after.top}`);
+  console.log('  A load average near or above the core count means every timing-sensitive suite '
+              + 'here was competing for CPU.\n  It does not make a failure less real — but a suite '
+              + 'that takes many times its usual seconds and then\n  passes on a retry is reporting '
+              + 'the machine, not the build. Re-run it alone before believing it.');
+}
 console.log(`\n${failed.length === 0
   ? `all ${results.length} suites passed${flakeNote}`
   : `${failed.length} of ${results.length} suites FAILED: ${failed.map((r) => r.file).join(', ')}${flakeNote}`}`);
