@@ -793,6 +793,17 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
         'AND A ZERO-BAR RIPPLE IS REPORTED AS THE NON-EDIT IT IS',
         `exit=${zeroBars.ok ? 0 : 'nonzero'} said ${JSON.stringify(zeroBars.out.slice(0, 160))}`);
 
+  // The master track is the third scope word and the one most easily left untested, because
+  // --track master is an ordinary thing to do and 4294901760 looks like a track id right up until
+  // the journal writes "master" instead. Asserted rather than reasoned about.
+  const badMaster = cli('do', 'remove-device', '--track', 'master', '--device', '9999');
+  check(!badMaster.ok && /no such device to remove/.test(badMaster.out),
+        'A REFUSED EDIT ON THE MASTER TRACK IS REPORTED TOO',
+        `exit=${badMaster.ok ? 0 : 'nonzero'} said ${JSON.stringify(badMaster.out.slice(0, 160))}`);
+  check(!/4294901760/.test(badMaster.out),
+        'and the master id is not printed as a raw number either',
+        JSON.stringify(badMaster.out.slice(0, 160)));
+
   // ── remove-track, which must remove THAT track and leave the rest ────────────────────────
   //
   // Asserted on WHICH track went, not just the count. A remove that took the wrong one leaves the
