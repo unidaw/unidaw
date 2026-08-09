@@ -1291,8 +1291,15 @@ enum ChainOutcome {
 /// block (~11.6ms at 512/44.1k), so the refusal is normally written within a few milliseconds;
 /// the margin is for a loaded machine, and `sampler-load --files` writes a whole kit one command
 /// at a time, so a longer window would be felt.
-fn await_refusal_only(track: u32, journal_at: u64, ops: &[&str]) -> ChainOutcome {
-    match daw_bridge::journal::await_refusal(track, journal_at, ops) {
+fn await_refusal_only(track: u32, journal_at: u64, ops: &[&str],
+                      ack: Option<(&EngineHandle, u32)>) -> ChainOutcome {
+    // No ack available for this family: silence after the window is the only "applied" there is.
+    let outcome = match ack {
+        Some((handle, before)) => daw_bridge::journal::await_refusal_or_ack(
+            track, journal_at, ops, || handle.sampler_kit_version() != before),
+        None => daw_bridge::journal::await_refusal(track, journal_at, ops),
+    };
+    match outcome {
         Some(reason) => ChainOutcome::Refused { reason },
         None => ChainOutcome::Applied,
     }
@@ -1300,8 +1307,9 @@ fn await_refusal_only(track: u32, journal_at: u64, ops: &[&str]) -> ChainOutcome
 
 
 
-fn report_refusal_outcome(verb: &str, ops: &[&str], track: u32, journal_at: u64, extra: &str) -> i32 {
-    match await_refusal_only(track, journal_at, ops) {
+fn report_refusal_outcome(verb: &str, ops: &[&str], track: u32, journal_at: u64, extra: &str,
+                          ack: Option<(&EngineHandle, u32)>) -> i32 {
+    match await_refusal_only(track, journal_at, ops, ack) {
         ChainOutcome::Refused { reason } => {
             eprintln!("daw-cli: the engine refused {verb} on track {track}: {}",
                       refusal_sentence(&reason));
@@ -3257,6 +3265,7 @@ fn main() {
                             let mut sent = 0usize;
                             let mut bad: Option<String> = None;
                             let journal_at = journal_mark();
+                            let kit_before = handle.sampler_kit_version();
                             for (i, n) in names.iter().enumerate() {
                                 let key = (root as usize).saturating_add(i);
                                 if key > 127 {
@@ -3305,7 +3314,7 @@ fn main() {
                                 }
                                 None => {
                                     report_refusal_outcome("sampler-load", &["sampler_load"], track, journal_at,
-                                                          &format!(", \"device\": {device}, \"files\": {sent}, \"base_key\": {root}"))
+                                                          &format!(", \"device\": {device}, \"files\": {sent}, \"base_key\": {root}"), Some((&handle, kit_before)))
                                 }
                             }
                         }
@@ -3338,10 +3347,11 @@ fn main() {
                             name,
                         };
                         let journal_at = journal_mark();
+                        let kit_before = handle.sampler_kit_version();
                         match handle.send_sampler_load(payload) {
                             Ok(()) => {
                                 report_refusal_outcome("sampler-load", &["sampler_load"], track, journal_at,
-                                                      &format!(", \"device\": {device}, \"file\": {file:?}, \"root\": {root}, \"fixed_pitch\": {fixed}"))
+                                                      &format!(", \"device\": {device}, \"file\": {file:?}, \"root\": {root}, \"fixed_pitch\": {fixed}"), Some((&handle, kit_before)))
                             }
                             Err(err) => {
                                 eprintln!("daw-cli: {err}");
@@ -3397,9 +3407,10 @@ fn main() {
                                 reserved: [0; 24],
                             };
                             let journal_at = journal_mark();
+                            let kit_before = handle.sampler_kit_version();
                             match handle.send_sampler_set_device(payload) {
                                 Ok(()) => {
-                                    report_refusal_outcome("sampler-device", &["sampler_set_device"], track, journal_at, &format!(", \"device\": {device}, \"field\": {field_arg:?}, \"value\": {v}"))
+                                    report_refusal_outcome("sampler-device", &["sampler_set_device"], track, journal_at, &format!(", \"device\": {device}, \"field\": {field_arg:?}, \"value\": {v}"), Some((&handle, kit_before)))
                                 }
                                 Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                             }
@@ -3466,9 +3477,10 @@ fn main() {
                             });
                             buf.extend_from_slice(bytes);
                             let journal_at = journal_mark();
+                            let kit_before = handle.sampler_kit_version();
                             match handle.send_bulk(&buf) {
                                 Ok(()) => {
-                                    report_refusal_outcome("sampler-slot-name", &["sampler_set_slot_name"], track, journal_at, &format!(", \"device\": {device}, \"slot\": {slot}, \"name\": {n:?}"))
+                                    report_refusal_outcome("sampler-slot-name", &["sampler_set_slot_name"], track, journal_at, &format!(", \"device\": {device}, \"slot\": {slot}, \"name\": {n:?}"), Some((&handle, kit_before)))
                                 }
                                 Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                             }
@@ -3618,10 +3630,11 @@ fn main() {
                                 reserved: [0; 20],
                             };
                             let journal_at = journal_mark();
+                            let kit_before = handle.sampler_kit_version();
                             match handle.send_sampler_set_slot(payload) {
                                 Ok(()) => report_refusal_outcome(
                                     "sampler-slot", &["sampler_set_slot"], track, journal_at,
-                                    &format!(", \"device\": {device}, \"slot\": {slot}, \"field\": {field_arg:?}, \"value\": {value}")),
+                                    &format!(", \"device\": {device}, \"slot\": {slot}, \"field\": {field_arg:?}, \"value\": {value}"), Some((&handle, kit_before))),
                                 Err(err) => {
                                     eprintln!("daw-cli: {err}");
                                     1
@@ -3680,9 +3693,10 @@ fn main() {
                                 reserved: [0; 6],
                             };
                             let journal_at = journal_mark();
+                            let kit_before = handle.sampler_kit_version();
                             match handle.send_sampler_slice(payload) {
                                 Ok(()) => {
-                                    report_refusal_outcome("sampler-slice", &["sampler_slice"], track, journal_at, &format!(", \"source\": {source}, \"mode\": {mode_arg:?}, \"slots\": {make_slots}"))
+                                    report_refusal_outcome("sampler-slice", &["sampler_slice"], track, journal_at, &format!(", \"source\": {source}, \"mode\": {mode_arg:?}, \"slots\": {make_slots}"), Some((&handle, kit_before)))
                                 }
                                 Err(err) => {
                                     eprintln!("daw-cli: {err}");
@@ -3802,11 +3816,12 @@ fn main() {
                         // to derive one from the pid here, which is constant for a process
                         // sending twice and would have interleaved two draws into one buffer.
                         let journal_at = journal_mark();
+                        let kit_before = handle.sampler_kit_version();
                         match handle.send_bulk(&buf) {
                             Ok(()) => {
                                 let n = pts.len();
                                 let bytes = buf.len();
-                                report_refusal_outcome("sampler-env-draw", &["sampler_set_envelope_points"], track, journal_at, &format!(", \"points\": {n}, \"bytes\": {bytes}"))
+                                report_refusal_outcome("sampler-env-draw", &["sampler_set_envelope_points"], track, journal_at, &format!(", \"points\": {n}, \"bytes\": {bytes}"), Some((&handle, kit_before)))
                             }
                             Err(err) => {
                                 eprintln!("daw-cli: {err}");
@@ -3879,9 +3894,10 @@ fn main() {
                         reserved1: [0; 5],
                     };
                     let journal_at = journal_mark();
+                    let kit_before = handle.sampler_kit_version();
                     match handle.send_sampler_vintage(payload) {
                         Ok(()) => {
-                            report_refusal_outcome("sampler-vintage", &["sampler_set_vintage"], track, journal_at, &format!(", \"device\": {device}, \"mod_set\": {mod_set}, \"bits\": {bits}, \"rate_hz\": {rate}"))
+                            report_refusal_outcome("sampler-vintage", &["sampler_set_vintage"], track, journal_at, &format!(", \"device\": {device}, \"mod_set\": {mod_set}, \"bits\": {bits}, \"rate_hz\": {rate}"), Some((&handle, kit_before)))
                         }
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
@@ -3930,9 +3946,10 @@ fn main() {
                         reserved2: [0; 4],
                     };
                     let journal_at = journal_mark();
+                    let kit_before = handle.sampler_kit_version();
                     match handle.send_sampler_filter(payload) {
                         Ok(()) => {
-                            report_refusal_outcome("sampler-filter", &["sampler_set_filter"], track, journal_at, &format!(", \"mod_set\": {mod_set}, \"type\": {filter_type}, \"cutoff\": {cutoff}, \"resonance\": {resonance}"))
+                            report_refusal_outcome("sampler-filter", &["sampler_set_filter"], track, journal_at, &format!(", \"mod_set\": {mod_set}, \"type\": {filter_type}, \"cutoff\": {cutoff}, \"resonance\": {resonance}"), Some((&handle, kit_before)))
                         }
                         Err(err) => {
                             eprintln!("daw-cli: {err}");
@@ -3977,9 +3994,10 @@ fn main() {
                         reserved2: 0,
                     };
                     let journal_at = journal_mark();
+                    let kit_before = handle.sampler_kit_version();
                     match handle.send_sampler_lfo(payload) {
                         Ok(()) => {
-                            report_refusal_outcome("sampler-lfo", &["sampler_set_lfo"], track, journal_at, &format!(", \"target\": {target}"))
+                            report_refusal_outcome("sampler-lfo", &["sampler_set_lfo"], track, journal_at, &format!(", \"target\": {target}"), Some((&handle, kit_before)))
                         }
                         Err(err) => {
                             eprintln!("daw-cli: {err}");
@@ -4037,9 +4055,10 @@ fn main() {
                         depth_milli: depth,
                     };
                     let journal_at = journal_mark();
+                    let kit_before = handle.sampler_kit_version();
                     match handle.send_sampler_envelope(payload) {
                         Ok(()) => {
-                            report_refusal_outcome("sampler-env", &["sampler_set_envelope"], track, journal_at, &format!(", \"attack\": {attack}, \"decay\": {decay}, \"sustain\": {sustain}, \"release\": {release}, \"sync\": {sync}"))
+                            report_refusal_outcome("sampler-env", &["sampler_set_envelope"], track, journal_at, &format!(", \"attack\": {attack}, \"decay\": {decay}, \"sustain\": {sustain}, \"release\": {release}, \"sync\": {sync}"), Some((&handle, kit_before)))
                         }
                         Err(err) => {
                             eprintln!("daw-cli: {err}");
@@ -4264,9 +4283,10 @@ fn main() {
                                 reserved: [0; 8],
                             };
                             let journal_at = journal_mark();
+                            let kit_before = handle.sampler_kit_version();
                             match handle.send_sampler_marker(payload) {
                                 Ok(()) => {
-                                    report_refusal_outcome("sampler-marker", &["sampler_marker"], track, journal_at, &format!(", \"source\": {source}, \"op\": {op_arg:?}, \"marker\": {marker}, \"frame\": {frame}"))
+                                    report_refusal_outcome("sampler-marker", &["sampler_marker"], track, journal_at, &format!(", \"source\": {source}, \"op\": {op_arg:?}, \"marker\": {marker}, \"frame\": {frame}"), Some((&handle, kit_before)))
                                 }
                                 Err(err) => {
                                     eprintln!("daw-cli: {err}");
@@ -4306,9 +4326,10 @@ fn main() {
                         reserved: [0; 6],
                     };
                     let journal_at = journal_mark();
+                    let kit_before = handle.sampler_kit_version();
                     match handle.send_sampler_emit_rows(payload) {
                         Ok(()) => {
-                            report_refusal_outcome("sampler-emit-rows", &["sampler_emit_rows"], track, journal_at, &format!(", \"source\": {source}, \"at\": {at}, \"step\": {step}"))
+                            report_refusal_outcome("sampler-emit-rows", &["sampler_emit_rows"], track, journal_at, &format!(", \"source\": {source}, \"at\": {at}, \"step\": {step}"), Some((&handle, kit_before)))
                         }
                         Err(err) => {
                             eprintln!("daw-cli: {err}");
@@ -4495,7 +4516,7 @@ fn main() {
                     match handle.send_patcher_graph_command(payload) {
                         Ok(()) => report_refusal_outcome(
                             "patcher-connect", &["patcher_graph", "connect_patcher_nodes"], track, journal_at,
-                            &format!(", \"src\": {src}, \"dst\": {dst}")),
+                            &format!(", \"src\": {src}, \"dst\": {dst}"), None),
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }
@@ -4534,7 +4555,7 @@ fn main() {
                     match handle.send_patcher_node_config(payload) {
                         Ok(()) => report_refusal_outcome(
                             "patcher-config", &["set_patcher_node_config", "patcher_graph"], track, journal_at,
-                            &format!(", \"node\": {node}")),
+                            &format!(", \"node\": {node}"), None),
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }
@@ -4920,7 +4941,7 @@ fn main() {
                             &format!("marker {sub}"),
                             &["add_marker", "remove_marker", "rename_marker", "move_marker",
                               "set_marker_color"],
-                            UI_GLOBAL_SCOPE, journal_at, ""),
+                            UI_GLOBAL_SCOPE, journal_at, "", None),
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }

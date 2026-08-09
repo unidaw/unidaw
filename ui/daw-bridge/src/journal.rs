@@ -168,6 +168,38 @@ pub fn refusal_in(tail: &str, scope: &str, want_ops: &[String]) -> Option<String
 /// insisted on positive proof would therefore make every SUCCESSFUL command sit out the whole
 /// window before printing. So a refusal that arrives later than the window is missed. That is
 /// strictly better than what these callers did before, which was to report success unconditionally.
+/// As `await_refusal`, but returns early when `applied` reports the edit landed.
+///
+/// SILENCE IS THE SUCCESS SIGNAL ONLY BECAUSE NOTHING BETTER WAS BEING READ. The sampler family
+/// does publish an acknowledgement: refreshSamplerForTrack bumps samplerKitVersion on the success
+/// path, and daw-bridge already exposes it. Watching it turns the window from the normal path into
+/// a timeout — a successful command returns as soon as the engine has acted, instead of always
+/// paying for the wait.
+///
+/// THE ACK IS AN OPTIMISATION, NOT A CORRECTNESS MECHANISM, and that is what makes it safe to
+/// apply broadly: a refusal is still checked first on every pass, and a verb whose handler does
+/// not bump the counter simply falls through to the same timeout it had before. Guessing wrong
+/// costs latency, never truth.
+///
+/// The counter is GLOBAL — "bumped whenever any track's sampler state changes" — so another
+/// track's edit can move it while ours is still being refused. Hence the final journal read before
+/// reporting success: the cheap check that closes the window the shared counter opens.
+pub fn await_refusal_or_ack(track: u32, journal_at: u64, ops: &[&str],
+                            applied: impl Fn() -> bool) -> Option<String> {
+    let scope = journal_scope(track);
+    let want: Vec<String> = ops.iter().map(|op| format!("\"op\":\"{op}\"")).collect();
+    for _ in 0..50 {
+        if let Some(reason) = journal_refusal_for(journal_at, &scope, &want) {
+            return Some(reason);
+        }
+        if applied() {
+            return journal_refusal_for(journal_at, &scope, &want);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    None
+}
+
 pub fn await_refusal(track: u32, journal_at: u64, ops: &[&str]) -> Option<String> {
     let scope = journal_scope(track);
     let want: Vec<String> = ops.iter().map(|op| format!("\"op\":\"{op}\"")).collect();
