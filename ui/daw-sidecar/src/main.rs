@@ -6872,9 +6872,10 @@ fn drain_engine_events(shm: String, events: Arc<EngineEvents>, chains: Arc<Chain
             // UNCONDITIONAL, unlike the histogram below. "attached=false" or
             // "attached=true drained=0" are different diagnoses and both are invisible if the
             // only line printed requires something to have arrived first.
+            let cursors = handle.as_ref().and_then(|h| h.out_ring_cursors());
             eprintln!("sidecar: event drain attached={} drained={drained_total} \
-                       forwarded={forwarded_total} not-forwarded={dropped}",
-                      handle.is_some());
+                       forwarded={forwarded_total} not-forwarded={dropped} ring={:?}",
+                      handle.is_some(), cursors);
             last_report = Instant::now();
             let seen: Vec<String> = kinds.iter().enumerate()
                 .filter(|(_, n)| **n > 0)

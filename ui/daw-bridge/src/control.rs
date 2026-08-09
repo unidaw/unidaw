@@ -407,6 +407,24 @@ impl EngineHandle {
     /// gone before this can see it, and a slow caller can miss one to wrap-around. It is enough
     /// to answer "did the engine report this refusal", which is what it exists for, and a caller
     /// that needs every diff has to be the consumer rather than a bystander.
+    /// The out ring's (capacity, read_index, write_index), for diagnostics.
+    ///
+    /// Task #52 has now had three wrong causes, and the reason each survived is that "attached"
+    /// and "draining" were the only two things anyone could see. These three numbers separate the
+    /// remaining cases outright: write_index STUCK means the engine is not writing to the ring
+    /// this handle mapped (wrong segment, or an offset that moved under us); write_index MOVING
+    /// with read_index stuck behind it means the drain is at fault. Nothing else fits.
+    pub fn out_ring_cursors(&self) -> Option<(u32, u32, u32)> {
+        let ring = self.ring_ui_out.as_ref()?;
+        unsafe {
+            Some((
+                (*ring.header).capacity,
+                (*ring.header).read_index.load(Ordering::Relaxed),
+                (*ring.header).write_index.load(Ordering::Relaxed),
+            ))
+        }
+    }
+
     /// Is the engine's OUT ring actually mapped?
     ///
     /// `attach` succeeds as soon as the shared segment can be opened, but `ring_view` returns None
