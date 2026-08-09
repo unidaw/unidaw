@@ -427,10 +427,24 @@ if (skipped.length) {
 }
 
 const flakeNote = flakes.length ? ` — ${flakes.length} FLAKY (${flakes.map((r) => r.file).join(', ')})` : '';
-if (failed.length || flakes.length) {
+/*
+ * ALWAYS, not only when something failed. I recorded the START load unconditionally and the END
+ * load only on failure, then spent several sweeps explaining flakes with the start number — and a
+ * table across sweeps 33-42 refutes it: sweep 42 started at the LOWEST load of the ten (3,77) and
+ * produced the MOST flakes (7), while sweep 34 started highest (6,71) and produced 4.
+ *
+ * What actually moved in 42 was load DURING the run, 3,77 at the start to 6,07 at the end, with
+ * the flakes clustered on the alphabetically-late suites where it was highest. A one-sample-at-
+ * the-door measurement cannot see that, and a measurement only taken when the news is bad cannot
+ * be compared against the runs where it was good. Both ends, every run, or the numbers cannot be
+ * used for anything.
+ */
+{
   const after = machineLoad();
-  console.log(`\nMACHINE, for reading the above: load was ${loadBefore.load} at the start and `
-              + `${after.load} now · busiest now: ${after.top}`);
+  console.log(`\nMACHINE: load ${loadBefore.load} at the start, ${after.load} now`
+              + ` · busiest now: ${after.top}`);
+}
+if (failed.length || flakes.length) {
   console.log('  A load average near or above the core count means every timing-sensitive suite '
               + 'here was competing for CPU.\n  It does not make a failure less real — but a suite '
               + 'that takes many times its usual seconds and then\n  passes on a retry is reporting '
