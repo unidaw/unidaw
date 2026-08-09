@@ -3094,7 +3094,6 @@ const ENGINE_UNUSED = {
   // it kept a working feature out of the UI for as long as it stood — the flag is
   // `uiTrackMixFlags` bit 2 and always has been. Backend caught it by checking live rather than
   // by reading the code. Now wired, so it is off this list entirely.
-  RequestClipWindow: 'the sidecar owns the viewport and asks on the client\'s behalf',
   // These three are referenced by NAME elsewhere but never sent as a command from
   // a frontend path, which is the distinction this test draws: a struct that
   // mentions an enum is not a caller.
@@ -3121,7 +3120,6 @@ const ENGINE_UNUSED = {
    * which is the explicit half of the same choice — so the per-placement mode is a convenience
    * it does not need yet, rather than a capability it is missing.
    */
-  SetPlacementEditScope: 'gap — this app sets the scope per edit instead',
   /*
    * ARRANGEMENT SECTIONS (54-58), landed engine-side and not yet a surface here.
    *
@@ -3141,7 +3139,6 @@ const ENGINE_UNUSED = {
    * wants a control on the clip rather than a console verb, since that is where the
    * override is visible.
    */
-  RevertPlacementOverrides: 'gap — no way to send a placement back to its shared clip',
   /*
    * THE SAMPLER (73, 74, 75, and the slice/marker/emit trio), landed across S1-S5 while this
    * side was designing how per-note ops draw. Recorded as one gap with one reason rather than
@@ -3172,8 +3169,6 @@ const ENGINE_UNUSED = {
    * cap so a command can send a string. Wiring it with nothing to send would be plumbing with
    * no water.
    */
-  SaveModule: 'gap — a module is a saved chain; it wants a browser entry before a verb',
-  LoadModule: 'gap — with SaveModule',
   /*
    * SamplerSetEnvelope WAS listed here — "an ADSR wants the drawable envelope, not four numbers
    * on a line" — and that reasoning was right about the surface and wrong about the priority.
@@ -3191,7 +3186,6 @@ const ENGINE_UNUSED = {
    * sampler's five modulation targets and two kinds, only two combinations ever reached the
    * audio. So this is newly worth drawing rather than newly existing.
    */
-  SamplerSetLfo: 'gap — with SamplerSetEnvelope; a modulator wants to be seen moving',
   BulkChunk: 'gap — a carrier for payloads over 40 bytes; nothing here needs one yet',
   /*
    * SamplerSetSlot WAS recorded here as a gap "with SamplerLoad". It is wired now, and the
@@ -3200,7 +3194,6 @@ const ENGINE_UNUSED = {
    * either, so a sampled note played its whole extent however short it was written — and
    * The ruling is that a note-off has to be able to cut it.
    */
-  SamplerMarker: 'gap — with SamplerSlice',
   /*
    * SamplerEmitRows WAS recorded here as a gap "with SamplerSlice". It is wired now, and the
    * reason it stopped being deferrable is that `slice` makes the slots and puts NOTHING in the
@@ -3308,6 +3301,16 @@ test("the row-op mask bits are the engine's, not this table's order", async () =
   }
 });
 
+/*
+ * SEVEN ENTRIES LEFT THIS LIST on 2026-08-09, and none of them by being built. They were
+ * always called — by daw-cli — and the audit below simply did not read daw-cli, so it
+ * believed the list and the list said 'gap'. RequestClipWindow, SetPlacementEditScope,
+ * RevertPlacementOverrides, SaveModule, LoadModule, SamplerSetLfo, SamplerMarker.
+ *
+ * That is a ratchet lying in the comfortable direction: it invented seven gaps and would
+ * have kept inventing them. An exemption is a claim about the product, so it has to be
+ * re-derived from the sources rather than trusted because it is written down.
+ */
 test('every engine command has a caller, or a recorded reason it has none', async () => {
   const { readFileSync } = await import('node:fs');
   const hdr = readFileSync(new URL('../../apps/event_payloads.h', import.meta.url), 'utf8');
@@ -3331,7 +3334,17 @@ test('every engine command has a caller, or a recorded reason it has none', asyn
   // The sidecar is the UI's only path to the ring, so a command the sidecar never
   // names is a command the UI cannot send. The agent has its own ring and its own
   // reach, so it counts as a caller too.
-  const callers = ['../../ui/daw-sidecar/src/main.rs', '../../ui/daw-agent/src/tools.rs']
+  /*
+   * daw-cli WAS MISSING FROM THIS LIST, and the omission is the interesting kind: the audit asks
+   * "does anything call this command", then looked in two of the three surfaces that can. A
+   * command reachable ONLY from the command line was reported as uncalled — which is the opposite
+   * of the truth, and in the direction that invents work rather than hiding it. Found by
+   * codex-worker-1 running the audit on a branch where SetClipText, SetMarkerColor and
+   * RequestSamplerEnvelope had CLI callers and nothing else, and escalated by backend rather than
+   * silently exempted, which is why it got fixed instead of papered over.
+   */
+  const callers = ['../../ui/daw-sidecar/src/main.rs', '../../ui/daw-agent/src/tools.rs',
+                   '../../ui/daw-cli/src/main.rs']
     .map((f) => readFileSync(new URL(f, import.meta.url), 'utf8')).join('\n');
 
   const unused = names.filter((n) => !new RegExp(`UiCommandType::${n}\\b`).test(callers));
