@@ -89,8 +89,8 @@ watcher:  none (required for Codex)
 | `AE-P0` | `ACTIVE` | current-main rebaseline + formal review | `backend` | unassigned | root | `62bafdc` execution baseline |
 | `AE-P0.1` | `HOLD` | packet `258f423` acknowledgement required | `codex-worker-1` | `claude-worker-1` | `/Users/jak/src/daw-ae-p0-roots-current` | current-main packet paused for handoff |
 | `AE-P0.2 discovery` | `ESCALATED_TO_ADR` | frozen baseline + packet | `claude-worker-2` | `codex-worker-2` | read-only root | four rejected designs; evidence complete |
-| `AE-P0.2 ADR` | `DRAFT_REBASELINE_PENDING` | refreshed current-main inventory + exact review | `backend` | `codex-worker-2` | root | external review after current-main refresh |
-| `AE-P0.2 implementation` | `BLOCKED` | `AE-P0.1` + reviewed discovery + baseline results | unassigned | unassigned | none | none |
+| `AE-P0.2 ADR` | `APPROVED` | current-main inventory + exact review | `backend` | `codex-worker-2` | root | exact SHA `7dff997`; approval received |
+| `AE-P0.2 implementation` | `BLOCKED` | `AE-P0.1` integration + ownership manifest | unassigned | unassigned | none | ADR approved; waits on P0.1 |
 | `AE-P0.3` | `BLOCKED` | AE-P0.1 review + frontend ownership release | unassigned | unassigned | none | packet ready |
 | `AE-P1.1` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P1.2` | `BLOCKED` | `AE-P1.1` | unassigned | unassigned | none | none |
@@ -193,6 +193,7 @@ never evaluated against different packet generations.
 | 2026-08-10 | AE-P0.1 packet amended for credential and unique-log callers | `ace551b` adds explicit paid/demo credential opt-ins and validated segment log-locator ownership; owner acknowledgement required before resuming |
 | 2026-08-10 | AE-P0.1 owner acknowledged packet `ace551b` | Exact current packet acknowledged; implementation resumed only within its amended ownership and invariant scope |
 | 2026-08-10 | AE-P0.1 current-main packet amended and committed | `258f423` records credentialed demo callers and validated unique log-locator ownership in the correct current-main packet; implementation paused for exact-SHA handoff |
+| 2026-08-10 | AE-P0.2 ADR independently approved | `codex-worker-2` approved exact SHA `7dff997`; no blockers remain in schema/trust, provenance, allocation, terminal selection, fixture closure, inventory, ownership, or GC controls |
 | 2026-08-10 | Current-main metadata-only configure completed | Fresh `/Users/jak/src/daw/build-ae-current` generated from `62bafdc` with RelWithDebInfo and patcher Rust enabled; no build, test, install, or runtime process launched |
 | 2026-08-10 | AE-P0.2 current-main delta checked read-only | Core findings survive at `62bafdc`; registered tests changed from 213 to 214 and shell inventory from 153 to 156, so configured counts and the complete inventory must be regenerated after baseline selection |
 
