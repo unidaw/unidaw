@@ -73,12 +73,15 @@ page_server_matches_checkout() {
   cwd="$(daw_canonical_directory "$cwd" 'page-server working directory' 2>/dev/null)" || return 1
   [ "$cwd" = "$UI_WEB" ] || return 1
   ps -o command= -p "$pid" 2>/dev/null | grep -Fq 'test/serve.mjs' || return 1
+  curl -fsSI --max-time 3 "http://127.0.0.1:$PORT/index.html" 2>/dev/null \
+    | grep -Eiq '^Cache-Control:[[:space:]]*no-store([,;[:space:]]|$)' || return 1
   curl -fsS --max-time 3 "http://127.0.0.1:$PORT/index.html" 2>/dev/null \
     | cmp -s - "$UI_WEB/index.html"
 }
 
 sidecar_listener_pids() {
-  { lsof -nP -iTCP:"$WS_STATE" -sTCP:LISTEN -t 2>/dev/null; lsof -nP -iTCP:"$WS_CMD" -sTCP:LISTEN -t 2>/dev/null; } | sort -u || true
+  local port="$1"
+  lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | sort -u || true
 }
 
 file_mode() {
@@ -700,9 +703,10 @@ SIDECAR_PID="$STARTED_SIDECAR_PID"
 alive "$SIDECAR_PID" || { say "sidecar exited during startup:"; head -3 "$LOG_DIR/sidecar.log"; exit 1; }
 printf '%s\n%s\n' "$ENGINE_PID" "$SIDECAR_PID" > "$PIDFILE"
 grep -q 'attached to' "$LOG_DIR/sidecar.log" || { say "sidecar did not attach:"; head -3 "$LOG_DIR/sidecar.log"; exit 1; }
-SIDECAR_LISTENERS="$(sidecar_listener_pids)"
-[ "$(printf '%s\n' "$SIDECAR_LISTENERS" | sed '/^$/d' | sort -u)" = "$SIDECAR_PID" ] \
-  || { say "sidecar listener ownership does not match sidecar pid $SIDECAR_PID (got $SIDECAR_LISTENERS)"; exit 1; }
+SIDECAR_STATE_LISTENERS="$(sidecar_listener_pids "$WS_STATE")"
+SIDECAR_CMD_LISTENERS="$(sidecar_listener_pids "$WS_CMD")"
+[ "$SIDECAR_STATE_LISTENERS" = "$SIDECAR_PID" ] && [ "$SIDECAR_CMD_LISTENERS" = "$SIDECAR_PID" ] \
+  || { say "sidecar listener ownership does not match sidecar pid $SIDECAR_PID (state=$SIDECAR_STATE_LISTENERS cmd=$SIDECAR_CMD_LISTENERS)"; exit 1; }
 
 if [ "$PAGE_REUSE" = "0" ]; then
   # Fully detached: </dev/null and nohup. A backgrounded child that still holds

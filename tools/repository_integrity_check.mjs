@@ -37,7 +37,7 @@ const MODULE_LEXICAL_FILE = fileURLToPath(import.meta.url);
 function rejectSymlinkedAncestor(path) {
   let current = sep;
   const parts = path.split(sep).filter(Boolean);
-  for (let index = 0; index < parts.length - 1; index++) {
+  for (let index = 0; index < parts.length; index++) {
     const part = parts[index];
     current = join(current, part);
     if (lstatSync(current).isSymbolicLink()) {
@@ -780,7 +780,7 @@ function selfTest(repositoryRoot) {
     'escaping-relative-symlink-rejected',
     'foreign-cwd-root-isolation',
     'symlinked-shell-entrypoint-rejected',
-    'symlinked-node-entrypoint-canonicalized',
+    'symlinked-node-entrypoint-rejected',
     'git-environment-steering-rejected',
     'bash-environment-sanitized',
     'public-root-argument-rejected',
@@ -1201,13 +1201,11 @@ function selfTest(repositoryRoot) {
       cwd: caller,
       env: { ...process.env, NODE_OPTIONS: '--preserve-symlinks-main' },
     });
-    assert(symlinkedModuleResult.status === 0 || symlinkedModuleResult.status === 1,
-      'Node checker errored through a symlinked main module');
-    assert(/repository integrity: (?:PASS|FAIL)/.test(`${symlinkedModuleResult.stdout}${symlinkedModuleResult.stderr}`),
-      'symlinked Node checker did not run the canonical repository scan');
-    assert(!`${symlinkedModuleResult.stdout}${symlinkedModuleResult.stderr}`.includes('poison must not execute'),
-      'symlinked Node checker scanned the link-adjacent tree');
-    pass('symlinked-node-entrypoint-canonicalized', 'Node main canonicalizes to the checkout containing its real file');
+    assert(symlinkedModuleResult.status !== 0,
+      'Node checker accepted a symlinked main module');
+    assert(`${symlinkedModuleResult.stdout}${symlinkedModuleResult.stderr}`.includes('symlinked ancestor'),
+      'symlinked Node checker did not report bootstrap refusal');
+    pass('symlinked-node-entrypoint-rejected', 'Node main rejects symlinked bootstrap paths before scanning');
 
     const gitSteeringResult = run('bash', [wrapper], {
       cwd: caller,
