@@ -148,7 +148,8 @@ included in handoffs. The bus never substitutes for a commit, review, or gate.
 | 2026-08-09 | Build-contract drift reproduced | CMake requests C++17 while source uses C++20 defaulted comparisons; unrestricted parallel build drove load average above 175 and was safely resumed with six jobs |
 | 2026-08-09 | Clean baseline build completed | `cmake --build build-ae-baseline --parallel 6` completed all targets successfully |
 | 2026-08-09 | Canonical hard-coded build root refreshed | `cmake -S . -B build ... && cmake --build build --parallel 6` completed successfully before CTest |
-| 2026-08-09 | Rust baseline compiled and unit-tested | workspace build/no-run green; bridge+agent 36, sidecar 75, patcher 3; agent engine e2e 34/34 green in serialized test mode |
+| 2026-08-09 | Rust baseline compiled and unit-tested | workspace build/no-run green; bridge+agent 36, sidecar 75, patcher 3 |
+| 2026-08-09 | Agent e2e result withdrawn after resource audit | 34/34 tests reported pass, but `DAW_ENGINE_TEST_MODE=1` still opens the physical device; the 22.32-second run overlapped frontend's sweep and must be repeated under exclusive ownership |
 | 2026-08-09 | Attributable baseline record opened | `docs/architecture/baselines/AE-P0-2026-08-09.md`; CTest, local web dependencies, and objective audio explicitly pending |
 | 2026-08-09 | AE-P0.1 assigned and acknowledged | `/Users/jak/src/daw-ae-p0-roots` on `ae/p0-roots`; owner `codex-worker-1`, reviewer `claude-worker-1`; packet `docs/architecture/tasks/AE-P0.1.md` |
 | 2026-08-09 | Symlink-install hazard stopped before execution | Reviewer proved `npm ci` would traverse the tracked link and rewrite frontend dependencies; packet amended to unlink only the verified symlink before local install |
