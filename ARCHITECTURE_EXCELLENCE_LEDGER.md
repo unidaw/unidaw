@@ -8,11 +8,11 @@ ledger records current orchestration state.
 
 ```text
 Program:       ACTIVE -- AE-P0 only
-Reason:        Undo complete; baseline build/provenance verification in progress
+Reason:        Builds and Rust suites green; CTest queued behind shared-resource owner
 Target repo:   /Users/jak/src/daw-backend
 Baseline SHA:  5bef283798b59c2c4f5720292554c7ab8c265be6
 Worktrees:     AE-P0.1 at /Users/jak/src/daw-ae-p0-roots
-Active tasks:  AE-P0 baseline verification; AE-P0.1 implementation
+Active tasks:  AE-P0 baseline; AE-P0.1 implementation; AE-P0.2 discovery review
 File locks:    protocol hotspots frozen; root CMake reserved narrowly for AE-P0.1
 Integration:   architecture-audit fast-forwarded to frozen baseline
 ```
@@ -40,8 +40,8 @@ The owner-authorized activation trigger has been satisfied:
 | `backend` | Codex | Orchestrator/integrator | `ACTIVE: AE-P0` |
 | `codex-worker-1` | Codex | Lane A implementation owner first | `READY: HOLD` |
 | `claude-worker-1` | Claude | Lane A independent reviewer first | `READY: HOLD` |
-| `claude-worker-2` | Claude | Lane B implementation owner first | `READY: AE-P0.2 discovery` |
-| `codex-worker-2` | Codex | Lane B independent reviewer first | `READY: AE-P0.2 discovery review` |
+| `claude-worker-2` | Claude | Lane B implementation owner first | `READY_FOR_REVIEW: AE-P0.2 discovery` |
+| `codex-worker-2` | Codex | Lane B independent reviewer first | `ACTIVE: AE-P0.2 discovery review` |
 
 Implementation and review roles rotate after each integrated ticket. Pairing is
 not authorization to begin a ticket.
@@ -85,7 +85,7 @@ watcher:  none (required for Codex)
 |---|---|---|---|---|---|---|
 | `AE-P0` | `ACTIVE` | Undo + owner `GO` satisfied | `backend` | unassigned | root | `5bef283` baseline |
 | `AE-P0.1` | `ACTIVE` | frozen baseline + planning bootstrap | `codex-worker-1` | `claude-worker-1` | `/Users/jak/src/daw-ae-p0-roots` | none |
-| `AE-P0.2 discovery` | `READY` | frozen baseline + packet | `claude-worker-2` | `codex-worker-2` | read-only root | none |
+| `AE-P0.2 discovery` | `READY_FOR_REVIEW` | frozen baseline + packet | `claude-worker-2` | `codex-worker-2` | read-only root | report on bus |
 | `AE-P0.2 implementation` | `BLOCKED` | `AE-P0.1` + reviewed discovery + baseline results | unassigned | unassigned | none | none |
 | `AE-P1.1` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P1.2` | `BLOCKED` | `AE-P1.1` | unassigned | unassigned | none | none |
@@ -147,9 +147,14 @@ included in handoffs. The bus never substitutes for a commit, review, or gate.
 | 2026-08-09 | Clean RelWithDebInfo configure captured | CMake 4.3.3, Apple clang 17.0.0, arm64 Darwin, Boost 1.90.0, JUCE cache reports 8.0.12, SHM v37 |
 | 2026-08-09 | Build-contract drift reproduced | CMake requests C++17 while source uses C++20 defaulted comparisons; unrestricted parallel build drove load average above 175 and was safely resumed with six jobs |
 | 2026-08-09 | Clean baseline build completed | `cmake --build build-ae-baseline --parallel 6` completed all targets successfully |
+| 2026-08-09 | Canonical hard-coded build root refreshed | `cmake -S . -B build ... && cmake --build build --parallel 6` completed successfully before CTest |
+| 2026-08-09 | Rust baseline compiled and unit-tested | workspace build/no-run green; bridge+agent 36, sidecar 75, patcher 3; agent engine e2e 34/34 green in serialized test mode |
+| 2026-08-09 | Attributable baseline record opened | `docs/architecture/baselines/AE-P0-2026-08-09.md`; CTest, local web dependencies, and objective audio explicitly pending |
 | 2026-08-09 | AE-P0.1 assigned and acknowledged | `/Users/jak/src/daw-ae-p0-roots` on `ae/p0-roots`; owner `codex-worker-1`, reviewer `claude-worker-1`; packet `docs/architecture/tasks/AE-P0.1.md` |
 | 2026-08-09 | Symlink-install hazard stopped before execution | Reviewer proved `npm ci` would traverse the tracked link and rewrite frontend dependencies; packet amended to unlink only the verified symlink before local install |
 | 2026-08-09 | AE-P0.2 read-only discovery packet prepared | `docs/architecture/tasks/AE-P0.2-discovery.md`; no implementation authorization |
+| 2026-08-09 | AE-P0.2 discovery delivered for independent review | Report derives the 211-test partition, writable-resource inventory, RunContext/provenance proposal, nine negative controls, migration slices, and five unresolved ADR questions; `codex-worker-2` review active |
+| 2026-08-09 | Cross-worktree runtime ownership respected | Full CTest deferred while frontend's 66-suite gate owns engine/audio resources; frontend will send an explicit clear signal |
 
 ## AE-P0 baseline findings
 
@@ -173,3 +178,7 @@ sibling checkout:
 - The clean baseline build is intentionally bounded to six jobs after the
   unrestricted build oversubscribed the machine. The interrupted build changed
   only disposable build artifacts and resumed in the same isolated directory.
+- Read-only AE-P0.2 discovery found that 103 of 211 registered CTest entries
+  select the canonical `build/` directory internally, regardless of
+  `ctest --test-dir`; its independent review is active. The canonical C++ and
+  Rust debug artifacts were therefore rebuilt before the full sweep.
