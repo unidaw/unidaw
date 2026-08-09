@@ -4885,3 +4885,33 @@ test('no capability is reachable only by mouse', () => {
     + 'it, that is the mouse-only capability the owner\'s rule forbids — give it a verb. If it is '
     + 'a read, an internal, or covered by a key, say which in API_NOT_ON_THE_CONSOLE.');
 });
+
+/*
+ * THE OP NAMES daw-cli WAITS FOR MUST BE OP NAMES THE ENGINE WRITES.
+ *
+ * report_sampler_outcome takes the journal op to wait for as a literal string, because the CLI
+ * has no way to ask the engine what it calls a command. That is a hand-maintained mapping across
+ * a language boundary, and its failure mode is silent in exactly the direction #51 is about: an
+ * op renamed in the engine makes the CLI wait for a line that never comes, find nothing, and
+ * report the refused command as applied. Green tests, refusals invisible again.
+ *
+ * Comparing against uiCommandTypeName's own table is the only check that catches the rename,
+ * because that table is where the journal's spelling actually comes from.
+ */
+test('every journal op daw-cli waits for is one the engine writes', () => {
+  const cli = readFileSync(new URL('../../ui/daw-cli/src/main.rs', import.meta.url), 'utf8');
+  const engine = readFileSync(new URL('../../apps/event_payloads.h', import.meta.url), 'utf8');
+  const waited = [...cli.matchAll(/report_sampler_outcome\(\s*"[a-z-]+",\s*"([a-z_]+)"/g)]
+    .map((m) => m[1]);
+  // Counted against the calls themselves rather than a number written here, so a new sampler arm
+  // that forgets its op is a failure instead of a constant somebody has to remember to bump.
+  const calls = (cli.match(/(?<!fn )report_sampler_outcome\(/g) || []).length;
+  assert.equal(waited.length, calls,
+    `${calls} sampler arms report an outcome but only ${waited.length} name the op to wait for`);
+  assert.ok(calls >= 13, `only ${calls} sampler arms are wired to the journal at all`);
+  const written = new Set([...engine.matchAll(/return "([a-z_]+)";/g)].map((m) => m[1]));
+  const unknown = [...new Set(waited)].filter((op) => !written.has(op)).sort();
+  assert.deepEqual(unknown, [],
+    'daw-cli waits for a journal op that uiCommandTypeName never emits — the refusal for these '
+    + 'verbs will never be seen, and the command will report success');
+});

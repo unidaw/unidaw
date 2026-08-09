@@ -1060,6 +1060,20 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
           + 'rewrite the device',
           `voice_cap=${JSON.stringify(readDev(afterSs)?.sampler?.voice_cap)}`);
 
+    /*
+     * THE FIRST ENGINE REFUSAL THIS SUITE ASSERTS. Every other refusal check above is an argument
+     * refusal, decided by daw-cli before anything is sent. This one requires the round trip: the
+     * engine journals "rejected:no_such_slot", and the CLI has to READ that and exit non-zero.
+     * Before #51 wired it, this command printed a cheerful "sent" line and exited 0.
+     *
+     * 4242 rather than a merely-stale id, so the refusal cannot be a race with a slot that exists.
+     */
+    const ssBad = cli('do', 'sampler-slot', '--track', '0', '--device', devId,
+                      '--slot', '4242', '--field', 'root', '--value', '60');
+    check(!ssBad.ok && /no slot with that id/.test(ssBad.out),
+          'A REFUSED SAMPLER EDIT EXITS NON-ZERO AND SAYS WHY — not a cheerful "sent"',
+          ssBad.out.trim().slice(0, 160) || `(exit ok=${ssBad.ok}, no output)`);
+
     // sampler-slot-name, the one verb here whose stored name matches its own.
     const sn = cli('do', 'sampler-slot-name', '--track', '0', '--device', devId,
                    '--slot', slotId, '--name', 'clivslot');
@@ -1588,6 +1602,24 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
             'SAMPLER-EMIT-ROWS WRITES THE PATTERN — the clip has more notes than before the chop '
             + 'was emitted',
             `clip ${clipId}: ${notesBefore} notes -> ${notesAfter}`);
+
+    /*
+     * A SECOND REFUSAL FAMILY, and a different reason word. sampler-slot proves the CLI reads the
+     * journal at all; this proves it is not one arm's special case, and it exercises the
+     * LoadFailed the engine only started emitting in #50 — a sample that cannot be decoded used
+     * to be silent to every client.
+     *
+     * LAST IN THIS BLOCK ON PURPOSE. A load that fails leaves a dangling source behind, and the
+     * engine re-resolves it on every subsequent project load — so run earlier, this one refusal
+     * reappears in the journal indefinitely and the chop above it has no source to slice. That
+     * retry is also what forced the op filter in daw-cli's journal reader: without it, nine later
+     * verbs reported "the sample would not load" about a slot rename.
+     */
+    const loadBad = cli('do', 'sampler-load', '--track', '0', '--device', dev,
+                        '--file', 'no_such_sample.wav', '--root', '60');
+    check(!loadBad.ok && /would not load/.test(loadBad.out),
+          'A SAMPLE THAT CANNOT LOAD IS REPORTED TO THE CLI — the #50 refusal reaches a client',
+          loadBad.out.trim().slice(0, 160) || `(exit ok=${loadBad.ok}, no output)`);
     }
   }
 }
