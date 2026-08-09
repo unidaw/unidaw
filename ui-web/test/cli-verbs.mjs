@@ -28,7 +28,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, rmSync, cpSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { startStack } from './stack.mjs';
 
@@ -1512,6 +1512,84 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
           .every((i) => idsAfter.includes(i)),
         'and leaves every other track alone',
         `${JSON.stringify(idsBefore)} -> ${JSON.stringify(idsAfter)}`);
+}
+
+/*
+ * ── sampler-emit-rows: the pattern that reproduces a chop ───────────────────────────────────────
+ *
+ * The last verb on the pin list, and it stayed there because it needs a CHOP to emit rows from —
+ * a loaded source, sliced. That is not a fixture this file had, and faking one (an empty source,
+ * or slices invented in JSON) would exercise the arm while proving nothing about it, which is the
+ * exact failure the pin list exists to prevent.
+ *
+ * So the chop is BUILT here with the product's own verbs: load a real wav, slice it, emit the
+ * rows. Three verbs in the order a person uses them, and each step asserted before the next
+ * depends on it — a missing source makes slicing meaningless, and no slices makes emitted rows
+ * meaningless.
+ *
+ * `--file` is relative to the project directory and capped at 24 BYTES, which
+ * "../audio/waveform_probe.wav" (27) exceeds. Copied to a short name rather than lengthening the
+ * cap: the cap is the payload's, and a silently truncated path resolves to nothing and leaves a
+ * slot mysteriously silent.
+ */
+{
+  // INTO THE PROJECT DIRECTORY, and by a bare name. --file is not a path: the verb refuses
+  // "../audio/p.wav" outright, because a project that names a sample by path stops playing the
+  // moment the project moves. So the sample is copied where the verb will look for it.
+  cpSync(join(stack.root, 'audio', 'waveform_probe.wav'), join(stack.dir, 'p.wav'));
+  const samp = (await saved('cliv_chop0'))?.tracks?.find((t) => t.track_id === 0)
+    ?.device_chain?.find((d) => d.sampler !== undefined);
+  check(samp !== undefined, 'track 0 still has a sampler to chop into',
+        'no sampler device on track 0');
+
+  if (samp) {
+    const dev = String(samp.device_id);
+    const sl = cli('do', 'sampler-load', '--track', '0', '--device', dev,
+                   '--file', 'p.wav', '--root', '60');
+    check(sl.ok, 'do sampler-load is accepted', sl.out.slice(0, 140));
+    let withSource = null;
+    for (let i = 0; i < 40; i++) {
+      withSource = await saved(`cliv_chop_src${i}`);
+      const d = withSource?.tracks?.find((t) => t.track_id === 0)
+        ?.device_chain?.find((x) => x.device_id === samp.device_id);
+      if ((d?.sampler?.sources ?? []).length > 0) break;
+      await sleep(150);
+    }
+    const srcs = withSource?.tracks?.find((t) => t.track_id === 0)
+      ?.device_chain?.find((x) => x.device_id === samp.device_id)?.sampler?.sources ?? [];
+    check(srcs.length > 0,
+          'THE SAMPLE LOADS — a source exists to slice, which the two checks below depend on',
+          `sources=${JSON.stringify(srcs).slice(0, 160)}`);
+
+    if (srcs.length > 0) {
+      const srcId = String(srcs[0].local_id ?? srcs[0].id ?? 1);
+      const sc = cli('do', 'sampler-slice', '--track', '0', '--source', srcId,
+                     '--mode', 'equal', '--count', '8', '--slots');
+      check(sc.ok, 'do sampler-slice is accepted', sc.out.slice(0, 140));
+      const afterSlice = await saved('cliv_chop_sliced');
+      const sliced = afterSlice?.tracks?.find((t) => t.track_id === 0)
+        ?.device_chain?.find((x) => x.device_id === samp.device_id)?.sampler;
+      const sliceSets = sliced?.slice_sets ?? [];
+      check(sliceSets.length > 0,
+            'SAMPLER-SLICE CHOPS IT — a slice set exists on the device',
+            `slice_sets=${JSON.stringify(sliceSets).slice(0, 200)}`);
+
+      // And the rows. The clip track 0 holds is where they land, so the count before matters:
+      // this fixture has been edited by ninety checks already and starting from "0 notes" would
+      // be an assumption, not a reading.
+      const clipId = afterSlice?.tracks?.find((t) => t.track_id === 0)?.placements?.[0]?.clip_id;
+      const notesBefore = (afterSlice?.clips?.find((c) => c.id === clipId)?.notes ?? []).length;
+      const er = cli('do', 'sampler-emit-rows', '--track', '0', '--source', srcId,
+                     '--at', '0', '--step', String(Q));
+      check(er.ok, 'do sampler-emit-rows is accepted', er.out.slice(0, 140));
+      const afterRows = await saved('cliv_chop_rows');
+      const notesAfter = (afterRows?.clips?.find((c) => c.id === clipId)?.notes ?? []).length;
+      check(notesAfter > notesBefore,
+            'SAMPLER-EMIT-ROWS WRITES THE PATTERN — the clip has more notes than before the chop '
+            + 'was emitted',
+            `clip ${clipId}: ${notesBefore} notes -> ${notesAfter}`);
+    }
+  }
 }
 
 /*
