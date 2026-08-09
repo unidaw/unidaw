@@ -796,6 +796,26 @@ struct MusicalEvent {
   std::vector<MusicalEvent> events_;
   uint16_t author_ = kAuthorHuman;
   uint64_t nextCounter_ = 1;
+
+ public:
+  // AN ENCAPSULATED CLASS COMPARES ITSELF, because only it knows which of its members are the
+  // content and which are bookkeeping. This is the third of the three cases documentFieldsEqual
+  // handles (leaf with ==, aggregate with a field list, class with an invariant), and the reason
+  // the third exists: a field list here would have to name private members, and a memberwise
+  // default would compare the wrong thing.
+  //
+  // nextCounter_ IS DELIBERATELY NOT COMPARED. It is the id allocator's high-water mark, derived
+  // from the events on load and only ever moved upward in memory — delete a note and the live
+  // clip keeps the higher counter while a reload of the same file produces a lower one. Comparing
+  // it would report "this changed" for a document nobody touched, which in commit() means a
+  // refused command records a version and destroys the redo tail. Exactly the bug the
+  // unchanged-document test was added to fix, reintroduced from underneath it.
+  //
+  // author_ IS compared: it decides whose ids new events get, so two clips differing only in
+  // author will diverge the moment either is edited.
+  friend bool operator==(const MusicalClip& a, const MusicalClip& b) {
+    return a.author_ == b.author_ && a.events_ == b.events_;
+  }
 };
 
 class PatternView {

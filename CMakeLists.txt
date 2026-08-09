@@ -186,6 +186,7 @@ add_library(engine_commands STATIC
   apps/engine_history_journal.cpp
   apps/engine_song_store.cpp
   apps/engine_consumer.cpp
+  apps/engine_plugin_state_capture.cpp
   apps/engine_save_project.cpp
   apps/engine_sampler_commands.cpp
   apps/engine_automation_commands.cpp
@@ -706,6 +707,27 @@ target_include_directories(gesture_undo_tests PRIVATE
   ${Boost_INCLUDE_DIRS}
 )
 target_link_libraries(gesture_undo_tests PRIVATE engine_commands)
+
+# UNDO STAGE 5: a version holds the hosted plugins' own state, not just the document.
+add_executable(plugin_state_version_tests
+  apps/plugin_state_version_tests_main.cpp
+)
+target_include_directories(plugin_state_version_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(plugin_state_version_tests PRIVATE engine_commands)
+
+# STAGE 3's SAFETY GATE: the structural comparer must see every authored field the serializer
+# writes, or switching commit() to it would silently drop an edit.
+add_executable(comparer_equivalence_tests
+  apps/comparer_equivalence_tests_main.cpp
+)
+target_include_directories(comparer_equivalence_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(comparer_equivalence_tests PRIVATE engine_commands)
 
 add_executable(engine_clip_helpers_tests
   apps/engine_clip_helpers_tests_main.cpp
@@ -1704,6 +1726,29 @@ add_test(NAME gesture_undo
 )
 set_tests_properties(gesture_undo PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
 
+add_test(NAME plugin_state_version
+  COMMAND plugin_state_version_tests
+)
+set_tests_properties(plugin_state_version PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
+
+# EVERY SHIPPED PRESET EXCEPT THE TWO STRESS FILES. stress-128 and stress-512 hold tens of
+# thousands of note events and the walk re-serializes the document once per distinct field shape,
+# so they cost minutes and add no field the others lack — they are big, not structurally richer.
+# Stated here rather than silently omitted: a check that covers less than it looks like it does is
+# the failure this whole family exists to prevent.
+add_test(NAME comparer_equivalence
+  COMMAND comparer_equivalence_tests
+          --baseline ${CMAKE_CURRENT_SOURCE_DIR}/tools/comparer_blind_fields.txt
+          ${CMAKE_CURRENT_SOURCE_DIR}/presets/projects/generator.uniproj.json
+          ${CMAKE_CURRENT_SOURCE_DIR}/presets/projects/maximal.uniproj.json
+          ${CMAKE_CURRENT_SOURCE_DIR}/presets/projects/meter.uniproj.json
+          ${CMAKE_CURRENT_SOURCE_DIR}/presets/projects/multiout.uniproj.json
+          ${CMAKE_CURRENT_SOURCE_DIR}/presets/projects/rack.uniproj.json
+          ${CMAKE_CURRENT_SOURCE_DIR}/presets/projects/waveform.uniproj.json
+          ${CMAKE_CURRENT_SOURCE_DIR}/presets/projects/webtest.uniproj.json
+)
+set_tests_properties(comparer_equivalence PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 add_test(NAME undo_ratchet
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/undo_ratchet_check.sh
 )
@@ -1740,6 +1785,11 @@ add_test(NAME undo_plugin_state
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/undo_plugin_state_check.sh
 )
 set_tests_properties(undo_plugin_state PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME undo_plugin_version
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/undo_plugin_version_check.sh
+)
+set_tests_properties(undo_plugin_version PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # A STEM IS A TRACK. Registered the moment it went green — it was DECLARED_UNREGISTERED for one
 # commit while the load half was still narrow, because a permanently red check is one people learn

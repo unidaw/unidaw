@@ -1,0 +1,11 @@
+# FIELDS documentFieldsEqual CANNOT SEE, and the file is EMPTY on purpose.
+#
+# comparer_equivalence_tests perturbs every leaf a save writes and requires the structural
+# comparer to notice. Anything it does NOT notice is listed here — and nothing is, because the
+# 29 fields its first run found (Device's patcher graph, euclidean config, vst_ref, sampler)
+# were fixed rather than recorded. DocumentHistory::commit is switched to the comparer on the
+# strength of that.
+#
+# THE LIST SHRINKS ONLY. The check fails if a new name is needed AND if a listed name is no
+# longer blind, so it can neither grow quietly nor rot. A line added here is a field whose edit
+# would record no undo step: that is a bug being written down, never an exemption being granted.

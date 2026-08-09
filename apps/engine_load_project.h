@@ -86,6 +86,10 @@ struct LoadProjectDeps {
   // What the engine HOLDS, for seeding the undo history after a load. Not the parsed file:
   // applyDocument gutted that of the master and aux-child tracks on its way through.
   std::function<daw::ProjectDocument()> captureDocument;
+  // And the plugin blobs to seed version 0 with — see apps/engine_plugin_state_capture.h. Without
+  // it undo could return the song to how the file opened while leaving every plugin where the
+  // session's edits left it.
+  std::function<PluginStateSnapshot(const PluginStateSnapshot&, bool)> capturePluginState;
 };
 
 // Returns false and fills *error if the document will not load. On success the engine is

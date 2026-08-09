@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "apps/document_compare.h"
+#include "apps/engine_plugin_state_version.h"
 #include "apps/project_file.h"
 
 namespace daw::engine {
@@ -48,15 +50,16 @@ class DocumentHistory {
 
   // The base version, recorded once when the engine first has a document worth returning to.
   // Without it the first undo has no earlier state to reach and would silently do nothing.
-  void seed(daw::ProjectDocument doc) {
+  void seed(daw::ProjectDocument doc, PluginStateSnapshot plugins = {}) {
     std::lock_guard<std::mutex> lock(mutex_);
     versions_.clear();
     labels_.clear();
+    pluginStates_.clear();
     versions_.push_back(std::move(doc));
     labels_.emplace_back("open");
+    pluginStates_.push_back(std::move(plugins));
     cursor_ = 0;
     bytes_ = approximateBytes(versions_.front());
-    cursorJson_ = daw::serializeProject(versions_.front());
   }
 
   // Record the state AFTER an edit. `label` is required, not optional: a version nobody can name
@@ -65,14 +68,15 @@ class DocumentHistory {
   //
   // RETURNS whether a version was actually recorded. `false` means the document was byte-identical
   // to the one already at the cursor — see below.
-  bool commit(daw::ProjectDocument doc, std::string label) {
+  bool commit(daw::ProjectDocument doc, std::string label,
+              PluginStateSnapshot plugins = {}) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (versions_.empty()) {
       versions_.push_back(doc);
       labels_.emplace_back("open");
+      pluginStates_.push_back(plugins);
       cursor_ = 0;
       bytes_ = approximateBytes(versions_.front());
-      cursorJson_ = daw::serializeProject(versions_.front());
     }
 
     // A COMMAND THAT CHANGED NOTHING DOES NOT OPEN AN UNDO STEP — and, far more importantly,
@@ -89,12 +93,35 @@ class DocumentHistory {
     // succeeds while writing the value that was already there. Comparing what SAVE WOULD WRITE
     // is the same definition undo itself uses, so the two cannot disagree.
     //
-    // COST: one serialization per mutating command, against a cached string rather than a second
-    // serialization of the current version. That is real, and on a large project it is the
-    // dominant cost of an edit — Step 3's field visitor replaces it with a structural compare.
-    // It buys an invariant that no amount of handler discipline can provide.
-    std::string json = daw::serializeProject(doc);
-    if (json == cursorJson_) {
+    // STAGE 3 LANDED HERE. This used to serialize the whole document to JSON and compare strings
+    // against a cached copy — correct, and megabytes of text per mutating command on a large
+    // project. documentFieldsEqual walks the field lists and stops at the first difference.
+    //
+    // THE SWAP WAS NOT MADE ON THE STRENGTH OF THE COMPARER LOOKING RIGHT. A field the walk cannot
+    // see makes this answer "nothing changed" for an edit that changed it: no version, no undo
+    // step, silent and permanent, and indistinguishable from a refused command.
+    // comparer_equivalence_tests perturbs every leaf a save writes, on every shipped preset, and
+    // requires the comparer to notice. Its first run found 29 blind fields — all of Device's
+    // patcher graph, euclidean config, vst_ref and sampler — and a live persistence bug on the way
+    // (load_mode written as a boolean, so a by-path plugin reloaded by-reference). The switch was
+    // made when that check went green with an EMPTY baseline, and it stays true because the check
+    // is in the gate.
+    // SHARE THE BYTES OF ANY PLUGIN THAT DID NOT CHANGE, before the comparison below — which then
+    // costs a pointer compare per device rather than a memcmp of every blob in the project.
+    if (cursor_ < pluginStates_.size()) {
+      sharePluginBlobsWith(pluginStates_[cursor_], plugins);
+    }
+
+    // "NOTHING CHANGED" MUST INCLUDE THE PLUGINS, or the single most common plugin edit is
+    // un-undoable. A VST's state is not in ProjectDocument, so turning a cutoff leaves the
+    // serialized document byte-identical; testing the document alone would classify it as a
+    // refused command, record no version, and Ctrl-Z would step over the knob turn as if it had
+    // never happened. The test is "did anything a version holds change", and a version holds both.
+    const bool documentSame =
+        cursor_ < versions_.size() && daw::documentFieldsEqual(versions_[cursor_], doc);
+    const bool pluginsSame =
+        cursor_ < pluginStates_.size() && samePluginState(pluginStates_[cursor_], plugins);
+    if (documentSame && pluginsSame) {
       return false;
     }
     // COMMITTING AFTER AN UNDO DISCARDS THE REDO TAIL, which is what every editor does and what
@@ -104,12 +131,18 @@ class DocumentHistory {
       bytes_ -= approximateBytes(versions_.back());
       versions_.pop_back();
       labels_.pop_back();
+      pluginStates_.pop_back();
     }
     bytes_ += approximateBytes(doc);
     versions_.push_back(std::move(doc));
     labels_.push_back(std::move(label));
+    pluginStates_.push_back(std::move(plugins));
     cursor_ = versions_.size() - 1;
-    cursorJson_ = std::move(json);
+    // THE OPEN GESTURE NOW OWNS A VERSION, so everything after this may amend it. Until this line
+    // runs there is nothing of the gesture's own to rewrite — see gestureAmendable().
+    if (gestureOpen_) {
+      gestureHasVersion_ = true;
+    }
     evictOldest();
     return true;
   }
@@ -124,15 +157,44 @@ class DocumentHistory {
   //
   // THE REDO TAIL SURVIVES. An audition is not an edit, so it has no business destroying work the
   // user can still redo — which is the same reason it does not push a version.
-  void amend(daw::ProjectDocument doc) {
+  void amend(daw::ProjectDocument doc, PluginStateSnapshot plugins = {}) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (versions_.empty()) {
       return;
     }
     bytes_ -= approximateBytes(versions_[cursor_]);
     bytes_ += approximateBytes(doc);
-    cursorJson_ = daw::serializeProject(doc);
     versions_[cursor_] = std::move(doc);
+    if (cursor_ < pluginStates_.size()) {
+      sharePluginBlobsWith(pluginStates_[cursor_], plugins);
+      pluginStates_[cursor_] = std::move(plugins);
+    }
+  }
+
+  // REWRITE ONLY THE PLUGIN STATE AT THE CURSOR, leaving the document alone.
+  //
+  // For the interrupted drag. A gesture defers its plugin capture to the command carrying END —
+  // one cross-process round trip per drag instead of one per sample, which is the whole reason
+  // coalescing had to land before this. When the pointer never comes back up there is no END, and
+  // the drag's version would keep the plugin state from BEFORE the drag: undoing to that step
+  // would restore the document the drag produced and the plugin as it was beforehand, which is a
+  // state that never existed. The force-close path calls this so the abandoned step still holds
+  // the plugin state that goes with its document.
+  void amendPluginState(PluginStateSnapshot plugins) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (cursor_ >= pluginStates_.size()) {
+      return;
+    }
+    sharePluginBlobsWith(pluginStates_[cursor_], plugins);
+    pluginStates_[cursor_] = std::move(plugins);
+  }
+
+  // The plugin state belonging to the version at the cursor — what undo/redo must push after
+  // applying the document. Empty when nothing was ever captured, which a restore reads as
+  // "nothing to push" rather than "push nothing", and those differ: see restorePluginSnapshot.
+  PluginStateSnapshot pluginStateAtCursor() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return cursor_ < pluginStates_.size() ? pluginStates_[cursor_] : PluginStateSnapshot{};
   }
 
   // A GESTURE IS ONE UNDO STEP. See kUiCmdFlagGestureBegin in event_payloads.h for why the UI has
@@ -144,14 +206,32 @@ class DocumentHistory {
   void beginGesture() {
     std::lock_guard<std::mutex> lock(mutex_);
     gestureOpen_ = true;
+    gestureHasVersion_ = false;
   }
   void endGesture() {
     std::lock_guard<std::mutex> lock(mutex_);
     gestureOpen_ = false;
+    gestureHasVersion_ = false;
   }
   bool gestureOpen() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return gestureOpen_;
+  }
+
+  // MAY THE NEXT COMMAND AMEND? Only once the gesture has pushed a version of ITS OWN.
+  //
+  // "Gesture open" is not sufficient, and assuming it was destroyed the pre-drag state. commit()
+  // returns false for a document byte-identical to the cursor's, so a drag whose first command
+  // changes nothing — a pointer-down before any travel, or a SetDeviceParam while params still
+  // live outside the document — opens the gesture with the cursor still on the PRE-DRAG version.
+  // Every amend() after that overwrites the state the user wants Ctrl-Z to return them to.
+  //
+  // With this, a gesture that has not yet committed keeps committing until one command actually
+  // changes something; that command's version becomes the step, and the rest of the drag rewrites
+  // it. One drag is still one step, and the step is never the one before the drag.
+  bool gestureAmendable() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return gestureOpen_ && gestureHasVersion_;
   }
 
   // Undo and redo are the same motion with the sign flipped. Both return the version to apply,
@@ -162,9 +242,11 @@ class DocumentHistory {
       return nullptr;
     }
     --cursor_;
-    // The cache follows the cursor, or the next commit would compare against the version we just
-    // LEFT and conclude nothing changed — which would silently drop the redo-then-edit case.
-    cursorJson_ = daw::serializeProject(versions_[cursor_]);
+    // NO CACHE TO KEEP IN STEP any more, and that is the second thing stage 3 bought. The string
+    // cache had to be refreshed on every path that moved cursor_, and a stale one did not merely
+    // mislead a log line — it decided whether an edit was recorded at all. The comparer reads
+    // versions_[cursor_] directly, so "compare against where the cursor is" is true by
+    // construction rather than by four call sites remembering.
     return &versions_[cursor_];
   }
 
@@ -174,7 +256,6 @@ class DocumentHistory {
       return nullptr;
     }
     ++cursor_;
-    cursorJson_ = daw::serializeProject(versions_[cursor_]);
     return &versions_[cursor_];
   }
 
@@ -229,6 +310,9 @@ class DocumentHistory {
       bytes_ -= approximateBytes(versions_.front());
       versions_.erase(versions_.begin());
       labels_.erase(labels_.begin());
+      if (!pluginStates_.empty()) {
+        pluginStates_.erase(pluginStates_.begin());
+      }
       --cursor_;
     }
   }
@@ -237,12 +321,16 @@ class DocumentHistory {
   // OPEN MEANS "AMEND, DO NOT PUSH". Force-closed by the command bracket when a non-gesture
   // command arrives, so a UI that dies mid-drag cannot wedge every later edit into one step.
   bool gestureOpen_ = false;
-  // WHAT SAVE WOULD WRITE FOR versions_[cursor_], cached so the unchanged-document test costs one
-  // serialization per edit rather than two. Every path that moves cursor_ must refresh it; a stale
-  // cache does not merely mislead a log line, it decides whether an edit is recorded at all.
-  std::string cursorJson_;
+  // Whether the OPEN gesture has committed a version of its own yet. See gestureAmendable().
+  bool gestureHasVersion_ = false;
   std::vector<daw::ProjectDocument> versions_;
   std::vector<std::string> labels_;
+  // PARALLEL TO versions_, one entry per version. Kept as a separate vector rather than a field on
+  // ProjectDocument because a plugin blob is not part of the authored song: it must not be
+  // serialized into the project file, compared by the document comparer, or reach any code that
+  // treats a ProjectDocument as the thing a user wrote. Every push, pop and erase above touches
+  // all three vectors together — the pairing is the invariant.
+  std::vector<PluginStateSnapshot> pluginStates_;
   size_t cursor_ = 0;
   size_t bytes_ = 0;
   size_t byteBudget_;

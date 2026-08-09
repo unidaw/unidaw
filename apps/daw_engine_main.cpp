@@ -75,6 +75,7 @@
 #include "apps/engine_harmony_timeline.h"
 #include "apps/engine_load_project.h"
 #include "apps/engine_render_track.h"
+#include "apps/engine_plugin_state_capture.h"
 #include "apps/engine_save_project.h"
 #include "apps/worker_pool.h"
 #include "apps/engine_pure.h"
@@ -1688,6 +1689,15 @@ int main(int argc, char** argv) {
   // Named, and declared before the struct, because deps_order_check matches each positional
   // argument to its member BY NAME.
   auto captureDocument = [&] { return daw::engine::captureDocument(saveProjectDeps); };
+  // UNDO STAGE 5. Bound once and shared by the load seed, the command bracket and undo/redo, for
+  // the same reason captureDocument is: three gatherers would be three opinions about what a
+  // version holds, and the one that disagreed would be found by a user, not by a check.
+  auto capturePluginState = [&](const daw::engine::PluginStateSnapshot& previous, bool onlyDirty) {
+    return daw::engine::capturePluginState(engineState, masterTrack, previous, onlyDirty);
+  };
+  auto restorePluginState = [&](const daw::engine::PluginStateSnapshot& snapshot) {
+    return daw::engine::restorePluginSnapshot(engineState, masterTrack, snapshot);
+  };
   daw::engine::LoadProjectDeps loadProjectDeps{
       engineState, automationVersion,
       buildTrackSnapshot, bumpAllTrackClipVersions, clipDirty, clipVersion,
@@ -1696,7 +1706,7 @@ int main(int argc, char** argv) {
       masterTrack, nextClipId, patternTicks, pluginCache, projectSeed,
       publishAudioClipTable, rebuildAudioRender, rebuildFlatAndPublish, rebuildHostForChain,
       reconcileMasterHost, refreshSamplerForTrack, resetTrackContent, tempoProvider,
-      updatePatcherGraphSnapshot, waveformStore, captureDocument
+      updatePatcherGraphSnapshot, waveformStore, captureDocument, capturePluginState
   };
 
   auto loadProjectFromPath = [&](const std::string& path, std::string* error) -> bool {
@@ -1756,46 +1766,14 @@ int main(int argc, char** argv) {
                                        recordUndo, rejectReason);
   };
 
-  // Arrangement placement ops (Move/Resize/Remove/Add) all mutate a track's placement
-  // store and commit exactly like a note edit: snapshot for undo, mutate, re-derive the
-  // flat clip + audio render, push the undo, republish + bump the clip version so the UI
-  // re-reads. `mutate` returns true if it changed anything; placements are keyed by stable
-  // id. 0xFFFF... is the "leave unchanged" sentinel for Resize (a real nanotick never is).
-  // M3.24: a LOCAL edit — one that belongs to THIS APPEARANCE of a clip rather than to
-  // the clip itself. Recorded on the placement as an `add` (a note only this appearance
-  // has) or a `mute` (a base note only this appearance is missing), which is what makes
-  // "fix the bass in chorus 1, all three choruses change, and the hat you added to
-  // chorus 3 survives" expressible at all: the bass fix is a CLIP edit and reaches all
-  // three, the hat is a LOCAL edit and stays where it was put.
-  //
-  // Additive-only, on purpose (roadmap item 24): there is no "changed note" record. An
-  // edit that would MODIFY a base note is decomposed into mute(original) + add(new), so
-  // the override list is always a set of things added and things silenced, and reverting
-  // is deleting both vectors rather than replaying inverses.
-  // DOES THIS EDIT BELONG TO THE APPEARANCE OR TO THE CLIP? One function, because WriteNote and
-  // DeleteNote both have to answer it and two copies would eventually disagree about the same
-  // gesture — which for this feature means the same keystroke doing different things depending on
-  // which handler ran.
-  //
-  // The explicit bit wins on its own: a caller that SAID which it meant is never overridden. The
-  // placement's own flag is the standing answer for when nobody said. Never inferred from whether
-  // the cell is occupied.
-  // WHICH APPEARANCE IS THIS TICK IN? One lookup, for the same reason editIsLocalScope is one
-  // function: the scope decision and the target decision have to agree, and they were two
-  // separate loops that agreed only by accident.
-  //
-  // OVERLAPPING PLACEMENTS made both of them arbitrary. Each took the FIRST match in
-  // sourcePlacements — file order, or insertion order, which is nothing the user can see. Worse,
-  // they disagreed in a way that mattered: editIsLocalScope scanned for ANY placement under the
-  // tick with localEdits set, while the target loop took the first containing placement whether
-  // its flag was set or not. So with two overlapping appearances, one local and one not, the
-  // gesture could be RULED local and then applied to the placement that is not — an override
-  // recorded on an appearance the user never marked.
-  //
-  // The tie-break is the LATEST START among the placements containing the tick, and on an exact
-  // tie the later one in the list. "Topmost wins" is the convention every arranger uses for
-  // stacked material, and stating it is the point: an arbitrary rule that happens to be stable
-  // is still unpredictable to the person using it.
+  // Placement ops (Move/Resize/Remove/Add) mutate a track's placement store and commit exactly
+  // like a note edit: snapshot for undo, mutate, re-derive the flat clip + audio render, push the
+  // undo, republish and bump the clip version. `mutate` returns true if it changed anything;
+  // placements are keyed by stable id, and 0xFFFF... is Resize's "leave unchanged" sentinel (a
+  // real nanotick never is). WHY a local edit is additive-only, HOW the appearance-vs-clip
+  // decision is made, and the overlapping-placement tie-break now live on the functions that
+  // implement them — apps/engine_clip_edit.h, above applyLocalNoteEdit, editIsLocalScope and
+  // findPlacementAt. They described three functions this file only forwards to.
   auto applyLocalNoteEdit = [&](uint32_t trackId, uint64_t nanotick, uint64_t duration,
                                 uint8_t pitch, uint8_t velocity, uint8_t column,
                                 bool deleting) -> bool {
@@ -2009,7 +1987,7 @@ int main(int argc, char** argv) {
   };
   daw::engine::UndoCommandDeps undoCommandDeps{
      engineState, applyUndoEntry, restoreSongStore, restoreTrackStore,
-      requireMatchingClipVersion, applyDocument
+      requireMatchingClipVersion, applyDocument, restorePluginState
   };
 
   daw::engine::DeviceCommandDeps deviceCommandDeps{
@@ -2048,7 +2026,7 @@ int main(int argc, char** argv) {
       moduleCommandDeps, noteCommandDeps, patcherCommandDeps, placementCommandDeps,
       projectCommandDeps, requestCommandDeps, rowopsCommandDeps, samplerCommandDeps,
       trackCommandDeps, trackpropsCommandDeps, transportCommandDeps, undoCommandDeps,
-      captureDocument, documentHistory
+      captureDocument, capturePluginState, documentHistory
   };
 
   auto handleUiEntry = [&](const daw::EventEntry& entry) {

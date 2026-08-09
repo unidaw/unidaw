@@ -717,8 +717,22 @@ std::string serializeProject(const ProjectDocument& document) {
       // of bug three times (rack.uniproj.json loading an Analog Heat for Identity; a master effect
       // resolving to the engine's default and muting the mix). resolveDeviceSlot is its only
       // writer now, so no loader can inherit one.
-      writer.key("load_mode",
-                 device.loadMode == daw::VstLoadMode::ByPath ? "by_path" : "by_reference");
+      // std::string, NOT the bare ternary. `cond ? "by_path" : "by_reference"` is a `const char*`,
+      // and overload resolution preferred key(const char*, bool) — a pointer-to-bool conversion is
+      // a standard conversion while pointer-to-std::string is user-defined. So every save since
+      // the split has written `"load_mode": true`, the loader's get<std::string> read "true",
+      // matched neither spelling, fell through to the legacy host_slot_index branch — which is no
+      // longer written either — and defaulted to by_reference.
+      //
+      // A device authored BY PATH therefore came back BY REFERENCE from its own file, every time:
+      // the exact failure the load_mode split was made to fix, silently inert since it landed.
+      // Invisible to document_value_check because it is SYMMETRIC — both saves write `true` and
+      // both loads read by_reference, so save/load/save is perfectly idempotent about the wrong
+      // value. Found by comparer_equivalence_tests, which compares the LIVE document against its
+      // own round trip rather than one file against another.
+      writer.key("load_mode", std::string(device.loadMode == daw::VstLoadMode::ByPath
+                                              ? "by_path"
+                                              : "by_reference"));
       writer.key("bypass", device.bypass);
       if (!device.vstRef.empty()) {
         writer.beginChildObject("vst_ref");

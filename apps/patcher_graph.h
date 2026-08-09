@@ -78,12 +78,26 @@ constexpr uint32_t kPatcherAudioOutputPort = 5;
 struct PatcherPortRef {
   uint32_t nodeId = 0;
   uint32_t portId = 0;
+
+  friend bool operator==(const PatcherPortRef&, const PatcherPortRef&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const PatcherPortRef& a, const PatcherPortRef& b) { return !(a == b); }
 };
 
 struct PatcherEdge {
   PatcherPortRef src;
   PatcherPortRef dst;
   PatcherPortKind kind = PatcherPortKind::Event;
+
+  friend bool operator==(const PatcherEdge&, const PatcherEdge&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const PatcherEdge& a, const PatcherEdge& b) { return !(a == b); }
 };
 
 struct PatcherNode {

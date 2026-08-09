@@ -50,6 +50,13 @@ struct EnvPoint {
   // per segment and nobody has ever asked a sampler for one.
   int8_t tension = 0;
   uint8_t flags = 0;
+
+  friend bool operator==(const EnvPoint&, const EnvPoint&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const EnvPoint& a, const EnvPoint& b) { return !(a == b); }
 };
 
 // On the segment's START point: hold this value until the next point's time, then jump. This is
@@ -99,6 +106,13 @@ struct EnvShape {
   bool empty() const { return points.empty(); }
   uint32_t duration() const { return points.empty() ? 0u : points.back().time; }
   bool hasReleaseLoop() const { return releaseLoopStart != kEnvLoopNone; }
+
+  friend bool operator==(const EnvShape&, const EnvShape&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const EnvShape& a, const EnvShape& b) { return !(a == b); }
 };
 
 // ADSR AS POINTS. Not a conversion and not a second representation — this is what the simple

@@ -359,6 +359,31 @@ struct TrackRuntime {
   std::map<std::array<uint8_t, 16>, ParamMirrorEntry, ParamKeyLess> paramMirror;
   std::mutex paramMirrorMutex;
   std::mutex controllerMutex;
+
+  // UNDO STAGE 5: HAS ANYTHING THE ENGINE KNOWS ABOUT CHANGED THIS TRACK'S PLUGINS?
+  //
+  // Set by the paths that alter hosted plugin state AS AN EDIT — a SetDeviceParam write, a chain
+  // rebuild — and cleared by a capture. capturePluginState skips a clean track, which is what
+  // keeps the per-command cost at zero round trips for the overwhelmingly common edit (a note) on
+  // a project full of plugins.
+  //
+  // AUTOMATION DELIBERATELY DOES NOT SET IT, and the first version of this did. Two reasons, and
+  // the first is the one that matters: an automation lane IS in the document, so undo restores the
+  // lane and playback re-derives the values from it. Capturing an automation-driven param into a
+  // version would freeze WHERE THE PLAYHEAD HAPPENED TO BE into an undo step — a value the user
+  // never authored, restored by an undo of something else. The second is cost: the producer writes
+  // the mirror per automation point, so marking dirty there would make every mutating command
+  // during playback of an automated project take a blocking cross-process round trip, on the
+  // command thread, contending for controllerMutex with the producer.
+  //
+  // STARTS TRUE. A freshly built runtime has never been read, and "not dirty" would be taken as
+  // "already captured" — the first version after a load would then hold no blob for it at all.
+  std::atomic<bool> pluginStateDirty{true};
+  // The bytes each hosted device last RECEIVED, by device id, so a restore can skip a plugin whose
+  // state already matches. Guarded by pluginStateMutex, not controllerMutex: the compare happens
+  // before the socket send and must not hold the lock a VST load can sit on for seconds.
+  std::map<uint32_t, std::shared_ptr<const std::vector<uint8_t>>> lastPushedState;
+  std::mutex pluginStateMutex;
   std::atomic<bool> active{false};
   // THE LAST BLOCK THIS HOST WAS ACTUALLY SENT. Written by the producer right after a
   // successful sendProcessBlock, read by the back-pressure minimum. Without it the producer

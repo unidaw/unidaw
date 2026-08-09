@@ -60,7 +60,8 @@ cli() { env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@" >/dev/null
 cli_out() { env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@" 2>/dev/null; }
 wait_for_boot "$TMP/eng.log" "$ENG" 80 'UI: command thread started'
 
-after_command "$TMP" cli do load rack --force
+after_command "$TMP" cli do load rack --force \
+  || { echo "  FAIL: the rack preset never loaded — nothing below addresses a real device"; exit 1; }
 
 # The device id comes from the ENGINE, not from a guess: a hardcoded id that no longer exists
 # would make every assertion below vacuous (found=false, and "not mirrored" for the wrong reason).
@@ -68,14 +69,26 @@ after_command "$TMP" cli do load rack --force
 # <track> <device> <uid16hex> <milli> — and a hardcoded uid16 would write a param the plugin does
 # not have, which the handler cannot detect (the host owns the param namespace). The write would
 # still be "mirrored" and the check would pass while testing nothing real.
-DEVICE_ID=0
+#
+# THE DEVICE ID IS DISCOVERED TOO, and it used to be `DEVICE_ID=0` sitting directly under that
+# paragraph — a guess, under a comment denying there was one. Slot 0 happens to be the plugin in
+# rack today; reorder the preset's chain and the check would address an empty slot, report "no
+# parameters", and the failure would name the fixture instead of the mirror.
+#
+# Ask the ENGINE which slot answers with parameters: the first one that does is a real device with
+# a real param namespace, which is the only property this check needs of it.
+DEVICE_ID=""
 UID16=""
 for _ in $(seq 1 40); do
-  UID16="$(cli_out get device-params 0 "$DEVICE_ID" 2>/dev/null \
-           | grep -oE '"uid16": "[0-9a-fA-F]{32}"' | grep -oE '[0-9a-fA-F]{32}' | head -1 || true)"
+  for candidate in 0 1 2 3 4 5 6 7; do
+    UID16="$(cli_out get device-params 0 "$candidate" 2>/dev/null \
+             | grep -oE '"uid16": "[0-9a-fA-F]{32}"' | grep -oE '[0-9a-fA-F]{32}' | head -1 || true)"
+    if [ -n "$UID16" ]; then DEVICE_ID="$candidate"; break; fi
+  done
   [ -n "$UID16" ] && break
   sleep 0.25
 done
+DEVICE_ID="${DEVICE_ID:-0}"
 if [ -z "$UID16" ]; then
   echo "  FAIL: no parameters reported for device $DEVICE_ID on track 0, so there is nothing real"
   echo "        to write. Either the plugin did not load or the params read-back is empty — both"
@@ -83,7 +96,9 @@ if [ -z "$UID16" ]; then
   fails=$((fails + 1))
 else
   echo "  addressing device $DEVICE_ID on track 0, param ${UID16:0:8}..."
-  after_command "$TMP" cli do set-param 0 "$DEVICE_ID" "$UID16" 750
+  after_command "$TMP" cli do set-param 0 "$DEVICE_ID" "$UID16" 750 \
+    || { echo "  FAIL: set-param was refused or never journalled. Every assertion below reads the"; \
+         echo "        log of a command that did not run, so a PASS would mean nothing."; exit 1; }
 
   LINE="$(grep -o '"event":"device.set_param"[^}]*' "$TMP/eng.log" 2>/dev/null | tail -1 || true)"
   if [ -z "$LINE" ]; then

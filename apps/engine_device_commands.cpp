@@ -193,9 +193,33 @@ void handleSetDeviceParam(DeviceCommandDeps& deps,
     std::array<uint8_t, 16> paramKey{};
     std::memcpy(paramKey.data(), sp.uid16, sizeof(sp.uid16));
     std::lock_guard<std::mutex> lock(runtime->paramMirrorMutex);
-    runtime->paramMirror[paramKey] = ParamMirrorEntry{normalized, pluginIndex};
+    // WRITE THE VALUE, NOT THE TARGET — and the difference is a regression this fix already
+    // caused once.
+    //
+    // paramMirror is keyed by uid16 ALONE, and uid16 is hashStableId16(stableId): it identifies a
+    // PARAMETER, not a parameter OF AN INSTANCE. Two instances of the same plugin on one track
+    // share a key. The automation path treats a concrete targetPluginIndex in this map as
+    // AUTHORITATIVE and overrides the automation clip's own target with it
+    // (engine_render_track.cpp:619-625).
+    //
+    // So the first version of this write, which stored `pluginIndex` here, redirected automation:
+    // two instances of the same EQ, a lane automating instance 1's cutoff, the user turns instance
+    // 0's knob — and from the next block that lane drives instance 0 and never reaches instance 1.
+    // Before this write existed only the automation path touched the map, so the override was
+    // self-consistent and that could not happen. Found by review, not by a check.
+    //
+    // Preserving the existing target keeps the automation override exactly as it was, while still
+    // recording the VALUE, which is all #117 needed (engine_restart_worker re-applies from here).
+    // Making the mirror instance-aware is the real fix and needs the KEY to carry the plugin
+    // index — that is a change to every reader of this map, filed rather than smuggled in here.
+    auto& mirrorEntry = runtime->paramMirror[paramKey];
+    mirrorEntry.value = normalized;
     mirrored = true;
   }
+  // AND THE PLUGIN NOW HOLDS STATE THE LAST VERSION DOES NOT. Undo stage 5 re-reads a track's
+  // blobs only when this is set, so a knob turn that forgot to set it would be captured by no
+  // version and silently dropped by the next undo.
+  runtime->pluginStateDirty.store(true, std::memory_order_release);
   // Always log the write. The host stores the value atomically, but it only
   // takes effect when the plugin next processes a block — so on a headless
   // engine (no audio device driving the callback) the store is real yet never

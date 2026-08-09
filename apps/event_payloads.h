@@ -1623,8 +1623,31 @@ enum class UiChordDiffType : uint16_t {
 //
 // One drag, one undo step, holding the FINAL value. Generalises for free: a fader drag, a lasso
 // move and a multi-note nudge are all one gesture.
+// THE FLAGS WORD IS NOT A COMMON HEADER FIELD, and I got this wrong the first time. Every 40-byte
+// payload has its own `flags` at the same offset, so a bit means whatever THAT payload says it
+// means. Bits 14 and 15 are already spoken for elsewhere:
+//   kUiEditScopeLocal        = 1u << 15  on note commands
+//   kUiPatcherFlagHasDeviceId= 1u << 15  on the patcher payloads, whose device id occupies
+//   kUiPatcherDeviceIdMask   = 0x7FFF    bits 0-14 — so bit 14 is inside the id as well
+// `daw-cli do note --local` and every per-device patcher command therefore already set bit 15.
+// Reading these bits generically made the engine see GestureEnd on commands that meant neither.
+//
+// SO THEY ARE ONLY READ FOR COMMANDS WHOSE FLAGS WORD IS FREE — see gestureFlagsApplyTo() below.
+// SetDeviceParam ignores its flags entirely (daw-cli sends 0), which is the command a knob drag
+// actually uses and the one stage 5 needs coalesced.
+//
+// LIMITATION, stated rather than discovered later: a lasso drag of LOCAL-SCOPE notes, or a patcher
+// knob drag, cannot express a gesture, because those payloads have no free bit here. Extending
+// coalescing to them needs space those payloads actually have — a reserved byte, or a widened
+// payload — and must not be done by quietly reusing a bit that already means something.
 constexpr uint16_t kUiCmdFlagGestureBegin = 1u << 14;
 constexpr uint16_t kUiCmdFlagGestureEnd = 1u << 15;
+
+// Whitelist, not a blacklist: a new command type carries no gesture meaning until someone has
+// checked that its flags word has these bits free and added it here deliberately.
+constexpr bool gestureFlagsApplyTo(UiCommandType type) {
+  return type == UiCommandType::SetDeviceParam;
+}
 
 struct UiCommandPayload {
   uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);

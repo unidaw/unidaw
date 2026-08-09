@@ -79,6 +79,14 @@ struct VstRef {
   bool empty() const {
     return vendor.empty() && name.empty() && path.empty() && uid16.empty();
   }
+
+  // Memberwise: all four strings are authored, and vst_ref is how a project names its plugin.
+  friend bool operator==(const VstRef&, const VstRef&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const VstRef& a, const VstRef& b) { return !(a == b); }
 };
 
 struct Device {

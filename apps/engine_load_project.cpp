@@ -794,7 +794,15 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   // to by definition. Found by the review panel, ranked first of eleven.
   {
     daw::ProjectDocument seeded = deps.captureDocument ? deps.captureDocument() : document;
-    deps.engineState.documentHistory.seed(std::move(seeded));
+    // AND THE PLUGINS THE FILE JUST RESTORED. restorePluginStateFromDisk ran above, so the hosts
+    // now hold the saved blobs — reading them here is what makes "undo back to the state I
+    // opened" return the plugins too, not only the notes. A full read rather than a dirty-flag
+    // one: there is no previous snapshot to carry anything forward from.
+    daw::engine::PluginStateSnapshot seededPlugins;
+    if (deps.capturePluginState) {
+      seededPlugins = deps.capturePluginState({}, /*onlyDirty=*/false);
+    }
+    deps.engineState.documentHistory.seed(std::move(seeded), std::move(seededPlugins));
   }
   return true;
 }

@@ -21,6 +21,7 @@
 #include "apps/device_chain.h"
 #include "apps/document_visitor.h"
 #include "apps/lane_quantize.h"
+#include "apps/patcher_graph.h"
 #include "apps/project_file.h"
 #include "apps/modulation.h"
 #include "apps/track_routing.h"
@@ -96,6 +97,57 @@ void visitFields_(TypeTag<Device>, V& visit) {
   visit.field("load_mode", &Device::loadMode);
   visit.field("host_slot_index", &Device::hostSlotIndex, FieldKind::Derived);
   visit.field("bypass", &Device::bypass);
+  // SIX FIELDS THAT WERE MISSING, and every one of them is authored and serialized. Found by
+  // comparer_equivalence_tests on its first run: 29 leaf paths that a save writes and
+  // documentFieldsEqual could not see, all of them under this struct. Switching commit() to the
+  // comparer with this list as it stood would have made editing a patcher edge, a euclidean
+  // parameter or a plugin reference record no undo step at all.
+  //
+  // The file's own rule — "a struct is not done until its field list matches its declaration line
+  // for line" — is what should have caught it, and did not, because nothing mechanical read it.
+  // Now something does.
+  visit.field("has_euclidean", &Device::hasEuclideanConfig);
+  visit.field("euclidean", &Device::euclideanConfig);
+  visit.field("vst_ref", &Device::vstRef);
+  visit.field("has_sampler", &Device::hasSampler);
+  visit.field("sampler", &Device::sampler);
+  visit.field("patcher", &Device::patcher);
+}
+
+// ---- the per-device patcher DAG ----------------------------------------------------------------
+
+template <typename V>
+void visitFields_(TypeTag<PatcherNode>, V& visit) {
+  visit.field("id", &PatcherNode::id, FieldKind::Identity);
+  visit.field("type", &PatcherNode::type);
+  // DEPTH AND OWNER ARE DERIVED. depth comes from the topological sort, and ownerDeviceId is
+  // stamped when the shared pool is ASSEMBLED from the device graphs — a device's own authored
+  // graph leaves it 0. Neither is persisted, and comparing either would report a change on a
+  // document nobody touched.
+  visit.field("depth", &PatcherNode::depth, FieldKind::Derived);
+  visit.field("owner_device_id", &PatcherNode::ownerDeviceId, FieldKind::Derived);
+  visit.field("has_euclidean", &PatcherNode::hasEuclideanConfig);
+  visit.field("euclidean", &PatcherNode::euclideanConfig);
+  visit.field("has_lfo", &PatcherNode::hasLfoConfig);
+  visit.field("lfo", &PatcherNode::lfoConfig);
+  visit.field("has_random_degree", &PatcherNode::hasRandomDegreeConfig);
+  visit.field("random_degree", &PatcherNode::randomDegreeConfig);
+  visit.field("has_slice_select", &PatcherNode::hasSliceSelectConfig);
+  visit.field("slice_select", &PatcherNode::sliceSelectConfig);
+}
+
+template <typename V>
+void visitFields_(TypeTag<PatcherGraph>, V& visit) {
+  // ONLY nodes AND edges ARE AUTHORED — everything below them is the compiled form, rebuilt from
+  // these two by the assembler on every load. The serializer writes only these two for the same
+  // reason.
+  visit.field("nodes", &PatcherGraph::nodes);
+  visit.field("edges", &PatcherGraph::edges);
+  visit.field("topo_order", &PatcherGraph::topoOrder, FieldKind::Derived);
+  visit.field("depths", &PatcherGraph::depths, FieldKind::Derived);
+  visit.field("resolved_inputs", &PatcherGraph::resolvedInputs, FieldKind::Derived);
+  visit.field("id_to_index", &PatcherGraph::idToIndex, FieldKind::Derived);
+  visit.field("max_depth", &PatcherGraph::maxDepth, FieldKind::Derived);
 }
 
 

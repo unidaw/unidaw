@@ -54,6 +54,13 @@ struct AudioClip {
   double gainDb = 0.0;
   uint64_t fadeInNanoticks = 0;
   uint64_t fadeOutNanoticks = 0;
+
+  friend bool operator==(const AudioClip&, const AudioClip&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const AudioClip& a, const AudioClip& b) { return !(a == b); }
 };
 
 // A reusable clip definition. Project-level (Song.clips), referenced by
@@ -217,12 +224,30 @@ struct ProjectTrack {
 struct ProjectTempoPoint {
   uint64_t nanotick = 0;
   double bpm = 120.0;
+
+  // A LEAF WITH NO INVARIANT compares memberwise. documentFieldsEqual needs every type it
+  // reaches to answer either through a field list or through this; without one of the two,
+  // documentFieldsEqual<ProjectDocument> does not COMPILE — which is how these seven were
+  // found, because nothing had ever instantiated the comparer at the top level.
+  friend bool operator==(const ProjectTempoPoint&, const ProjectTempoPoint&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const ProjectTempoPoint& a, const ProjectTempoPoint& b) { return !(a == b); }
 };
 
 struct ProjectMeta {
   std::string name = "Untitled";
   std::string createdUtc;
   std::string modifiedUtc;
+
+  friend bool operator==(const ProjectMeta&, const ProjectMeta&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const ProjectMeta& a, const ProjectMeta& b) { return !(a == b); }
 };
 
 // The authoritative, recallable document. Everything the engine needs to

@@ -59,6 +59,48 @@ int main() {
     // pointer never comes up; no endGesture
     expect(h.undo() != nullptr, "a drag interrupted mid-way must still have a step to undo");
   }
+  // A GESTURE WHOSE FIRST COMMAND CHANGES NOTHING MUST NOT EAT THE PRE-DRAG VERSION.
+  //
+  // The bug this pins: the bracket used to amend on gestureOpen() alone. commit() returns false
+  // for a byte-identical document, so a pointer-down with no travel — or a SetDeviceParam while
+  // params still live outside ProjectDocument — opened the gesture with the cursor still on the
+  // version from BEFORE the drag. The next amend() then overwrote it, and Ctrl-Z could no longer
+  // reach the state the user started from. gestureAmendable() is false until the gesture pushes a
+  // version of its own, so the first command that really changes something commits instead.
+  //
+  // Driven the way the bracket drives it: sample the decision BEFORE the command, act after.
+  {
+    daw::engine::DocumentHistory h;
+    h.seed(docWithTracks(1));
+    h.commit(docWithTracks(2), "Set device param");   // the pre-drag state: two tracks
+    const size_t preDrag = h.size();
+
+    h.beginGesture();
+    expect(!h.gestureAmendable(), "a just-opened gesture owns no version yet, so nothing to amend");
+
+    // Drag sample 1: identical document — the real no-op the old code mistook for a step.
+    bool amend = h.gestureAmendable();
+    if (amend) { h.amend(docWithTracks(2)); } else { h.commit(docWithTracks(2), "Set device param"); }
+    expect(!h.gestureAmendable(), "a commit that changed nothing must not make the gesture amendable");
+
+    // Drag sample 2: the first one that actually moves. It must COMMIT, not overwrite.
+    amend = h.gestureAmendable();
+    expect(!amend, "the first CHANGING command of a gesture must commit, not amend");
+    if (amend) { h.amend(docWithTracks(7)); } else { h.commit(docWithTracks(7), "Set device param"); }
+    expect(h.gestureAmendable(), "once the gesture owns a version, the rest of the drag amends it");
+
+    // Drag samples 3..n: amend that step.
+    for (int i = 8; i <= 11; ++i) {
+      if (h.gestureAmendable()) { h.amend(docWithTracks(static_cast<size_t>(i))); }
+      else { h.commit(docWithTracks(static_cast<size_t>(i)), "Set device param"); }
+    }
+    h.endGesture();
+
+    expect(h.size() == preDrag + 1, "the whole drag is still exactly ONE version");
+    const auto* v = h.undo();
+    expect(v != nullptr && v->tracks.size() == 2,
+           "undo must return to the PRE-DRAG state — the version the old code overwrote");
+  }
   if (fails) { std::printf("gesture: FAIL (%d)\n", fails); return 1; }
   std::printf("gesture: PASS\n");
   return 0;

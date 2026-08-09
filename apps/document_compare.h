@@ -112,4 +112,38 @@ bool documentFieldsEqual(const T& a, const T& b) {
   return visitor.equal;
 }
 
+// WHICH FIELD, not just whether. Empty when the two are equal.
+//
+// The yes/no answer is what commit() needs and it is a poor diagnostic: "the document changed"
+// sends a reader to diff two megabytes of JSON. This walks the same lists and names the first
+// field that differs, one level deep — enough to say "device_chain" or "clips" and then be run
+// again on that member. Not part of the equality path, so it costs nothing when nobody asks.
+namespace detail {
+
+template <typename T>
+struct FirstDifferenceVisitor {
+  const T& a;
+  const T& b;
+  std::string found;
+
+  template <typename C, typename M>
+  void field(const char* name, M C::*member, FieldKind kind = FieldKind::Authored) {
+    if (!found.empty() || kind == FieldKind::Derived || kind == FieldKind::Session) {
+      return;
+    }
+    if (!EqualityVisitor<T>::valueEqual(a.*member, b.*member)) {
+      found = name;
+    }
+  }
+};
+
+}  // namespace detail
+
+template <typename T>
+std::string documentFirstDifference(const T& a, const T& b) {
+  detail::FirstDifferenceVisitor<T> visitor{a, b, {}};
+  visitFields<T>(visitor);
+  return visitor.found;
+}
+
 }  // namespace daw

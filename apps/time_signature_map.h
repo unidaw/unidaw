@@ -47,6 +47,13 @@ struct TimeSignature {
 struct TimeSignaturePoint {
   uint64_t nanotick = 0;
   TimeSignature sig{};
+
+  friend bool operator==(const TimeSignaturePoint&, const TimeSignaturePoint&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const TimeSignaturePoint& a, const TimeSignaturePoint& b) { return !(a == b); }
 };
 
 // Where a tick sits, in the terms a musician uses. Bars and beats are ONE-BASED because

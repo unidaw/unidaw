@@ -24,6 +24,13 @@
 # applies the document. Same shape as the loop-region fix in 53b77d5 — a bool parameter would have
 # hidden the distinction behind something nobody reads.
 #
+# THIS DID NOT BECOME FALSE WHEN UNDO STARTED RESTORING PLUGINS (stage 5), and the distinction is
+# the whole point. Undo now pushes the blobs held by the VERSION — the state the plugin actually
+# had at that step, captured live — and reports them as undo.plugin_state_pushed. It must still
+# never push the blobs sitting on DISK, which are last-SAVED state and would discard unsaved
+# plugin work exactly as before. Two sources, opposite requirements, two events: this check counts
+# project.state_restored, and tools/undo_plugin_version_check.sh counts the other. Both must hold.
+#
 #   tools/undo_plugin_state_check.sh
 #
 set -uo pipefail
@@ -64,18 +71,39 @@ cli() { env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@" >/dev/null
 n_restored() { grep -c '"event":"project.state_restored"' "$TMP/eng.log" 2>/dev/null || true; }
 wait_for_boot "$TMP/eng.log" "$ENG" 80 'UI: command thread started'
 
-after_command "$TMP" cli do load rack --force
+must() {
+  local what="$1"; shift
+  after_command "$TMP" "$@" && return 0
+  echo "  FAIL: $what was refused or never journalled."
+  echo "        Everything after it counts events from a command that did not run, so the"
+  echo "        comparison would report PASS having exercised nothing."
+  exit 1
+}
+
+must "the rack load" cli do load rack --force
 # SAVE FIRST, so blobs exist on disk to be wrongly re-pushed. Without this the check passes
 # vacuously: nothing to push means no push to detect, and the bug would be invisible.
-after_command "$TMP" cli do save rack --force
-after_command "$TMP" cli do load rack --force
+must "the save" cli do save rack --force
+must "the reload" cli do load rack --force
 
 AFTER_LOAD="$(n_restored)"
 echo "  a load restored ${AFTER_LOAD:-0} plugin state blob(s)"
 
 # ---------------------------------------------------------------- undo must push NONE of them
-after_command "$TMP" cli do note --track 0 --pitch 60 --nanotick 0 --duration 480000000
-after_command "$TMP" cli do undo
+must "the note write" cli do note --track 0 --pitch 60 --nanotick 0 --duration 480000000
+must "the undo" cli do undo
+
+# AND THE UNDO MUST HAVE ACTUALLY APPLIED A VERSION. This is the vacuous path the check was
+# written to avoid and left open anyway: if `do undo` is refused, or finds nothing to return to,
+# AFTER_UNDO equals AFTER_LOAD and the comparison below reports PASS having exercised nothing.
+# "No blobs were pushed" is only a statement about undo if an undo happened.
+if ! grep -q '"event":"undo.applied"[^}]*"ok":true' "$TMP/eng.log" 2>/dev/null; then
+  echo "  FAIL: no undo.applied ok:true in the log. The undo did not restore a version, so the"
+  echo "        blob count below compares nothing against nothing."
+  grep -o '"event":"undo\.[a-z_]*"[^}]*' "$TMP/eng.log" 2>/dev/null | tail -5
+  exit 1
+fi
+
 # The consumer applies an undone document on its next pass, so give the push (if any) time to
 # happen before concluding it did not. Waiting for a NON-event needs a bound, not an anchor.
 sleep 1.5
