@@ -87,7 +87,7 @@ watcher:  none (required for Codex)
 | Ticket | State | Dependency | Owner | Reviewer | Worktree | Commit |
 |---|---|---|---|---|---|---|
 | `AE-P0` | `ACTIVE` | current-main rebaseline + formal review | `backend` | unassigned | root | `62bafdc` execution baseline |
-| `AE-P0.1` | `ACTIVE` | current baseline + formal review findings | `codex-worker-1` | `claude-worker-1` | `/Users/jak/src/daw-ae-p0-roots-current` | packet `016eea4` acknowledged; repair active |
+| `AE-P0.1` | `ACTIVE` | amended packet acknowledged | `codex-worker-1` | `claude-worker-1` | `/Users/jak/src/daw-ae-p0-roots-current` | packet `ce09485`; repair active |
 | `AE-P0.2 discovery` | `ESCALATED_TO_ADR` | frozen baseline + packet | `claude-worker-2` | `codex-worker-2` | read-only root | four rejected designs; evidence complete |
 | `AE-P0.2 ADR` | `DRAFT_REBASELINE_PENDING` | refreshed current-main inventory + exact review | `backend` | `codex-worker-2` | root | external review after current-main refresh |
 | `AE-P0.2 implementation` | `BLOCKED` | `AE-P0.1` + reviewed discovery + baseline results | unassigned | unassigned | none | none |
@@ -188,6 +188,9 @@ never evaluated against different packet generations.
 | 2026-08-10 | Task-packet handoff invariant strengthened | AE-P0.1 was implemented from a branch predating later packet amendments; every future assignment and amendment must name the exact packet SHA and require owner acknowledgement before work resumes |
 | 2026-08-10 | AE-P0.1 current-main repair packet committed | Worktree `/Users/jak/src/daw-ae-p0-roots-current`, branch `ae/p0-roots-current`, packet commit `016eea4`; owner assignment sent with exact baseline and packet SHA |
 | 2026-08-10 | AE-P0.1 owner acknowledged exact packet | `codex-worker-1` confirmed `016eea4` and `62bafdc`; old `d722306`, main, and old repair worktree remain preserved |
+| 2026-08-10 | AE-P0.1 packet amended before implementation | `ce09485` explicitly adds discovered live surfaces; prior `016eea4` is superseded and owner re-acknowledgement is required |
+| 2026-08-10 | AE-P0.1 owner acknowledged amended packet | `codex-worker-1` confirmed `ce09485`; implementation may proceed only within the amended ownership table |
+| 2026-08-10 | Current-main metadata-only configure completed | Fresh `/Users/jak/src/daw/build-ae-current` generated from `62bafdc` with RelWithDebInfo and patcher Rust enabled; no build, test, install, or runtime process launched |
 | 2026-08-10 | AE-P0.2 current-main delta checked read-only | Core findings survive at `62bafdc`; registered tests changed from 213 to 214 and shell inventory from 153 to 156, so configured counts and the complete inventory must be regenerated after baseline selection |
 
 ## AE-P0 baseline findings
