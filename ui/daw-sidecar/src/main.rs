@@ -6777,8 +6777,39 @@ fn drain_engine_events(shm: String, events: Arc<EngineEvents>, chains: Arc<Chain
     let mut drained_total: u64 = 0;
     let mut forwarded_total: u64 = 0;
     let mut last_report = Instant::now();
+    /*
+     * RE-ATTACH ON A TIMER, exactly as the publish loop does — this is task #52's root cause.
+     *
+     * setUpUiShm (engine_ui_shm.cpp:23) does shm_unlink(name) and THEN shm_open(name, O_CREAT).
+     * That removes the NAME and creates a NEW object under it. Anyone who attached before that
+     * moment keeps the OLD object mapped: still valid memory, still a well-formed ring, and
+     * permanently disconnected from everything the engine writes from then on.
+     *
+     * The frame loop survives this because it re-attaches every REATTACH_EVERY. This thread
+     * attached once and only retried while its handle was None — so a sidecar that attached to a
+     * leftover object drained ZERO for the entire session while frames flowed at 65/s. That is
+     * exactly the reported symptom, and it is why the failing and passing runs looked inverted:
+     * the run whose first attach FAILED retried after the engine's create and worked, while the
+     * run that "succeeded" had grabbed the doomed object.
+     *
+     * Evidence, uni-e2e-tOZ4ad: engine logged 2 refusals with dropped_no_ring=0 (it wrote), while
+     * this thread saw ring=(1024, 2, 2) frozen for 50 seconds and drained 0 — a different object.
+     */
+    const REATTACH_EVERY: Duration = Duration::from_secs(2);
+    let mut last_reattach = Instant::now();
     loop {
         thread::sleep(EVERY);
+        if last_reattach.elapsed() >= REATTACH_EVERY {
+            last_reattach = Instant::now();
+            // QUIET on success: this fires every two seconds and a line each time would bury the
+            // heartbeat it sits next to. A FAILURE still speaks, because that is the case worth
+            // seeing, and the heartbeat below reports the ring either way.
+            match EngineHandle::attach(&shm, true) {
+                Ok(h) if h.out_ring_ready() => handle = Some(h),
+                Ok(_) => {}
+                Err(e) => eprintln!("sidecar: event drain periodic re-attach failed: {e}"),
+            }
+        }
         // The publish loop bumps the generation when it re-attaches to a
         // restarted engine. Follow it, because this thread's handle points into
         // the segment the OLD engine mapped: it would keep draining a ring
