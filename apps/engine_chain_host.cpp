@@ -234,6 +234,11 @@ void rebuildHostForChain(ChainHostDeps& deps, TrackRuntime& runtime) {
               runtime.controller.sendSetChain(refs, sidechainMask, auxOutMask);
         }
         if (reconciled) {
+          // A REBUILT CHAIN IS NEW PLUGIN STATE by definition — plugins loaded, removed or
+          // reordered, all at their defaults until something restores them. The next capture
+          // must re-read this track rather than carry forward blobs belonging to a chain that
+          // no longer exists.
+          runtime.pluginStateDirty.store(true, std::memory_order_release);
           // Voice-reset the track: drop active notes so a removed plugin
           // leaves no note stuck on and no dangling note-off.
           {

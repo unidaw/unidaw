@@ -53,6 +53,13 @@ struct PatcherEuclideanConfig {
   uint8_t velocity = 100;
   uint8_t base_octave = 4;
   uint8_t _pad0[2]{};
+
+  friend bool operator==(const PatcherEuclideanConfig&, const PatcherEuclideanConfig&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const PatcherEuclideanConfig& a, const PatcherEuclideanConfig& b) { return !(a == b); }
 };
 
 // SliceSelect: which SOUND a generated note plays.
@@ -66,6 +73,13 @@ struct PatcherSliceSelectConfig {
   uint16_t base = 1;
   uint16_t count = 8;
   uint8_t reserved[4]{};
+
+  friend bool operator==(const PatcherSliceSelectConfig&, const PatcherSliceSelectConfig&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const PatcherSliceSelectConfig& a, const PatcherSliceSelectConfig& b) { return !(a == b); }
 };
 
 struct PatcherRandomDegreeConfig {
@@ -73,6 +87,13 @@ struct PatcherRandomDegreeConfig {
   uint8_t velocity = 100;
   uint8_t _pad0[2]{};
   uint64_t duration_ticks = 0;
+
+  friend bool operator==(const PatcherRandomDegreeConfig&, const PatcherRandomDegreeConfig&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const PatcherRandomDegreeConfig& a, const PatcherRandomDegreeConfig& b) { return !(a == b); }
 };
 
 struct PatcherLfoConfig {
@@ -80,6 +101,13 @@ struct PatcherLfoConfig {
   float depth = 1.0f;
   float bias = 0.0f;
   float phase_offset = 0.0f;
+
+  friend bool operator==(const PatcherLfoConfig&, const PatcherLfoConfig&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const PatcherLfoConfig& a, const PatcherLfoConfig& b) { return !(a == b); }
 };
 
 struct alignas(64) PatcherContext {

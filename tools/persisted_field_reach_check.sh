@@ -279,7 +279,11 @@ DEVICE = {
     "kind":            "EXEMPT:identity — chosen at AddDevice; changing it reinterprets the device",
     "bypass":          "UpdateDevice",
     "capability_mask": "EXEMPT:derived — capabilityMaskForKind(kind); a writer would be a second truth about what a kind can do",
-    "host_slot_index": "AddDevice",
+    # load_mode replaced host_slot_index in the FILE (host_slot_index is a derived scan index
+    # and is no longer persisted). The WIRE is unchanged: AddDevice still carries a hostSlotIndex
+    # and kHostSlotIndexDirect on it still means "load by path", which engine_chain_commands.cpp
+    # translates into load_mode at the boundary.
+    "load_mode": "AddDevice",
     "patcher_node_id": "EXEMPT:derived — assigned when the device's own patcher graph is created",
     # The VST reference, all four stamped from the plugin cache at save time.
     "name":            "EXEMPT:derived — stamped from the plugin cache at save, keyed on hostSlotIndex",
@@ -416,7 +420,7 @@ automation_keys = [k for k in
 # loud so the next reader does not "fix" the omission by inventing a table for it.
 
 # Keys that belong to nested objects inside the track block rather than to the track itself.
-NESTED = {"kind", "device_id", "capability_mask", "host_slot_index", "patcher_node_id", "bypass",
+NESTED = {"kind", "device_id", "capability_mask", "load_mode", "patcher_node_id", "bypass",
           "path", "vendor", "uid16", "steps", "hits", "offset", "degree", "octave_offset",
           "velocity", "base_octave", "duration_ticks"}
 track_keys = [k for k in track_keys if k not in NESTED]

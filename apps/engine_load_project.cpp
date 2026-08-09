@@ -1,5 +1,6 @@
 #include "engine_load_project.h"
 
+#include "apps/engine_clip_adoption.h"
 #include "apps/engine_load_patcher_pool.h"
 #include "apps/engine_load_track.h"
 
@@ -12,12 +13,23 @@
 #include "engine_pure.h"
 #include "event_log.h"
 #include "patcher_assemble.h"
+// defaultProjectDir(), for loadStartupProject at the foot of this file.
+#include "patcher_preset_library.h"
 
 
 namespace daw::engine {
 
-bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
-                         std::string* error) {
+// APPLY A DOCUMENT TO THE ENGINE, with no file involved. The other half of Step 1: the load
+// path knew how to turn a ProjectDocument into live engine state and could only be asked to
+// do it by naming a file. Undo is exactly that operation — restore the engine to a document
+// it already holds — so it needed this to exist as a function.
+//
+// `path` STAYS, and is not a wart: a document's opaque plugin blobs live in a directory
+// beside the file it came from, and loadedProjectDir (which decides where a bare sample name
+// resolves) is derived from it. An in-memory caller passes the path the document belongs to,
+// or empty when it belongs to none — the same string the engine would have had either way.
+bool applyDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
+                   const std::string& path, std::string* error) {
   // Re-bind every dependency to the name the body already uses, so the 943 lines below are
   // the untouched original.
   auto& arrangeMutex = deps.engineState.arrange.arrangeMutex;
@@ -43,10 +55,8 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   auto& loadedClips = deps.engineState.loadedProject.loadedClips;
   auto& loadedClipsMutex = deps.engineState.loadedProject.loadedClipsMutex;
   auto& loadedProjectDir = deps.engineState.loadedProject.loadedProjectDir;
+  auto& loadedProjectPath = deps.engineState.loadedProject.loadedProjectPath;
   auto& loadedTempoMap = deps.engineState.songTiming.loadedTempoMap;
-  auto& loopEndNanotick = deps.engineState.transport.loopEndNanotick;
-  auto& loopStartNanotick = deps.engineState.transport.loopStartNanotick;
-  auto& loopUserSet = deps.engineState.transport.loopUserSet;
   auto& markerList = deps.engineState.arrange.markerList;
   auto& masterTrack = deps.masterTrack;
   auto& meterSnapshot = deps.engineState.songTiming.meterSnapshot;
@@ -69,10 +79,6 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
   auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
   auto& waveformStore = deps.waveformStore;
 
-    daw::ProjectDocument document;
-    if (!daw::loadProject(document, path, error)) {
-      return false;
-    }
     // Hold off aux-child derivation until this load has finished mutating the track set
     // (adopt, tear down leftovers, set liveTrackCount). Cleared on every exit path.
     // Adopt the project's generation seed before anything renders, so generators hash
@@ -146,29 +152,14 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
                 // claiming it is malformed: drop it rather than park material that no
                 // derivation will ever come asking for.
                 if (t.auxBusIndex != 0) {
+                  // THE WHOLE TRACK. Copying four named fields here is what made a stem's
+                  // collapsed state, chain, quantize, routing and mod links survive the SAVE and
+                  // then vanish on the way back in — which undo hits on every single undo.
                   AuxChildOverlay overlay;
-                  overlay.name = t.name;
-                  overlay.mixer = t.mixer;
-                  overlay.placements = t.placements;
-                  overlay.automationClips = t.automationClips;
-                  for (const auto& pl : t.placements) {
-                    bool have = false;
-                    for (const auto& oc : overlay.ownedClips) {
-                      if (oc.id == pl.clipId) {
-                        have = true;
-                        break;
-                      }
-                    }
-                    if (have) {
-                      continue;
-                    }
-                    for (const auto& c : document.clips) {
-                      if (c.id == pl.clipId) {
-                        overlay.ownedClips.push_back(c);
-                        break;
-                      }
-                    }
-                  }
+                  overlay.track = t;
+                  // The SECOND copy of the adoption rule, and it had the same hole as the first:
+                  // a stem's A/B draft was dropped exactly like a slot track's.
+                  adoptClipsForPlacements(t.placements, document.clips, overlay.ownedClips);
                   auxChildOverlays[{t.parentId, t.auxBusIndex}] = std::move(overlay);
                 }
                 return true;
@@ -180,6 +171,7 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
     // drop the previous project's waveform sources (and pyramids) before the track
     // loop below re-decodes and repopulates the store — one project's worth resident.
     loadedProjectDir = std::filesystem::path(path).parent_path().string();
+    loadedProjectPath = path;
     waveformStore.beginLoad();
 
     {
@@ -257,8 +249,8 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
     if (arrangementEnd == 0) {
       arrangementEnd = patternTicks;  // empty project keeps the default bar
     }
-    loopStartNanotick.store(0, std::memory_order_release);
-    loopEndNanotick.store(arrangementEnd, std::memory_order_release);
+    // songEndNanotick is DERIVED FROM THE DOCUMENT, so it belongs here and is correct on undo.
+    // The LOOP is not: see the note in loadProjectFromPath, which is where resetting it moved to.
     songEndNanotick.store(arrangementEnd, std::memory_order_release);
     // v29: install the arrangement — the markers and the song's METER MAP.
     //
@@ -311,8 +303,6 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
         std::memory_order_relaxed);
     arrangeVersion.fetch_add(1, std::memory_order_acq_rel);
     automationVersion.fetch_add(1, std::memory_order_acq_rel);
-    // A load replaces the song, so any hand-set loop belonged to the OLD one.
-    loopUserSet.store(false, std::memory_order_release);
 
     // Grow the track set to fit the document, so a project with more tracks than
     // the engine currently holds loads in full rather than dropping the tail.
@@ -439,7 +429,20 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
                    std::string(resolution.match == daw::VstMatch::None && onDisk
                                    ? "direct_path"
                                    : daw::vstMatchToString(resolution.match)))
-            .field("slot", static_cast<uint64_t>(resolution.index));
+            // SLOT ONLY WHEN A MATCH PRODUCED ONE. resolution.index is 0 when the match is
+            // None, and "direct_path" IS the None case — so this field printed `"slot":0` for
+            // every plugin resolved off disk, which reads as "loaded entry 0 of the bundle".
+            // For u-he's Zebra2.vst3, entry 0 is Zebra2 and entry 2 is Zebralette, so a project
+            // that correctly loaded Zebralette reported a slot saying it had loaded Zebra2.
+            // That cost a real investigation: the number was believed over the parameter count,
+            // which is the fact that actually distinguishes them (777 params is Zebra2).
+            //
+            // The host picks the class BY NAME (platform_juce/juce_wrapper.cpp, desiredName),
+            // and that name is not an index into anything the cache knows — so on this path
+            // there is no slot to report, and reporting a zero is worse than reporting nothing.
+            .field("slot", resolution.match == daw::VstMatch::None
+                               ? std::string("n/a — resolved by path, class chosen by name")
+                               : std::to_string(resolution.index));
       }
     }
 
@@ -644,6 +647,49 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
     // Reported from the UI as "a track disappears on load"; the file was right both times.
     liveTrackCount.store(liveTrackExtent, std::memory_order_release);
 
+    // PLUGIN STATE IS RESTORED BY loadProjectFromPath, NOT HERE. See the note there: pushing
+    // saved blobs is a FILE-OPEN action, and undo runs this same function.
+
+
+    // Publish the audio source + clip descriptor tables (contract §2.1). Version-gated like
+    // deviceParams: write both tables, then bump `version` last behind a release fence so a
+    // reader seeing the new version sees complete tables.
+    //
+    // BOTH HALVES, ONE DEFINITION, and the load is just another caller. The source loop used to
+    // be inline here under "these change only at load, so no seqlock" — true until a command
+    // could add a source, which SetClipText (98) now can. It is in publishAudioClipTable with
+    // the clip loop it has to stay consistent with.
+    publishAudioClipTable();
+
+    // The UI's mirror is now arbitrarily stale, so force a full resync rather
+    // than trying to describe the change as a diff.
+    bumpAllTrackClipVersions();
+    clipDirty.store(true, std::memory_order_release);
+    daw::UiDiffPayload resync{};
+    resync.diffType = static_cast<uint16_t>(daw::UiDiffType::ResyncNeeded);
+    resync.clipVersion = clipVersion.load(std::memory_order_acquire);
+    emitUiDiff(resync);
+    return true;
+}
+
+// PUSH THE SAVED PLUGIN BLOBS BACK INTO THE HOSTS — a FILE-OPEN action, and only that.
+//
+// This lived inside applyDocument until undo started calling that function. Plugin state is NOT in
+// ProjectDocument (Device has no params field; the blobs live in <project>/.state/*.bin), so undo
+// was not restoring anything here — it was OVERWRITING LIVE STATE WITH LAST-SAVED STATE. Tweak a
+// cutoff, do not save, type a note, press Ctrl-Z: the note came back AND the plugin snapped to
+// whatever was on disk. Review finding #123 item 6.
+//
+// Moving it rather than gating it with a flag, for the same reason as the loop region in 53b77d5:
+// applying a document and replacing the session are two different operations, and only one of them
+// is undo. A bool would have hidden that distinction behind a parameter nobody reads.
+//
+// The body below is the block from applyDocument, moved verbatim.
+static void restorePluginStateFromDisk(LoadProjectDeps& deps,
+                                       const daw::ProjectDocument& document,
+                                       const std::string& path) {
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
     // Restore plugin state. The chain was just rebuilt from the project above,
     // so on a clean reopen the live chain matches the saved one and state lands;
     // if a live reconcile diverged it is reported rather than pushed into the
@@ -700,26 +746,98 @@ bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
             .field("ok", ok);
       }
     }
+}
 
-    // Publish the audio source + clip descriptor tables (contract §2.1). Version-gated like
-    // deviceParams: write both tables, then bump `version` last behind a release fence so a
-    // reader seeing the new version sees complete tables.
-    //
-    // BOTH HALVES, ONE DEFINITION, and the load is just another caller. The source loop used to
-    // be inline here under "these change only at load, so no seqlock" — true until a command
-    // could add a source, which SetClipText (98) now can. It is in publishAudioClipTable with
-    // the clip loop it has to stay consistent with.
-    publishAudioClipTable();
+bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path,
+                         std::string* error) {
+  // Read the file, then apply it. Everything that was below this point is applyDocument now.
+  daw::ProjectDocument document;
+  if (!daw::loadProject(document, path, error)) {
+    return false;
+  }
+  if (!applyDocument(deps, document, path, error)) { return false; }
 
-    // The UI's mirror is now arbitrarily stale, so force a full resync rather
-    // than trying to describe the change as a diff.
-    bumpAllTrackClipVersions();
-    clipDirty.store(true, std::memory_order_release);
-    daw::UiDiffPayload resync{};
-    resync.diffType = static_cast<uint16_t>(daw::UiDiffType::ResyncNeeded);
-    resync.clipVersion = clipVersion.load(std::memory_order_acquire);
-    emitUiDiff(resync);
+  // OPENING A FILE pushes its saved plugin blobs into the hosts. Undo must not: the blobs are not
+  // in the document, so re-pushing them reverts unsaved plugin edits rather than restoring
+  // anything. See restorePluginStateFromDisk.
+  restorePluginStateFromDisk(deps, document, path);
+
+  // A LOAD REPLACES THE SONG, so any hand-set loop belonged to the OLD one — and this is the only
+  // place that is true. It used to live inside applyDocument, which was correct until UNDO started
+  // applying documents through the same function: every undo then reset the loop to the whole
+  // arrangement. Set a loop over bars 5-9, type a note, press Ctrl-Z, and it was gone. Confirmed by
+  // probe (loop_start 1920000000 -> 0) before this moved.
+  //
+  // The loop is SESSION state, not authored state — SetLoopRange is deliberately classified
+  // non-mutating, so the loop is not in the document and undo has nothing to restore it from.
+  // Moving the reset rather than gating it with a flag keeps that distinction visible: applying a
+  // document and replacing the session are two different things, and only one of them is undo.
+  {
+    auto& transport = deps.engineState.transport;
+    transport.loopStartNanotick.store(0, std::memory_order_release);
+    transport.loopEndNanotick.store(
+        deps.engineState.songTiming.songEndNanotick.load(std::memory_order_acquire),
+        std::memory_order_release);
+    transport.loopUserSet.store(false, std::memory_order_release);
+  }
+  // SEEDED FROM WHAT THE ENGINE NOW HOLDS, NOT FROM THE PARSED FILE.
+  //
+  // `document` is passed to applyDocument BY NON-CONST REFERENCE and comes back GUTTED: the
+  // is_master track is lifted out of it, and so is every is_aux_child track. Seeding version 0
+  // from that object meant the first undo after opening a project reset the master chain, mixer
+  // and host, and un-childed every stem — restoring a state the user never had. The same gutted
+  // copy also carries the FILE's placement ids, which ensurePlacementIds never wrote back, so
+  // undo reintroduced ids the engine had already reassigned: that, not any lack of atomicity, is
+  // what cross_track_move_check was reporting.
+  //
+  // captureDocument() asks the engine what it actually holds, which is the state undo must return
+  // to by definition. Found by the review panel, ranked first of eleven.
+  {
+    daw::ProjectDocument seeded = deps.captureDocument ? deps.captureDocument() : document;
+    // AND THE PLUGINS THE FILE JUST RESTORED. restorePluginStateFromDisk ran above, so the hosts
+    // now hold the saved blobs — reading them here is what makes "undo back to the state I
+    // opened" return the plugins too, not only the notes. A full read rather than a dirty-flag
+    // one: there is no previous snapshot to carry anything forward from.
+    daw::engine::PluginStateSnapshot seededPlugins;
+    if (deps.capturePluginState) {
+      seededPlugins = deps.capturePluginState({}, /*onlyDirty=*/false);
+    }
+    deps.engineState.documentHistory.seed(std::move(seeded), std::move(seededPlugins));
+  }
+  return true;
+}
+
+bool loadStartupProject(const std::string& startupProject,
+                        const std::function<bool(const std::string&, std::string*)>& load,
+                        std::atomic<uint32_t>& projectLoadOk,
+                        std::atomic<uint32_t>& projectLoadSeq) {
+  // --project: load before anything runs. For a render this is mandatory (the pump starts as
+  // soon as the threads are up, so there is no window for a CLI load); on its own it just saves
+  // a round trip. Reported loudly on failure and the render is abandoned rather than writing a
+  // file of silence, which is what the first version did and it looked exactly like success.
+  if (startupProject.empty()) {
     return true;
+  }
+  const std::filesystem::path path = std::filesystem::path(daw::defaultProjectDir()) /
+                                     (startupProject + ".uniproj.json");
+  std::string error;
+  const bool ok = load(path.string(), &error);
+  projectLoadOk.store(ok ? 1u : 0u, std::memory_order_release);
+  projectLoadSeq.fetch_add(1, std::memory_order_acq_rel);
+  DAW_EVENT("project.load")
+      .field("path", path.string())
+      .field("ok", ok)
+      .field("startup", true)
+      .field("error", ok ? std::string() : error);
+  if (!ok) {
+    daw::LogLine() << "Startup load FAILED for " << path.string() << ": " << error << std::endl;
+    return false;
+  }
+  std::cout << "Startup load: " << path.string() << std::endl;
+  // No sleep here: a render waits for a host to be READY (awaitAnyReadyTrack), which is
+  // the condition that actually matters, and a fixed guess would be both slower and
+  // occasionally wrong.
+  return true;
 }
 
 }  // namespace daw::engine

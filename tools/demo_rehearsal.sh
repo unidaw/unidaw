@@ -163,6 +163,24 @@ n_samplers(){
   done
   echo "$n"
 }
+# A SAMPLER THAT CAN ACTUALLY SOUND, which is not the same fact as a sampler being present and is
+# the one that decides whether the demo makes noise. n_samplers above counts DEVICES: it answered
+# "yes, a sampler" for a bank with nothing in it, so the AI could add an instrument, write sixteen
+# notes and pass every step of this rehearsal with a track that is audibly nothing. That is what a
+# count-based check cannot see, and it went unnoticed because no step here ever listened.
+#
+# `length_frames` is the engine's own verdict: 0 means the slot's source did not resolve, so the
+# slot exists, draws, and is silent. Counting SLOTS would repeat the original mistake one level
+# down.
+n_sounding() {
+  local n=0 id
+  for id in $(cli get tracks | sed -n 's/.*"track_id": *\([0-9][0-9]*\).*/\1/p'); do
+    [ "$id" -gt 100000 ] && continue
+    cli get sampler-kit --track "$id" 2>/dev/null \
+      | grep -oE '"length_frames": *[0-9]+' | grep -qvE ': *0$' && n=$((n+1))
+  done
+  echo "$n"
+}
 # EVERY track's notes, not track 0's. The model routinely makes its own track for a part, and a
 # count that only ever looks at track 0 reports "the song did not change" while the notes are
 # sitting one track over.
@@ -170,6 +188,18 @@ n_samplers(){
 # UI-scoped view, not a census. It read 3 nodes before and after adding a patcher, which
 # says nothing about whether the add landed. The device chain is only observable whole
 # through a SAVE, same as the harmony timeline.
+# COUNTS ONLY THE PATCHERS THAT COULD ACTUALLY SOUND — an EVENT patcher after the instrument is
+# not a patcher that works, it is a silent track with a valid-looking chain.
+#
+# This counted every patcher device regardless of position, and so reported success right through
+# a regression that put the event patcher AFTER the sampler: add_device's default was changed from
+# head-insert to append on 2026-08-06 to match the other surfaces, which is correct for an effect
+# and wrong for a generator. The device was present, the graph was valid, the count went 0 -> 1,
+# and the graph emitted into nothing. A step that cannot tell those apart is not testing the claim
+# it is named after.
+#
+# Returning 0 rather than a differently-worded answer is deliberate: `step` passes when the value
+# CHANGES, so encoding the mistake in the string would still read as a pass.
 n_patcher(){
   cli do save rehearsal --force >/dev/null 2>&1
   local f="$TMP/rehearsal.uniproj.json"
@@ -177,8 +207,20 @@ n_patcher(){
   python3 -c "
 import json,sys
 d=json.load(open(sys.argv[1]))
-print(sum(1 for t in d['tracks'] for x in t.get('device_chain',[])
-          if str(x.get('kind','')).startswith('patcher')))" "$f" 2>/dev/null || echo 0
+n=0
+for t in d['tracks']:
+    chain=[str(x.get('kind','')) for x in t.get('device_chain',[])]
+    inst=[i for i,k in enumerate(chain) if k in ('sampler','vst_instrument')]
+    first_inst = min(inst) if inst else len(chain)
+    for i,k in enumerate(chain):
+        if not k.startswith('patcher'):
+            continue
+        # An EVENT patcher only counts ahead of the instrument it feeds. The audio and instrument
+        # flavours process what reaches them, so their position is not this rule's business.
+        if k == 'patcher_event' and i > first_inst:
+            continue
+        n+=1
+print(n)" "$f" 2>/dev/null || echo 0
 }
 
 # CHORDS ARE NOT NOTES and are not counted by n_notes — they live in their own array on the clip,
@@ -201,8 +243,11 @@ d=json.load(open(sys.argv[1]))
 #
 # NO BACKTICKS IN HERE. This block sits inside python3 -c \"...\", a DOUBLE-QUOTED shell string,
 # so a backtick opens command substitution: the first version of this comment quoted the field
-# names and the shell tried to run `placement.adds` and `mutes`, printing 'command not found'
-# twice per call. Harmless only by luck - the substitutions came back empty and left the comment
+# names -- in BACKTICKS, inside this same double-quoted string -- and the shell duly tried to run
+# them, printing 'command not found' twice per call. The comment WARNING about backticks was
+# written using backticks, so it re-created the bug it documents, on every single call, and
+# survived the fix that was supposed to remove it. Prose about code is still code to the shell.
+# Harmless only by luck - the substitutions came back empty and left the comment
 # a comment.
 print(sum(len(c.get('chords',[])) for c in d.get('clips',[]))
     + sum(len(pl.get('chords',[])) for t in d.get('tracks',[]) for pl in t.get('placements',[])))" "$f" 2>/dev/null || echo 0
@@ -236,16 +281,219 @@ except Exception: print('unreadable')" "$f"
 }
 h_quantize(){ cli get tracks 2>/dev/null | grep -o '"quantize_grid": *[0-9]*' | tr -d '\n ' ; }
 
+# SOMETHING TO LOAD. The engine runs with DAW_PROJECT_DIR="$TMP", and a bare sample name
+# resolves there, so a wav written here is exactly what the demo's "load a kick into it" reaches.
+# Generated rather than copied from presets/audio: the two files there are the WAVEFORM PROBE
+# assets, which are silent for their first second and stretch that when played below their root —
+# a rehearsal that loaded one and heard nothing would be reporting the probe's shape, not the
+# product's.
+python3 - "$TMP/demo_kick.wav" <<'PYWAV'
+import sys, wave, struct, math
+w = wave.open(sys.argv[1], 'wb')
+w.setnchannels(1); w.setsampwidth(2); w.setframerate(44100)
+# Attack in the first millisecond, so it sounds the instant a note starts at any transposition.
+frames = [int(32000 * math.exp(-i / 3000.0) * math.sin(i * 0.08)) for i in range(8000)]
+w.writeframes(b''.join(struct.pack('<h', f) for f in frames))
+w.close()
+PYWAV
+
 echo "REHEARSING — each step is one prompt, judged by whether the ENGINE changed."
 echo
 step "add a track"        "Add a new track named Bass."                     n_tracks
 step "put a sampler on it" "Put a sampler on the track named Bass."         n_samplers
+step "load a sample"      "Load demo_kick.wav into the sampler on the track named Bass." n_sounding
 step "write a bassline"   "Write a simple four-bar bassline on the track named Bass, root notes on the beat." n_notes
 step "the harmony lane"   "Set the key to C minor from the start of the song."   h_harmony
 step "lane quantize"      "Quantize the Bass track to a 1/16 grid at full strength." h_quantize
-step "a drum beat"        "Add a track called Drums with a sampler on it, and write a four-bar drum beat: kick on every beat, snare on 2 and 4." n_notes
+# MEASURED BY WHETHER IT CAN SOUND, not by whether notes appeared. This step passed for weeks
+# while producing a SILENT track: the model adds the sampler, writes sixteen notes, and n_notes
+# duly reports 16 -> 32. Today it also tried load_sample twice, got ok=false both times because it
+# GUESSED at file names, said "you'll need to load your own drum samples later", wrote the notes
+# anyway — and still scored a pass. A rehearsal that scores the demo's centrepiece on note count
+# is agreeing with the model's own workaround.
+#
+# THIS STEP IS EXPECTED TO FAIL UNTIL THE AGENT CAN DISCOVER WHAT SAMPLES EXIST. That is the point
+# of putting it here: the failure is true, and the step that lies is worse than the step that
+# fails. The prompt deliberately does NOT name a file, because Jaakko will not name one either.
+step "a drum beat"        "Add a track called Drums with a sampler on it, and write a four-bar drum beat: kick on every beat, snare on 2 and 4." n_sounding
 step "a chord progression" "On a new track called Keys, write a four-bar I-V-vi-IV chord progression, strummed." n_chords
 step "the patcher"        "Put a patcher device on the Bass track."                 n_patcher
+
+# ---- AND DOES THE SONG ACTUALLY MAKE A NOISE.
+#
+# ASKED OF THE WHOLE SONG AT THE END, not step by step, because the per-step version kept missing.
+# Each step measures the thing its own prompt was about — notes for a bassline, chords for a
+# progression, a device for the patcher — and every one of those can be perfectly correct on a
+# track that emits nothing. The drum step scored 16 -> 32 for a silent track; the chord step
+# scored 0 -> 4 for a track with NO DEVICES AT ALL. Two of the seven things being demonstrated,
+# both green, both silent.
+#
+# A per-step audio assertion would have to be written into each new step and would be forgotten in
+# exactly the same way. This is one rule over the finished song: anything carrying musical content
+# must have something that can sound it. It applies to steps nobody has written yet.
+#
+# STRUCTURAL, and deliberately weaker than a render. A render says "this song made noise", which a
+# single loud track satisfies while three others are silent; per-track audio needs stems and a solo
+# pass and is not a night-before change. "Has an instrument that could sound this" is the property
+# that was actually violated, and it names the track.
+echo
+cli do save rehearsal --force >/dev/null 2>&1
+# THE FILE SAYS WHAT IS ON EACH TRACK; THE ENGINE SAYS WHETHER IT CAN SOUND. Splitting it that
+# way is not tidiness — the first version of this check read `slots` out of the saved file and
+# passed the Drums track, which held TWO slots pointing at kick.wav and snare.wav, neither of
+# which exists. A refused load still MINTS A SLOT, so slot COUNT is exactly the wrong question,
+# and answering it from the file would mean re-implementing the engine's path resolution here as
+# a second copy that guesses at the same directories.
+#
+# `length_frames` is the engine's own verdict and it is only available live.
+ROWS="$(python3 - "$TMP/rehearsal.uniproj.json" 2>/dev/null <<'PYQ'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit
+clips = {c.get("id"): c for c in d.get("clips", [])}
+for t in d.get("tracks", []):
+    if t.get("is_master"):
+        continue
+    # BOTH PROJECT FORMATS. schema_version 4 keeps notes in CLIPS that placements point at;
+    # schema_version 1 keeps them FLAT on the track. Counting only clips is not a partial answer,
+    # it is a zero for every schema-1 track — so this phase would report "every track that carries
+    # notes has an instrument" about a song whose notes it never looked at, which is the precise
+    # failure it exists to catch, one level up. Five of the nine shipped presets are schema 1,
+    # including maximal, which has 162 notes, no clips at all, and renders at peak 0.66.
+    #
+    # The rehearsal happens to save schema 4 today. That is luck, not a reason.
+    content = len(t.get("notes", [])) + len(t.get("chords", []))
+    for pl in t.get("placements", []):
+        c = clips.get(pl.get("clip_id"))
+        if c:
+            content += len(c.get("notes", [])) + len(c.get("chords", []))
+        content += len(pl.get("chords", []))
+    if content == 0:
+        continue
+    kinds = [x.get("kind") for x in t.get("device_chain", [])]
+    # `track_id`, NOT `id`. Getting this wrong did not raise: t.get("id") returned None, the
+    # query became `--track None`, and the engine answered found:false for EVERY track — so the
+    # phase reported all three as silent, including the one that demonstrably sounded. A wrong
+    # field name reads exactly like a real defect, which is why the id is asserted here rather
+    # than formatted into a command and hoped for.
+    tid = t.get("track_id")
+    if tid is None:
+        print("HARNESS_BUG no_track_id_field 0 0 0 %s" % ",".join(sorted(t.keys())))
+        continue
+    name = (t.get("name") or ("track %s" % tid)).replace(" ", "_")
+    print("%s %s %d %d %d %s" % (tid, name, content,
+                                 int("vst_instrument" in kinds), int("sampler" in kinds),
+                                 ",".join(kinds) or "no_devices_at_all"))
+PYQ
+)"
+SILENT=""
+while read -r tid tname content has_vst has_smp kinds; do
+  [ -n "${tid:-}" ] || continue
+  if [ "$tid" = "HARNESS_BUG" ]; then
+    SILENT="$SILENT|THIS CHECK IS BROKEN, not the song: no track_id field in the saved project (keys: $kinds)"
+    continue
+  fi
+  [ "$has_vst" = "1" ] && continue
+  if [ "$has_smp" != "1" ]; then
+    SILENT="$SILENT|$tname: $content note/chord event(s) and NO INSTRUMENT ($kinds)"
+    continue
+  fi
+  # A slot whose source did not resolve reports length_frames 0 — minted, drawn, and silent.
+  #
+  # RETRIED, for the reason n_samplers above is retried and this phase was not: the kit is a
+  # REQUEST, not a field, so a single ask can legitimately answer found:false while the engine is
+  # still filling the answer. Asking once flagged the BASS track — the one track here that
+  # demonstrably sounds — as silent. Two hazards in one line: an answer that has not arrived reads
+  # exactly like an answer of "nothing", and </dev/null keeps the real `cli` from eating the rows
+  # this loop is still reading from its stdin.
+  resolved=0; kit=""
+  for _try in 1 2 3 4 5 6 7 8; do
+    kit="$(cli get sampler-kit --track "$tid" </dev/null 2>/dev/null)"
+    if printf '%s' "$kit" | grep -oE '"length_frames": *[0-9]+' | grep -qvE ': *0$'; then
+      resolved=1; break
+    fi
+    sleep 0.25
+  done
+  if [ "$resolved" = "0" ]; then
+    # THE FAILURE CARRIES THE ANSWER IT JUDGED. Without this the message says "no slot resolves"
+    # for three indistinguishable causes — the kit says found:false, the kit has slots that are
+    # all zero-length, or the query never reached the right track at all — and the first time this
+    # phase fired it flagged a track that demonstrably sounded, which is a bug in the CHECK that
+    # a verdict-only message cannot tell apart from a bug in the product.
+    why="$(printf '%s' "$kit" | grep -oE '"found": *(true|false)|"length_frames": *[0-9]+' \
+           | head -4 | tr '\n' ' ')"
+    [ -n "$why" ] || why="the kit query returned nothing at all for track $tid"
+    SILENT="$SILENT|$tname (track $tid): $content note/chord event(s), sampler present, no slot resolves its source — kit said: $why"
+  fi
+done <<< "$ROWS"
+
+if [ -n "$SILENT" ]; then
+  echo "  SILENT TRACKS — content written where nothing can sound it:"
+  # QUOTED AND SPLIT ON THE SEPARATOR ONLY. Unquoted, the shell word-splits each message on every
+  # space and printf emits one line PER WORD — "Drums:", "17", "note/chord" — which is unreadable
+  # exactly when somebody is reading it to find out what broke.
+  printf '%s\n' "$SILENT" | tr '|' '\n' | while IFS= read -r line; do
+    [ -n "$line" ] && echo "    $line"
+  done
+  FAIL=$((FAIL+1))
+else
+  echo "  every track carrying notes or chords has something that can sound it"
+fi
+
+# ---- AND THE ENGINE ACTUALLY PRODUCES AUDIO FROM WHAT THE AI BUILT.
+#
+# The phase above asks whether each part COULD sound — a structural question, answered from the
+# chain and the kit. This one closes the loop: the song the model built by prompting is rendered
+# OFFLINE and the result is measured. Prompt in, audio out, with nothing in between that a
+# count could satisfy.
+#
+# THE OFFLINE RENDER RATHER THAN PLAYBACK, deliberately: no audio device, no dropouts, no
+# dependence on what this machine's default output is doing. The capture tap on this Mac is
+# unusable and a live playback assertion would be measuring CoreAudio.
+#
+# ITS LIMITATION, stated because it is easy to over-read: a whole-song peak is satisfied by ONE
+# loud track. It cannot tell you the drums sounded — that is what the per-track phase above is
+# for, and the two are complementary rather than redundant. Per-track audio would need stems and
+# a solo pass per track.
+echo
+if [ -f "$TMP/rehearsal.uniproj.json" ]; then
+  # ITS OWN SEGMENT NAME. The rehearsal's engine is still alive on $SHM at this point, and an
+  # engine with no DAW_UI_SHM_NAME takes the DEFAULT one — from which the host socket paths and
+  # the shared segment are derived. Two engines on one segment is the collision that started the
+  # instance-isolation work in this repo; leaving it to chance because "nothing else is probably
+  # using the default right now" is how it happened the first time. Derived from $SHM so it is
+  # unique per run and obviously related to it.
+  ( cd "$BUILD" && exec env DAW_UI_SHM_NAME="${SHM}_render" DAW_PROJECT_DIR="$TMP" \
+      ./daw_engine --project rehearsal \
+      --render "$TMP/take" --run-seconds 12 ) >"$TMP/render.log" 2>&1
+  PEAK="$(python3 - "$TMP/take.wav" <<'PYR' 2>/dev/null
+import wave, struct, sys
+try:
+    w = wave.open(sys.argv[1], "rb")
+except Exception:
+    print(-1); raise SystemExit
+n = w.getnframes()
+d = w.readframes(min(n, 44100 * 10))
+s = struct.unpack("<%dh" % (len(d) // 2), d)
+print(max((abs(v) for v in s), default=0))
+PYR
+)"
+  if [ "${PEAK:--1}" = "-1" ]; then
+    echo "  the render wrote no readable wav — see $TMP/render.log"
+    FAIL=$((FAIL+1))
+  elif [ "${PEAK:-0}" -gt 300 ]; then
+    echo "  the song the model built RENDERS AUDIO: peak $PEAK"
+  else
+    echo "  THE WHOLE SONG RENDERS SILENT: peak $PEAK. Every part above can be structurally
+        perfect and this still be zero — that is the point of measuring it."
+    FAIL=$((FAIL+1))
+  fi
+else
+  echo "  no saved project to render, so the audio end of this was not tested at all"
+  FAIL=$((FAIL+1))
+fi
 
 echo
 echo "rehearsed: $PASS passed, $FAIL failed"

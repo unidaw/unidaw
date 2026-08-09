@@ -83,10 +83,36 @@ struct LoadProjectDeps {
   daw::TempoMapProvider& tempoProvider;
   std::function<void()> updatePatcherGraphSnapshot;
   daw::WaveformStore& waveformStore;
+  // What the engine HOLDS, for seeding the undo history after a load. Not the parsed file:
+  // applyDocument gutted that of the master and aux-child tracks on its way through.
+  std::function<daw::ProjectDocument()> captureDocument;
+  // And the plugin blobs to seed version 0 with — see apps/engine_plugin_state_capture.h. Without
+  // it undo could return the song to how the file opened while leaving every plugin where the
+  // session's edits left it.
+  std::function<PluginStateSnapshot(const PluginStateSnapshot&, bool)> capturePluginState;
 };
 
 // Returns false and fills *error if the document will not load. On success the engine is
 // holding the new project and every version counter has been bumped.
+// Apply a document the caller already holds. loadProjectFromPath is now a file read plus this.
+// Undo restores the engine to a document it already has, so this is the operation it needs.
+bool applyDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
+                   const std::string& path, std::string* error);
+
+// THE --project ARGUMENT, resolved and reported.
+//
+// Lifted out of main() because it is a DECISION, not wiring: it turns a name into a path, records
+// the outcome where the consumer can see it, and distinguishes "no project was asked for" from
+// "one was asked for and could not be loaded". main() only needs the answer.
+//
+// RETURNS true when there is nothing to abandon — either no project was requested, or one was
+// requested and loaded. False means a requested load FAILED, which for an offline render is fatal:
+// the first version rendered a file of silence instead, and that looked exactly like success.
+bool loadStartupProject(const std::string& startupProject,
+                        const std::function<bool(const std::string&, std::string*)>& load,
+                        std::atomic<uint32_t>& projectLoadOk,
+                        std::atomic<uint32_t>& projectLoadSeq);
+
 bool loadProjectFromPath(LoadProjectDeps& deps, const std::string& path, std::string* error);
 
 }  // namespace daw::engine

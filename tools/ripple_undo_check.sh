@@ -304,9 +304,15 @@ PYI
 
 # ---- UNDO. Every one of the five back.
 after_command "$TMP" cli do undo || true
-grep -q '"event":"undo.song"' "$TMP/eng.log" || \
-  fail "the undo did not restore a SONG-scoped entry, so the ripple pushed none — this is the
-        defect: the largest destructive edit in the program with no way back:
+# ASSERTS THAT UNDO RAN, NOT HOW IT IS IMPLEMENTED. This grepped "undo.song" — an event of the
+# store-swap model, deleted when undo became a cursor over document versions. A check that names
+# the MECHANISM fails the moment the mechanism is replaced, and it fails EARLY: this line ran
+# before the six state comparisons below, so the only behavioural coverage of the ripple restore
+# in the whole suite was switched off by a rename. The comparisons are the real assertions; this
+# line exists only to catch "undo did nothing at all" before they report a confusing diff.
+grep -q '"event":"undo.applied"' "$TMP/eng.log" || \
+  fail "undo produced no undo.applied event, so it did not run at all — the six comparisons
+        below would report a difference without saying why:
         $(grep -o '"event":"undo[a-z._]*"[^}]*' "$TMP/eng.log" | tail -1)"
 UNDONE="$(state undone)"
 [ "$UNDONE" = "$BEFORE" ] || \
@@ -329,7 +335,7 @@ echo "  runtime agrees: the published read-back matches too ($RT_UNDONE)"
 
 # ---- REDO puts it back, or the entry was consumed rather than moved.
 after_command "$TMP" cli do redo || true
-grep -q '"event":"redo.song"' "$TMP/eng.log" || fail "redo did not re-apply the song entry"
+grep -q '"event":"redo.applied"' "$TMP/eng.log" || fail "redo produced no redo.applied event"
 REDONE="$(state redone)"
 [ "$REDONE" = "$AFTER" ] || \
   fail "redo did not re-apply the ripple.

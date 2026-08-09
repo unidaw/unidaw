@@ -1598,6 +1598,57 @@ enum class UiChordDiffType : uint16_t {
   ResyncNeeded = 4,
 };
 
+// A GESTURE IS ONE UNDO STEP, however many commands it takes to make.
+//
+// A knob drag emits one SetDeviceParam per milli-unit (ui-web/src/chain.js:650-666), so a single
+// drag is ~1000 mutating commands — ~1000 undo steps and ~1000 full document captures. Stage 5
+// makes that fatal rather than merely slow: it adds a cross-process requestPluginState round trip
+// per hosted plugin per mutating command.
+//
+// THE ENGINE CANNOT INFER THIS. The obvious fix is to coalesce commits sharing a label within a
+// time window, which is what Reaper and Live do and which DocumentHistory::amend() already makes a
+// one-line branch. It is still wrong: two deliberate turns of the same knob a moment apart are TWO
+// edits, and typing notes quickly shares the label "Write note" and would merge into ONE undo
+// step. A time window cannot tell a continuous gesture from fast discrete edits, because the
+// difference is INTENT and intent lives in the UI. Same reasoning as VST3's beginEdit/endEdit,
+// which exists for exactly this reason in every host.
+//
+// SO THE UI SAYS SO, on the flags field that already exists — no new opcode, no kShmVersion bump.
+// A client that never sets these behaves exactly as before, which is what makes this safe to land
+// before any UI emits it.
+//
+//   BEGIN  the first command of the drag. Commits a version, opens the gesture.
+//   (none) every command in between AMENDS that version instead of adding one.
+//   END    the last command. Amends, then closes the gesture.
+//
+// One drag, one undo step, holding the FINAL value. Generalises for free: a fader drag, a lasso
+// move and a multi-note nudge are all one gesture.
+// THE FLAGS WORD IS NOT A COMMON HEADER FIELD, and I got this wrong the first time. Every 40-byte
+// payload has its own `flags` at the same offset, so a bit means whatever THAT payload says it
+// means. Bits 14 and 15 are already spoken for elsewhere:
+//   kUiEditScopeLocal        = 1u << 15  on note commands
+//   kUiPatcherFlagHasDeviceId= 1u << 15  on the patcher payloads, whose device id occupies
+//   kUiPatcherDeviceIdMask   = 0x7FFF    bits 0-14 — so bit 14 is inside the id as well
+// `daw-cli do note --local` and every per-device patcher command therefore already set bit 15.
+// Reading these bits generically made the engine see GestureEnd on commands that meant neither.
+//
+// SO THEY ARE ONLY READ FOR COMMANDS WHOSE FLAGS WORD IS FREE — see gestureFlagsApplyTo() below.
+// SetDeviceParam ignores its flags entirely (daw-cli sends 0), which is the command a knob drag
+// actually uses and the one stage 5 needs coalesced.
+//
+// LIMITATION, stated rather than discovered later: a lasso drag of LOCAL-SCOPE notes, or a patcher
+// knob drag, cannot express a gesture, because those payloads have no free bit here. Extending
+// coalescing to them needs space those payloads actually have — a reserved byte, or a widened
+// payload — and must not be done by quietly reusing a bit that already means something.
+constexpr uint16_t kUiCmdFlagGestureBegin = 1u << 14;
+constexpr uint16_t kUiCmdFlagGestureEnd = 1u << 15;
+
+// Whitelist, not a blacklist: a new command type carries no gesture meaning until someone has
+// checked that its flags word has these bits free and added it here deliberately.
+constexpr bool gestureFlagsApplyTo(UiCommandType type) {
+  return type == UiCommandType::SetDeviceParam;
+}
+
 struct UiCommandPayload {
   uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);
   uint16_t flags = 0;

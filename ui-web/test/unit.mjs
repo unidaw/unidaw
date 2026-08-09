@@ -2860,20 +2860,24 @@ const CLI_NEVER_EXERCISED = [
 
 const AGENT_NEVER_EXERCISED = [
   /*
-   * THREE, and each is a HARNESS limit with its coverage named — not an unwritten test.
+   * TWO, and each is a HARNESS limit with its coverage named — not an unwritten test.
    *
-   * All three are driven by tests in engine_e2e.rs that are `#[ignore]`d: `load_sample` resolves
-   * a bare name against the loaded project's directory, and the Rust harness makes a fresh temp
-   * dir whose engine output goes to /dev/null, so the refusal cannot be read. The capability is
-   * covered where the tool was built to work — ai-demo.mjs loads a sample the MODEL chose, and
-   * kit/sampler-render/sampler-state all load and play them in the Playwright harness, which
-   * copies presets/ into its project directory.
+   * `load_sample` LEFT THIS LIST on 2026-08-09, and the way it left is the point: merging main
+   * brought over tests that drive it for real (load_sample_gives_the_sampler_a_sound_across_the
+   * _keyboard, a_drum_slot_is_pinned_to_its_key, an_over_long_sample_name_is_refused_rather_than
+   * _cut, a_sample_that_does_not_exist_is_an_error_not_a_silent_ok). The harness limit described
+   * below was real when written and somebody else solved it on another branch. A ratchet that can
+   * only tighten by hand would have kept claiming it was unexercised.
+   *
+   * The two below are driven by `#[ignore]`d tests: the Rust harness makes a fresh temp dir whose
+   * engine output goes to /dev/null, so a refusal cannot be read back. The capability is covered
+   * where the tool was built to work — kit/sampler-render/sampler-state load and play in the
+   * Playwright harness, which copies presets/ into its project directory.
    *
    * Listed here anyway. A tool proven only in another harness is worth knowing about separately
    * from one proven in this one, and quietly counting it as done is how a list starts agreeing
    * with itself.
    */
-  'load_sample',
   'sampler_slice',
   'sampler_emit_rows',
 ];

@@ -102,7 +102,11 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "add_notes",
-            description: "Write a phrase of notes onto a track, one pitch per step.",
+            description: "Write a phrase of notes onto a track, one pitch per step. NOTES ARE \
+                          SOUNDED BY THE TRACK'S INSTRUMENT — a track with no instrument, or with \
+                          a sampler that has nothing loaded, stores the notes correctly and plays \
+                          SILENCE. Check the track's chain in `observe` first: add_device gives it \
+                          an instrument and load_sample gives a sampler a sound.",
             params: json!({
                 "type": "object",
                 "required": ["track", "pitches"],
@@ -187,7 +191,10 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
                           key and the same progression transposes with it. Use add_notes when \
                           you want fixed MIDI pitches instead, and `set_harmony` when what is \
                           wanted is the KEY rather than chords (a modulation, \"put it in C \
-                          minor\", anything about the harmony lane itself).",
+                          minor\", anything about the harmony lane itself). \
+                          CHORDS ARE SOUNDED BY THE TRACK'S INSTRUMENT, so a chord \
+                          progression written onto a bare track is stored perfectly and \
+                          heard as nothing — give the track an instrument first.",
             params: json!({
                 "type": "object",
                 "required": ["track", "degrees"],
@@ -1043,48 +1050,12 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
                                 "device": { "type": "integer", "minimum": 1 } },
             }),
         },
-        ToolSpec {
-            name: "add_device",
-            description: "Insert a device into a track's chain at a position (0 is first). \
-                          kind: sampler, vst_effect, vst_instrument, or one of the three \
-                          patcher flavours (patcher = event, patcher_instrument, patcher_audio). \
-                          `sampler` is the \
-                          engine's own instrument and needs nothing else; a VST needs `plugin`, \
-                          the name as the plugin catalogue reports it.",
-            params: json!({
-                "type": "object",
-                "required": ["track"],
-                "properties": {
-                    "track": { "type": "integer", "minimum": 0 },
-                    "kind": { "type": "string",
-                              "enum": ["sampler", "vst_effect", "vst_instrument", "patcher",
-                                       "patcher_instrument", "patcher_audio"] },
-                    "position": { "type": "integer", "minimum": 0 },
-                },
-            }),
-        },
-        ToolSpec {
-            name: "load_sample",
-            description: "Give a track's sampler an audio file, by NAME — the engine resolves \
-                          it against the project's own directory and its sibling audio/ folder, \
-                          so a bare file name is what this takes, never a path. One file lands \
-                          across the whole keyboard from its root so any note plays it; set \
-                          `fixed` to pin it to one key, which is what a drum wants.",
-            params: json!({
-                "type": "object",
-                "required": ["track", "file"],
-                "properties": {
-                    "track": { "type": "integer", "minimum": 0 },
-                    "file": { "type": "string", "description": "File name, under 24 bytes." },
-                    "device": { "type": "integer", "minimum": 0,
-                                "description": "The sampler's device id; 0 means the first sampler on the track." },
-                    "root": { "type": "integer", "minimum": 0, "maximum": 127,
-                              "description": "The key it plays at original pitch. Default 60, middle C." },
-                    "fixed": { "type": "boolean",
-                               "description": "Pin it to the root key alone instead of spreading it." }
-                }
-            }),
-        },
+        /*
+         * RESTORED AFTER THE MERGE ATE THEM. The dispatch arms and the functions survived,
+         * but these manifest entries did not — main never had them, and git merged that
+         * region cleanly. The tools existed and no model could discover them, which is
+         * task #42 reopening in silence. The registry ratchet caught it, not a human.
+         */
         ToolSpec {
             name: "patcher_node",
             description: "Add a node to a patcher device's graph, or link two of its nodes. A \
@@ -1161,6 +1132,55 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
                     "count": { "type": "integer", "minimum": 1, "maximum": 128,
                                "description": "slice: how many addresses the range covers." }
                 }
+            }),
+        },
+        ToolSpec {
+            name: "add_device",
+            description: "Insert a device into a track's chain at a position (0 is first). \
+                          kind: sampler, vst_effect, vst_instrument, or one of the three \
+                          patcher flavours (patcher = event, patcher_instrument, patcher_audio). \
+                          `sampler` is the \
+                          engine's own instrument and needs nothing else; a VST needs `plugin`, \
+                          the name as the plugin catalogue reports it.",
+            params: json!({
+                "type": "object",
+                "required": ["track"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "kind": { "type": "string",
+                              "enum": ["sampler", "vst_effect", "vst_instrument", "patcher",
+                                       "patcher_instrument", "patcher_audio"] },
+                    "position": { "type": "integer", "minimum": 0 },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "load_sample",
+            description: "Load an audio file into a sampler device, minting a slot that plays it. \
+                          A SAMPLER WITH NOTHING LOADED IS SILENT — add_device gives you the \
+                          instrument, this gives it a sound, and notes written before this lands \
+                          make no noise. The file is named PROJECT-RELATIVE, not by path (a \
+                          project referring to an absolute path stops playing the moment you send \
+                          it to someone), and the name must fit 24 bytes. By default the sample \
+                          plays ACROSS THE WHOLE KEYBOARD from its root, so any note you write \
+                          sounds it — that is what you want for a pluck, pad, bass or lead. Pass \
+                          drum:true for one piece of a kit, which pins it to the single key \
+                          `root` AND SILENCES EVERY OTHER NOTE, so write that part's notes at \
+                          exactly that pitch.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "file"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "device": { "type": "integer", "minimum": 0,
+                                "description": "The sampler's device id from `observe`. Omit it for the track's FIRST sampler, which is what a track you just added one to has — that saves re-observing to learn an id you do not need." },
+                    "file": { "type": "string",
+                              "description": "Project-relative file name, 24 bytes or fewer, e.g. demo_pluck_c4.wav." },
+                    "root": { "type": "integer", "minimum": 0, "maximum": 127,
+                              "description": "The key the sample plays untransposed: default 60 (middle C) pitched, 36 for a drum. With drum:true this is the ONLY key that sounds." },
+                    "drum": { "type": "boolean",
+                              "description": "Pin the slot to `root` alone instead of the whole keyboard (default false)." },
+                },
             }),
         },
         ToolSpec {
@@ -1241,6 +1261,14 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
                     "depth": { "type": "number", "minimum": 0, "maximum": 1 },
                     "bias": { "type": "number", "minimum": -1, "maximum": 1 },
                     "value": { "type": "number", "minimum": 0, "maximum": 1 },
+                    // ADVERTISED BECAUSE THE EXECUTOR READS IT. `modulate` has always taken a
+                    // `link` id and the schema never mentioned one, so no model could pass it and
+                    // every call took the AUTO path — which mints a link whose uid16 is all
+                    // zeros. That link is stored, published and fires every block, and the host
+                    // drops the SetParam because a zero uid resolves to no parameter. A visible
+                    // link that moves nothing, reported ok.
+                    "link": { "type": "integer", "minimum": 1,
+                              "description": "Id for this link. Give an unused one to create a link that actually moves the parameter; omit it and the engine mints an automatic link whose uid does not resolve." },
                 },
             }),
         },
@@ -1631,6 +1659,43 @@ fn chain_blank(cmd: UiCommandType, track: u32) -> UiChainCommandPayload {
     }
 }
 
+/// Ask one sampler for its kit and wait for the answer that echoes this question.
+///
+/// `device` 0 means the track's FIRST sampler, matching every handler in
+/// engine_sampler_commands.cpp — the load and this read resolve it the same way, which is what
+/// makes omitting it safe.
+fn read_kit(handle: &EngineHandle, track: u64, device: u64, within: std::time::Duration)
+            -> Result<daw_bridge::control::SamplerKitView, String> {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    // Forced non-zero: zero means "no answer here", so a seq of 0 reads as an empty slot.
+    let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::AcqRel) | 1;
+    let req = daw_bridge::layout::UiSamplerKitRequestPayload {
+        command_type: UiCommandType::RequestSamplerKit as u16,
+        flags: 0, track_id: track as u32, device_id: device as u32,
+        request_seq: seq, reserved: [0u8; 24],
+    };
+    handle.send_sampler_kit_request(req)?;
+    let index = (seq as usize) % daw_bridge::layout::UI_SAMPLER_KIT_SLOTS;
+    let deadline = std::time::Instant::now() + within;
+    loop {
+        // THE ECHO IS THE POINT: a slot reused for a DIFFERENT question looks exactly like an
+        // answer to this one without it.
+        if let Some(v) = handle.read_sampler_kit_slot(index).filter(|v| v.request_seq == seq) {
+            return Ok(v);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(format!("the sampler on track {track} did not answer within {:?}", within));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+// load_sample lives further down: the merge produced TWO definitions of it, because both
+// branches added one at different offsets and git saw no textual conflict. The surviving
+// copy carries main's semantics (drum, the 24-byte refusal, the kind-dependent root) AND
+// the refusal wiring from #54, so it is the superset of both. The compiler found this, not
+// a test — "the name `load_sample` is defined multiple times".
+
 fn add_device(handle: &EngineHandle, args: &Value) -> ToolResult {
     let Some(track) = arg_u64(args, "track") else {
         return ToolResult::err("add_device needs \"track\"");
@@ -1645,7 +1710,28 @@ fn add_device(handle: &EngineHandle, args: &Value) -> ToolResult {
     };
     let mut p = chain_blank(UiCommandType::AddDevice, track as u32);
     p.device_kind = kind;
-    p.insert_index = arg_u64(args, "position").unwrap_or(0) as u32;
+    // THE DEFAULT DEPENDS ON THE KIND, because neither answer fits both and this has now been
+    // wrong in both directions.
+    //
+    // An EVENT PATCHER generates notes for whatever follows it, so it has to sit AHEAD of the
+    // instrument. Appending one gives [sampler, patcher]: the graph emits into nothing, the track
+    // is silent, and every structural check stays green because the device is present and the
+    // graph is valid and only the order is wrong.
+    //
+    // Everything else appends, which is what daw-cli's `--at` and UiChainCommandPayload's
+    // insertIndex already default to — an effect added after a delay belongs after the delay.
+    //
+    // This defaulted to 0 (head-insert) for everything, which was wrong for effects and right for
+    // patchers by accident; I changed it to append for everything this morning, which fixed
+    // effects and broke patchers. Both are one number standing in for a rule that has two cases.
+    // The web-UI agent found the same shape independently on their side: their console appends,
+    // with a test pinning it, and is therefore wrong for exactly this.
+    //
+    // NOTE the rule lives in three surfaces now (here, daw-cli, the sidecar) and belongs in one.
+    // See the follow-up: the ENGINE should place an event-kind patcher, because a rule three
+    // callers must remember is one a fourth will forget.
+    let default_position = if kind == 0 { 0 } else { 0xFFFF_FFFF };
+    p.insert_index = arg_u64(args, "position").unwrap_or(default_position) as u32;
     /*
      * WHICH PLUGIN, and the absence of this was the whole of a live failure.
      *
@@ -1706,20 +1792,23 @@ fn load_sample(handle: &EngineHandle, args: &Value) -> ToolResult {
     name[..bytes.len()].copy_from_slice(bytes);
     // Spread across the keyboard unless asked otherwise — the same default the UI takes, and
     // for the same reason: a sample pinned to one key is silent for every note but that one.
-    let fixed = args.get("fixed").and_then(|v| v.as_bool()).unwrap_or(false);
+    // `drum`, not `fixed` — main renamed it and the schema above says drum. The merge kept my
+    // body and main's schema, so for a moment this tool advertised one name and read another; a
+    // caller passing drum:true would have been silently ignored.
+    let drum = args.get("drum").and_then(|v| v.as_bool()).unwrap_or(false);
     let payload = daw_bridge::layout::UiSamplerLoadPayload {
         command_type: UiCommandType::SamplerLoad as u16,
-        flags: if fixed { daw_bridge::layout::SAMPLER_LOAD_FIXED_PITCH } else { 0 },
+        flags: if drum { daw_bridge::layout::SAMPLER_LOAD_FIXED_PITCH } else { 0 },
         track_id: track as u32,
         device_id: arg_u64(args, "device").unwrap_or(0) as u32,
-        root_key: arg_u64(args, "root").unwrap_or(60).min(127) as u8,
+        root_key: arg_u64(args, "root").unwrap_or(if drum { 36 } else { 60 }).min(127) as u8,
         reserved: [0; 3],
         name,
     };
     let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_sampler_load(payload) {
         Ok(()) => refused_or(track as u32, journal_at, &["sampler_load"], json!({
-            "sent": true, "track": track, "file": file, "fixed": fixed,
+            "sent": true, "track": track, "file": file, "drum": drum,
         })),
         Err(e) => ToolResult::err(e),
     }
@@ -4515,12 +4604,36 @@ fn set_mixer(handle: &EngineHandle, args: &Value) -> ToolResult {
     if gain_db.is_none() && pan.is_none() && mute.is_none() && solo.is_none() {
         return ToolResult::err("set_mixer needs at least one of gain_db, pan, mute, solo");
     }
-    let millibels = (gain_db.unwrap_or(0.0) * 100.0).round() as i32;
-    let thousandths = (pan.unwrap_or(0.0).clamp(-1.0, 1.0) * 1000.0).round() as i32;
+    // THE HANDLER WRITES ALL FOUR EVERY CALL. handleSetTrackMixer stores gain, pan, mute and solo
+    // from every payload unconditionally, so an argument the caller did not mention cannot be left
+    // out — it has to be carried through at its CURRENT value or it is reset. Filling the gaps
+    // with defaults, which is what this did, meant "mute the drums" also sent 0 dB and centre pan
+    // and quietly undid a fader move made a moment earlier. Absent is not zero; it is unchanged.
+    //
+    // Read-modify-write against the published strip. Two callers racing can still lose an edit,
+    // which is the same optimistic bargain every other command here makes and is a great deal
+    // better than every partial update resetting three properties.
+    let current = handle.read_mixer();
+    let now = current.get(track as usize);
+    let millibels = match gain_db {
+        Some(db) => (db * 100.0).round() as i32,
+        None => now.map(|m| m.gain_millibels).unwrap_or(0),
+    };
+    let thousandths = match pan {
+        Some(v) => (v.clamp(-1.0, 1.0) * 1000.0).round() as i32,
+        None => now.map(|m| m.pan_thousandths).unwrap_or(0),
+    };
+    let now_mute = now.map(|m| m.flags & 1 != 0).unwrap_or(false);
+    let now_solo = now.map(|m| m.flags & 2 != 0).unwrap_or(false);
     p.value0 = millibels as u32;
-    p.note_pitch = thousandths as u32;
-    p.flags = (if mute.unwrap_or(false) { 1 } else { 0 })
-            | (if solo.unwrap_or(false) { 2 } else { 0 });
+    // PAN GOES IN pluginIndex, which is where the engine reads it from
+    // (engine_trackprops_commands.cpp: `static_cast<int32_t>(payload.pluginIndex) / 1000.0`).
+    // This wrote note_pitch, so every pan the model set was a silent no-op and whatever
+    // pluginIndex happened to hold was interpreted as the pan instead. The engine-side test
+    // hand-builds the payload with the right field, so it passed throughout.
+    p.plugin_index = thousandths as u32;
+    p.flags = (if mute.unwrap_or(now_mute) { 1 } else { 0 })
+            | (if solo.unwrap_or(now_solo) { 2 } else { 0 });
     send_now(handle, p, json!({
         "track": if master { Value::from("master") } else { Value::from(track) },
         "gain_db": gain_db, "pan": pan, "mute": mute, "solo": solo }))

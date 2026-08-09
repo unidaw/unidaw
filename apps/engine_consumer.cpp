@@ -559,12 +559,27 @@ void runConsumerThread(ConsumerDeps& deps) {
           std::shared_ptr<const ClipSnapshot> snapshot;
           {
             std::lock_guard<std::mutex> lock(child->trackMutex);
-            child->sourcePlacements = overlay.placements;
+            // EVERY AUTHORED FIELD, because the overlay now carries the whole track. Applying a
+            // chosen few is what made a stem's properties survive the save and die on the way
+            // back — and undo is the way back, so it fired on every undo.
+            const daw::ProjectTrack& src = overlay.track;
+            child->sourcePlacements = src.placements;
             ensurePlacementIds(child->sourcePlacements);
             child->ownedClips = overlay.ownedClips;
-            child->track.automationClips = overlay.automationClips;
-            if (!overlay.name.empty()) {
-              child->trackName = overlay.name;
+            child->track.automationClips = src.automationClips;
+            child->track.harmonyQuantize = src.harmonyQuantize;
+            child->track.soundAddressedOnly = src.soundAddressedOnly;
+            child->track.routing = src.routing;
+            child->track.chain = src.chain;
+            child->track.modRegistry.links = src.modLinks;
+            child->collapsed.store(src.collapsed, std::memory_order_relaxed);
+            child->linesPerBeat.store(src.linesPerBeat, std::memory_order_relaxed);
+            child->allowNoteOverlap.store(src.allowNoteOverlap, std::memory_order_relaxed);
+            child->quantizeGrid.store(src.quantize.gridNanoticks, std::memory_order_release);
+            child->quantizeStrength.store(src.quantize.strengthMilli, std::memory_order_release);
+            child->quantizeSwing.store(src.quantize.swingMilli, std::memory_order_release);
+            if (!src.name.empty()) {
+              child->trackName = src.name;
             }
             child->arrangementDirty.store(false, std::memory_order_relaxed);
             snapshot = rebuildFlatAndPublish(*child);
@@ -575,12 +590,12 @@ void runConsumerThread(ConsumerDeps& deps) {
           std::atomic_store_explicit(&child->clipSnapshot, snapshot,
                                      std::memory_order_release);
           child->mixGainLinear.store(
-              static_cast<float>(std::pow(10.0, overlay.mixer.gainDb / 20.0)),
+              static_cast<float>(std::pow(10.0, overlay.track.mixer.gainDb / 20.0)),
               std::memory_order_relaxed);
-          child->mixPan.store(static_cast<float>(overlay.mixer.pan),
+          child->mixPan.store(static_cast<float>(overlay.track.mixer.pan),
                               std::memory_order_relaxed);
-          child->mixMute.store(overlay.mixer.mute, std::memory_order_relaxed);
-          child->mixSolo.store(overlay.mixer.solo, std::memory_order_relaxed);
+          child->mixMute.store(overlay.track.mixer.mute, std::memory_order_relaxed);
+          child->mixSolo.store(overlay.track.mixer.solo, std::memory_order_relaxed);
           // The published per-track version must move with the material, or the lane shows
           // its notes while the next edit to it is refused against a base nobody published
           // — the bug that made stems uneditable in the first place. Per-track value first,
@@ -592,7 +607,7 @@ void runConsumerThread(ConsumerDeps& deps) {
               .field("bus", static_cast<uint64_t>(key.second))
               .field("child", child->trackId)
               .field("placements",
-                     static_cast<uint64_t>(overlay.placements.size()));
+                     static_cast<uint64_t>(overlay.track.placements.size()));
         }
       }
 

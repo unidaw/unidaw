@@ -80,6 +80,16 @@ bool applySetRowOps(ClipEditDeps& deps, uint32_t trackId, uint32_t clipId, daw::
                     const daw::RowOpEdit& edit, bool recordUndo,
                     daw::UiClipRejectReason& rejectReason);
 
+// A LOCAL EDIT — one that belongs to THIS APPEARANCE of a clip rather than to the clip itself.
+// Recorded on the placement as an `add` (a note only this appearance has) or a `mute` (a base note
+// only this appearance is missing), which is what makes "fix the bass in chorus 1, all three
+// choruses change, and the hat you added to chorus 3 survives" expressible at all: the bass fix is
+// a CLIP edit and reaches all three, the hat is a LOCAL edit and stays where it was put.
+//
+// ADDITIVE-ONLY, ON PURPOSE (roadmap item 24): there is no "changed note" record. An edit that
+// would MODIFY a base note is decomposed into mute(original) + add(new), so the override list is
+// always a set of things added and things silenced, and reverting is deleting both vectors rather
+// than replaying inverses.
 bool applyLocalNoteEdit(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick,
                         uint64_t duration, uint8_t pitch, uint8_t velocity, uint8_t column,
                         bool deleting,
@@ -102,7 +112,22 @@ bool applyRemoveChordAt(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick,
 bool requireMatchingClipVersion(ClipEditDeps& deps, uint32_t baseVersion, daw::UiCommandType commandType, uint32_t trackId);
 
 // Which placement covers this tick on this track, if any. The one answer to a question that used
-// to be asked five different ways.
+// to be asked five different ways — for the same reason editIsLocalScope is one function: the
+// scope decision and the target decision have to agree, and they were two separate loops that
+// agreed only by accident.
+//
+// OVERLAPPING PLACEMENTS made both of them arbitrary. Each took the FIRST match in
+// sourcePlacements — file order, or insertion order, which is nothing the user can see. Worse,
+// they disagreed in a way that mattered: editIsLocalScope scanned for ANY placement under the tick
+// with localEdits set, while the target loop took the first containing placement whether its flag
+// was set or not. So with two overlapping appearances, one local and one not, the gesture could be
+// RULED local and then applied to the placement that is not — an override recorded on an
+// appearance the user never marked.
+//
+// The tie-break is the LATEST START among the placements containing the tick, and on an exact tie
+// the later one in the list. "Topmost wins" is the convention every arranger uses for stacked
+// material, and stating it is the point: an arbitrary rule that happens to be stable is still
+// unpredictable to the person using it.
 PlacementHit findPlacementAt(ClipEditDeps& deps, TrackRuntime& rt, uint64_t nanotick);
 
 // COPY-ON-WRITE FOR A SHARED CLIP: editing one instance must not edit the others.
@@ -121,6 +146,15 @@ void bumpAllTrackClipVersions(ClipEditDeps& deps);
 void ensurePlacementIds(ClipEditDeps& deps, std::vector<daw::ProjectPlacement>& placements);
 
 // Whether this edit touches one instance or every instance of a shared clip.
+//
+// DOES THIS EDIT BELONG TO THE APPEARANCE OR TO THE CLIP? One function, because WriteNote and
+// DeleteNote both have to answer it and two copies would eventually disagree about the same
+// gesture — which for this feature means the same keystroke doing different things depending on
+// which handler ran.
+//
+// The explicit bit wins on its own: a caller that SAID which it meant is never overridden. The
+// placement's own flag is the standing answer for when nobody said. Never inferred from whether
+// the cell is occupied.
 bool editIsLocalScope(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick, uint16_t flags);
 
 // Whether this track may edit that clip in place, or must fork it first.

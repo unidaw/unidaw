@@ -61,6 +61,20 @@ DECLARED_UNREGISTERED = {
     #
     # Keep the mechanism. The next check that cannot run needs a reason here rather than a quiet
     # absence from CMakeLists, which is what forty-three checks had before this ratchet existed.
+    #
+    "undo_session_state_check.sh":
+        "ITS ASSERTIONS ARE RIGHT AND ITS PROBE IS NOT — do not register until phase 1 is "
+        "reliable. It guards a CONFIRMED and FIXED bug (undo used to reset the loop region; see "
+        "task #123 item 5), and the fix is verified by hand in both directions plus a negative "
+        "control. What is unreliable is the harness: phase 1 needs the undo to be VISIBLE before it "
+        "reads the loop, and it anchors on a written note disappearing — but the note write is "
+        "refused for a stale base (task #120) and `get notes --track 0` does not report the count "
+        "this anchor assumes, so the phase reports 'the note never became visible (1 -> 1)'. "
+        "IMPORTANT: an earlier version of this file PASSED WITH THE BUG PRESENT, because phase 1 "
+        "expects the loop NOT to change and reading before the publish returns exactly that. Only "
+        "the negative control exposed it. Registering it while the anchor is broken would put that "
+        "vacuous pass back. Fix the anchor, re-run the control (restore the three loop stores into "
+        "applyDocument and confirm phase 1 FAILS), then register.",
 }
 
 checks = sorted(p.name for p in (root / "tools").glob("*_check.sh"))

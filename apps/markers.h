@@ -39,6 +39,15 @@ struct Marker {
   uint64_t nanotick = 0;
   std::string name;
   uint32_t colorRgb = 0;
+
+  // Including the id: a marker's id is authored state a client can hold a reference to, so two
+  // documents whose markers differ only by id are genuinely different documents.
+  friend bool operator==(const Marker&, const Marker&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const Marker& a, const Marker& b) { return !(a == b); }
 };
 
 class MarkerList {

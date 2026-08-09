@@ -283,4 +283,60 @@ sed 's/"clip_id": 2, "id": 2/"clip_id": 1, "id": 2/' "$TMP/clean.uniproj.json" >
 "$LINT" --strict "$TMP/warn.uniproj.json" >/dev/null 2>&1 && { echo "  FAIL: --strict did not fail on a warning"; fails=$((fails + 1)); } || true
 echo "  exit codes: error=1, warning=0, --strict warning=1"
 
+# ---- EVERY SHIPPED PRESET STILL LINTS CLEAN.
+#
+# Everything above lints a fixture this script wrote a moment earlier, so it tests the LINTER. The
+# presets in presets/projects are the files a person actually opens, and nothing checked them —
+# so a preset can rot as the format moves and be found by whoever loads it.
+#
+# It has already happened on the sibling web-ui worktree: rack.uniproj.json there carries a
+# sampler with device_id 0 and a mod link pointing at device 0, which the engine reads as "no
+# device" and refuses. Two errors, in a file that loads without complaint and whose modulation
+# silently does nothing. The same file on this branch is clean, so it drifted rather than shipping
+# broken.
+#
+# ERRORS ONLY. The stress fixtures carry tens of thousands of note-same-tick-in-column warnings
+# BY DESIGN — that is what they are for — so asserting zero warnings would either fail on them
+# forever or require an exemption list that goes stale. Zero errors is the line that means "this
+# file still describes a project the engine can build".
+preset_fails=0
+n_presets=0
+for preset in "$ROOT"/presets/projects/*.uniproj.json; do
+  [ -f "$preset" ] || continue
+  n_presets=$((n_presets + 1))
+  name="$(basename "$preset")"
+  # `|| true` ON THE CAPTURE, because daw_lint EXITS NON-ZERO when it finds errors — which is
+  # the whole point of running it — and under pipefail that made `if !` report "no summary line"
+  # for a preset whose summary was right there. The control caught it: a deliberately rotted
+  # preset failed with the wrong message.
+  summary="$("$LINT" "$preset" 2>&1 | grep -oE 'daw_lint: [0-9]+ error' | head -1 || true)"
+  if [ -z "$summary" ]; then
+    echo "  FAIL: $name produced no daw_lint summary line at all — the linter did not run on it"
+    preset_fails=$((preset_fails + 1)); continue
+  fi
+  case "$summary" in
+    "daw_lint: 0 error") : ;;
+    *) echo "  FAIL: $name does not lint clean — $summary(s). A shipped preset that the linter
+        rejects is one somebody will open and find broken; run build/daw_lint on it for the rule."
+       preset_fails=$((preset_fails + 1)) ;;
+  esac
+done
+# COUNTED BY THE LOOP ITSELF, not by a second `ls` over the same glob. Two expressions for one
+# fact can disagree, and this one did worse than disagree: `ls` on an empty directory exits
+# non-zero, so under `set -euo pipefail` the assignment killed the script — the control that
+# pointed the glob at nothing exited 1 having printed no reason at all, which reads exactly like
+# a check that did not run. Now the count IS the number of files the loop linted, by construction.
+# A GLOB THAT MATCHED NOTHING WOULD PASS SILENTLY, which is the failure this whole phase is about.
+if [ "$n_presets" -lt 5 ]; then
+  echo "  FAIL: only ${n_presets:-0} preset(s) found in presets/projects — the loop above asserted
+        almost nothing. Check the path before believing this phase."
+  preset_fails=$((preset_fails + 1))
+fi
+# `if`, NOT `[ ... ] && echo`. Under set -e a false test makes that line the script's last: the
+# control pointing the glob at an empty directory exited 1 having printed no reason at all.
+if [ "$preset_fails" = "0" ]; then
+  echo "  all $n_presets shipped presets lint with 0 errors"
+fi
+fails=$((fails + preset_fails))
+
 [ "$fails" = "0" ] && echo "lint_check: PASS" || { echo "lint_check: FAIL ($fails)"; exit 1; }

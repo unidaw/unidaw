@@ -18,11 +18,40 @@
 # the bug being tested for, which is the trap: a fixture that cannot produce the input makes the
 # check agree with you for the wrong reason.
 #
-# TWO PROPERTIES:
+# THE CLAIM HAS A CONDITION, AND THIS CHECK USED TO HIDE IT. The slot below spans key 0..127, so
+# whatever pitch the graph resolves to, some slot answers. `sampler-load --fixed-pitch` — which is
+# what the multi-file load and the web console's load-sample both use — mints
+# `keyLow = keyHigh = rootKey` instead. A euclidean at base_octave 4 resolves to pitches around
+# 48..60, so against a slot pinned to key 36 NOTHING MATCHES and the render is silent.
+#
+# That silence is CORRECT: a pad mapped to one key should not answer other keys. It is also
+# indistinguishable, from outside, from the routing bug this check was written for — a silent
+# render looks the same whichever cause produced it. Two renders differing only in the slot's key
+# range separate them: 0.4027 wide, 0.0000 narrow.
+#
+# (This phase was written while chasing a report that the patcher could not drive the sampler at
+# all. It was NOT that report's cause — that turned out to be a zero-length placement in the
+# reporter's fixture, and their slot was already wide. The boundary is real and worth pinning on
+# its own merit; it is recorded here as a property, not as the story of an incident.)
+#
+# So the KEYMAP phase below is not a second test of the same thing. It pins the boundary of the
+# claim, in the file someone reads when the patcher goes quiet.
+#
+# THE DIAGNOSTIC ALREADY EXISTS AND IS NOT LOGGED: the kit read-back publishes `unmapped`,
+# "notes that hit no slot" (apps/sampler_engine.h, unmappedCount). A silent render with
+# unmapped > 0 is a keymap miss; with unmapped == 0 it is a routing failure. Nothing writes it to
+# the log, so an offline render cannot tell you which — reading it needs a live engine and a kit
+# request. Worth knowing before spending an afternoon on the wrong one.
+#
+# THREE PROPERTIES:
 #   SOUNDS   a patcher-generated note plays the sampler on the same track
 #   TIMED    it lands on the patcher's rhythm rather than all at the block boundary — the tee
 #            carries the exact frame offset, which is the thing MidiEvent.sampleOffset throws
 #            away for hosted plugins (docs/SAMPLER_DESIGN.md §3.5)
+#   KEYMAP   the same graph against a slot pinned to ONE key is silent, because the generated
+#            pitch is not that key. Asserted so the SOUNDS phase above cannot be read as
+#            unconditional, and so the next person to see a quiet patcher looks at the keymap
+#            before the routing
 #
 # Rendered OFFLINE. No audio device needed.
 #   tools/patcher_plays_sampler_check.sh
@@ -175,4 +204,47 @@ echo "  patcher -> sampler: peak $PEAK, $BURSTS separate onsets"
         handful of separate bursts is what reaching the sampler sounds like — one burst means
         the notes arrived but not as a rhythm"
 
-echo "patcher_plays_sampler_check: PASS — a patcher generator drives the built-in sampler, in time"
+# ---- KEYMAP. The SAME graph, the SAME device, the SAME sample — one variable, the slot's key
+# range narrowed to what `sampler-load --fixed-pitch` mints (keyLow == keyHigh == rootKey). The
+# generated pitch is not that key, so nothing matches and the take is silent.
+#
+# This is correct behaviour asserted as correct, which is the only way to stop it being reported
+# as the routing bug above — a silent render is the same reading either way.
+python3 - "$TMP/pat.uniproj.json" "$TMP/narrow.uniproj.json" <<'PYN'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["meta"]["name"] = "narrow"
+done = False
+for t in d["tracks"]:
+    for dev in t.get("device_chain", []):
+        for slot in dev.get("sampler", {}).get("slots", []):
+            # Exactly what applySamplerLoad does under kSamplerLoadFixedPitch.
+            slot["key_low"] = slot["key_high"] = slot["root_key"]
+            slot["pitch_track_milli"] = 0
+            done = True
+if not done:
+    raise SystemExit("no sampler slot in the fixture to narrow — the check cannot make its point")
+json.dump(d, open(sys.argv[2], "w"))
+PYN
+( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/patnarrow_$$" \
+    ./daw_engine --project narrow --render narrow --run-seconds 5 --block-size 256 \
+    >"$TMP/narrow.log" 2>&1 ) || fail "the narrow render exited non-zero — see $TMP/narrow.log"
+[ -s "$TMP/narrow.wav" ] || fail "the narrow render wrote no output"
+
+NARROW=$(python3 - "$TMP/narrow.wav" <<'PYB'
+import sys, wave, struct
+w = wave.open(sys.argv[1], 'rb')
+ch, n = w.getnchannels(), w.getnframes()
+s = struct.unpack('<' + 'h' * (n * ch), w.readframes(n)); w.close()
+print(max((abs(v) for v in s), default=0))
+PYB
+)
+echo "  same graph, slot pinned to one key: peak $NARROW (the wide slot above gave $PEAK)"
+[ "${NARROW:-0}" -lt 500 ] || \
+  fail "a slot pinned to a single key answered a generated note at a different pitch: peak
+        $NARROW. Either the keymap stopped bounding which notes a slot takes, or this fixture no
+        longer narrows the slot it thinks it does — check that the slot really has
+        key_low == key_high before believing the sampler changed"
+
+echo "patcher_plays_sampler_check: PASS — a patcher generator drives the built-in sampler, in time,"
+echo "                             and is correctly silent against a slot mapped to one key"

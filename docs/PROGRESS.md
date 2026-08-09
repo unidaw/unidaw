@@ -11,11 +11,11 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: 0bbed99
-- main-cpp-lines: 2191
-- main-function-lines: 1985
-- ctest-entries: 198
-- main-function-ceiling: 1985
+- as-of-commit: 9367134
+- main-cpp-lines: 2184
+- main-function-lines: 1978
+- ctest-entries: 202
+- main-function-ceiling: 1955
 
 ## Why this file cannot quietly go stale
 
@@ -46,6 +46,60 @@ The reason it is built this way: every stale claim found in this repo was in a f
 *intended* to keep current. `tools/meter_bar_check.sh` carried "THE ANCHOR IS NOT FIXED" for months
 after it was fixed — stale in the direction that gets work done twice, by someone with no reason to
 suspect the first attempt exists.
+
+## 2026-08-06 (afternoon) — a bug panel, and the regression it caused
+
+An adversarial panel over the demo-critical surface: four finders with distinct lenses, deduped,
+then each finding handed to an independent agent whose job was to REFUTE it, defaulting to refuted
+when unsure. Six survived, five were fixed. It also killed three of its own finders' claims —
+"the reverb processes silence", "a following observe shows pan 0.0", "the rehearsal triggers the
+ring spin" — each of which would have had someone editing working code the day before a demo.
+
+**The root cause it named is the useful part.** The agent tool layer is a THIRD COPY of the wire,
+after daw-cli and the C++ payload defaults, and nothing in `tools/` drives an agent tool at all.
+Every existing test either hand-builds the payload or drives daw-cli — the two copies that were
+right. Three of the five findings were that: pan packed into a field the engine does not read for
+pan, an insert index defaulting the opposite way to every other producer, and an argument the
+executor reads that the schema never advertised.
+
+### The fix that caused the regression
+
+`add_device` defaulted its position to 0 — head-insert — while daw-cli and the payload append. I
+changed it to append. That is right for an effect and **wrong for an event patcher**, which
+generates notes for whatever follows it: `[sampler, patcher_event]` emits into nothing.
+
+For about ninety minutes, asking the agent to put a patcher on a track that already had a sampler
+produced a silent graph. **The demo rehearsal passed throughout**, because its patcher step counted
+patcher devices in the chain — the device was present, the graph was valid, and only the order was
+wrong.
+
+One number was standing in for a rule with two cases. It is chosen by kind now, and both halves are
+pinned, because fixing one direction is exactly how the other broke. The rehearsal's step counts
+only patchers that could actually sound.
+
+It was found by the web-UI agent asking a question — whether their console shared the head-insert
+default — not by any test. Their console appends, with a test pinning it, which is wrong for the
+same case in the same way. Two surfaces, two confident tests, opposite errors, one day. That is
+task #113: the constraint belongs in the engine, because a rule three callers must remember is one
+a fourth will forget.
+
+### Two silences that were not what they looked like
+
+The web-UI agent reported the patcher could not drive the built-in sampler: 0.1010 into a VST,
+0.0000 into the sampler. I reproduced *a* silence, found that a slot pinned to one key cannot
+answer a generated pitch, and told them that was their cause. It was not — their slot was already
+full-range, and their actual fault was a zero-length placement scheduling nothing.
+
+I had a measurement that explained a silence and offered it as explaining theirs. That is the same
+move they had just retracted, one step removed. The phase it produced is kept, because the boundary
+is real, with its comment rewritten to record a property rather than the story of an incident that
+turned out differently.
+
+Their narrower finding — `euclidean -> event_out` is silent without a middle node — was already
+documented in `tools/patcher_plays_sampler_check.sh`'s own header, which says a euclidean emits
+gates, a rhythm with no pitch, and the resolution path skips gates deliberately. The fixture's
+author had fallen into it too. Whether `event_out` should promote a bare gate is an open question
+for the owner; it is the obvious two-node gesture and it is the silent one.
 
 ## 2026-08-06 — rehearsing the demo, and the three things that found
 
@@ -100,6 +154,102 @@ perfectly", and it took a diagnostic dump of the actual ticks to see it.
 
 That is the same shape as every other fixture failure in this file: the test was measuring
 something real and it was not the thing under test.
+
+## 2026-08-06 (evening) — four diagnostics that pointed away from the answer
+
+Not one of these was a wrong computation. All four were the machine describing itself
+incorrectly, and each cost time proportional to how much the description was trusted.
+
+**A number that meant nothing, printed where a meaning was expected.** `project.plugin_resolved`
+logged `"slot": 0` for every plugin resolved off disk — `resolution.index` is 0 when the match is
+None, and the direct-path case IS the None case. Entry 0 of u-he's Zebra2.vst3 is Zebra2, so a
+project that had correctly loaded Zebralette printed a number saying it had loaded something
+else. I believed the number over the parameter count for several minutes. There is no slot on
+that path — the host picks the class by NAME — so it now says that instead of printing a zero.
+
+**A known-failure note that outlived its defect.** `rust_tests_check`'s header declared
+`multi_bundle_selects_named_subplugin` a genuine failure. It passes, three runs of three. A stale
+note of that kind is worse than none: it tells the next person a working guard is broken, and it
+supplies a ready reason not to run the one thing that would have corrected it.
+
+**A timeout that was a refusal.** `note_overlap` flaked, and the kept evidence said why:
+`write_note received`, then `write_note rejected:version`. The check waited for the NOTE COUNT to
+publish, and the next `daw-cli do` — a fresh process — then read the CLIP VERSION, published on
+its own tick. In the window between them the second writer reads a stale base and is correctly
+refused, and the wait spends its full budget on a note that was never coming. **A refused edit
+never arrives however long you wait**, so the failure message now says to look for
+`rejected:version` before believing slowness.
+
+**"Not found" about a device that was plainly there.** `OpenPluginEditor`'s resolver walks only
+VstInstrument and VstEffect, so it returned nullopt for three different situations and the message
+named the one that is usually wrong. Pointed at a sampler, it sent the reader looking for a
+missing device. It now distinguishes all three, and it uses the existing `deviceKindToString`
+rather than a second switch over DeviceKind — lifted out of an anonymous namespace for the
+purpose, because a duplicated enum table goes stale one value at a time.
+
+**And one where the negative control killed my explanation rather than the bug.** Two orphaned
+host processes were found alive after 1h28m. The obvious cause — a SIGKILLed engine never running
+`killHostProcess` — is DISPROVEN: measured with the engine SIGSTOPped so the harness must
+escalate, and again with a direct SIGKILL and no cleanup path at all, every host was gone within
+seconds *with the new reaper disabled*. A host exits when its socket peer dies. So the orphans are
+real and unexplained, the reaper has no demonstrated effect, and its comment says so in those
+words rather than claiming a fix. The alternative was a confident comment over code that has never
+once fired.
+
+## 2026-08-06 — the AI could add a sampler and never give it a sound
+
+The agent shipped forty-one tools and not one of them could load a sample. `add_device` mints the
+instrument; `SamplerLoad` was reachable from `daw-cli` and from the browser console and from no
+tool at all. So "add a four on the floor kick pattern" wrote sixteen notes onto a **silent track**,
+and `tools/demo_rehearsal.sh` scored that step a pass — because it counted notes.
+
+That is the same failure this repo keeps meeting from a new direction: not a wrong answer, a
+question nobody asked. Every check around the sampler asked whether the structure was right. None
+asked whether the track could make a noise.
+
+**`load_sample` reads the kit back rather than reporting the send.** A file name that resolves to
+nothing still MINTS A SLOT — published with SOURCE MISSING and `length_frames` 0, a slot that
+exists, draws, and is silent. A tool that answered "ok" on a successful write would say *loaded*
+about a sampler that plays nothing, which is precisely the belief that then gets notes written on
+top of it. It also says in words what the slot plays, because `key_low == key_high` meaning "every
+other note is silent" is a step of reasoning, and it is the step that decides whether the part
+sounds.
+
+`device` is optional: 0 means the track's first sampler, which is how every handler in
+`apps/engine_sampler_commands.cpp` already resolves it. On this wire an omitted field is usually
+NOT a zero one, so it is worth saying that here it deliberately is.
+
+**A sample name only resolved after a project had been LOADED.** `resolveSourcePath` treated an
+empty `loadedProjectDir` as "resolve against the process working directory". That string is set
+only by loading a project — saving does not set it — so a freshly started stack, which is how the
+web UI comes up and what a person prompting "load a kick into the sampler" is sitting in front of,
+resolved every bare name against the build directory. It now falls back to `defaultProjectDir()`,
+which is what `HistoryJournal` already does with the same empty string.
+
+**The check that should have caught it was green the whole time, and not for want of asserting.**
+`tools/sampler_load_check.sh` asserts the load event, the slot ids, the fixed-pitch keys, the
+refusals, and the save round trip. Early on it runs `cli do load blank` for unrelated reasons — and
+loading a project is exactly what sets the variable under test. Every assertion after that line
+inherited the precondition it was supposed to be checking.
+
+Worth naming as its own shape: **not a missing assertion, a setup step quietly supplying the thing
+being tested.** A missing assertion is visible by reading the check. This is only visible by asking
+what the setup provides, which nobody does when the check is green. The new phase boots an engine
+and never loads a project.
+
+**Three wrong turns, each caught by running something rather than by thinking harder.** Matching
+the read-back by file name — the engine seeds a slot's name with the file's *stem*, and a rename
+command can change it afterwards, so the slot's identity is that it was not there before. Judging
+a shell pipeline by pasting it into an interactive shell — that `grep` is a ugrep wrapper which
+inverts `-qv` against the real one a script gets, and it reported a correct counter as broken.
+And a first pass at the preset lint phase whose two negative controls both produced no output,
+which read as "the controls did not fire" and was actually three separate bugs in the check.
+
+**Duplicated work, third time this week.** The web-UI agent had built `load_sample` on its own
+branch, as it had `add_chords` and the `add_device` ordering default before it. Neither of us can
+see the other's branch, and the standing "announce before it lands" rule is scoped to the wire —
+a tool is not an opcode, so none of the three tripped it. Proposed on the channel that the rule
+extend to anything taken off a gap list, announced before the work rather than after.
 
 ## 2026-08-05 — an engine object, and what it was actually costing not to have one
 
@@ -496,13 +646,49 @@ than shipped — a check-auditing tool that produces confident false accusations
 
 ## Open, and needing a decision rather than work
 
+### Waiting on Jaakko specifically (2026-08-06)
+
+Collected here because the demo follow-up will want them in one place, and because each has been
+sitting in a task list where an owner does not read it.
+
+- **FILL conditional trig — what fill state does a BOUNCE render under?** A FILL trig fires on a
+  fill; an offline render has no performer pressing anything. Rendering it as never-fill, always-
+  fill, or a documented default are all defensible and the choice is musical, not technical.
+- **A sampler track cannot be an audio routing destination** — the sampler overwrites its input
+  rather than mixing into it. Whether a sampler should mix or replace is a design decision.
+- **Should an event-out promote a bare GATE to a default degree?** A euclidean emits gates, which
+  carry no pitch, and the note path skips them deliberately — so `euclidean → out` is silent BY
+  DESIGN and the fix for a user is to put `random` or `slice` between. Promoting silently would
+  make a gate into a note, which it is not. Real design call.
+- **`SamplerSetFilter` writes the filter TYPE unconditionally, with no set-flag.** Cutoff and
+  resonance each have one and can be left alone; type cannot. So a caller adjusting cutoff turns
+  the filter OFF on the way past unless it re-sends the type, and returns success. Found by the
+  web-UI agent, who worked around it by requiring the type in their tool. Adding
+  `SAMPLER_FILTER_SET_TYPE` is a contract change and would be announced before it lands.
+
+### Open and simply not understood
+
+- **Two `juce_host_process` orphans were found alive after 1h28m** and the obvious explanation is
+  disproven: a host exits on its own when its socket peer dies, measured with the engine
+  SIGSTOPped into the SIGKILL path and with a direct SIGKILL, both with the new reaper disabled.
+  The reaper in `tools/lib/engine_wait.sh` has never been observed to fire and says so. The first
+  time it does fire is the first real evidence about the cause.
+
+- ~~**Published meter points carry the requested tick, not the effective one.**~~ **FIXED
+  2026-08-05** — kept for the reasoning, struck so a scanner is not misled by the bullet. The
+  correction used to live only in the paragraph at the bottom of this section, which is precisely
+  how a reader skimming bullets ends up believing a closed item is open.
+  Original text follows.
 - **Published meter points carry the requested tick, not the effective one.** `setMap` snaps a
   signature change forward to the next bar line; the wire publishes the tick that was *asked for*.
   Measured: 3/4 requested at 5 quarters, published as 5, actually begins at 8. Fixing it properly
   means widening `UiTimeSigPoint` and bumping `kShmVersion`, which the equality gate turns into a
   forced rebuild on both sides — so it needs coordination, not just code.
-- **PDC clamps every event in the first `latencySamples_` to sample 0**, collapsing their relative
-  timing. Three candidate fixes, and choosing among them is an owner's call.
+- ~~**PDC clamps every event in the first `latencySamples_` to sample 0**~~ **FIXED 2026-08-05.**
+  Struck for the same reason as the bullet above. Original text: PDC clamps every event in the
+  first `latencySamples_` to sample 0, collapsing their relative timing; three candidate fixes,
+  and choosing among them is an owner's call. (The offset those options traded off turned out to
+  be inert — the "three options" had no options in it.)
 - **CoreAudio workgroups for the host render thread.** Cross-process `os_workgroup` sharing needs
   raw mach ports — JUCE 8's `AudioIODevice::getWorkgroup()` / `AudioWorkgroup::join()` hide the
   handle — plus a dedicated RT render thread in the host, split off the control/instantiation

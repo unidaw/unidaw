@@ -343,6 +343,9 @@ struct NotePayload {
   // trigConditionFires, and note that the pass index it takes must come from the transport.
   int8_t retrigRamp = 0;
   uint8_t trigCondition = 0;
+
+  // Plain value; the compiler writes the comparison. Reached by the document walk.
+  friend bool operator==(const NotePayload&, const NotePayload&) = default;
 };
 // PINNED, still. The point was never "32 forever" — it is that this struct is copied per note per
 // block, so a growth must be a decision somebody wrote down rather than a field that drifted in.
@@ -362,23 +365,39 @@ struct ChordPayload {
   uint16_t humanizeTiming = 0;
   uint16_t humanizeVelocity = 0;
   uint64_t durationNanoticks = 0;
+
+  // Plain value; the compiler writes the comparison. Reached by the document walk.
+  friend bool operator==(const ChordPayload&, const ChordPayload&) = default;
 };
 
 struct MusicalParamPayload {
   std::array<uint8_t, 16> uid16{};
   float value = 0.0f;
+
+  // Plain value; the compiler writes the comparison. Reached by the document walk.
+  friend bool operator==(const MusicalParamPayload&, const MusicalParamPayload&) = default;
 };
 
 struct MusicalEventPayload {
   NotePayload note;
   MusicalParamPayload param;
   ChordPayload chord;
+
+  // Plain value; the compiler writes the comparison. Reached by the document walk.
+  friend bool operator==(const MusicalEventPayload&, const MusicalEventPayload&) = default;
 };
 
 struct MusicalEvent {
   uint64_t nanotickOffset = 0;
   MusicalEventType type = MusicalEventType::Note;
   MusicalEventPayload payload;
+
+  // The document walk reaches events through MusicalClip and asks whether the user changed
+  // anything. A DEFAULTED comparison compares all three payload variants even though `type`
+  // selects one — deliberately: the inactive ones are always default-constructed, so this is
+  // exact in practice, and where it is not it errs toward reporting a change that did not
+  // happen (a spurious undo step) rather than missing one that did (a lost edit).
+  friend bool operator==(const MusicalEvent&, const MusicalEvent&) = default;
 };
 
  class MusicalClip {
@@ -777,6 +796,26 @@ struct MusicalEvent {
   std::vector<MusicalEvent> events_;
   uint16_t author_ = kAuthorHuman;
   uint64_t nextCounter_ = 1;
+
+ public:
+  // AN ENCAPSULATED CLASS COMPARES ITSELF, because only it knows which of its members are the
+  // content and which are bookkeeping. This is the third of the three cases documentFieldsEqual
+  // handles (leaf with ==, aggregate with a field list, class with an invariant), and the reason
+  // the third exists: a field list here would have to name private members, and a memberwise
+  // default would compare the wrong thing.
+  //
+  // nextCounter_ IS DELIBERATELY NOT COMPARED. It is the id allocator's high-water mark, derived
+  // from the events on load and only ever moved upward in memory — delete a note and the live
+  // clip keeps the higher counter while a reload of the same file produces a lower one. Comparing
+  // it would report "this changed" for a document nobody touched, which in commit() means a
+  // refused command records a version and destroys the redo tail. Exactly the bug the
+  // unchanged-document test was added to fix, reintroduced from underneath it.
+  //
+  // author_ IS compared: it decides whose ids new events get, so two clips differing only in
+  // author will diverge the moment either is edited.
+  friend bool operator==(const MusicalClip& a, const MusicalClip& b) {
+    return a.author_ == b.author_ && a.events_ == b.events_;
+  }
 };
 
 class PatternView {

@@ -58,6 +58,11 @@ struct SaveProjectDeps {
 // READS LIVE STATE, NOT THE LOADED DOCUMENT, which is the property the module boundary now makes
 // visible: what gets written is what the engine currently holds, so a save after an edit that
 // never reached the document would silently write the old thing.
+// THE DOCUMENT AS A VALUE, with no file involved. Step 1 of making every operation undoable:
+// undo needs the complete authored state, and until now the only code that knew how to gather it
+// was welded to a path. saveProjectToPath is now this plus a name plus a write.
+daw::ProjectDocument captureDocument(SaveProjectDeps& deps);
+
 bool saveProjectToPath(SaveProjectDeps& deps, const std::string& path, std::string* error);
 
 }  // namespace daw::engine

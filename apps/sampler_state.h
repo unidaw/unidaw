@@ -37,6 +37,13 @@ struct SamplerSource {
   std::string path;         // project-relative, resolved at load
   uint64_t contentKey = 0;  // recomputed at load; a mismatch is reported, never silently accepted
   uint32_t sourceId = 0;    // RUNTIME ONLY
+
+  friend bool operator==(const SamplerSource&, const SamplerSource&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const SamplerSource& a, const SamplerSource& b) { return !(a == b); }
 };
 
 // A slice marker. Extent is DERIVED from marker order; identity is STORED. Inserting a marker
@@ -48,12 +55,26 @@ struct SliceMarker {
   int16_t tuneCents = 0;
   uint8_t reverse = 0;
   uint16_t modSetId = 0;  // 0 = inherit the slot's
+
+  friend bool operator==(const SliceMarker&, const SliceMarker&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const SliceMarker& a, const SliceMarker& b) { return !(a == b); }
 };
 
 struct SliceSet {
   uint16_t sourceLocalId = 0;
   uint16_t nextMarkerId = 1;
   std::vector<SliceMarker> markers;  // sorted by frame; ids never reordered
+
+  friend bool operator==(const SliceSet&, const SliceSet&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const SliceSet& a, const SliceSet& b) { return !(a == b); }
 };
 
 enum class ModTarget : uint8_t { Volume = 0, Panning = 1, Pitch = 2, Cutoff = 3, Resonance = 4 };
@@ -82,6 +103,13 @@ struct SamplerModulator {
   uint8_t editor = 0;
   EnvShape env{};           // ModKind::Envelope
   PatcherLfoConfig lfo{};   // ModKind::Lfo — reuses the patcher's LFO unchanged
+
+  friend bool operator==(const SamplerModulator&, const SamplerModulator&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const SamplerModulator& a, const SamplerModulator& b) { return !(a == b); }
 };
 
 // The Renoise steal: settings shared BY REFERENCE, so sixteen slots point at two envelopes and
@@ -125,6 +153,13 @@ struct SamplerModSet {
     }
     return nullptr;
   }
+
+  friend bool operator==(const SamplerModSet&, const SamplerModSet&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const SamplerModSet& a, const SamplerModSet& b) { return !(a == b); }
 };
 
 // NNA — what happens to the PREVIOUS voice in the same (column, slot) when a new note arrives.
@@ -161,6 +196,13 @@ struct SamplerSlot {
   uint8_t quality = 1;     // 0 Vintage, 1 Fast, 2 Studio — a SOUND, not a setting (S3)
 
   bool isFixedPitch() const { return keyLow == keyHigh && keyLow == rootKey; }
+
+  friend bool operator==(const SamplerSlot&, const SamplerSlot&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const SamplerSlot& a, const SamplerSlot& b) { return !(a == b); }
 };
 
 struct SamplerState {
@@ -228,6 +270,13 @@ struct SamplerState {
     }
     return nullptr;
   }
+
+  friend bool operator==(const SamplerState&, const SamplerState&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const SamplerState& a, const SamplerState& b) { return !(a == b); }
 };
 
 // A default mod set, so a freshly created device makes a sound rather than silence. The amp
@@ -279,6 +328,13 @@ struct SamplerKeymap {
       }
     }
   }
+
+  friend bool operator==(const SamplerKeymap&, const SamplerKeymap&) = default;
+  // AND != EXPLICITLY. This is built as C++17, where a defaulted operator== is a clang
+  // extension that does NOT synthesise its negation — and std::vector's own operator==
+  // reaches for element != in its constexpr path, so a vector of this type would fail to
+  // compile with a message pointing deep inside libc++ rather than here.
+  friend bool operator!=(const SamplerKeymap& a, const SamplerKeymap& b) { return !(a == b); }
 };
 
 // Resolves (pitch, velocity) to a slot id, or 0 if nothing is mapped there. `rrCounter` advances

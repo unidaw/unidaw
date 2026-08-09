@@ -79,8 +79,33 @@ void handleOpenPluginEditor(DeviceCommandDeps& deps,
       };
   const auto hostIndex = resolveHostIndexForDevice(deviceId);
   if (!hostIndex) {
-    daw::LogLine() << "UI: OpenPluginEditor failed - device "
-              << deviceId << " not found" << std::endl;
+    // "NOT FOUND" WAS TRUE OF THE SEARCH AND FALSE OF THE WORLD. The resolver above walks only
+    // VstInstrument and VstEffect and skips anything whose plugin path does not resolve, so it
+    // returns nullopt for THREE different situations and the message named the one that is
+    // usually wrong. Point this at a sampler that is plainly in the chain and it said the device
+    // did not exist — sending the reader to look for a missing device, which is exactly the
+    // round the web-UI agent spent before reading the resolver.
+    //
+    // The message is the only thing a caller can see: the engine owns the plugin window, so
+    // there is no second place to look. Say which of the three it is.
+    const daw::Device* present = nullptr;
+    for (const auto& device : devices) {
+      if (device.id == deviceId) { present = &device; break; }
+    }
+    if (present == nullptr) {
+      daw::LogLine() << "UI: OpenPluginEditor failed - track " << trackId
+                << " has no device " << deviceId << std::endl;
+    } else if (present->kind != daw::DeviceKind::VstInstrument &&
+               present->kind != daw::DeviceKind::VstEffect) {
+      daw::LogLine() << "UI: OpenPluginEditor failed - device " << deviceId
+                << " is a " << daw::deviceKindToString(present->kind)
+                << ", which has no plugin editor" << std::endl;
+    } else {
+      daw::LogLine() << "UI: OpenPluginEditor failed - device " << deviceId
+                << " is a " << daw::deviceKindToString(present->kind)
+                << " whose plugin did not resolve, so there is no editor to open"
+                << std::endl;
+    }
     return;
   }
   if (!runtime->hostReady.load(std::memory_order_acquire)) {
@@ -141,12 +166,60 @@ void handleSetDeviceParam(DeviceCommandDeps& deps,
     }
   }
   bool forwarded = false;
+  bool mirrored = false;
   if (runtime && found) {
     const float normalized =
         std::clamp(static_cast<float>(sp.valueMilli) / 1000.0f, 0.0f, 1.0f);
-    std::lock_guard<std::mutex> lock(runtime->controllerMutex);
-    forwarded = runtime->controller.sendSetParam(pluginIndex, sp.uid16, normalized);
+    {
+      std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+      forwarded = runtime->controller.sendSetParam(pluginIndex, sp.uid16, normalized);
+    }
+    // RECORD IT IN THE ENGINE'S OWN MIRROR, not only in the host process (task #117).
+    //
+    // This write was missing entirely. The value went over the control socket and nowhere else, so
+    // the ENGINE never knew it: a knob turn was lost on host restart, and it could not be saved,
+    // because the save path reads plugin params from this map.
+    //
+    // It is also why plugin params sit outside undo, and why this is the FIRST task of stage 5
+    // rather than a part of it: undo restores a captured document, capture reads this mirror, and
+    // UNDO CANNOT RESTORE WHAT WAS NEVER RECORDED — however complete the rest of the machinery is.
+    //
+    // The host remains the authority while it lives; this is the engine's durable copy of what it
+    // was told, which is exactly what a restart, a save, and an undo each need.
+    //
+    // The wire carries uid16 as a C array and the mirror keys on std::array, so the key is copied
+    // rather than assigned — the automation path (engine_render_track.cpp:528) already holds an
+    // std::array and writes the same map directly.
+    std::array<uint8_t, 16> paramKey{};
+    std::memcpy(paramKey.data(), sp.uid16, sizeof(sp.uid16));
+    std::lock_guard<std::mutex> lock(runtime->paramMirrorMutex);
+    // WRITE THE VALUE, NOT THE TARGET — and the difference is a regression this fix already
+    // caused once.
+    //
+    // paramMirror is keyed by uid16 ALONE, and uid16 is hashStableId16(stableId): it identifies a
+    // PARAMETER, not a parameter OF AN INSTANCE. Two instances of the same plugin on one track
+    // share a key. The automation path treats a concrete targetPluginIndex in this map as
+    // AUTHORITATIVE and overrides the automation clip's own target with it
+    // (engine_render_track.cpp:619-625).
+    //
+    // So the first version of this write, which stored `pluginIndex` here, redirected automation:
+    // two instances of the same EQ, a lane automating instance 1's cutoff, the user turns instance
+    // 0's knob — and from the next block that lane drives instance 0 and never reaches instance 1.
+    // Before this write existed only the automation path touched the map, so the override was
+    // self-consistent and that could not happen. Found by review, not by a check.
+    //
+    // Preserving the existing target keeps the automation override exactly as it was, while still
+    // recording the VALUE, which is all #117 needed (engine_restart_worker re-applies from here).
+    // Making the mirror instance-aware is the real fix and needs the KEY to carry the plugin
+    // index — that is a change to every reader of this map, filed rather than smuggled in here.
+    auto& mirrorEntry = runtime->paramMirror[paramKey];
+    mirrorEntry.value = normalized;
+    mirrored = true;
   }
+  // AND THE PLUGIN NOW HOLDS STATE THE LAST VERSION DOES NOT. Undo stage 5 re-reads a track's
+  // blobs only when this is set, so a knob turn that forgot to set it would be captured by no
+  // version and silently dropped by the next undo.
+  runtime->pluginStateDirty.store(true, std::memory_order_release);
   // Always log the write. The host stores the value atomically, but it only
   // takes effect when the plugin next processes a block — so on a headless
   // engine (no audio device driving the callback) the store is real yet never
@@ -161,6 +234,7 @@ void handleSetDeviceParam(DeviceCommandDeps& deps,
       .field("valueMilli", sp.valueMilli)
       .field("found", found)
       .field("forwarded", forwarded)
+      .field("mirrored", mirrored)
       .field("playing", playing.load(std::memory_order_acquire))
       .field("audioActive", audioActive);
   }

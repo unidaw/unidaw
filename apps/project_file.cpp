@@ -196,18 +196,6 @@ class JsonWriter {
   bool arrayEmpty_ = false;
 };
 
-const char* deviceKindToString(DeviceKind kind) {
-  switch (kind) {
-    case DeviceKind::PatcherEvent: return "patcher_event";
-    case DeviceKind::PatcherInstrument: return "patcher_instrument";
-    case DeviceKind::PatcherAudio: return "patcher_audio";
-    case DeviceKind::VstInstrument: return "vst_instrument";
-    case DeviceKind::VstEffect: return "vst_effect";
-    case DeviceKind::Sampler: return "sampler";
-  }
-  return "patcher_event";
-}
-
 bool deviceKindFromString(const std::string& text, DeviceKind& out) {
   if (text == "patcher_event") { out = DeviceKind::PatcherEvent; return true; }
   if (text == "patcher_instrument") { out = DeviceKind::PatcherInstrument; return true; }
@@ -534,6 +522,19 @@ void writePatcherGraph(JsonWriter& writer, const PatcherGraph& graph) {
 
 }  // namespace
 
+const char* deviceKindToString(DeviceKind kind) {
+  switch (kind) {
+    case DeviceKind::PatcherEvent: return "patcher_event";
+    case DeviceKind::PatcherInstrument: return "patcher_instrument";
+    case DeviceKind::PatcherAudio: return "patcher_audio";
+    case DeviceKind::VstInstrument: return "vst_instrument";
+    case DeviceKind::VstEffect: return "vst_effect";
+    case DeviceKind::Sampler: return "sampler";
+  }
+  return "patcher_event";
+}
+
+
 uint32_t projectSchemaVersion() { return kProjectSchemaVersion; }
 
 std::string serializeProject(const ProjectDocument& document) {
@@ -708,9 +709,30 @@ std::string serializeProject(const ProjectDocument& document) {
       writer.key("kind", std::string(deviceKindToString(device.kind)));
       writer.key("capability_mask", static_cast<uint32_t>(device.capabilityMask));
       writer.key("patcher_node_id", device.patcherNodeId);
-      // host_slot_index is a runtime index into a directory scan and is written
-      // only so older readers still work; vst_ref is the durable identity.
-      writer.key("host_slot_index", device.hostSlotIndex);
+      // load_mode is the AUTHORED half of what host_slot_index used to conflate: how to LOCATE
+      // this plugin. vst_ref remains the durable identity.
+      //
+      // host_slot_index IS NO LONGER WRITTEN. It is an index into THIS machine's scan, which is
+      // stale on any other machine and after any rescan — and persisting it caused the same class
+      // of bug three times (rack.uniproj.json loading an Analog Heat for Identity; a master effect
+      // resolving to the engine's default and muting the mix). resolveDeviceSlot is its only
+      // writer now, so no loader can inherit one.
+      // std::string, NOT the bare ternary. `cond ? "by_path" : "by_reference"` is a `const char*`,
+      // and overload resolution preferred key(const char*, bool) — a pointer-to-bool conversion is
+      // a standard conversion while pointer-to-std::string is user-defined. So every save since
+      // the split has written `"load_mode": true`, the loader's get<std::string> read "true",
+      // matched neither spelling, fell through to the legacy host_slot_index branch — which is no
+      // longer written either — and defaulted to by_reference.
+      //
+      // A device authored BY PATH therefore came back BY REFERENCE from its own file, every time:
+      // the exact failure the load_mode split was made to fix, silently inert since it landed.
+      // Invisible to document_value_check because it is SYMMETRIC — both saves write `true` and
+      // both loads read by_reference, so save/load/save is perfectly idempotent about the wrong
+      // value. Found by comparer_equivalence_tests, which compares the LIVE document against its
+      // own round trip rather than one file against another.
+      writer.key("load_mode", std::string(device.loadMode == daw::VstLoadMode::ByPath
+                                              ? "by_path"
+                                              : "by_reference"));
       writer.key("bypass", device.bypass);
       if (!device.vstRef.empty()) {
         writer.beginChildObject("vst_ref");
@@ -1084,7 +1106,33 @@ bool deserializeProject(const std::string& json,
             device.capabilityMask = capabilityMaskForKind(device.kind);
           }
           device.patcherNodeId = deviceTree.get<uint32_t>("patcher_node_id", 0);
-          device.hostSlotIndex = deviceTree.get<uint32_t>("host_slot_index", 0);
+          // DEFAULT TO UNRESOLVED, NOT 0 — because 0 IS A VALID CACHE INDEX. A file with no
+          // host_slot_index (hand-written, older, or produced by a tool that omits it) silently
+          // pointed the device at the FIRST PLUGIN IN THE SCAN, which loads and plays and is the
+          // wrong instrument. The sentinel says "nobody has resolved this yet", which is what an
+          // absent key actually means, and resolveDeviceSlot then does its job from vst_ref.
+          //
+          // The field conflates two things and that is why it keeps causing trouble: a DERIVED
+          // cache index, and an AUTHORED load-mode (kHostSlotIndexDirect = "load by path, not from
+          // the scan" — fixtures set it deliberately). Splitting those is stage 3 work; making the
+          // absent case safe is not, and does not wait for it.
+          // MIGRATION, one way. A file written before the split says by_path by carrying
+          // kHostSlotIndexDirect in the index; anything else meant "find it in the scan". The old
+          // key is still READ, but only to recover the authored intent — never to set the index,
+          // which resolveDeviceSlot owns.
+          const std::string loadMode = deviceTree.get<std::string>("load_mode", "");
+          if (loadMode == "by_path") {
+            device.loadMode = daw::VstLoadMode::ByPath;
+          } else if (loadMode == "by_reference") {
+            device.loadMode = daw::VstLoadMode::ByReference;
+          } else {
+            const uint32_t legacy =
+                deviceTree.get<uint32_t>("host_slot_index", kHostSlotIndexUnresolved);
+            device.loadMode = (legacy == kHostSlotIndexDirect) ? daw::VstLoadMode::ByPath
+                                                               : daw::VstLoadMode::ByReference;
+          }
+          // Never restored from the file: a scan index the loader did not compute is a stale one.
+          device.hostSlotIndex = kHostSlotIndexUnresolved;
           device.bypass = deviceTree.get<bool>("bypass", false);
           if (const auto ref = deviceTree.get_child_optional("vst_ref")) {
             device.vstRef.vendor = ref->get<std::string>("vendor", "");

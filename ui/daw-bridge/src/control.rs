@@ -458,7 +458,13 @@ impl EngineHandle {
                 let diff_type = u16::from_le_bytes([entry.payload[0], entry.payload[1]]);
                 out.push((diff_type, entry.payload));
             }
-            index = index.wrapping_add(1);
+            // MASKED, LIKE EVERY OTHER WALK OF THIS RING. The indices in this header are SLOT
+            // NUMBERS, not free-running counters — the engine advances with
+            // `next = (write + 1) & ring.mask` (apps/event_ring.cpp) and drain_ui_out reads with
+            // `read = (read + 1) & ring.mask`. Advancing unmasked let `index` climb past the
+            // mask, where it can never equal the masked `write` again, so the loop ran until
+            // u32 wrapped: about 4.3 billion iterations pushing entries into `out` the whole way.
+            index = (index + 1) & ring.mask;
         }
         out
     }

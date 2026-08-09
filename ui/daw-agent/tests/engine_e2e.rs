@@ -4367,3 +4367,254 @@ fn open_editor_is_accepted_for_a_real_device() {
         tool: "open_editor".into(), args: json!({ "track": 0 }) });
     assert!(!bad.ok, "open_editor with no device must be refused, got: {bad:?}");
 }
+
+#[test]
+fn a_drum_slot_is_pinned_to_its_key_and_the_answer_says_so() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("loaddrum");
+    write_wav(&engine.proj.join("kick.wav"), 8_000);
+
+    assert!(session.execute(&ToolCall {
+        tool: "add_device".into(), args: json!({"track":0,"kind":"sampler"}) }).ok);
+    let r = session.execute(&ToolCall {
+        tool: "load_sample".into(), args: json!({"track":0,"file":"kick.wav","drum":true}) });
+    assert!(r.ok, "load_sample drum failed: {r:?}");
+
+    assert_eq!(r.output["key_low"].as_u64(), Some(36),
+               "drum:true defaults to root 36, the key a kick is written at: {r:?}");
+    assert_eq!(r.output["key_high"].as_u64(), Some(36));
+    // SAID IN WORDS, because "key_low == key_high" is a fact a model has to derive and the
+    // consequence — every other note is silent — is the one it needs before writing the part.
+    let plays = r.output["plays"].as_str().unwrap_or("");
+    assert!(plays.contains("only note 36"),
+            "the answer must SAY it plays one key alone, not leave it to be inferred: {plays:?}");
+}
+
+/// The signature defect of this codebase: success reported for work the engine did not do. A name
+/// that resolves to nothing still MINTS A SLOT — it is published with SOURCE MISSING and
+/// lengthFrames 0 — so a load that checked only "did the write land" would answer ok for a
+/// sampler that cannot make a sound.
+#[test]
+fn a_sample_that_does_not_exist_is_an_error_not_a_silent_ok() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("loadmissing");
+    assert!(session.execute(&ToolCall {
+        tool: "add_device".into(), args: json!({"track":0,"kind":"sampler"}) }).ok);
+
+    let r = session.execute(&ToolCall {
+        tool: "load_sample".into(), args: json!({"track":0,"file":"no_such_file.wav"}) });
+    assert!(!r.ok,
+            "loading a file that does not exist reported SUCCESS. The slot is minted either way, \
+             so this is indistinguishable from a working load until the track plays nothing: {r:?}");
+    let e = r.error.clone().unwrap_or_default();
+    assert!(e.contains("silent") || e.contains("did not resolve") || e.contains("never appeared"),
+            "the error must say the sampler will be silent, which is the consequence: {e:?}");
+}
+
+/// Per-track mixer state written via SetTrackMixer is published back verbatim, so
+/// the UI can render a fader at its true position; the mixer version advances.
+#[test]
+// AN EVENT PATCHER LANDS AHEAD OF THE INSTRUMENT IT FEEDS.
+//
+// A patcher_event GENERATES notes for whatever follows it, so a chain of [sampler, patcher] emits
+// into nothing: the track is silent and every structural check stays green, because the device is
+// present and the graph is valid and the order is the whole problem.
+//
+// BOTH DEFAULTS HAVE BEEN WRONG, in opposite directions. add_device used to default position to 0
+// — head-insert — which is wrong for an effect and right for this, by luck. Fixing it to append
+// (to match daw-cli and the payload default) made effects correct and broke this. The sidecar
+// appends too, with a test pinning it. Three surfaces, two defaults, and neither fits both kinds.
+//
+// So the default is chosen BY KIND here rather than being one number for everything. The rule is
+// not a preference: an event graph feeds what comes after it, and there is no arrangement in
+// which anyone wants it last.
+//
+// The demo rehearsal's patcher step counts patcher devices in the saved chain, so it passes
+// whichever end they land on — which is why this is asserted here, on the ORDER.
+fn an_event_patcher_lands_before_the_instrument() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("patchorder");
+
+    let s = session.execute(&ToolCall {
+        tool: "add_device".into(), args: json!({"track":0,"kind":"sampler"}) });
+    assert!(s.ok, "adding the sampler failed: {s:?}");
+    let p = session.execute(&ToolCall {
+        tool: "add_device".into(), args: json!({"track":0,"kind":"patcher"}) });
+    assert!(p.ok, "adding the patcher failed: {p:?}");
+
+    assert!(session.execute(&ToolCall {
+        tool: "save".into(), args: json!({"name":"patchorder"}) }).ok);
+    let doc = read_project(&engine.proj, "patchorder");
+    let kinds: Vec<String> = doc["tracks"][0]["device_chain"].as_array().unwrap().iter()
+        .map(|d| d["kind"].as_str().unwrap_or("?").to_string())
+        .collect();
+
+    let pat = kinds.iter().position(|k| k.starts_with("patcher"));
+    let inst = kinds.iter().position(|k| k == "sampler" || k == "vst_instrument");
+    let (pat, inst) = match (pat, inst) {
+        (Some(a), Some(b)) => (a, b),
+        _ => panic!("expected both a patcher and an instrument in the chain, got {kinds:?}"),
+    };
+    assert!(pat < inst,
+            "the event patcher landed at {pat} and the instrument at {inst} ({kinds:?}). A patcher \
+             that sits AFTER the instrument generates notes nobody plays — the track is silent and \
+             the chain looks perfectly correct to anything counting devices.");
+
+    // AND THE OTHER HALF OF THE RULE, or fixing one direction just breaks the other again — which
+    // is what happened this morning. A patcher_AUDIO is not a generator; it processes what reaches
+    // it, so it appends like every other non-generator. Added to a chain that already holds an
+    // event patcher, it must land AFTER it.
+    let a = session.execute(&ToolCall {
+        tool: "add_device".into(), args: json!({"track":0,"kind":"patcher_audio"}) });
+    assert!(a.ok, "adding the audio patcher failed: {a:?}");
+    assert!(session.execute(&ToolCall {
+        tool: "save".into(), args: json!({"name":"patchorder2"}) }).ok);
+    let doc = read_project(&engine.proj, "patchorder2");
+    let kinds: Vec<String> = doc["tracks"][0]["device_chain"].as_array().unwrap().iter()
+        .map(|d| d["kind"].as_str().unwrap_or("?").to_string())
+        .collect();
+    let ev = kinds.iter().position(|k| k == "patcher_event").expect("event patcher still present");
+    let au = kinds.iter().position(|k| k == "patcher_audio").expect("audio patcher was added");
+    assert!(au > ev,
+            "the audio patcher landed at {au}, before the event patcher at {ev} ({kinds:?}). Only \
+             the EVENT kind head-inserts; everything else appends, which is what daw-cli and the \
+             payload default already do.");
+}
+
+/// REFUSED, NOT TRUNCATED. A cut name resolves to nothing or to a DIFFERENT file, and the second
+/// is worse than failing because it looks like it worked.
+#[test]
+fn an_over_long_sample_name_is_refused_rather_than_cut() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("loadlong");
+    assert!(session.execute(&ToolCall {
+        tool: "add_device".into(), args: json!({"track":0,"kind":"sampler"}) }).ok);
+
+    let r = session.execute(&ToolCall {
+        tool: "load_sample".into(),
+        args: json!({"track":0,"file":"a_name_far_longer_than_twenty_four_bytes.wav"}) });
+    assert!(!r.ok, "a 44-byte name must be refused, not truncated to 24: {r:?}");
+    assert!(r.error.clone().unwrap_or_default().contains("24"),
+            "the refusal should name the limit so it can be acted on: {r:?}");
+}
+
+/// THE GAP THIS CLOSES: `add_device` could mint a sampler and nothing could give it a sound, so
+/// "add a four on the floor kick" wrote sixteen notes onto a silent track and every count-based
+/// check passed it.
+#[test]
+fn load_sample_gives_the_sampler_a_sound_across_the_keyboard() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("loadsample");
+    write_wav(&engine.proj.join("probe.wav"), 22_050);
+
+    assert!(session.execute(&ToolCall {
+        tool: "add_device".into(), args: json!({"track":0,"kind":"sampler"}) }).ok);
+    // DELIBERATELY NO SAVE AND NO LOAD FIRST. `loadedProjectDir` is set only by LOADING a
+    // project, so until this was fixed a bare sample name on a fresh session resolved against the
+    // engine's working directory and the slot's source did not exist — the state the web stack
+    // comes up in, and the state the demo prompt "load a kick into the sampler" runs in.
+
+    // NO `device` ARGUMENT. Omitted means the track's first sampler, which is the whole point:
+    // a model that has just added one should not need a second observe to learn an id.
+    let r = session.execute(&ToolCall {
+        tool: "load_sample".into(), args: json!({"track":0,"file":"probe.wav"}) });
+    assert!(r.ok, "load_sample failed: {r:?}");
+
+    assert_eq!(r.output["key_low"].as_u64(), Some(0));
+    assert_eq!(r.output["key_high"].as_u64(), Some(127),
+               "the default must map ACROSS the keyboard — a slot pinned to one key is silent for \
+                every other note, which is the failure mode that reads as 'the DAW is broken': {r:?}");
+    assert_eq!(r.output["root"].as_u64(), Some(60), "pitched default roots at middle C: {r:?}");
+    // THE SLOT RESOLVED ITS SOURCE. lengthFrames 0 is a slot that exists, draws, and is silent —
+    // the exact state a load reported as ok on the send alone would have hidden.
+    assert!(r.output["length_frames"].as_u64().unwrap_or(0) > 0,
+            "the slot did not resolve its source, so it is silent: {r:?}");
+}
+
+#[test]
+// set_mixer THE TOOL, not the payload — and the two are not the same thing.
+//
+// mixer_read_back below sends a hand-built UiCommandPayload, so it proves the ENGINE reads the
+// wire correctly and says nothing about whether the tool fills that wire correctly. Both bugs
+// here lived under a green mixer_read_back for exactly that reason.
+//
+// 1. PAN WENT TO THE WRONG FIELD. The engine reads pan from `payload.pluginIndex`
+//    (engine_trackprops_commands.cpp: `static_cast<int32_t>(payload.pluginIndex) / 1000.0`);
+//    set_mixer wrote it to `note_pitch`. So every pan the model set was a silent no-op and
+//    whatever pluginIndex happened to hold was interpreted as the pan.
+//
+// 2. AN ABSENT ARGUMENT RESET THE OTHERS. The handler stores gain, pan, mute AND solo on every
+//    call, unconditionally. set_mixer filled the ones the caller omitted with defaults
+//    (`gain_db.unwrap_or(0.0)`), so "mute the drums" also sent 0 dB and centre pan — undoing a
+//    fader move made a moment earlier. The codebase's own "absent is not zero" rule, in the tool
+//    the demo drives.
+fn set_mixer_sets_one_thing_without_resetting_the_others() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("mixtool");
+    let h = session.handle();
+
+    let mix = |h: &daw_bridge::control::EngineHandle| h.read_mixer().get(0).copied();
+
+    // Gain only.
+    let a = session.execute(&ToolCall {
+        tool: "set_mixer".into(), args: json!({"track":0,"gain_db":-6.0}) });
+    assert!(a.ok, "set_mixer gain failed: {a:?}");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let m = mix(h).expect("track 0 has a mixer strip");
+    assert!((m.gain_millibels - (-600)).abs() <= 20,
+            "gain did not land: {} millibels, wanted about -600", m.gain_millibels);
+
+    // Pan only. Must ACTUALLY PAN, and must not disturb the gain just set.
+    let b = session.execute(&ToolCall {
+        tool: "set_mixer".into(), args: json!({"track":0,"pan":-0.5}) });
+    assert!(b.ok, "set_mixer pan failed: {b:?}");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let m = mix(h).unwrap();
+    assert!((m.pan_thousandths - (-500)).abs() <= 20,
+            "PAN NEVER REACHED THE ENGINE: {} thousandths, wanted about -500. The engine reads pan \
+             from payload.pluginIndex; check which field the tool writes.", m.pan_thousandths);
+    assert!((m.gain_millibels - (-600)).abs() <= 20,
+            "SETTING PAN RESET THE GAIN to {} millibels. An argument the caller did not mention \
+             must not be written — the handler stores all four every call, so the tool has to \
+             carry the current values through.", m.gain_millibels);
+
+    // Mute only. Must not disturb either of the two already set.
+    let c = session.execute(&ToolCall {
+        tool: "set_mixer".into(), args: json!({"track":0,"mute":true}) });
+    assert!(c.ok, "set_mixer mute failed: {c:?}");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let m = mix(h).unwrap();
+    assert!(m.flags & daw_bridge::layout::MIXER_FLAG_MUTE as u8 != 0,
+            "mute did not land: flags {:#x}", m.flags);
+    assert!((m.gain_millibels - (-600)).abs() <= 20,
+            "MUTING RESET THE GAIN to {} millibels — this is 'mute the drums' undoing a fader \
+             move from a moment earlier, live.", m.gain_millibels);
+    assert!((m.pan_thousandths - (-500)).abs() <= 20,
+            "MUTING RESET THE PAN to {} thousandths", m.pan_thousandths);
+}
+
+/// A wav the engine can decode, written where a bare name resolves. Hand-rolled rather than
+/// checked in: a fixture whose bytes nothing states is one nobody can reason about when an
+/// assertion below moves, and this one's length IS the assertion.
+fn write_wav(path: &std::path::Path, frames: u32) {
+    let rate = 44_100u32;
+    let data_bytes = frames * 2;
+    let mut v: Vec<u8> = Vec::new();
+    v.extend(b"RIFF");
+    v.extend((36 + data_bytes).to_le_bytes());
+    v.extend(b"WAVEfmt ");
+    v.extend(16u32.to_le_bytes());
+    v.extend(1u16.to_le_bytes()); // PCM
+    v.extend(1u16.to_le_bytes()); // mono
+    v.extend(rate.to_le_bytes());
+    v.extend((rate * 2).to_le_bytes());
+    v.extend(2u16.to_le_bytes());
+    v.extend(16u16.to_le_bytes());
+    v.extend(b"data");
+    v.extend(data_bytes.to_le_bytes());
+    for i in 0..frames {
+        let s = ((i as f32 * 0.05).sin() * 12_000.0) as i16;
+        v.extend(s.to_le_bytes());
+    }
+    std::fs::write(path, v).expect("write wav");
+}

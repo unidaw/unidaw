@@ -1,5 +1,7 @@
 #include "engine_handle_ui_entry.h"
 
+#include "apps/engine_command_mutates.h"
+
 // The module header carries the dependency surface of the Deps struct — the command
 // modules, engine_types, the event log. These two are what the dispatcher BODY reaches
 // for on its own, and they are the whole list: the file arrived here carrying main.cpp's
@@ -54,6 +56,181 @@ void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
     const auto commandType =
         static_cast<daw::UiCommandType>(header.commandType);
 
+    // RECORD A VERSION WHEN THIS COMMAND FINISHES, whichever of the 48 branches it leaves by.
+    //
+    // RAII rather than a line at the end, because there is no end: every branch returns from
+    // inside itself. A recording site that has to be repeated 48 times is a site that will be
+    // missed once, and "missed once" is exactly how undo came to cover 15 commands of 70.
+    //
+    // Nothing is captured BEFORE the command. History holds versions, not before/after pairs: the
+    // state to undo to is the version already at the cursor, so one capture per edit is enough
+    // and the pair cannot disagree with itself.
+    // VERSION 0 ARRIVES WITH THE FIRST EDIT, not with a load.
+    //
+    // seed() had exactly one caller, inside loadProjectFromPath. A bare boot — no --project and
+    // no `do load` — therefore reached its first edit with an EMPTY history, and commit()'s empty
+    // branch pushes the document it is handed as version 0. That document is the state AFTER the
+    // edit, so the first edit of such a session was permanently un-undoable: there was no earlier
+    // version to reach, and undo() returned nullptr forever after.
+    //
+    // Not fixed by seeding at startup: that only covers the boot path, and it would put version 0
+    // at a moment the engine picked rather than at the state the user's first edit departs from.
+    // Seeding HERE, before the command runs, is correct for every entry into the engine and costs
+    // one capture per session.
+    auto seedHistoryIfEmpty = [&deps] {
+      if (deps.documentHistory != nullptr && deps.captureDocument &&
+          deps.documentHistory->size() == 0) {
+        // A FULL PLUGIN READ, not a dirty-flag one. There is no previous snapshot to carry
+        // anything forward from, so onlyDirty would leave version 0 holding no plugin state and
+        // the first undo would restore a song with every plugin left where the edit put it.
+        deps.documentHistory->seed(
+            deps.captureDocument(),
+            deps.capturePluginState ? deps.capturePluginState({}, /*onlyDirty=*/false)
+                                    : daw::engine::PluginStateSnapshot{});
+        DAW_EVENT("undo.seeded").field("where", "first_edit");
+      }
+    };
+    if (commandUndoPolicy(commandType) != UndoPolicy::None) {
+      seedHistoryIfEmpty();
+    }
+
+    // GESTURE BRACKETING. A drag is one undo step; see kUiCmdFlagGestureBegin in event_payloads.h.
+    //
+    // ONLY FOR COMMAND TYPES WHOSE FLAGS WORD IS FREE — gestureFlagsApplyTo. The first version read
+    // these bits from every command, and bit 15 is already kUiEditScopeLocal on note commands and
+    // kUiPatcherFlagHasDeviceId on the patcher payloads (whose device id covers bits 0-14, so bit
+    // 14 is taken there too). `do note --local` therefore read as GestureEnd.
+    const bool gestureCapable = daw::gestureFlagsApplyTo(commandType);
+    const bool gestureWantsBegin =
+        gestureCapable && (header.flags & daw::kUiCmdFlagGestureBegin) != 0;
+    const bool gestureWantsEnd =
+        gestureCapable && (header.flags & daw::kUiCmdFlagGestureEnd) != 0;
+
+    // A NON-GESTURE command force-closes an open gesture, so a UI that died mid-drag cannot wedge
+    // every later edit into one step. END is NOT handled here — see closeGestureAtEnd below.
+    if (deps.documentHistory != nullptr && !gestureWantsEnd && !gestureWantsBegin &&
+        deps.documentHistory->gestureOpen() &&
+        commandUndoPolicy(commandType) == UndoPolicy::Version) {
+      deps.documentHistory->endGesture();
+      // AND THE ABANDONED DRAG GETS ITS PLUGINS. Mid-gesture commands defer the cross-process
+      // capture to the command carrying END; when the pointer never comes back up there is no
+      // END, and that step would keep the plugin state from BEFORE the drag — a version whose
+      // document and plugins never coexisted. Paid once, here, at the moment the drag is
+      // declared over, which is also the only moment we know it is.
+      if (deps.capturePluginState) {
+        deps.documentHistory->amendPluginState(deps.capturePluginState(
+            deps.documentHistory->pluginStateAtCursor(), /*onlyDirty=*/true));
+      }
+      DAW_EVENT("undo.gesture_force_closed")
+          .field("by", std::string(daw::uiCommandTypeName(commandType)));
+    }
+
+    struct RecordVersion {
+      HandleUiEntryDeps& d;
+      UndoPolicy policy;
+      const char* label;
+      // SAMPLED AT CONSTRUCTION, NOT READ AT DESTRUCTION — and the difference is a bug I wrote and
+      // caught by tracing it. beginGesture() runs after this guard is built but before it fires, so
+      // reading gestureOpen() in the destructor would make the drag's FIRST command amend instead
+      // of commit, leaving an interrupted drag with no step to undo to.
+      bool amendForGesture;
+      // MID-DRAG, SKIP THE PLUGINS. capturePluginState is a blocking round trip to another
+      // process per hosted plugin, and a knob drag emits one command per milli-unit — a thousand
+      // of them per drag would make the engine unusable, which is exactly why the ruling put
+      // gesture coalescing ahead of this. So a command inside an open gesture that is not the
+      // one carrying END carries the PREVIOUS snapshot forward unread, and the END command pays
+      // for the whole drag once. An abandoned drag (no END ever arrives) is caught by the
+      // force-close path, which amends the step's plugin state then.
+      bool deferPluginCapture;
+      PluginStateSnapshot capture() const {
+        if (!d.capturePluginState || d.documentHistory == nullptr) {
+          return {};
+        }
+        const PluginStateSnapshot previous = d.documentHistory->pluginStateAtCursor();
+        if (deferPluginCapture) {
+          return previous;
+        }
+        return d.capturePluginState(previous, /*onlyDirty=*/true);
+      }
+      ~RecordVersion() {
+        if (policy == UndoPolicy::None || d.documentHistory == nullptr || !d.captureDocument) {
+          return;
+        }
+        // AN AUDITION KEEPS THE HISTORY HONEST WITHOUT ADDING TO IT. See commandUndoPolicy: the
+        // swap must not consume an undo step, but the cursor's version still has to follow the
+        // live document or the next undo flips the placement back as collateral.
+        // MID-GESTURE COMMANDS AMEND. The drag's first command opened the step; every one after
+        // it rewrites that step instead of adding another, so a 1000-command knob drag is ONE undo
+        // step holding the final value. Inert until a client sets the flags.
+        if (policy == UndoPolicy::Version && amendForGesture) {
+          d.documentHistory->amend(d.captureDocument(), capture());
+          return;
+        }
+        if (policy == UndoPolicy::Amend) {
+          d.documentHistory->amend(d.captureDocument(), capture());
+          DAW_EVENT("undo.version_amended")
+              .field("label", std::string(label))
+              .field("cursor", static_cast<uint64_t>(d.documentHistory->cursor()));
+          return;
+        }
+        if (!d.documentHistory->commit(d.captureDocument(), label, capture())) {
+          // THE COMMAND CHANGED NOTHING — refused, or applied a value already in place. Recorded
+          // as its own event rather than silently: "no version appeared" and "the guard never
+          // ran" look identical from outside, and only one of them is correct behaviour.
+          DAW_EVENT("undo.version_unchanged")
+              .field("label", std::string(label))
+              .field("versions", static_cast<uint64_t>(d.documentHistory->size()))
+              .field("cursor", static_cast<uint64_t>(d.documentHistory->cursor()));
+          return;
+        }
+        // OBSERVABLE FROM OUTSIDE, because "the history is being built" is otherwise a claim
+        // nobody can check until undo is repointed at it. A check can read this line and assert
+        // the count rises once per mutating command and not at all for a query.
+        DAW_EVENT("undo.version_recorded")
+            .field("label", std::string(label))
+            .field("versions", static_cast<uint64_t>(d.documentHistory->size()))
+            .field("cursor", static_cast<uint64_t>(d.documentHistory->cursor()))
+            .field("bytes", static_cast<uint64_t>(d.documentHistory->bytes()));
+      }
+    } recordVersion{deps, commandUndoPolicy(commandType),
+                    daw::engine::commandLabel(commandType),
+                    deps.documentHistory != nullptr &&
+                        deps.documentHistory->gestureAmendable(),
+                    // Sampled here for the same reason as amendForGesture: beginGesture() runs
+                    // below, so reading it in the destructor would defer the capture of the
+                    // drag's FIRST command too — and a one-command drag would then hold no
+                    // plugin state at all.
+                    deps.documentHistory != nullptr &&
+                        deps.documentHistory->gestureOpen() && !gestureWantsEnd};
+
+    // Opened AFTER the guard is built, so THIS command still commits and the drag has a step to
+    // undo to even if the pointer never comes back up.
+    //
+    // BEGIN|END TOGETHER is a click with no travel, and must NOT leave a gesture open: the next
+    // drag's BEGIN would then be swallowed by the force-close guard and its first command would
+    // amend the PREVIOUS undo step instead of committing its own.
+    if (deps.documentHistory != nullptr && gestureWantsBegin && !gestureWantsEnd) {
+      deps.documentHistory->beginGesture();
+    }
+
+    // CLOSES AFTER THE GUARD HAS SAMPLED, which is the whole point of it being here rather than
+    // above. Closing END early made amendForGesture read false, so the drag's FINAL command took
+    // the commit() path and pushed a SECOND version — one drag, two undo steps, and the first
+    // Ctrl-Z landing on the second-to-last drag sample, a value the user never chose. That is the
+    // exact mirror of the BEGIN bug fixed by sampling at construction, written into the same
+    // commit under a comment claiming the opposite. Found by review.
+    //
+    // RAII so it runs on every return path, including the bulk branch's early return.
+    struct CloseGestureAtEnd {
+      daw::engine::DocumentHistory* history;
+      bool closing;
+      ~CloseGestureAtEnd() {
+        if (closing && history != nullptr) {
+          history->endGesture();
+        }
+      }
+    } closeGestureAtEnd{deps.documentHistory,
+                        deps.documentHistory != nullptr && gestureWantsEnd};
     // ---- BULK CHUNK (83). Intercepted BEFORE the journal: a 17-chunk envelope would otherwise
     // write 17 indistinguishable lines and bury the command it spells. The ASSEMBLED command
     // journals itself.
@@ -120,6 +297,26 @@ void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
             .field("stream", static_cast<uint32_t>(doneId))
             .field("chunks", static_cast<uint32_t>(c.total))
             .field("bytes", static_cast<uint64_t>(assembled.size()));
+        // THE ENVELOPE IS NOT THE COMMAND. BulkChunk itself changes nothing, so the guard above
+        // was built with mutates=false — correct for the carrier, wrong for what it carries.
+        // SetClipText, SamplerSetSlotName and SamplerSetEnvelopePoints arrive ONLY this way and
+        // can never arrive any other way, so with the guard reading the OUTER opcode they were
+        // classified `true` in commandMutatesDocument and still recorded nothing: draw an
+        // envelope, undo, and it is gone with no version to redo from. Re-point the guard at the
+        // opcode the envelope spells, which is its first two bytes and is what
+        // handleAssembledBulk itself dispatches on.
+        if (assembled.size() >= sizeof(uint16_t)) {
+          uint16_t innerOp = 0;
+          std::memcpy(&innerOp, assembled.data(), sizeof(innerOp));
+          const auto innerType = static_cast<daw::UiCommandType>(innerOp);
+          recordVersion.policy = commandUndoPolicy(innerType);
+          recordVersion.label = daw::engine::commandLabel(innerType);
+          // The seed above ran on the OUTER opcode, which is non-mutating, so it declined. An
+          // envelope drawn as the first act of a bare session would otherwise land as version 0.
+          if (recordVersion.policy != UndoPolicy::None) {
+            seedHistoryIfEmpty();
+          }
+        }
         handleAssembledBulk(assembled);
       }
       return;

@@ -12,124 +12,81 @@
 #include <filesystem>
 
 namespace daw::engine {
+namespace {
+
+// PUT THE PLUGINS BACK, AND SAY SO WHEN THE STEP CANNOT BE FULLY PUT BACK.
+//
+// Shared by both arms because undo and redo are the same motion with the sign flipped, and a
+// second copy of this would be the exact shape that keeps costing here — two rules agreeing on
+// names and differing in behaviour.
+void restorePluginsForVersion(UndoCommandDeps& deps,
+                              const PluginStateSnapshot& plugins,
+                              const char* arm) {
+  const uint32_t pushed =
+      deps.restorePluginState ? deps.restorePluginState(plugins) : 0;
+  if (pushed > 0) {
+    DAW_EVENT("undo.plugins_restored").field("arm", std::string(arm))
+        .field("pushed", static_cast<uint64_t>(pushed))
+        .field("held", static_cast<uint64_t>(plugins.blobs.size()));
+  }
+  if (!plugins.complete) {
+    // NOT A WARNING IN A LOG NOBODY READS — the honest half of the stage-5 ruling. Some hosted
+    // plugin did not answer when this version was recorded (host dead, plugin refused, request
+    // timed out), so the step is restored as far as it can be and the shortfall is stated.
+    // "Undo cannot fully restore this step" is something a user can act on; a silent partial
+    // restore, presented as a complete one, is the fifth subset bug this effort exists to kill.
+    DAW_EVENT("undo.partial").field("arm", std::string(arm))
+        .field("held", static_cast<uint64_t>(plugins.blobs.size()))
+        .field("asked", static_cast<uint64_t>(plugins.asked));
+  }
+}
+
+}  // namespace
 
 void handleUndo(UndoCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& undoMutex = deps.engineState.undoStacks.undoMutex;
-  auto& undoStack = deps.engineState.undoStacks.undoStack;
-  auto& redoStack = deps.engineState.undoStacks.redoStack;
-  const auto& applyUndoEntry = deps.applyUndoEntry;
-  const auto& restoreSongStore = deps.restoreSongStore;
-  const auto& restoreTrackStore = deps.restoreTrackStore;
-  const auto& requireMatchingClipVersion = deps.requireMatchingClipVersion;
-  {
-  if (!requireMatchingClipVersion(payload.baseVersion,
-                                  daw::UiCommandType::Undo,
-                                  payload.trackId)) {
-    return;
-  }
-  std::optional<EngineUndoEntry> undo;
-  {
-    std::lock_guard<std::mutex> lock(undoMutex);
-    if (!undoStack.empty()) {
-      undo = std::move(undoStack.back());
-      undoStack.pop_back();
-    }
-  }
-  if (!undo) {
-    return;
-  }
-  if (undo->song) {
-    // The whole song at once. A partial restore of a ripple is worse than none: the
-    // placements would be back where they were while the tempo change and the filter sweep
-    // stayed at their new positions.
-    if (restoreSongStore(undo->songBefore)) {
-      DAW_EVENT("undo.song").field("scope", "section_ripple");
-      std::lock_guard<std::mutex> lock(undoMutex);
-      redoStack.push_back(std::move(*undo));
-    }
-  } else if (undo->structural) {
-    // Store swap: restore the track's pre-edit placements + clips. A cross-track move
-    // restores BOTH tracks so the placement is never briefly in neither.
-    bool ok = restoreTrackStore(undo->trackId, undo->before);
-    if (undo->hasSecond) {
-      ok = restoreTrackStore(undo->secondTrackId, undo->secondBefore) || ok;
-    }
-    if (ok) {
-      std::lock_guard<std::mutex> lock(undoMutex);
-      redoStack.push_back(std::move(*undo));
-    }
-  } else {
-    const daw::UndoEntry redoHarmony = invertUndoEntry(undo->harmony);
-    if (applyUndoEntry(undo->harmony, false)) {
-      EngineUndoEntry e;
-      e.structural = false;
-      e.trackId = redoHarmony.trackId;
-      e.harmony = redoHarmony;
-      std::lock_guard<std::mutex> lock(undoMutex);
-      redoStack.push_back(std::move(e));
-    }
-  }
-  }
+  DAW_EVENT("undo.enter");
+  auto& history = deps.engineState.documentHistory;
+  const daw::ProjectDocument* version = history.undo();
+  DAW_EVENT("undo.picked").field("null", version == nullptr)
+      .field("cursor", static_cast<uint64_t>(history.cursor()));
+  if (version == nullptr) { return; }
+  daw::ProjectDocument doc = *version;
+  const PluginStateSnapshot plugins = history.pluginStateAtCursor();
+  DAW_EVENT("undo.applying");
+  const bool ok = deps.applyDocument && deps.applyDocument(doc);
+  // THE PLUGINS AFTER THE DOCUMENT, and in that order for a reason: applyDocument may rebuild a
+  // chain (undoing a RemoveDevice re-creates the plugin), and a host that does not exist yet
+  // cannot be handed state. Restoring afterwards is also what closes the chain-rebuild gap left
+  // when the disk-blob push moved out of applyDocument — the state a recreated plugin gets now
+  // comes from the VERSION, which is the state it actually had, rather than from whatever was on
+  // disk at the last save.
+  restorePluginsForVersion(deps, plugins, "undo");
+  // THE DIRECTORY IS PART OF THE OUTCOME. applyDocument derives it from the path it is handed,
+  // and undo used to hand it an empty string — which blanked it, silently re-pointing every
+  // relative sample path at the engine's working directory and every plugin state blob at
+  // ./.state. Reported here so a check can assert it SURVIVES an undo rather than trusting it to.
+  DAW_EVENT("undo.applied").field("ok", ok)
+      .field("project_dir", deps.engineState.loadedProject.loadedProjectDir);
 }
 
 void handleRedo(UndoCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
-  auto& undoMutex = deps.engineState.undoStacks.undoMutex;
-  auto& undoStack = deps.engineState.undoStacks.undoStack;
-  auto& redoStack = deps.engineState.undoStacks.redoStack;
-  const auto& applyUndoEntry = deps.applyUndoEntry;
-  const auto& restoreSongStore = deps.restoreSongStore;
-  const auto& restoreTrackStore = deps.restoreTrackStore;
-  const auto& requireMatchingClipVersion = deps.requireMatchingClipVersion;
-  {
-  if (!requireMatchingClipVersion(payload.baseVersion,
-                                  daw::UiCommandType::Redo,
-                                  payload.trackId)) {
-    return;
-  }
-  std::optional<EngineUndoEntry> redo;
-  {
-    std::lock_guard<std::mutex> lock(undoMutex);
-    if (!redoStack.empty()) {
-      redo = std::move(redoStack.back());
-      redoStack.pop_back();
-    }
-  }
-  if (!redo) {
-    return;
-  }
-  if (redo->song) {
-    if (restoreSongStore(redo->songAfter)) {
-      DAW_EVENT("redo.song").field("scope", "section_ripple");
-      std::lock_guard<std::mutex> lock(undoMutex);
-      undoStack.push_back(std::move(*redo));
-    }
-  } else if (redo->structural) {
-    // Store swap: re-apply the track's post-edit placements + clips (both tracks for a
-    // cross-track move).
-    bool ok = restoreTrackStore(redo->trackId, redo->after);
-    if (redo->hasSecond) {
-      ok = restoreTrackStore(redo->secondTrackId, redo->secondAfter) || ok;
-    }
-    if (ok) {
-      std::lock_guard<std::mutex> lock(undoMutex);
-      undoStack.push_back(std::move(*redo));
-    }
-  } else {
-    const daw::UndoEntry undoHarmony = invertUndoEntry(redo->harmony);
-    if (applyUndoEntry(redo->harmony, false)) {
-      EngineUndoEntry e;
-      e.structural = false;
-      e.trackId = undoHarmony.trackId;
-      e.harmony = undoHarmony;
-      std::lock_guard<std::mutex> lock(undoMutex);
-      undoStack.push_back(std::move(e));
-    }
-  }
-  }
+  DAW_EVENT("redo.enter");
+  auto& history = deps.engineState.documentHistory;
+  const daw::ProjectDocument* version = history.redo();
+  DAW_EVENT("redo.picked").field("null", version == nullptr)
+      .field("cursor", static_cast<uint64_t>(history.cursor()));
+  if (version == nullptr) { return; }
+  daw::ProjectDocument doc = *version;
+  const PluginStateSnapshot plugins = history.pluginStateAtCursor();
+  DAW_EVENT("redo.applying");
+  const bool ok = deps.applyDocument && deps.applyDocument(doc);
+  restorePluginsForVersion(deps, plugins, "redo");
+  DAW_EVENT("redo.applied").field("ok", ok)
+      .field("project_dir", deps.engineState.loadedProject.loadedProjectDir);
 }
 
 }  // namespace daw::engine

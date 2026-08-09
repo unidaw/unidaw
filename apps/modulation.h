@@ -29,6 +29,10 @@ struct ModSourceRef {
   uint32_t deviceId = 0;
   uint32_t sourceId = 0;
   ModSourceKind kind = ModSourceKind::Macro;
+
+  // A plain value. The document walk reaches these through ModLink and asks whether the
+  // user changed anything; the compiler writes the comparison.
+  friend bool operator==(const ModSourceRef&, const ModSourceRef&) = default;
 };
 
 struct ModTargetRef {
@@ -36,6 +40,10 @@ struct ModTargetRef {
   uint32_t targetId = 0;
   ModTargetKind kind = ModTargetKind::VstParam;
   uint8_t uid16[16]{};
+
+  // A plain value. The document walk reaches these through ModLink and asks whether the
+  // user changed anything; the compiler writes the comparison.
+  friend bool operator==(const ModTargetRef&, const ModTargetRef&) = default;
 };
 
 struct ModSourceState {

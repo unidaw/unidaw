@@ -30,6 +30,7 @@
 #include "apps/engine_arrange_rail.h"
 #include "apps/engine_aux_child_overlays.h"
 #include "apps/engine_clip_window.h"
+#include "apps/engine_document_history.h"
 #include "apps/engine_loaded_project.h"
 #include "apps/engine_patcher_graph_owner.h"
 #include "apps/engine_preview_queue.h"
@@ -64,7 +65,15 @@ struct EngineState {
   PatcherGraphOwner patcherGraph;
 
   // Undo is a whole-store swap, not a per-edit inverse — see the stacks' own header.
+  //
+  // BEING REPLACED. UndoStacks can only carry TrackStoreState's three fields, which is why 55 of
+  // 70 mutating commands are not undoable. documentHistory below is the successor: whole document
+  // versions, so there is no subset to omit. Both exist during the changeover; the stacks go when
+  // the last writer does.
   UndoStacks undoStacks;
+
+  // UNDO AS A CURSOR over whole-document versions. Redo is the same motion with the sign flipped.
+  DocumentHistory documentHistory;
 
   // Auditioning a note outside the transport.
   PreviewQueue previewQueue;

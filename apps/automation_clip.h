@@ -13,6 +13,10 @@ namespace daw {
 struct AutomationPoint {
   uint64_t nanotick = 0;
   float value = 0.0f;
+
+  // A plain value, so the compiler writes the comparison. Needed because the document walk asks
+  // "did anything the user authored change?" and reaches these through AutomationClip.
+  friend bool operator==(const AutomationPoint&, const AutomationPoint&) = default;
 };
 
 class AutomationClip {
@@ -164,6 +168,23 @@ class AutomationClip {
   bool discreteOnly() const { return discreteOnly_; }
   uint32_t targetPluginIndex() const { return targetPluginIndex_; }
   void setTargetPluginIndex(uint32_t target) { targetPluginIndex_ = target; }
+
+  // EQUALITY IS THE CLASS'S OWN BUSINESS, and that is deliberate.
+  //
+  // The document field visitor (apps/document_visitor.h) walks aggregates by member pointer so one
+  // field declaration can drive serialize, compare and merge. THIS CLASS IS NOT AN AGGREGATE: it
+  // keeps an invariant — addPoint holds points_ sorted and REPLACES a point at an existing tick, so
+  // a file that was written with a doubled point heals on its next load. Exposing points_ to a
+  // generic walk would let a caller build an AutomationClip this class forbids, which is worse than
+  // the duplication the walk exists to remove.
+  //
+  // So an encapsulated type with an invariant supplies its own comparison and the walk treats it as
+  // a LEAF. That is the third case, alongside plain leaves and field-list aggregates, and it is
+  // correct layering rather than an exception.
+  friend bool operator==(const AutomationClip& a, const AutomationClip& b) {
+    return a.paramId_ == b.paramId_ && a.discreteOnly_ == b.discreteOnly_ &&
+           a.targetPluginIndex_ == b.targetPluginIndex_ && a.points_ == b.points_;
+  }
 
  private:
   std::string paramId_;

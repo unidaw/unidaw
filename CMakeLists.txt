@@ -186,6 +186,7 @@ add_library(engine_commands STATIC
   apps/engine_history_journal.cpp
   apps/engine_song_store.cpp
   apps/engine_consumer.cpp
+  apps/engine_plugin_state_capture.cpp
   apps/engine_save_project.cpp
   apps/engine_sampler_commands.cpp
   apps/engine_automation_commands.cpp
@@ -663,6 +664,70 @@ target_include_directories(engine_ui_publish_tests PRIVATE
   ${Boost_INCLUDE_DIRS}
 )
 target_link_libraries(engine_ui_publish_tests PRIVATE engine_commands)
+
+# UNDO AS A CURSOR over document versions — the structure that makes redo the exact opposite of
+# undo by construction. Pure: no engine, no audio device, no file, so it runs in milliseconds.
+add_executable(engine_document_history_tests
+  apps/engine_document_history_tests_main.cpp
+)
+target_include_directories(engine_document_history_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(engine_document_history_tests PRIVATE engine_commands)
+
+# THE FIELD VISITOR — stage 3's foundation. Header-only, so this links nothing: the point is that
+# the walk COMPILES against the real structs and that FieldKind separates what a differ compares
+# from what it must ignore. It asserts behaviour, never a field COUNT — a count is a second
+# hand-maintained list of the thing the visitor exists to abolish, and it goes stale in the
+# dangerous direction (passing while a field silently stops being visited).
+add_executable(document_visitor_tests
+  apps/document_visitor_tests_main.cpp
+)
+target_include_directories(document_visitor_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+
+# STRUCTURAL EQUALITY over the visitor — header-only like the visitor itself.
+add_executable(document_compare_tests
+  apps/document_compare_tests_main.cpp
+)
+target_include_directories(document_compare_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+
+# GESTURE COALESCING: a drag is one undo step, and an interrupted drag is still undoable.
+add_executable(gesture_undo_tests
+  apps/gesture_undo_tests_main.cpp
+)
+target_include_directories(gesture_undo_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(gesture_undo_tests PRIVATE engine_commands)
+
+# UNDO STAGE 5: a version holds the hosted plugins' own state, not just the document.
+add_executable(plugin_state_version_tests
+  apps/plugin_state_version_tests_main.cpp
+)
+target_include_directories(plugin_state_version_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(plugin_state_version_tests PRIVATE engine_commands)
+
+# STAGE 3's SAFETY GATE: the structural comparer must see every authored field the serializer
+# writes, or switching commit() to it would silently drop an edit.
+add_executable(comparer_equivalence_tests
+  apps/comparer_equivalence_tests_main.cpp
+)
+target_include_directories(comparer_equivalence_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(comparer_equivalence_tests PRIVATE engine_commands)
 
 add_executable(engine_clip_helpers_tests
   apps/engine_clip_helpers_tests_main.cpp
@@ -1642,6 +1707,116 @@ add_test(NAME note_overlap
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/note_overlap_check.sh
 )
 set_tests_properties(note_overlap PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+# EVERY OPERATION MUST BE UNDOABLE (owner's ruling 2026-08-06). This is the ratchet that measures
+# how far that is from true: it classifies every UiCommandType entry — an unclassified one fails,
+# which is the shell equivalent of a switch with no `default:` — and for each command it can drive
+# it asserts the command CHANGED the document, that undo restores it byte-identically through the
+# canonical serializer, and that redo re-reaches it. Correct under every undo architecture, since
+# it tests behaviour through the command wire and knows nothing about the mechanism.
+add_test(NAME document_history
+  COMMAND engine_document_history_tests
+)
+set_tests_properties(document_history PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
+
+add_test(NAME document_visitor
+  COMMAND document_visitor_tests
+)
+set_tests_properties(document_visitor PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
+
+add_test(NAME document_compare
+  COMMAND document_compare_tests
+)
+set_tests_properties(document_compare PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
+
+add_test(NAME gesture_undo
+  COMMAND gesture_undo_tests
+)
+set_tests_properties(gesture_undo PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
+
+add_test(NAME plugin_state_version
+  COMMAND plugin_state_version_tests
+)
+set_tests_properties(plugin_state_version PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 60)
+
+# EVERY SHIPPED PRESET EXCEPT THE TWO STRESS FILES. stress-128 and stress-512 hold tens of
+# thousands of note events and the walk re-serializes the document once per distinct field shape,
+# so they cost minutes and add no field the others lack — they are big, not structurally richer.
+# Stated here rather than silently omitted: a check that covers less than it looks like it does is
+# the failure this whole family exists to prevent.
+add_test(NAME comparer_equivalence
+  COMMAND comparer_equivalence_tests
+          --baseline ${CMAKE_CURRENT_SOURCE_DIR}/tools/comparer_blind_fields.txt
+          ${CMAKE_CURRENT_SOURCE_DIR}/presets/projects/generator.uniproj.json
+          ${CMAKE_CURRENT_SOURCE_DIR}/presets/projects/maximal.uniproj.json
+          ${CMAKE_CURRENT_SOURCE_DIR}/presets/projects/meter.uniproj.json
+          ${CMAKE_CURRENT_SOURCE_DIR}/presets/projects/multiout.uniproj.json
+          ${CMAKE_CURRENT_SOURCE_DIR}/presets/projects/rack.uniproj.json
+          ${CMAKE_CURRENT_SOURCE_DIR}/presets/projects/waveform.uniproj.json
+          ${CMAKE_CURRENT_SOURCE_DIR}/presets/projects/webtest.uniproj.json
+)
+set_tests_properties(comparer_equivalence PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME undo_ratchet
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/undo_ratchet_check.sh
+)
+# 900s: every command now drives a real undo AND redo through applyDocument, and the harness waits
+# on the journal for each. An undo itself measures 0 ms — the budget is the harness's waits, not
+# the feature's cost. I first read this timeout being hit as a deadlock and reverted the whole
+# switchover on that inference, without observing it. It was neither hung nor slow.
+set_tests_properties(undo_ratchet PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 900)
+
+# THE FOUR THINGS THE RATCHET CANNOT SEE. undo_ratchet counts undoable commands, one at a time,
+# each from a freshly loaded project — so it is structurally blind to anything that needs a
+# SEQUENCE: a refusal after an undo, a session that never loaded a project, a command that only
+# exists inside a bulk envelope, a directory read long after the undo that blanked it. All four
+# were real defects found by a review panel rather than by a check, and each has its own engine on
+# its own segment here because sharing one would let a previous phase supply the state under test.
+add_test(NAME undo_invariants
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/undo_invariants_check.sh
+)
+set_tests_properties(undo_invariants PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+
+# A KNOB TURN MUST REACH THE ENGINE, not only the plugin host. Stage 5's first task: undo restores
+# a captured document and capture reads paramMirror, so a param that never lands there cannot be
+# restored however complete the rest of the undo machinery is.
+add_test(NAME param_mirror
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/param_mirror_check.sh
+)
+set_tests_properties(param_mirror PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+# UNDO MUST NOT RE-PUSH SAVED PLUGIN STATE. Plugin blobs are not in the document, so an undo that
+# pushes them overwrites LIVE state with LAST-SAVED state — it discards unsaved plugin work rather
+# than restoring anything. Counts project.state_restored across a load and an undo: a load must
+# emit them, an undo must emit none.
+add_test(NAME undo_plugin_state
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/undo_plugin_state_check.sh
+)
+set_tests_properties(undo_plugin_state PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME undo_plugin_version
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/undo_plugin_version_check.sh
+)
+set_tests_properties(undo_plugin_version PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+# A STEM IS A TRACK. Registered the moment it went green — it was DECLARED_UNREGISTERED for one
+# commit while the load half was still narrow, because a permanently red check is one people learn
+# to skip. It exists because a negative control proved the gap: with the five-field aux-child
+# capture re-introduced, all eight plausibly-related checks passed.
+add_test(NAME aux_child_fidelity
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/aux_child_fidelity_check.sh
+)
+set_tests_properties(aux_child_fidelity PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+# THE DOCUMENT IS A VALUE. Undo is built on captureDocument/applyDocument, so a field either of
+# them drops would be dropped by every undo at once. Loading a preset, saving, loading THAT and
+# saving again must produce identical bytes: the second save came through the pair, so a loss in
+# either half shows up without anybody listing the fields — which is the point, since a
+# hand-listed comparison is how undo came to carry three.
+add_test(NAME document_value
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/document_value_check.sh
+)
+set_tests_properties(document_value PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
 
 # A lane's subdivision is settable at last, and it is the LANE's — a one-track fixture cannot
 # tell "set the track I asked for" from "set all of them".

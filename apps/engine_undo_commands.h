@@ -23,6 +23,7 @@
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
 #include "apps/engine_state.h"
+#include "apps/project_file.h"
 
 namespace daw::engine {
 
@@ -35,6 +36,11 @@ struct UndoCommandDeps {
   std::function<bool(const SongStoreState&)> restoreSongStore;
   std::function<bool(uint32_t, const TrackStoreState&)> restoreTrackStore;
   std::function<bool(uint32_t, daw::UiCommandType, uint32_t)> requireMatchingClipVersion;
+  std::function<bool(daw::ProjectDocument&)> applyDocument;
+  // UNDO STAGE 5. applyDocument puts back the song; this puts back the plugins, which are not in
+  // it. Returns how many hosts were actually written to — a note edit changes no plugin state, so
+  // its version's blobs match what the hosts already hold and this pushes nothing.
+  std::function<uint32_t(const PluginStateSnapshot&)> restorePluginState;
 };
 
 void handleUndo(UndoCommandDeps& deps,
