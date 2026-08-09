@@ -7,14 +7,15 @@ ledger records current orchestration state.
 ## Global state
 
 ```text
-Program:       ACTIVE -- AE-P0 only
-Reason:        Baseline captured: CTest 204/6/1, exclusive e2e 34/34; fixture/root gates remain
+Program:       ACTIVE -- AE-P0 only; current-main rebaseline in progress
+Reason:        execution baseline selected at current main; old evidence remains historical
 Target repo:   /Users/jak/src/daw-backend
-Baseline SHA:  5bef283798b59c2c4f5720292554c7ab8c265be6
+Baseline SHA:  62bafdc6cf1cd53168ce73d098cd6acc78659be8
+Historical evidence SHA: 5bef283798b59c2c4f5720292554c7ab8c265be6
 Worktrees:     AE-P0.1 at /Users/jak/src/daw-ae-p0-roots
-Active tasks:  AE-P0 record; AE-P0.1 final hardening; AE-P0.2 V4 correction
+Active tasks:  preserve evidence; revise AE-P0.1 after baseline selection; ADR preflight
 File locks:    protocol hotspots frozen; root CMake reserved narrowly for AE-P0.1
-Integration:   architecture-audit fast-forwarded to frozen baseline
+Integration:   HOLD -- refresh evidence and rebase repair packet before integration
 ```
 
 No worker may edit, build, test, create a branch/worktree, commit, or self-assign
@@ -38,10 +39,10 @@ The owner-authorized activation trigger has been satisfied:
 | Handle | Kind | Initial pairing | State |
 |---|---|---|---|
 | `backend` | Codex | Orchestrator/integrator | `ACTIVE: AE-P0` |
-| `codex-worker-1` | Codex | Lane A implementation owner first | `ACTIVE: AE-P0.1 final hardening` |
-| `claude-worker-1` | Claude | Lane A independent reviewer first | `HOLD: awaiting AE-P0.1 SHA` |
-| `claude-worker-2` | Claude | Lane B discovery owner first | `CHANGES_REQUESTED: AE-P0.2 V4` |
-| `codex-worker-2` | Codex | Lane B independent reviewer first | `HOLD: awaiting V4` |
+| `codex-worker-1` | Codex | Lane A implementation owner first | `HOLD: preserve d722306; revision pending baseline` |
+| `claude-worker-1` | Claude | Lane A independent reviewer first | `COMPLETE: CHANGES_REQUESTED on d722306` |
+| `claude-worker-2` | Claude | Lane B discovery owner first | `HOLD: evidence and current-main delta delivered` |
+| `codex-worker-2` | Codex | Lane B independent reviewer first | `HOLD: awaiting baseline and exact ADR SHA` |
 
 Implementation and review roles rotate after each integrated ticket. Pairing is
 not authorization to begin a ticket.
@@ -52,8 +53,10 @@ not authorization to begin a ticket.
 - [x] Undo changes integrated.
 - [x] Owner's conditional `GO` became effective on `[UNDO][DONE]`.
 - [x] `/Users/jak/src/daw-backend` is clean except approved planning files.
-- [x] Canonical branch and baseline SHA recorded above.
-- [ ] Baseline build/test provenance captured.
+- [x] Exact current product baseline selected; historical evidence remains
+      explicitly attributable to the prior SHA.
+- [x] Baseline build/test evidence captured; the machine-readable provenance
+      mechanism remains the AE-P0.2 implementation gate.
 - [x] All four workers acknowledge the target path, baseline, plan, and `HOLD`.
 - [x] First-wave tickets have complete task packets.
 - [x] Merge-hotspot ownership assigned before any worktree is created.
@@ -83,9 +86,10 @@ watcher:  none (required for Codex)
 
 | Ticket | State | Dependency | Owner | Reviewer | Worktree | Commit |
 |---|---|---|---|---|---|---|
-| `AE-P0` | `ACTIVE` | Undo + owner `GO` satisfied | `backend` | unassigned | root | `5bef283` baseline |
-| `AE-P0.1` | `ACTIVE` | frozen baseline + planning bootstrap | `codex-worker-1` | `claude-worker-1` | `/Users/jak/src/daw-ae-p0-roots` | final scope-amended checks running |
-| `AE-P0.2 discovery` | `CHANGES_REQUESTED` | frozen baseline + packet | `claude-worker-2` | `codex-worker-2` | read-only root | V2.1 and V3 rejected; V4 requested |
+| `AE-P0` | `ACTIVE` | current-main rebaseline + formal review | `backend` | unassigned | root | `62bafdc` execution baseline |
+| `AE-P0.1` | `ACTIVE` | current baseline + formal review findings | `codex-worker-1` | `claude-worker-1` | `/Users/jak/src/daw-ae-p0-roots-current` | packet `016eea4` acknowledged; repair active |
+| `AE-P0.2 discovery` | `ESCALATED_TO_ADR` | frozen baseline + packet | `claude-worker-2` | `codex-worker-2` | read-only root | four rejected designs; evidence complete |
+| `AE-P0.2 ADR` | `DRAFT_REBASELINE_PENDING` | refreshed current-main inventory + exact review | `backend` | `codex-worker-2` | root | external review after current-main refresh |
 | `AE-P0.2 implementation` | `BLOCKED` | `AE-P0.1` + reviewed discovery + baseline results | unassigned | unassigned | none | none |
 | `AE-P0.3` | `BLOCKED` | AE-P0.1 review + frontend ownership release | unassigned | unassigned | none | packet ready |
 | `AE-P1.1` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
@@ -128,6 +132,10 @@ the orchestrator records the resolved dependency or decision.
 
 Bus subjects use `[ticket][state] summary`. Git SHAs and test artifact paths are
 included in handoffs. The bus never substitutes for a commit, review, or gate.
+Every assignment names the exact task-packet commit as well as the product base.
+Amending a packet automatically returns its owner to `HOLD`; work resumes only
+after the owner acknowledges the new packet SHA. Reviewer and implementer are
+never evaluated against different packet generations.
 
 ## Evidence log
 
@@ -170,6 +178,17 @@ included in handoffs. The bus never substitutes for a commit, review, or gate.
 | 2026-08-09 | AE-P0.2 V2.1 independently rejected | Default-substitution count corrected to 118; compiled/web resources, immutable lifecycle, IPC entropy, coherent artifact-record substitution, ownership, and audio serialization remained incomplete |
 | 2026-08-09 | AE-P0.2 V3 independently rejected | Trusted source/build anchor, executed-artifact bijection, incremental generation semantics, closed schemas, endpoint lifecycle, crash-safe device lease, exact inventory/ownership, and adversarial controls remained incomplete; standalone V4 requested |
 | 2026-08-09 | AE-P0.1 scope amended for credential isolation | Final red-team found own-stack sidecar CWD could discover parent/home `.env` and make an ambient paid call; `ui-web/test/stack.mjs` narrowly added with fail-closed regression requirements |
+| 2026-08-10 | AE-P0.1 implementation handed off | `d722306` from parent `2f57427`; 12-path scope; independent exact-SHA review assigned before integration |
+| 2026-08-10 | AE-P0.2 iteration stopped at the ADR threshold | Four independently rejected discovery designs were converted into an eight-decision dossier; the compiled-test inventory then closed all 48 targets / 66 linked source files |
+| 2026-08-10 | AE-P0.2 umbrella ADR proposed | `docs/architecture/decisions/AE-P0.2-attributable-isolated-execution.md`; implementation remains blocked pending exact-SHA review, AE-P0.1 integration, and an ownership manifest |
+| 2026-08-10 | Upstream product baseline advanced during preflight | `main` and `origin/main` moved from `5bef283` to `62bafdc` by 223 commits; the 62bafdc execution baseline is now selected, while historical evidence remains tied to 5bef283 |
+| 2026-08-10 | Architecture implementation placed on coordination hold | All four workers were told to preserve work and make no edits, builds, tests, integration, merge, or rebase pending the owner's exact baseline choice |
+| 2026-08-10 | AE-P0.1 exact-SHA review requested changes | Commit `d722306` remains clean and preserved; findings cover tracked bytecode/path forms, index-versus-live scanning, negative-control gaps, credential opt-in, legacy override rejection, and checkout-local dependency isolation |
+| 2026-08-10 | AE-P0.1 review addendum found a launcher regression | The rewritten free-port probe assigns an expected `lsof` status 1 under `set -euo pipefail`, aborting `tools/webstack.sh` before normal startup; repair is frozen with the rest of the packet pending baseline selection |
+| 2026-08-10 | Task-packet handoff invariant strengthened | AE-P0.1 was implemented from a branch predating later packet amendments; every future assignment and amendment must name the exact packet SHA and require owner acknowledgement before work resumes |
+| 2026-08-10 | AE-P0.1 current-main repair packet committed | Worktree `/Users/jak/src/daw-ae-p0-roots-current`, branch `ae/p0-roots-current`, packet commit `016eea4`; owner assignment sent with exact baseline and packet SHA |
+| 2026-08-10 | AE-P0.1 owner acknowledged exact packet | `codex-worker-1` confirmed `016eea4` and `62bafdc`; old `d722306`, main, and old repair worktree remain preserved |
+| 2026-08-10 | AE-P0.2 current-main delta checked read-only | Core findings survive at `62bafdc`; registered tests changed from 213 to 214 and shell inventory from 153 to 156, so configured counts and the complete inventory must be regenerated after baseline selection |
 
 ## AE-P0 baseline findings
 

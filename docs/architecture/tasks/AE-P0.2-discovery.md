@@ -1,6 +1,8 @@
 # AE-P0.2 discovery — Isolated run context and provenance
 
-State: `READY FOR READ-ONLY ASSIGNMENT`
+State: `COMPLETE — ESCALATED TO ADR`
+
+Decision record: `docs/architecture/decisions/AE-P0.2-attributable-isolated-execution.md`
 
 Discovery owner: `claude-worker-2`
 
@@ -20,7 +22,8 @@ worktrees, commits, cleanup, package installation, or process launches.
 
 ## Baseline and location
 
-- Frozen product baseline: `5bef283798b59c2c4f5720292554c7ab8c265be6`.
+- Historical discovery baseline: `5bef283798b59c2c4f5720292554c7ab8c265be6`.
+- Selected execution baseline for continuation: `62bafdc6cf1cd53168ce73d098cd6acc78659be8`.
 - Read-only checkout: `/Users/jak/src/daw-backend`.
 - The architecture branch may gain governance-only commits while discovery runs;
   report the exact HEAD inspected and distinguish product baseline from later
