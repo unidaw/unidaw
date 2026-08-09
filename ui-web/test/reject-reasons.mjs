@@ -103,7 +103,27 @@ const refuse = async (patch) => {
     // soon as the reject line moves, so the only cost is how long a GENUINE silence takes to be
     // reported. 25s buys the loaded case without turning a real regression into a slow one.
       before, { timeout: 25000 });
-  } catch { return ''; }
+  /*
+   * ON TIMEOUT, SAY WHAT THE PAGE HAD RECEIVED — task #52.
+   *
+   * Returning '' meant a timeout here printed as `""` and told the next reader nothing. Sweep 43
+   * caught exactly that: three checks in this file failed with an empty reject line while the
+   * probe that could have explained it lived only in chain-error-reasons.mjs, so the occurrence
+   * was wasted. Three suites can hit this symptom; all three should be able to name it.
+   *
+   * The counters separate "never delivered" from "delivered and dropped in the page". The text
+   * deliberately contains none of the words the assertions match on, so a timeout still FAILS the
+   * check it belongs to — it just fails with a diagnosis attached instead of an empty string.
+   */
+  } catch {
+    const c = await page.evaluate(() => {
+      const st = window.__uni.state() || {};
+      return { seen: st.engineEventsSeen || 0, missed: st.engineEventsMissed || 0 };
+    });
+    return `[#52 probe] no reject line in time; engine events seen=${c.seen} missed=${c.missed}`
+      + (c.seen === 0 ? ' — NOTHING was delivered to the page all run, loss is upstream'
+                      : ' — the page DID receive events, so this one was dropped here');
+  }
   return reject();
 };
 
