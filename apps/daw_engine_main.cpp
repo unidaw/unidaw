@@ -1950,7 +1950,7 @@ int main(int argc, char** argv) {
   };
   daw::engine::PatcherCommandDeps patcherCommandDeps{
      engineState, buildTrackSnapshot, emitPatcherGraphDelta, emitPatcherGraphError,
-      emitUiDiff, reassemblePatcherFromDevices, updatePatcherGraphSnapshot
+      emitUiDiff, reassemblePatcherFromDevices, updatePatcherGraphSnapshot, historyAppend
   };
 
   daw::engine::ModuleCommandDeps moduleCommandDeps{

@@ -115,6 +115,12 @@ void handleAddPatcherNode(PatcherCommandDeps& deps,
           .field("device", deviceId)
           .field("op", daw::uiCommandTypeName(commandType))
           .field("reason", why);
+      // AND THE JOURNAL, so a client that is not the sidecar can see it. Guarded because the
+      // unit tests build PatcherCommandDeps without one and an unset std::function throws.
+      if (deps.historyAppend) {
+        deps.historyAppend(daw::uiCommandTypeName(commandType),
+                           (std::string("rejected:") + why).c_str(), probe.trackId, 0, "");
+      }
     };
     if (!runtime) {
       refuse("no_such_track");
@@ -380,6 +386,12 @@ void handleSetPatcherNodeConfig(PatcherCommandDeps& deps,
           .field("device", deviceId)
           .field("op", daw::uiCommandTypeName(commandType))
           .field("reason", why);
+      // AND THE JOURNAL, so a client that is not the sidecar can see it. Guarded because the
+      // unit tests build PatcherCommandDeps without one and an unset std::function throws.
+      if (deps.historyAppend) {
+        deps.historyAppend(daw::uiCommandTypeName(commandType),
+                           (std::string("rejected:") + why).c_str(), configPayload.trackId, 0, "");
+      }
     };
     if (!runtime) {
       refuseCfg("no_such_track");

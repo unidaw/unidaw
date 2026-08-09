@@ -61,6 +61,12 @@ std::string errorScopeName(const char* family, uint16_t code) {
       {"chain", {"", "add_failed", "remove_failed", "move_failed", "update_failed"}},
       {"mod", {"", "track_missing", "link_missing", "invalid_kind", "invalid_device",
                "order_violation", "link_exists"}},
+      // The patcher GRAPH codes, from the kGraphErr* constants in engine_patcher_commands.cpp.
+      // Same reasoning as the three families above: the journal and the log should carry the word,
+      // not the number, because "graph error 5" and "invalid_connection" are the same fact and
+      // only one of them tells the reader what they did.
+      {"patcher", {"", "invalid_type", "invalid_node", "cycle", "add_failed",
+                   "invalid_connection", "invalid_port"}},
   };
   if (family == nullptr) {
     return "code:" + std::to_string(code);

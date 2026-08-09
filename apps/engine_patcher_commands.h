@@ -38,6 +38,14 @@ struct PatcherCommandDeps {
   std::function<void(const daw::UiDiffPayload&)> emitUiDiff;
   std::function<bool()> reassemblePatcherFromDevices;
   std::function<void()> updatePatcherGraphSnapshot;
+  // The journal, so a patcher refusal is readable by a client that is not the sidecar. Every
+  // other refusal family already writes one; patcher wrote only a DAW_EVENT, which lives in the
+  // engine's own log and nowhere a tool can reach without racing the single-consumer ring.
+  //
+  // MAY BE EMPTY: the unit tests build this struct without it, so every call site checks. An
+  // unset std::function is not a no-op, it throws.
+  std::function<void(const char*, const char*, uint32_t, uint32_t,
+                     const std::string&)> historyAppend;
 };
 
 void handleAddPatcherNode(PatcherCommandDeps& deps,

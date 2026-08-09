@@ -250,6 +250,17 @@ void emitPatcherGraphError(UiPublishDeps& deps, uint16_t errorCode, uint32_t tra
     // sendUiDiff builds the entry exactly as makeUiDiffEntry did — one accounting path instead of
     // five hand-written copies of it.
     sendUiDiff(deps, ringUiOut, daw::EventType::UiDiff, payload);
+    // AND THE JOURNAL. This emitter published to the ring and nowhere else — no DAW_EVENT, no
+    // history line — so a refused patcher connection was invisible to every client that is not
+    // the sidecar, and invisible in the engine's own log too. It was the last refusal family
+    // with no durable record (task #51).
+    DAW_EVENT("patcher_graph.rejected")
+        .field("track", trackId)
+        .field("node", nodeId)
+        .field("reason", errorScopeName("patcher", errorCode));
+    deps.historyAppend("patcher_graph",
+                       ("rejected:" + errorScopeName("patcher", errorCode)).c_str(),
+                       trackId, 0, "");
 }
 
 void emitChainError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId, uint32_t deviceId, uint32_t deviceKind, uint32_t insertIndex) {
