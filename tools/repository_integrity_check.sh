@@ -15,8 +15,16 @@ while [ -n "$remainder" ]; do
   current="$current$part"; [ ! -L "$current" ] || { printf '%s\n' 'repository integrity: ERROR: refusing a symlinked ancestor' >&2; exit 2; }; current="$current/"
 done
 SCRIPT_DIR="$({ CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd -P; })"
-. "$SCRIPT_DIR/lib/repository_root.sh"
+[ -d "$SCRIPT_DIR/lib" ] && [ ! -L "$SCRIPT_DIR/lib" ] \
+  || { printf '%s\n' 'repository integrity: ERROR: refusing a symlinked helper directory' >&2; exit 2; }
+HELPER="$SCRIPT_DIR/lib/repository_root.sh"
+[ -f "$HELPER" ] && [ ! -L "$HELPER" ] \
+  || { printf '%s\n' 'repository integrity: ERROR: refusing a symlinked helper' >&2; exit 2; }
+CHECKER="$SCRIPT_DIR/repository_integrity_check.mjs"
+[ -f "$CHECKER" ] && [ ! -L "$CHECKER" ] \
+  || { printf '%s\n' 'repository integrity: ERROR: refusing a symlinked checker' >&2; exit 2; }
+. "$HELPER"
 ROOT="$(daw_repository_root)"
 
 unset NODE_OPTIONS NODE_PATH
-exec node "$ROOT/tools/repository_integrity_check.mjs" "$@"
+exec node "$CHECKER" "$@"

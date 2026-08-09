@@ -780,6 +780,7 @@ function selfTest(repositoryRoot) {
     'daw-scrub-regression-control', 'ws-port-derivation-control',
     'page-identity-no-store-control', 'sidecar-listener-ownership-control',
     'ready-retirement-registration-control',
+    'wrapper-helper-checker-canaries',
   ]);
   const passedControls = new Set();
   const pass = (id, label) => {
@@ -1200,6 +1201,24 @@ function selfTest(repositoryRoot) {
     assert(symlinkedWrapperResult.status !== 0, 'symlinked shell entrypoint was accepted');
     assert(!`${symlinkedWrapperResult.stdout}${symlinkedWrapperResult.stderr}`.includes('poison helper executed'), 'symlinked entrypoint sourced an adjacent poison helper');
     pass('symlinked-shell-entrypoint-rejected', 'shell entrypoint rejects links before helper discovery');
+
+    const canaryRoot = join(poisonedSibling, 'wrapper-canaries');
+    const canaryTools = join(canaryRoot, 'tools');
+    mkdirSync(canaryTools, { recursive: true });
+    writeFileSync(join(canaryTools, 'repository_integrity_check.sh'), readFileSync(wrapper));
+    writeFileSync(join(canaryTools, 'repository_integrity_check.mjs'), readFileSync(join(repositoryRoot, 'tools', 'repository_integrity_check.mjs')));
+    symlinkSync(join(poisonedSibling, 'lib'), join(canaryTools, 'lib'));
+    const helperCanary = run('bash', [join(canaryTools, 'repository_integrity_check.sh')], { cwd: caller, env: { ...process.env, DAW_REPOSITORY_ROOT: '' } });
+    assert(helperCanary.status !== 0 && !`${helperCanary.stdout}${helperCanary.stderr}`.includes('poison helper executed'), 'symlinked helper directory was accepted');
+    const checkerCanaryRoot = join(poisonedSibling, 'checker-canary');
+    const checkerTools = join(checkerCanaryRoot, 'tools');
+    mkdirSync(join(checkerTools, 'lib'), { recursive: true });
+    writeFileSync(join(checkerTools, 'repository_integrity_check.sh'), readFileSync(wrapper));
+    writeFileSync(join(checkerTools, 'lib', 'repository_root.sh'), readFileSync(join(repositoryRoot, 'tools', 'lib', 'repository_root.sh')));
+    symlinkSync(join(poisonedSibling, 'tools', 'repository_integrity_check.mjs'), join(checkerTools, 'repository_integrity_check.mjs'));
+    const checkerCanary = run('bash', [join(checkerTools, 'repository_integrity_check.sh')], { cwd: caller, env: { ...process.env, DAW_REPOSITORY_ROOT: '' } });
+    assert(checkerCanary.status !== 0, 'symlinked checker was accepted');
+    pass('wrapper-helper-checker-canaries', 'wrapper refuses symlinked helper directories and checker files');
 
     const gitSteeringResult = run('bash', [wrapper], {
       cwd: caller,
