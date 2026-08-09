@@ -73,9 +73,11 @@ Do not edit, clean, install into, build from, or otherwise touch
 4. `node_modules` is an ignored local directory, never a tracked symlink.
 5. The integrity guard inspects tracked repository state deterministically and
    cannot be bypassed by running it from another CWD.
-6. The guard distinguishes live executable/configuration surfaces from prose
-   with a narrow, documented classification. Do not exclude all Markdown or all
-   comments merely to make the baseline pass.
+6. The mandatory guard scope is a positive, documented set of live executable,
+   build, test, and configuration surfaces plus every tracked symlink. It scans
+   all content, including comments, inside those live files. Governance and prose
+   records are non-executable context for this guard; that semantic distinction
+   must not become a broad path allowlist that can hide a live file.
 7. No secret value, `.env` content, or credential path is printed by tests.
 8. Existing engine, SHM, protocol, and audio behavior is unchanged.
 
@@ -143,6 +145,19 @@ npm ci --prefix ui-web
 node --test ui-web/test/unit.mjs
 ```
 
+The baseline `ui-web/node_modules` is a symlink into the frontend-owned worktree.
+`npm ci` removes and recreates `node_modules`, so running it before unlinking
+would rewrite another agent's dependency installation. Before any npm command:
+
+1. use `lstat`/`readlink` to prove the exact worktree path is a symlink;
+2. record the frontend target's state without modifying it;
+3. remove and stage only the symlink itself with no recursion and no trailing
+   slash;
+4. prove the assigned-worktree path is no longer a symlink and the frontend
+   target is unchanged; and only then
+5. run `npm ci`, which must create a real ignored directory inside the assigned
+   worktree.
+
 Replace the checker placeholder in the handoff with its actual stable command.
 Also run the repository scan that proves there are no forbidden live references
 and no tracked absolute symlinks. `npm ci` must create only the ignored local
@@ -155,6 +170,8 @@ Expected observations:
   fixture passes.
 - Commands run from `/tmp` still report/use `/Users/jak/src/daw-ae-p0-roots`.
 - No command reads or changes a sibling checkout.
+- The frontend worktree's dependency directory is unchanged across the link
+  removal and local install.
 - `git status --short` contains only intended source changes before commit and is
   clean after the ticket commit.
 

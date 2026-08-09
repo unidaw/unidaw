@@ -11,8 +11,8 @@ Program:       ACTIVE -- AE-P0 only
 Reason:        Undo complete; baseline build/provenance verification in progress
 Target repo:   /Users/jak/src/daw-backend
 Baseline SHA:  5bef283798b59c2c4f5720292554c7ab8c265be6
-Worktrees:     AE-P0.1 pending creation
-Active tasks:  AE-P0; AE-P0.1 packet ready, not assigned
+Worktrees:     AE-P0.1 at /Users/jak/src/daw-ae-p0-roots
+Active tasks:  AE-P0 baseline verification; AE-P0.1 implementation
 File locks:    protocol hotspots frozen; root CMake reserved narrowly for AE-P0.1
 Integration:   architecture-audit fast-forwarded to frozen baseline
 ```
@@ -30,7 +30,8 @@ The owner-authorized activation trigger has been satisfied:
   without conflict to the frozen baseline.
 - The plan and this ledger were committed as the governance bootstrap at
   `762fe34` before any remediation worktree was created.
-- No remediation task worktree has yet been created.
+- The first remediation worktree was created only after its complete task packet
+  was committed.
 
 ## Bootstrap roster
 
@@ -83,7 +84,7 @@ watcher:  none (required for Codex)
 | Ticket | State | Dependency | Owner | Reviewer | Worktree | Commit |
 |---|---|---|---|---|---|---|
 | `AE-P0` | `ACTIVE` | Undo + owner `GO` satisfied | `backend` | unassigned | root | `5bef283` baseline |
-| `AE-P0.1` | `READY` | frozen baseline + planning bootstrap | `codex-worker-1` | `claude-worker-1` | pending `/Users/jak/src/daw-ae-p0-roots` | none |
+| `AE-P0.1` | `ACTIVE` | frozen baseline + planning bootstrap | `codex-worker-1` | `claude-worker-1` | `/Users/jak/src/daw-ae-p0-roots` | none |
 | `AE-P0.2` | `BLOCKED` | `AE-P0.1` + baseline results | unassigned | unassigned | none | none |
 | `AE-P1.1` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P1.2` | `BLOCKED` | `AE-P1.1` | unassigned | unassigned | none | none |
@@ -139,10 +140,13 @@ included in handoffs. The bus never substitutes for a commit, review, or gate.
 | 2026-08-09 | Architecture branch fast-forwarded | `d04331d..5bef283`, exact `main`/`origin/main` match |
 | 2026-08-09 | Governance bootstrap committed | `762fe34` adds the approved plan and mutable execution ledger |
 | 2026-08-09 | Frozen baseline independently acknowledged | `[AE-P0][ACK]` from all four workers; exact path/SHA/HOLD confirmed |
-| 2026-08-09 | Existing worktrees inventoried read-only | `daw` clean at `5bef283`; `daw-play` detached/clean at `3259862`; frontend-owned `daw-web` dirty/unmerged at `97348ed`; no worktree modified |
+| 2026-08-09 | Existing worktrees inventoried read-only | At inventory time: `daw` clean at `5bef283`; `daw-play` detached/clean at `3259862`; frontend-owned `daw-web` dirty/unmerged at `97348ed`; no worktree modified |
+| 2026-08-09 | Frontend worktree status updated by its owner | `daw-web` later clean at `afdb605`, containing `main` with divergence `0/220`; ownership and backend baseline unchanged |
 | 2026-08-09 | Cross-worktree verification substitution reproduced | `tools/verify.sh` and `tools/webstack.sh` target sibling worktrees; other executable fallbacks target `/Users/jak/src/daw-web`; tracked `ui-web/node_modules` is an absolute symlink |
 | 2026-08-09 | Clean RelWithDebInfo configure captured | CMake 4.3.3, Apple clang 17.0.0, arm64 Darwin, Boost 1.90.0, JUCE cache reports 8.0.12, SHM v37 |
 | 2026-08-09 | Build-contract drift reproduced | CMake requests C++17 while source uses C++20 defaulted comparisons; unrestricted parallel build drove load average above 175 and was safely resumed with six jobs |
+| 2026-08-09 | AE-P0.1 assigned and acknowledged | `/Users/jak/src/daw-ae-p0-roots` on `ae/p0-roots`; owner `codex-worker-1`, reviewer `claude-worker-1`; packet `docs/architecture/tasks/AE-P0.1.md` |
+| 2026-08-09 | Symlink-install hazard stopped before execution | Reviewer proved `npm ci` would traverse the tracked link and rewrite frontend dependencies; packet amended to unlink only the verified symlink before local install |
 
 ## AE-P0 baseline findings
 
@@ -151,9 +155,10 @@ sibling checkout:
 
 - Canonical source is `/Users/jak/src/daw-backend` on `architecture-audit` at
   `5bef283798b59c2c4f5720292554c7ab8c265be6`.
-- `/Users/jak/src/daw-web` is a divergent, frontend-owned worktree with existing
-  modifications and unmerged paths. The architecture program will neither test
-  it as the backend baseline nor modify it.
+- `/Users/jak/src/daw-web` was divergent and unmerged during the initial inventory
+  and was later reported clean at `afdb605` by its owner. It remains a divergent,
+  frontend-owned worktree. The architecture program will neither test it as the
+  backend baseline nor modify it.
 - `tools/verify.sh`, `tools/webstack.sh`, `tools/ask_path_check.sh`,
   `tools/demo_rehearsal.sh`, and `ui-web/test/e2e.mjs` contain executable
   sibling-worktree fallbacks. `ui-web/node_modules` is a tracked absolute
