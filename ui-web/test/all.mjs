@@ -422,8 +422,22 @@ if (flakes.length) {
      * pushed the real cause out. A whole sweep was diagnosed from those two warnings before
      * anyone noticed they were about mtimes. Suite output only.
      */
-    const lines = (r.firstOut || '').split('\n')
-      .filter((l) => /FAIL|not ok|Error|error:/i.test(l) && !/^\s*stack: /.test(l));
+    /*
+     * RANKED, NOT FILTERED — and the second version of this was as wrong as the first.
+     *
+     * Originally this matched /FAIL/ and let stack.mjs's staleness warning ("a target that FAILED
+     * to build leaves its old binary in place") fill all six slots, pushing the suite's own
+     * failures out. I fixed that by DROPPING stack: lines. Then a merge left juce_host_process 55
+     * hours older than the event_payloads.h it speaks, stack.mjs said so precisely, and under the
+     * new filter that line would have been thrown away — the one time it was the whole diagnosis.
+     *
+     * So: a suite's own failures first, harness warnings after, and the warnings only take the
+     * space nobody else wants. Neither crowds the other out.
+     */
+    const all = (r.firstOut || '').split('\n').filter((l) => /FAIL|not ok|Error|error:/i.test(l));
+    const harness = all.filter((l) => /^\s*stack: /.test(l));
+    const own = all.filter((l) => !/^\s*stack: /.test(l));
+    const lines = [...own, ...harness];
     console.log(lines.slice(0, 6).map((l) => '      ' + l.trim()).join('\n')
       || '      (no failure line at all — see the duration above: a run many times its usual '
          + 'length was killed as a hang, and a hang prints nothing)');
