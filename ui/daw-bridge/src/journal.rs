@@ -63,6 +63,8 @@ pub fn refusal_sentence(reason: &str) -> String {
         "version" => "the edit quoted a base version the engine has already moved past",
         // The sampler family, now that its refusals reach the journal. Same rule as the rest:
         // the engine's word mapped to a sentence a reader can act on.
+        "no_such_marker" => "there is no marker with that id — `get markers` lists the ones \
+                              that exist",
         "no_such_slot" => "there is no slot with that id on this sampler — slot ids start at 1 \
                            and `get sampler-kit` lists the ones that exist",
         "no_such_device" => "there is no device with that id on this track",

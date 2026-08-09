@@ -4903,14 +4903,14 @@ test('every journal op daw-cli waits for is one the engine writes', () => {
   // Each call names a SET of ops (one refused patcher command can be journalled under either the
   // family name or its own), so collect every name inside the slice, not just the first.
   const waited = [
-    ...cli.matchAll(/report_refusal_outcome\(\s*"[a-z-]+",\s*&\[([^\]]+)\]/g),
+    ...cli.matchAll(/report_refusal_outcome\(\s*(?:"[a-z-]+"|&format!\([^)]*\)),\s*&\[([^\]]+)\]/g),
     ...cli.matchAll(/refused_or\([^,]+,\s*journal_at,\s*&\[([^\]]+)\]/g),
   ].flatMap((m) => [...m[1].matchAll(/"([a-z_]+)"/g)].map((o) => o[1]));
   // Counted against the calls themselves rather than a number written here, so a new arm that
   // forgets its op is a failure instead of a constant somebody has to remember to bump.
   const calls = (cli.match(/(?<!fn )report_refusal_outcome\(/g) || []).length
     + (cli.match(/(?<!fn )refused_or\(/g) || []).length;
-  const named = (cli.match(/report_refusal_outcome\(\s*"[a-z-]+",\s*&\[/g) || []).length
+  const named = (cli.match(/report_refusal_outcome\(\s*(?:"[a-z-]+"|&format!\([^)]*\)),\s*&\[/g) || []).length
     + (cli.match(/refused_or\([^,]+,\s*journal_at,\s*&\[/g) || []).length;
   assert.equal(named, calls,
     `${calls} arms report an outcome but only ${named} name the ops to wait for`);

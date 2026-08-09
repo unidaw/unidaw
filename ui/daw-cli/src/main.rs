@@ -4902,13 +4902,25 @@ fn main() {
                         color_rgb: flag_u64(&args, "--color", Some(0)).unwrap_or(0) as u32,
                         name,
                     };
+                    /*
+                     * MARKERS ARE JOURNALLED UNDER "global", not under a track — the engine
+                     * passes 0xFFFFFFFF as the scope in engine_marker_commands.cpp, so a matcher
+                     * built from the track form would never see one.
+                     *
+                     * All five ops are named because the subcommand picks between them and this
+                     * one arm sends whichever was chosen. Measured with tools/refusal_probe.mjs:
+                     * `marker remove --id 4242` journals remove_marker rejected:no_such_marker
+                     * while this arm printed {"sent": "marker remove"} and exited 0.
+                     */
+                    let journal_at = journal_mark();
                     match handle.send_marker_command(payload) {
-                        Ok(()) => {
-                            // The engine names the id it assigned on the event stream
-                            // (marker.changed); an auto-id add has none to report here.
-                            println!("{{ \"sent\": \"marker {sub}\" }}");
-                            0
-                        }
+                        // The engine names the id it assigned on the event stream
+                        // (marker.changed); an auto-id add has none to report here.
+                        Ok(()) => report_refusal_outcome(
+                            &format!("marker {sub}"),
+                            &["add_marker", "remove_marker", "rename_marker", "move_marker",
+                              "set_marker_color"],
+                            UI_GLOBAL_SCOPE, journal_at, ""),
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }

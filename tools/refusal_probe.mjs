@@ -54,6 +54,18 @@ const PROBES = [
                          '--nanotick', '0', '--value', '0.25']],
   ['delete-automation', ['do', 'delete-automation', '--track', BAD, '--param', '0',
                          '--nanotick', '0']],
+  /*
+   * mixer and marker were left out of the first run because their flags were unverified, and a
+   * wrong flag is refused by daw-cli itself and reads exactly like an engine that never refuses.
+   * Both are now taken from the source: mixer parses --track/--gain-db/--mute/--pan/--solo in
+   * mixer_command, and marker takes subcommands add/move/remove/rename/color with --id.
+   *
+   * marker is the interesting one: engine_marker_commands.cpp DOES write a rejected: line (under
+   * "global" scope, not a track), so a refusal is expected here — and if it appears, daw-cli's
+   * marker arm is worth wiring, unlike the five that go unanswered.
+   */
+  ['mixer',             ['do', 'mixer', '--track', BAD, '--gain-db', '-6']],
+  ['marker',            ['do', 'marker', 'remove', '--id', BAD]],
   // CONTROLS: two families PROVEN to journal refusals. If these come back silent the probe itself
   // is broken — fixture, ids, or journal path — and every NONE above is worthless, not evidence.
   ['CONTROL sampler',   ['do', 'sampler-slot', '--track', '0', '--device', '1', '--slot', BAD,

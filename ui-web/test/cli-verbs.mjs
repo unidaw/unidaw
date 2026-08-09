@@ -712,6 +712,17 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
   // asserted, not just the count.
   const markersBefore = (afterNo?.markers ?? []).length;
   const mk = cli('do', 'marker', 'add', '--nanotick', '1920000', '--name', 'CLIVMARK');
+
+/*
+ * A MARKER REFUSAL, WHICH THIS ARM USED TO SWALLOW. Markers journal under "global" scope rather
+ * than a track, so the CLI has to look in the right place — measured with tools/refusal_probe.mjs,
+ * which showed remove_marker rejected:no_such_marker landing in history.jsonl while daw-cli
+ * printed {"sent": "marker remove"} and exited 0.
+ */
+const markBad = cli('do', 'marker', 'remove', '--id', '4242');
+check(!markBad.ok && /no marker with that id/.test(markBad.out),
+      'A REFUSED MARKER EDIT EXITS NON-ZERO AND SAYS WHY — markers are scoped "global", not to a track',
+      markBad.out.trim().slice(0, 160) || `(exit ok=${markBad.ok}, no output)`);
   check(mk.ok, 'do marker add is accepted', mk.out.slice(0, 120));
   const afterMk = await saved('cliv_batch_mk');
   const mine = (afterMk?.markers ?? []).find((m) => m.name === 'CLIVMARK');
