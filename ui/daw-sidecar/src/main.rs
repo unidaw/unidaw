@@ -6736,12 +6736,32 @@ fn diff_type_name(t: u16) -> &'static str {
 fn drain_engine_events(shm: String, events: Arc<EngineEvents>, chains: Arc<ChainStore>) {
     const EVERY: Duration = Duration::from_millis(50);
     const MAX_PER_TICK: usize = 32;
-    let mut handle = EngineHandle::attach(&shm, true).ok();
+    /*
+     * ATTACH LOUDLY. Every one of these used to be `attach(&shm, true).ok()`, which throws the
+     * error away — so a thread that never attached looked exactly like a ring with nothing in it,
+     * and the only periodic line was gated on having already seen something.
+     *
+     * Task #52 is "the page received ZERO engine events for a whole run, and the transport was
+     * certain it had lost nothing" (probe: seen 0->0, missed 0->0). A drain thread that never
+     * attaches produces that signature precisely, while frames stay healthy because they come
+     * from a different attach in a different thread. Fixing the cursor race did not stop it
+     * recurring, so this is the next thing to rule in or out — and it cannot be ruled out with a
+     * diagnostic that only speaks when the answer is already good news.
+     */
+    let attach_loud = |why: &str| -> Option<EngineHandle> {
+        match EngineHandle::attach(&shm, true) {
+            Ok(h) => { eprintln!("sidecar: event drain attached to {shm} ({why})"); Some(h) }
+            Err(e) => { eprintln!("sidecar: event drain ATTACH FAILED on {shm} ({why}): {e}"); None }
+        }
+    };
+    let mut handle = attach_loud("startup");
     let mut entries: Vec<EventEntry> = Vec::with_capacity(MAX_PER_TICK);
     let mut last_attach = Instant::now();
     let mut generation = SHM_GENERATION.load(Ordering::Acquire);
     let mut dropped: u64 = 0;
     let mut kinds = [0u64; 16];
+    let mut drained_total: u64 = 0;
+    let mut forwarded_total: u64 = 0;
     let mut last_report = Instant::now();
     loop {
         thread::sleep(EVERY);
@@ -6754,20 +6774,21 @@ fn drain_engine_events(shm: String, events: Arc<EngineEvents>, chains: Arc<Chain
         if g != generation {
             generation = g;
             last_attach = Instant::now();
-            handle = EngineHandle::attach(&shm, true).ok();
+            handle = attach_loud("generation changed");
             chains.reset();
         }
         let Some(h) = handle.as_ref() else {
             // The engine may not be up yet, or may have restarted under us.
             if last_attach.elapsed() > Duration::from_secs(2) {
                 last_attach = Instant::now();
-                handle = EngineHandle::attach(&shm, true).ok();
+                handle = attach_loud("retry");
                 if handle.is_some() { chains.reset(); }
             }
             continue;
         };
         entries.clear();
         let n = h.drain_ui_out(&mut entries, MAX_PER_TICK);
+        drained_total += n as u64;
         // NO early return on an empty tick. The histogram below used to sit under
         // `if n == 0 { continue; }`, so it could only ever print on a tick that
         // happened to drain something — and diffs arrive in a BURST at load and
@@ -6823,7 +6844,7 @@ fn drain_engine_events(shm: String, events: Arc<EngineEvents>, chains: Arc<Chain
                 continue;
             }
             match decode_engine_event(e) {
-                Some(json) => events.push(json),
+                Some(json) => { forwarded_total += 1; events.push(json); }
                 // Counted, not ignored. A silent drop here would make the ring
                 // look quiet when it is busy with things we chose not to name.
                 None => dropped += 1,
@@ -6834,6 +6855,12 @@ fn drain_engine_events(shm: String, events: Arc<EngineEvents>, chains: Arc<Chain
         // breakdown by type says exactly which capability is publishing and
         // which is silent.
         if last_report.elapsed() > Duration::from_secs(10) {
+            // UNCONDITIONAL, unlike the histogram below. "attached=false" or
+            // "attached=true drained=0" are different diagnoses and both are invisible if the
+            // only line printed requires something to have arrived first.
+            eprintln!("sidecar: event drain attached={} drained={drained_total} \
+                       forwarded={forwarded_total} not-forwarded={dropped}",
+                      handle.is_some());
             last_report = Instant::now();
             let seen: Vec<String> = kinds.iter().enumerate()
                 .filter(|(_, n)| **n > 0)
