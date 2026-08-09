@@ -258,6 +258,12 @@ void emitChainError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId, u
 
     auto ringUiOut = getRingUiOut();
     if (ringUiOut.mask == 0) {
+      // NOT SILENTLY. This early return is where task #52 lives: the UI out ring is unavailable at
+      // emit time, so the refusal is computed, logged to DAW_EVENT, and then dropped on the floor
+      // with nothing anywhere counting it. The sidecar's ring cursors proved the engine was not
+      // writing — read == write, frozen, while the log showed refusals — and this is the only path
+      // that produces that.
+      DAW_EVENT("ui_diff.dropped_no_ring").field("emitter", "emitChainError");
       return;
     }
     daw::UiChainErrorPayload payload{};
@@ -331,6 +337,12 @@ void emitModError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId,
 
     auto ringUiOut = getRingUiOut();
     if (ringUiOut.mask == 0) {
+      // NOT SILENTLY. This early return is where task #52 lives: the UI out ring is unavailable at
+      // emit time, so the refusal is computed, logged to DAW_EVENT, and then dropped on the floor
+      // with nothing anywhere counting it. The sidecar's ring cursors proved the engine was not
+      // writing — read == write, frozen, while the log showed refusals — and this is the only path
+      // that produces that.
+      DAW_EVENT("ui_diff.dropped_no_ring").field("emitter", "emitModError");
       return;
     }
     daw::UiModErrorPayload payload{};
@@ -362,6 +374,12 @@ void emitRoutingError(UiPublishDeps& deps, uint16_t errorCode, uint32_t trackId)
 
     auto ringUiOut = getRingUiOut();
     if (ringUiOut.mask == 0) {
+      // NOT SILENTLY. This early return is where task #52 lives: the UI out ring is unavailable at
+      // emit time, so the refusal is computed, logged to DAW_EVENT, and then dropped on the floor
+      // with nothing anywhere counting it. The sidecar's ring cursors proved the engine was not
+      // writing — read == write, frozen, while the log showed refusals — and this is the only path
+      // that produces that.
+      DAW_EVENT("ui_diff.dropped_no_ring").field("emitter", "emitRoutingError");
       return;
     }
     daw::UiRoutingErrorPayload payload{};
