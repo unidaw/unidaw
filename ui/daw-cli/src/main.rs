@@ -3571,11 +3571,27 @@ fn main() {
                                 )
                             });
                             buf.extend_from_slice(bytes);
+                            /*
+                             * THE LAST ARM THAT COULD BE REFUSED AND WAS NOT READING IT. Unlike
+                             * the five families in #55, SetClipText carries a base_version and
+                             * goes through requireMatchingClipVersion — the guard that writes
+                             * rejected:no_track and rejected:version. Measured, not assumed:
+                             * tools/refusal_probe.mjs against a track that does not exist gives
+                             * `set_clip_text -> no_track`, while this arm printed {"sent": ...}
+                             * and exited 0.
+                             *
+                             * That is the #46 family seen from the CLI: a rename is arbitrated
+                             * PER TRACK, so a stale base lands on whichever track was edited last
+                             * and is refused everywhere else — silently, until now.
+                             */
+                            let journal_at = journal_mark();
                             match handle.send_bulk(&buf) {
                                 Ok(()) => {
                                     let field = if is_name { "name" } else { "source_path" };
-                                    println!("{{ \"sent\": \"clip-text\", \"track\": {track}, \"clip\": {clip}, \"field\": {field:?}, \"text\": {t:?}, \"base_version\": {base} }}");
-                                    0
+                                    report_refusal_outcome(
+                                        "clip-text", &["set_clip_text"], track, journal_at,
+                                        &format!(", \"clip\": {clip}, \"field\": {field:?}, \"text\": {t:?}, \"base_version\": {base}"),
+                                        None)
                                 }
                                 Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                             }

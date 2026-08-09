@@ -66,6 +66,15 @@ const PROBES = [
    */
   ['mixer',             ['do', 'mixer', '--track', BAD, '--gain-db', '-6']],
   ['marker',            ['do', 'marker', 'remove', '--id', BAD]],
+  /*
+   * clip-name and clip-source both send SetClipText, and unlike the five above they carry a
+   * base_version and go through requireMatchingClipVersion — the guard that writes
+   * rejected:no_track and rejected:version. So a refusal is expected here. Neither verb is driven
+   * by cli-verbs, which is how they stayed unwired: the parity check greps daw-cli for the verb
+   * NAME, and a name is present whether or not anything exercises it.
+   */
+  ['clip-name',         ['do', 'clip-name', '--track', BAD, '--clip', '1', '--name', 'PROBE']],
+  ['rename',            ['do', 'rename', '--track', BAD, '--name', 'PROBE']],
   // CONTROLS: two families PROVEN to journal refusals. If these come back silent the probe itself
   // is broken — fixture, ids, or journal path — and every NONE above is worthless, not evidence.
   ['CONTROL sampler',   ['do', 'sampler-slot', '--track', '0', '--device', '1', '--slot', BAD,

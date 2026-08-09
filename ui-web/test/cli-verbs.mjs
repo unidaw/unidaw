@@ -668,6 +668,20 @@ check(JSON.stringify(chainOf(afterRm, 0)) === '[7]',
         'CLIP-NAME REACHES THE CLIP — the name is stored',
         `clip ${clipId} name=${JSON.stringify(nameNow)}`);
 
+  /*
+   * AND A REFUSED RENAME MUST SAY SO. This arm was exercised all along — the check above drives it
+   * — but it printed {"sent": ...} and exited 0 whatever the engine did, so the one thing #46 is
+   * about was invisible here. SetClipText is arbitrated PER TRACK, so a stale base lands on
+   * whichever track was edited last and is refused everywhere else.
+   *
+   * A track that does not exist is the portable way to be refused; the engine answers no_track.
+   */
+  const cnBad = cli('do', 'clip-name', '--track', '4242', '--clip', String(clipId),
+                    '--name', 'NOPE');
+  check(!cnBad.ok && /no such track/.test(cnBad.out),
+        'A REFUSED CLIP RENAME EXITS NON-ZERO AND SAYS WHY',
+        cnBad.out.trim().slice(0, 160) || `(exit ok=${cnBad.ok}, no output)`);
+
   // ── set-bypass, on a device this fixture actually has ────────────────────────────────────
   //
   // Device 3 is the sampler the fixture puts on track 0. Read the flag back per DEVICE, because
