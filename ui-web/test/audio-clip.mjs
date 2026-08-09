@@ -294,7 +294,21 @@ if (box && box.w > 40) {
 console.log('\n[dragging the gain]');
 await page.evaluate(({ t, c }) => window.__uni.run(`audio-clip ${t} ${c} gain 0`),
                     { t: target.track, c: target.clipId });
-await page.waitForTimeout(1000);
+/*
+ * WAIT FOR THE VALUE, NOT FOR A SECOND. This was `waitForTimeout(1000)`, and under sweep load the
+ * round trip — command, engine, publish, page state, DOM — outran it: the badge still showed the
+ * gain from the fade test above, so `and it reads 0.0` failed with -3.5 and took the four checks
+ * after it down with it. 6 of 41, and it passed alone every time, which is what a fixed sleep
+ * looks like when the machine is busy.
+ *
+ * `_gainMb` is what the renderer was HANDED; the text and the unity class are what it MADE of it.
+ * So waiting on the number and then asserting the string keeps the rendering under test — waiting
+ * for the badge to say "0.0" would have been waiting for the thing the next line asserts.
+ */
+await page.waitForFunction((clipId) => {
+  const el = [...document.querySelectorAll('.ar-clip')].find((x) => x._clipId === clipId);
+  return !!el && el._gainMb === 0;
+}, target.clipId, { timeout: 15000 });
 // The pointer is still sitting on the clip from the fade drag above, and the badge is
 // revealed on hover — so park it somewhere neutral before measuring anything about the
 // resting state.
