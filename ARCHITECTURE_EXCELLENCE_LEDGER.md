@@ -7,15 +7,15 @@ ledger records current orchestration state.
 ## Global state
 
 ```text
-Program:       ACTIVE -- AE-P0 only; current-main rebaseline in progress
+Program:       ACTIVE -- AE-P0.1 integrated; AE-P0.2 ownership manifest next
 Reason:        execution baseline selected at current main; old evidence remains historical
 Target repo:   /Users/jak/src/daw-backend
 Baseline SHA:  62bafdc6cf1cd53168ce73d098cd6acc78659be8
 Historical evidence SHA: 5bef283798b59c2c4f5720292554c7ab8c265be6
-Worktrees:     AE-P0.1 at /Users/jak/src/daw-ae-p0-roots
-Active tasks:  preserve evidence; revise AE-P0.1 after baseline selection; ADR preflight
+Worktrees:     AE-P0.1 integration landed in /Users/jak/src/daw at c33da66; review worktree preserved at /Users/jak/src/daw-ae-p0-followup
+Active tasks:  Lane 0 AE-P0.2 ownership manifest; preserve AE-P0.1 evidence and track F1-F3 follow-ups
 File locks:    protocol hotspots frozen; root CMake reserved narrowly for AE-P0.1
-Integration:   HOLD -- refresh evidence and rebase repair packet before integration
+Integration:   AE-P0.1 COMPLETE -- product main contains packet plus reviewed repair chain through c33da66
 ```
 
 No worker may edit, build, test, create a branch/worktree, commit, or self-assign
@@ -39,8 +39,8 @@ The owner-authorized activation trigger has been satisfied:
 | Handle | Kind | Initial pairing | State |
 |---|---|---|---|
 | `backend` | Codex | Orchestrator/integrator | `ACTIVE: AE-P0` |
-| `codex-worker-1` | Codex | Lane A implementation owner first | `HOLD: preserve d722306; revision pending baseline` |
-| `claude-worker-1` | Claude | Lane A independent reviewer first | `COMPLETE: CHANGES_REQUESTED on d722306` |
+| `codex-worker-1` | Codex | Lane A implementation owner first | `COMPLETE: final repair chain delivered; original lane clean at 2f7aa93` |
+| `claude-worker-1` | Claude | Lane A independent reviewer first | `APPROVED: e4e08de exact; wrapper-only successor 0f48f69 documented` |
 | `claude-worker-2` | Claude | Lane B discovery owner first | `HOLD: evidence and current-main delta delivered` |
 | `codex-worker-2` | Codex | Lane B independent reviewer first | `HOLD: awaiting baseline and exact ADR SHA` |
 
@@ -87,10 +87,10 @@ watcher:  none (required for Codex)
 | Ticket | State | Dependency | Owner | Reviewer | Worktree | Commit |
 |---|---|---|---|---|---|---|
 | `AE-P0` | `ACTIVE` | current-main rebaseline + formal review | `backend` | unassigned | root | `62bafdc` execution baseline |
-| `AE-P0.1` | `HOLD` | packet `258f423` acknowledgement required | `codex-worker-1` | `claude-worker-1` | `/Users/jak/src/daw-ae-p0-roots-current` | current-main packet paused for handoff |
+| `AE-P0.1` | `COMPLETE` | packet `258f423` + independent review | `codex-worker-1` | `claude-worker-1` | `/Users/jak/src/daw-ae-p0-followup` | product main `c33da66`; chain ends `0f48f69` |
 | `AE-P0.2 discovery` | `ESCALATED_TO_ADR` | frozen baseline + packet | `claude-worker-2` | `codex-worker-2` | read-only root | four rejected designs; evidence complete |
 | `AE-P0.2 ADR` | `APPROVED` | current-main inventory + exact review | `backend` | `codex-worker-2` | root | exact SHA `7dff997`; approval received |
-| `AE-P0.2 implementation` | `BLOCKED` | `AE-P0.1` integration + ownership manifest | unassigned | unassigned | none | ADR approved; waits on P0.1 |
+| `AE-P0.2 implementation` | `READY_FOR_MANIFEST` | `AE-P0.1` integration + ownership manifest | backend | codex-worker-2 | root | ADR approved; manifest/validator is next gate |
 | `AE-P0.3` | `BLOCKED` | AE-P0.1 review + frontend ownership release | unassigned | unassigned | none | packet ready |
 | `AE-P1.1` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P1.2` | `BLOCKED` | `AE-P1.1` | unassigned | unassigned | none | none |
@@ -196,6 +196,10 @@ never evaluated against different packet generations.
 | 2026-08-10 | AE-P0.2 ADR independently approved | `codex-worker-2` approved exact SHA `7dff997`; no blockers remain in schema/trust, provenance, allocation, terminal selection, fixture closure, inventory, ownership, or GC controls |
 | 2026-08-10 | Current-main metadata-only configure completed | Fresh `/Users/jak/src/daw/build-ae-current` generated from `62bafdc` with RelWithDebInfo and patcher Rust enabled; no build, test, install, or runtime process launched |
 | 2026-08-10 | AE-P0.2 current-main delta checked read-only | Core findings survive at `62bafdc`; registered tests changed from 213 to 214 and shell inventory from 153 to 156, so configured counts and the complete inventory must be regenerated after baseline selection |
+| 2026-08-10 | AE-P0.1 current-main implementation integrated | Product `/Users/jak/src/daw` now contains packet `258f423` and reviewed repair chain `2f7aa93 -> 88f4449 -> c3642a4 -> e4e08de -> 0f48f69`, ending at integration commit `c33da66`; Claude approved exact `e4e08de`, and `0f48f69` records the wrapper-only bootstrap contract |
+| 2026-08-10 | AE-P0.1 post-integration verification | Product repository integrity self-test and production scan pass: 730 tracked/worktree paths, 670 index/worktree live files, zero non-ignored untracked paths; READY-retirement self-test, shell syntax, and Node syntax pass |
+| 2026-08-10 | AE-P0.1 nonblocking follow-ups recorded | F1: replace five source-text controls with behavioral hostile probes; F2: remove/initialize redundant post-wait listener diagnostic recheck; F3: reconcile wrapper-only policy with repository_root canonicalization prose and document `/tmp` behavior |
+| 2026-08-10 | AE-P0.2 Lane 0 assigned | `codex-worker-2` asked for a pre-enumerated packet and isolated proposal before adding generated OwnershipManifest/OwnershipTransfer schemas; no downstream lane authorized |
 
 ## AE-P0 baseline findings
 
