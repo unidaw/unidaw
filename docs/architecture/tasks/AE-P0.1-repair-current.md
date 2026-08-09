@@ -49,8 +49,22 @@ engine, SHM protocol, plugin architecture, or unrelated frontend behavior.
 
 ## Ownership and forbidden scope
 
-Owned files are limited to the checkout-root verification helpers, their direct
-self-tests, the web-stack helper/test harness, `.gitignore`, and this packet.
+Owned files are limited to the following exact surfaces and their directly
+required test fixtures:
+
+- `tools/verify.sh`, `tools/webstack.sh`, `tools/ask_path_check.sh`,
+  `tools/demo_rehearsal.sh`, `tools/hunt52.sh`, and `tools/lib/*` helpers;
+- `ui-web/test/{e2e,stack,unit,serve,ask-live}.mjs` and directly required test
+  fixtures;
+- `CMakeLists.txt` only for the relevant test-registration/guard wiring;
+- `.gitignore`, operational Markdown consumed by registered checks (including
+  `docs/TRACKER_GAP_LIST.md`), and this packet.
+
+This amendment explicitly authorizes the three live surfaces discovered after
+the original packet was cut: `tools/hunt52.sh`, `ui-web/test/unit.mjs`, and
+the consumed operational Markdown. It does not authorize a broad documentation
+allowlist or unrelated prose cleanup.
+
 Do not edit C++ engine sources, `platform_juce`, SHM/protocol files, Rust bridge
 protocol definitions, generated artifacts, or unrelated UI behavior. Do not
 modify the historical worktree `/Users/jak/src/daw-ae-p0-roots` or commit into
