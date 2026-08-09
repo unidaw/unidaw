@@ -2129,9 +2129,21 @@ fn set_row_ops(handle: &EngineHandle, args: &Value) -> ToolResult {
         trig_condition: trig_condition.clamp(0, 255) as u8,
         reserved: [0; 8],
     };
-    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_row_ops(p) {
-        Ok(()) => refused_or(track as u32, journal_at, &["set_row_ops"], json!({
+        /*
+         * NO WAIT HERE, and it is measured rather than assumed. A wait costs the full 250ms
+         * window whenever nothing is refused, because silence is the only success signal these
+         * families publish — so it is worth paying only where the engine can write a refusal.
+         *
+         * This one cannot. Driven against a track that does not exist, the engine journals
+         * "op":"set_row_ops","outcome":"received" and NOTHING else: no rejection, no error, the edit
+         * simply vanishes. Two control verbs in the same probe (sampler, chain) wrote their
+         * refusals in the same run, so the silence is the engine's, not the probe's.
+         *
+         * That is an engine gap, not a client one — see the task about edits to a nonexistent
+         * track being silently dropped. When it is closed, this becomes a wait like the others.
+         */
+        Ok(()) => ToolResult::ok(json!({
             "sent": true, "track": track, "note_id": note_id, "set": named,
         })),
         Err(e) => ToolResult::err(e),
@@ -2815,9 +2827,21 @@ fn set_audio_clip(handle: &EngineHandle, args: &Value) -> ToolResult {
         value,
         reserved1: [0; 4],
     };
-    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_audio_clip_field(p) {
-        Ok(()) => refused_or(track, journal_at, &["set_audio_clip_field"], json!({ "sent": true, "clip": clip, "value": value })),
+        /*
+         * NO WAIT HERE, and it is measured rather than assumed. A wait costs the full 250ms
+         * window whenever nothing is refused, because silence is the only success signal these
+         * families publish — so it is worth paying only where the engine can write a refusal.
+         *
+         * This one cannot. Driven against a track that does not exist, the engine journals
+         * "op":"set_audio_clip_field","outcome":"received" and NOTHING else: no rejection, no error, the edit
+         * simply vanishes. Two control verbs in the same probe (sampler, chain) wrote their
+         * refusals in the same run, so the silence is the engine's, not the probe's.
+         *
+         * That is an engine gap, not a client one — see the task about edits to a nonexistent
+         * track being silently dropped. When it is closed, this becomes a wait like the others.
+         */
+        Ok(()) => ToolResult::ok(json!({ "sent": true, "clip": clip, "value": value })),
         Err(e) => ToolResult::err(e),
     }
 }
@@ -3000,9 +3024,21 @@ fn set_clip_grid(handle: &EngineHandle, args: &Value) -> ToolResult {
         time_sig_denominator: den,
         reserved: [0; 4],
     };
-    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_clip_grid(p) {
-        Ok(()) => refused_or(track as u32, journal_at, &["set_clip_grid"], json!({
+        /*
+         * NO WAIT HERE, and it is measured rather than assumed. A wait costs the full 250ms
+         * window whenever nothing is refused, because silence is the only success signal these
+         * families publish — so it is worth paying only where the engine can write a refusal.
+         *
+         * This one cannot. Driven against a track that does not exist, the engine journals
+         * "op":"set_clip_grid","outcome":"received" and NOTHING else: no rejection, no error, the edit
+         * simply vanishes. Two control verbs in the same probe (sampler, chain) wrote their
+         * refusals in the same run, so the silence is the engine's, not the probe's.
+         *
+         * That is an engine gap, not a client one — see the task about edits to a nonexistent
+         * track being silently dropped. When it is closed, this becomes a wait like the others.
+         */
+        Ok(()) => ToolResult::ok(json!({
             "sent": true, "track": track, "clip": clip,
             "lines": lines, "numerator": num, "denominator": den,
         })),
