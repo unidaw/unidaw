@@ -98,7 +98,7 @@ export CARGO_TARGET_DIR="$CARGO_TARGET"
 
 NODE_MODULES="$ROOT/ui-web/node_modules"
 SOURCE_SHA="$(daw_git -C "$ROOT" rev-parse HEAD)" || exit 2
-SOURCE_STATUS="$(daw_git -C "$ROOT" status --porcelain --untracked-files=no)" || exit 2
+SOURCE_STATUS="$(daw_git -C "$ROOT" status --porcelain --untracked-files=all)" || exit 2
 if [ -n "$SOURCE_STATUS" ]; then SOURCE_STATE=dirty; else SOURCE_STATE=clean; fi
 if [ -L "$ROOT/build" ]; then
   printf '%s\n' 'verify: ERROR: checkout build directory is a symlink' >&2
@@ -138,6 +138,7 @@ printf 'verification temp root: %s\n' "$TEMP_ROOT"
 
 step "repository integrity" bash "$ROOT/tools/repository_integrity_check.sh"
 step "webstack free-port startup control" bash "$ROOT/tools/webstack.sh" --self-test-free-port
+step "webstack READY retirement control" bash "$ROOT/tools/webstack.sh" --self-test-ready-retirement
 
 if [ "$PLAN_ONLY" = "0" ]; then
   [ -d "$NODE_MODULES" ] && [ ! -L "$NODE_MODULES" ] \

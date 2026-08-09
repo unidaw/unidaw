@@ -124,7 +124,9 @@ function credentialFreeBase(source, tempDir) {
   // so a differently-cased credential or dependency variable cannot survive the
   // policy and win nondeterministically when Node builds the child's env block.
   for (const name of Object.keys(environment)) {
-    if (CHILD_STEERING_KEYS.has(name.toUpperCase())) delete environment[name];
+    if (name.toUpperCase().startsWith('DAW_') || CHILD_STEERING_KEYS.has(name.toUpperCase())) {
+      delete environment[name];
+    }
   }
   if (tempDir) {
     environment.TMPDIR = tempDir;

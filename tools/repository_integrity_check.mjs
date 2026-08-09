@@ -33,7 +33,20 @@ import {
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const MODULE_FILE = realpathSync(fileURLToPath(import.meta.url));
+const MODULE_LEXICAL_FILE = fileURLToPath(import.meta.url);
+function rejectSymlinkedAncestor(path) {
+  let current = sep;
+  const parts = path.split(sep).filter(Boolean);
+  for (let index = 0; index < parts.length - 1; index++) {
+    const part = parts[index];
+    current = join(current, part);
+    if (lstatSync(current).isSymbolicLink()) {
+      throw new Error(`repository integrity: refusing symlinked ancestor ${current}`);
+    }
+  }
+}
+rejectSymlinkedAncestor(MODULE_LEXICAL_FILE);
+const MODULE_FILE = realpathSync(MODULE_LEXICAL_FILE);
 const MODULE_REPOSITORY_ROOT = realpathSync(join(dirname(MODULE_FILE), '..'));
 const EXPECTED_PACKET_SHA = '258f42359dd3f500df06f4797c4f9d84cb9c4a1b';
 const EXPECTED_PRODUCT_BASELINE = '62bafdc6cf1cd53168ce73d098cd6acc78659be8';

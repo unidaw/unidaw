@@ -72,8 +72,13 @@ page_server_matches_checkout() {
   [ -n "$cwd" ] || return 1
   cwd="$(daw_canonical_directory "$cwd" 'page-server working directory' 2>/dev/null)" || return 1
   [ "$cwd" = "$UI_WEB" ] || return 1
+  ps -o command= -p "$pid" 2>/dev/null | grep -Fq 'test/serve.mjs' || return 1
   curl -fsS --max-time 3 "http://127.0.0.1:$PORT/index.html" 2>/dev/null \
     | cmp -s - "$UI_WEB/index.html"
+}
+
+sidecar_listener_pids() {
+  { lsof -nP -iTCP:"$WS_STATE" -sTCP:LISTEN -t 2>/dev/null; lsof -nP -iTCP:"$WS_CMD" -sTCP:LISTEN -t 2>/dev/null; } | sort -u || true
 }
 
 file_mode() {
@@ -353,6 +358,8 @@ esac
 PORT="$(canonical_port "${PORT:-8173}" PORT)" || exit 2
 WS_STATE="$(canonical_port "${WS_STATE:-$((PORT + 1))}" WS_STATE)" || exit 2
 WS_CMD="$(canonical_port "${WS_CMD:-$((PORT + 2))}" WS_CMD)" || exit 2
+[ "$WS_STATE" = "$((PORT + 1))" ] && [ "$WS_CMD" = "$((PORT + 2))" ] \
+  || { say "REFUSING TO START: WS_STATE and WS_CMD must be derived from PORT (+1/+2)"; exit 2; }
 [ "$PORT" != "$WS_STATE" ] && [ "$PORT" != "$WS_CMD" ] && [ "$WS_STATE" != "$WS_CMD" ] \
   || { say "REFUSING TO START: PORT, WS_STATE, and WS_CMD must be distinct"; exit 2; }
 PLUGIN_CACHE="$RUNDIR/plugin_cache.json"
@@ -404,7 +411,7 @@ say "cache   $PLUGIN_CACHE (derived from selected engine artifact directory)"
 say "presets $PATCHER_PRESETS (checkout source)"
 say "ask     $CREDENTIAL_MODE; sidecar cwd cannot discover checkout/home .env files"
 SOURCE_SHA="$(daw_git -C "$ROOT" rev-parse HEAD)" || exit 2
-SOURCE_STATUS="$(daw_git -C "$ROOT" status --porcelain --untracked-files=no)" || exit 2
+SOURCE_STATUS="$(daw_git -C "$ROOT" status --porcelain --untracked-files=all)" || exit 2
 if [ -n "$SOURCE_STATUS" ]; then SOURCE_STATE=dirty; else SOURCE_STATE=clean; fi
 say "source  $ROOT"
 say "revision $SOURCE_SHA ($SOURCE_STATE)"
@@ -693,6 +700,9 @@ SIDECAR_PID="$STARTED_SIDECAR_PID"
 alive "$SIDECAR_PID" || { say "sidecar exited during startup:"; head -3 "$LOG_DIR/sidecar.log"; exit 1; }
 printf '%s\n%s\n' "$ENGINE_PID" "$SIDECAR_PID" > "$PIDFILE"
 grep -q 'attached to' "$LOG_DIR/sidecar.log" || { say "sidecar did not attach:"; head -3 "$LOG_DIR/sidecar.log"; exit 1; }
+SIDECAR_LISTENERS="$(sidecar_listener_pids)"
+[ "$(printf '%s\n' "$SIDECAR_LISTENERS" | sed '/^$/d' | sort -u)" = "$SIDECAR_PID" ] \
+  || { say "sidecar listener ownership does not match sidecar pid $SIDECAR_PID (got $SIDECAR_LISTENERS)"; exit 1; }
 
 if [ "$PAGE_REUSE" = "0" ]; then
   # Fully detached: </dev/null and nohup. A backgrounded child that still holds

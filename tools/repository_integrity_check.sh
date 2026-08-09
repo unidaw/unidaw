@@ -6,7 +6,15 @@ if [ -L "${BASH_SOURCE[0]}" ]; then
   printf '%s\n' 'repository integrity: ERROR: refusing a symlinked entrypoint' >&2
   exit 2
 fi
-SCRIPT_DIR="$({ CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P; })"
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+case "$SCRIPT_PATH" in /*) ;; *) SCRIPT_PATH="$PWD/$SCRIPT_PATH" ;; esac
+current='/' remainder="${SCRIPT_PATH#/}"
+while [ -n "$remainder" ]; do
+  part="${remainder%%/*}"; if [ "$remainder" = "$part" ]; then remainder=''; else remainder="${remainder#*/}"; fi
+  [ -n "$part" ] || continue
+  current="$current$part"; [ ! -L "$current" ] || { printf '%s\n' 'repository integrity: ERROR: refusing a symlinked ancestor' >&2; exit 2; }; current="$current/"
+done
+SCRIPT_DIR="$({ CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd -P; })"
 . "$SCRIPT_DIR/lib/repository_root.sh"
 ROOT="$(daw_repository_root)"
 

@@ -5,7 +5,23 @@
 # sibling checkout.  It may name this checkout through another spelling (for example, a symlink),
 # but after canonicalization it must still be the checkout that contains this file.
 
-if [ -L "${BASH_SOURCE[0]}" ]; then
+_daw_reject_symlinked_ancestor() {
+  local path="$1"
+  case "$path" in /*) ;; *) path="$PWD/$path" ;; esac
+  local current='/'
+  local part
+  local remainder="${path#/}"
+  while [ -n "$remainder" ]; do
+    part="${remainder%%/*}"
+    if [ "$remainder" = "$part" ]; then remainder=''; else remainder="${remainder#*/}"; fi
+    [ -n "$part" ] || continue
+    current="$current$part"
+    [ ! -L "$current" ] || return 1
+    current="$current/"
+  done
+}
+
+if ! _daw_reject_symlinked_ancestor "${BASH_SOURCE[0]}" || [ -L "${BASH_SOURCE[0]}" ]; then
   printf '%s\n' 'repository root: ERROR: refusing a symlinked root helper' >&2
   return 1 2>/dev/null || exit 1
 fi
