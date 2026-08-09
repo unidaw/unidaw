@@ -4900,18 +4900,33 @@ test('no capability is reachable only by mouse', () => {
  */
 test('every journal op daw-cli waits for is one the engine writes', () => {
   const cli = readFileSync(new URL('../../ui/daw-cli/src/main.rs', import.meta.url), 'utf8');
+  // Each call names a SET of ops (one refused patcher command can be journalled under either the
+  // family name or its own), so collect every name inside the slice, not just the first.
+  const waited = [...cli.matchAll(/report_refusal_outcome\(\s*"[a-z-]+",\s*&\[([^\]]+)\]/g)]
+    .flatMap((m) => [...m[1].matchAll(/"([a-z_]+)"/g)].map((o) => o[1]));
+  // Counted against the calls themselves rather than a number written here, so a new arm that
+  // forgets its op is a failure instead of a constant somebody has to remember to bump.
+  const calls = (cli.match(/(?<!fn )report_refusal_outcome\(/g) || []).length;
+  const named = (cli.match(/report_refusal_outcome\(\s*"[a-z-]+",\s*&\[/g) || []).length;
+  assert.equal(named, calls,
+    `${calls} arms report an outcome but only ${named} name the ops to wait for`);
+  assert.ok(calls >= 15, `only ${calls} arms are wired to the journal at all`);
+
+  /*
+   * An op reaches the journal by TWO routes, and checking only one of them would reject a correct
+   * name. uiCommandTypeName maps a command type to its spelling; but the graph family journals
+   * under a hand-written "patcher_graph" that covers the whole family and belongs to no single
+   * command type. The set the engine can write is the union.
+   */
   const engine = readFileSync(new URL('../../apps/event_payloads.h', import.meta.url), 'utf8');
-  const waited = [...cli.matchAll(/report_sampler_outcome\(\s*"[a-z-]+",\s*"([a-z_]+)"/g)]
-    .map((m) => m[1]);
-  // Counted against the calls themselves rather than a number written here, so a new sampler arm
-  // that forgets its op is a failure instead of a constant somebody has to remember to bump.
-  const calls = (cli.match(/(?<!fn )report_sampler_outcome\(/g) || []).length;
-  assert.equal(waited.length, calls,
-    `${calls} sampler arms report an outcome but only ${waited.length} name the op to wait for`);
-  assert.ok(calls >= 13, `only ${calls} sampler arms are wired to the journal at all`);
   const written = new Set([...engine.matchAll(/return "([a-z_]+)";/g)].map((m) => m[1]));
+  for (const f of readdirSync(new URL('../../apps', import.meta.url))) {
+    if (!f.endsWith('.cpp')) continue;
+    const src = readFileSync(new URL(`../../apps/${f}`, import.meta.url), 'utf8');
+    for (const m of src.matchAll(/historyAppend\("([a-z_]+)"/g)) written.add(m[1]);
+  }
   const unknown = [...new Set(waited)].filter((op) => !written.has(op)).sort();
   assert.deepEqual(unknown, [],
-    'daw-cli waits for a journal op that uiCommandTypeName never emits — the refusal for these '
-    + 'verbs will never be seen, and the command will report success');
+    'daw-cli waits for a journal op no engine path ever writes — the refusal for these verbs will '
+    + 'never be seen, and the command will report success');
 });

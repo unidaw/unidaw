@@ -1357,11 +1357,16 @@ fn journal_scope(track: u32) -> String {
 /// block (~11.6ms at 512/44.1k), so the refusal is normally written within a few milliseconds;
 /// the margin is for a loaded machine, and `sampler-load --files` writes a whole kit one command
 /// at a time, so a longer window would be felt.
-fn await_refusal_only(track: u32, journal_at: u64, op: &str) -> ChainOutcome {
+fn await_refusal_only(track: u32, journal_at: u64, ops: &[&str]) -> ChainOutcome {
     let scope = journal_scope(track);
-    let want_op = format!("\"op\":\"{op}\"");
+    // A SET, NOT A NAME. One refused patcher command can be journalled under two different ops:
+    // emitPatcherGraphError writes the family name "patcher_graph", while refuse/refuseCfg in the
+    // per-device path write uiCommandTypeName's spelling of the command itself. Which one you get
+    // depends on whether the verb was given --device. Waiting for a single name means the other
+    // half of the verb's own behaviour reports success on a refusal.
+    let want: Vec<String> = ops.iter().map(|op| format!("\"op\":\"{op}\"")).collect();
     for _ in 0..50 {
-        if let Some(reason) = journal_refusal_for(journal_at, &scope, &want_op) {
+        if let Some(reason) = journal_refusal_for(journal_at, &scope, &want) {
             return ChainOutcome::Refused { reason };
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -1381,7 +1386,7 @@ fn await_refusal_only(track: u32, journal_at: u64, op: &str) -> ChainOutcome {
 /// within one window are still indistinguishable, because the journal line carries no device or
 /// file to tell them apart. `sampler-load` is the only verb the retry behaviour makes likely, and
 /// a wrong attribution there still names a real refusal of a real load.
-fn journal_refusal_for(offset: u64, scope: &str, want_op: &str) -> Option<String> {
+fn journal_refusal_for(offset: u64, scope: &str, want_ops: &[String]) -> Option<String> {
     use std::io::{Read, Seek};
     let mut file = std::fs::File::open(history_path()).ok()?;
     file.seek(std::io::SeekFrom::Start(offset)).ok()?;
@@ -1389,7 +1394,7 @@ fn journal_refusal_for(offset: u64, scope: &str, want_op: &str) -> Option<String
     file.read_to_string(&mut tail).ok()?;
     let want_scope = format!("\"scope\":\"{scope}\"");
     for line in tail.lines() {
-        if !line.contains(&want_scope) || !line.contains(want_op) {
+        if !line.contains(&want_scope) || !want_ops.iter().any(|op| line.contains(op)) {
             continue;
         }
         if let Some(at) = line.find("\"outcome\":\"rejected:") {
@@ -1405,12 +1410,12 @@ fn journal_refusal_for(offset: u64, scope: &str, want_op: &str) -> Option<String
 /// Two functions rather than one that owns the send, because every sampler verb has its own
 /// typed send method — send_sampler_set_slot, send_sampler_device, send_named and so on — and a
 /// helper that swallowed the send would need a closure per arm to say nothing extra.
-fn sampler_journal_mark() -> u64 {
+fn journal_mark() -> u64 {
     std::fs::metadata(history_path()).map(|m| m.len()).unwrap_or(0)
 }
 
-fn report_sampler_outcome(verb: &str, op: &str, track: u32, journal_at: u64, extra: &str) -> i32 {
-    match await_refusal_only(track, journal_at, op) {
+fn report_refusal_outcome(verb: &str, ops: &[&str], track: u32, journal_at: u64, extra: &str) -> i32 {
+    match await_refusal_only(track, journal_at, ops) {
         ChainOutcome::Refused { reason } => {
             eprintln!("daw-cli: the engine refused {verb} on track {track}: {}",
                       refusal_sentence(&reason));
@@ -3365,7 +3370,7 @@ fn main() {
                         } else {
                             let mut sent = 0usize;
                             let mut bad: Option<String> = None;
-                            let journal_at = sampler_journal_mark();
+                            let journal_at = journal_mark();
                             for (i, n) in names.iter().enumerate() {
                                 let key = (root as usize).saturating_add(i);
                                 if key > 127 {
@@ -3413,7 +3418,7 @@ fn main() {
                                     1
                                 }
                                 None => {
-                                    report_sampler_outcome("sampler-load", "sampler_load", track, journal_at,
+                                    report_refusal_outcome("sampler-load", &["sampler_load"], track, journal_at,
                                                           &format!(", \"device\": {device}, \"files\": {sent}, \"base_key\": {root}"))
                                 }
                             }
@@ -3446,10 +3451,10 @@ fn main() {
                             reserved: [0; 3],
                             name,
                         };
-                        let journal_at = sampler_journal_mark();
+                        let journal_at = journal_mark();
                         match handle.send_sampler_load(payload) {
                             Ok(()) => {
-                                report_sampler_outcome("sampler-load", "sampler_load", track, journal_at,
+                                report_refusal_outcome("sampler-load", &["sampler_load"], track, journal_at,
                                                       &format!(", \"device\": {device}, \"file\": {file:?}, \"root\": {root}, \"fixed_pitch\": {fixed}"))
                             }
                             Err(err) => {
@@ -3505,10 +3510,10 @@ fn main() {
                                 value: v,
                                 reserved: [0; 24],
                             };
-                            let journal_at = sampler_journal_mark();
+                            let journal_at = journal_mark();
                             match handle.send_sampler_set_device(payload) {
                                 Ok(()) => {
-                                    report_sampler_outcome("sampler-device", "sampler_set_device", track, journal_at, &format!(", \"device\": {device}, \"field\": {field_arg:?}, \"value\": {v}"))
+                                    report_refusal_outcome("sampler-device", &["sampler_set_device"], track, journal_at, &format!(", \"device\": {device}, \"field\": {field_arg:?}, \"value\": {v}"))
                                 }
                                 Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                             }
@@ -3574,10 +3579,10 @@ fn main() {
                                 )
                             });
                             buf.extend_from_slice(bytes);
-                            let journal_at = sampler_journal_mark();
+                            let journal_at = journal_mark();
                             match handle.send_bulk(&buf) {
                                 Ok(()) => {
-                                    report_sampler_outcome("sampler-slot-name", "sampler_set_slot_name", track, journal_at, &format!(", \"device\": {device}, \"slot\": {slot}, \"name\": {n:?}"))
+                                    report_refusal_outcome("sampler-slot-name", &["sampler_set_slot_name"], track, journal_at, &format!(", \"device\": {device}, \"slot\": {slot}, \"name\": {n:?}"))
                                 }
                                 Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                             }
@@ -3726,10 +3731,10 @@ fn main() {
                                 value,
                                 reserved: [0; 20],
                             };
-                            let journal_at = sampler_journal_mark();
+                            let journal_at = journal_mark();
                             match handle.send_sampler_set_slot(payload) {
-                                Ok(()) => report_sampler_outcome(
-                                    "sampler-slot", "sampler_set_slot", track, journal_at,
+                                Ok(()) => report_refusal_outcome(
+                                    "sampler-slot", &["sampler_set_slot"], track, journal_at,
                                     &format!(", \"device\": {device}, \"slot\": {slot}, \"field\": {field_arg:?}, \"value\": {value}")),
                                 Err(err) => {
                                     eprintln!("daw-cli: {err}");
@@ -3788,10 +3793,10 @@ fn main() {
                                 slot_base_key: base,
                                 reserved: [0; 6],
                             };
-                            let journal_at = sampler_journal_mark();
+                            let journal_at = journal_mark();
                             match handle.send_sampler_slice(payload) {
                                 Ok(()) => {
-                                    report_sampler_outcome("sampler-slice", "sampler_slice", track, journal_at, &format!(", \"source\": {source}, \"mode\": {mode_arg:?}, \"slots\": {make_slots}"))
+                                    report_refusal_outcome("sampler-slice", &["sampler_slice"], track, journal_at, &format!(", \"source\": {source}, \"mode\": {mode_arg:?}, \"slots\": {make_slots}"))
                                 }
                                 Err(err) => {
                                     eprintln!("daw-cli: {err}");
@@ -3910,12 +3915,12 @@ fn main() {
                         // The stream id is send_bulk's to pick — see its comment. This used
                         // to derive one from the pid here, which is constant for a process
                         // sending twice and would have interleaved two draws into one buffer.
-                        let journal_at = sampler_journal_mark();
+                        let journal_at = journal_mark();
                         match handle.send_bulk(&buf) {
                             Ok(()) => {
                                 let n = pts.len();
                                 let bytes = buf.len();
-                                report_sampler_outcome("sampler-env-draw", "sampler_set_envelope_points", track, journal_at, &format!(", \"points\": {n}, \"bytes\": {bytes}"))
+                                report_refusal_outcome("sampler-env-draw", &["sampler_set_envelope_points"], track, journal_at, &format!(", \"points\": {n}, \"bytes\": {bytes}"))
                             }
                             Err(err) => {
                                 eprintln!("daw-cli: {err}");
@@ -3987,10 +3992,10 @@ fn main() {
                         rate_hz: rate,
                         reserved1: [0; 5],
                     };
-                    let journal_at = sampler_journal_mark();
+                    let journal_at = journal_mark();
                     match handle.send_sampler_vintage(payload) {
                         Ok(()) => {
-                            report_sampler_outcome("sampler-vintage", "sampler_set_vintage", track, journal_at, &format!(", \"device\": {device}, \"mod_set\": {mod_set}, \"bits\": {bits}, \"rate_hz\": {rate}"))
+                            report_refusal_outcome("sampler-vintage", &["sampler_set_vintage"], track, journal_at, &format!(", \"device\": {device}, \"mod_set\": {mod_set}, \"bits\": {bits}, \"rate_hz\": {rate}"))
                         }
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
@@ -4038,10 +4043,10 @@ fn main() {
                         reserved1: 0,
                         reserved2: [0; 4],
                     };
-                    let journal_at = sampler_journal_mark();
+                    let journal_at = journal_mark();
                     match handle.send_sampler_filter(payload) {
                         Ok(()) => {
-                            report_sampler_outcome("sampler-filter", "sampler_set_filter", track, journal_at, &format!(", \"mod_set\": {mod_set}, \"type\": {filter_type}, \"cutoff\": {cutoff}, \"resonance\": {resonance}"))
+                            report_refusal_outcome("sampler-filter", &["sampler_set_filter"], track, journal_at, &format!(", \"mod_set\": {mod_set}, \"type\": {filter_type}, \"cutoff\": {cutoff}, \"resonance\": {resonance}"))
                         }
                         Err(err) => {
                             eprintln!("daw-cli: {err}");
@@ -4085,10 +4090,10 @@ fn main() {
                         depth_milli: amount,
                         reserved2: 0,
                     };
-                    let journal_at = sampler_journal_mark();
+                    let journal_at = journal_mark();
                     match handle.send_sampler_lfo(payload) {
                         Ok(()) => {
-                            report_sampler_outcome("sampler-lfo", "sampler_set_lfo", track, journal_at, &format!(", \"target\": {target}"))
+                            report_refusal_outcome("sampler-lfo", &["sampler_set_lfo"], track, journal_at, &format!(", \"target\": {target}"))
                         }
                         Err(err) => {
                             eprintln!("daw-cli: {err}");
@@ -4145,10 +4150,10 @@ fn main() {
                         reserved2: 0,
                         depth_milli: depth,
                     };
-                    let journal_at = sampler_journal_mark();
+                    let journal_at = journal_mark();
                     match handle.send_sampler_envelope(payload) {
                         Ok(()) => {
-                            report_sampler_outcome("sampler-env", "sampler_set_envelope", track, journal_at, &format!(", \"attack\": {attack}, \"decay\": {decay}, \"sustain\": {sustain}, \"release\": {release}, \"sync\": {sync}"))
+                            report_refusal_outcome("sampler-env", &["sampler_set_envelope"], track, journal_at, &format!(", \"attack\": {attack}, \"decay\": {decay}, \"sustain\": {sustain}, \"release\": {release}, \"sync\": {sync}"))
                         }
                         Err(err) => {
                             eprintln!("daw-cli: {err}");
@@ -4372,10 +4377,10 @@ fn main() {
                                 frame,
                                 reserved: [0; 8],
                             };
-                            let journal_at = sampler_journal_mark();
+                            let journal_at = journal_mark();
                             match handle.send_sampler_marker(payload) {
                                 Ok(()) => {
-                                    report_sampler_outcome("sampler-marker", "sampler_marker", track, journal_at, &format!(", \"source\": {source}, \"op\": {op_arg:?}, \"marker\": {marker}, \"frame\": {frame}"))
+                                    report_refusal_outcome("sampler-marker", &["sampler_marker"], track, journal_at, &format!(", \"source\": {source}, \"op\": {op_arg:?}, \"marker\": {marker}, \"frame\": {frame}"))
                                 }
                                 Err(err) => {
                                     eprintln!("daw-cli: {err}");
@@ -4414,10 +4419,10 @@ fn main() {
                         velocity,
                         reserved: [0; 6],
                     };
-                    let journal_at = sampler_journal_mark();
+                    let journal_at = journal_mark();
                     match handle.send_sampler_emit_rows(payload) {
                         Ok(()) => {
-                            report_sampler_outcome("sampler-emit-rows", "sampler_emit_rows", track, journal_at, &format!(", \"source\": {source}, \"at\": {at}, \"step\": {step}"))
+                            report_refusal_outcome("sampler-emit-rows", &["sampler_emit_rows"], track, journal_at, &format!(", \"source\": {source}, \"at\": {at}, \"step\": {step}"))
                         }
                         Err(err) => {
                             eprintln!("daw-cli: {err}");
@@ -4600,8 +4605,11 @@ fn main() {
                         edge_kind: kind,
                         ..Default::default()
                     };
+                    let journal_at = journal_mark();
                     match handle.send_patcher_graph_command(payload) {
-                        Ok(()) => { println!("{{ \"sent\": \"patcher-connect\", \"src\": {src}, \"dst\": {dst} }}"); 0 }
+                        Ok(()) => report_refusal_outcome(
+                            "patcher-connect", &["patcher_graph", "connect_patcher_nodes"], track, journal_at,
+                            &format!(", \"src\": {src}, \"dst\": {dst}")),
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }
@@ -4636,8 +4644,11 @@ fn main() {
                         config: cfg,
                         ..Default::default()
                     };
+                    let journal_at = journal_mark();
                     match handle.send_patcher_node_config(payload) {
-                        Ok(()) => { println!("{{ \"sent\": \"patcher-config\", \"node\": {node} }}"); 0 }
+                        Ok(()) => report_refusal_outcome(
+                            "patcher-config", &["set_patcher_node_config", "patcher_graph"], track, journal_at,
+                            &format!(", \"node\": {node}")),
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }

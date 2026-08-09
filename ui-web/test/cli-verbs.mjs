@@ -239,6 +239,22 @@ check(edgesOf(afterConn).length >= 1,
       + ' :: ' + ((readFileSync(ENGINE_LOG, 'utf8')
                     .match(/[^\n]*patcher_device_edit.rejected[^\n]*/g) || []).slice(-1).join('')));
 
+/*
+ * THE SAME CONNECTION BACKWARDS, WHICH THE ENGINE REFUSES. An event-out has no output and a
+ * euclidean has no event input, so this is the invalid_port case the comment above describes.
+ *
+ * It is here to prove daw-cli READS that refusal. The per-device patcher path journals under the
+ * command's own name (connect_patcher_nodes) while the pool path journals under the family name
+ * (patcher_graph) — so a CLI waiting for one name reports success for half of its own verb's
+ * behaviour, which is what this file exists to catch. Node count is untouched, so nothing below
+ * depends on the order.
+ */
+const connBad = cli('do', 'patcher-connect', '--track', '1', '--device', '1',
+                    '--src', String(ids[1]), '--dst', String(ids[0]), '--kind', 'event');
+check(!connBad.ok && /(no such port|cannot be connected|would make a cycle)/.test(connBad.out),
+      'A REFUSED PATCHER CONNECTION EXITS NON-ZERO AND SAYS WHY',
+      connBad.out.trim().slice(0, 160) || `(exit ok=${connBad.ok}, no output)`);
+
 const unnode = cli('do', 'patcher-unnode', '--track', '1', '--device', '1',
                    '--node', String(ids[1]));
 check(unnode.ok, 'do patcher-unnode runs', unnode.out.slice(0, 160));
