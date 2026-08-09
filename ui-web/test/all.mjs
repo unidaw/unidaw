@@ -415,8 +415,18 @@ if (flakes.length) {
   console.log(`\n${flakes.length} FLAKY — failed, then passed on a retry. Not a clean sweep:`);
   for (const r of flakes) {
     console.log(`  ${r.file.padEnd(24)} first run: ${r.firstSummary} (${(r.firstSecs || 0).toFixed(0)}s)`);
-    const lines = (r.firstOut || '').split('\n').filter((l) => /FAIL|not ok|Error|error:/i.test(l));
-    console.log(lines.slice(0, 6).map((l) => '      ' + l.trim()).join('\n'));
+    /*
+     * HARNESS WARNINGS ARE NOT FAILURES, and one of them says so in a way this filter used to
+     * believe: stack.mjs warns that "a target that FAILED to build leaves its old binary in
+     * place", which matches /FAIL/ and outranked nothing — it simply filled all six lines and
+     * pushed the real cause out. A whole sweep was diagnosed from those two warnings before
+     * anyone noticed they were about mtimes. Suite output only.
+     */
+    const lines = (r.firstOut || '').split('\n')
+      .filter((l) => /FAIL|not ok|Error|error:/i.test(l) && !/^\s*stack: /.test(l));
+    console.log(lines.slice(0, 6).map((l) => '      ' + l.trim()).join('\n')
+      || '      (no failure line at all — see the duration above: a run many times its usual '
+         + 'length was killed as a hang, and a hang prints nothing)');
   }
 }
 

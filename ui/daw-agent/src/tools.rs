@@ -1497,8 +1497,9 @@ fn edit_marker(handle: &EngineHandle, args: &Value) -> ToolResult {
         color_rgb: arg_u64(args, "color").unwrap_or(0) as u32,
         name,
     };
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_marker_command(p) {
-        Ok(()) => ToolResult::ok(json!({ "sent": true, "op": op, "id": id, "tick": tick })),
+        Ok(()) => refused_or(daw_bridge::journal::UI_GLOBAL_SCOPE, journal_at, &["add_marker", "remove_marker"], json!({ "sent": true, "op": op, "id": id, "tick": tick })),
         Err(e) => ToolResult::err(e),
     }
 }
@@ -1523,8 +1524,9 @@ fn insert_time(handle: &EngineHandle, args: &Value) -> ToolResult {
         numerator: 0, denominator: 0,
         reserved0: 0, reserved1: 0, reserved2: 0, reserved3: 0,
     };
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_arrange_time_command(p) {
-        Ok(()) => ToolResult::ok(json!({ "sent": true, "tick": tick, "bars": bars })),
+        Ok(()) => refused_or(daw_bridge::journal::UI_GLOBAL_SCOPE, journal_at, &["insert_remove_time"], json!({ "sent": true, "tick": tick, "bars": bars })),
         Err(e) => ToolResult::err(e),
     }
 }
@@ -1555,8 +1557,9 @@ fn set_time_signature(handle: &EngineHandle, args: &Value) -> ToolResult {
         denominator: den,
         reserved0: 0, reserved1: 0, reserved2: 0, reserved3: 0,
     };
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_arrange_time_command(p) {
-        Ok(()) => ToolResult::ok(json!({ "sent": true, "signature": sig, "tick": tick })),
+        Ok(()) => refused_or(daw_bridge::journal::UI_GLOBAL_SCOPE, journal_at, &["set_time_signature"], json!({ "sent": true, "signature": sig, "tick": tick })),
         Err(e) => ToolResult::err(e),
     }
 }
@@ -2003,8 +2006,9 @@ fn move_device(handle: &EngineHandle, args: &Value) -> ToolResult {
     let mut p = chain_blank(UiCommandType::MoveDevice, track as u32);
     p.device_id = device as u32;
     p.insert_index = pos as u32;
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_chain_command(p) {
-        Ok(()) => ToolResult::ok(json!({ "sent": true, "device": device, "position": pos })),
+        Ok(()) => refused_or(track as u32, journal_at, &["chain"], json!({ "sent": true, "device": device, "position": pos })),
         Err(e) => ToolResult::err(e),
     }
 }
@@ -2020,8 +2024,9 @@ fn set_bypass(handle: &EngineHandle, args: &Value) -> ToolResult {
     // it would carry a bypass of 0 and switch every device back on.
     p.flags = 1;
     p.bypass = if on { 1 } else { 0 };
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_chain_command(p) {
-        Ok(()) => ToolResult::ok(json!({ "sent": true, "device": device, "bypassed": on })),
+        Ok(()) => refused_or(track as u32, journal_at, &["chain"], json!({ "sent": true, "device": device, "bypassed": on })),
         Err(e) => ToolResult::err(e),
     }
 }
@@ -2646,6 +2651,11 @@ fn save_patcher_preset(handle: &EngineHandle, args: &Value) -> ToolResult {
     let p = daw_bridge::layout::UiPatcherPresetCommandPayload::named(
         UiCommandType::SavePatcherPreset, name);
     match handle.send_command(p.as_command()) {
+        // THE ONE TOOL HERE THAT DELIBERATELY DOES NOT WAIT. Waiting costs the full window
+        // whenever nothing is refused — silence is the success signal — so it is only worth
+        // paying where a refusal can actually arrive. No engine path journals a rejection for
+        // save_patcher_preset; grep apps/ for it and nothing writes "rejected:" against this
+        // command. Wiring it would buy 250ms of latency and no information.
         Ok(()) => ToolResult::ok(json!({ "sent": true, "name": name })),
         Err(e) => ToolResult::err(e),
     }
@@ -2793,17 +2803,21 @@ fn set_audio_clip(handle: &EngineHandle, args: &Value) -> ToolResult {
             "set_audio_clip needs \"value\" — 0 is a legal value for every one of these four \
              fields, so it cannot double as \"unset\"");
     };
+    // Bound once, so the payload and the refusal watch cannot drift onto different tracks —
+    // and so the parity check can see the op set, which it cannot through a call with a comma in it.
+    let track = arg_u64(args, "track").unwrap_or(0) as u32;
     let p = L::UiAudioClipFieldPayload {
         command_type: UiCommandType::SetAudioClipField as u16,
         field,
-        track_id: arg_u64(args, "track").unwrap_or(0) as u32,
+        track_id: track,
         clip_id: clip as u32,
         reserved0: 0,
         value,
         reserved1: [0; 4],
     };
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_audio_clip_field(p) {
-        Ok(()) => ToolResult::ok(json!({ "sent": true, "clip": clip, "value": value })),
+        Ok(()) => refused_or(track, journal_at, &["set_audio_clip_field"], json!({ "sent": true, "clip": clip, "value": value })),
         Err(e) => ToolResult::err(e),
     }
 }
@@ -3157,6 +3171,7 @@ fn modulate(handle: &EngineHandle, args: &Value) -> ToolResult {
         depth: arg_f64(args, "depth").unwrap_or(1.0).clamp(0.0, 1.0) as f32,
         bias: arg_f64(args, "bias").unwrap_or(0.0).clamp(-1.0, 1.0) as f32,
     };
+    let journal_at = daw_bridge::journal::journal_mark();
     if let Err(e) = handle.send_mod_link_command(add) { return ToolResult::err(e); }
     // The parameter's name, if the caller chose an explicit id. With AUTO the engine assigns
     // one this side cannot predict, so the naming has to be a second call — said plainly in
@@ -3188,7 +3203,7 @@ fn modulate(handle: &EngineHandle, args: &Value) -> ToolResult {
         reserved: [0u8; 16],
     };
     if let Err(e) = handle.send_mod_source_value(knob) { return ToolResult::err(e); }
-    ToolResult::ok(json!({
+    refused_or(track as u32, journal_at, &["mod_link"], json!({
         "sent": true, "link": link, "named": named, "macro": value,
         "note": if named { Value::Null } else { json!(
             "no \"link\" id was given, so the engine assigned one and the parameter is NOT \
@@ -3223,8 +3238,9 @@ fn unmodulate(handle: &EngineHandle, args: &Value) -> ToolResult {
         depth: 0.0,
         bias: 0.0,
     };
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_mod_link_command(p) {
-        Ok(()) => ToolResult::ok(json!({ "sent": true, "link": link })),
+        Ok(()) => refused_or(track as u32, journal_at, &["mod_link"], json!({ "sent": true, "link": link })),
         Err(e) => ToolResult::err(e),
     }
 }
@@ -3246,8 +3262,9 @@ fn set_macro(handle: &EngineHandle, args: &Value) -> ToolResult {
         value: value.clamp(0.0, 1.0) as f32,
         reserved: [0u8; 16],
     };
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_mod_source_value(p) {
-        Ok(()) => ToolResult::ok(json!({ "sent": true, "device": device, "value": value })),
+        Ok(()) => refused_or(track as u32, journal_at, &["mod_link"], json!({ "sent": true, "device": device, "value": value })),
         Err(e) => ToolResult::err(e),
     }
 }
