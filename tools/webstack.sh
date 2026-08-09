@@ -712,8 +712,6 @@ printf '%s\n%s\n' "$ENGINE_PID" "$SIDECAR_PID" > "$PIDFILE"
 wait_for_sidecar_listener "$WS_STATE" "$SIDECAR_PID" && wait_for_sidecar_listener "$WS_CMD" "$SIDECAR_PID" \
   || { SIDECAR_STATE_LISTENERS="$(sidecar_listener_pids "$WS_STATE")"; SIDECAR_CMD_LISTENERS="$(sidecar_listener_pids "$WS_CMD")"; \
     say "sidecar listener ownership/readiness failed for pid $SIDECAR_PID (state=$SIDECAR_STATE_LISTENERS cmd=$SIDECAR_CMD_LISTENERS)"; exit 1; }
-[ "$(sidecar_listener_pids "$WS_STATE")" = "$SIDECAR_PID" ] && [ "$(sidecar_listener_pids "$WS_CMD")" = "$SIDECAR_PID" ] \
-  || { say "sidecar listener ownership does not match sidecar pid $SIDECAR_PID (state=$SIDECAR_STATE_LISTENERS cmd=$SIDECAR_CMD_LISTENERS)"; exit 1; }
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   grep -q 'attached to' "$LOG_DIR/sidecar.log" && break
   sleep 0.25
