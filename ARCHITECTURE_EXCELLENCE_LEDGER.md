@@ -87,6 +87,7 @@ watcher:  none (required for Codex)
 | `AE-P0.1` | `ACTIVE` | frozen baseline + planning bootstrap | `codex-worker-1` | `claude-worker-1` | `/Users/jak/src/daw-ae-p0-roots` | none |
 | `AE-P0.2 discovery` | `CHANGES_REQUESTED` | frozen baseline + packet | `claude-worker-2` | `codex-worker-2` | read-only root | first report rejected |
 | `AE-P0.2 implementation` | `BLOCKED` | `AE-P0.1` + reviewed discovery + baseline results | unassigned | unassigned | none | none |
+| `AE-P0.3` | `BLOCKED` | AE-P0.1 review + frontend ownership release | unassigned | unassigned | none | packet ready |
 | `AE-P1.1` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P1.2` | `BLOCKED` | `AE-P1.1` | unassigned | unassigned | none | none |
 | `AE-P1.3` | `BLOCKED` | `AE-P1.2` | unassigned | unassigned | none | none |
@@ -158,6 +159,7 @@ included in handoffs. The bus never substitutes for a commit, review, or gate.
 | 2026-08-09 | AE-P0.2 discovery independently rejected | Core counts reproduced, but provenance lacked artifact/source binding, RunContext had no coherent creator/lifecycle, endpoint allocation retained TOCTOU, Rust/web globals were incomplete, controls were mislabeled, and ownership overlapped; corrected report requested |
 | 2026-08-09 | Cross-worktree runtime ownership respected | Full CTest deferred while frontend's 66-suite gate owns engine/audio resources; frontend will send an explicit clear signal |
 | 2026-08-09 | Canonical operating brief corrected | `AGENTS.md` now states that test mode still opens audio, Codex must not use the Claude watcher, and SHM is v37 rather than v15 |
+| 2026-08-09 | AE-P0.1 exposed a pre-existing web unit failure | 120/121 pass; command-caller audit ignores CLI and reports three CLI-reachable commands as unexplained. No scope expansion granted; `AE-P0.3` records the still-red gate |
 
 ## AE-P0 baseline findings
 

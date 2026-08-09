@@ -298,6 +298,23 @@ web, and SHM tests concurrently with no shared writable path or resource name.
 Each result is attributable to its own manifest, and deliberately swapping an
 artifact or source root fails before tests begin.
 
+### AE-P0.3: Truthful command-caller coverage
+
+- Correct the command-caller audit so its claimed population and inspected
+  surfaces agree. A command reached only through `daw-cli` is a caller, not an
+  unexplained engine command.
+- Keep the audit non-vacuous for sidecar, agent, and CLI sources independently;
+  a missing/unparsed surface must fail rather than silently shrink coverage.
+- Preserve the reverse stale-reason check: once a command gains a caller, any
+  recorded unused reason must be removed.
+- Treat source scanning as an interim guard. The generated protocol/operation
+  registry in Phase 1/2 must eventually replace hand-parsed command lists.
+
+Gate: the web unit suite is green; a synthetic CLI-only caller is accepted; a
+synthetic truly uncalled command is rejected; and removing any inspected caller
+surface makes the audit fail. This ticket changes audit truthfulness only, not
+engine/client behavior or wire definitions.
+
 ## Phase 1: Contracts and safety foundations
 
 Phase 1 is mostly serial at merge hotspots. Prototype/test work may occur in new
