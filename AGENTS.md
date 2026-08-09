@@ -38,11 +38,18 @@ noise.
 - Rust e2e: `cd ui/daw-agent && cargo test`. `tests/engine_e2e.rs` spawns
   `build/daw_engine` in **test mode**, serialized (one engine at a time via a
   `SERIAL` mutex), each test using a unique SHM/project tag (duplicate tags
-  collide → flake). Build the C++ targets first.
+  collide → flake). Build the C++ targets first. Important: that mutex is local
+  to one Rust test process, and test mode still opens the default audio device;
+  do not overlap this suite with another worktree's engine/audio tests.
 
-**Running the engine.** Two modes:
-- **Test mode** (`DAW_ENGINE_TEST_MODE=1`): headless, NO real audio device, driven
-  over the command ring. This is what e2e uses.
+**Running the engine.** Relevant startup controls:
+- **Test mode** (`DAW_ENGINE_TEST_MODE=1`) currently clears the default plugin
+  path; it does **not** disable the real audio device. The Rust e2e harness uses
+  this mode and drives the engine over the command ring.
+- **No-device mode** (`--no-audio`) is the control that avoids opening an output
+  device. State an explicit sample rate and block size when the test's result
+  depends on either; do not assume equivalence with a device-backed or offline
+  render until that test scope has measured it.
 - **Normal mode** (env unset): opens the real CoreAudio device (present here,
   44100 Hz) and starts the audio callback. Required for the capture tap.
 - Run from `build/` so it finds `./juce_host_process` (spawned per track,
@@ -60,15 +67,18 @@ cd build && DAW_UI_SHM_NAME=/x_$$ DAW_PROJECT_DIR=/tmp/x_$$ \
 python3 ../tools/perceptual.py --expect-audio /tmp/take.wav
 ```
 
-**Multi-agent collaboration.** Two agents work in parallel over a file bus at
-`/tmp/dawagents/` (`send.mjs <from> <to> "subj"` + body on stdin; `poll.mjs
-backend`; `watch-next.mjs backend` as a background watcher). This agent is
-`backend` (C++ engine + `ui/daw-bridge`/`daw-agent`); `frontend` builds the web UI
-+ sidecar in a `daw-web` worktree. Poll at each turn start; re-arm the watcher
-(fires once, on any bus append — including your own posts).
+**Multi-agent collaboration.** Agents coordinate over the append-only file bus
+at `/tmp/dawagents/`. This agent is `backend` (C++ engine plus
+`ui/daw-bridge`/`daw-agent`); `frontend` owns the web UI and sidecar in the
+`daw-web` worktree. Poll with `node /tmp/dawagents/poll.mjs backend` first on
+every turn. Codex must **not** run `watch-next.mjs`: Codex delivery uses the Stop
+guard plus terminal wake, while that watcher only works for Claude Code. Send
+with `node /tmp/dawagents/send.mjs backend <to> <subject> <body>`, and always
+name an agent's exact absolute worktree because worker shells may start in a
+different checkout.
 
 **SHM contract.** `apps/shared_memory.h` ↔ `ui/daw-bridge/src/layout.rs` are
-lockstep (C++ `static_assert`s / Rust `offset_of!` asserts), `kShmVersion` = 15.
+lockstep (C++ `static_assert`s / Rust `offset_of!` asserts), `kShmVersion` = 37.
 Any header/struct change bumps the version in BOTH + updates the offset asserts.
 See `SHM_LAYOUT.md`.
 
