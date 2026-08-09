@@ -284,18 +284,31 @@ const badEditor = cli('do', 'open-editor', '--track', '0', '--device', '4242');
 check(badEditor.ok, 'do open-editor runs', badEditor.out.slice(0, 160));
 await sleep(1200);
 const log = existsSync(ENGINE_LOG) ? readFileSync(ENGINE_LOG, 'utf8') : '';
-check(/OpenPluginEditor failed - device 4242/.test(log),
+/*
+ * THE ID, NOT THE SENTENCE. This asserted the exact phrase "OpenPluginEditor failed - device 4242"
+ * and went red when main reworded the refusal to "…failed - track 0 has no device 4242" — a
+ * STRICTLY BETTER message, since it names the track as well. The property under test never
+ * changed: the id we sent comes back, so it reached the engine instead of being zeroed by the
+ * wire bug this check exists for.
+ *
+ * Matching the failure line and requiring OUR id in it keeps the check able to fail — a zeroed id
+ * prints 0, and the control below still proves it is not echoing a constant — without pinning the
+ * engine's wording, which is not the contract.
+ */
+const editorLine = (log.match(/OpenPluginEditor failed[^\n]*/g) || []).join(' | ');
+check(/\b4242\b/.test(editorLine),
       'open-editor DELIVERS THE DEVICE ID IT WAS GIVEN — the wire bug always sent 0',
-      (log.match(/OpenPluginEditor failed[^\n]*/) || ['no refusal line at all'])[0]);
+      editorLine || 'no refusal line at all');
 // And the id is read from the right offset in both directions: a different id must be echoed
 // differently, or the check above would pass on any constant.
 const badEditor2 = cli('do', 'open-editor', '--track', '0', '--device', '777');
 check(badEditor2.ok, 'open-editor runs a second time', badEditor2.out.slice(0, 120));
 await sleep(1200);
 const log2 = existsSync(ENGINE_LOG) ? readFileSync(ENGINE_LOG, 'utf8') : '';
-check(/OpenPluginEditor failed - device 777/.test(log2),
+const editorLine2 = (log2.match(/OpenPluginEditor failed[^\n]*/g) || []).join(' | ');
+check(/\b777\b/.test(editorLine2),
       'CONTROL: a different device id is echoed differently, so the check above is not constant',
-      (log2.match(/OpenPluginEditor failed - device \d+/g) || []).join(' | '));
+      editorLine2 || 'no refusal line at all');
 
 /* ── get shared ─────────────────────────────────────────────────────────────────────────────
  * "IF I EDIT HERE, WHAT ELSE CHANGES?" — the question shared clips make possible and surprising.

@@ -129,7 +129,13 @@ if (inserted !== true) {
   await page.evaluate(() => window.__uni.openEditor(0, 4242));
   await settle(1500);
   const named = refusals().slice(after.length);
-  check(named.some((l) => /device 4242 not found/.test(l)),
+  /*
+   * THE ID, NOT THE SENTENCE — same fix as cli-verbs' open-editor pair. This pinned the phrase
+   * "device 4242 not found" and went red when main reworded the refusal to "track 0 has no device
+   * 4242", which is a better message: it names the track too. What this control is FOR is that
+   * the id arrives instead of arriving as 0, and that is what it now asks.
+   */
+  check(named.some((l) => /\b4242\b/.test(l)),
         'and a bogus device id comes back NAMED — the id really reaches the engine',
         named.join(' | ') || 'the engine said nothing at all');
 }
