@@ -28,10 +28,13 @@ manifest is committed.
 The current verification system cannot attribute a result to the source and
 artifacts that supposedly produced it:
 
-- 103 of 211 registered CTest tests call scripts that hard-code
-  `<source>/build`; another 15 honor `DAW_BUILD_DIR`; the remaining 93 use a
+- 103 of 212 registered CTest tests call scripts that hard-code
+  `<source>/build`; another 15 honor `DAW_BUILD_DIR`; the remaining 94 use a
   compiled target, Cargo, or another entry point. `ctest --test-dir X` therefore
   does not mean that the suite executes artifacts from `X`.
+- The independent shell inventory is 106 hard-coded build assignments and 18
+  override-aware assignments; it includes six unregistered live scripts that
+  are not part of the 212-test CTest partition.
 - Many scripts prefer a stale `ui/target/debug/daw-cli` over any selected build.
   The engine in turn selects `./juce_host_process` and a CWD-relative plugin
   cache.
@@ -538,6 +541,7 @@ The initially generated document set is:
 - `ActiveRunLocator`
 - `AllocationIntent`
 - `AllocationJournalFrame`
+- `AllocationHead`
 - `RunTerminalRecord`
 - `ContainmentJournalFrame`
 - `ContainmentClosure`
@@ -642,11 +646,16 @@ authority interval.
 Each reservation is exclusive and is followed by an fsynced
 `AllocationJournalFrame` containing sequence, previous-frame hash, intent ID,
 resource, owner token, and transition. Frames form the sole authoritative
-append-only state machine; an intent's `planned` body is never edited. A
-per-intent no-replace `AllocationHead` pointer names the last complete frame,
-and a torn tail is ignored only after replaying the valid prefix. After all
-resources are validated, a `committed` frame is published and only then may the
-immutable RunContext be published. A broker, sentinel, or recovery claimant
+append-only state machine; an intent's `planned` body is never edited. An
+`AllocationHead` is a mutable, fsynced generation record containing the intent
+ID, highest complete sequence, frame hash, and previous-head hash. It advances
+under the registry lease by write-new-temp, fsync, and atomic rename; each
+generation is content-addressed and retained. Recovery selects the highest
+valid head whose frame prefix and hash chain verify; a torn head or frame is
+ignored only after replaying the valid prefix and selecting that one
+authoritative head. After all resources are validated, a `committed` frame is
+published and only then may the immutable RunContext be published. A broker,
+sentinel, or recovery claimant
 that dies at any boundary reopens the intent and authoritative frame prefix,
 verifies each surviving resource by owner token and no-follow handle, and
 either completes the remaining plan or rolls back only resources recorded for
@@ -671,7 +680,8 @@ minimal per-run lifecycle sentinel, and one per-run service supervisor.
 Consecutive ports and reserve-close-rebind are deleted.
 
 The broker is a minimal coordination process, not a product-service host. It
-authenticates callers by OS peer credentials, creates Invocation/RunContexts,
+authenticates callers by OS peer credentials, validates and persists the
+launcher-minted InvocationContext, and creates child RunContexts,
 normally holds the result-writer lease, owns the outcome journal, and starts the
 trusted bootstrap sentinel from the broker generation's immutable installation
 closure. The bootstrap sentinel requires no candidate run directory, SHM object,
@@ -743,8 +753,10 @@ only broker endpoint, run ID, current state/generation, and the PathRef of a
 0600 control-capability object. The starter prints the run ID and status/stop
 command after readiness. Status and stop are serialized by the broker; stop is
 idempotent, and a stale locator returns the final state rather than attaching to
-a successor. The locator is atomically tombstoned after result publication and
-never substitutes for a content-addressed context/result.
+a successor. The locator is atomically tombstoned only after the terminal
+selector is durably present and any terminal-conflict quarantine is resolved;
+result publication alone does not tombstone it. It never substitutes for a
+content-addressed context/result.
 
 Ephemeral mode gives the broker a caller-liveness channel; caller EOF requests
 teardown. Persistent mode leaves broker, sentinel, and supervisor, not unmanaged
@@ -767,26 +779,30 @@ evidence. It retains the active-run lease until that closure is durable and a
 single `RunTerminalRecord` has selected exactly one result.
 
 Terminal publication is a separate no-replace operation at a deterministic
-run-owned selector path. The broker or recovery sentinel first stages a
-candidate RunResult containing the closure digest, then exclusively creates the
-`RunTerminalRecord` with `{run_id, result_id, containment_closure_id}` and fsyncs
-the selector parent. The first valid selector wins. A later claimant must prove
-the exact same tuple; a different tuple is terminal-conflict quarantine, never a
-second published result. Candidate documents without the selector are retained
-as non-authoritative evidence and are not called RunResult for completion or GC.
+run-owned selector path. The broker or recovery sentinel first stages and
+fsyncs a candidate RunResult containing the closure digest, then exclusively
+creates the `RunTerminalRecord` with
+`{run_id, result_id, containment_closure_id}` and fsyncs the selector parent.
+The first valid selector wins. A later claimant must first adopt that selector
+if it already exists; only an absent selector may be created. A different
+candidate tuple is terminal-conflict quarantine, never a second published
+result. Candidate documents without the selector are retained as
+non-authoritative evidence and are not called RunResult for completion or GC.
 
 If the supervisor dies, the surviving broker observes control EOF, tears down
 the containment unit through the sentinel, replays the valid journal prefix,
-marks unfinished outcomes `error: supervisor_lost`, and stages one candidate
-RunResult while holding the result-writer lease after `ContainmentClosure` is
-durable, then wins or validates the terminal selector. Journal frames carry
+marks unfinished outcomes `error: supervisor_lost`, and after `ContainmentClosure`
+is durable first adopts an existing selector or stages and fsyncs one candidate
+RunResult while holding the result-writer lease, then creates or validates the
+terminal selector. Journal frames carry
 length, sequence, previous hash, payload hash, and checksum; recovery truncates
 an incomplete tail only.
 
 If the broker dies, the sentinel remains the active-run lease holder, observes
 authenticated control EOF, tears down and closes containment, then acquires the
-released result-writer lease, validates the journal, stages
-`error: coordinator_lost`, and wins or validates the terminal selector before
+released result-writer lease, validates the journal, adopts an existing selector
+or stages and fsyncs `error: coordinator_lost`, and creates or validates the
+terminal selector before
 releasing the active-run lease. The broker's death therefore never creates an
 unlocked-but-live interval.
 
@@ -1050,8 +1066,14 @@ The dependency lanes after bootstrap are:
    artifact-contract part of 2.
 4. **Compiled tests:** the complete 66-file inventory, split only along disjoint
    exact file lists. Depends on namespace, staging, and lease contracts.
-5. **Shell and fixtures:** all registered shell entry points and explicit cache,
-   project, capture, and log inputs. Depends on 1 through 4.
+5. **Shell and fixtures:** all registered shell entry points, plus the six
+   unregistered live scripts `tools/extraction_cost.sh`,
+   `tools/nc_unit_build.sh`, `tools/rt_load_probe.sh`,
+   `tools/demo_rehearsal.sh`, `tools/plugin_insert_stall_repro.sh`, and
+   `tools/undo_session_state_check.sh`, together with explicit cache, project,
+   capture, and log inputs. These six files are explicitly enumerated in the
+   ownership manifest and are not left in an unowned “other” partition.
+   Depends on 1 through 4.
 6. **Rust and web lifecycle:** bridge/agent e2e, sidecar, page discovery, and
    persistent/ephemeral supervision. Depends on 1 through 5.
 7. **Integration and GC:** two-worktree adversarial gate, crash recovery,

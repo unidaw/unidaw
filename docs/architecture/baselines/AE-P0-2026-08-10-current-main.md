@@ -16,7 +16,8 @@ Fresh metadata-only configure was completed from the product checkout into
 `/Users/jak/src/daw/build-ae-current` with `RelWithDebInfo` and
 `DAW_BUILD_PATCHER_RUST=ON`. The configure completed at 2026-08-10 01:13:23
 (Europe/Helsinki), after the selected product SHA and its last `CMakeLists.txt`
-change. No test or runtime process was launched for the metadata refresh.
+change. A subsequent full compile-only build completed successfully at
+01:23:41; no test or runtime process was launched for this baseline.
 
 | Population | Count |
 |---|---:|
