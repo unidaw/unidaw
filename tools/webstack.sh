@@ -84,6 +84,16 @@ sidecar_listener_pids() {
   lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | sort -u || true
 }
 
+wait_for_sidecar_listener() {
+  local port="$1" pid="$2" attempt listeners
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    listeners="$(sidecar_listener_pids "$port")"
+    [ "$listeners" = "$pid" ] && return 0
+    sleep 0.25
+  done
+  return 1
+}
+
 file_mode() {
   command stat -f '%Lp' "$1" 2>/dev/null || command stat -c '%a' "$1" 2>/dev/null
 }
@@ -363,8 +373,6 @@ WS_STATE="$(canonical_port "${WS_STATE:-$((PORT + 1))}" WS_STATE)" || exit 2
 WS_CMD="$(canonical_port "${WS_CMD:-$((PORT + 2))}" WS_CMD)" || exit 2
 [ "$WS_STATE" = "$((PORT + 1))" ] && [ "$WS_CMD" = "$((PORT + 2))" ] \
   || { say "REFUSING TO START: WS_STATE and WS_CMD must be derived from PORT (+1/+2)"; exit 2; }
-[ "$PORT" != "$WS_STATE" ] && [ "$PORT" != "$WS_CMD" ] && [ "$WS_STATE" != "$WS_CMD" ] \
-  || { say "REFUSING TO START: PORT, WS_STATE, and WS_CMD must be distinct"; exit 2; }
 PLUGIN_CACHE="$RUNDIR/plugin_cache.json"
 if [ -L "$PLUGIN_CACHE" ]; then
   say "selected plugin cache is a symlink; refusing ambiguous artifact provenance"
@@ -698,14 +706,14 @@ STARTED_SIDECAR_PID="$(sed -n '1p' "$SIDECAR_LAUNCH_PID_FILE")"
 case "$STARTED_SIDECAR_PID" in
   ''|*[!0-9]*) say "sidecar launch did not return a numeric pid"; exit 1 ;;
 esac
-sleep 2
 SIDECAR_PID="$STARTED_SIDECAR_PID"
 alive "$SIDECAR_PID" || { say "sidecar exited during startup:"; head -3 "$LOG_DIR/sidecar.log"; exit 1; }
 printf '%s\n%s\n' "$ENGINE_PID" "$SIDECAR_PID" > "$PIDFILE"
 grep -q 'attached to' "$LOG_DIR/sidecar.log" || { say "sidecar did not attach:"; head -3 "$LOG_DIR/sidecar.log"; exit 1; }
-SIDECAR_STATE_LISTENERS="$(sidecar_listener_pids "$WS_STATE")"
-SIDECAR_CMD_LISTENERS="$(sidecar_listener_pids "$WS_CMD")"
-[ "$SIDECAR_STATE_LISTENERS" = "$SIDECAR_PID" ] && [ "$SIDECAR_CMD_LISTENERS" = "$SIDECAR_PID" ] \
+wait_for_sidecar_listener "$WS_STATE" "$SIDECAR_PID" && wait_for_sidecar_listener "$WS_CMD" "$SIDECAR_PID" \
+  || { SIDECAR_STATE_LISTENERS="$(sidecar_listener_pids "$WS_STATE")"; SIDECAR_CMD_LISTENERS="$(sidecar_listener_pids "$WS_CMD")"; \
+    say "sidecar listener ownership/readiness failed for pid $SIDECAR_PID (state=$SIDECAR_STATE_LISTENERS cmd=$SIDECAR_CMD_LISTENERS)"; exit 1; }
+[ "$(sidecar_listener_pids "$WS_STATE")" = "$SIDECAR_PID" ] && [ "$(sidecar_listener_pids "$WS_CMD")" = "$SIDECAR_PID" ] \
   || { say "sidecar listener ownership does not match sidecar pid $SIDECAR_PID (state=$SIDECAR_STATE_LISTENERS cmd=$SIDECAR_CMD_LISTENERS)"; exit 1; }
 
 if [ "$PAGE_REUSE" = "0" ]; then

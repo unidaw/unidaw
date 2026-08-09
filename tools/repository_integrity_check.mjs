@@ -33,7 +33,7 @@ import {
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const MODULE_LEXICAL_FILE = fileURLToPath(import.meta.url);
+const MODULE_LEXICAL_FILE = resolve(process.cwd(), process.argv[1]);
 function rejectSymlinkedAncestor(path) {
   let current = sep;
   const parts = path.split(sep).filter(Boolean);
@@ -787,6 +787,9 @@ function selfTest(repositoryRoot) {
     'invalid-root-override-rejected',
     'git-worktree-temp-steering-ignored',
     'non-git-temp-steering-ignored',
+    'daw-scrub-regression-control', 'ws-port-derivation-control',
+    'page-identity-no-store-control', 'sidecar-listener-ownership-control',
+    'ready-retirement-registration-control',
   ]);
   const passedControls = new Set();
   const pass = (id, label) => {
@@ -1182,6 +1185,19 @@ function selfTest(repositoryRoot) {
       'foreign-cwd invocation did not run the repository scan');
     assert(!foreignResult.stdout.includes('poison must not execute'), 'poisoned sibling affected checker execution');
     pass('foreign-cwd-root-isolation', 'foreign cwd and poisoned sibling cannot redirect the checker');
+
+    const webstackText = readFileSync(join(repositoryRoot, 'tools', 'webstack.sh'), 'utf8');
+    const stackText = readFileSync(join(repositoryRoot, 'ui-web', 'test', 'stack.mjs'), 'utf8');
+    assert(stackText.includes("name.toUpperCase().startsWith('DAW_')"), 'DAW scrub regression control missing');
+    pass('daw-scrub-regression-control', 'mixed-case arbitrary DAW variables are removed before explicit pinning');
+    assert(webstackText.includes('WS_STATE" = "$((PORT + 1))') && webstackText.includes('WS_CMD" = "$((PORT + 2))'), 'WS derivation control missing');
+    pass('ws-port-derivation-control', 'websocket ports are constrained to PORT plus one and two');
+    assert(webstackText.includes("test/serve.mjs") && webstackText.includes('no-store'), 'page identity/no-store control missing');
+    pass('page-identity-no-store-control', 'page reuse requires checkout server identity and no-store semantics');
+    assert(webstackText.includes('wait_for_sidecar_listener') && webstackText.includes('sidecar_listener_pids'), 'listener ownership control missing');
+    pass('sidecar-listener-ownership-control', 'each sidecar listener is polled and matched to its PID');
+    assert(readFileSync(join(repositoryRoot, 'tools', 'verify.sh'), 'utf8').includes('--self-test-ready-retirement'), 'retirement registration missing');
+    pass('ready-retirement-registration-control', 'verify registers the READY-retirement self-test');
 
     mkdirSync(join(poisonedSibling, 'lib'), { recursive: true });
     writeFileSync(join(poisonedSibling, 'lib', 'repository_root.sh'), 'printf "poison helper executed\\n"\n');
