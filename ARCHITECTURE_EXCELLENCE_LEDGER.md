@@ -11,9 +11,9 @@ Program:       ACTIVE -- AE-P0 only
 Reason:        Undo complete; baseline build/provenance verification in progress
 Target repo:   /Users/jak/src/daw-backend
 Baseline SHA:  5bef283798b59c2c4f5720292554c7ab8c265be6
-Worktrees:     NONE created for remediation tickets
-Active tasks:  AE-P0
-File locks:    merge hotspots frozen to backend during baseline gate
+Worktrees:     AE-P0.1 pending creation
+Active tasks:  AE-P0; AE-P0.1 packet ready, not assigned
+File locks:    protocol hotspots frozen; root CMake reserved narrowly for AE-P0.1
 Integration:   architecture-audit fast-forwarded to frozen baseline
 ```
 
@@ -28,8 +28,8 @@ The owner-authorized activation trigger has been satisfied:
 - `main`, `origin/main`, and the handoff SHA matched before integration.
 - The prior `architecture-audit` HEAD was a strict ancestor and was fast-forwarded
   without conflict to the frozen baseline.
-- The plan and this ledger are approved planning artifacts but remain untracked
-  until their activation-state update is reviewed and committed.
+- The plan and this ledger were committed as the governance bootstrap at
+  `762fe34` before any remediation worktree was created.
 - No remediation task worktree has yet been created.
 
 ## Bootstrap roster
@@ -83,7 +83,7 @@ watcher:  none (required for Codex)
 | Ticket | State | Dependency | Owner | Reviewer | Worktree | Commit |
 |---|---|---|---|---|---|---|
 | `AE-P0` | `ACTIVE` | Undo + owner `GO` satisfied | `backend` | unassigned | root | `5bef283` baseline |
-| `AE-P0.1` | `BLOCKED` | baseline results + planning bootstrap commit | unassigned | unassigned | none | none |
+| `AE-P0.1` | `READY` | frozen baseline + planning bootstrap | `codex-worker-1` | `claude-worker-1` | pending `/Users/jak/src/daw-ae-p0-roots` | none |
 | `AE-P0.2` | `BLOCKED` | `AE-P0.1` + baseline results | unassigned | unassigned | none | none |
 | `AE-P1.1` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P1.2` | `BLOCKED` | `AE-P1.1` | unassigned | unassigned | none | none |
@@ -108,7 +108,7 @@ Task-specific ownership is assigned before any Phase 1 worktree is created:
 | `ui/daw-bridge/src/layout.rs`, generated Rust wire types | `backend` | `FROZEN: AE-P0` |
 | `ui/daw-bridge/src/control.rs` | `backend` | `FROZEN: AE-P0` |
 | `apps/engine_types.h`, `apps/daw_engine_main.cpp` | `backend` | `FROZEN: AE-P0` |
-| root CMake/test registration | `backend` | `FROZEN: AE-P0` |
+| root CMake/test registration | `codex-worker-1` | `RESERVED: AE-P0.1 test registration only` |
 
 ## Bus state protocol
 
@@ -137,6 +137,7 @@ included in handoffs. The bus never substitutes for a commit, review, or gate.
 | 2026-08-09 | `backend` re-registered under corrected channel protocol | `join.mjs` reported `runtime Codex`; stale watcher marker removed |
 | 2026-08-09 | Undo completion trigger received | `[UNDO][DONE] main 5bef283` from `refactor` |
 | 2026-08-09 | Architecture branch fast-forwarded | `d04331d..5bef283`, exact `main`/`origin/main` match |
+| 2026-08-09 | Governance bootstrap committed | `762fe34` adds the approved plan and mutable execution ledger |
 | 2026-08-09 | Frozen baseline independently acknowledged | `[AE-P0][ACK]` from all four workers; exact path/SHA/HOLD confirmed |
 | 2026-08-09 | Existing worktrees inventoried read-only | `daw` clean at `5bef283`; `daw-play` detached/clean at `3259862`; frontend-owned `daw-web` dirty/unmerged at `97348ed`; no worktree modified |
 | 2026-08-09 | Cross-worktree verification substitution reproduced | `tools/verify.sh` and `tools/webstack.sh` target sibling worktrees; other executable fallbacks target `/Users/jak/src/daw-web`; tracked `ui-web/node_modules` is an absolute symlink |
