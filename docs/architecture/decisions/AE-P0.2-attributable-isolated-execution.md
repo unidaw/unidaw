@@ -269,8 +269,11 @@ it does not create a competing root mechanism.
 The following behavior is intentional:
 
 - The launcher selects the explicit build and mints the top-level context.
-- CTest entries are guarded wrappers that validate that context and mint their
-  child RunContext.
+- CTest entries are guarded wrappers that validate that context and request a
+  child RunContext from the broker; the broker is the sole authority that mints
+  the child run ID, persists the immutable child context, and returns it to the
+  wrapper. A wrapper may validate the returned bytes but may not mint a second
+  context.
 - A bare `ctest`, including `ctest -R`, has no independently selected build
   anchor and therefore refuses before executing any test. Its diagnostic prints
   the exact checkout-local wrapper command.
