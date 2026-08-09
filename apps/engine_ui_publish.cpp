@@ -440,6 +440,19 @@ void reportSamplerReject(UiPublishDeps& deps, daw::UiCommandType command,
                   "the sampler rejection must fit the diff slot it rides");
     std::memcpy(&asDiff, &rejected, sizeof(rejected));
     emitUiDiff(asDiff);
+    // AND INTO THE JOURNAL, like every chain, routing and mod refusal already is.
+    //
+    // The diff above rides the UI out ring, which is single-consumer: the sidecar drains it and
+    // any other client that wants to know a command was refused has to race for it. That is why
+    // daw-cli reads history.jsonl instead (task #51) — and why sampler refusals were invisible to
+    // it, since the sampler handlers journalled nothing at all. Twenty rejection sites funnel
+    // through this one function, so one line covers the family.
+    //
+    // The reason by NAME, not by number: "rejected:not_a_sampler" tells a reader what to do and
+    // "rejected:9" does not.
+    deps.historyAppend(daw::uiCommandTypeName(command),
+                       (std::string("rejected:") + samplerReasonName(reason)).c_str(),
+                       trackId, 0, "");
 }
 
 }  // namespace daw::engine

@@ -44,6 +44,10 @@ bool documentHasPerDeviceGraphs(const daw::ProjectDocument& doc);
 // and the wire disagree about why the same command was refused.
 daw::UiSamplerRejectReason samplerReasonFor(const char* why);
 
+// The inverse: a reason back to the word the engine used for it. For the journal, where a number
+// tells the reader nothing — the same argument errorScopeName makes for chain/routing/mod.
+const char* samplerReasonName(daw::UiSamplerRejectReason reason);
+
 // Codes are per-family small integers; naming them here keeps the numbers out of the log, where
 // nobody remembers what routing error 3 was. An unknown family or an out-of-range code formats as
 // "code:N" rather than asserting — a refusal that cannot be named must still be reportable.

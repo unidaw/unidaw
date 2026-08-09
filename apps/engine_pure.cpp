@@ -21,6 +21,23 @@ bool documentHasPerDeviceGraphs(const daw::ProjectDocument& doc) {
   return false;
 }
 
+const char* samplerReasonName(daw::UiSamplerRejectReason reason) {
+  using R = daw::UiSamplerRejectReason;
+  switch (reason) {
+    case R::NoSuchTrack: return "no_such_track";
+    case R::NoSuchDevice: return "no_such_device";
+    case R::NotASampler: return "not_a_sampler";
+    case R::NoSuchSlot: return "no_such_slot";
+    case R::NoSuchModSet: return "no_such_mod_set";
+    case R::NoSuchModulator: return "no_such_modulator";
+    case R::NoSuchSource: return "no_such_source";
+    case R::NoSuchSliceSet: return "no_such_slice";
+    case R::LoadFailed: return "load_failed";
+    case R::BadValue: return "bad_value";
+    default: return "unnamed";
+  }
+}
+
 daw::UiSamplerRejectReason samplerReasonFor(const char* why) {
   using R = daw::UiSamplerRejectReason;
   if (why == nullptr) return R::BadValue;
