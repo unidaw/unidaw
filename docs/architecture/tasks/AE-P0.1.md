@@ -46,6 +46,12 @@ The implementation owner may edit only:
 - a new shared repository-root helper under `tools/lib/`
 - a new repository-integrity checker and its tests under `tools/`
 - `ui-web/test/e2e.mjs`
+- `ui-web/test/ai-demo.mjs`
+- `ui-web/test/ask-live.mjs`
+- `ui-web/test/stack.mjs`
+- `ui-web/test/demo-stack-smoke.mjs`
+- `tools/dev.sh`
+- `docs/DEMO.md`
 - the tracked `ui-web/node_modules` symlink, for removal from version control
 
 If a different production or test file must change, stop and request a scope
@@ -80,6 +86,13 @@ Do not edit, clean, install into, build from, or otherwise touch
    must not become a broad path allowlist that can hide a live file.
 7. No secret value, `.env` content, or credential path is printed by tests.
 8. Existing engine, SHM, protocol, and audio behavior is unchanged.
+9. Intentional paid/demo callers that load `.env` credentials set
+   `DAW_WEBSTACK_ALLOW_CREDENTIALS=1` explicitly; all other callers remain
+   credential-deny by default.
+10. Unique validated webstack log directories are the sole log authority.
+    Consumers resolve the canonical `engine.log` through the segment state
+    locator and validate ownership, regular-file type, and path containment;
+    no fixed `/tmp/eng<SEG>.log` alias or link is permitted.
 
 ## Required reproducer before implementation
 
