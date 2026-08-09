@@ -57,7 +57,7 @@ here before implementation.
 
 The compiled-test inventory is closed for the inspected baseline: all 48
 `apps/*_tests_main.cpp` targets and all 66 source files behind the 48 compiled
-entries in the 93-test "other" partition were inspected. Fifteen files inside
+entries in the 94-test "other" partition were inspected. Fifteen files inside
 that 66-file population exercise real resource authority; the remainder contain
 no filesystem, IPC, process, or device authority relevant to this ADR. Direct
 device entry points outside that population were inventoried separately. The
