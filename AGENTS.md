@@ -39,13 +39,15 @@ noise.
   `build/daw_engine` in **test mode**, serialized (one engine at a time via a
   `SERIAL` mutex), each test using a unique SHM/project tag (duplicate tags
   collide → flake). Build the C++ targets first. Important: that mutex is local
-  to one Rust test process, and test mode still opens the default audio device;
-  do not overlap this suite with another worktree's engine/audio tests.
+  to one Rust test process. Test mode does not start the output callback, but it
+  still creates the backend and opens the default audio device; do not overlap
+  this suite with another worktree's engine/audio tests.
 
 **Running the engine.** Relevant startup controls:
-- **Test mode** (`DAW_ENGINE_TEST_MODE=1`) currently clears the default plugin
-  path; it does **not** disable the real audio device. The Rust e2e harness uses
-  this mode and drives the engine over the command ring.
+- **Test mode** (`DAW_ENGINE_TEST_MODE=1`) changes the default plugin/test-track
+  topology and skips starting the output callback and xrun reporter. It does
+  **not** prevent backend creation or opening the real audio device. The Rust
+  e2e harness uses this mode and drives the engine over the command ring.
 - **No-device mode** (`--no-audio`) is the control that avoids opening an output
   device. State an explicit sample rate and block size when the test's result
   depends on either; do not assume equivalence with a device-backed or offline
