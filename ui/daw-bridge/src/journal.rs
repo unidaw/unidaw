@@ -63,6 +63,24 @@ pub fn refusal_sentence(reason: &str) -> String {
         "version" => "the edit quoted a base version the engine has already moved past",
         // The sampler family, now that its refusals reach the journal. Same rule as the rest:
         // the engine's word mapped to a sentence a reader can act on.
+        // Read from the engine rather than guessed: each of these was found at its emit site
+        // (engine_marker_commands, engine_placement_commands, engine_automation_commands,
+        // engine_bulk_edit, engine_pure) before it was given a sentence.
+        "no_such_track" => "there is no track with that id",
+        "no_such_clip" => "there is no clip with that id",
+        "no_such_placement" => "there is no placement with that id on that track",
+        "no_alternate" => "this placement has nothing to swap to — swapping alternates between a \
+                           clip and the one a previous scratch edit forked from it, and no fork \
+                           has happened here yet",
+        "id_exists" => "a marker with that id already exists — leave the id off to have one \
+                        assigned",
+        "empty_name" => "a marker needs a name: an unnamed flag is one nobody can read",
+        "bad_value" => "that value is outside the range this field accepts",
+        // The engine's own fallback (engine_pure.cpp `default:`), so it means the reverse of the
+        // others: a reason code this build has a number for and no name. Saying so is more use
+        // than repeating the word.
+        "unnamed" => "the engine refused it but gave no reason name — this build's reason table \
+                      has a gap, which is worth reporting rather than working around",
         "no_such_marker" => "there is no marker with that id — `get markers` lists the ones \
                               that exist",
         "no_such_slot" => "there is no slot with that id on this sampler — slot ids start at 1 \

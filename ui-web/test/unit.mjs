@@ -4934,3 +4934,38 @@ test('every journal op daw-cli waits for is one the engine writes', () => {
     'daw-cli waits for a journal op no engine path ever writes — the refusal for these verbs will '
     + 'never be seen, and the command will report success');
 });
+
+/*
+ * EVERY REASON THE ENGINE CAN NAME MUST HAVE A SENTENCE.
+ *
+ * refusal_sentence falls back to `the engine called it "<token>"`, which is honest but useless —
+ * "no_such_placement" tells a reader nothing they could not see for themselves. The fallback is
+ * worth keeping for a reason from a NEWER engine than this build, but it should never be reached
+ * by a reason this build's own engine can emit.
+ *
+ * Eight were reachable when this check was written (bad_value, empty_name, id_exists,
+ * no_alternate, no_such_clip, no_such_placement, no_such_track, unnamed) — found by comparing the
+ * two vocabularies, not by anyone hitting one. That is the point: a reason with no sentence is
+ * invisible until somebody triggers it, and the engine gains them faster than clients notice.
+ */
+test('every reason the engine can name has a sentence in refusal_sentence', () => {
+  const apps = new URL('../../apps/', import.meta.url);
+  let engine = '';
+  for (const f of readdirSync(apps)) {
+    if (f.endsWith('.cpp') || f.endsWith('.h')) engine += readFileSync(new URL(f, apps), 'utf8');
+  }
+  // Three ways the engine names a reason: the errorScopeName/samplerReasonName tables, a literal
+  // written into the journal, and a `reason = "..."` assigned at the refusal site.
+  const named = new Set([
+    ...[...readFileSync(new URL('../../apps/engine_pure.cpp', import.meta.url), 'utf8')
+      .matchAll(/return "([a-z_]+)";/g)].map((m) => m[1]),
+    ...[...engine.matchAll(/"rejected:([a-z_]+)"/g)].map((m) => m[1]),
+    ...[...engine.matchAll(/reason = "([a-z_]+)"/g)].map((m) => m[1]),
+  ]);
+  const journal = readFileSync(new URL('../../ui/daw-bridge/src/journal.rs', import.meta.url), 'utf8');
+  const worded = new Set([...journal.matchAll(/^\s*"([a-z_]+)" =>/gm)].map((m) => m[1]));
+  const unworded = [...named].filter((r) => !worded.has(r)).sort();
+  assert.deepEqual(unworded, [],
+    'the engine can emit these reasons and a reader would get the raw token — give each a sentence '
+    + 'in daw_bridge::journal::refusal_sentence, after reading its emit site to learn what it means');
+});
