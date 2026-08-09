@@ -2567,18 +2567,17 @@ const OP_REGISTRY = {
  *   has twenty read_* functions and no read_mod_links. Needs a published region or a
  *   RequestDeviceParams-style mirror. Raised with backend; theirs to rule on.
  *
- * UNDECIDED, and stated as a question rather than parked as exempt:
- *   `copy`, `cut`, `paste`. These are the last cluster that could plausibly be built, and the
- *   obstacle is not the ops — it is WHERE A CLIPBOARD LIVES. The agent has a session and could
- *   hold one; daw-cli is a fresh process per invocation and would need a file somewhere, which is
- *   a design decision with a persistence question attached, not a missing verb.
+ * SETTLED SINCE, and left here because the reasoning still applies to the next such question:
+ *   `copy`, `cut`, `paste` were built. The obstacle this list used to name was the real one —
+ *   daw-cli is a fresh process per invocation, so a clipboard needs somewhere to live — and it was answered
+ *   with a file, in daw-bridge/src/clipboard.rs. cli-verbs drives all three against a live engine
+ *   and asserts the notes move, not the exit code.
  *
- *   And the shape is probably wrong anyway. What a scriptable surface actually wants is not a
- *   stateful clipboard but ONE op — duplicate(track, from, to, at) — which needs no state between
- *   invocations, cannot go stale, and expresses in a single call what copy-then-paste expresses in
- *   two plus a hidden buffer. `transpose` was built that way tonight for the same reason, and the
- *   range shape worked. Proposed rather than built, because inventing a fourth clipboard-shaped
- *   thing at 2am on the morning of a demo is how a good week ends badly.
+ *   The paragraph that used to sit here argued for one stateless op — duplicate(track, from, to,
+ *   at) — instead of a stateful clipboard, on the grounds that a scriptable surface wants no
+ *   hidden buffer. That argument was not wrong and is worth keeping for the next op of this
+ *   shape; it simply lost to the clipboard the UI already had, which the other two surfaces then
+ *   had to match rather than reinvent.
  */
 const CLI_GAP = ['clear', 'columns', 'mods'];
 /** Ops with no agent tool today. Same rule. */
@@ -4899,15 +4898,20 @@ test('no capability is reachable only by mouse', () => {
  * because that table is where the journal's spelling actually comes from.
  */
 test('every journal op daw-cli waits for is one the engine writes', () => {
-  const cli = readFileSync(new URL('../../ui/daw-cli/src/main.rs', import.meta.url), 'utf8');
+  const cli = readFileSync(new URL('../../ui/daw-cli/src/main.rs', import.meta.url), 'utf8')
+    + readFileSync(new URL('../../ui/daw-agent/src/tools.rs', import.meta.url), 'utf8');
   // Each call names a SET of ops (one refused patcher command can be journalled under either the
   // family name or its own), so collect every name inside the slice, not just the first.
-  const waited = [...cli.matchAll(/report_refusal_outcome\(\s*"[a-z-]+",\s*&\[([^\]]+)\]/g)]
-    .flatMap((m) => [...m[1].matchAll(/"([a-z_]+)"/g)].map((o) => o[1]));
+  const waited = [
+    ...cli.matchAll(/report_refusal_outcome\(\s*"[a-z-]+",\s*&\[([^\]]+)\]/g),
+    ...cli.matchAll(/refused_or\([^,]+,\s*journal_at,\s*&\[([^\]]+)\]/g),
+  ].flatMap((m) => [...m[1].matchAll(/"([a-z_]+)"/g)].map((o) => o[1]));
   // Counted against the calls themselves rather than a number written here, so a new arm that
   // forgets its op is a failure instead of a constant somebody has to remember to bump.
-  const calls = (cli.match(/(?<!fn )report_refusal_outcome\(/g) || []).length;
-  const named = (cli.match(/report_refusal_outcome\(\s*"[a-z-]+",\s*&\[/g) || []).length;
+  const calls = (cli.match(/(?<!fn )report_refusal_outcome\(/g) || []).length
+    + (cli.match(/(?<!fn )refused_or\(/g) || []).length;
+  const named = (cli.match(/report_refusal_outcome\(\s*"[a-z-]+",\s*&\[/g) || []).length
+    + (cli.match(/refused_or\([^,]+,\s*journal_at,\s*&\[/g) || []).length;
   assert.equal(named, calls,
     `${calls} arms report an outcome but only ${named} name the ops to wait for`);
   assert.ok(calls >= 15, `only ${calls} arms are wired to the journal at all`);

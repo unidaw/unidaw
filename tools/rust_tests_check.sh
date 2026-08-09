@@ -57,7 +57,7 @@ if ! ( cd "$UI" && cargo test --workspace --no-run ) >"$TMP/build.log" 2>&1; the
 fi
 
 # 2. THE SUITES THAT DO NOT NEED AN ENGINE ACTUALLY PASS.
-if ! ( cd "$UI" && cargo test -p daw-sidecar -p daw-bridge -p daw-cli ) >"$TMP/test.log" 2>&1; then
+if ! ( cd "$UI" && cargo test -p daw-sidecar -p daw-bridge -p daw-cli -p daw-agent ) >"$TMP/test.log" 2>&1; then
   echo
   echo "  FAIL: a Rust test failed."
   echo

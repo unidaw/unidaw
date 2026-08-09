@@ -5,6 +5,13 @@
 //! compare-and-swap, so the UI app and any number of CLI invocations can write
 //! at the same time without losing each other's commands.
 
+// UI_GLOBAL_SCOPE is imported, not re-declared. It is used as a MATCH PATTERN below, and an
+// identifier in a pattern that is not a known const silently becomes a catch-all binding — so
+// losing this import does not fail the build, it makes the first arm swallow every value. The
+// compiler says so only as an "unreachable pattern" warning on the arms beneath it.
+use daw_bridge::journal::{history_path, journal_mark, journal_scope, refusal_sentence,
+                          UI_GLOBAL_SCOPE};
+
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -1168,64 +1175,6 @@ fn await_clip_outcome(
     ClipOutcome::Unknown
 }
 
-/// The engine's refusal reasons, worded.
-///
-/// The reason NAMES come from the engine — `errorScopeName` in engine_pure.cpp writes them into
-/// the journal as `rejected:<name>` — so this maps a name to a sentence rather than a number to a
-/// name, and an unmapped reason falls through to the engine's own word, which is already better
-/// than a code. What a sentence adds is what the reader can DO: "order_violation" and "modulation
-/// flows forward, so the source must sit before its target" are the same fact and only one of them
-/// is actionable.
-fn refusal_sentence(reason: &str) -> String {
-    match reason {
-        "add_failed" => "the device could not be added — a track takes one head-of-chain \
-                         instrument, so a second sampler or VST instrument on a track that has \
-                         one is refused",
-        "remove_failed" => "there is no such device to remove",
-        "move_failed" => "the device could not be moved to that position",
-        "update_failed" => "the update changed nothing — the device id may not exist on that track",
-        "track_missing" => "there is no such track",
-        "link_missing" => "there is no such modulation link",
-        "link_exists" => "that link already exists",
-        "invalid_kind" => "that is not a kind this engine knows",
-        "invalid_target" => "the route has no such target",
-        "invalid_device" => "one of the devices in the link does not exist on that track",
-        "order_violation" => "modulation flows FORWARD along the chain, so a source that sits \
-                              after its target is refused — move the source earlier or pick a \
-                              later target",
-        "version" => "the edit quoted a base version the engine has already moved past",
-        // The sampler family, now that its refusals reach the journal. Same rule as the rest:
-        // the engine's word mapped to a sentence a reader can act on.
-        "no_such_slot" => "there is no slot with that id on this sampler — slot ids start at 1 \
-                           and `get sampler-kit` lists the ones that exist",
-        "no_such_device" => "there is no device with that id on this track",
-        "not_a_sampler" => "that device is not a sampler — check the id, since a chain can hold \
-                            effects and patchers beside it",
-        "no_such_mod_set" => "there is no mod set with that id",
-        "no_such_modulator" => "there is no modulator with that id in the mod set",
-        "no_such_source" => "there is no loaded source with that id — load a sample first",
-        "no_such_slice" => "there is no slice set with that id — chop the source first",
-        "load_failed" => "the sample would not load: the file is missing, or not audio this \
-                          build can decode",
-        // The patcher graph family.
-        "invalid_type" => "that is not a node type this engine knows",
-        "invalid_node" => "there is no node with that id in this graph",
-        "cycle" => "that connection would make a cycle, and the graph must stay acyclic",
-        "add_failed" => "the node could not be added",
-        "invalid_connection" => "those two ports cannot be connected",
-        "invalid_port" => "there is no such port on that node",
-        "invalid_signature" => "that is not a time signature — the denominator must be a power of \
-                                two, and 4/5 is refused rather than quietly clamped to 4/4, which \
-                                would put the ruler somewhere nobody asked for",
-        "zero_delta" => "a ripple of zero bars would change nothing",
-        "no_track" => "there is no such track",
-        "automation_in_removed_bars" => "the bars being removed carry automation, which would be \
-                                         destroyed — clear it first, or remove a range that does \
-                                         not cover it",
-        other => return format!("the engine called it {other:?}"),
-    }
-    .to_string()
-}
 
 /// The diff type the engine publishes for this family when it ACTED. Used as the fast positive
 /// signal only — see `await_outcome` for why the refusal does not come from the ring.
@@ -1246,9 +1195,6 @@ const GLOBAL_FAMILY: DiffFamily =
 const MOD_FAMILY: DiffFamily =
     DiffFamily { ok_type: daw_bridge::layout::UiDiffType::ModSnapshot as u16 };
 
-fn history_path() -> std::path::PathBuf {
-    std::path::Path::new(&daw_bridge::project::engine_project_dir()).join("history.jsonl")
-}
 
 /// What the journal says about `scope` after `offset`.
 ///
@@ -1326,19 +1272,7 @@ enum ChainOutcome {
     Unknown,
 }
 
-/// The journal's word for a command's scope. NOT `format!("track:{id}")` — the master track is
-/// written as "master" and a global command as "global" (engine_history_journal.cpp), so a matcher
-/// that only knew the track form would silently miss every refusal on the master track and every
-/// global one. `kUiGlobalScope` is the id the engine itself passes for global.
-const UI_GLOBAL_SCOPE: u32 = 0xFFFF_FFFF;
 
-fn journal_scope(track: u32) -> String {
-    match track {
-        UI_GLOBAL_SCOPE => "global".to_string(),
-        daw_bridge::layout::MASTER_TRACK_ID => "master".to_string(),
-        id => format!("track:{id}"),
-    }
-}
 
 /// A REFUSAL-ONLY WAIT, for families that publish no acknowledgement.
 ///
@@ -1358,61 +1292,13 @@ fn journal_scope(track: u32) -> String {
 /// the margin is for a loaded machine, and `sampler-load --files` writes a whole kit one command
 /// at a time, so a longer window would be felt.
 fn await_refusal_only(track: u32, journal_at: u64, ops: &[&str]) -> ChainOutcome {
-    let scope = journal_scope(track);
-    // A SET, NOT A NAME. One refused patcher command can be journalled under two different ops:
-    // emitPatcherGraphError writes the family name "patcher_graph", while refuse/refuseCfg in the
-    // per-device path write uiCommandTypeName's spelling of the command itself. Which one you get
-    // depends on whether the verb was given --device. Waiting for a single name means the other
-    // half of the verb's own behaviour reports success on a refusal.
-    let want: Vec<String> = ops.iter().map(|op| format!("\"op\":\"{op}\"")).collect();
-    for _ in 0..50 {
-        if let Some(reason) = journal_refusal_for(journal_at, &scope, &want) {
-            return ChainOutcome::Refused { reason };
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
+    match daw_bridge::journal::await_refusal(track, journal_at, ops) {
+        Some(reason) => ChainOutcome::Refused { reason },
+        None => ChainOutcome::Applied,
     }
-    ChainOutcome::Applied
 }
 
-/// The first refusal of THIS op in THIS scope after `offset`.
-///
-/// THE OP FILTER IS NOT OPTIONAL, and a test found out why. A `sampler-load` of a file that does
-/// not exist leaves a dangling source that the engine RE-RESOLVES on every project load, so the
-/// journal collects a fresh `sampler_load rejected:load_failed` long afterwards, interleaved with
-/// whatever else is running. Without this filter, nine later verbs on the same track each adopted
-/// that unrelated refusal and reported "the sample would not load" about a slot rename.
-///
-/// The residual hole, stated rather than hidden: two commands of the SAME op on the same track
-/// within one window are still indistinguishable, because the journal line carries no device or
-/// file to tell them apart. `sampler-load` is the only verb the retry behaviour makes likely, and
-/// a wrong attribution there still names a real refusal of a real load.
-fn journal_refusal_for(offset: u64, scope: &str, want_ops: &[String]) -> Option<String> {
-    use std::io::{Read, Seek};
-    let mut file = std::fs::File::open(history_path()).ok()?;
-    file.seek(std::io::SeekFrom::Start(offset)).ok()?;
-    let mut tail = String::new();
-    file.read_to_string(&mut tail).ok()?;
-    let want_scope = format!("\"scope\":\"{scope}\"");
-    for line in tail.lines() {
-        if !line.contains(&want_scope) || !want_ops.iter().any(|op| line.contains(op)) {
-            continue;
-        }
-        if let Some(at) = line.find("\"outcome\":\"rejected:") {
-            let rest = &line[at + "\"outcome\":\"rejected:".len()..];
-            return Some(rest.split('"').next().unwrap_or("").to_string());
-        }
-    }
-    None
-}
 
-/// The journal mark to take BEFORE sending, and the report to make after.
-///
-/// Two functions rather than one that owns the send, because every sampler verb has its own
-/// typed send method — send_sampler_set_slot, send_sampler_device, send_named and so on — and a
-/// helper that swallowed the send would need a closure per arm to say nothing extra.
-fn journal_mark() -> u64 {
-    std::fs::metadata(history_path()).map(|m| m.len()).unwrap_or(0)
-}
 
 fn report_refusal_outcome(verb: &str, ops: &[&str], track: u32, journal_at: u64, extra: &str) -> i32 {
     match await_refusal_only(track, journal_at, ops) {

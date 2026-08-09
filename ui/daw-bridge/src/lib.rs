@@ -1,6 +1,7 @@
 pub mod clipboard;
 pub mod control;
 pub mod grid;
+pub mod journal;
 pub mod layout;
 pub mod project;
 pub mod reader;

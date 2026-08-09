@@ -47,6 +47,26 @@ pub struct ToolResult {
     pub error: Option<String>,
 }
 
+/// WHAT THE ENGINE DID, not merely what we sent.
+///
+/// Every tool here used to answer `{"sent": true}` the instant the bytes reached the ring, which
+/// says nothing about whether the engine accepted them. That is worse on this surface than on the
+/// command line: a person reads "sent" and moves on, but a model reads it as confirmation and
+/// REASONS FROM IT — told a sample loaded, it will go on to chop slices off a source that does not
+/// exist and report a finished kit.
+///
+/// A refusal is returned as an ERROR rather than a successful result carrying a flag, because the
+/// only safe thing for a caller to do with it is stop. The reader, and the two rules that make it
+/// correct, live in daw_bridge::journal — shared with daw-cli rather than copied, so the two
+/// surfaces cannot drift into disagreeing about what the same command did.
+fn refused_or(track: u32, journal_at: u64, ops: &[&str], output: Value) -> ToolResult {
+    match daw_bridge::journal::await_refusal(track, journal_at, ops) {
+        Some(reason) => ToolResult::err(format!(
+            "the engine refused it: {}", daw_bridge::journal::refusal_sentence(&reason))),
+        None => ToolResult::ok(output),
+    }
+}
+
 impl ToolResult {
     fn ok(output: Value) -> Self {
         Self { ok: true, output, error: None }
@@ -1643,8 +1663,9 @@ fn add_device(handle: &EngineHandle, args: &Value) -> ToolResult {
     if let Some(slot) = arg_u64(args, "plugin_slot") {
         p.host_slot_index = slot as u32;
     }
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_chain_command(p) {
-        Ok(()) => ToolResult::ok(json!({
+        Ok(()) => refused_or(track as u32, journal_at, &["chain"], json!({
             "sent": true, "track": track, "kind": kind,
             "plugin_slot": arg_u64(args, "plugin_slot") })),
         Err(e) => ToolResult::err(e),
@@ -1692,8 +1713,9 @@ fn load_sample(handle: &EngineHandle, args: &Value) -> ToolResult {
         reserved: [0; 3],
         name,
     };
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_sampler_load(payload) {
-        Ok(()) => ToolResult::ok(json!({
+        Ok(()) => refused_or(track as u32, journal_at, &["sampler_load"], json!({
             "sent": true, "track": track, "file": file, "fixed": fixed,
         })),
         Err(e) => ToolResult::err(e),
@@ -1949,8 +1971,9 @@ fn patcher_node(handle: &EngineHandle, args: &Value) -> ToolResult {
         }
         other => return ToolResult::err(format!("action must be add, link or remove (got {other})")),
     }
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_patcher_graph(p) {
-        Ok(()) => ToolResult::ok(json!({
+        Ok(()) => refused_or(track as u32, journal_at, &["patcher_graph", "add_patcher_node", "connect_patcher_nodes", "remove_patcher_node"], json!({
             "sent": true, "track": track, "device": device, "action": action,
         })),
         Err(e) => ToolResult::err(e),
@@ -1963,8 +1986,9 @@ fn chain_edit(handle: &EngineHandle, args: &Value, cmd: UiCommandType) -> ToolRe
     };
     let mut p = chain_blank(cmd, track as u32);
     p.device_id = device as u32;
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_chain_command(p) {
-        Ok(()) => ToolResult::ok(json!({ "sent": true, "track": track, "device": device })),
+        Ok(()) => refused_or(track as u32, journal_at, &["chain"], json!({ "sent": true, "track": track, "device": device })),
         Err(e) => ToolResult::err(e),
     }
 }
@@ -2100,8 +2124,9 @@ fn set_row_ops(handle: &EngineHandle, args: &Value) -> ToolResult {
         trig_condition: trig_condition.clamp(0, 255) as u8,
         reserved: [0; 8],
     };
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_row_ops(p) {
-        Ok(()) => ToolResult::ok(json!({
+        Ok(()) => refused_or(track as u32, journal_at, &["set_row_ops"], json!({
             "sent": true, "track": track, "note_id": note_id, "set": named,
         })),
         Err(e) => ToolResult::err(e),
@@ -2156,8 +2181,9 @@ fn sampler_slot(handle: &EngineHandle, args: &Value) -> ToolResult {
         value: value.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
         reserved: [0; 20],
     };
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_sampler_set_slot(p) {
-        Ok(()) => ToolResult::ok(json!({
+        Ok(()) => refused_or(track as u32, journal_at, &["sampler_set_slot"], json!({
             "sent": true, "track": track, "device": device, "slot": slot,
             "field": name, "value": value,
         })),
@@ -2204,8 +2230,9 @@ fn sampler_device(handle: &EngineHandle, args: &Value) -> ToolResult {
         value: value.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
         reserved: [0; 24],
     };
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_sampler_set_device(p) {
-        Ok(()) => ToolResult::ok(json!({
+        Ok(()) => refused_or(track as u32, journal_at, &["sampler_set_device"], json!({
             "sent": true, "track": track, "device": device, "field": name, "value": value,
         })),
         Err(e) => ToolResult::err(e),
@@ -2252,8 +2279,9 @@ fn sampler_slice(handle: &EngineHandle, args: &Value) -> ToolResult {
         slot_base_key: arg_u64(args, "base_key").unwrap_or(36).clamp(0, 127) as u8,
         reserved: [0; 6],
     };
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_sampler_slice(p) {
-        Ok(()) => ToolResult::ok(json!({
+        Ok(()) => refused_or(track as u32, journal_at, &["sampler_slice"], json!({
             "sent": true, "track": track, "device": device,
             "mode": arg_str(args, "mode").unwrap_or("transient"), "slots": make_slots,
         })),
@@ -2313,8 +2341,9 @@ fn sampler_envelope(handle: &EngineHandle, args: &Value) -> ToolResult {
         reserved2: 0,
         depth_milli: depth as i16,
     };
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_sampler_envelope(p) {
-        Ok(()) => ToolResult::ok(json!({
+        Ok(()) => refused_or(track as u32, journal_at, &["sampler_set_envelope"], json!({
             "sent": true, "track": track, "device": device,
             "attack_ms": attack, "decay_ms": decay, "sustain_pct": sustain,
             "release_ms": release, "target": arg_str(args, "target").unwrap_or("volume"),
@@ -2358,8 +2387,9 @@ fn sampler_emit_rows(handle: &EngineHandle, args: &Value) -> ToolResult {
         velocity: arg_u64(args, "velocity").unwrap_or(100).clamp(1, 127) as u8,
         reserved: [0; 6],
     };
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_sampler_emit_rows(p) {
-        Ok(()) => ToolResult::ok(json!({
+        Ok(()) => refused_or(track as u32, journal_at, &["sampler_emit_rows"], json!({
             "sent": true, "track": track, "device": device, "at": at,
             "step": if step == 0 { Value::from("from each slice's length") } else { Value::from(step) },
         })),
@@ -2400,8 +2430,9 @@ fn sampler_vintage(handle: &EngineHandle, args: &Value) -> ToolResult {
         rate_hz: rate.unwrap_or(44100).clamp(1000, 65535) as u16,
         reserved1: [0; 5],
     };
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_sampler_vintage(p) {
-        Ok(()) => ToolResult::ok(json!({
+        Ok(()) => refused_or(track as u32, journal_at, &["sampler_set_vintage"], json!({
             "sent": true, "track": track, "device": device, "bits": bits, "rate": rate,
         })),
         Err(e) => ToolResult::err(e),
@@ -2727,8 +2758,9 @@ fn sampler_envelope_points(handle: &EngineHandle, args: &Value) -> ToolResult {
                                        std::mem::size_of::<L::UiEnvPointWire>())
         });
     }
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_bulk(&buf) {
-        Ok(()) => ToolResult::ok(json!({
+        Ok(()) => refused_or(track as u32, journal_at, &["sampler_set_envelope_points"], json!({
             "sent": true, "track": track, "target": target, "points": pts.len() })),
         Err(e) => ToolResult::err(e),
     }
@@ -2825,8 +2857,9 @@ fn sampler_filter(handle: &EngineHandle, args: &Value) -> ToolResult {
         reserved1: 0,
         reserved2: [0; 4],
     };
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_sampler_filter(p) {
-        Ok(()) => ToolResult::ok(json!({
+        Ok(()) => refused_or(track as u32, journal_at, &["sampler_set_filter"], json!({
             "sent": true, "track": track, "type": filter_type,
             "cutoff": cutoff, "resonance": resonance })),
         Err(e) => ToolResult::err(e),
@@ -2867,8 +2900,9 @@ fn sampler_slot_name(handle: &EngineHandle, args: &Value) -> ToolResult {
         )
     });
     buf.extend_from_slice(bytes);
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_bulk(&buf) {
-        Ok(()) => ToolResult::ok(json!({
+        Ok(()) => refused_or(track as u32, journal_at, &["sampler_set_slot_name"], json!({
             "sent": true, "track": track, "slot": slot, "name": name })),
         Err(e) => ToolResult::err(e),
     }
@@ -2952,8 +2986,9 @@ fn set_clip_grid(handle: &EngineHandle, args: &Value) -> ToolResult {
         time_sig_denominator: den,
         reserved: [0; 4],
     };
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_clip_grid(p) {
-        Ok(()) => ToolResult::ok(json!({
+        Ok(()) => refused_or(track as u32, journal_at, &["set_clip_grid"], json!({
             "sent": true, "track": track, "clip": clip,
             "lines": lines, "numerator": num, "denominator": den,
         })),
@@ -2991,8 +3026,9 @@ fn delete_automation_point(handle: &EngineHandle, args: &Value) -> ToolResult {
         value: 0.0,
         param_id,
     };
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_automation_point(p) {
-        Ok(()) => ToolResult::ok(json!({
+        Ok(()) => refused_or(track as u32, journal_at, &["delete_automation_point"], json!({
             "sent": true, "track": track, "param": param, "tick": tick })),
         Err(e) => ToolResult::err(e),
     }
@@ -3059,8 +3095,9 @@ fn set_clip_text(handle: &EngineHandle, args: &Value) -> ToolResult {
         )
     });
     buf.extend_from_slice(bytes);
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_bulk(&buf) {
-        Ok(()) => ToolResult::ok(json!({
+        Ok(()) => refused_or(track as u32, journal_at, &["set_clip_text"], json!({
             "sent": true, "track": track, "clip": clip,
             "field": if is_name { "name" } else { "source" }, "text": text,
         })),
@@ -3352,8 +3389,9 @@ fn write_automation_point(handle: &EngineHandle, args: &Value) -> ToolResult {
         value: value.clamp(0.0, 1.0) as f32,
         param_id,
     };
+    let journal_at = daw_bridge::journal::journal_mark();
     match handle.send_automation_point(p) {
-        Ok(()) => ToolResult::ok(json!({
+        Ok(()) => refused_or(track as u32, journal_at, &["write_automation_point"], json!({
             "sent": true, "track": track, "param": param, "tick": tick,
             "value": value.clamp(0.0, 1.0),
         })),
