@@ -407,6 +407,22 @@ impl EngineHandle {
     /// gone before this can see it, and a slow caller can miss one to wrap-around. It is enough
     /// to answer "did the engine report this refusal", which is what it exists for, and a caller
     /// that needs every diff has to be the consumer rather than a bystander.
+    /// Is the engine's OUT ring actually mapped?
+    ///
+    /// `attach` succeeds as soon as the shared segment can be opened, but `ring_view` returns None
+    /// while the engine has not yet written its header — offset still 0, or capacity still 0. A
+    /// handle in that state is attached and PERMANENTLY USELESS: `drain_ui_out` and
+    /// `peek_ui_diffs` both bail on the missing ring and return nothing, for ever, because nothing
+    /// re-resolves the view.
+    ///
+    /// A caller that attaches in a loop must therefore ask this, not just whether attach
+    /// succeeded. See task #52 — the sidecar's event-drain thread attached at startup, won the
+    /// race against the engine's header write, and delivered zero events for the whole session
+    /// while the frame channel (attached later) was perfectly healthy.
+    pub fn out_ring_ready(&self) -> bool {
+        self.ring_ui_out.is_some()
+    }
+
     pub fn peek_ui_diffs(&self) -> Vec<(u16, [u8; 40])> {
         let Some(ring) = self.ring_ui_out.as_ref() else {
             return Vec::new();

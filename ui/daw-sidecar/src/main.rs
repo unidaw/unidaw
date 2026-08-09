@@ -6750,6 +6750,20 @@ fn drain_engine_events(shm: String, events: Arc<EngineEvents>, chains: Arc<Chain
      */
     let attach_loud = |why: &str| -> Option<EngineHandle> {
         match EngineHandle::attach(&shm, true) {
+            // ATTACHED IS NOT READY. attach() succeeds the moment the segment can be opened, but
+            // the OUT RING is only resolvable once the engine has written its header. Win that
+            // race and you hold a handle that drains zero entries for ever, because nothing
+            // re-resolves the ring view and the retry below only runs while the handle is None.
+            //
+            // That is task #52, and the logs said it outright: the run that FAILED drained 0 for
+            // 30+ seconds after "attached (startup)", while the run that PASSED failed its
+            // startup attach, retried, and drained 18. Returning None here puts the early case
+            // onto the retry path that already works.
+            Ok(h) if !h.out_ring_ready() => {
+                eprintln!("sidecar: event drain attached to {shm} ({why}) but the OUT RING is not \
+                           published yet — treating as not attached so the retry re-resolves it");
+                None
+            }
             Ok(h) => { eprintln!("sidecar: event drain attached to {shm} ({why})"); Some(h) }
             Err(e) => { eprintln!("sidecar: event drain ATTACH FAILED on {shm} ({why}): {e}"); None }
         }
