@@ -25,51 +25,132 @@
 #
 #   tools/ask_path_check.sh
 set -uo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -L "${BASH_SOURCE[0]}" ]; then
+  printf '%s\n' 'ask_path_check: ERROR: refusing a symlinked entrypoint' >&2
+  exit 2
+fi
+SCRIPT_DIR="$({ CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P; })" || exit 2
+. "$SCRIPT_DIR/lib/repository_root.sh" || exit 2
+ROOT="$(daw_repository_root)" || exit 2
+unset BASH_ENV ENV NODE_OPTIONS NODE_PATH
+unset PYTHONHOME PYTHONPATH
+unset ASK_BUILD_DIR_INPUT ASK_ENV_FILE_INPUT ASK_EVIDENCE_ROOT ASK_API_KEY_INPUT
+unset SIDECAR_API_KEY SIDECAR_ENV_FILE
+ASK_BUILD_DIR_INPUT="${DAW_BUILD_DIR:-}"
+ASK_ENV_FILE_INPUT="${DAW_ENV_FILE:-}"
+ASK_EVIDENCE_ROOT="${DAW_CHECK_EVIDENCE:-}"
+ASK_API_KEY_INPUT="${ANTHROPIC_API_KEY:-}"
+while IFS= read -r daw_variable; do
+  unset "$daw_variable"
+done < <(compgen -v DAW_)
+unset ANTHROPIC_API_KEY
+export -n ASK_BUILD_DIR_INPUT ASK_ENV_FILE_INPUT ASK_EVIDENCE_ROOT ASK_API_KEY_INPUT 2>/dev/null || true
+command -v python3 >/dev/null 2>&1 || { echo "SKIP: no python3 for isolated port selection"; exit 0; }
+python3() { command python3 -I "$@"; }
 . "$ROOT/tools/lib/engine_wait.sh"
-BUILD="${DAW_BUILD_DIR:-$ROOT/build}"
+if [ -n "$ASK_BUILD_DIR_INPUT" ]; then
+  BUILD="$(daw_canonical_directory "$ASK_BUILD_DIR_INPUT" 'explicit DAW_BUILD_DIR')" || exit 2
+  printf 'build directory: %s (explicit DAW_BUILD_DIR)\n' "$BUILD" >&2
+else
+  BUILD="$(daw_canonical_directory "$ROOT/build" 'checkout build directory')" || exit 2
+  daw_require_within_root "$BUILD" "$ROOT" 'checkout build directory' || exit 2
+  daw_validate_cmake_build_source "$BUILD" "$ROOT" 'checkout build directory' || exit 2
+  printf 'build directory: %s (checkout default)\n' "$BUILD" >&2
+fi
 SIDE="$ROOT/ui/target/release/daw-sidecar"
 [ -x "$SIDE" ] || SIDE="$ROOT/ui/target/debug/daw-sidecar"
 CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
 
-[ -x "$BUILD/daw_engine" ] || { echo "build daw_engine first"; exit 2; }
-[ -x "$SIDE" ] || { echo "build daw-sidecar first"; exit 2; }
-[ -x "$CLI" ]  || { echo "build daw-cli first"; exit 2; }
+ENGINE="$(daw_canonical_executable "$BUILD/daw_engine" 'selected daw_engine')" || { echo "build daw_engine first"; exit 2; }
+HOST="$(daw_canonical_executable "$BUILD/juce_host_process" 'selected juce_host_process')" || { echo "build juce_host_process first"; exit 2; }
+daw_require_within_root "$ENGINE" "$BUILD" 'selected daw_engine' || exit 2
+daw_require_within_root "$HOST" "$BUILD" 'selected juce_host_process' || exit 2
+SIDE="$(daw_canonical_executable "$SIDE" 'checkout daw-sidecar')" || { echo "build daw-sidecar first"; exit 2; }
+CLI="$(daw_canonical_executable "$CLI" 'checkout daw-cli')" || { echo "build daw-cli first"; exit 2; }
+daw_require_within_root "$SIDE" "$ROOT" 'checkout daw-sidecar' || exit 2
+daw_require_within_root "$CLI" "$ROOT" 'checkout daw-cli' || exit 2
+PLUGIN_CACHE="$BUILD/plugin_cache.json"
+if [ -L "$PLUGIN_CACHE" ]; then
+  echo "selected plugin cache is a symlink; refusing ambiguous artifact provenance"
+  exit 2
+fi
+if [ -e "$PLUGIN_CACHE" ]; then
+  PLUGIN_CACHE="$(daw_canonical_readable_file "$PLUGIN_CACHE" 'selected plugin cache')" || exit 2
+  daw_require_within_root "$PLUGIN_CACHE" "$BUILD" 'selected plugin cache' || exit 2
+fi
+PROJECTS="$(daw_canonical_directory "$ROOT/presets/projects" 'checkout project fixtures')" || exit 2
+daw_require_within_root "$PROJECTS" "$ROOT" 'checkout project fixtures' || exit 2
+PATCHER_PRESETS="$(daw_canonical_directory "$ROOT/presets/patcher" 'checkout patcher presets')" || exit 2
+daw_require_within_root "$PATCHER_PRESETS" "$ROOT" 'checkout patcher presets' || exit 2
 command -v node >/dev/null 2>&1 || { echo "SKIP: no node, and the command socket is a websocket"; exit 0; }
-node -e "require.resolve('ws')" >/dev/null 2>&1 || { echo "SKIP: node 'ws' module not available"; exit 0; }
+NODE_MODULES="$ROOT/ui-web/node_modules"
+[ -d "$NODE_MODULES" ] && [ ! -L "$NODE_MODULES" ] \
+  || { echo "SKIP: checkout-local ui-web dependencies are not installed as a real directory"; exit 0; }
+NODE_MODULES="$(daw_canonical_directory "$NODE_MODULES" 'ui-web dependency directory')" || exit 2
+daw_require_within_root "$NODE_MODULES" "$ROOT" 'ui-web dependency directory' || exit 2
+WS_ENTRY="$(cd "$ROOT/ui-web" && node -e "process.stdout.write(require('fs').realpathSync(require.resolve('ws')))" 2>/dev/null)" \
+  || { echo "SKIP: checkout-local node 'ws' module not available"; exit 0; }
+case "$WS_ENTRY" in
+  "$NODE_MODULES"/*) ;;
+  *) echo "FAIL: node 'ws' resolved outside checkout-local dependencies"; exit 2 ;;
+esac
 
-# THE SAME SEARCH THE SIDECAR DOES, so a skip here means the sidecar would also have found
-# nothing. Never print the value — only whether one resolves.
+# Paid execution is explicit: environment key or named file only. The sidecar is
+# launched from a run-owned cwd below, so its relative .env search cannot discover
+# a checkout or home credential file accidentally.
+SIDECAR_ENV_FILE=''
+if [ -n "$ASK_ENV_FILE_INPUT" ]; then
+  SIDECAR_ENV_FILE="$(daw_canonical_readable_file "$ASK_ENV_FILE_INPUT" 'explicit DAW_ENV_FILE')" || exit 2
+fi
+case "$ASK_API_KEY_INPUT" in
+  *[![:space:]]*) ;;
+  *) ASK_API_KEY_INPUT='' ;;
+esac
 key_present() {
-  [ -n "${ANTHROPIC_API_KEY:-}" ] && return 0
-  local f
-  for f in "${DAW_ENV_FILE:-}" "$SIDECAR_CWD/.env" "$SIDECAR_CWD/../.env" "$SIDECAR_CWD/../../.env"; do
-    [ -n "$f" ] && [ -f "$f" ] || continue
-    grep -qE '^[[:space:]]*ANTHROPIC_API_KEY[[:space:]]*=[[:space:]]*[^[:space:]"'"'"']' "$f" && return 0
-  done
+  [ -n "$ASK_API_KEY_INPUT" ] && return 0
+  [ -n "$SIDECAR_ENV_FILE" ] && daw_env_file_has_anthropic_key "$SIDECAR_ENV_FILE" && return 0
   return 1
 }
-# Run the sidecar where the web stack runs it (tools/webstack.sh), because its key search is
-# relative to its own working directory.
-SIDECAR_CWD=/Users/jak/src/daw-web/ui
-[ -d "$SIDECAR_CWD" ] || SIDECAR_CWD="$ROOT/ui"
-key_present || { echo "SKIP: no ANTHROPIC_API_KEY resolves (env, DAW_ENV_FILE, or .env near $SIDECAR_CWD)"; exit 0; }
+key_present || { echo "SKIP: paid ask check requires explicit ANTHROPIC_API_KEY or DAW_ENV_FILE"; exit 0; }
+SIDECAR_API_KEY="$ASK_API_KEY_INPUT"
+ASK_API_KEY_INPUT=''
+export -n SIDECAR_API_KEY SIDECAR_ENV_FILE 2>/dev/null || true
 
-TMP="$(mktemp -d)"
+TMP="$(daw_make_temp_directory daw-ask-path)" || exit 2
+SIDECAR_CWD="$TMP/runtime/sidecar/cwd"
+mkdir -p -- "$SIDECAR_CWD" || exit 2
+SIDECAR_CWD="$(daw_canonical_directory "$SIDECAR_CWD" 'run-owned sidecar cwd')" || exit 2
+daw_require_within_root "$SIDECAR_CWD" "$TMP" 'run-owned sidecar cwd' || exit 2
 SHM="/askpath_$$"
 ENG=""; SC=""
 cleanup() {
   [ -n "$SC" ]  && kill "$SC"  2>/dev/null
   [ -n "$ENG" ] && stop_engine "$ENG"
-  rm -rf "$TMP"
+  daw_remove_temp_directory "$TMP" daw-ask-path
 }
 keep_evidence_then() {
   local rc=$?
   if [ "$rc" -ne 0 ] && [ -n "${TMP:-}" ] && [ -d "$TMP" ]; then
-    local dest="${DAW_CHECK_EVIDENCE:-/tmp/daw-check-evidence}/$(basename "$0" .sh).$$"
-    mkdir -p "$dest" && cp -R "$TMP"/. "$dest"/ 2>/dev/null
-    echo "  evidence kept in $dest"
+    local evidence_root
+    local dest
+    if [ -n "$ASK_EVIDENCE_ROOT" ]; then
+      [ -d "$ASK_EVIDENCE_ROOT" ] && [ ! -L "$ASK_EVIDENCE_ROOT" ] || {
+        echo "  evidence root override is not a real directory"
+        "$@"
+        exit "$rc"
+      }
+      evidence_root="$(daw_canonical_directory "$ASK_EVIDENCE_ROOT" 'explicit evidence root')" || {
+        "$@"
+        exit "$rc"
+      }
+      dest="$(mktemp -d "$evidence_root/ask-path-check.XXXXXXXX")" || dest=''
+    else
+      dest="$(daw_make_temp_directory daw-check-evidence)" || dest=''
+    fi
+    if [ -n "$dest" ] && cp -R "$TMP"/. "$dest"/ 2>/dev/null; then
+      echo "  evidence kept in $dest"
+    fi
   fi
   "$@"
   exit $rc
@@ -87,15 +168,19 @@ print(p(), p())")
 EOF
 [ -n "$CMD_PORT" ] || fail "could not pick a free port"
 
-( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$ROOT/presets/projects" \
-    ./daw_engine --run-seconds 240 >"$TMP/eng.log" 2>&1 ) &
+( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$PROJECTS" \
+    DAW_HOST_BINARY="$HOST" DAW_PLUGIN_CACHE="$PLUGIN_CACHE" \
+    DAW_PATCHER_PRESET_DIR="$PATCHER_PRESETS" \
+    "$ENGINE" --run-seconds 240 >"$TMP/eng.log" 2>&1 ) &
 ENG=$!
 wait_for_boot "$TMP/eng.log" "$ENG" 120 "UI: command thread started" \
   || fail "engine never came up:
 $(tail -8 "$TMP/eng.log" | sed 's/^/          /')"
 
-( cd "$SIDECAR_CWD" && exec env DAW_ENV_FILE="${DAW_ENV_FILE:-}" \
-    "$SIDE" --shm "$SHM" --port "$STATE_PORT" --cmd-port "$CMD_PORT" >"$TMP/side.log" 2>&1 ) &
+( cd "$SIDECAR_CWD" && exec env ANTHROPIC_API_KEY="$SIDECAR_API_KEY" \
+    DAW_ENV_FILE="$SIDECAR_ENV_FILE" DAW_PROJECT_DIR="$PROJECTS" \
+    "$SIDE" --shm "$SHM" --port "$STATE_PORT" --cmd-port "$CMD_PORT" \
+      --plugin-cache "$PLUGIN_CACHE" >"$TMP/side.log" 2>&1 ) &
 SC=$!
 port_open() { nc -z 127.0.0.1 "$CMD_PORT" 2>/dev/null; }
 wait_until 60 port_open || fail "the sidecar never opened its command port:
@@ -106,7 +191,7 @@ $(tail -8 "$TMP/side.log" | sed 's/^/          /')"
 # change detector by the accident that one added track prints one added line. A number in a
 # failure message that is not the number it claims to be sends the next person somewhere else.
 count_tracks() {
-  env DAW_UI_SHM_NAME="$SHM" "$CLI" get tracks 2>/dev/null \
+  env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$PROJECTS" "$CLI" get tracks 2>/dev/null \
     | sed -n 's/.*"track_count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1
 }
 BEFORE=$(count_tracks); BEFORE=${BEFORE:-0}
@@ -114,7 +199,7 @@ BEFORE=$(count_tracks); BEFORE=${BEFORE:-0}
         so any change measured after the ask would be meaningless."
 echo "  tracks before: $BEFORE"
 
-node - "$CMD_PORT" >"$TMP/ask.out" 2>&1 <<'JS'
+( cd "$ROOT/ui-web" && node - "$CMD_PORT" ) >"$TMP/ask.out" 2>&1 <<'JS'
 const WebSocket = require('ws');
 const ws = new WebSocket(`ws://127.0.0.1:${process.argv[2]}`);
 // A hard deadline, because the sidecar puts NO timeout on its HTTP call: a hung API request

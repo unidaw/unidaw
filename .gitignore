@@ -49,5 +49,9 @@ build-*/
 # the build ACTUALLY produces, not what it produced when the list was written.
 .cache/
 
+# Generated Python bytecode is never repository source.
+__pycache__/
+*.pyc
+
 # Local only. A symlink to another checkout was committed here once; never again.
-node_modules/
+node_modules

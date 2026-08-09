@@ -30,10 +30,113 @@
 // because a wrong cause in a comment is worse than none — it sends the next reader
 // to tools/repro-hang.mjs and the plugin host when the answer is a timer.
 
-import { chromium } from 'playwright';
-import { rmSync, readFileSync } from 'node:fs';
+import {
+  accessSync,
+  constants as fsConstants,
+  existsSync,
+  lstatSync,
+  rmSync,
+  readFileSync,
+  realpathSync,
+} from 'node:fs';
+import { createRequire } from 'node:module';
 import os from 'node:os';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const MODULE_FILE = realpathSync(fileURLToPath(import.meta.url));
+const REPOSITORY_ROOT = realpathSync(join(dirname(MODULE_FILE), '..', '..'));
+const STACK_MODULE = realpathSync(join(dirname(MODULE_FILE), 'stack.mjs'));
+for (const marker of ['CMakeLists.txt', 'ui-web/test/e2e.mjs', 'presets/projects']) {
+  if (!existsSync(join(REPOSITORY_ROOT, marker))) {
+    throw new Error('e2e module location does not resolve to the expected repository');
+  }
+}
+console.log(`[e2e] repository root: ${REPOSITORY_ROOT} (module location)`);
+
+// The current process is already running, but its browser and own-stack children
+// must not inherit caller-controlled dependency, temp, or credential authority.
+for (const name of [
+  'NODE_OPTIONS', 'NODE_PATH', 'PLAYWRIGHT_BROWSERS_PATH',
+  'DAW_PLUGIN_CACHE', 'DAW_PATCHER_PRESET_DIR',
+  'ANTHROPIC_API_KEY', 'DAW_ENV_FILE',
+  'TMPDIR', 'TMP', 'TEMP',
+]) delete process.env[name];
+const e2eTempRoot = realpathSync(os.tmpdir());
+if (!lstatSync(e2eTempRoot).isDirectory()) {
+  throw new Error('e2e OS temporary root is not a directory');
+}
+for (let current = e2eTempRoot;; current = dirname(current)) {
+  if (existsSync(join(current, '.git'))) {
+    throw new Error('e2e refuses a temporary root inside a Git checkout');
+  }
+  const parent = dirname(current);
+  if (parent === current) break;
+}
+process.env.TMPDIR = e2eTempRoot;
+process.env.TMP = e2eTempRoot;
+process.env.TEMP = e2eTempRoot;
+
+function isWithin(root, path) {
+  const rel = relative(root, path);
+  return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
+}
+
+if (!isWithin(REPOSITORY_ROOT, STACK_MODULE)) {
+  throw new Error('e2e stack module resolves outside the containing checkout');
+}
+const patcherPresetRoot = realpathSync(join(REPOSITORY_ROOT, 'presets', 'patcher'));
+if (!isWithin(REPOSITORY_ROOT, patcherPresetRoot)
+    || !lstatSync(patcherPresetRoot).isDirectory()) {
+  throw new Error('patcher preset root is not checkout-local');
+}
+process.env.DAW_PATCHER_PRESET_DIR = patcherPresetRoot;
+
+function containingGitCheckout(path) {
+  let current = realpathSync(path);
+  for (;;) {
+    if (existsSync(join(current, '.git'))) return current;
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+function validatedProjectsRoot(candidate, label, project) {
+  const root = realpathSync(candidate);
+  if (!lstatSync(root).isDirectory()) throw new Error(`${label} is not a directory`);
+  const checkout = containingGitCheckout(root);
+  if (checkout !== REPOSITORY_ROOT || !isWithin(REPOSITORY_ROOT, root)) {
+    throw new Error(`${label} does not belong to the containing checkout`);
+  }
+  const projectPath = join(root, `${project}.uniproj.json`);
+  if (!existsSync(projectPath)) {
+    throw new Error(`${label} does not contain the selected project fixture`);
+  }
+  const projectStat = lstatSync(projectPath);
+  if (!projectStat.isFile() || projectStat.isSymbolicLink()) {
+    throw new Error(`${label} contains an invalid selected project fixture`);
+  }
+  const canonicalProject = realpathSync(projectPath);
+  if (!isWithin(root, canonicalProject)) {
+    throw new Error(`${label} selected project fixture resolves outside its root`);
+  }
+  return root;
+}
+
+function validatedCheckoutExecutable(relativePath, label) {
+  const candidate = join(REPOSITORY_ROOT, relativePath);
+  const stat = lstatSync(candidate);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error(`${label} is not a checkout-local regular executable`);
+  }
+  const executable = realpathSync(candidate);
+  if (!isWithin(REPOSITORY_ROOT, executable)) {
+    throw new Error(`${label} resolves outside the containing checkout`);
+  }
+  accessSync(executable, fsConstants.X_OK);
+  return executable;
+}
 
 /**
  * By default this suite brings up its OWN engine, sidecar and page server and
@@ -49,9 +152,69 @@ import { join } from 'node:path';
  * something a person is looking at, and the reason that path still exists.
  */
 const OWN_STACK = !process.env.UNI_URL;
-const stack = OWN_STACK ? await (await import('./stack.mjs')).startStack() : null;
-const URL = process.env.UNI_URL || stack.url;
 const PROJECT = process.env.UNI_PROJECT || 'webtest';
+if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(PROJECT) || PROJECT === '.' || PROJECT === '..') {
+  throw new Error('UNI_PROJECT must be a safe project leaf name');
+}
+const checkoutProjects = validatedProjectsRoot(
+  join(REPOSITORY_ROOT, 'presets', 'projects'),
+  'checkout project root',
+  !OWN_STACK && process.env.UNI_PROJECTS ? 'webtest' : PROJECT,
+);
+const attachedProjects = OWN_STACK
+  ? null
+  : validatedProjectsRoot(
+      process.env.UNI_PROJECTS || checkoutProjects,
+      process.env.UNI_PROJECTS ? 'explicit UNI_PROJECTS' : 'checkout project root',
+      PROJECT,
+    );
+
+const dependencyPath = join(REPOSITORY_ROOT, 'ui-web', 'node_modules');
+const dependencyStat = lstatSync(dependencyPath);
+if (!dependencyStat.isDirectory() || dependencyStat.isSymbolicLink()) {
+  throw new Error('e2e requires checkout-local node_modules as a real directory');
+}
+const dependencyRoot = realpathSync(dependencyPath);
+const require = createRequire(MODULE_FILE);
+const playwrightEntry = realpathSync(require.resolve('playwright'));
+if (!isWithin(dependencyRoot, playwrightEntry)) {
+  throw new Error('playwright resolved outside checkout-local node_modules');
+}
+const playwrightRequire = createRequire(playwrightEntry);
+const playwrightCoreEntry = realpathSync(playwrightRequire.resolve('playwright-core'));
+if (!isWithin(dependencyRoot, playwrightCoreEntry)) {
+  throw new Error('playwright-core resolved outside checkout-local node_modules');
+}
+const { chromium } = require('playwright');
+
+if (OWN_STACK) {
+  for (const [path, label] of [
+    ['build/daw_engine', 'daw_engine'],
+    ['build/juce_host_process', 'juce_host_process'],
+    ['ui/target/release/daw-sidecar', 'daw-sidecar'],
+    ['ui/target/release/daw-cli', 'daw-cli'],
+  ]) {
+    const executable = validatedCheckoutExecutable(path, label);
+    console.log(`[e2e] ${label}: ${executable} (checkout artifact)`);
+  }
+  const pluginCache = join(REPOSITORY_ROOT, 'build', 'plugin_cache.json');
+  if (existsSync(pluginCache)) {
+    const cacheStat = lstatSync(pluginCache);
+    const canonicalCache = realpathSync(pluginCache);
+    if (!cacheStat.isFile() || cacheStat.isSymbolicLink()
+        || !isWithin(REPOSITORY_ROOT, canonicalCache)) {
+      throw new Error('plugin cache is not a checkout-local regular file');
+    }
+    console.log(`[e2e] plugin cache: ${canonicalCache} (checkout artifact)`);
+  }
+}
+const stack = OWN_STACK
+  ? await (await import(pathToFileURL(STACK_MODULE).href)).startStack()
+  : null;
+const URL = process.env.UNI_URL || stack.url;
+const PROJECTS = stack ? realpathSync(stack.dir) : attachedProjects;
+console.log(`[e2e] project root: ${PROJECTS} (${stack ? 'isolated stack copy'
+  : process.env.UNI_PROJECTS ? 'explicit UNI_PROJECTS' : 'checkout default'})`);
 
 let fail = 0, count = 0;
 const ok = (cond, label, detail = '') => {
@@ -1223,9 +1386,6 @@ ok(listed.includes(SCRATCH), 'a saved project appears in the browser', JSON.stri
  * fallback for a run against somebody's already-running stack, where the engine
  * was pointed at the real one.
  */
-const PROJECTS = (stack && stack.dir)
-  || process.env.UNI_PROJECTS
-  || '/Users/jak/src/daw-web/presets/projects';
 for (const suffix of ['.uniproj.json', '.uniproj.state']) {
   rmSync(join(PROJECTS, SCRATCH + suffix), { recursive: true, force: true });
 }

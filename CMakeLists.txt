@@ -875,6 +875,20 @@ add_test(NAME contract_freshness
 )
 set_tests_properties(contract_freshness PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# Establish source authority before registered checks consume scripts, fixtures, or documentation.
+# Strip shell startup hooks outside bash: unsetting them inside the entrypoint would be too late.
+add_test(NAME repository_integrity
+  COMMAND ${CMAKE_COMMAND} -E env --unset=BASH_ENV --unset=ENV
+    bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/repository_integrity_check.sh
+)
+set_tests_properties(repository_integrity PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME root_isolation
+  COMMAND ${CMAKE_COMMAND} -E env --unset=BASH_ENV --unset=ENV
+    bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/repository_integrity_check.sh --self-test
+)
+set_tests_properties(root_isolation PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 # Every hand-written Rust mirror is pinned to the C++ struct bindgen generates from the header.
 add_test(NAME contract_layout
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/contract_layout_check.sh

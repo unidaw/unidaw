@@ -1,11 +1,26 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -uo pipefail
+unset BASH_ENV ENV
+
 # Hunt the decisive #52 stack dir: one run with (a) a real chain/modlink/routing rejection,
 # (b) drained=0 in the sidecar, and (c) the ring= cursors. Each suite run is ~10s, so this gets
 # far more attempts per minute than a 50-minute sweep at one-in-two odds.
 #
 # Each run bounded at 90s so a hang is recorded, not blocking.
-cd /Users/jak/src/daw-web
-D=/private/tmp/claude-501/-Users-jak-src-daw/072087ea-9515-45b9-8660-c8c34a937332/scratchpad
+if [ -L "${BASH_SOURCE[0]}" ]; then
+  printf '%s\n' 'hunt52: ERROR: refusing a symlinked entrypoint' >&2
+  exit 2
+fi
+SCRIPT_DIR="$({ CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P; })" || {
+  printf '%s\n' 'hunt52: ERROR: cannot locate the containing tools directory' >&2
+  exit 2
+}
+. "$SCRIPT_DIR/lib/repository_root.sh" || exit 2
+ROOT="$(daw_repository_root)" || exit 2
+cd "$ROOT" || exit 2
+D="$(daw_make_temp_directory daw-hunt52)" || exit 2
+# Failure logs are the purpose of this hunt, so retain this unique run-owned directory for review.
+printf 'hunt52 logs retained at: %s\n' "$D"
 hits=0
 for i in $(seq 1 24); do
   suite=chain-error-reasons; [ $((i % 2)) -eq 0 ] && suite=reject-reasons

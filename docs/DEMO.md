@@ -41,8 +41,8 @@ not READ back from either. Both are with the engine side.
 ## Before you start
 
 ```
-cd /Users/jak/src/daw-web
-tools/dev.sh
+# From the root of this checkout:
+DAW_ENV_FILE=/absolute/path/to/credentials.env tools/dev.sh
 ```
 
 That is the whole thing: it **builds first**, starts the engine, sidecar and page server, opens
@@ -55,29 +55,25 @@ while it is up leaves the process older than the code on disk — a fix lands, t
 and the app in front of you still has the bug. That happened three times in one day before this
 script existed.
 
-`tools/webstack.sh` is still there and unchanged, and is what the harness and
-`demo-stack-smoke.mjs` use. Reach for it directly only if you need its flags:
+`tools/webstack.sh` is still available for a direct launch. It is credential-free by default,
+even if the shell or checkout contains a key. A paid/demo launch must opt in at the call site:
 
 ```
-DAW_ENV_FILE=/Users/jak/src/daw-web/.env KEEP_ENGINE=1 tools/webstack.sh
+DAW_WEBSTACK_ALLOW_CREDENTIALS=1 \
+  DAW_ENV_FILE=/absolute/path/to/credentials.env \
+  KEEP_ENGINE=1 tools/webstack.sh
 ```
 
-Either way, check the two lines it prints about the key:
+Check the line it prints about the credential boundary:
 
 ```
-> ask: an ANTHROPIC_API_KEY resolves — the AI box should work
-> ask     enabled — key file /Users/jak/src/daw-web/.env
+> ask     explicit credentialed mode; sidecar cwd cannot discover checkout/home .env files
 ```
 
-They answer different questions and you want both. The first repeats the sidecar's own search and
-says whether a key **resolves**; the second names **which file** it came from. A stack can find a
-key in a place you did not mean — an inherited `ANTHROPIC_API_KEY` in the shell, or a `.env` one
-directory up — and only the second line tells you that.
-
-**If either says `DISABLED` or `NO ANTHROPIC_API_KEY RESOLVES`, the AI box will not work** — and
-it will not say so until somebody types into it, which on stage is the worst possible moment to
-find out. The script prints the two ways to fix it. `.env` in the repo root is enough;
-`DAW_ENV_FILE` overrides it, and `dev.sh` passes the repo one unless you set that.
+The launcher canonicalizes an explicit `DAW_ENV_FILE`, requires a nonblank key, and passes the
+credential only to the sidecar — not the engine, Cargo build, page server or CLI. It refuses a
+credentialed start with no explicit key. `tools/dev.sh` is the intentional paid/demo wrapper: it
+sets the opt-in and selects this checkout's `.env` unless you name a different file.
 
 `--keep-engine` means closing the browser tab does not kill the engine. Without it the sidecar
 asks the engine to quit a few seconds after the last tab closes.
@@ -104,7 +100,7 @@ Last green: 5/5 on 2026-08-07, against a stack started exactly as above.
 **And if you are going to show §7, run the AI suite once as well:**
 
 ```
-DAW_ENV_FILE=/Users/jak/src/daw-web/.env node ui-web/test/ai-demo.mjs
+DAW_ENV_FILE=/absolute/path/to/credentials.env node ui-web/test/ai-demo.mjs
 ```
 
 Two to three minutes, and it costs a few cents in tokens — which is exactly why no sweep runs it,
@@ -424,22 +420,28 @@ DAW_PROJECT_DIR=<the project dir> ./daw_engine --project <name> --render take --
 
 ## If it goes wrong
 
-- **The AI refuses everything** → the stack was started without a key. Restart it with
-  `DAW_ENV_FILE` set; the startup line tells you which.
+- **The AI refuses everything** → restart through `tools/dev.sh`, or launch `tools/webstack.sh`
+  with both `DAW_WEBSTACK_ALLOW_CREDENTIALS=1` and an explicit key/file as shown above.
 - **A typed note does nothing** → the grid does not have the keyboard. Click it. Check `EDIT`.
-- **The engine is gone** → `tools/webstack.sh` again; `--keep-engine` should prevent it.
+- **The engine is gone** → start the stack again; `KEEP_ENGINE=1` should prevent a tab close from
+  asking it to quit.
 - **Nothing makes any sound at all** — not one track, not the AI's part, nothing. Do NOT start
   debugging the app; check the device first, because everything upstream of it can be perfectly
   healthy while this is broken. One command:
 
   ```
-  grep -E 'Audio output' /tmp/eng_daw_web_ui.log
+  node ui-web/test/demo-stack-smoke.mjs
   ```
 
-  `Audio output started` means the device ran a real callback and the fault is elsewhere.
+  The smoke test finds the unique run through its segment state locator, rejects symlinked or
+  non-run-owned state/log paths, matches the locator's engine PID to the numeric segment pidfile,
+  and then reads that run's `engine.log`. `Audio output started` means the device ran a real
+  callback and the fault is elsewhere.
   `OPENED BUT NEVER STARTED` means CoreAudio accepted the device, reported its name and rate, and
   never ran the IO proc — the app is fine and nothing it does will be heard. Restarting the stack
   does not usually clear that one; `sudo killall coreaudiod` has, and it cost this project days
   before anyone thought to check.
 
-  `demo-stack-smoke.mjs` asserts this line, so if you ran the pre-flight you already know.
+  `webstack.sh` also prints the exact validated state-locator path for the run; its `ENGINE_LOG=`
+  field names the same regular file the smoke test inspected. There is deliberately no fixed
+  `/tmp/eng...` alias or symlink.

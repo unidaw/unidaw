@@ -1,4 +1,4 @@
-# TRACKER GAP LIST — /Users/jak/src/daw
+# TRACKER GAP LIST
 
 **Read this first — and note what has changed since it was written.**
 

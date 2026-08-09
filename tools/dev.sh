@@ -92,7 +92,8 @@ fi
 
 # ── START ───────────────────────────────────────────────────────────────────────────────────
 say "starting the stack on $SHM port $PORT"
-DAW_ENV_FILE="${DAW_ENV_FILE:-$WEB/.env}" KEEP_ENGINE=1 tools/webstack.sh || {
+DAW_WEBSTACK_ALLOW_CREDENTIALS=1 \
+  DAW_ENV_FILE="${DAW_ENV_FILE:-$WEB/.env}" KEEP_ENGINE=1 tools/webstack.sh || {
   say "webstack.sh failed to start"
   exit 1
 }

@@ -11,13 +11,17 @@
  * is worse than one that fails: it is the reason `ask` shipped with four tools
  * reporting `applied: false` on every call.
  *
- *   DAW_ENV_FILE=~/src/daw/.env node test/ask-live.mjs
+ *   DAW_ENV_FILE=/absolute/path/to/credentials.env node test/ask-live.mjs
  */
 
 import { startStack } from './stack.mjs';   // WebSocket is a Node global since 22.
 
-const KEY = process.env.ANTHROPIC_API_KEY || process.env.DAW_ENV_FILE;
-if (!KEY) {
+const HAS_EXPLICIT_CREDENTIALS =
+  (typeof process.env.ANTHROPIC_API_KEY === 'string'
+    && process.env.ANTHROPIC_API_KEY.trim() !== '')
+  || (typeof process.env.DAW_ENV_FILE === 'string'
+    && process.env.DAW_ENV_FILE.trim() !== '');
+if (!HAS_EXPLICIT_CREDENTIALS) {
   console.log('SKIPPED — no ANTHROPIC_API_KEY and no DAW_ENV_FILE. This suite is the '
               + 'only check that the agent actually works; run it before shipping '
               + 'anything that touches ask.rs.');
@@ -72,7 +76,10 @@ function callTo(lines, tool) {
   try { return JSON.parse((l.detail || '').slice(0, arrow)); } catch { return {}; }
 }
 
-const stack = await startStack();
+// This is the only own-stack suite authorized to cross the paid credential
+// boundary. startStack defaults to credential-free and passes these ambient
+// credentials only to its sidecar, never to the engine, page server, or CLI.
+const stack = await startStack({ allowCredentials: true });
 const ws = new WebSocket(`ws://127.0.0.1:${stack.base + 2}`);
 await new Promise((r, j) => {
   ws.addEventListener('open', r);

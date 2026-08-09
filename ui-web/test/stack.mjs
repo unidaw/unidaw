@@ -19,16 +19,221 @@
  */
 
 import { spawn } from 'node:child_process';
-import { statSync, readdirSync } from 'node:fs';
-import { mkdtempSync, cpSync, rmSync, existsSync, readFileSync, unlinkSync } from 'node:fs';
+import {
+  accessSync,
+  constants as fsConstants,
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = fileURLToPath(new URL('../..', import.meta.url));   // repo root
-const UIWEB = fileURLToPath(new URL('..', import.meta.url));
+const MODULE_FILE = realpathSync(fileURLToPath(import.meta.url));
+const ROOT = realpathSync(join(dirname(MODULE_FILE), '..', '..'));
+const UIWEB = realpathSync(join(ROOT, 'ui-web'));
+const PRESETS = realpathSync(join(ROOT, 'presets'));
+const PATCHER_PRESET_DIR = realpathSync(join(PRESETS, 'patcher'));
+
+export const STACK_LOCAL_PATHS = Object.freeze({
+  repositoryRoot: ROOT,
+  webRoot: UIWEB,
+  presetRoot: PRESETS,
+  patcherPresetDir: PATCHER_PRESET_DIR,
+});
 
 const bin = (p) => join(ROOT, p);
+
+function isWithin(root, path) {
+  const rel = relative(root, path);
+  return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
+}
+
+for (const [path, label] of [
+  [UIWEB, 'web source'],
+  [PRESETS, 'preset fixtures'],
+  [PATCHER_PRESET_DIR, 'patcher presets'],
+]) {
+  if (!isWithin(ROOT, path) || !lstatSync(path).isDirectory()) {
+    throw new Error(`stack: ${label} is not a checkout-local directory`);
+  }
+}
+
+function trustedTempRoot() {
+  const saved = new Map();
+  for (const name of ['TMPDIR', 'TMP', 'TEMP']) {
+    saved.set(name, process.env[name]);
+    delete process.env[name];
+  }
+  let candidate;
+  try {
+    candidate = realpathSync(tmpdir());
+  } finally {
+    for (const [name, value] of saved) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+  const target = lstatSync(candidate);
+  if (!target.isDirectory() || target.isSymbolicLink()) {
+    throw new Error('stack: canonical OS temporary root is invalid');
+  }
+  for (let current = candidate;; current = dirname(current)) {
+    if (existsSync(join(current, '.git'))) {
+      throw new Error('stack: refusing a temporary root inside a Git checkout');
+    }
+    const parent = dirname(current);
+    if (parent === current) break;
+  }
+  return candidate;
+}
+
+function removeStackTempRoot(path, tempRoot) {
+  const parent = realpathSync(dirname(path));
+  const target = lstatSync(path);
+  if (parent !== tempRoot || !basename(path).startsWith('uni-e2e-')
+      || !target.isDirectory() || target.isSymbolicLink()) {
+    throw new Error('stack: refusing to remove an invalid temporary root');
+  }
+  rmSync(path, { recursive: true, force: true });
+}
+
+const CHILD_STEERING = [
+  'ANTHROPIC_API_KEY', 'DAW_ENV_FILE',
+  'NODE_OPTIONS', 'NODE_PATH', 'PLAYWRIGHT_BROWSERS_PATH', 'CARGO_TARGET_DIR',
+  'DAW_PLUGIN_CACHE', 'DAW_PATCHER_PRESET_DIR',
+  'DAW_CAPTURE_WAV', 'DAW_CAPTURE_SECONDS',
+  'DAW_EVENT_LOG', 'DAW_EVENT_LOG_OFF', 'DAW_HOST_SOCKET_PREFIX',
+  'DAW_UI_SHM_NAME', 'DAW_PROJECT_DIR', 'DAW_HOST_BINARY', 'DAW_ENGINE_NUM_BLOCKS',
+  'TMPDIR', 'TMP', 'TEMP',
+];
+const CHILD_STEERING_KEYS = new Set(CHILD_STEERING.map((name) => name.toUpperCase()));
+
+function credentialFreeBase(source, tempDir) {
+  const environment = { ...source };
+  // Environment keys are case-insensitive on Windows. Delete by normalized key
+  // so a differently-cased credential or dependency variable cannot survive the
+  // policy and win nondeterministically when Node builds the child's env block.
+  for (const name of Object.keys(environment)) {
+    if (CHILD_STEERING_KEYS.has(name.toUpperCase())) delete environment[name];
+  }
+  if (tempDir) {
+    environment.TMPDIR = tempDir;
+    environment.TMP = tempDir;
+    environment.TEMP = tempDir;
+  }
+  return environment;
+}
+
+/**
+ * Pure process-boundary policy, exported so credential isolation can be checked
+ * without starting an engine, opening an audio device, or making a paid request.
+ * Credentials are absent from every role by default. In the explicit paid mode,
+ * only the sidecar receives them.
+ */
+export function stackChildEnvironments(source, {
+  allowCredentials = false,
+  credentials = {},
+  shm = '',
+  projectDir = '',
+  hostBin = '',
+  pluginCache = '',
+  patcherPresetDir = '',
+  capture = '',
+  captureSeconds = 0,
+  numBlocks = 0,
+  tempDir = '',
+} = {}) {
+  if (typeof allowCredentials !== 'boolean') {
+    throw new Error('stack: allowCredentials must be boolean');
+  }
+  const base = credentialFreeBase(source, tempDir);
+  const engine = { ...base };
+  const sidecar = { ...base };
+  const page = { ...base };
+  const cli = { ...base };
+
+  if (shm) {
+    engine.DAW_UI_SHM_NAME = shm;
+    sidecar.DAW_UI_SHM_NAME = shm;
+    cli.DAW_UI_SHM_NAME = shm;
+  }
+  if (projectDir) {
+    engine.DAW_PROJECT_DIR = projectDir;
+    sidecar.DAW_PROJECT_DIR = projectDir;
+  }
+  if (hostBin) engine.DAW_HOST_BINARY = hostBin;
+  if (pluginCache) engine.DAW_PLUGIN_CACHE = pluginCache;
+  if (patcherPresetDir) {
+    engine.DAW_PATCHER_PRESET_DIR = patcherPresetDir;
+    sidecar.DAW_PATCHER_PRESET_DIR = patcherPresetDir;
+  }
+  if (capture) {
+    engine.DAW_CAPTURE_WAV = capture;
+    engine.DAW_CAPTURE_SECONDS = String(captureSeconds);
+  }
+  if (numBlocks) engine.DAW_ENGINE_NUM_BLOCKS = String(numBlocks);
+
+  if (allowCredentials) {
+    if (credentials.anthropicApiKey) {
+      sidecar.ANTHROPIC_API_KEY = credentials.anthropicApiKey;
+    }
+    if (credentials.envFile) sidecar.DAW_ENV_FILE = credentials.envFile;
+  }
+  return { engine, sidecar, page, cli };
+}
+
+// Kept as the narrow common-policy surface used by the repository guard. It is
+// intentionally credential-free even when a caller is constructing paid-mode
+// sidecar credentials; role separation happens in stackChildEnvironments().
+export function stackChildEnvironment(source, {
+  pluginCache = '', patcherPresetDir = '', tempRoot = '',
+} = {}) {
+  const environment = credentialFreeBase(source, tempRoot);
+  if (pluginCache) environment.DAW_PLUGIN_CACHE = pluginCache;
+  if (patcherPresetDir) environment.DAW_PATCHER_PRESET_DIR = patcherPresetDir;
+  return environment;
+}
+
+/** The exact relative credential search performed by daw-sidecar/src/ask.rs. */
+export function sidecarCredentialSearchPaths(cwd) {
+  return [resolve(cwd, '.env'), resolve(cwd, '../.env'), resolve(cwd, '../../.env')];
+}
+
+export function explicitStackCredentials(source, allowCredentials = false) {
+  if (typeof allowCredentials !== 'boolean') {
+    throw new Error('stack: allowCredentials must be boolean');
+  }
+  if (!allowCredentials) return {};
+  const credentials = {};
+  if (typeof source.ANTHROPIC_API_KEY === 'string'
+      && source.ANTHROPIC_API_KEY.trim() !== '') {
+    credentials.anthropicApiKey = source.ANTHROPIC_API_KEY;
+  }
+  if (typeof source.DAW_ENV_FILE === 'string' && source.DAW_ENV_FILE !== '') {
+    try {
+      if (!isAbsolute(source.DAW_ENV_FILE)) throw new Error('relative');
+      const canonical = realpathSync(source.DAW_ENV_FILE);
+      if (!statSync(canonical).isFile()) throw new Error('not-file');
+      accessSync(canonical, fsConstants.R_OK);
+      credentials.envFile = canonical;
+    } catch {
+      // Never include the candidate: a credential path is sensitive even when
+      // invalid, and callers only need to know which explicit contract failed.
+      throw new Error('stack: explicit DAW_ENV_FILE must name an absolute readable file');
+    }
+  }
+  return credentials;
+}
 
 /** Wait until `probe()` is true, or throw with a diagnosis. */
 async function until(probe, what, ms = 25000, every = 250) {
@@ -122,16 +327,56 @@ async function findFreeBase(tries = 40) {
  *   producer: 1237 of 2759 playback callbacks dropped a track in one run, and the
  *   capture came out as perfect silence. That is not the application failing, it
  *   is the box being busy, and a deeper pipeline is the documented lever for it.
+ * @param {boolean} [opts.allowCredentials] explicit paid-test opt-in. False by
+ *   default; true passes validated ambient ask credentials to the sidecar only.
  */
 export async function startStack({ base = 0, shm = '', keepDir = false,
                                    capture = '', captureSeconds = 30,
-                                   runSeconds = 0, numBlocks = 0 } = {}) {
+                                   runSeconds = 0, numBlocks = 0,
+                                   allowCredentials = false } = {}) {
   const procs = [];
+  if (typeof allowCredentials !== 'boolean') {
+    throw new Error('stack: allowCredentials must be boolean');
+  }
   if (!base) base = await findFreeBase();
   // The segment name has to be unique too, or two runs share one engine's memory
   // — the same collision one layer down, and a much harder one to see.
   if (!shm) shm = `/daw_e2e_${base}`;
-  const root = mkdtempSync(join(tmpdir(), 'uni-e2e-'));
+
+  const artifact = (candidate, what) => {
+    if (!existsSync(candidate)) throw new Error(`stack: ${what} is not built in this checkout`);
+    const source = lstatSync(candidate);
+    const canonical = realpathSync(candidate);
+    if (!source.isFile() || source.isSymbolicLink() || !isWithin(ROOT, canonical)) {
+      throw new Error(`stack: ${what} is not a checkout-local regular artifact`);
+    }
+    return canonical;
+  };
+  const buildCandidate = bin('build');
+  const buildCache = join(buildCandidate, 'CMakeCache.txt');
+  if (!existsSync(buildCache) || lstatSync(buildCache).isSymbolicLink()) {
+    throw new Error('stack: checkout build cache is missing or is a symlink');
+  }
+  const configuredSource = readFileSync(buildCache, 'utf8').split('\n')
+    .filter((line) => line.startsWith('CMAKE_HOME_DIRECTORY:INTERNAL='))
+    .at(-1)?.slice('CMAKE_HOME_DIRECTORY:INTERNAL='.length);
+  if (!configuredSource || realpathSync(configuredSource) !== ROOT) {
+    throw new Error('stack: checkout build was configured from a different source root');
+  }
+  const engineBin = artifact(bin('build/daw_engine'), 'daw_engine');
+  const hostBin = artifact(bin('build/juce_host_process'), 'juce_host_process');
+  const sidecarBin = artifact(bin('ui/target/release/daw-sidecar'), 'daw-sidecar');
+  const cliBin = artifact(bin('ui/target/release/daw-cli'), 'daw-cli');
+  const buildCwd = realpathSync(buildCandidate);
+  if (!isWithin(ROOT, buildCwd)) {
+    throw new Error('stack: build directory resolves outside this checkout');
+  }
+  let pluginCache = bin('build/plugin_cache.json');
+  if (existsSync(pluginCache)) pluginCache = artifact(pluginCache, 'plugin_cache.json');
+
+  const credentials = explicitStackCredentials(process.env, allowCredentials);
+  const tempRoot = trustedTempRoot();
+  const root = mkdtempSync(join(tempRoot, 'uni-e2e-'));
   // The WHOLE presets tree, not just projects/. An audio clip stores its file as
   // `../audio/waveform_probe.wav` — relative to the project directory — so a copy
   // of projects/ alone leaves every audio source dangling one level up. Copying
@@ -140,14 +385,16 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
   //
   // A copy, not the real thing, so a test that saves cannot rewrite the fixtures
   // everything else reads.
-  cpSync(join(ROOT, 'presets'), root, { recursive: true });
+  cpSync(PRESETS, root, { recursive: true });
   const dir = join(root, 'projects');
-
-  const engineBin = bin('build/daw_engine');
-  const hostBin = bin('build/juce_host_process');
-  const sidecarBin = bin('ui/target/release/daw-sidecar');
-  for (const [p, what] of [[engineBin, 'daw_engine'], [sidecarBin, 'daw-sidecar']]) {
-    if (!existsSync(p)) throw new Error(`stack: ${what} not built at ${p}`);
+  const runtimeRoot = mkdtempSync(join(root, '.runtime-'));
+  const sidecarCwd = join(runtimeRoot, 'sidecar', 'work');
+  const childTemp = join(runtimeRoot, 'tmp');
+  mkdirSync(sidecarCwd, { recursive: true });
+  mkdirSync(childTemp, { recursive: true });
+  const credentialSearch = sidecarCredentialSearchPaths(sidecarCwd);
+  if (!credentialSearch.every((candidate) => isWithin(runtimeRoot, candidate))) {
+    throw new Error('stack: sidecar credential search escapes its run-owned resource root');
   }
 
   /*
@@ -255,15 +502,20 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
 
   await demandFree([base, base + 1, base + 2]);
 
-  const env = {
-    ...process.env,
-    DAW_UI_SHM_NAME: shm,
-    DAW_PROJECT_DIR: dir,
-    DAW_HOST_BINARY: hostBin,
-  };
+  const childEnvironments = stackChildEnvironments(process.env, {
+    allowCredentials,
+    credentials,
+    shm,
+    projectDir: dir,
+    hostBin,
+    pluginCache,
+    patcherPresetDir: PATCHER_PRESET_DIR,
+    capture,
+    captureSeconds,
+    numBlocks,
+    tempDir: childTemp,
+  });
   if (capture) {
-    env.DAW_CAPTURE_WAV = capture;
-    env.DAW_CAPTURE_SECONDS = String(captureSeconds);
     /*
      * DELETE LAST RUN'S CAPTURE. HERE, because this is where the path becomes this run's.
      *
@@ -282,11 +534,6 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
      */
     try { unlinkSync(capture); } catch { /* absent is the normal case */ }
   }
-  if (numBlocks) env.DAW_ENGINE_NUM_BLOCKS = String(numBlocks);
-  // Where the API key lives, if the caller has said. The agent loop reads this
-  // at ask time; a stack started without it simply cannot ask, which is the
-  // right failure and the one it reports.
-  if (process.env.DAW_ENV_FILE) env.DAW_ENV_FILE = process.env.DAW_ENV_FILE;
   // Logs to disk, not /dev/null. The first version discarded them, so when the
   // engine fell back to a stand-in plugin the only evidence was a wrong device
   // name three sections into the suite.
@@ -333,18 +580,25 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
 
   const engineArgs = runSeconds ? ['--run-seconds', String(runSeconds)] : [];
   const engine = spawn(engineBin, engineArgs, {
-    env, cwd: bin('build'), stdio: ['ignore', log('engine'), log('engine')],
+    env: childEnvironments.engine,
+    cwd: buildCwd,
+    stdio: ['ignore', log('engine'), log('engine')],
   });
   procs.push(engine);
 
   const sidecar = spawn(sidecarBin, [
     '--shm', shm, '--port', String(base + 1), '--cmd-port', String(base + 2),
-    '--keep-engine', '--plugin-cache', bin('build/plugin_cache.json'),
-  ], { env, cwd: ROOT, stdio: ['ignore', log('sidecar'), log('sidecar')] });
+    '--keep-engine', '--plugin-cache', pluginCache,
+  ], {
+    env: childEnvironments.sidecar,
+    cwd: sidecarCwd,
+    stdio: ['ignore', log('sidecar'), log('sidecar')],
+  });
   procs.push(sidecar);
 
   const server = spawn(process.execPath, [join(UIWEB, 'test/serve.mjs'), String(base)],
-                       { cwd: UIWEB, stdio: ['ignore', log('serve'), log('serve')] });
+                       { cwd: UIWEB, env: childEnvironments.page,
+                         stdio: ['ignore', log('serve'), log('serve')] });
   procs.push(server);
 
 /*
@@ -387,9 +641,9 @@ try {
   await until(async () => {
     const { execFileSync } = await import('node:child_process');
     try {
-      execFileSync(bin('ui/target/release/daw-cli'), ['get', 'transport'],
+      execFileSync(cliBin, ['get', 'transport'],
                    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
-                     env: { ...process.env, DAW_UI_SHM_NAME: shm } });
+                     env: childEnvironments.cli });
       return true;
     } catch { return false; }
   }, `the engine to publish ${shm}`, 30000);
@@ -513,7 +767,7 @@ try {
        * after a day of sweeps left 1257 directories and 19 GB behind.
        */
       const keep = keepDir || process.env.DAW_KEEP_STACK === '1';
-      if (!keep) { try { rmSync(root, { recursive: true, force: true }); } catch {} }
+      if (!keep) { try { removeStackTempRoot(root, tempRoot); } catch {} }
       resolveStop();
     }, 500);
   });
@@ -550,11 +804,11 @@ try {
     } catch { /* no SharedArrayBuffer: fall through and kill immediately */ }
     for (const p of procs) { try { p.kill('SIGKILL'); } catch {} }
     const keep = keepDir || process.env.DAW_KEEP_STACK === '1';
-    if (!keep) { try { rmSync(root, { recursive: true, force: true }); } catch {} }
+    if (!keep) { try { removeStackTempRoot(root, tempRoot); } catch {} }
   };
   process.on('exit', reapSync);
 
-  return { url: `http://127.0.0.1:${base}/index.html`, dir, root, shm, base,
+  return { url: `http://127.0.0.1:${base}/index.html`, dir, root, shm, base, sidecarCwd,
            capture, captureOffset, audioStartedAt, runSeconds, stop,
            /*
             * Did the device actually PULL a block? The only honest basis for believing or
@@ -564,6 +818,8 @@ try {
            audioRunning };
 } catch (e) {
   killSpawned();
+  const keep = keepDir || process.env.DAW_KEEP_STACK === '1';
+  if (!keep) { try { removeStackTempRoot(root, tempRoot); } catch {} }
   throw new Error(`${e && e.message ? e.message : e} — the stack's own engine, sidecar and `
                 + 'page server were killed rather than left running. An engine spawned without '
                 + '--run-seconds never exits on its own, and a leaked one makes the NEXT run '

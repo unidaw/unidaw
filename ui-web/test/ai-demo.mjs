@@ -52,7 +52,7 @@ const check = (ok, what, detail) => {
   else { fail++; console.log('  FAIL ', what, detail === undefined ? '' : `— ${detail}`); }
 };
 
-const stack = await startStack({ keepDir: true });
+const stack = await startStack({ keepDir: true, allowCredentials: true });
 const browser = await chromium.launch({ channel: 'chrome' });
 const page = await browser.newPage({ viewport: { width: 1600, height: 950 } });
 const errors = [];

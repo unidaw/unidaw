@@ -17,16 +17,61 @@
 # add_track that sent nothing still produced "Done! I've added a new audio track named Bass
 # (track 2)" — the prose is not evidence.
 set -uo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -L "${BASH_SOURCE[0]}" ]; then
+  printf '%s\n' 'demo_rehearsal: ERROR: refusing a symlinked entrypoint' >&2
+  exit 2
+fi
+SCRIPT_DIR="$({ CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P; })" || exit 2
+. "$SCRIPT_DIR/lib/repository_root.sh" || exit 2
+ROOT="$(daw_repository_root)" || exit 2
+unset BASH_ENV ENV NODE_OPTIONS NODE_PATH
+unset PYTHONHOME PYTHONPATH
+unset DEMO_BUILD_DIR_INPUT DEMO_ENV_FILE_INPUT DEMO_API_KEY_INPUT
+unset SIDECAR_API_KEY SIDECAR_ENV_FILE
+DEMO_BUILD_DIR_INPUT="${DAW_BUILD_DIR:-}"
+DEMO_ENV_FILE_INPUT="${DAW_ENV_FILE:-}"
+DEMO_API_KEY_INPUT="${ANTHROPIC_API_KEY:-}"
+while IFS= read -r daw_variable; do
+  unset "$daw_variable"
+done < <(compgen -v DAW_)
+unset ANTHROPIC_API_KEY
+export -n DEMO_BUILD_DIR_INPUT DEMO_ENV_FILE_INPUT DEMO_API_KEY_INPUT 2>/dev/null || true
+command -v python3 >/dev/null 2>&1 || { echo "needs python3"; exit 2; }
+python3() { command python3 -I "$@"; }
 . "$ROOT/tools/lib/engine_wait.sh"
-BUILD="${DAW_BUILD_DIR:-$ROOT/build}"
+if [ -n "$DEMO_BUILD_DIR_INPUT" ]; then
+  BUILD="$(daw_canonical_directory "$DEMO_BUILD_DIR_INPUT" 'explicit DAW_BUILD_DIR')" || exit 2
+  printf 'build directory: %s (explicit DAW_BUILD_DIR)\n' "$BUILD" >&2
+else
+  BUILD="$(daw_canonical_directory "$ROOT/build" 'checkout build directory')" || exit 2
+  daw_require_within_root "$BUILD" "$ROOT" 'checkout build directory' || exit 2
+  daw_validate_cmake_build_source "$BUILD" "$ROOT" 'checkout build directory' || exit 2
+  printf 'build directory: %s (checkout default)\n' "$BUILD" >&2
+fi
 SIDE="$ROOT/ui/target/release/daw-sidecar"
 [ -x "$SIDE" ] || SIDE="$ROOT/ui/target/debug/daw-sidecar"
 CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
 
-[ -x "$BUILD/daw_engine" ] || { echo "build daw_engine first"; exit 2; }
-[ -x "$SIDE" ] || { echo "build daw-sidecar first"; exit 2; }
+ENGINE="$(daw_canonical_executable "$BUILD/daw_engine" 'selected daw_engine')" || { echo "build daw_engine first"; exit 2; }
+HOST="$(daw_canonical_executable "$BUILD/juce_host_process" 'selected juce_host_process')" || { echo "build juce_host_process first"; exit 2; }
+daw_require_within_root "$ENGINE" "$BUILD" 'selected daw_engine' || exit 2
+daw_require_within_root "$HOST" "$BUILD" 'selected juce_host_process' || exit 2
+SIDE="$(daw_canonical_executable "$SIDE" 'checkout daw-sidecar')" || { echo "build daw-sidecar first"; exit 2; }
+CLI="$(daw_canonical_executable "$CLI" 'checkout daw-cli')" || { echo "build daw-cli first"; exit 2; }
+daw_require_within_root "$SIDE" "$ROOT" 'checkout daw-sidecar' || exit 2
+daw_require_within_root "$CLI" "$ROOT" 'checkout daw-cli' || exit 2
+PLUGIN_CACHE="$BUILD/plugin_cache.json"
+if [ -L "$PLUGIN_CACHE" ]; then
+  echo "selected plugin cache is a symlink; refusing ambiguous artifact provenance"
+  exit 2
+fi
+if [ -e "$PLUGIN_CACHE" ]; then
+  PLUGIN_CACHE="$(daw_canonical_readable_file "$PLUGIN_CACHE" 'selected plugin cache')" || exit 2
+  daw_require_within_root "$PLUGIN_CACHE" "$BUILD" 'selected plugin cache' || exit 2
+fi
+PATCHER_PRESETS="$(daw_canonical_directory "$ROOT/presets/patcher" 'checkout patcher presets')" || exit 2
+daw_require_within_root "$PATCHER_PRESETS" "$ROOT" 'checkout patcher presets' || exit 2
 
 # THE SIDECAR CARRIES THE TOOL MANIFEST, SO A STALE ONE REHEARSES YESTERDAY'S CAPABILITIES.
 #
@@ -44,18 +89,51 @@ newest_src=$(find "$ROOT/ui/daw-agent/src" "$ROOT/ui/daw-sidecar/src" -name '*.r
 if [ -n "$newest_src" ]; then
   echo "REFUSING TO REHEARSE: $SIDE is older than the agent/sidecar source."
   echo "  newer than the binary:"
-  printf '    %s\n' $newest_src
+  printf '%s\n' "$newest_src" | sed 's/^/    /'
   echo "  The sidecar compiles in the TOOL MANIFEST, so the model would be offered a stale set of"
   echo "  tools and the run would test a build you are not going to demo. Rebuild first:"
   echo "      ( cd $ROOT/ui && cargo build --release -p daw-sidecar )"
   exit 2
 fi
-node -e "require.resolve('ws')" >/dev/null 2>&1 || { echo "needs node's 'ws' module"; exit 2; }
+command -v node >/dev/null 2>&1 || { echo "needs node"; exit 2; }
+NODE_MODULES="$ROOT/ui-web/node_modules"
+[ -d "$NODE_MODULES" ] && [ ! -L "$NODE_MODULES" ] \
+  || { echo "needs checkout-local ui-web dependencies as a real directory"; exit 2; }
+NODE_MODULES="$(daw_canonical_directory "$NODE_MODULES" 'ui-web dependency directory')" || exit 2
+daw_require_within_root "$NODE_MODULES" "$ROOT" 'ui-web dependency directory' || exit 2
+WS_ENTRY="$(cd "$ROOT/ui-web" && node -e "process.stdout.write(require('fs').realpathSync(require.resolve('ws')))" 2>/dev/null)" \
+  || { echo "needs checkout-local node 'ws' module"; exit 2; }
+case "$WS_ENTRY" in
+  "$NODE_MODULES"/*) ;;
+  *) echo "node 'ws' resolved outside checkout-local dependencies"; exit 2 ;;
+esac
 
-SIDECAR_CWD=/Users/jak/src/daw-web/ui
-[ -d "$SIDECAR_CWD" ] || SIDECAR_CWD="$ROOT/ui"
+# This is an intentionally paid rehearsal. Credentials must be named by the
+# caller; the run-owned sidecar cwd below prevents implicit checkout/home .env
+# discovery from broadening that authority.
+SIDECAR_ENV_FILE=''
+if [ -n "$DEMO_ENV_FILE_INPUT" ]; then
+  SIDECAR_ENV_FILE="$(daw_canonical_readable_file "$DEMO_ENV_FILE_INPUT" 'explicit DAW_ENV_FILE')" || exit 2
+fi
+case "$DEMO_API_KEY_INPUT" in
+  *[![:space:]]*) ;;
+  *) DEMO_API_KEY_INPUT='' ;;
+esac
+if [ -z "$DEMO_API_KEY_INPUT" ]; then
+  if [ -z "$SIDECAR_ENV_FILE" ] || ! daw_env_file_has_anthropic_key "$SIDECAR_ENV_FILE"; then
+    echo "demo rehearsal requires explicit ANTHROPIC_API_KEY or DAW_ENV_FILE"
+    exit 2
+  fi
+fi
+SIDECAR_API_KEY="$DEMO_API_KEY_INPUT"
+DEMO_API_KEY_INPUT=''
+export -n SIDECAR_API_KEY SIDECAR_ENV_FILE 2>/dev/null || true
 
-TMP="$(mktemp -d)"
+TMP="$(daw_make_temp_directory daw-demo-rehearsal)" || exit 2
+SIDECAR_CWD="$TMP/runtime/sidecar/cwd"
+mkdir -p -- "$SIDECAR_CWD" || exit 2
+SIDECAR_CWD="$(daw_canonical_directory "$SIDECAR_CWD" 'run-owned sidecar cwd')" || exit 2
+daw_require_within_root "$SIDECAR_CWD" "$TMP" 'run-owned sidecar cwd' || exit 2
 SHM="/demoreh_$$"
 ENG=""; SC=""
 cleanup() {
@@ -76,13 +154,17 @@ EOF
 # The engine's project dir is the TEMP dir, not presets/: the harmony step verifies itself by
 # saving and reading the file back, and a rehearsal must not write into the repo's presets.
 ( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
-    ./daw_engine --run-seconds 900 >"$TMP/eng.log" 2>&1 ) &
+    DAW_HOST_BINARY="$HOST" DAW_PLUGIN_CACHE="$PLUGIN_CACHE" \
+    DAW_PATCHER_PRESET_DIR="$PATCHER_PRESETS" \
+    "$ENGINE" --run-seconds 900 >"$TMP/eng.log" 2>&1 ) &
 ENG=$!
 wait_for_boot "$TMP/eng.log" "$ENG" 120 "UI: command thread started" \
   || { echo "engine never came up"; tail -8 "$TMP/eng.log"; exit 1; }
 
-( cd "$SIDECAR_CWD" && exec env DAW_ENV_FILE="${DAW_ENV_FILE:-}" \
-    "$SIDE" --shm "$SHM" --port "$STATE_PORT" --cmd-port "$CMD_PORT" >"$TMP/side.log" 2>&1 ) &
+( cd "$SIDECAR_CWD" && exec env ANTHROPIC_API_KEY="$SIDECAR_API_KEY" \
+    DAW_ENV_FILE="$SIDECAR_ENV_FILE" DAW_PROJECT_DIR="$TMP" \
+    "$SIDE" --shm "$SHM" --port "$STATE_PORT" --cmd-port "$CMD_PORT" \
+      --plugin-cache "$PLUGIN_CACHE" >"$TMP/side.log" 2>&1 ) &
 SC=$!
 port_open() { nc -z 127.0.0.1 "$CMD_PORT" 2>/dev/null; }
 wait_until 60 port_open || { echo "sidecar never opened its command port"; tail -8 "$TMP/side.log"; exit 1; }
@@ -91,7 +173,7 @@ cli() { env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@" 2>/dev/nul
 
 # One prompt, one connection, printed as it streams. Returns non-zero if the model reports failure.
 ask() {
-  node - "$CMD_PORT" "$1" <<'JS'
+  ( cd "$ROOT/ui-web" && node - "$CMD_PORT" "$1" ) <<'JS'
 const WebSocket = require('ws');
 const [,, port, prompt] = process.argv;
 const ws = new WebSocket(`ws://127.0.0.1:${port}`);
@@ -466,7 +548,9 @@ if [ -f "$TMP/rehearsal.uniproj.json" ]; then
   # using the default right now" is how it happened the first time. Derived from $SHM so it is
   # unique per run and obviously related to it.
   ( cd "$BUILD" && exec env DAW_UI_SHM_NAME="${SHM}_render" DAW_PROJECT_DIR="$TMP" \
-      ./daw_engine --project rehearsal \
+      DAW_HOST_BINARY="$HOST" DAW_PLUGIN_CACHE="$PLUGIN_CACHE" \
+      DAW_PATCHER_PRESET_DIR="$PATCHER_PRESETS" \
+      "$ENGINE" --project rehearsal \
       --render "$TMP/take" --run-seconds 12 ) >"$TMP/render.log" 2>&1
   PEAK="$(python3 - "$TMP/take.wav" <<'PYR' 2>/dev/null
 import wave, struct, sys

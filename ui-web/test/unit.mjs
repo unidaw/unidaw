@@ -3422,8 +3422,8 @@ test('the JS row-op mirror matches the Rust schema exactly', async () => {
    */
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(
-    // THIS REPO'S COPY, not the sibling checkout's. It read ../../../daw/... — backend's
-    // working tree — so the check failed whenever they were mid-edit on ops this side had never
+    // THIS REPO'S COPY, not a separately named checkout. It used to read backend's working tree,
+    // so the check failed whenever they were mid-edit on ops this side had never
     // been told about, which punishes someone else's work in progress rather than finding drift.
     // The copy here is what the sidecar actually compiles against, which is what has to agree
     // with the mirror.
@@ -4682,7 +4682,7 @@ test('CONTROL: a ref that resolves to a DIFFERENT product IS caught', () => {
  * Found by reading, which is the wrong way to find it. DEMO.md said:
  *
  *     Then check the line it prints:
- *         ask     enabled — key file /Users/jak/src/daw-web/.env
+ *         ask     enabled — key file <checkout-specific credential file>
  *
  * No version of webstack.sh in this tree prints that. The real line is
  * "ask: an ANTHROPIC_API_KEY resolves". So the instruction on the morning of the demo was to
@@ -4698,14 +4698,29 @@ const toolScripts = () => readdirSync(join(PRESET_ROOT, 'tools'))
   .join('\n');
 
 /*
- * Does any script print this line? Compared on the part BEFORE the em-dash, because the scripts
- * interpolate after it ($ask_key, a path, a timestamp) and a whole-line match would fail on lines
- * that are perfectly correct — which pushes the next person to delete the check instead of
- * fixing the claim.
+ * Does any script print this line? Static output can be found directly. For a quoted `say`/`echo`
+ * template, shell variables may match dynamic text but the template must retain a distinctive
+ * literal fragment; a template consisting only of `$value` cannot prove that any sentence prints.
  */
 const scriptPrints = (scripts, line) => {
   const stem = line.split('—')[0].trim();
-  return stem.length <= 6 || scripts.includes(stem);
+  if (scripts.includes(stem)) return true;
+  const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const templates = [...scripts.matchAll(/\b(?:say|echo)\s+"((?:[^"\\]|\\.)*)"/g)]
+    .map((m) => m[1]);
+  return templates.some((template) => {
+    const variablePattern = /\$(?:\{[A-Za-z_][A-Za-z0-9_]*(?::-[^}]*)?\}|[A-Za-z_][A-Za-z0-9_]*)/g;
+    const literal = template.replace(variablePattern, '').trim();
+    if (literal.length <= 6) return false;
+    let pattern = '';
+    let offset = 0;
+    for (const variable of template.matchAll(variablePattern)) {
+      pattern += escapeRegExp(template.slice(offset, variable.index)) + '.*';
+      offset = variable.index + variable[0].length;
+    }
+    pattern += escapeRegExp(template.slice(offset));
+    return new RegExp(`^${pattern}$`).test(line);
+  });
 };
 
 test('every script line the runbook quotes is a line a script prints', () => {
@@ -4733,10 +4748,9 @@ test('CONTROL: an invented output line IS caught', () => {
   /*
    * THE CONTROL I FIRST WROTE WAS BUILT ON A FALSE PREMISE, and that is worth the space.
    *
-   * I "corrected" DEMO.md for quoting `ask     enabled — key file ...`, having grepped
-   * webstack.sh, found `ask: an ANTHROPIC_API_KEY resolves`, and stopped at the first hit. The
-   * script prints BOTH — one says whether a key resolves, the other says which file it came
-   * from — and the runbook was right. This check, still in a scratch file, is what caught it.
+   * The launcher interpolates its selected credential mode into the line the runbook quotes.
+   * A raw source substring therefore rejects a line the script really prints, while accepting
+   * every prefix shorter than seven characters would make the negative control meaningless.
    *
    * So the control asserts the PREDICATE, not a claim about any particular line: a line nobody
    * prints must be rejected, and a line somebody does print must be accepted. A control resting
@@ -4745,9 +4759,9 @@ test('CONTROL: an invented output line IS caught', () => {
   const scripts = toolScripts();
   assert.equal(scriptPrints(scripts, 'no script anywhere prints this sentence'), false,
     'an invented line was accepted — the check cannot fail and proves nothing');
-  assert.equal(scriptPrints(scripts, 'ask     enabled — key file /somewhere/else/.env'), true,
-    'a line a script really does print was rejected; only the text after the em-dash differs, '
-    + 'which is interpolated and cannot be matched');
+  assert.equal(scriptPrints(scripts,
+    'ask     explicit credentialed mode; sidecar cwd cannot discover checkout/home .env files'),
+  true, 'a line a script really prints through a shell variable was rejected');
 });
 
 /*
