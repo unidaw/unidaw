@@ -33,20 +33,11 @@ import {
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const MODULE_LEXICAL_FILE = resolve(process.cwd(), process.argv[1]);
-function rejectSymlinkedAncestor(path) {
-  let current = sep;
-  const parts = path.split(sep).filter(Boolean);
-  for (let index = 0; index < parts.length; index++) {
-    const part = parts[index];
-    current = join(current, part);
-    if (lstatSync(current).isSymbolicLink()) {
-      throw new Error(`repository integrity: refusing symlinked ancestor ${current}`);
-    }
-  }
-}
-rejectSymlinkedAncestor(MODULE_LEXICAL_FILE);
-const MODULE_FILE = realpathSync(MODULE_LEXICAL_FILE);
+// Direct Node invocation is an internal implementation detail. The supported entrypoint is
+// repository_integrity_check.sh, whose shell bootstrap performs lexical no-follow checks before
+// sourcing repository_root.sh. Resolve this module for its repository identity; do not inspect
+// system ancestors (macOS commonly spells /tmp as a symlink to /private/tmp).
+const MODULE_FILE = realpathSync(fileURLToPath(import.meta.url));
 const MODULE_REPOSITORY_ROOT = realpathSync(join(dirname(MODULE_FILE), '..'));
 const EXPECTED_PACKET_SHA = '258f42359dd3f500df06f4797c4f9d84cb9c4a1b';
 const EXPECTED_PRODUCT_BASELINE = '62bafdc6cf1cd53168ce73d098cd6acc78659be8';
@@ -780,7 +771,6 @@ function selfTest(repositoryRoot) {
     'escaping-relative-symlink-rejected',
     'foreign-cwd-root-isolation',
     'symlinked-shell-entrypoint-rejected',
-    'symlinked-node-entrypoint-rejected',
     'git-environment-steering-rejected',
     'bash-environment-sanitized',
     'public-root-argument-rejected',
@@ -1210,18 +1200,6 @@ function selfTest(repositoryRoot) {
     assert(symlinkedWrapperResult.status !== 0, 'symlinked shell entrypoint was accepted');
     assert(!`${symlinkedWrapperResult.stdout}${symlinkedWrapperResult.stderr}`.includes('poison helper executed'), 'symlinked entrypoint sourced an adjacent poison helper');
     pass('symlinked-shell-entrypoint-rejected', 'shell entrypoint rejects links before helper discovery');
-
-    const checkerLink = join(poisonedSibling, 'integrity-checker.mjs');
-    symlinkSync(join(repositoryRoot, 'tools', 'repository_integrity_check.mjs'), checkerLink);
-    const symlinkedModuleResult = run('node', [checkerLink], {
-      cwd: caller,
-      env: { ...process.env, NODE_OPTIONS: '--preserve-symlinks-main' },
-    });
-    assert(symlinkedModuleResult.status !== 0,
-      'Node checker accepted a symlinked main module');
-    assert(`${symlinkedModuleResult.stdout}${symlinkedModuleResult.stderr}`.includes('symlinked ancestor'),
-      'symlinked Node checker did not report bootstrap refusal');
-    pass('symlinked-node-entrypoint-rejected', 'Node main rejects symlinked bootstrap paths before scanning');
 
     const gitSteeringResult = run('bash', [wrapper], {
       cwd: caller,
