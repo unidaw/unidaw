@@ -8,11 +8,11 @@ ledger records current orchestration state.
 
 ```text
 Program:       ACTIVE -- AE-P0 only
-Reason:        Builds and Rust suites green; CTest queued behind shared-resource owner
+Reason:        Baseline captured: CTest 204/6/1, exclusive e2e 34/34; fixture/root gates remain
 Target repo:   /Users/jak/src/daw-backend
 Baseline SHA:  5bef283798b59c2c4f5720292554c7ab8c265be6
 Worktrees:     AE-P0.1 at /Users/jak/src/daw-ae-p0-roots
-Active tasks:  AE-P0 baseline; AE-P0.1 implementation; AE-P0.2 report correction
+Active tasks:  AE-P0 record; AE-P0.1 final hardening; AE-P0.2 V4 correction
 File locks:    protocol hotspots frozen; root CMake reserved narrowly for AE-P0.1
 Integration:   architecture-audit fast-forwarded to frozen baseline
 ```
@@ -38,10 +38,10 @@ The owner-authorized activation trigger has been satisfied:
 | Handle | Kind | Initial pairing | State |
 |---|---|---|---|
 | `backend` | Codex | Orchestrator/integrator | `ACTIVE: AE-P0` |
-| `codex-worker-1` | Codex | Lane A implementation owner first | `READY: HOLD` |
-| `claude-worker-1` | Claude | Lane A independent reviewer first | `READY: HOLD` |
-| `claude-worker-2` | Claude | Lane B implementation owner first | `CHANGES_REQUESTED: AE-P0.2 discovery` |
-| `codex-worker-2` | Codex | Lane B independent reviewer first | `HOLD: corrected-report review` |
+| `codex-worker-1` | Codex | Lane A implementation owner first | `ACTIVE: AE-P0.1 final hardening` |
+| `claude-worker-1` | Claude | Lane A independent reviewer first | `HOLD: awaiting AE-P0.1 SHA` |
+| `claude-worker-2` | Claude | Lane B discovery owner first | `CHANGES_REQUESTED: AE-P0.2 V4` |
+| `codex-worker-2` | Codex | Lane B independent reviewer first | `HOLD: awaiting V4` |
 
 Implementation and review roles rotate after each integrated ticket. Pairing is
 not authorization to begin a ticket.
@@ -55,9 +55,9 @@ not authorization to begin a ticket.
 - [x] Canonical branch and baseline SHA recorded above.
 - [ ] Baseline build/test provenance captured.
 - [x] All four workers acknowledge the target path, baseline, plan, and `HOLD`.
-- [ ] First-wave tickets have complete task packets.
-- [ ] Merge-hotspot ownership assigned before any worktree is created.
-- [ ] Every first-wave ticket has an independent cross-model reviewer.
+- [x] First-wave tickets have complete task packets.
+- [x] Merge-hotspot ownership assigned before any worktree is created.
+- [x] Every first-wave ticket has an independent cross-model reviewer.
 
 ## Worker acknowledgements
 
@@ -84,8 +84,8 @@ watcher:  none (required for Codex)
 | Ticket | State | Dependency | Owner | Reviewer | Worktree | Commit |
 |---|---|---|---|---|---|---|
 | `AE-P0` | `ACTIVE` | Undo + owner `GO` satisfied | `backend` | unassigned | root | `5bef283` baseline |
-| `AE-P0.1` | `ACTIVE` | frozen baseline + planning bootstrap | `codex-worker-1` | `claude-worker-1` | `/Users/jak/src/daw-ae-p0-roots` | none |
-| `AE-P0.2 discovery` | `CHANGES_REQUESTED` | frozen baseline + packet | `claude-worker-2` | `codex-worker-2` | read-only root | first report rejected |
+| `AE-P0.1` | `ACTIVE` | frozen baseline + planning bootstrap | `codex-worker-1` | `claude-worker-1` | `/Users/jak/src/daw-ae-p0-roots` | final scope-amended checks running |
+| `AE-P0.2 discovery` | `CHANGES_REQUESTED` | frozen baseline + packet | `claude-worker-2` | `codex-worker-2` | read-only root | V2.1 and V3 rejected; V4 requested |
 | `AE-P0.2 implementation` | `BLOCKED` | `AE-P0.1` + reviewed discovery + baseline results | unassigned | unassigned | none | none |
 | `AE-P0.3` | `BLOCKED` | AE-P0.1 review + frontend ownership release | unassigned | unassigned | none | packet ready |
 | `AE-P1.1` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
@@ -160,6 +160,16 @@ included in handoffs. The bus never substitutes for a commit, review, or gate.
 | 2026-08-09 | Cross-worktree runtime ownership respected | Full CTest deferred while frontend's 66-suite gate owns engine/audio resources; frontend will send an explicit clear signal |
 | 2026-08-09 | Canonical operating brief corrected | `AGENTS.md` now states that test mode still opens audio, Codex must not use the Claude watcher, and SHM is v37 rather than v15 |
 | 2026-08-09 | AE-P0.1 exposed a pre-existing web unit failure | 120/121 pass; command-caller audit ignores CLI and reports three CLI-reachable commands as unexplained. No scope expansion granted; `AE-P0.3` records the still-red gate |
+| 2026-08-09 | Frontend released shared runtime resources | Owner proved no engine, host, sidecar, Node suite, or sweep remained; canonical backend baseline then ran exclusively |
+| 2026-08-10 | Canonical CTest baseline completed | 204 passed, six failed, one skipped of 211 in 1,404.03 seconds; JUnit `build/ae-p0-ctest.xml` SHA-256 `2db255c070cce67c996bd4aaa7cb66b0494de52b5779610d9f9ed9f6f63bcc3d` |
+| 2026-08-10 | CTest failure cluster classified without waiver | Governance freshness failed; five VST-backed checks had no plugin cache/parameters/state; `audio_stability` skipped with no loaded callbacks. Engine and host artifacts were newer than `event_payloads.h` and matched recorded hashes |
+| 2026-08-10 | CTest mutated source-tree paths | `readback_check` left an untracked preset, which was recorded and removed; four checks appended eight events to ignored `presets/projects/history.jsonl`, which was preserved because no pre-run content hash existed |
+| 2026-08-10 | Agent engine e2e rerun exclusively | 34/34 passed in 21.92 seconds with no competing suite; device-derived rate/block-size limitation remains explicit |
+| 2026-08-10 | Normal-mode capture path exercised | Structurally valid all-zero 44.1-kHz WAV and expected-silence metric pass recorded; positive tap liveness is unproven, seven underruns make realtime stability red, and shutdown reported a control-header receive failure |
+| 2026-08-10 | Shared runtime resources released back to frontend | Backend declared no remaining engine/host/sidecar suite; frontend resumed its 66-suite sweep |
+| 2026-08-09 | AE-P0.2 V2.1 independently rejected | Default-substitution count corrected to 118; compiled/web resources, immutable lifecycle, IPC entropy, coherent artifact-record substitution, ownership, and audio serialization remained incomplete |
+| 2026-08-09 | AE-P0.2 V3 independently rejected | Trusted source/build anchor, executed-artifact bijection, incremental generation semantics, closed schemas, endpoint lifecycle, crash-safe device lease, exact inventory/ownership, and adversarial controls remained incomplete; standalone V4 requested |
+| 2026-08-09 | AE-P0.1 scope amended for credential isolation | Final red-team found own-stack sidecar CWD could discover parent/home `.env` and make an ambient paid call; `ui-web/test/stack.mjs` narrowly added with fail-closed regression requirements |
 
 ## AE-P0 baseline findings
 
@@ -183,7 +193,14 @@ sibling checkout:
 - The clean baseline build is intentionally bounded to six jobs after the
   unrestricted build oversubscribed the machine. The interrupted build changed
   only disposable build artifacts and resumed in the same isolated directory.
-- Read-only AE-P0.2 discovery found that 103 of 211 registered CTest entries
-  select the canonical `build/` directory internally, regardless of
-  `ctest --test-dir`; its independent review is active. The canonical C++ and
-  Rust debug artifacts were therefore rebuilt before the full sweep.
+- Read-only AE-P0.2 discovery found that a bare noncanonical `ctest --test-dir`
+  sends 118 direct shell engine checks to canonical `build/`: 103 are
+  override-immune and 15 are override-aware but default there. Its V2.1 and V3
+  reports were independently rejected for deeper contract gaps. The canonical
+  C++ and Rust debug artifacts were rebuilt before the full sweep.
+- The canonical CTest result is honestly red: 204 pass, six fail, one skip. Five
+  failures form a missing-plugin-cache/fixture cluster; the suite must become
+  hermetic and fail-fast rather than relying on machine-local plugin state.
+- The objective capture created and metrically accepted an all-zero WAV. That
+  passes the expected-silence content assertion but does not prove positive tap
+  liveness; seven underruns separately leave realtime stability red.
