@@ -38,7 +38,7 @@ packet commit, a new exact-SHA acknowledgement, and independent review.
 
 ## Exact additive ownership
 
-Lane 0 may add exactly these 26 paths and may not edit, delete, rename, or
+Lane 0 may add exactly these 25 paths and may not edit, delete, rename, or
 replace any existing path:
 
 1. `docs/architecture/tasks/AE-P0.2-lane0.md`
@@ -66,7 +66,6 @@ replace any existing path:
 23. `tools/architecture/ae_p0_2/tests/cross-language.test.mjs`
 24. `tools/architecture/ae_p0_2/tests/contracts_cpp_test.cpp`
 25. `tools/architecture/ae_p0_2/tests/contracts_rust_test.rs`
-26. `tools/architecture/ae_p0_2/tests/contracts_ts_test.ts`
 
 All paths are additive and isolated. No root `CMakeLists.txt`, product source,
 protocol/SHM file, generated product artifact, existing verification entry
@@ -78,6 +77,9 @@ documentation is owned by Lane 0.
 - The four schema sources use JSON Schema 2020-12, reject unknown properties at
   every object boundary, use closed enums/tagged unions, and define canonical
   ordering and duplicate rejection.
+- Canonical JSON is RFC 8785 JCS and every identity digest uses SHA-256 with the
+  ADR's exact domain-separated byte preimage. No implementation-local meaning
+  of "canonical" is permitted.
 - `src/generate.mjs` is the sole generator. It emits the schema bundle,
   standalone generated validator, and C++/Rust/TypeScript contracts containing
   types, validators, canonical writers, and literal-vector constants.
@@ -86,18 +88,29 @@ documentation is owned by Lane 0.
   hand-reviewed anchor bytes before generated parsing is trusted.
 - `src/validate-cli.mjs` is a new standalone reader/validator. Wiring it into an
   existing verification entry point belongs to a later owned lane.
-- Tests are standalone new files. They may invoke installed Node, C++, Rust, and
-  TypeScript tools directly, but may not change root build/package integration.
+- Tests are standalone new files. They may invoke installed Node, C++, and Rust
+  tools directly, but may not change root build/package integration. The
+  generated TypeScript contract remains a Lane 0 deliverable, but TypeScript
+  type-checking moves to the later web/toolchain-owned lane and must be added by
+  an accepted OwnershipTransfer before that lane begins; Lane 0 may not install
+  a TypeScript compiler or silently skip a nominal TypeScript check.
 
 ## Ownership manifest rules
 
-`docs/architecture/tasks/AE-P0.2-ownership.json` is generated from the exact
-baseline tree plus the exact planned list above. It must:
+`docs/architecture/tasks/AE-P0.2-ownership.json` is generated from an explicit
+reference set: the exact tree tracked at baseline
+`c33da66fe1a66f20eee931335b18465cfddfdb0e` unioned with the exact 25-path
+planned list above. It must:
 
-1. enumerate all 730 paths tracked at product baseline `c33da66...` and all 26
+1. enumerate all 730 paths tracked at product baseline
+   `c33da66fe1a66f20eee931335b18465cfddfdb0e` and all 25
    planned Lane 0 paths as exact, canonical, unique entries;
-2. record whether each entry is `existing` or `planned` without treating that
-   state as ownership identity;
+2. classify `existing` versus `planned` solely against the tracked tree at
+   `c33da66fe1a66f20eee931335b18465cfddfdb0e`: a baseline path is `existing`,
+   while every approved path absent from that baseline remains `planned` even
+   after a later commit creates it; specifically,
+   `docs/architecture/tasks/AE-P0.2-lane0.md` remains `planned` although packet
+   commit `4dbc387abb679d9db8647c6ce627eb44b2679934` already tracks it;
 3. assign exactly one owner, one independent review owner, one dependency lane,
    and one transfer state to every entry;
 4. mark out-of-scope baseline files frozen rather than silently unowned;
@@ -111,7 +124,11 @@ baseline tree plus the exact planned list above. It must:
 
 The generator may use deterministic classification rules to prepare entries,
 but only the emitted exact path entries are authority. Counts and globs are
-diagnostics.
+diagnostics. Reconciliation compares the manifest's canonical path set with the
+explicit baseline-union-planned reference set; it never derives or changes the
+state field from `HEAD`. During Lane 0 construction the tracked `HEAD` set must
+be a subset of that reference set with every baseline path present, and the
+final Lane 0 implementation commit must equal the full reference set.
 
 ## Verification after packet acknowledgement
 
@@ -121,8 +138,9 @@ non-product verification:
 - generator freshness and byte-for-byte regeneration;
 - bootstrap stale-anchor/schema/validator substitution controls;
 - ownership schema positive and negative vectors;
-- C++/Rust/TypeScript literal-vector and validator smoke tests using only the
-  new standalone files;
+- C++/Rust literal-vector and validator smoke tests using only the new
+  standalone files; TypeScript type-checking is a mandatory later
+  toolchain-owned-lane gate, not a skipped Lane 0 check;
 - exact baseline/planned path-set reconciliation;
 - `git diff --check`, changed-path allowlist checks, and clean committed state.
 
