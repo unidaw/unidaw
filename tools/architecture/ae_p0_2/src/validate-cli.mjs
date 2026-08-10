@@ -1,2 +1,2 @@
-import fs from 'node:fs'; import path from 'node:path'; import {validateManifest} from '../generated/validator.mjs'; import {baselinePaths,plannedPaths} from './inventory.mjs';
-const file=process.argv[2]; if(!file) throw Error('usage: validate-cli.mjs FILE'); const value=JSON.parse(fs.readFileSync(path.resolve(file),'utf8')); validateManifest(value,[...new Set([...baselinePaths(value.baseline),...plannedPaths])]); console.log('PASS');
+import fs from 'node:fs'; import path from 'node:path'; import {validateManifest} from '../generated/validator.mjs'; import {baselinePaths,plannedPaths} from './inventory.mjs'; import {parseCanonicalJson} from './canonical.mjs';
+const file=process.argv[2]; if(!file) throw Error('usage: validate-cli.mjs FILE'); const value=parseCanonicalJson(fs.readFileSync(path.resolve(file))); validateManifest(value,[...new Set([...baselinePaths(value.baseline),...plannedPaths])]); console.log('PASS');

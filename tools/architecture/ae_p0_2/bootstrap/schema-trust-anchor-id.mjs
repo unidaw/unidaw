@@ -1,1 +1,1 @@
-export const TRUST_ANCHOR_ID="ae-p0-2-anchor-696e3c340cb94fffb71fb640fa2e3ba6d10927f43a810509237293bff53833ce";
+export const TRUST_ANCHOR_ID="ae-p0-2-anchor-eef4d4ca707ef57587a2dabd742ee0e4e3dd42ed8405ca5f28a234f3acbf08f6";
