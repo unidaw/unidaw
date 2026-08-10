@@ -26,13 +26,17 @@ authorized. This amendment is immutable after owner and reviewer ACK; any
 further baseline or scope change requires another packet and review.
 
 The ownership-manifest existing/planned classification and its owner/dependency
-fields continue to be computed against the original classification baseline
-`c33da66fe1a66f20eee931335b18465cfddfdb0e`, deliberately distinct from the
-implementation base above. This preserves the planned Lane 0 ownership until
-the corrective implementation is accepted. The independent reference set is
-the tracked set at that classification baseline union the 25 implementation
-paths; at the new implementation base it contains 756 tracked paths. Set
-equality, not that diagnostic count, remains authoritative.
+fields for the 25 Lane 0 paths continue to be computed against the original
+classification baseline `c33da66fe1a66f20eee931335b18465cfddfdb0e`, deliberately
+distinct from the implementation base above. This preserves the planned Lane 0
+ownership until the corrective implementation is accepted. The independent
+reference set is the tracked set at that classification baseline union the 25
+implementation paths union the exact amended-base delta
+`tools/gesture_drag_check.sh`. That one delta path is existing and frozen under
+the amended product base; it is not Lane 0 corrective scope and must not be
+assigned to `codex-worker-2`. The resulting reference set contains 756 paths at
+the new implementation base. Set equality, not that diagnostic count, remains
+authoritative.
 
 ## Required acknowledgements
 
