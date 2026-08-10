@@ -13,7 +13,7 @@ Target repo:   /Users/jak/src/daw-backend
 Baseline SHA:  62bafdc6cf1cd53168ce73d098cd6acc78659be8
 Historical evidence SHA: 5bef283798b59c2c4f5720292554c7ab8c265be6
 Worktrees:     AE-P0.1 integration landed in /Users/jak/src/daw at 71758c0; review worktree preserved at /Users/jak/src/daw-ae-p0-followup
-Active tasks:  AE-P0.3 truthful command-caller controls assigned to codex-worker-2; preserve AE-P0.1 evidence and track F1-F3 follow-ups
+Active tasks:  AE-P1.1 protocol/memory-model ADR packet preparation; preserve AE-P0.1 evidence and track F1-F3 follow-ups
 File locks:    protocol hotspots frozen; root CMake reserved narrowly for AE-P0.1
 Integration:   AE-P0.1 COMPLETE; AE-P0.2 Lane 0 COMPLETE -- product main at 01d3708; reviewed corrective SHA 89d0f6cfddb6350c15d239f13058221d5e1b6051
 ```
@@ -204,6 +204,7 @@ never evaluated against different packet generations.
 | 2026-08-10 | AE-P0.2 Lane 0 corrective review requested | Second independent review identified invalid JSON-domain handling and divergent digest preimages; corrective implementation `89d0f6cfddb6350c15d239f13058221d5e1b6051` was prepared for exact review |
 | 2026-08-10 | AE-P0.2 Lane 0 corrective implementation approved and integrated | Claude independently approved exact `89d0f6cfddb6350c15d239f13058221d5e1b6051`; product `/Users/jak/src/daw` integrated it as `01d3708`; focused Node/C++/Rust/CLI gates pass; later bundle-contract enrichment remains a separate lane |
 | 2026-08-10 | AE-P0.3 packet amended after isolated baseline reproduction | Packet `dab40fbd1f4ed174bb7f0634a6df488c0eb98731` records isolated 141/146 with five plugin-cache fixture failures, caller target passing, and focused-control acceptance; owner `codex-worker-2` acknowledged exact SHA |
+| 2026-08-10 | AE-P0.3 implemented, independently approved, and integrated | Claude approved exact `a265a7b7b338909b9b8d4a08796d89b94dacad98`; product `/Users/jak/src/daw` integrated it as `d7fc58c`; targeted caller audit and five controls pass; documented plugin-cache fixture failures remain environmental |
 
 ## AE-P0 baseline findings
 
