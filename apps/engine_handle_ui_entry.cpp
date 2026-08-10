@@ -106,10 +106,17 @@ void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
     const bool gestureWantsEnd =
         gestureCapable && (header.flags & daw::kUiCmdFlagGestureEnd) != 0;
 
-    // A NON-GESTURE command force-closes an open gesture, so a UI that died mid-drag cannot wedge
-    // every later edit into one step. END is NOT handled here — see closeGestureAtEnd below.
+    // A command that is NOT PART OF THIS DRAG force-closes an open gesture, so a UI that died
+    // mid-drag cannot wedge every later edit into one step. END is NOT handled here — see
+    // closeGestureAtEnd below.
+    //
+    // "Not part of this drag" is gestureForceCloseFor(), which compares the arriving command's
+    // TYPE against the type that opened the gesture. It used to be "carries neither flag", and a
+    // drag's own middle moves carry neither — so the first pointermove closed the gesture the
+    // pointerdown had just opened, and coalescing was unreachable by any conforming UI. Measured
+    // by frontend on a real drag: 8 sends, 8 versions.
     if (deps.documentHistory != nullptr && !gestureWantsEnd && !gestureWantsBegin &&
-        deps.documentHistory->gestureOpen() &&
+        deps.documentHistory->gestureForceCloseFor(static_cast<uint32_t>(commandType)) &&
         commandUndoPolicy(commandType) == UndoPolicy::Version) {
       deps.documentHistory->endGesture();
       // AND THE ABANDONED DRAG GETS ITS PLUGINS. Mid-gesture commands defer the cross-process
@@ -210,7 +217,18 @@ void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
     // drag's BEGIN would then be swallowed by the force-close guard and its first command would
     // amend the PREVIOUS undo step instead of committing its own.
     if (deps.documentHistory != nullptr && gestureWantsBegin && !gestureWantsEnd) {
-      deps.documentHistory->beginGesture();
+      deps.documentHistory->beginGesture(static_cast<uint32_t>(commandType));
+    }
+    // OBSERVABLE, because "the flag arrived" was otherwise unfalsifiable from outside. Chasing a
+    // drag that would not coalesce, I could see versions being recorded and no force-close, and
+    // had no way to tell a flag that never reached the engine from one that reached it and was
+    // ignored. Emitted for any gesture-capable command so a check can assert the WIRE, not just
+    // the outcome.
+    if (gestureCapable && (gestureWantsBegin || gestureWantsEnd)) {
+      DAW_EVENT("undo.gesture_flags")
+          .field("begin", gestureWantsBegin)
+          .field("end", gestureWantsEnd)
+          .field("raw_flags", static_cast<uint64_t>(header.flags));
     }
 
     // CLOSES AFTER THE GUARD HAS SAMPLED, which is the whole point of it being here rather than

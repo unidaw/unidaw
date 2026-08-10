@@ -346,10 +346,17 @@ fn get_transport(handle: &EngineHandle) -> i32 {
     0
 }
 
-// do set-param <track> <device> <uid16hex> <milli>
+// do set-param <track> <device> <uid16hex> <milli> [--gesture begin|end|both]
 // uid16hex is the 32-char hex of the param's durable id (from `get device-params`);
 // milli is the normalized value in milli (0..1000).
-fn set_param(handle: &EngineHandle, args: &[&str]) -> i32 {
+//
+// --gesture SETS THE COALESCING BITS, and it exists so the engine's gesture bracket has a client
+// that can exercise it. It had none: gesture_undo_tests drives DocumentHistory directly and never
+// runs the bracket, which is how a force-close that fired on the drag's own middle moves reached
+// main. A knob drag is BEGIN, then N bare moves, then END, and tools/gesture_drag_check.sh sends
+// exactly that. Same reasoning as every other daw-cli verb — the product needs the capability to
+// be testable, so it belongs in the product's CLI rather than in a one-off harness.
+fn set_param(handle: &EngineHandle, args: &[&str], gesture_flags: u16) -> i32 {
     use daw_bridge::layout::UiSetParamPayload;
     let track: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
     let device: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -368,9 +375,15 @@ fn set_param(handle: &EngineHandle, args: &[&str]) -> i32 {
     let mut uid16 = [0u8; 16];
     uid16.copy_from_slice(&bytes);
     let milli: u32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
+    // COMES IN AS A PARAMETER, read from the RAW argv by the caller — see gestureFlagsFor below.
+    // It cannot be parsed here: main() strips every `--`-prefixed token before dispatch
+    // (`positional`), so `--gesture` never reaches this function. The first version parsed it here
+    // and the flag silently never left the process — the engine logged no gesture at all, and I
+    // spent the search in the bracket before instrumenting the wire.
+    let flags: u16 = gesture_flags;
     let p = UiSetParamPayload {
         command_type: UiCommandType::SetDeviceParam as u16,
-        flags: 0,
+        flags,
         track_id: track,
         device_id: device,
         value_milli: milli,
@@ -379,7 +392,7 @@ fn set_param(handle: &EngineHandle, args: &[&str]) -> i32 {
     };
     match handle.send_set_param(p) {
         Ok(()) => {
-            println!("{{ \"set_param\": {{ \"track\": {track}, \"device\": {device}, \"milli\": {milli} }} }}");
+            println!("{{ \"set_param\": {{ \"track\": {track}, \"device\": {device}, \"milli\": {milli}, \"flags\": {flags} }} }}");
             0
         }
         Err(err) => {
@@ -2337,6 +2350,21 @@ fn main() {
     // M2.18: the ring is multi-producer now, so nothing needs acknowledging. The flag
     // is still accepted (and ignored) because it appears in a lot of scripts and notes.
     let _force = args.iter().any(|arg| arg == "--force");
+    // THE GESTURE BITS, parsed from the raw argv for the same reason --force is: `positional`
+    // below drops every `--` token, so a flag read downstream of it is a flag that never arrives.
+    // Accepts `--gesture begin` and `--gesture=begin` — flag() handles both.
+    // An unrecognised word EXITS rather than defaulting to "no gesture": a typo that quietly sent
+    // a bare command would make a coalescing check pass while measuring nothing.
+    let gesture_flags: u16 = match flag(&args, "--gesture").as_deref() {
+        None => 0,
+        Some("begin") => 1 << 14,
+        Some("end") => 1 << 15,
+        Some("both") => (1 << 14) | (1 << 15),
+        Some(other) => {
+            eprintln!("daw-cli: --gesture takes begin|end|both (got {other:?})");
+            std::process::exit(2);
+        }
+    };
     let positional: Vec<&str> = args
         .iter()
         .map(String::as_str)
@@ -2918,7 +2946,7 @@ fn main() {
                     }
                 }
                 Some(&"set-tempo") => set_tempo(&handle, rest),
-                Some(&"set-param") => set_param(&handle, rest),
+                Some(&"set-param") => set_param(&handle, rest, gesture_flags),
                 Some(&"note") | Some(&"delete-note") => {
                     let is_write = rest.first() == Some(&"note");
                     let command = if is_write {

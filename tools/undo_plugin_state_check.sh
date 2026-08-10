@@ -61,8 +61,20 @@ keep_evidence_then() {
 trap 'keep_evidence_then cleanup' EXIT
 
 # rack has real VST devices, which is what makes state blobs exist at all.
-cp "$ROOT"/presets/projects/rack.uniproj.json "$TMP"/ 2>/dev/null
-[ -s "$TMP/rack.uniproj.json" ] || { echo "  FAIL: rack preset missing — this check would assert nothing"; exit 1; }
+# THE FIXTURE IS DISCOVERED, NOT NAMED. This used to copy `rack` because rack shipped an
+# Identity instrument; a branch merge replaced its chain with a sampler and this check began
+# reporting "no parameters", which reads as an engine bug and is a fixture bug. Ask which
+# shipped preset actually declares a hosted plugin — see preset_with_hosted_plugin.
+PRESET="$(preset_with_hosted_plugin "$ROOT" || true)"
+if [ -z "$PRESET" ]; then
+  echo "  FAIL: no shipped preset declares a hosted VST, so this check cannot address a real"
+  echo "        plugin. That is a FIXTURE problem, not an engine one — do not read it as a"
+  echo "        pass or as a defect in the code under test."
+  exit 1
+fi
+cp "$ROOT/presets/projects/$PRESET.uniproj.json" "$TMP"/ 2>/dev/null
+[ -s "$TMP/$PRESET.uniproj.json" ] || { echo "  FAIL: could not stage preset $PRESET"; exit 1; }
+echo "  fixture: $PRESET (the first shipped preset with a hosted plugin)"
 
 ( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 240 >"$TMP/eng.log" 2>&1 ) &
@@ -80,11 +92,11 @@ must() {
   exit 1
 }
 
-must "the rack load" cli do load rack --force
+must "the preset load" cli do load "$PRESET" --force
 # SAVE FIRST, so blobs exist on disk to be wrongly re-pushed. Without this the check passes
 # vacuously: nothing to push means no push to detect, and the bug would be invisible.
-must "the save" cli do save rack --force
-must "the reload" cli do load rack --force
+must "the save" cli do save "$PRESET" --force
+must "the reload" cli do load "$PRESET" --force
 
 AFTER_LOAD="$(n_restored)"
 echo "  a load restored ${AFTER_LOAD:-0} plugin state blob(s)"

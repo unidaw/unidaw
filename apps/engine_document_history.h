@@ -203,15 +203,45 @@ class DocumentHistory {
   // beginGesture() only marks the state; the command carrying BEGIN still commits normally, so the
   // step exists from the first movement and an interrupted drag is still undoable. Everything
   // after it amends until endGesture().
-  void beginGesture() {
+  // `openedBy` is the command type that started the drag. The force-close guard needs it to tell
+  // the drag's OWN middle from an unrelated later edit — see gestureForceCloseFor().
+  void beginGesture(uint32_t openedBy = 0) {
     std::lock_guard<std::mutex> lock(mutex_);
     gestureOpen_ = true;
     gestureHasVersion_ = false;
+    gestureOpenedBy_ = openedBy;
   }
   void endGesture() {
     std::lock_guard<std::mutex> lock(mutex_);
     gestureOpen_ = false;
     gestureHasVersion_ = false;
+    gestureOpenedBy_ = 0;
+  }
+
+  // SHOULD THIS COMMAND FORCE AN OPEN GESTURE SHUT?
+  //
+  // THE BUG THIS REPLACES, measured by frontend on a real drag: the guard closed on ANY mutating
+  // command carrying neither flag. A drag's own middle moves carry neither — only its first and
+  // last do — so the first pointermove after BEGIN closed the gesture BEGIN had just opened. Eight
+  // sends produced eight versions. The coalescing worked and was unreachable by any UI following
+  // the documented contract, and beginGesture's own comment ("everything after it amends until
+  // endGesture") was false.
+  //
+  // It went unnoticed because gesture_undo_tests drives DocumentHistory DIRECTLY and never runs
+  // the bracket. That file says so in its own header — the semantics were pinned, the wiring was
+  // not — and this is the defect that gap was hiding. tools/gesture_drag_check.sh now drives real
+  // commands with the real flags.
+  //
+  // THE RULE: a command of the SAME TYPE as the one that opened the gesture is the drag continuing.
+  // Anything else is a different edit and closes it. That is a proxy for intent rather than a
+  // reading of it, and its residual exposure is stated rather than hidden: if a UI dies mid-drag
+  // and the user then edits ANOTHER parameter, that edit is of the same type and joins the dead
+  // drag's step instead of opening its own. Undo granularity degrades until any other command type
+  // arrives; nothing is lost, because gestureAmendable() still protects the pre-drag version.
+  // Closing that last gap needs the UI to say "I am gone", which no wire signal carries today.
+  bool gestureForceCloseFor(uint32_t commandType) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return gestureOpen_ && commandType != gestureOpenedBy_;
   }
   bool gestureOpen() const {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -323,6 +353,8 @@ class DocumentHistory {
   bool gestureOpen_ = false;
   // Whether the OPEN gesture has committed a version of its own yet. See gestureAmendable().
   bool gestureHasVersion_ = false;
+  // The command type that opened the gesture, so its own repeats are not mistaken for a new edit.
+  uint32_t gestureOpenedBy_ = 0;
   std::vector<daw::ProjectDocument> versions_;
   std::vector<std::string> labels_;
   // PARALLEL TO versions_, one entry per version. Kept as a separate vector rather than a field on

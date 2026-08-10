@@ -50,8 +50,20 @@ keep_evidence_then() {
 trap 'keep_evidence_then cleanup' EXIT
 
 # rack has a real device chain, which is what a param write needs to address.
-cp "$ROOT"/presets/projects/rack.uniproj.json "$TMP"/ 2>/dev/null
-[ -s "$TMP/rack.uniproj.json" ] || { echo "  FAIL: rack preset missing — this check would assert nothing"; exit 1; }
+# THE FIXTURE IS DISCOVERED, NOT NAMED. This used to copy `rack` because rack shipped an
+# Identity instrument; a branch merge replaced its chain with a sampler and this check began
+# reporting "no parameters", which reads as an engine bug and is a fixture bug. Ask which
+# shipped preset actually declares a hosted plugin — see preset_with_hosted_plugin.
+PRESET="$(preset_with_hosted_plugin "$ROOT" || true)"
+if [ -z "$PRESET" ]; then
+  echo "  FAIL: no shipped preset declares a hosted VST, so this check cannot address a real"
+  echo "        plugin. That is a FIXTURE problem, not an engine one — do not read it as a"
+  echo "        pass or as a defect in the code under test."
+  exit 1
+fi
+cp "$ROOT/presets/projects/$PRESET.uniproj.json" "$TMP"/ 2>/dev/null
+[ -s "$TMP/$PRESET.uniproj.json" ] || { echo "  FAIL: could not stage preset $PRESET"; exit 1; }
+echo "  fixture: $PRESET (the first shipped preset with a hosted plugin)"
 
 ( cd "$BUILD" && exec env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
     ./daw_engine --run-seconds 180 >"$TMP/eng.log" 2>&1 ) &
@@ -60,7 +72,7 @@ cli() { env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@" >/dev/null
 cli_out() { env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@" 2>/dev/null; }
 wait_for_boot "$TMP/eng.log" "$ENG" 80 'UI: command thread started'
 
-after_command "$TMP" cli do load rack --force \
+after_command "$TMP" cli do load "$PRESET" --force \
   || { echo "  FAIL: the rack preset never loaded — nothing below addresses a real device"; exit 1; }
 
 # The device id comes from the ENGINE, not from a guess: a hardcoded id that no longer exists
@@ -77,26 +89,33 @@ after_command "$TMP" cli do load rack --force \
 #
 # Ask the ENGINE which slot answers with parameters: the first one that does is a real device with
 # a real param namespace, which is the only property this check needs of it.
+# THE TRACK IS DISCOVERED TOO, not assumed to be 0. `demo` carries its plugin on a later track,
+# and scanning only track 0 reported "no parameters" — a fixture that DOES host a plugin, declared
+# unusable because the search was too narrow. Ask the engine across both axes.
+TRACK_ID=""
 DEVICE_ID=""
 UID16=""
-for _ in $(seq 1 40); do
-  for candidate in 0 1 2 3 4 5 6 7; do
-    UID16="$(cli_out get device-params 0 "$candidate" 2>/dev/null \
-             | grep -oE '"uid16": "[0-9a-fA-F]{32}"' | grep -oE '[0-9a-fA-F]{32}' | head -1 || true)"
-    if [ -n "$UID16" ]; then DEVICE_ID="$candidate"; break; fi
+for _ in $(seq 1 20); do
+  for t in 0 1 2 3 4 5 6 7; do
+    for candidate in 0 1 2 3 4 5 6 7; do
+      UID16="$(cli_out get device-params "$t" "$candidate" 2>/dev/null \
+               | grep -oE '"uid16": "[0-9a-fA-F]{32}"' | grep -oE '[0-9a-fA-F]{32}' | head -1 || true)"
+      if [ -n "$UID16" ]; then TRACK_ID="$t"; DEVICE_ID="$candidate"; break; fi
+    done
+    [ -n "$UID16" ] && break
   done
   [ -n "$UID16" ] && break
   sleep 0.25
 done
 DEVICE_ID="${DEVICE_ID:-0}"
 if [ -z "$UID16" ]; then
-  echo "  FAIL: no parameters reported for device $DEVICE_ID on track 0, so there is nothing real"
+  echo "  FAIL: no parameters reported for any device on any track, so there is nothing real"
   echo "        to write. Either the plugin did not load or the params read-back is empty — both"
   echo "        are fixture problems, and neither says anything about the mirror."
   fails=$((fails + 1))
 else
-  echo "  addressing device $DEVICE_ID on track 0, param ${UID16:0:8}..."
-  after_command "$TMP" cli do set-param 0 "$DEVICE_ID" "$UID16" 750 \
+  echo "  addressing device $DEVICE_ID on track $TRACK_ID, param ${UID16:0:8}..."
+  after_command "$TMP" cli do set-param "$TRACK_ID" "$DEVICE_ID" "$UID16" 750 \
     || { echo "  FAIL: set-param was refused or never journalled. Every assertion below reads the"; \
          echo "        log of a command that did not run, so a PASS would mean nothing."; exit 1; }
 

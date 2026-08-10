@@ -1813,6 +1813,12 @@ add_test(NAME undo_plugin_version
 )
 set_tests_properties(undo_plugin_version PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# THE WIRING, which gesture_undo_tests explicitly does not cover: real commands, real flags.
+add_test(NAME gesture_drag
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/gesture_drag_check.sh
+)
+set_tests_properties(gesture_drag PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 # A STEM IS A TRACK. Registered the moment it went green — it was DECLARED_UNREGISTERED for one
 # commit while the load half was still narrow, because a permanently red check is one people learn
 # to skip. It exists because a negative control proved the gap: with the five-field aux-child

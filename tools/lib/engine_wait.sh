@@ -570,3 +570,29 @@ after_command() {
   "$@" >/dev/null 2>&1 || return 1
   wait_for_history "$dir" $((before + 1)) 20
 }
+
+# A SHIPPED PRESET THAT ACTUALLY HOSTS A PLUGIN, chosen by reading the presets rather than named.
+#
+# Three checks need a real hosted VST — a param write must reach one, undo must push state back
+# into one — and all three hardcoded `rack` because rack had an Identity instrument. It stopped
+# having one: a branch merge brought in a version of the preset whose chain is a sampler, and all
+# three checks began failing with "no parameters reported", which reads as a mirror bug and is a
+# FIXTURE bug. A hardcoded fixture name is a claim about a file's contents that nothing rechecks.
+#
+# Prints the preset STEM (what `do load` takes) of the first preset declaring a hosted plugin, or
+# nothing at all — the caller must treat empty as "this check cannot run" and say so, rather than
+# falling back to a name and reporting the wrong component.
+#
+# USAGE:  PRESET="$(preset_with_hosted_plugin "$ROOT")"
+preset_with_hosted_plugin() {
+  local root="$1"
+  local f
+  for f in "$root"/presets/projects/*.uniproj.json; do
+    [ -s "$f" ] || continue
+    if grep -q '"vst_instrument"\|"vst_effect"' "$f" 2>/dev/null; then
+      basename "$f" .uniproj.json
+      return 0
+    fi
+  done
+  return 1
+}
