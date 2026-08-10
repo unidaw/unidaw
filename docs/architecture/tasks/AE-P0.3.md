@@ -19,8 +19,11 @@ client behavior, edit wire definitions, or bless unexplained commands.
 ## Baseline
 
 - Frozen product SHA: `62bafdc6cf1cd53168ce73d098cd6acc78659be8`.
-- Reproducer at that SHA: `node --test ui-web/test/unit.mjs` reports 146/146 pass;
-  the earlier 120/121 result is historical and predates the caller-audit fix.
+- Reproducer at that SHA in an isolated checkout: `node --test ui-web/test/unit.mjs`
+  reports 141/146; the five failures are plugin-resolution fixtures requiring the
+  untracked machine-local `build/plugin_cache.json`, not this ticket's audit. The
+  caller-audit target itself passes. The earlier 120/121 result is historical and
+  predates the caller-audit fix.
 - Failing test: `every engine command has a caller, or a recorded reason it has none`.
 - Reported names: `RequestSamplerEnvelope`, `SetClipText`, `SetMarkerColor`.
 - All three have concrete `UiCommandType::<Name>` callers in
@@ -76,9 +79,10 @@ git diff --check
 git status --short --branch
 ```
 
-Expected result: 121/121 or the then-current full count passes, every required
-negative control proves its named failure, and only `ui-web/test/unit.mjs`
-changes.
+Expected result: the targeted caller-audit test and every required synthetic
+negative control pass; the isolated full-suite result is recorded (including any
+plugin-cache fixture failures) without copying caches, building, or reading a
+sibling checkout. Only `ui-web/test/unit.mjs` changes.
 
 ## Review focus
 
