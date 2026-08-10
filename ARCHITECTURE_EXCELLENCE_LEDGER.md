@@ -7,15 +7,15 @@ ledger records current orchestration state.
 ## Global state
 
 ```text
-Program:       ACTIVE -- AE-P0.1 integrated; AE-P0.2 ownership manifest next
+Program:       ACTIVE -- AE-P0.1 integrated; AE-P0.2 Lane 0 complete; next lane requires packet
 Reason:        execution baseline selected at current main; old evidence remains historical
 Target repo:   /Users/jak/src/daw-backend
 Baseline SHA:  62bafdc6cf1cd53168ce73d098cd6acc78659be8
 Historical evidence SHA: 5bef283798b59c2c4f5720292554c7ab8c265be6
 Worktrees:     AE-P0.1 integration landed in /Users/jak/src/daw at 71758c0; review worktree preserved at /Users/jak/src/daw-ae-p0-followup
-Active tasks:  Lane 0 AE-P0.2 ownership manifest; preserve AE-P0.1 evidence and track F1-F3 follow-ups
+Active tasks:  AE-P0.2 downstream toolchain/provenance lanes pending explicit packets; preserve AE-P0.1 evidence and track F1-F3 follow-ups
 File locks:    protocol hotspots frozen; root CMake reserved narrowly for AE-P0.1
-Integration:   AE-P0.1 COMPLETE -- product main contains packet plus reviewed repair chain through c33da66
+Integration:   AE-P0.1 COMPLETE; AE-P0.2 Lane 0 COMPLETE -- product main at 53486ee with approved tip 92778e6
 ```
 
 No worker may edit, build, test, create a branch/worktree, commit, or self-assign
