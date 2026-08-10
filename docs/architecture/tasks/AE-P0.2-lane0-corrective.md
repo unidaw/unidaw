@@ -22,7 +22,17 @@ It is additive/corrective only; no product runtime, protocol hotspot, or client 
 
 ## Scope and controls
 
-Owner may change only the existing Lane 0 generated/source/test paths plus this packet. Add a
+## Exact corrective allowlist
+
+The owner may change exactly the following 26 paths: this corrective packet plus the 25 original
+Lane 0 paths (`docs/architecture/tasks/AE-P0.2-lane0.md`,
+`docs/architecture/tasks/AE-P0.2-ownership.json`, the four JSON schemas under
+`tools/architecture/ae_p0_2/schemas/`, the five `src/*.mjs` files, the two bootstrap files, the
+five generated files, `testdata/golden-vectors.json`, and the six Lane 0 tests). No other path may
+change; no path may be added, deleted, renamed, or replaced outside this list. The original
+ownership manifest must be regenerated to include this corrective packet and the exact path set.
+
+Add a
 negative control for each requirement, independent literal ADR preimage vectors, freshness over
 every generated output, exact 755-path reconciliation, and a clean-tree check. No sibling checkout,
 machine cache, product build, or runtime process is permitted.
