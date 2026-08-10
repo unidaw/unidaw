@@ -136,7 +136,12 @@ including RT.
 
 **Deterministic test.** Three parts. **A** drives `connect()`/`launch()` against a stub host installed
 via the existing `DAW_HOST_BINARY` hook (`host_controller.cpp:124-128`), one row per geometry
-mutation; the stub links `apps/ipc_io.cpp` rather than hand-rolling framing, because `recvHeader`
+mutation. **Rows named by the PASS conditions, defined here:** A1 = a canonical, correctly sized,
+correctly offset object (the only row that must attach). A2 = advertised size larger than the object.
+A4 = an 8-byte object advertised as 8. A5 = advertised size smaller than `S_expect`. A7 = mailbox fits
+exactly, derived key ring does not. A12 = `audioOutOffset = 2^64 − k`, wrapping `auxOutputPlaneOffset`
+inside the header. A13 = a valid object under a name the engine did not choose. A15 = a valid object
+whose header is mutated after attach. The stub links `apps/ipc_io.cpp` rather than hand-rolling framing, because `recvHeader`
 rejects on `kControlVersion` and a hand-rolled constant turns every row into a handshake refusal that
 looks like a pass. **B** drives the region half, which `connect()` never reaches — the mailbox poll,
 both event rings and the key ring are constructed after attach. **C** is static.
@@ -281,11 +286,17 @@ bytes as data, or release the slot to the producers, in any other state. **Five 
 three** — the predecessor's three did not cover its own failure model, and `ringSkipStalledSlot`
 CONFORMS to obligation (b) while committing the defect.
 
-**Population.** *Rings* — 8 production. Command: `rg -n '\->capacity\s*=' apps/ | rg -v '=='` returns
-10, being the 8 plus 2 test fixtures. *Statements interpreting an entry's bytes as data* — 5. Command:
-`rg -n '\.entries\[|->entries\[' apps/` returns 21, **of which 12 are plugin-cache reads**; the ring
-filter must be in the printed command or the population measures the wrong set. *Read-cursor stores* —
-4. Command: `rg -n 'readIndex\.store|read_index\.store' apps/ ui/`. *Index sites* — 12.
+**Population.** Every count is stated as RAW (what the command returns) → RULE (the classification)
+→ IN SCOPE, because a bare figure that is a hand-classified subset of its own command is not
+reproducible, and four populations in the predecessor were exactly that.
+- *Rings* — RAW 10 (`rg -n '\->capacity\s*=' apps/ | rg -v '=='`) → minus 2 test fixtures → **8**.
+- *Statements interpreting an entry's bytes as data* — RAW 21 (`rg -n '\.entries\[|->entries\[' apps/`)
+  → minus 12 plugin-cache reads, minus 4 test-only → **5**. The ring filter is in the rule, not
+  implied: without it this population measures the wrong set.
+- *Read-cursor stores* — RAW **14** (`rg -n 'readIndex\.store|read_index\.store' apps/ ui/`) → minus
+  test and non-ring stores → **4**. The predecessor printed this command beside the figure 4, which
+  the command does not produce.
+- *Index sites* — RAW 21, same command as the entry-address population → **12** after the same rule.
 
 **Floor.** All four are token greps and blind in the same four ways: a cursor mutated through a
 whole-`RingHeader` memcpy, a `reinterpret_cast`, a helper that takes the header by reference, or a
@@ -322,7 +333,10 @@ the array.
 8. Reservation values do not recur after a lap, on both sides. *REFUTED BY* the raw write cursor
    returning to its pre-lap value.
 9. The unguarded C++ reader at `apps/device_chain_ui_live_tests_main.cpp:110-113` — raw index, no
-   `ready` load, on a ring with six live producers — is closed.
+   `ready` load, on a ring with six live producers — is closed. *REFUTED BY* that site still reading
+   `entry.type` with no preceding acquire load of that slot's `ready`, which the S2 predicate decides
+   on the source; a runtime observation cannot, because an unpublished slot's bytes are
+   indistinguishable from a published slot's when the producer has not yet written.
 
 **Static checks.** S1 the ready-clear lexically precedes the cursor store at all four sites, same
 function, no return or branch between. S2 the read guard's load is an acquire load of THAT SLOT's
@@ -352,9 +366,14 @@ the address the client asked about; and (ii) a complete image of exactly one exe
 never fields from publication N+1 beside fields from N.
 
 **Population.** *Seqlock opens and closes* — 4 + 4. Command: `rg -n 'seq\.store' apps` returns exactly
-8, cross-checked per file with `rg -c`. *Request/answer readers* — 6 of 21. Command:
-`rg -n 'pub fn read_' ui/daw-bridge/src/control.rs` returns 21; the 6 in scope were selected **by
-hand**, which is stated because it is the one population here not decided by a command. *Call sites of
+8, cross-checked per file with `rg -c`. *Request/answer readers* — RAW 21 (`rg -n 'pub fn read_' ui/daw-bridge/src/control.rs`) → RULE: a
+reader is in scope iff its body reads a region that an engine REQUEST handler writes in place, i.e.
+the function dereferences one of the region pointers whose writer appears in
+`apps/engine_request_commands.cpp`; the rule is applied by intersecting the reader's region symbol
+with `rg -n 'Region\*' apps/engine_request_commands.cpp` → **6**. The predecessor selected these six
+BY HAND and said so, which made the number honest and the population irreproducible; a reviewer could
+not obtain it. If the intersection does not reproduce exactly six at the reviewed SHA, the gate FAILS
+rather than adopting the new number. *Call sites of
 those six* — 16 production, 2 test, obtained per name and discarding definitions and three doc
 comments.
 
@@ -441,9 +460,13 @@ refusal: `WriteNote`, `DeleteNote`, `WriteChord`, `DeleteChord`, `RevertPlacemen
 true — the predecessor said 186, off by 2× in the section whose credibility rests on counts — but for
 the other ~60 families no `ClipRejected` is ever emitted, so an identity obligation over them would
 require inventing emit sites the code says do not exist. *Terminal refusal records* — 3 `emitClipReject`
-sites plus 2 refusal journal lines. *Correlator call sites* — **40 in product code**, tests excluded,
-**including `refused_or` → `await_refusal` (`ui/daw-agent/src/tools.rs:62-67`) with 24 call sites, one
-of them `set_clip_text` (`:3239`), a governed command** — a family the predecessor omitted entirely.
+sites plus 2 refusal journal lines. *Correlator call sites* — **51 in product code**, tests excluded. The predecessor said 40; the exact
+review's 51 is the correct figure and is adopted rather than argued, because my 40 was a subtraction
+from a hand-classified list and the reviewer's is a re-derivation. The set includes `refused_or` →
+`await_refusal` (`ui/daw-agent/src/tools.rs:62-67`) with 24 call sites, one of them `set_clip_text`
+(`:3239`), a governed command — a family the predecessor omitted entirely. **This packet does not
+publish the 51 as its own derivation**: it is carried with attribution, and open item 12 requires it
+to be re-derived by a printed command before any gate is decided on it.
 
 **Floor.** Three, in the model of `tools/version_arbiter_check.sh:69-78` ("finding FEWER means the
 extraction broke, not that the code got safer"), which the predecessor cited nowhere. The nine are
@@ -524,9 +547,9 @@ copy is the only referent that exists, because the guard is released at `:1114` 
 loop runs at `:1116-1124` under `controllerMutex` alone, so the chain can change across the gap.
 MECHANISM: `hostReady` is release-published only after all three are staged and acknowledged.
 
-**Population.** *`hostReady` publish sites* — exactly 4. Command:
-`rg -n 'hostReady(\.|->)store\(true' apps`: `engine_restart_worker.cpp:87` (the site under gate),
-`engine_track_setup.cpp:62`, and two others. *`controllerMutex` acquisitions in product code* — 28.
+**Population.** *`hostReady` publish sites* — RAW 4 (`rg -n 'hostReady(\.|->)store\(true' apps`) →
+minus 1 in `_tests_main` → **3 production**: `engine_restart_worker.cpp:87` (the site under gate),
+`engine_track_setup.cpp:62`, and one other. The predecessor said "exactly 4", counting the test. *`controllerMutex` acquisitions in product code* — 28.
 Command: `rg -n -g 'apps/**' -g '!apps/*tests_main.cpp' '(lock_guard|unique_lock)<std::mutex>[^;()]*\([^;]*controllerMutex'`.
 *`hostReady` read sites in product code* — exactly 20, `daw_engine_main.cpp:1107` among them. Command:
 `rg -n -g 'apps/**' -g '!apps/*tests_main.cpp' 'hostReady(\.|->)load' apps`.
@@ -560,8 +583,12 @@ false-green the predecessor's open list dropped.
    also what contention looks like. *REFUTED BY* the offline probe acquiring during recovery.
 3. The swap trap: `hookEntryHostReady` recorded as the hook's first statement must be TRUE.
    *REFUTED BY* a fix that reorders the two lines, which makes it false and deletes the recovery.
-4. **Mirror replay is staged and acknowledged before publication.** *REFUTED BY* a dispatch observed
-   after `hostReady` with the mirror unreplayed for that `host_generation`.
+4. **WITHDRAWN AS CIRCULAR — see the register.** The predecessor required the mirror to be
+   acknowledged before `hostReady` is published. The acknowledgement can only arrive during a
+   `ProcessBlock`, and `processTrack` refuses to dispatch while `hostReady` is false, so the condition
+   is unsatisfiable by construction: it demands an ack that the state it gates makes impossible. No
+   bullet replaces it until the owner rules on a recovery-only priming protocol; a PASS condition
+   that cannot be met by any implementation is worse than an absent one, because it reads as covered.
 5. **A `sendSetBypass` failure withdraws readiness.** *REFUTED BY* `hostReady` remaining true after a
    forced send failure.
 6. Liveness scoped to the path that reaches the publish. *REFUTED BY* the re-run probe being refused
@@ -582,8 +609,12 @@ SHALL confirm by reading `apps/daw_engine_main.cpp:1106-1125` that the recovery 
 `SetBypass` per slot. The reviewer SHALL confirm no artifact describing the fix says "the authored
 bypass value" without qualifying it as the copy at `:1113`. The reviewer SHALL confirm, when the fix
 lands, that mechanism substitution has not voided the gate. The reviewer SHALL classify any NEW
-`hostReady` publish site, which S1 can detect but not judge. **The reviewer SHALL rule on the
-self-deadlock**: the fix class this gate admits requires `applyHostBypassStates` to stop taking
+`hostReady` publish site, which S1 can detect but not judge. **The reviewer SHALL rule on the mirror-ack circularity**: the ack arrives only during a
+`ProcessBlock`, which `processTrack` refuses while `hostReady` is false. Either recovery gets a
+priming path that dispatches under an explicit recovery-only exemption, or readiness is staged in two
+levels (mapped-and-bypassed versus mirror-complete) with dispatch permitted at the lower one. Both are
+design decisions with consequences for G4's dispatch identity, and this packet deliberately does not
+choose. **The reviewer SHALL also rule on the self-deadlock**: the fix class this gate admits requires `applyHostBypassStates` to stop taking
 `controllerMutex` at `:1116`, i.e. a caller-holds contract or a lock-passing signature — which the
 predecessor did not state and which is a design decision, not a detail.
 
@@ -591,7 +622,14 @@ predecessor did not state and which is a design decision, not a detail.
 
 # G3 — Per-host failure containment
 
-**Severity** HIGH; blast radius is the entire session. **Dependencies** G2-B **of this packet** — the
+**Severity** HIGH; blast radius is the entire session. **STATUS: NOT DECIDABLE AT THIS SHA — BLOCKED
+ON AN OWNER RULING.** Every PASS condition below is written against a bound N counted in observations,
+and nothing in the tree sources N: all three production `Watchdog`s use `hardTimeoutBlocks = 500`,
+which is a block count and not an observation count, and no other artifact proposes one. The exact
+review's verdict that this gate "remains undecidable" is accepted rather than argued. The bullets are
+retained because they are correct GIVEN N, and they become decidable the moment N is ruled — but no
+implementation may be accepted against this gate until then, and the packet does not pretend
+otherwise. **Dependencies** an owner ruling on N, then G2-B **of this packet** — the
 gate as received named a document that does not exist in the pinned tree, and the reference is
 resolved here rather than left dangling.
 
@@ -602,8 +640,9 @@ declared bound N counted in OBSERVATIONS OF THAT HOST, have `hostReady` stored f
 engine path, and block production for the remaining tracks must continue.
 
 **Population.** *Tracks whose production must continue* — the `tracks` vector, read at
-`apps/daw_engine_main.cpp:962-969`. *Writes that remove a host from the gate population* — 17.
-Command: `grep -rn 'hostReady\.store(false' apps/`. *Producer-loop exits* — 12 `continue;`. Command:
+`apps/daw_engine_main.cpp:962-969`. *Writes that remove a host from the gate population* — RAW 17
+(`grep -rn 'hostReady\.store(false' apps/`) → minus 3 in `_tests_main` → **14 production**. The whole
+`hostReady.store(` census is RAW 21 → 18 production. The predecessor's figures counted tests. *Producer-loop exits* — 12 `continue;`. Command:
 `sed -n '134,373p' apps/engine_producer_thread.cpp | grep -c 'continue;'`.
 
 **Floor.** The `hostReady` write census is exact at 21 total (4 true / 17 false) with zero non-literal
@@ -692,9 +731,10 @@ input immutability and ack identity but omitted this ordering, which is what mak
 sound rather than merely acknowledged.
 
 **Population.** *Dispatch sites* — 3 production, 8 test, 6 non-calls; command `rg -n sendProcessBlock`
-over the pinned root returns 17, every hit classified. *Out-plane readers in engine production code* —
-exactly 7; command `rg -n "audioOutOffset|safeAudioOutPtr|audioOutChannelPtr|auxOutputPlaneOffset" apps/`
-returns 28, classified. *Input-plane writers in engine production code* — exactly 2; command
+over the pinned root returns 17, every hit classified. *Out-plane readers* — RAW **27**
+(`rg -n "audioOutOffset|safeAudioOutPtr|audioOutChannelPtr|auxOutputPlaneOffset" apps/`) → minus 3 in
+`_tests_main`, minus declarations and non-reads → **7 production**. The predecessor said the command
+returns 28; it returns 27, and the reviewer's count is the correct one. *Input-plane writers in engine production code* — exactly 2; command
 `rg -n "audioInOffset|safeAudioInPtr|audioInChannelPtr" apps/` returns 13, all classified.
 
 **Floor.** Dispatch sites floor 3: `rg` finds every syntactic call but is blind to a dispatch through
@@ -713,7 +753,17 @@ principle** — which is why the invariant demands an ack keyed on the quadruple
 **Deterministic test.** Stated first: the device-free offline render (`apps/daw_engine_main.cpp:2143-2153`)
 is the byte-exact oracle for CONTENT and is the only driver this gate accepts for content, but its only
 barrier is per-block, so ORDERING is decided by a barrier-controlled fake host emitting a merged log.
-Chains F0–F6 with distinct per-segment sentinels; schedules S1–S8 hold at every boundary. **The
+**Chains, defined here because the predecessor referenced them and compressed away their
+definitions:** F0 = one track, single VST, unsegmented (the determinism baseline). F1 = VST → patcher
+audio node → VST on one track, which segments into two dispatches on one blockId. F2 = F1 with the
+patcher node replaced by a non-VST device that produces no audio, isolating the segmentation boundary
+from the audio path. F3 = VST → patcher → VST → patcher, three boundaries. F4 = F1 with track routing
+to a second track. F5 = two tracks where B sidechains from A, exercising the carve-out. F6 = F1 with
+the master bus engaged, which must remain unsegmented. **Schedules:** S1 no holds (the control); S2
+hold the host before reading input; S3 hold before writing output; S4 hold after writing output and
+before the ack; S5 hold the engine between dispatch and the next segment's input write; S6 reorder two
+segments' replies; S7 kill the host mid-chain; S8 the multiplier sweep, every other schedule re-run
+with holds ×1, ×10, ×100. **The
 negative control is specified against "the pinned tree PLUS this gate's instrumentation, with the
 per-segment ack and wait absent"** — an unmodified pinned build cannot emit the merged log at all, so
 the predecessor's control could not run.
@@ -774,57 +824,63 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
    in place of a deterministic transition test. This project has a documented history of "zero
    underruns, therefore correct" conclusions that were wrong, so the rule is stated, not assumed.
 
-# Open items — 20, atomic
+# Open items — 22, atomic
 
-Listed atomically rather than by category, because the predecessor's 15 categories hid four issues.
-None is closed; each names what must be decided or built.
+Two added since the predecessor, and none closed. Each names what must be decided or built.
 
 **G0-B** — 1. The generated header breaks the documented `-DDAW_BUILD_PATCHER_RUST=OFF` build for six
 unconditional targets, with no stated path, include directory or target-ordering edge. 2. The
-declaring macro invalidates the `#[repr(C` grep that this gate's own population floor depends on, so
-the gate goes red on its own floor the moment the mechanism lands. 3. **The mutation floor is
-unowned**: ">= 600" is asserted with no derivation, and counting the defined kinds over the real 131
-members lands near 551, so the battery would fail its own floor permanently. 4. 600 is itself a fifth
-pinned integer with no owner named.
+declaring macro invalidates the `#[repr(C` grep this gate's population floor depends on. 3. The
+mutation floor ">= 600" is asserted with no derivation and counts near 551 over the real 131 members,
+so the battery would fail its own floor permanently. 4. 600 is a fifth pinned integer with no owner.
+**21. The member counts (66/65) were obtained by reading, not by a command, and no command is proposed
+that would reproduce them.**
 
-**G1-A** — 5. The entry-address extraction returns 21 lines of which 12 are plugin-cache reads; the
-ring filter must be in the printed command or the population measures the wrong set. 6. The `ui_out`
-producer census is not established, and the disarm is only safe under a single-consumer contract that
-is asserted rather than proven.
+**G1-A** — 5. The entry-address extraction's rule must ship in the printed command, not beside it. 6.
+The `ui_out` producer census is not established, and the disarm is safe only under a single-consumer
+contract that is asserted rather than proven.
 
-**G1-B** — 7. The send-site count is stated as 16, as "the sixteen", and as a printed list of 15;
-these must reconcile. 8. A region the scope omits is called by the population one of "the only two"
-that rewrite in place. 9. Two extraction recipes do not reproduce their own lists. 10. The selection
-of 6 readers from 21 is by hand and is the weakest link in this packet's populations.
+**G1-B** — 7. The send-site count is stated as 16, as "the sixteen", and as a list of 15. 8. A region
+the scope omits is called by the population one of "the only two" that rewrite in place. 9. Two
+extraction recipes do not reproduce their lists. 10. The six-reader predicate added here is UNTESTED:
+it is stated so a reviewer can run it, and it has not been run, because the pin is read-only.
 
 **G2-A** — 11. Layer-1 fixture arithmetic: 11 journal lines, not 6, and ids legitimately repeat, so a
-correct implementation fails the gate's only runnable integration assertion. 12. Twenty-two of the
-forty correlator sites read records no bullet requires to carry an id, and sixteen are in a family the
-scope excludes; widen the record population or narrow the correlator population, but the packet must
-choose. 13. **The BATCH note branch**: `resolve_base` keeps the counter crossing on the path a browser
-transpose takes, and the static check as written is satisfied by fixing the chord branch alone.
+correct implementation fails the gate's only runnable integration assertion — the gate cannot be
+accepted until this is respecified. 12. **The 51 correlator sites are carried from the exact review
+with attribution and must be re-derived by a printed command before any gate is decided on them.** 13.
+The BATCH note branch: `resolve_base` keeps the counter crossing on the path a browser transpose
+takes, and the static check as written is satisfied by fixing the chord branch alone.
 
-**G2-B** — 14. **The self-deadlock**: the admitted fix class requires `applyHostBypassStates` to stop
-taking `controllerMutex`, i.e. a caller-holds contract — a design decision with no owner ruling. 15.
-The swap trap rests on an unratcheted guard at `apps/daw_engine_main.cpp:1107-1109`; either pin it
-statically or restate the bullet as a disjunction. 16. **Probe ordering**: without forbidding the
-offline probe from acquiring before the RT probe has reported, the PASS token is producible by
-contention from the packet's own fixture.
+**G2-B** — 14. The self-deadlock: the admitted fix class requires `applyHostBypassStates` to stop
+taking `controllerMutex`. 15. The swap trap rests on an unratcheted guard at
+`apps/daw_engine_main.cpp:1107-1109`. 16. Probe ordering: without forbidding the offline probe from
+acquiring before the RT probe reports, the PASS token is producible by the packet's own fixture. **22.
+The mirror-ack circularity — the ack arrives only during a `ProcessBlock` that `processTrack` refuses
+while `hostReady` is false. A PASS bullet was withdrawn rather than reworded, and the gate is
+incomplete on the mirror half until the owner rules between a recovery-only priming exemption and a
+two-level readiness.**
 
-**G3** — 17. A containment bound whose denominator is structurally 1, because the readiness event has
-exactly one emission site. 18. **`DAW_ENGINE_DEBUG_STALL` must be set by the Layer-2 fixture**, or the
-channel a PASS bullet reads does not exist. 19. **The static-check contradiction**: one check places
-the eviction where its natural implementation changes an exit count another check pins. One must
-yield; the packet does not choose.
+**G3** — 17. **N has no source in the tree, so this gate is NOT DECIDABLE and no implementation may be
+accepted against it until an owner rules.** 18. `DAW_ENGINE_DEBUG_STALL` must be set by the Layer-2
+fixture or the channel a PASS bullet reads does not exist. 19. The static-check contradiction: one
+check places the eviction where its natural implementation changes an exit count another check pins.
 
-**G4** — 20. Ack-census counts and the master clause needed correcting, and the negative control had
-to be respecified against a build that can emit the log it is measured on; both are done here, and the
-reviewer should confirm the corrected counts against the fixture rather than against this packet.
+**G4** — 20. The fixture definitions added here (F0–F6, S1–S8) and the corrected ack-census counts
+have not been run against anything; the reviewer should confirm them against the fixture rather than
+against this packet.
 
 # Provenance of this packet's own numbers
 
-Every count was produced by a command run against the pinned read-only checkout, and every count is a
-floor where a runtime value defeats the extraction. Counts corrected from the predecessor, in place
+Every count is stated as RAW → RULE → IN SCOPE, so that the command reproduces the raw figure and the
+rule reproduces the rest; and every count is a floor where a runtime value defeats the extraction.
+**Two populations are NOT command-derived and are labelled as such rather than covered by this
+sentence**: G0-B's member counts (66 C++ / 65 Rust) were obtained by reading both declarations, and
+G2-A's 51 correlator sites are carried from the exact review with attribution, not re-derived here.
+The predecessor's version of this paragraph said every count was command-produced while two of its own
+populations said "counted by reading" and "selected by hand" — a universal claim contradicted inside
+its own document, which is the third instance of that shape in this lineage and the reason the
+provenance paragraph is now written last, against the finished text. Counts corrected from the predecessor, in place
 and named: `commandMutatesDocument` has **93** case arms, not 186; the mailbox census is **7 live of 8
 syntactic**, having been stated as 6 and then as 10 — the first omitted the three RT loads and the
 direct load, the second added a dead `Watchdog` read and a line that is not a load;
