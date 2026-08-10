@@ -203,7 +203,7 @@ never evaluated against different packet generations.
 | 2026-08-10 | AE-P0.2 Lane 0 packet approved and implementation authorized | Corrected packet `6287ffd` independently approved by `claude-worker-2`; 25 additive paths, 755-path reference set, TS compiler deferred to toolchain-owned lane; Lane 0 implementation now active |
 | 2026-08-10 | AE-P0.2 Lane 0 corrective review requested | Second independent review identified invalid JSON-domain handling and divergent digest preimages; corrective implementation `89d0f6cfddb6350c15d239f13058221d5e1b6051` was prepared for exact review |
 | 2026-08-10 | AE-P0.2 Lane 0 corrective implementation approved and integrated | Claude independently approved exact `89d0f6cfddb6350c15d239f13058221d5e1b6051`; product `/Users/jak/src/daw` integrated it as `01d3708`; focused Node/C++/Rust/CLI gates pass; later bundle-contract enrichment remains a separate lane |
-| 2026-08-10 | AE-P0.3 assigned against refreshed baseline | Frontend released `ui-web/test/unit.mjs`; packet `1d8bd6d` pins product baseline `62bafdc` and 146/146 current unit tests; owner `codex-worker-2`, reviewer `claude-worker-2`; only audit controls authorized |
+| 2026-08-10 | AE-P0.3 packet amended after isolated baseline reproduction | Packet `dab40fbd1f4ed174bb7f0634a6df488c0eb98731` records isolated 141/146 with five plugin-cache fixture failures, caller target passing, and focused-control acceptance; owner `codex-worker-2` acknowledged exact SHA |
 
 ## AE-P0 baseline findings
 
