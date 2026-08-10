@@ -1,4 +1,4 @@
-import fs from 'node:fs'; import crypto from 'node:crypto';
-export const TRUST_ANCHOR_ID='ae-p0-2-anchor-'+crypto.createHash('sha256').update('AE-P0.2/trust-anchor').digest('hex');
-export function validateAnchor(anchor){if(!anchor||anchor.anchor_id!==TRUST_ANCHOR_ID) throw Error('trust anchor mismatch'); if(typeof anchor.schema_bundle_id!=='string') throw Error('schema bundle missing'); return true;}
-if(import.meta.url===`file://${process.argv[1]}`) validateAnchor(JSON.parse(fs.readFileSync(process.argv[2],'utf8')));
+import fs from 'node:fs'; import {canonical,sha256} from './canonical.mjs';
+export function anchorId(anchor) { const body={anchor_version:anchor.anchor_version,schema_bundle_digest:anchor.schema_bundle_digest}; return 'ae-p0-2-anchor-'+sha256(Buffer.concat([Buffer.from('AE-P0.2/trust-anchor\0'),Buffer.from(canonical(body))])); }
+export function validateAnchor(anchor, expectedBundle) { if(!anchor || anchor.anchor_version!==1 || typeof anchor.schema_bundle_digest!=='string' || typeof anchor.anchor_id!=='string') throw Error('malformed trust anchor'); if(expectedBundle && anchor.schema_bundle_digest!==expectedBundle) throw Error('schema bundle substitution'); if(anchor.anchor_id!==anchorId(anchor)) throw Error('trust anchor digest mismatch'); return true; }
+if(process.argv[1] && import.meta.url===`file://${process.argv[1]}`) validateAnchor(JSON.parse(fs.readFileSync(process.argv[2],'utf8')));

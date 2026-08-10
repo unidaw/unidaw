@@ -1,3 +1,5 @@
-import fs from 'node:fs';
-export function validate(value){ if(!value||typeof value!=='object'||Array.isArray(value)) throw Error('object required'); return true; }
-export function validateManifest(value){ validate(value); if(!Array.isArray(value.entries)) throw Error('entries required'); const seen=new Set(); for(const e of value.entries){if(!e.path||seen.has(e.path)) throw Error('duplicate or missing path');seen.add(e.path)} return true; }
+import {jcs,sha256,digest} from '../src/canonical.mjs';
+export function validate(value){if(!value||typeof value!=='object'||Array.isArray(value))throw Error('object required');return true;}
+export function validateManifest(value, reference){validate(value);if(!Array.isArray(value.entries)||value.entries.length===0)throw Error('entries required');const seen=new Set();for(const e of value.entries){if(!e||typeof e.path!=='string'||!e.path||e.path.startsWith('/')||e.path.includes('\0')||e.path.split('/').some(x=>x==='.'||x==='..')||seen.has(e.path))throw Error('invalid or duplicate path');if(!['existing','planned'].includes(e.state)||!e.owner||!e.reviewer||!e.dependency||!['frozen','lane-0','transfer-required'].includes(e.transfer))throw Error('invalid ownership entry');seen.add(e.path);}if(reference){const expected=new Set(reference);if(seen.size!==expected.size||[...seen].some(p=>!expected.has(p)))throw Error('manifest path set mismatch');}return true;}
+export function validateTransfer(t){validate(t);if(!/^ae-p0-2-transfer-[0-9a-f]{64}$/.test(t.transfer_id)||!t.path||!t.from||!t.to||!t.reviewer||t.status!=='accepted')throw Error('unaccepted ownership transfer');return true;}
+export const canonicalWriter=v=>jcs(v)+'\n';
