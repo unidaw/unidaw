@@ -29,9 +29,15 @@ It is additive/corrective only; no product runtime, protocol hotspot, or client 
 
 ## Scope and controls
 
+The corrective lane is limited to the exact implementation paths below. The
+governance packet is outside that set and is not itself an implementation
+artifact. The independently pinned baseline path set plus these 25 paths is the
+only authorized reference set; set equality is authoritative and the count of
+755 is diagnostic only.
+
 ## Exact corrective allowlist
 
-The owner may change exactly these 26 paths, one per line:
+The owner may change exactly these 25 implementation paths, one per line:
 
 1. `docs/architecture/tasks/AE-P0.2-lane0.md`
 2. `docs/architecture/tasks/AE-P0.2-ownership.json`
@@ -64,11 +70,11 @@ path or manifest entry. The final manifest reference set is the baseline set
 union the 25 numbered implementation paths; its diagnostic count is 755 and
 the canonical path-set comparison—not the count—is authoritative. No other path
 may change, be added, deleted, renamed, or replaced. The manifest must include
-the corrective packet and all 26 paths.
+the independently pinned baseline set and these 25 paths, but not this
+governance packet.
 
-Add a
-negative control for each requirement, independent literal ADR preimage vectors, freshness over
-every generated output, exact 755-path reconciliation, and a clean-tree check. No sibling checkout,
+Add a negative control for each requirement, independent literal ADR preimage
+vectors, freshness over every generated output, and a clean-tree check. No sibling checkout,
  machine cache, product build, or runtime process is permitted. The authorized
  baseline/reference path set must be independently pinned; candidate manifest
  fields may not define their own expected set. Dotfiles such as `.gitignore`
