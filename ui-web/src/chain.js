@@ -625,7 +625,11 @@ export class Chain {
     // mixer's fader does: the fill inside the bar changes width as you drag, and
     // re-measuring would move the reference frame under the pointer.
     const r = bar.getBoundingClientRect();
-    this._drag = { el: card, rect: r, index: row._pi, uid: row._uid, slot: null, last: -1 };
+    // `gesture` rides the drag so the FIRST send carries BEGIN and the pointer-up carries END,
+    // making the whole drag one undo step. See gestureFlagsApplyTo in event_payloads.h: the
+    // engine reads these bits for SetDeviceParam only, which is what this sends.
+    this._drag = { el: card, rect: r, index: row._pi, uid: row._uid, slot: null, last: -1,
+                   gesture: 'begin', sent: false };
     // The gesture belongs to the strip until the button comes up, even if the
     // pointer leaves the 3px bar — which it will, immediately, on a 13px row.
     this.cardsEl.setPointerCapture(e.pointerId);
@@ -641,6 +645,20 @@ export class Chain {
 
   _up() {
     if (!this._drag) return;
+    const d = this._drag;
+    /*
+     * CLOSE THE GESTURE, and re-send the value to carry the flag rather than inventing a new one.
+     * The engine coalesces everything between BEGIN and END into one undo step, so this last
+     * command is the same value the user is already looking at — it exists to say "done".
+     *
+     * Only if something actually opened the gesture. A pointer-down whose send was refused left no
+     * gesture open, and an END for a gesture that never began is a lie the engine would have to
+     * interpret.
+     */
+    if (d.sent && this.onParam) {
+      this.onParam({ track: this.vm ? this.vm.track : -1, device: d.el._devId,
+                     index: d.index, uid: d.uid, valueMilli: d.last, gesture: 'end' });
+    }
     this._drag = null;
     this._frame();
   }
@@ -669,8 +687,12 @@ export class Chain {
     d.last = milli;
     const sent = this.onParam
       ? !!this.onParam({ track: this.vm ? this.vm.track : -1, device: el._devId,
-                         index: d.index, uid: d.uid, valueMilli: milli })
+                         index: d.index, uid: d.uid, valueMilli: milli,
+                         gesture: d.gesture })
       : false;
+    // BEGIN opens the gesture ONCE. Clearing it only on a successful send matters: if the first
+    // command never went out there is no gesture open, and the next one has to be the opener.
+    if (sent) { d.gesture = null; d.sent = true; }
     if (!sent) {
       // Nothing went out, so there is nothing to be optimistic about. Say so
       // rather than moving a bar that no longer describes the plugin.

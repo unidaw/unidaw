@@ -3764,9 +3764,30 @@ fn build_set_param(body: &str) -> Option<Result<UiSetParamPayload, String>> {
     // message carrying an impossible index was built wrong, and hearing that is
     // more use than having the uid lookup miss for an unrelated reason.
     let _ = index;
+    /*
+     * THE GESTURE BITS, and this is the only command that carries them.
+     *
+     * A knob drag is one SetDeviceParam per pointer sample, so undo used to replay it sample by
+     * sample. BEGIN on the first, END on the last, and the engine coalesces the span into one
+     * step. Absent field means neither bit — every non-drag caller is unaffected.
+     *
+     * bit 14/15 are free on THIS payload and not on others: kUiEditScopeLocal is bit 15 on note
+     * commands, and the patcher payloads put a device id in bits 0-14 under a bit-15 flag. The
+     * engine enforces that with gestureFlagsApplyTo(), which admits SetDeviceParam alone — so
+     * setting these on anything else does nothing rather than something wrong.
+     */
+    let gesture = parse_str_value(body, "\"gesture\"");
+    let flags = match gesture.as_deref() {
+        Some("begin") => 1u16 << 14,
+        Some("end") => 1u16 << 15,
+        // Both, for a click with no travel: it opens and closes in one command rather than
+        // leaving a gesture open that nothing will ever close.
+        Some("click") => (1u16 << 14) | (1u16 << 15),
+        _ => 0,
+    };
     Some(Ok(UiSetParamPayload {
         command_type: UiCommandType::SetDeviceParam as u16,
-        flags: 0,
+        flags,
         track_id: track as u32,
         device_id: device as u32,
         value_milli: milli as u32,

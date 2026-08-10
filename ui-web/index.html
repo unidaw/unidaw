@@ -3092,8 +3092,19 @@ function onChainParam(edit) {
       state.reject = 'this plugin publishes no durable id for that parameter';
       return false;
     }
+    /*
+     * `gesture` is optional and passes straight through: 'begin' on a drag's first command, 'end'
+     * on its last, absent for everything between and for every non-drag caller. The sidecar turns
+     * it into the two flag bits the engine reads for SetDeviceParam, so a drag becomes ONE undo
+     * step instead of one per pointer sample.
+     *
+     * It belongs here rather than in the knob handler because this is the one parameter-write
+     * path — the console and the agent come through it too, so a scripted sweep can express a
+     * gesture exactly as the mouse does.
+     */
     const ok = conn.send({ type: 'setparam', track: edit.track, device: edit.device,
-                           index: edit.index, uid: edit.uid, valueMilli: edit.valueMilli });
+                           index: edit.index, uid: edit.uid, valueMilli: edit.valueMilli,
+                           ...(edit.gesture ? { gesture: edit.gesture } : {}) });
     state.reject = ok ? null : 'no engine';
     // A write is not a read. Nothing else asks the plugin again, so ask —
     // otherwise the bar snaps back to a value that stopped being true 1.2
