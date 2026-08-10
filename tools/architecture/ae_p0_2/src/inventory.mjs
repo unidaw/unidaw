@@ -1,4 +1,56 @@
-import {execFileSync} from 'node:child_process';
-export const baselinePaths = sha => execFileSync('git',['ls-tree','-r','--name-only',sha],{encoding:'utf8'}).trim().split('\n').filter(Boolean).sort();
-export const plannedPaths = [
-'docs/architecture/tasks/AE-P0.2-lane0.md','docs/architecture/tasks/AE-P0.2-ownership.json','tools/architecture/ae_p0_2/schemas/schema-bundle-identity.schema.json','tools/architecture/ae_p0_2/schemas/schema-trust-anchor.schema.json','tools/architecture/ae_p0_2/schemas/ownership-manifest.schema.json','tools/architecture/ae_p0_2/schemas/ownership-transfer.schema.json','tools/architecture/ae_p0_2/src/canonical.mjs','tools/architecture/ae_p0_2/src/generate.mjs','tools/architecture/ae_p0_2/src/inventory.mjs','tools/architecture/ae_p0_2/src/bootstrap-validator.mjs','tools/architecture/ae_p0_2/src/validate-cli.mjs','tools/architecture/ae_p0_2/bootstrap/schema-trust-anchor.json','tools/architecture/ae_p0_2/bootstrap/schema-trust-anchor-id.mjs','tools/architecture/ae_p0_2/generated/schema-bundle-identity.json','tools/architecture/ae_p0_2/generated/validator.mjs','tools/architecture/ae_p0_2/generated/contracts.hpp','tools/architecture/ae_p0_2/generated/contracts.rs','tools/architecture/ae_p0_2/generated/contracts.ts','tools/architecture/ae_p0_2/testdata/golden-vectors.json','tools/architecture/ae_p0_2/tests/bootstrap.test.mjs','tools/architecture/ae_p0_2/tests/generator-freshness.test.mjs','tools/architecture/ae_p0_2/tests/ownership-validator.test.mjs','tools/architecture/ae_p0_2/tests/cross-language.test.mjs','tools/architecture/ae_p0_2/tests/contracts_cpp_test.cpp','tools/architecture/ae_p0_2/tests/contracts_rust_test.rs'];
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
+
+const repositoryRoot = path.resolve(import.meta.dirname, '../../../..');
+
+export const BASELINE_SHA = 'c33da66fe1a66f20eee931335b18465cfddfdb0e';
+export const IMPLEMENTATION_BASE_SHA = '7710401d72029482c8f3d15869d58dce7e246def';
+
+// Exact product-base delta ratified by corrective packet 8f359009. This path is
+// existing/frozen authority, not Lane 0 planned scope.
+export const amendedBaseDeltaPaths = Object.freeze([
+  'tools/gesture_drag_check.sh',
+]);
+
+export const plannedPaths = Object.freeze([
+  'docs/architecture/tasks/AE-P0.2-lane0.md',
+  'docs/architecture/tasks/AE-P0.2-ownership.json',
+  'tools/architecture/ae_p0_2/schemas/schema-bundle-identity.schema.json',
+  'tools/architecture/ae_p0_2/schemas/schema-trust-anchor.schema.json',
+  'tools/architecture/ae_p0_2/schemas/ownership-manifest.schema.json',
+  'tools/architecture/ae_p0_2/schemas/ownership-transfer.schema.json',
+  'tools/architecture/ae_p0_2/src/canonical.mjs',
+  'tools/architecture/ae_p0_2/src/generate.mjs',
+  'tools/architecture/ae_p0_2/src/inventory.mjs',
+  'tools/architecture/ae_p0_2/src/bootstrap-validator.mjs',
+  'tools/architecture/ae_p0_2/src/validate-cli.mjs',
+  'tools/architecture/ae_p0_2/bootstrap/schema-trust-anchor.json',
+  'tools/architecture/ae_p0_2/bootstrap/schema-trust-anchor-id.mjs',
+  'tools/architecture/ae_p0_2/generated/schema-bundle-identity.json',
+  'tools/architecture/ae_p0_2/generated/validator.mjs',
+  'tools/architecture/ae_p0_2/generated/contracts.hpp',
+  'tools/architecture/ae_p0_2/generated/contracts.rs',
+  'tools/architecture/ae_p0_2/generated/contracts.ts',
+  'tools/architecture/ae_p0_2/testdata/golden-vectors.json',
+  'tools/architecture/ae_p0_2/tests/bootstrap.test.mjs',
+  'tools/architecture/ae_p0_2/tests/generator-freshness.test.mjs',
+  'tools/architecture/ae_p0_2/tests/ownership-validator.test.mjs',
+  'tools/architecture/ae_p0_2/tests/cross-language.test.mjs',
+  'tools/architecture/ae_p0_2/tests/contracts_cpp_test.cpp',
+  'tools/architecture/ae_p0_2/tests/contracts_rust_test.rs',
+]);
+
+export function baselinePaths() {
+  return execFileSync('git', ['ls-tree', '-r', '--name-only', BASELINE_SHA], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+  }).trim().split('\n').filter(Boolean).sort();
+}
+
+export function existingPaths(base = baselinePaths()) {
+  return [...new Set([...base, ...amendedBaseDeltaPaths])].sort();
+}
+
+export function referencePaths(existing = existingPaths()) {
+  return [...new Set([...existing, ...plannedPaths])].sort();
+}

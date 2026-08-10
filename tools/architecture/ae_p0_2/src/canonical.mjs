@@ -1,8 +1,14 @@
 import crypto from "node:crypto";
+import { types as utilTypes } from "node:util";
 
 const NUMBER = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/;
-const UTF8 = new TextDecoder("utf-8", { fatal: true });
+const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const HEX_DIGEST = /^[0-9a-f]{64}$/;
+const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Uint8Array.prototype);
+const TYPED_ARRAY_BUFFER = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "buffer").get;
+const TYPED_ARRAY_BYTE_LENGTH = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "byteLength").get;
+const TYPED_ARRAY_BYTE_OFFSET = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "byteOffset").get;
+const TYPED_ARRAY_SET = TYPED_ARRAY_PROTOTYPE.set;
 
 function reject(message, offset) {
   throw new Error(offset === undefined ? message : `${message} at byte ${offset}`);
@@ -23,32 +29,91 @@ function scalarString(value, label = "string") {
   return value;
 }
 
+export function snapshotBytes(input, label = "input") {
+  if (input !== null && (typeof input === "object" || typeof input === "function") && utilTypes.isProxy(input)) {
+    reject(`${label} bytes must not be a Proxy`);
+  }
+  if (!utilTypes.isUint8Array(input)) reject(`${label} must be a Uint8Array`);
+
+  let backing;
+  let byteLength;
+  let byteOffset;
+  try {
+    // Invoke captured intrinsic getters against the internal slots. Ordinary
+    // property reads such as input.length/input.buffer are forbidden here:
+    // typed arrays can shadow them with attacker-controlled accessors.
+    backing = Reflect.apply(TYPED_ARRAY_BUFFER, input, []);
+    byteLength = Reflect.apply(TYPED_ARRAY_BYTE_LENGTH, input, []);
+    byteOffset = Reflect.apply(TYPED_ARRAY_BYTE_OFFSET, input, []);
+  } catch {
+    reject(`${label} must be an attached Uint8Array`);
+  }
+  if (utilTypes.isSharedArrayBuffer(backing)) reject(`${label} must not use SharedArrayBuffer storage`);
+
+  try {
+    const source = new Uint8Array(backing, byteOffset, byteLength);
+    const copy = new Uint8Array(byteLength);
+    Reflect.apply(TYPED_ARRAY_SET, copy, [source]);
+    const copyBacking = Reflect.apply(TYPED_ARRAY_BUFFER, copy, []);
+    return Buffer.from(copyBacking, 0, byteLength);
+  } catch {
+    reject(`${label} could not be copied from a stable byte range`);
+  }
+}
+
+export function decodeUtf8RejectingBom(input, label = "input") {
+  if (typeof input === "string") {
+    if (input.charCodeAt(0) === 0xfeff) reject(`${label} starts with a UTF-8 BOM`);
+    return input;
+  }
+  const bytes = snapshotBytes(input, label);
+  // TextDecoder normally consumes an initial BOM. Inspect the undecoded bytes so
+  // byte-for-byte canonical validation can never erase the evidence first.
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    reject(`${label} starts with a UTF-8 BOM`);
+  }
+  try {
+    return UTF8.decode(bytes);
+  } catch {
+    reject(`${label} bytes are not well-formed UTF-8`);
+  }
+}
+
 function encode(value, active) {
+  const kind = typeof value;
+  if (value !== null && (kind === "object" || kind === "function") && utilTypes.isProxy(value)) {
+    // This must precede Array.isArray, getPrototypeOf, ownKeys, descriptors, or
+    // any other reflective operation: a revoked Proxy throws and a live Proxy
+    // can run user traps at each of those boundaries.
+    reject("JCS rejects Proxy values");
+  }
   if (value === null) return "null";
-  if (typeof value === "boolean") return value ? "true" : "false";
-  if (typeof value === "string") return JSON.stringify(scalarString(value));
-  if (typeof value === "number") {
+  if (kind === "boolean") return value ? "true" : "false";
+  if (kind === "string") return JSON.stringify(scalarString(value));
+  if (kind === "number") {
     if (!Number.isFinite(value)) reject("JCS rejects non-finite numbers");
     return Object.is(value, -0) ? "0" : JSON.stringify(value);
   }
-  if (["undefined", "function", "symbol", "bigint"].includes(typeof value)) {
-    reject(`JCS rejects ${typeof value} values`);
+  if (["undefined", "function", "symbol", "bigint"].includes(kind)) {
+    reject(`JCS rejects ${kind} values`);
   }
   if (active.has(value)) reject("JCS rejects cyclic values");
   active.add(value);
   try {
     if (Array.isArray(value)) {
       if (Object.getPrototypeOf(value) !== Array.prototype) reject("JCS accepts only ordinary arrays");
-      if (Object.getOwnPropertySymbols(value).length) reject("JCS rejects symbol properties");
       const ownKeys = Reflect.ownKeys(value);
-      if (ownKeys.length !== value.length + 1 || ownKeys[value.length] !== "length") {
+      if (ownKeys.some((key) => typeof key !== "string")) reject("JCS rejects symbol properties");
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+      if (!lengthDescriptor || !("value" in lengthDescriptor) || lengthDescriptor.enumerable) {
+        reject("JCS accepts only ordinary arrays");
+      }
+      const length = lengthDescriptor.value;
+      if (ownKeys.length !== length + 1) {
         reject("JCS rejects sparse arrays or extra array properties");
       }
-      const enumerable = Object.keys(value);
-      if (enumerable.length !== value.length) reject("JCS rejects sparse arrays or extra array properties");
       const parts = [];
-      for (let i = 0; i < value.length; i += 1) {
-        if (!Object.hasOwn(value, i) || enumerable[i] !== String(i)) reject("JCS rejects sparse arrays or extra array properties");
+      for (let i = 0; i < length; i += 1) {
         const descriptor = Object.getOwnPropertyDescriptor(value, String(i));
         if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) reject("JCS rejects array accessors");
         parts.push(encode(descriptor.value, active));
@@ -57,7 +122,6 @@ function encode(value, active) {
     }
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) reject("JCS accepts only plain JSON objects");
-    if (Object.getOwnPropertySymbols(value).length) reject("JCS rejects symbol properties");
     const keys = Reflect.ownKeys(value);
     if (keys.some((key) => typeof key !== "string")) reject("JCS rejects symbol properties");
     const members = [];
@@ -90,16 +154,52 @@ export function domainPreimage(domain, value) {
 
 export const digest = (domain, value) => sha256(domainPreimage(domain, value));
 
-export function schemaPreimage(schemaWithoutSelfId) {
-  return domainPreimage("daw-schema-v1", schemaWithoutSelfId);
+export function schemaWithoutSelfId(schema) {
+  if (schema !== null && (typeof schema === "object" || typeof schema === "function") && utilTypes.isProxy(schema)) {
+    reject("schema must not be a Proxy");
+  }
+  if (schema === null || typeof schema !== "object" || Array.isArray(schema)) reject("schema must be a plain object");
+  const prototype = Object.getPrototypeOf(schema);
+  if (prototype !== Object.prototype && prototype !== null) reject("schema must be a plain object");
+
+  const body = Object.create(null);
+  let foundSelfId = false;
+  for (const key of Reflect.ownKeys(schema)) {
+    if (typeof key !== "string") reject("schema rejects symbol properties");
+    scalarString(key, "schema key");
+    const descriptor = Object.getOwnPropertyDescriptor(schema, key);
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+      reject("schema rejects accessors and hidden properties");
+    }
+    if (key === "$id") {
+      if (typeof descriptor.value !== "string") reject("schema top-level $id must be a string");
+      scalarString(descriptor.value, "schema top-level $id");
+      foundSelfId = true;
+      continue;
+    }
+    Object.defineProperty(body, key, {
+      value: descriptor.value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  if (!foundSelfId) reject("schema must contain one top-level $id self-identifier");
+  return body;
 }
 
-export function schemaId(schemaWithoutSelfId) {
-  return sha256(schemaPreimage(schemaWithoutSelfId));
+export function schemaPreimage(schema) {
+  return domainPreimage("daw-schema-v1", schemaWithoutSelfId(schema));
+}
+
+export function schemaId(schema) {
+  return sha256(schemaPreimage(schema));
 }
 
 export function documentPreimage(schemaIdHex, documentWithoutId) {
-  if (typeof schemaIdHex !== "string" || !HEX_DIGEST.test(schemaIdHex)) reject("schema ID must be 64 lowercase hexadecimal characters");
+  if (typeof schemaIdHex !== "string" || schemaIdHex.length !== 64 || !HEX_DIGEST.test(schemaIdHex)) {
+    reject("schema ID must be 64 lowercase hexadecimal characters");
+  }
   return Buffer.concat([
     Buffer.from("daw-doc-v1\0", "ascii"),
     Buffer.from(schemaIdHex, "hex"),
@@ -114,11 +214,7 @@ export function documentId(schemaIdHex, documentWithoutId) {
 
 class StrictParser {
   constructor(input) {
-    if (typeof input === "string") this.text = input;
-    else {
-      try { this.text = UTF8.decode(Buffer.from(input)); }
-      catch { reject("JSON bytes are not well-formed UTF-8"); }
-    }
+    this.text = decodeUtf8RejectingBom(input, "JSON");
     this.offset = 0;
   }
 
@@ -214,7 +310,7 @@ export function parseJsonRejectingDuplicates(input) {
 }
 
 export function parseCanonicalJson(input) {
-  const text = typeof input === "string" ? input : UTF8.decode(Buffer.from(input));
+  const text = decodeUtf8RejectingBom(input, "JSON");
   const value = parseJsonRejectingDuplicates(text);
   if (jcs(value) !== text) reject("stored JSON is not byte-for-byte RFC 8785 JCS");
   return value;
