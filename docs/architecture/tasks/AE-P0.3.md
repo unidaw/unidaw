@@ -1,10 +1,10 @@
 # AE-P0.3 — Truthful command-caller coverage
 
-State: `BLOCKED`
+State: `ASSIGNED`
 
-Implementation owner: unassigned
+Implementation owner: `codex-worker-2`
 
-Independent reviewer: unassigned
+Independent reviewer: `claude-worker-2`
 
 ## Outcome
 
@@ -18,8 +18,9 @@ client behavior, edit wire definitions, or bless unexplained commands.
 
 ## Baseline
 
-- Frozen product SHA: `5bef283798b59c2c4f5720292554c7ab8c265be6`.
-- Reproducer: `node --test ui-web/test/unit.mjs` reports 120/121 pass.
+- Frozen product SHA: `62bafdc6cf1cd53168ce73d098cd6acc78659be8`.
+- Reproducer at that SHA: `node --test ui-web/test/unit.mjs` reports 146/146 pass;
+  the earlier 120/121 result is historical and predates the caller-audit fix.
 - Failing test: `every engine command has a caller, or a recorded reason it has none`.
 - Reported names: `RequestSamplerEnvelope`, `SetClipText`, `SetMarkerColor`.
 - All three have concrete `UiCommandType::<Name>` callers in
