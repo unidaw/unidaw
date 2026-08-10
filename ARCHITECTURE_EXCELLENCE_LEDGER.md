@@ -13,7 +13,7 @@ Target repo:   /Users/jak/src/daw-backend
 Baseline SHA:  7710401d72029482c8f3d15869d58dce7e246def
 Historical evidence SHA: 5bef283798b59c2c4f5720292554c7ab8c265be6
 Worktrees:     AE-P0.1 integration landed in /Users/jak/src/daw at 71758c0; review worktree preserved at /Users/jak/src/daw-ae-p0-followup
-Active tasks:  P1.1 corrective packet v-next required after second independent packet review; preserve AE-P0.1/AE-P0.2 evidence and track F1-F3 follow-ups
+Active tasks:  P1.1 corrective packet v-next required after third independent packet review; preserve AE-P0.1/AE-P0.2 evidence and track F1-F3 follow-ups
 File locks:    protocol hotspots frozen; root CMake reserved narrowly for AE-P0.1
 Integration:   AE-P0.1 COMPLETE; AE-P0.2 Lane 0 COMPLETE -- product main at 75c6f06, based on amended Undo baseline 7710401d; exact candidate ddb05bd independently approved by Claude and Codex red-team plus residual identity/fixture/path audit
 ```
