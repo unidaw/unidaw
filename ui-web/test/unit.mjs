@@ -3311,51 +3311,160 @@ test("the row-op mask bits are the engine's, not this table's order", async () =
  * have kept inventing them. An exemption is a claim about the product, so it has to be
  * re-derived from the sources rather than trusted because it is written down.
  */
+class CallerAuditError extends Error {
+  constructor(rule, detail) {
+    super(`${rule}: ${detail}`);
+    this.name = 'CallerAuditError';
+    this.rule = rule;
+  }
+}
+
+function engineCommandNames(source, minimum = 1) {
+  const rule = 'engine command enum non-vacuity';
+  if (typeof source !== 'string') throw new CallerAuditError(rule, 'source is absent');
+  const start = source.indexOf('enum class UiCommandType');
+  const end = start < 0 ? -1 : source.indexOf('};', start);
+  if (start < 0 || end < 0) throw new CallerAuditError(rule, 'UiCommandType enum is unparsable');
+  const names = [...source.slice(start, end).matchAll(/^\s+([A-Z][A-Za-z0-9]+) = \d+,/gm)]
+    .map((match) => match[1]).filter((name) => name !== 'None');
+  if (names.length < minimum) throw new CallerAuditError(rule, `parsed ${names.length} commands`);
+  if (new Set(names).size !== names.length) throw new CallerAuditError(rule, 'duplicate command names');
+  return names;
+}
+
+function callerReferences(source, surface, knownNames) {
+  const rule = `${surface} caller source non-vacuity`;
+  if (typeof source !== 'string') throw new CallerAuditError(rule, 'source is absent');
+  const known = new Set(knownNames);
+  const names = new Set([...source.matchAll(/\bUiCommandType::([A-Z][A-Za-z0-9]+)\b/g)]
+    .map((match) => match[1]).filter((name) => known.has(name)));
+  if (!names.size) throw new CallerAuditError(rule, 'parsed zero known engine command references');
+  return names;
+}
+
+function callerCoverage(names, referenceSets, unusedReasons) {
+  const called = new Set(referenceSets.flatMap((set) => [...set]));
+  return {
+    unexplained: names.filter((name) => !called.has(name)
+      && !Object.hasOwn(unusedReasons, name)),
+    stale: Object.keys(unusedReasons).filter((name) => !names.includes(name) || called.has(name)),
+  };
+}
+
+function auditEngineCommandCallers({ engineSource, callerSources, unusedReasons, minimumCommands = 1 }) {
+  const names = engineCommandNames(engineSource, minimumCommands);
+  const surfaces = ['sidecar', 'agent', 'cli'];
+  const references = Object.fromEntries(surfaces.map((surface) => {
+    if (!callerSources || !Object.hasOwn(callerSources, surface)) {
+      throw new CallerAuditError(`${surface} caller source non-vacuity`, 'source is absent');
+    }
+    return [surface, callerReferences(callerSources[surface], surface, names)];
+  }));
+  for (const [name, reason] of Object.entries(unusedReasons ?? {})) {
+    if (typeof reason !== 'string' || !reason.trim()) {
+      throw new CallerAuditError('unused-command reason', `${name} has no reviewed reason`);
+    }
+  }
+  const coverage = callerCoverage(names, Object.values(references), unusedReasons ?? {});
+  if (coverage.unexplained.length) {
+    throw new CallerAuditError('unexplained engine command', coverage.unexplained.join(', '));
+  }
+  if (coverage.stale.length) {
+    throw new CallerAuditError('stale unused-command reason', coverage.stale.join(', '));
+  }
+  return { names, references };
+}
+
+const CALLER_FIXTURE_HEADER = `enum class UiCommandType : uint16_t {
+  None = 0,
+  Shared = 1,
+  RequestSamplerEnvelope = 2,
+  SetClipText = 3,
+  SetMarkerColor = 4,
+  TrulyUncalled = 5,
+};`;
+const CALLER_FIXTURE_SOURCES = {
+  sidecar: 'let command = UiCommandType::Shared;',
+  agent: 'let command = UiCommandType::Shared;',
+  cli: `let a = UiCommandType::RequestSamplerEnvelope;
+        let b = UiCommandType::SetClipText;
+        let c = UiCommandType::SetMarkerColor;`,
+};
+
+test('CONTROL: the historical two-surface audit reproduces the CLI-only false gap', () => {
+  const names = engineCommandNames(CALLER_FIXTURE_HEADER);
+  const coverage = callerCoverage(names,
+    [callerReferences(CALLER_FIXTURE_SOURCES.sidecar, 'sidecar', names),
+     callerReferences(CALLER_FIXTURE_SOURCES.agent, 'agent', names)],
+    { TrulyUncalled: 'reviewed fixture gap' });
+  assert.deepEqual(coverage.unexplained,
+    ['RequestSamplerEnvelope', 'SetClipText', 'SetMarkerColor']);
+});
+
+test('CONTROL: a CLI-only command satisfies the caller audit', () => {
+  assert.doesNotThrow(() => auditEngineCommandCallers({
+    engineSource: CALLER_FIXTURE_HEADER,
+    callerSources: CALLER_FIXTURE_SOURCES,
+    unusedReasons: { TrulyUncalled: 'reviewed fixture gap' },
+  }));
+});
+
+test('CONTROL: a truly uncalled command fails the caller audit', () => {
+  assert.throws(() => auditEngineCommandCallers({
+    engineSource: CALLER_FIXTURE_HEADER,
+    callerSources: CALLER_FIXTURE_SOURCES,
+    unusedReasons: {},
+  }), (error) => error instanceof CallerAuditError
+    && error.rule === 'unexplained engine command'
+    && /TrulyUncalled/.test(error.message));
+});
+
+test('CONTROL: each absent or unparsable caller source fails its named non-vacuity rule', () => {
+  for (const surface of ['sidecar', 'agent', 'cli']) {
+    const missing = { ...CALLER_FIXTURE_SOURCES };
+    delete missing[surface];
+    assert.throws(() => auditEngineCommandCallers({
+      engineSource: CALLER_FIXTURE_HEADER, callerSources: missing,
+      unusedReasons: { TrulyUncalled: 'reviewed fixture gap' },
+    }), (error) => error instanceof CallerAuditError
+      && error.rule === `${surface} caller source non-vacuity`);
+  }
+  assert.throws(() => auditEngineCommandCallers({
+    engineSource: CALLER_FIXTURE_HEADER,
+    callerSources: { ...CALLER_FIXTURE_SOURCES, cli: '../../ui/daw-cli/src/main.rs' },
+    unusedReasons: { TrulyUncalled: 'reviewed fixture gap' },
+  }), (error) => error instanceof CallerAuditError
+    && error.rule === 'cli caller source non-vacuity');
+});
+
+test('CONTROL: an unused-command reason becomes stale when a caller lands', () => {
+  assert.throws(() => auditEngineCommandCallers({
+    engineSource: CALLER_FIXTURE_HEADER,
+    callerSources: { ...CALLER_FIXTURE_SOURCES,
+      cli: `${CALLER_FIXTURE_SOURCES.cli}\nlet command = UiCommandType::TrulyUncalled;` },
+    unusedReasons: { TrulyUncalled: 'reviewed fixture gap' },
+  }), (error) => error instanceof CallerAuditError
+    && error.rule === 'stale unused-command reason'
+    && /TrulyUncalled/.test(error.message));
+});
+
 test('every engine command has a caller, or a recorded reason it has none', async () => {
   const { readFileSync } = await import('node:fs');
-  const hdr = readFileSync(new URL('../../apps/event_payloads.h', import.meta.url), 'utf8');
-  const block = hdr.slice(hdr.indexOf('enum class UiCommandType'));
-  /*
-   * `[A-Za-z0-9]`, because a NAME WITH A DIGIT IN IT was invisible to this audit.
-   *
-   * `[A-Z][A-Za-z]+` silently skipped `SetModLinkUid16`, so an engine command was
-   * neither reported as unwired nor recorded as a gap — the audit had a hole shaped
-   * exactly like the thing it exists to find. Two commands were being dropped when
-   * this was measured.
-   *
-   * The count assertion below is what makes the widening safe to trust: it fails if
-   * the pattern ever stops matching the source, which is the failure mode every
-   * source-reading check has to guard against.
-   */
-  const names = [...block.slice(0, block.indexOf('};')).matchAll(/^\s+([A-Z][A-Za-z0-9]+) = \d+,/gm)]
-    .map((m) => m[1]).filter((n) => n !== 'None');
-  assert.ok(names.length > 15, `the engine's command enum was parsed: ${names.length}`);
-
-  // The sidecar is the UI's only path to the ring, so a command the sidecar never
-  // names is a command the UI cannot send. The agent has its own ring and its own
-  // reach, so it counts as a caller too.
-  /*
-   * daw-cli WAS MISSING FROM THIS LIST, and the omission is the interesting kind: the audit asks
-   * "does anything call this command", then looked in two of the three surfaces that can. A
-   * command reachable ONLY from the command line was reported as uncalled — which is the opposite
-   * of the truth, and in the direction that invents work rather than hiding it. Found by
-   * codex-worker-1 running the audit on a branch where SetClipText, SetMarkerColor and
-   * RequestSamplerEnvelope had CLI callers and nothing else, and escalated by backend rather than
-   * silently exempted, which is why it got fixed instead of papered over.
-   */
-  const callers = ['../../ui/daw-sidecar/src/main.rs', '../../ui/daw-agent/src/tools.rs',
-                   '../../ui/daw-cli/src/main.rs']
-    .map((f) => readFileSync(new URL(f, import.meta.url), 'utf8')).join('\n');
-
-  const unused = names.filter((n) => !new RegExp(`UiCommandType::${n}\\b`).test(callers));
-  const unexplained = unused.filter((n) => !(n in ENGINE_UNUSED));
-  assert.deepEqual(unexplained, [],
-    'an engine command nothing calls and nothing explains — wire it or record why');
-  // And the reverse, so the list cannot rot: something listed as unused that has
-  // since been wired must be removed, or the list stops describing the code.
-  const stale = Object.keys(ENGINE_UNUSED).filter((n) => !unused.includes(n));
-  assert.deepEqual(stale, [],
-    'listed as unused but something calls it now — delete the entry');
+  const readLocal = (relative) => readFileSync(new URL(relative, import.meta.url), 'utf8');
+  const result = auditEngineCommandCallers({
+    engineSource: readLocal('../../apps/event_payloads.h'),
+    callerSources: {
+      sidecar: readLocal('../../ui/daw-sidecar/src/main.rs'),
+      agent: readLocal('../../ui/daw-agent/src/tools.rs'),
+      cli: readLocal('../../ui/daw-cli/src/main.rs'),
+    },
+    unusedReasons: ENGINE_UNUSED,
+    minimumCommands: 16,
+  });
+  for (const surface of ['sidecar', 'agent', 'cli']) {
+    assert.ok(result.references[surface].size > 5,
+      `${surface} caller source independently parsed: ${result.references[surface].size} commands`);
+  }
 });
 
 // ---------------------------------------------------------------------------
