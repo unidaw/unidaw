@@ -13,7 +13,7 @@ Target repo:   /Users/jak/src/daw-backend
 Baseline SHA:  7710401d72029482c8f3d15869d58dce7e246def
 Historical evidence SHA: 5bef283798b59c2c4f5720292554c7ab8c265be6
 Worktrees:     AE-P0.1 integration landed in /Users/jak/src/daw at 71758c0; review worktree preserved at /Users/jak/src/daw-ae-p0-followup
-Active tasks:  P1.1 protocol ADR/assignment packet preparation; preserve AE-P0.1 and AE-P0.2 evidence and track F1-F3 follow-ups
+Active tasks:  P1.1 protocol ADR drafting in isolated worktree; preserve AE-P0.1/AE-P0.2 evidence and track F1-F3 follow-ups
 File locks:    protocol hotspots frozen; root CMake reserved narrowly for AE-P0.1
 Integration:   AE-P0.1 COMPLETE; AE-P0.2 Lane 0 COMPLETE -- product main at 75c6f06, based on amended Undo baseline 7710401d; exact candidate ddb05bd independently approved by Claude and Codex red-team plus residual identity/fixture/path audit
 ```
@@ -204,6 +204,7 @@ never evaluated against different packet generations.
 | 2026-08-10 | AE-P0.2 Lane 0 corrective review requested | Second independent review identified invalid JSON-domain handling and divergent digest preimages; corrective implementation `89d0f6cfddb6350c15d239f13058221d5e1b6051` was prepared for exact review |
 | 2026-08-10 | AE-P0.2 Lane 0 corrective packet superseded with final path authority | Corrective packet `e52804d31075443d03fb63e210176bd41efd13a3` supersedes prior drafts; it enumerates 25 implementation paths, excludes the governance packet from the manifest, pins the 755-path reference set, and adds baseline/dotfile controls; implementation remains paused pending exact owner/reviewer acknowledgement |
 | 2026-08-10 | AE-P0.2 Lane 0 corrective completed | Baseline amendment packet `8f359009f808d84cdc0aa9fcb4afbd675b7d5f99` approved by owner and independent reviewer; candidate `ddb05bd9803c1b30ba2b730d7dc4b8680a95285c` based on Undo-complete `7710401d72029482c8f3d15869d58dce7e246def`; focused gates 15/15, independent schema/bundle/anchor/validator identities, C++17/Rust2021 fixtures, sabotage controls, and exact 756-path reconciliation all passed; integrated to product as `75c6f06` |
+| 2026-08-10 | AE-P0.2 manifest authority follow-up recorded | P1.1 owner reported an independently derived 755-path authority interpretation that omits the ratified amended-base delta `tools/gesture_drag_check.sh`; direct `validate-cli.mjs` at product `75c6f06` includes that delta and returns PASS with 756 paths. Keep this as an explicit follow-up: all authority consumers must derive the same ratified 756-path set, with no baseline interpretation left implicit. It does not block documentation-only P1.1. |
 | 2026-08-10 | AE-P0.3 packet amended after isolated baseline reproduction | Packet `dab40fbd1f4ed174bb7f0634a6df488c0eb98731` records isolated 141/146 with five plugin-cache fixture failures, caller target passing, and focused-control acceptance; owner `codex-worker-2` acknowledged exact SHA |
 | 2026-08-10 | AE-P0.3 implemented, independently approved, and integrated | Claude approved exact `a265a7b7b338909b9b8d4a08796d89b94dacad98`; product `/Users/jak/src/daw` integrated it as `d7fc58c`; targeted caller audit and five controls pass; documented plugin-cache fixture failures remain environmental |
 
