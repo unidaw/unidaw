@@ -1,6 +1,6 @@
 # AE-P0.2 Lane 0 corrective packet
 
-State: `DRAFT_FOR_REVIEW`
+State: `ASSIGNED_BLOCKED_PENDING_ACK`
 
 Implementation owner: `codex-worker-2`
 Independent reviewer: `claude-worker-1`
@@ -35,33 +35,33 @@ The owner may change exactly these 26 paths, one per line:
 
 1. `docs/architecture/tasks/AE-P0.2-lane0.md`
 2. `docs/architecture/tasks/AE-P0.2-ownership.json`
-3. `docs/architecture/tasks/AE-P0.2-lane0-corrective.md`
-4. `tools/architecture/ae_p0_2/schemas/schema-bundle-identity.schema.json`
-5. `tools/architecture/ae_p0_2/schemas/schema-trust-anchor.schema.json`
-6. `tools/architecture/ae_p0_2/schemas/ownership-manifest.schema.json`
-7. `tools/architecture/ae_p0_2/schemas/ownership-transfer.schema.json`
-8. `tools/architecture/ae_p0_2/src/canonical.mjs`
-9. `tools/architecture/ae_p0_2/src/generate.mjs`
-10. `tools/architecture/ae_p0_2/src/inventory.mjs`
-11. `tools/architecture/ae_p0_2/src/bootstrap-validator.mjs`
-12. `tools/architecture/ae_p0_2/src/validate-cli.mjs`
-13. `tools/architecture/ae_p0_2/bootstrap/schema-trust-anchor.json`
-14. `tools/architecture/ae_p0_2/bootstrap/schema-trust-anchor-id.mjs`
-15. `tools/architecture/ae_p0_2/generated/schema-bundle-identity.json`
-16. `tools/architecture/ae_p0_2/generated/validator.mjs`
-17. `tools/architecture/ae_p0_2/generated/contracts.hpp`
-18. `tools/architecture/ae_p0_2/generated/contracts.rs`
-19. `tools/architecture/ae_p0_2/generated/contracts.ts`
-20. `tools/architecture/ae_p0_2/testdata/golden-vectors.json`
-21. `tools/architecture/ae_p0_2/tests/bootstrap.test.mjs`
-22. `tools/architecture/ae_p0_2/tests/generator-freshness.test.mjs`
-23. `tools/architecture/ae_p0_2/tests/ownership-validator.test.mjs`
-24. `tools/architecture/ae_p0_2/tests/cross-language.test.mjs`
-25. `tools/architecture/ae_p0_2/tests/contracts_cpp_test.cpp`
-26. `tools/architecture/ae_p0_2/tests/contracts_rust_test.rs`
+3. `tools/architecture/ae_p0_2/schemas/schema-bundle-identity.schema.json`
+4. `tools/architecture/ae_p0_2/schemas/schema-trust-anchor.schema.json`
+5. `tools/architecture/ae_p0_2/schemas/ownership-manifest.schema.json`
+6. `tools/architecture/ae_p0_2/schemas/ownership-transfer.schema.json`
+7. `tools/architecture/ae_p0_2/src/canonical.mjs`
+8. `tools/architecture/ae_p0_2/src/generate.mjs`
+9. `tools/architecture/ae_p0_2/src/inventory.mjs`
+10. `tools/architecture/ae_p0_2/src/bootstrap-validator.mjs`
+11. `tools/architecture/ae_p0_2/src/validate-cli.mjs`
+12. `tools/architecture/ae_p0_2/bootstrap/schema-trust-anchor.json`
+13. `tools/architecture/ae_p0_2/bootstrap/schema-trust-anchor-id.mjs`
+14. `tools/architecture/ae_p0_2/generated/schema-bundle-identity.json`
+15. `tools/architecture/ae_p0_2/generated/validator.mjs`
+16. `tools/architecture/ae_p0_2/generated/contracts.hpp`
+17. `tools/architecture/ae_p0_2/generated/contracts.rs`
+18. `tools/architecture/ae_p0_2/generated/contracts.ts`
+19. `tools/architecture/ae_p0_2/testdata/golden-vectors.json`
+20. `tools/architecture/ae_p0_2/tests/bootstrap.test.mjs`
+21. `tools/architecture/ae_p0_2/tests/generator-freshness.test.mjs`
+22. `tools/architecture/ae_p0_2/tests/ownership-validator.test.mjs`
+23. `tools/architecture/ae_p0_2/tests/cross-language.test.mjs`
+24. `tools/architecture/ae_p0_2/tests/contracts_cpp_test.cpp`
+25. `tools/architecture/ae_p0_2/tests/contracts_rust_test.rs`
 
-The final manifest reference set is the baseline set union this complete list;
-its diagnostic count is 756 (730 baseline paths plus 26 corrective paths), and
+The corrective packet itself is governance-only and is not an implementation
+path or manifest entry. The final manifest reference set is the baseline set
+union the 25 numbered implementation paths; its diagnostic count is 755 and
 the canonical path-set comparison—not the count—is authoritative. No other path
 may change, be added, deleted, renamed, or replaced. The manifest must include
 the corrective packet and all 26 paths.
@@ -69,7 +69,11 @@ the corrective packet and all 26 paths.
 Add a
 negative control for each requirement, independent literal ADR preimage vectors, freshness over
 every generated output, exact 755-path reconciliation, and a clean-tree check. No sibling checkout,
- machine cache, product build, or runtime process is permitted. Review may compile
+ machine cache, product build, or runtime process is permitted. The authorized
+ baseline/reference path set must be independently pinned; candidate manifest
+ fields may not define their own expected set. Dotfiles such as `.gitignore`
+ are valid tracked paths, while absolute, empty, dot/dotdot, NUL, duplicate, or
+ unsorted paths are rejected. Review may compile
  only the standalone C++17/Rust 2021 contract fixtures into a unique temporary
  directory; this is explicitly not a product build. TypeScript installation or
 type-checking is prohibited in this lane and requires a later accepted
