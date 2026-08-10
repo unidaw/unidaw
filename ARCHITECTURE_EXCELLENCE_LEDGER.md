@@ -15,7 +15,7 @@ Historical evidence SHA: 5bef283798b59c2c4f5720292554c7ab8c265be6
 Worktrees:     AE-P0.1 integration landed in /Users/jak/src/daw at 71758c0; review worktree preserved at /Users/jak/src/daw-ae-p0-followup
 Active tasks:  AE-P0.2 downstream toolchain/provenance lanes pending explicit packets; preserve AE-P0.1 evidence and track F1-F3 follow-ups
 File locks:    protocol hotspots frozen; root CMake reserved narrowly for AE-P0.1
-Integration:   AE-P0.1 COMPLETE; AE-P0.2 Lane 0 CONDITIONAL -- product main at 53486ee; corrective authority review required
+Integration:   AE-P0.1 COMPLETE; AE-P0.2 Lane 0 COMPLETE -- product main at 01d3708; reviewed corrective SHA 89d0f6cfddb6350c15d239f13058221d5e1b6051
 ```
 
 No worker may edit, build, test, create a branch/worktree, commit, or self-assign
@@ -201,7 +201,8 @@ never evaluated against different packet generations.
 | 2026-08-10 | AE-P0.1 nonblocking follow-ups recorded | F1: replace five source-text controls with behavioral hostile probes; F2: remove/initialize redundant post-wait listener diagnostic recheck; F3: reconcile wrapper-only policy with repository_root canonicalization prose and document `/tmp` behavior |
 | 2026-08-10 | AE-P0.2 Lane 0 assigned | `codex-worker-2` asked for a pre-enumerated packet and isolated proposal before adding generated OwnershipManifest/OwnershipTransfer schemas; no downstream lane authorized |
 | 2026-08-10 | AE-P0.2 Lane 0 packet approved and implementation authorized | Corrected packet `6287ffd` independently approved by `claude-worker-2`; 25 additive paths, 755-path reference set, TS compiler deferred to toolchain-owned lane; Lane 0 implementation now active |
-| 2026-08-10 | AE-P0.2 Lane 0 implementation integrated pending corrective review | Product `/Users/jak/src/daw` contains packet and implementation through `53486ee`; a second independent review found authority defects in canonical JSON/preimage unification and missing normative ADR text, so corrective follow-up is active and downstream lanes remain held |
+| 2026-08-10 | AE-P0.2 Lane 0 corrective review requested | Second independent review identified invalid JSON-domain handling and divergent digest preimages; corrective implementation `89d0f6cfddb6350c15d239f13058221d5e1b6051` was prepared for exact review |
+| 2026-08-10 | AE-P0.2 Lane 0 corrective implementation approved and integrated | Claude independently approved exact `89d0f6cfddb6350c15d239f13058221d5e1b6051`; product `/Users/jak/src/daw` integrated it as `01d3708`; focused Node/C++/Rust/CLI gates pass; later bundle-contract enrichment remains a separate lane |
 
 ## AE-P0 baseline findings
 
