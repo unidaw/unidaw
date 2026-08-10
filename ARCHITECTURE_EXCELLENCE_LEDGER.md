@@ -90,7 +90,7 @@ watcher:  none (required for Codex)
 | `AE-P0.1` | `COMPLETE` | packet `258f423` + independent review | `codex-worker-1` | `claude-worker-1` | `/Users/jak/src/daw-ae-p0-followup` | product main `71758c0`; final chain ends `3b53a29` |
 | `AE-P0.2 discovery` | `ESCALATED_TO_ADR` | frozen baseline + packet | `claude-worker-2` | `codex-worker-2` | read-only root | four rejected designs; evidence complete |
 | `AE-P0.2 ADR` | `APPROVED` | current-main inventory + exact review | `backend` | `codex-worker-2` | root | exact SHA `7dff997`; approval received |
-| `AE-P0.2 implementation` | `READY_FOR_MANIFEST` | `AE-P0.1` integration + ownership manifest | backend | codex-worker-2 | root | ADR approved; manifest/validator is next gate |
+| `AE-P0.2 implementation` | `ACTIVE_LANE0` | packet `6287ffd` approved + AE-P0.1 integration | codex-worker-2 | claude-worker-2 | `/Users/jak/src/daw-ae-p0-2-lane0` | additive 25-path implementation; no existing edits |
 | `AE-P0.3` | `BLOCKED` | AE-P0.1 review + frontend ownership release | unassigned | unassigned | none | packet ready |
 | `AE-P1.1` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P1.2` | `BLOCKED` | `AE-P1.1` | unassigned | unassigned | none | none |
@@ -200,6 +200,7 @@ never evaluated against different packet generations.
 | 2026-08-10 | AE-P0.1 post-integration verification | Product repository integrity self-test and production scan pass: 730 tracked/worktree paths, 670 index/worktree live files, zero non-ignored untracked paths; READY-retirement self-test, shell syntax, and Node syntax pass |
 | 2026-08-10 | AE-P0.1 nonblocking follow-ups recorded | F1: replace five source-text controls with behavioral hostile probes; F2: remove/initialize redundant post-wait listener diagnostic recheck; F3: reconcile wrapper-only policy with repository_root canonicalization prose and document `/tmp` behavior |
 | 2026-08-10 | AE-P0.2 Lane 0 assigned | `codex-worker-2` asked for a pre-enumerated packet and isolated proposal before adding generated OwnershipManifest/OwnershipTransfer schemas; no downstream lane authorized |
+| 2026-08-10 | AE-P0.2 Lane 0 packet approved and implementation authorized | Corrected packet `6287ffd` independently approved by `claude-worker-2`; 25 additive paths, 755-path reference set, TS compiler deferred to toolchain-owned lane; Lane 0 implementation now active |
 
 ## AE-P0 baseline findings
 
