@@ -1,0 +1,15 @@
+import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto';
+import {jcs,canonical} from './canonical.mjs'; import {baselinePaths,plannedPaths} from './inventory.mjs';
+const root=path.resolve(import.meta.dirname,'..'); const schemas=fs.readdirSync(path.join(root,'schemas')).sort();
+process.chdir(path.resolve(root,'../../..'));
+const bundle={schema_id:'ae-p0-2.schema-bundle-identity',version:1,schemas};
+bundle.digest=crypto.createHash('sha256').update('AE-P0.2/schema-bundle\0'+jcs(bundle)).digest('hex');
+const write=(p,s)=>{fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,s)};
+write(path.join(root,'generated/schema-bundle-identity.json'),canonical(bundle));
+const validator=`import fs from 'node:fs';\nexport function validate(value){ if(!value||typeof value!=='object'||Array.isArray(value)) throw Error('object required'); return true; }\nexport function validateManifest(value){ validate(value); if(!Array.isArray(value.entries)) throw Error('entries required'); const seen=new Set(); for(const e of value.entries){if(!e.path||seen.has(e.path)) throw Error('duplicate or missing path');seen.add(e.path)} return true; }\n`;
+write(path.join(root,'generated/validator.mjs'),validator);
+write(path.join(root,'generated/contracts.hpp'),'#pragma once\n#include <string_view>\nnamespace daw::ae_p0_2 { constexpr std::string_view kSchemaBundleId="ae-p0-2.schema-bundle-identity"; bool validate_manifest(std::string_view); }\n');
+write(path.join(root,'generated/contracts.rs'),'#[allow(dead_code)]\npub const SCHEMA_BUNDLE_ID: &str = "ae-p0-2.schema-bundle-identity";\npub fn validate_manifest(entries: &[&str]) -> bool { let mut x=entries.to_vec(); x.sort(); x.windows(2).all(|w| w[0]!=w[1]) }\n');
+write(path.join(root,'generated/contracts.ts'),'export const SCHEMA_BUNDLE_ID = "ae-p0-2.schema-bundle-identity" as const;\nexport type OwnershipState = "existing" | "planned";\n');
+const base=baselinePaths('c33da66fe1a66f20eee931335b18465cfddfdb0e'); const set=new Set(base); const entries=[...new Set([...base,...plannedPaths])].sort().map(p=>({path:p,state:set.has(p)?'existing':'planned',owner:set.has(p)?'frozen':'codex-worker-2',reviewer:'claude-worker-2',dependency:set.has(p)?'frozen':'lane-0-bootstrap',transfer:set.has(p)?'frozen':'lane-0'}));
+const manifest={manifest_id:'ae-p0-2-manifest-'+crypto.createHash('sha256').update(jcs(entries)).digest('hex'),baseline:'c33da66fe1a66f20eee931335b18465cfddfdb0e',entries}; write(path.join(root,'../../../docs/architecture/tasks/AE-P0.2-ownership.json'),canonical(manifest));

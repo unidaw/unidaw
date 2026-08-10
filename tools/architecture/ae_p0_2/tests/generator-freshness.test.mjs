@@ -1,0 +1,2 @@
+import {execFileSync} from 'node:child_process'; import assert from 'node:assert/strict'; import fs from 'node:fs'; import path from 'node:path';
+const dir=path.resolve(import.meta.dirname,'..'); const before=fs.readFileSync(path.join(dir,'generated/schema-bundle-identity.json'),'utf8'); execFileSync(process.execPath,['src/generate.mjs'],{cwd:dir}); assert.equal(fs.readFileSync(path.join(dir,'generated/schema-bundle-identity.json'),'utf8'),before); console.log('freshness PASS');

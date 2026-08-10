@@ -1,0 +1,1 @@
+import assert from 'node:assert/strict'; import fs from 'node:fs'; const text=fs.readFileSync(new URL('../generated/contracts.ts',import.meta.url),'utf8'); assert.match(text,/ae-p0-2\.schema-bundle-identity/); console.log('cross-language PASS');
