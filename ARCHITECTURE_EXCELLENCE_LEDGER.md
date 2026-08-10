@@ -7,7 +7,7 @@ ledger records current orchestration state.
 ## Global state
 
 ```text
-Program:       ACTIVE -- AE-P0.1 integrated; AE-P0.2 Lane 0 complete; next lane requires packet
+Program:       ACTIVE -- AE-P0.1 integrated; AE-P0.2 Lane 0 corrective follow-up active
 Reason:        execution baseline selected at current main; old evidence remains historical
 Target repo:   /Users/jak/src/daw-backend
 Baseline SHA:  62bafdc6cf1cd53168ce73d098cd6acc78659be8
@@ -15,7 +15,7 @@ Historical evidence SHA: 5bef283798b59c2c4f5720292554c7ab8c265be6
 Worktrees:     AE-P0.1 integration landed in /Users/jak/src/daw at 71758c0; review worktree preserved at /Users/jak/src/daw-ae-p0-followup
 Active tasks:  AE-P0.2 downstream toolchain/provenance lanes pending explicit packets; preserve AE-P0.1 evidence and track F1-F3 follow-ups
 File locks:    protocol hotspots frozen; root CMake reserved narrowly for AE-P0.1
-Integration:   AE-P0.1 COMPLETE; AE-P0.2 Lane 0 COMPLETE -- product main at 53486ee with approved tip 92778e6
+Integration:   AE-P0.1 COMPLETE; AE-P0.2 Lane 0 CONDITIONAL -- product main at 53486ee; corrective authority review required
 ```
 
 No worker may edit, build, test, create a branch/worktree, commit, or self-assign
@@ -201,7 +201,7 @@ never evaluated against different packet generations.
 | 2026-08-10 | AE-P0.1 nonblocking follow-ups recorded | F1: replace five source-text controls with behavioral hostile probes; F2: remove/initialize redundant post-wait listener diagnostic recheck; F3: reconcile wrapper-only policy with repository_root canonicalization prose and document `/tmp` behavior |
 | 2026-08-10 | AE-P0.2 Lane 0 assigned | `codex-worker-2` asked for a pre-enumerated packet and isolated proposal before adding generated OwnershipManifest/OwnershipTransfer schemas; no downstream lane authorized |
 | 2026-08-10 | AE-P0.2 Lane 0 packet approved and implementation authorized | Corrected packet `6287ffd` independently approved by `claude-worker-2`; 25 additive paths, 755-path reference set, TS compiler deferred to toolchain-owned lane; Lane 0 implementation now active |
-| 2026-08-10 | AE-P0.2 Lane 0 implemented and independently approved | Product `/Users/jak/src/daw` integrated packet and implementation through `53486ee` (approved Lane 0 tip `92778e6`); Claude independently verified all eight controls, 755-path reconciliation, and clean worktree; local Node/C++/Rust/CLI gates pass |
+| 2026-08-10 | AE-P0.2 Lane 0 implementation integrated pending corrective review | Product `/Users/jak/src/daw` contains packet and implementation through `53486ee`; a second independent review found authority defects in canonical JSON/preimage unification and missing normative ADR text, so corrective follow-up is active and downstream lanes remain held |
 
 ## AE-P0 baseline findings
 
