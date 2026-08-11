@@ -1053,7 +1053,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `93ce2926dc8d4eeb9b4ecffa896124d43b8f0934`, A.0 SCRIPT BLOB `b40031504cc511ab73b66ea5255e9f4aeb20811b`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `30a3d255c901c51da48070226a78efd8fe218a2e`, A.0 SCRIPT BLOB `50dde1d4b9326087ca182040ef6c90e5b21a4be7`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1063,6 +1063,15 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
     packet blob <oid> · product 75c6f064 tree 699abfe8 · 28 items, 22 open · 13 RAW (12 hand-ruled) + 20 commanded claims, all executed
     PASS
+
+**The MANIFEST is the canonical machine-readable source.**
+`docs/architecture/tasks/AE-P1.2-manifest.json` carries the gates and their decidability, the
+rulings and whether each is APPLIED, every item with its gate and blocking/closed state, every RAW
+claim with its command and arithmetic, the control names, and the counts. It is EMITTED by this
+checker from the same extraction the checks run on (`--emit-manifest`) and the checker FAILS if the
+committed copy differs, so it is canonical without being a second hand-maintained document — which
+is the defect this packet has produced in every other form today. Read the manifest for facts and
+the prose for reasons.
 
 **The two claim categories are DISJOINT**, which they were not until this SHA: a RAW claim whose
 command states a return was counted as a RAW claim AND as a commanded claim, so the printed sum
@@ -1096,13 +1105,13 @@ back to: A.0's "what it does not decide" list is the exact place where a stale s
 what has been settled.)
 And nothing about the product beyond what a text search can see.
 
-**Controls.** Twenty-nine, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Thirty, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
-`borrowed-cmd`, `byhand-count`, `heading-regress`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
+`borrowed-cmd`, `byhand-count`, `heading-regress`, `manifest-stale`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
 `unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`. Two of them were themselves defective when first
 written and are recorded here rather than quietly fixed: `raw-without-cmd` changed a claim's NUMBER
 and so provoked a different check entirely, and the landing assertion demanded the anchor count DROP,

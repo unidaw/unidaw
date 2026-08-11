@@ -11,7 +11,7 @@ not caller-supplied, and every control asserts its mutation reached the populati
 verdict is read. An earlier version of this file took the pin as an argument with no verification,
 claimed ten RAW checks while executing seven, and never validated the RULE arithmetic at all.
 """
-import hashlib, os, re, subprocess, sys
+import hashlib, json, os, re, subprocess, sys
 
 PACKET_PATH  = 'docs/architecture/tasks/AE-P1.2-shm-contract.md'
 PRODUCT_SHA  = '75c6f0646417828641e43287c260bea3d38b5a6f'
@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'cebb3cdead90eae19a12e7fd457b525c03825e99'
+PREV_TIP     = '163788d2d59e7a08ac191684450ff8212a1b2248'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -108,6 +108,8 @@ CONTROLS = {
                       'POPULATION-UNCOMMANDED'),
  'handmade-count':   ('**6 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
                       'HANDMADE-COUNT'),
+ 'manifest-stale':   ('26. **G4** — **BLOCKING.**', '26. **G4** — **blocking.**', 1,
+                      'MANIFEST-STALE'),
  'unresolved-tail':  ('master-track stores (`engine_master_render.cpp:121` and `:132`) → **13 IN\nSCOPE**.',
                       'master-track stores (`engine_master_render.cpp:121` and `:132`).', 1,
                       'RULE-UNRESOLVED-TAIL'),
@@ -167,7 +169,10 @@ cand = [int(n) for n in re.findall(r'(?m)^(\d{1,2})\. ', body)]
 nums, nxt = [], 1
 for c in cand:
     if c == nxt: nums.append(c); nxt += 1
-closed = len(re.findall(r'(?m)^\d{1,2}\. \*\*[^*]+\*\* — CLOSED at this SHA', body))
+closed_set = {int(m.group(1)) for m in
+              re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — CLOSED at this SHA', body)}
+closed = len(closed_set)
+blocking_n = len(re.findall(r'(?m)^\d{1,2}\. \*\*[^*]+\*\* — [^\n]{0,120}BLOCKING', body))
 if not hdr:
     bad('OPEN-HEADER-MISSING', 'no "# Open items — N atomic, K CLOSED at this SHA, M open"')
 else:
@@ -425,6 +430,37 @@ pristine = before_pkt if NEG else pkt
 for cname, (canchor, _, _, _) in sorted(CONTROLS.items()):
     if pristine.count(canchor) < 1:
         bad('CONTROL-ANCHOR-DEAD', f'{cname} cannot land: {canchor[:44]!r}')
+
+# ---- manifest: canonical AND derived. Emitted from the same extraction the checks run on, so it
+# cannot become a second hand-maintained copy of the packet -- which is the defect this document
+# has produced in every other form today.
+MANIFEST = 'docs/architecture/tasks/AE-P1.2-manifest.json'
+man = {
+ 'schema': 'ae-p1.2-manifest/1',
+ 'product': {'sha': PRODUCT_SHA, 'tree': PRODUCT_TREE},
+ 'items': [{'n': n, 'gate': entry.get(n, '?'),
+            'blocking': 'BLOCKING' in (re.search(r'(?m)^%d\. \*\*[^*]+\*\* — (.{0,200})' % n, body).group(1)
+                                       if re.search(r'(?m)^%d\. ' % n, body) else ''),
+            'closed': n in closed_set} for n in nums],
+ 'raw_claims': [{'raw': int(re.match(r'RAW \*{0,2}(\d+)', pkt[a:b]).group(1)),
+                 'command': (re.search(r'\(`([^`]+)`\)', pkt[a:b]).group(1)
+                             if re.search(r'\(`([^`]+)`\)', pkt[a:b]) else None),
+                 'minus': [int(x) for x in re.findall(r'minus \*{0,2}(\d+)', pkt[a:b])],
+                 'results': [int(x) for x in re.findall(r'→ \*{0,2}(\d+)', pkt[a:b])]}
+                for a, b in spans if b > a],
+ 'controls': sorted(CONTROLS),
+ 'counts': {'items': len(nums), 'open': len(nums) - closed, 'closed': closed,
+            'blocking': blocking_n, 'raw_claims': len(tokens), 'hand_ruled': byhand,
+            'controls': len(CONTROLS)},
+}
+emitted = json.dumps(man, indent=1, ensure_ascii=False, sort_keys=True) + '\n'
+if '--emit-manifest' in sys.argv:
+    open(MANIFEST, 'w').write(emitted); print(f'wrote {MANIFEST}'); sys.exit(0)
+try:
+    if open(MANIFEST).read() != emitted:
+        bad('MANIFEST-STALE', 'the committed manifest is not what this packet emits')
+except FileNotFoundError:
+    bad('MANIFEST-MISSING', MANIFEST)
 
 print(f'packet blob {oid[:12]} · product {PRODUCT_SHA[:12]} tree {PRODUCT_TREE[:12]} · '
       f'{len(nums)} items, {len(nums)-closed} open · {len(tokens)} RAW ({byhand} hand-ruled) + '

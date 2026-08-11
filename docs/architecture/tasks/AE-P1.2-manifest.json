@@ -1,0 +1,348 @@
+{
+ "controls": [
+  "borrowed-cmd",
+  "byhand-count",
+  "closed-count",
+  "control-unlisted",
+  "dangling-ref",
+  "drop-refutation",
+  "handmade-count",
+  "heading-regress",
+  "manifest-stale",
+  "member-dropped",
+  "member-per-type",
+  "no-terminator",
+  "open-arithmetic",
+  "open-count",
+  "orphan-marker",
+  "orphan-number",
+  "raw-without-cmd",
+  "rg-command",
+  "root-wide-grep",
+  "rule-arithmetic",
+  "stale-a0-sample",
+  "two-markers",
+  "ungated-ref",
+  "unmarked-popn",
+  "unresolved-tail",
+  "unstated-return",
+  "withdrawn-claim",
+  "wrong-command",
+  "wrong-gate-ref",
+  "wrong-raw"
+ ],
+ "counts": {
+  "blocking": 6,
+  "closed": 6,
+  "controls": 30,
+  "hand_ruled": 12,
+  "items": 28,
+  "open": 22,
+  "raw_claims": 13
+ },
+ "items": [
+  {
+   "blocking": false,
+   "closed": false,
+   "gate": "G0-B",
+   "n": 1
+  },
+  {
+   "blocking": false,
+   "closed": false,
+   "gate": "G0-B",
+   "n": 2
+  },
+  {
+   "blocking": false,
+   "closed": false,
+   "gate": "G0-B",
+   "n": 3
+  },
+  {
+   "blocking": false,
+   "closed": false,
+   "gate": "G0-B",
+   "n": 4
+  },
+  {
+   "blocking": false,
+   "closed": true,
+   "gate": "G0-B",
+   "n": 5
+  },
+  {
+   "blocking": false,
+   "closed": true,
+   "gate": "G1-A",
+   "n": 6
+  },
+  {
+   "blocking": false,
+   "closed": false,
+   "gate": "G1-A",
+   "n": 7
+  },
+  {
+   "blocking": false,
+   "closed": true,
+   "gate": "G1-B",
+   "n": 8
+  },
+  {
+   "blocking": false,
+   "closed": true,
+   "gate": "G1-B",
+   "n": 9
+  },
+  {
+   "blocking": false,
+   "closed": true,
+   "gate": "G1-B",
+   "n": 10
+  },
+  {
+   "blocking": true,
+   "closed": false,
+   "gate": "G1-B",
+   "n": 11
+  },
+  {
+   "blocking": false,
+   "closed": false,
+   "gate": "G2-A",
+   "n": 12
+  },
+  {
+   "blocking": false,
+   "closed": true,
+   "gate": "G2-A",
+   "n": 13
+  },
+  {
+   "blocking": false,
+   "closed": false,
+   "gate": "G2-A",
+   "n": 14
+  },
+  {
+   "blocking": false,
+   "closed": false,
+   "gate": "G2-B",
+   "n": 15
+  },
+  {
+   "blocking": false,
+   "closed": false,
+   "gate": "G2-B",
+   "n": 16
+  },
+  {
+   "blocking": false,
+   "closed": false,
+   "gate": "G2-B",
+   "n": 17
+  },
+  {
+   "blocking": true,
+   "closed": false,
+   "gate": "G2-B",
+   "n": 18
+  },
+  {
+   "blocking": true,
+   "closed": false,
+   "gate": "G3",
+   "n": 19
+  },
+  {
+   "blocking": false,
+   "closed": false,
+   "gate": "G3",
+   "n": 20
+  },
+  {
+   "blocking": false,
+   "closed": false,
+   "gate": "G3",
+   "n": 21
+  },
+  {
+   "blocking": false,
+   "closed": false,
+   "gate": "G4",
+   "n": 22
+  },
+  {
+   "blocking": false,
+   "closed": false,
+   "gate": "all",
+   "n": 23
+  },
+  {
+   "blocking": true,
+   "closed": false,
+   "gate": "G0-B",
+   "n": 24
+  },
+  {
+   "blocking": false,
+   "closed": false,
+   "gate": "all",
+   "n": 25
+  },
+  {
+   "blocking": true,
+   "closed": false,
+   "gate": "G4",
+   "n": 26
+  },
+  {
+   "blocking": true,
+   "closed": false,
+   "gate": "G2-A",
+   "n": 27
+  },
+  {
+   "blocking": false,
+   "closed": false,
+   "gate": "G2-A",
+   "n": 28
+  }
+ ],
+ "product": {
+  "sha": "75c6f0646417828641e43287c260bea3d38b5a6f",
+  "tree": "699abfe8f72e597cfd1b6fb3da93ee7f35aa7fef"
+ },
+ "raw_claims": [
+  {
+   "command": "grep -rn -e '>audioInOffset' -e '>audioOutOffset' -e '>ringStdOffset' -e '>ringCtrlOffset' -e '>mailboxOffset' -e auxOutputPlaneOffset -e hostKeyRingOffset apps/ | grep -v _tests_main | grep -v juce_host_process_main | grep -v engine_ui_shm | grep -v audio_shm | grep -v shared_memory | grep -v uiShm",
+   "minus": [
+    1
+   ],
+   "raw": 13,
+   "results": [
+    12
+   ]
+  },
+  {
+   "command": "grep -rnF '>capacity' apps/ | grep '=' | grep -v '=='",
+   "minus": [
+    9
+   ],
+   "raw": 17,
+   "results": [
+    8
+   ]
+  },
+  {
+   "command": "grep -roF 'entries[' apps/",
+   "minus": [
+    19
+   ],
+   "raw": 23,
+   "results": [
+    4
+   ]
+  },
+  {
+   "command": "grep -rn -e readIndex.store -e read_index.store apps/ ui/",
+   "minus": [
+    10
+   ],
+   "raw": 14,
+   "results": [
+    4
+   ]
+  },
+  {
+   "command": "grep -roF 'entries[' apps/",
+   "minus": [
+    9
+   ],
+   "raw": 23,
+   "results": [
+    14
+   ]
+  },
+  {
+   "command": "grep -rn -e 'requireMatchingClipVersion(' -e 'requireMatchingHarmonyVersion(' apps | grep -v tests_main",
+   "minus": [
+    8
+   ],
+   "raw": 17,
+   "results": [
+    9
+   ]
+  },
+  {
+   "command": "grep -rn -e await_clip_outcome -e report_outcome_from -e report_refusal_outcome -e refused_or ui/daw-cli/src ui/daw-agent/src",
+   "minus": [
+    5
+   ],
+   "raw": 56,
+   "results": [
+    51
+   ]
+  },
+  {
+   "command": "grep -rn 'hostReady' apps | grep 'store(true'",
+   "minus": [
+    1
+   ],
+   "raw": 4,
+   "results": [
+    3
+   ]
+  },
+  {
+   "command": "grep -rn 'hostReady' apps/ | grep 'store(false'",
+   "minus": [
+    2,
+    2
+   ],
+   "raw": 17,
+   "results": [
+    15,
+    13
+   ]
+  },
+  {
+   "command": "grep -rn 'hostReady' apps/ | grep 'store('",
+   "minus": [
+    3
+   ],
+   "raw": 21,
+   "results": [
+    18
+   ]
+  },
+  {
+   "command": "git grep -n sendProcessBlock",
+   "minus": [
+    14
+   ],
+   "raw": 17,
+   "results": [
+    3
+   ]
+  },
+  {
+   "command": "grep -rn -e audioOutOffset -e safeAudioOutPtr -e audioOutChannelPtr -e auxOutputPlaneOffset apps/",
+   "minus": [],
+   "raw": 27,
+   "results": []
+  },
+  {
+   "command": "grep -rn -e audioInOffset -e safeAudioInPtr -e audioInChannelPtr apps/",
+   "minus": [
+    11
+   ],
+   "raw": 13,
+   "results": [
+    2
+   ]
+  }
+ ],
+ "schema": "ae-p1.2-manifest/1"
+}
