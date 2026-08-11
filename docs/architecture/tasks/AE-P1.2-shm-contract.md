@@ -22,7 +22,9 @@ The blockers from the exact review are reconciled here, and the count is deliber
    FORM.** Leading with the form was the wrong order: a reader meets a completeness claim first and
    the disqualification second, and takes away the first.** G1-B declares none (item 11), G2-A's scope is falsified and unreplaced
    (item 27) and G4's out-plane selection is withdrawn (item 26). A record whose population slot
-   reads "withdrawn" satisfies the contract and decides nothing. Each carries population with its
+   reads "withdrawn" satisfies the contract and decides nothing. **No universal claim about
+   populations is made anywhere in this packet**, because three of them do not exist: any sentence
+   of the form "each population is ..." is false at this SHA by construction. Each carries population with its
    extraction command and floor, failure model, deterministic test, PASS conditions each naming their
    refutation, static checks, and review register. Nothing points at a table that does not exist.
 2. **The open list is 27 atomic items, not 15 categories.** The four that compression swallowed are
@@ -365,7 +367,8 @@ reproducible, and four populations in the predecessor were exactly that.
 - *Read-cursor stores* — RAW **14** (`grep -rn -e readIndex.store -e read_index.store apps/ ui/`) → minus 10 non-ring and test stores → **4**. ⟂ The predecessor printed this command beside the figure 4, which
   the command does not produce.
 - *Plugin-cache index sites, which are NOT ring sites* — RAW 23 (`grep -roF 'entries[' apps/`)
-  → minus 9 event-ring statements → **14 expressions across 12 lines**. ⟂ These fourteen accesses, which fall on twelve lines, are the
+  → minus 9 event-ring statements → **14**. ⟂ The unit is the expression throughout this gate; the line count is not restated because a
+  second unit beside the first is what produced the 21-versus-23 error. The fourteen are the
   plugin-cache reads and are NOT the population PASS 7 and S4 range over; the RING index sites are
   the separate authored population below. The twelve are: `plugin_cache.cpp:388/:460/:469/:478/:492`,
   `engine_chain_commands.cpp:81`, `engine_save_project.cpp:265/:362`, `daw_engine_main.cpp:291/:1078`,
@@ -408,8 +411,10 @@ mask-7 ring — a state the producer at `apps/event_ring.cpp:79` cannot create �
 the array.
 
 **PASS conditions.**
-1. Populations re-derived AFTER the change, not copied. *REFUTED BY* any of the four commands
-   returning a member this packet does not name.
+1. Populations re-derived AFTER the change, not copied. *REFUTED BY* any command printed in this
+   gate's Population returning a member this packet does not name. The bullet said "the four
+   commands" and this gate no longer has four — the number was a twin of a list that had changed
+   under it, so the bullet quantifies over the list instead of counting it.
 2. Read guard in `drain_ui_out` on the slot's own flag, acquire ordering, stop at zero. *REFUTED BY*
    the drain returning 1 for an unpublished slot, or `read_index` moving.
 3. Disarm on delivery asserted as a **1→0 transition** in the test-owned buffer. *REFUTED BY*
@@ -655,11 +660,7 @@ foreign record; Layer 3 asserts process exit code and stdout, not internal verdi
 
 **Static checks.** S1 the mark is sampled before the send — no `handle` method call inside any
 `await_clip_outcome(` argument. S2 the echo is a copy, not a computation, at each of the three emit
-sites. S3 **IS NOT A CHECK AT THIS SHA AND IS WITHDRAWN AS ONE.** It read "the counter-only decisions are
-extracted and each replaced", and the extraction has no predicate, no command and no member list, so
-there is nothing to run and nothing to fail. Carrying it in the static-check list made the list
-longer than the set of things that can actually be executed, which is the same defect as a
-population with no members. It is recorded as a REQUIREMENT on item 27 instead: it is carried
+sites. S3 is REMOVED from this list (see open item 27 (G2-A)): it is carried
 under open item 27 (G2-A) with the withdrawn thirteen, because a static check over an unspecified
 extraction is a sentence, not a check — the figure THIRTEEN is WITHDRAWN. It was stated with no predicate, no command and no
 member list, so it could not be reproduced or refuted; the independent evidence run records it as
@@ -689,9 +690,13 @@ worse than the gap it was closing.
 
 **Invariant, stated in full, with the clause this gate cannot decide marked as such.** OBSERVABLE:
 no `ProcessBlock` is dispatched to a host whose per-slot bypass differs from the authored chain,
-**[RULED BY R2 (two-level readiness), NOT YET PROPAGATED — open item 18 (G2-B)]** whose parameter mirror has not been replayed and
-acknowledged for the same `host_generation`, or for which a `sendSetBypass` failed without the
-readiness being withdrawn. The middle clause is a property of the SYSTEM and belongs in the
+whose readiness LEVEL is below the level that dispatch
+requires, or for which a `sendSetBypass` failed without the readiness being withdrawn. **R2 is
+propagated here:** readiness is `mapped-and-bypassed` or `mirror-complete`; a `ProcessBlock` may be
+dispatched at `mapped-and-bypassed`, and only processing that DEPENDS on mirrored parameters
+requires `mirror-complete`. That is what dissolves the circularity — the ack that establishes
+`mirror-complete` arrives during a `ProcessBlock` the lower level already permits, so the gate no
+longer demands a state reachable only through a state it forbids. The middle clause is a property of the SYSTEM and belongs in the
 invariant; it is not a property this gate can decide at this SHA, because the acknowledgement it
 would test for arrives only during a `ProcessBlock` that `processTrack` refuses while `hostReady` is
 false. Scope excluding the mirror while the invariant required it was a real contradiction and is
@@ -892,10 +897,13 @@ correctly gated by the mechanism this gate generalises. `apps/engine_audio_callb
 proving omission rather than design, and they bound the blast radius to three shapes: chains
 interleaving VST and non-VST devices, a patcher audio node after a plugin, and track-to-track routing
 from a plugin-bearing track. **Dependencies** G0-A, G0-B, G1-A, G1-B, G2-A, G2-B, G3. Final gate — and therefore NOT DECIDABLE
-at this SHA, because its dependencies carry FOUR BLOCKING items: 11 (G1-B) has no reader
+at this SHA on FIVE dependency blockers plus one of its own. The five are carried by gates G4
+depends on: 11 (G1-B) has no reader
 population, 18 (G2-B) has the mirror-ack circularity, 19 (G3) has no source for N, and 24 (G0-B) holds
-the rename PASS 9 is RED without. Items 26 and 27 are NOT dependency blockers: 26 is G4's own
-withdrawn population and 27 is G2-A's, and they are listed separately for that reason.
+the rename PASS 9 is RED without. Item 27 IS a dependency blocker — G2-A is one of G4's dependencies, so
+G2-A's undefined scope blocks G4 exactly as G1-B's missing population does; I had excluded it on the
+irrelevant ground that it is a gate's OWN population rather than asking whose gate. Item 26 is the
+only own-population blocker, because G4 is the gate that owns it.
 **Two conditions, and the second was missing.** (a) The dependency GATES PASS — not that their items
 are ruled. (b) **G4's OWN population exists**: item 26 is not a dependency blocker, it is G4's
 out-plane selection, withdrawn and unreplaced, so every dependency could pass and this gate would
@@ -908,8 +916,11 @@ in full so the work is specified, but no PASS verdict on it may be recorded unti
 GATE PASSES — not until items are ruled, which they already are; a final gate that reports green over blocked dependencies is the exact shape of a check that
 passes with the defect present.
 
-**Invariant.** For every dispatch, identified by the quadruple (host generation `g`, `blockId b`,
-`segmentStart s0`, `segmentLength sl`) — not by the loop ordinal, because segmentation is recomputed
+**Invariant.** For every dispatch, identified by the QUINTUPLE (host generation `g`, `blockId b`,
+`segmentStart s0`, `segmentLength sl`, readiness level `r`) — the fifth component is R2 propagated:
+a dispatch minted at `mapped-and-bypassed` and one minted at `mirror-complete` are DIFFERENT
+dispatches even with the same four other fields, and an acknowledgement must name the level it was
+minted under or a stale-level ack satisfies a fresh-level read — not by the loop ordinal, because segmentation is recomputed
 from `trackState.chainDevices` every block (`apps/engine_produce_block.cpp:660-716`) so a chain edit
 renumbers ordinals while `(s0,sl)` still names the same plugins — the bytes of that host's INPUT plane
 slot for `blockIndex = b % numBlocks` are owned by the host from dispatch until that exact segment
@@ -948,7 +959,7 @@ is delayed before WRITING segment k's output, and `:1030-1033` reads the audioOu
 plane, with no generation or marker to detect it. (4) Routing copies the same un-awaited plane
 (`:1147-1154`). The host publishes `completedBlockId` only on the last segment
 (`apps/juce_host_process_main.cpp:1069-1087`), so **there is no per-segment signal to wait on even in
-principle** — which is why the invariant demands an ack keyed on the quadruple.
+principle** — which is why the invariant demands an ack keyed on the quintuple.
 
 **Deterministic test.** Stated first: the device-free offline render (`apps/daw_engine_main.cpp:2143-2153`)
 is the byte-exact oracle for CONTENT and is the only driver this gate accepts for content, but its only
@@ -980,9 +991,10 @@ the predecessor's control could not run.
    whose release-store follows the host's `write_output`. *REFUTED BY* a `read_output` with no
    intervening acquire, or an ack released before the output write.
 4. Input immutability observed in the BYTES, not the schedule: every AFTER_INPUT_READ snapshot equals
-   what the engine's `write_input` recorded for that quadruple. *REFUTED BY* one differing byte.
-5. Full-identity comparison, not a field echo: each consumer refuses when ANY ONE of the four
-   components is wrong and the other three right. *REFUTED BY* a consumer reading on three of four.
+   what the engine's `write_input` recorded for that quintuple. *REFUTED BY* one differing byte.
+5. Full-identity comparison, not a field echo: each consumer refuses when ANY ONE of the FIVE
+   components is wrong and the other four right — including the readiness level, which R2 added.
+   *REFUTED BY* a consumer reading on four of five.
 6. Generation is engine-minted and host-echoed. *REFUTED BY* a generation the host originates.
 7. Segmentation-isolating content: three renders of F0 byte-identical, three of F1 byte-identical.
    *REFUTED BY* any pair differing.
@@ -1036,7 +1048,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `06860857f553688da97d23a9a353772acf680cc2`, A.0 SCRIPT BLOB `179c5482496d68672ae638b21991a9669f36d47d`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `1d1d0ae5447d12225fc18f91355a73da23080d65`, A.0 SCRIPT BLOB `664163eb2699dabaf4fa00f558bdd02ced8374aa`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1232,7 +1244,7 @@ carrying one cannot be decided by any implementation.
 16. **G2-B** — The swap trap rests on an unratcheted guard at `apps/daw_engine_main.cpp:1107-1109`.
 17. **G2-B** — Probe ordering: without forbidding the offline probe from acquiring before the RT probe reports, the PASS token is producible by the packet's own fixture.
 18. **G2-B** — **BLOCKING, RULED (R2), not closed.** The mirror-ack circularity. The ack arrives only during a `ProcessBlock` that `processTrack` refuses while `hostReady` is false. A PASS bullet was withdrawn rather than reworded, and the owner HAS ruled (R2: two-level readiness) and the mirror half is unspecified until that ruling is PROPAGATED into this gate and G4 — the item is open for the propagation, not for the decision.
-19. **G3** — **BLOCKING, RULED (R3: N = 3, authored), not closed.** N has no source in the tree. The owner HAS ruled (R3: N = 3, authored), which makes the gate decidable for PLANNING; it is not decidable for ACCEPTANCE until the ticket lands — N pinned with units and semantics, a static check on the literal, watchdog instrumentation, drift acceptance and independent validation.
+19. **G3** — **BLOCKING, not closed. The ruling is MADE (R3: N = 3, authored) and no further ruling is required.** N has no source in the tree; R3 supplies it as an authored constant. What remains is implementation, not decision (R3: N = 3, authored), which makes the gate decidable for PLANNING; it is not decidable for ACCEPTANCE until the ticket lands — N pinned with units and semantics, a static check on the literal, watchdog instrumentation, drift acceptance and independent validation.
 20. **G3** — `DAW_ENGINE_DEBUG_STALL` must be set by the Layer-2 fixture or the channel a PASS bullet reads does not exist.
 21. **G3** — The static-check contradiction: one check places the eviction where its natural implementation changes an exit count another check pins.
 22. **G4** — The fixture definitions added here (F0-F6, S1-S8) and the corrected ack-census counts have not been run against anything; the reviewer should confirm them against the fixture rather than against this packet.
@@ -1261,7 +1273,10 @@ carrying one cannot be decided by any implementation.
     distinguishing `engine_consumer.cpp:670` from `:730`, which assign the same field for a normal
     track and an aux child. A predicate must separate "establishes where the out-plane is read from"
     into the cases this gate governs, or the gate must range over all 27.
-27. **G2-A** — **BLOCKING.** The arbitrated-command SCOPE is FALSIFIED and unreplaced, so G2-A
+27. **G2-A** — **BLOCKING.** It also carries the requirement that was G2-A's S3 static check, now
+    removed from that list: the counter-only decisions must be extracted and each replaced, and no
+    check over that extraction can be written until the extraction has a predicate, a command and a
+    member list. The arbitrated-command SCOPE is FALSIFIED and unreplaced, so G2-A
     governs an undefined set. Falsified by exhibit: `engine_rowops_commands.cpp:49`
     emits an adoptable refusal for `SetRowOps`, outside the nine. The 51 correlators also span
     chain, sampler, mod-link and journal refusals. Either the nine becomes ten-or-more by
