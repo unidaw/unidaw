@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'b6a9e227dc10f215c11add6906c17df8a4e05653'
+PREV_TIP     = 'e67ba006bcd1476a9780bb2cfb4b965dd5bae62a'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -460,6 +460,10 @@ CONTROLS = {
  'writer-wrapped-sep': ('juce:989/994', 'fake<!--x-->:989/994', 1, 'OUT-MEMBERS'),
  'writer-detached':  ('juce:989/994', 'fake :989/994', 1, 'OUT-MEMBERS'),
  'blocker-kind':     ('35. **G0-B** — ⟦PRODUCT⟧ ', '35. **G0-B** — ', 1, 'BLOCKER-KIND'),
+ 'packet-marker-gone': ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ', '37. **G3** — ⟦PRODUCT⟧ ', 1,
+                      'PACKET-SET-RESTATED'),
+ 'packet-marker-typo': ('36. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ', '36. **G3** — ⟦PRODUCT⟧ ⟦PAKCET⟧ ', 1,
+                      'KIND-MARKER-UNKNOWN'),
  'writer-path-numeric': ('juce:989/994', '9/juce:989/994', 1, 'OUT-MEMBERS'),
  'control-dupe':     ('`member-per-type`,', '`member-per-type`, `member-per-type`,', 1,
                       'CONTROL-DUPLICATE'),
@@ -903,8 +907,36 @@ _bodies = {int(m.group(1)): m.group(0) for m in
 # populations elsewhere in this packet.
 _prod = sorted(n for n in _derived_blk if '⟦PRODUCT⟧' in _bodies.get(n, ''))
 # every blocker states a KIND; a dependency marker is additional, never a substitute
-_kindless = [n for n in _derived_blk if '⟦PRODUCT⟧' not in _bodies.get(n, '')]
-if _kindless: bad('BLOCKER-KIND', f'blockers with no ⟦PRODUCT⟧ kind marker: {_kindless}')
+# the item HEADS, built here because `_head_of` is defined later beside the emission; marker
+# checks must read the head for the same reason `blocking` does — validation and emission have to
+# look at the same text or a marker parked in the body passes one and feeds the other.
+_HEADS = {int(m.group(1)): m.group(2) for m in
+          re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — (.{0,200})', _unhidden(body))}
+_pkt_kind = sorted(n for n in nums if '⟦PACKET⟧' in _HEADS.get(n, ''))
+# A KIND IS AT LEAST ONE MARKER, not specifically PRODUCT. Requiring ⟦PRODUCT⟧ made a packet-only
+# blocker unrepresentable — the model could not say "this is blocked on work in this document",
+# which is a category the packet has produced twice.
+_kindless = [n for n in _derived_blk
+             if '⟦PRODUCT⟧' not in _HEADS.get(n, '') and '⟦PACKET⟧' not in _HEADS.get(n, '')]
+if _kindless: bad('BLOCKER-KIND', f'blockers with no kind marker: {_kindless}')
+# REPRESENTED IS NOT BOUND. /5 could emit kind ["PRODUCT","PACKET"] while nothing checked the
+# marker existed, so deleting item 37's ⟦PACKET⟧, moving it to a nonblocking item, or typing
+# ⟦PAKCET⟧ all emitted a clean PASS — the manifest simply reported one fewer kind and no check
+# noticed. codex-worker-1 landed all three mutations. A field a consumer plans from needs the same
+# derivation-versus-restatement treatment the blocker set has.
+_pkt_said = re.search(r'⟦PACKET⟧ MARKS \(([0-9, and]*)\)', _visible(pkt))
+if not _pkt_said:
+    bad('PACKET-SET-RESTATED', 'the packet states no ⟦PACKET⟧ set to check against the derivation')
+else:
+    _claimed = sorted(int(x) for x in re.findall(r'\d+', _pkt_said.group(1)))
+    if _claimed != _pkt_kind:
+        bad('PACKET-SET-RESTATED', f'{_pkt_said.group(1)!r} vs derived {_pkt_kind}')
+# an ENUM over item-head markers, so a typo is a failure rather than a silent absence
+_known = {'PRODUCT', 'PACKET'}
+for _n in nums:
+    for _m in re.finditer(r'⟦([A-Z][A-Z-]*)(?::[^⟧]*)?⟧', _HEADS.get(_n, '')):
+        if _m.group(1) not in _known and _m.group(1) != 'BLOCKED-ON':
+            bad('KIND-MARKER-UNKNOWN', f'item {_n} carries ⟦{_m.group(1)}⟧, which is not a kind')
 _marked = sorted(int(m.group(1)) for m in
                  re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ⟦PRODUCT⟧', body))
 if _marked != sorted(_derived_blk):

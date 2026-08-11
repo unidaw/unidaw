@@ -48,7 +48,9 @@ The blockers from the exact review are reconciled here, and the count is deliber
    acceptance oracle is unwritten, and item 36, whose Layer 0, PASS 1 and register text all need
    rewriting alongside the telemetry it waits on. Both carry ⟦PACKET⟧ beside ⟦PRODUCT⟧ so the
    manifest can say so; until `kind` became an array that fact was unrepresentable and the record
-   said PRODUCT. An earlier version of this sentence named only item 37. That list is derived from the items themselves and every
+   said PRODUCT. An earlier version of this sentence named only item 37. **⟦PACKET⟧ MARKS (36, 37)**, derived from the item heads and compared against this restatement, because representing a
+   kind is not binding it: deleting the marker, moving it to a nonblocking item and misspelling it
+   all passed until this check existed. A control performs each mutation. That list is derived from the items themselves and every
    restatement of it anywhere in this document is compared against the derivation
    (`BLOCKER-SET-RESTATED`) — this paragraph carried (18, 19, 23, 24, 29) for several SHAs, three
    members wrong on the packet's first screen, because the check knew about the open-items header
@@ -1409,7 +1411,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `2d10341ef57cb28ad62d7605f59b7a73321eff71`, A.0 SCRIPT BLOB `66288d8d3edc8a621a6ebcf756c87b88510ec8b6`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `333e02cec2523f7f61c23eee92c7163af4b24f05`, A.0 SCRIPT BLOB `61e2b0d48d26d43962db4c9065a96db54659045b`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1488,7 +1490,7 @@ extractor count at its floor. `--prove-sweep-predicate` classifies a crafted-lin
 every spoof a reviewer has landed on the sweep's success test — a bare `OK (+` prefix, an unanchored
 tail, a wrong tag, a count the emitter cannot print, and a tag line with no separator.
 
-**Controls.** Ninety, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Ninety-two, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1509,7 +1511,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `packet-marker-gone`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
@@ -2530,9 +2532,11 @@ carrying one cannot be decided by any implementation.
     two `await*ReadyTrack*` gates are production OFFLINE paths, called from
     `apps/engine_offline_render.cpp:123` and `:149`, and omitting them would have left the render
     path uncovered. The publication surface is `updateTracks`
-    (`apps/engine_consumer.cpp:737`); `:692-735` CONSTRUCTS the ordinary and aux `TrackInfo` records
-    it publishes, and `restartTrackHost` (`apps/engine_track_setup.cpp:367-403`) and the restart
-    worker are mapping/readiness MUTATORS rather than publishers. An earlier draft called all three
+    (`apps/engine_consumer.cpp:737`). Ordinary `TrackInfo` construction is `:650-674` with cache
+    reuse and push at `:678-685`; `:692-735` COPIES those records to build the aux ones — an earlier
+    draft said `:692-735` constructs both, which is wrong about the ordinary half.
+    `restartTrackHost` (`apps/engine_track_setup.cpp:367-403`) and the restart worker mutate mapping
+    and readiness; neither publishes a `TrackInfo` list. An earlier draft called all three
     "publication surfaces", blurring three roles into one; the oracle must exercise construction,
     publication and both relaunch paths distinctly, and none of them is a reader that must reject a
     stale generation. The supported `--no-spawn` path needs an explicit external-host policy besides:
@@ -2544,7 +2548,8 @@ carrying one cannot be decided by any implementation.
     `apps/juce_host_process_main.cpp:441-447`, `:1139-1150`). codex-worker-1 enumerated all of it.
     **THIS ITEM IS NOT PRODUCT-ONLY**: writing the oracle into G3's deterministic test, PASS
     conditions and static checks is PACKET work, and the opening's claim that every blocker needs
-    product work does not hold for it. **WHAT FOLLOWS IS RETAINED HISTORY, NOT A CURRENT
+    product work is not WRONG about it — item 37 has product work — but it is
+    incomplete: this item is not product-ONLY. **WHAT FOLLOWS IS RETAINED HISTORY, NOT A CURRENT
     CLAIM.** The item's ORIGINAL claim is withdrawn and every sentence after this one describes that
     theory rather than the live defect above — it read eviction
     as removal from the producer's minimum, which
