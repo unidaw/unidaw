@@ -679,6 +679,12 @@ markers are ignored, the named move control only copies, and the WORD[100]
 parser entry is unreachable. Item18 prose, G3 M1/N/Watchdog/item37 oracle,
 G0, G4, and opening packet-count contradictions remain.
 
+Owner successor `016da51` claims item28 is now blocking `[PRODUCT, PACKET]`,
+raising the roster to eleven blockers and five packet-marked items, and edge
+grammar now matches the emitter with an edge-nospace control. Qualified/empty
+marker fixes are inherited from `56dd20e`. Exact review is pending; item18
+prose, G3 N/Watchdog/item37 oracle, G0/G4, and M1 remain open.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
