@@ -698,6 +698,11 @@ G4 still says four versus ten dependency blockers. Item18 prose, G3 M1/item37
 oracle/N/Watchdog, G0, fake move control, and unreachable 100-word mapping
 remain.
 
+Owner successor `de76109` claims item18's body now explicitly states both
+PRODUCT and PACKET halves, with a visible-floor check catching indented-code
+misplacement; 99 controls pass. Exact review is pending. G3 N/Watchdog/item37
+oracle, G0, G4, M1, and marker-lexer closure remain gated.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
