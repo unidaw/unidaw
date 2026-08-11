@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '4bdb681866910bfb2cf861de7a9c843f9de08734'
+PREV_TIP     = '3426ffb13765e95c889971045a0ee330da28d862'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -516,8 +516,46 @@ if cblock:
         constraints.append({'n': int(cm.group(1)), 'line': line_of(base + cm.start()),
                             'text': re.sub(r'\s+', ' ', cm.group(2)).strip()})
 VERSION_COUNTERS = ['kShmVersion', 'kControlVersion', 'kPatcherAbiVersion']
+# The manifest extracted the MECHANICALLY REFUTABLE half of every gate and omitted the two parts
+# that exist because something cannot be mechanically decided -- so a plan built from it asserted,
+# by silence, that every gate is fully decidable. That is A.0's own rule inverted: a source silent
+# about its limits reads as total coverage. These three sections carry the residue.
+def section(gbody, label, gid, gstart):
+    m = re.search(r'\*\*%s\*\*(.*?)(?=\n\*\*[A-Z]|\n# |\Z)' % label, gbody, re.S)
+    if not m: return None
+    return {'gate': gid, 'line': line_of(gstart + m.start()),
+            'text': re.sub(r'\s+', ' ', m.group(1)).strip()}
+static_checks, review_register, failure_models = [], [], []
+for gid, gbody in zip(parts[0::2], parts[1::2]):
+    gstart = pkt.find(gbody)
+    sc = section(gbody, r'Static checks\.', gid, gstart)
+    if sc:
+        # a NAMED HOLE is not absence: "There is no S3" is a requirement on item 28, and a flat
+        # string loses that it is one.
+        # dedupe: ranges like "S1-S3" and re-mentions ("S4 each of S1-S3") repeat a label, and a
+        # repeated label is one check mentioned twice, not two checks.
+        seen_lab = []
+        for lab in re.findall(r'\bS(\d+)\b', sc['text']):
+            if lab not in seen_lab: seen_lab.append(lab)
+        sc['labels'] = [{'label': lab, 'present': True} for lab in seen_lab]
+        # an empty list means the section states its checks in PROSE, not that it has none —
+        # G0-B, G3 and G4 do exactly that, and an empty array would read as "no static checks"
+        sc['labelled'] = bool(seen_lab)
+        for miss in re.findall(r'[Tt]here is no S(\d+)', sc['text']):
+            sc['labels'] = [l for l in sc['labels'] if l['label'] != miss]
+            sc['labels'].append({'label': miss, 'present': False,
+                                 'note': 'named hole; carried by an open item'})
+        sc['labels'].sort(key=lambda l: int(l['label']))
+        static_checks.append(sc)
+    rr = section(gbody, r'Review register\.', gid, gstart)
+    if rr: review_register.append(rr)
+    fm = section(gbody, r'Failure model\.', gid, gstart)
+    if fm: failure_models.append(fm)
 man = {
  'schema': 'ae-p1.2-manifest/2',
+ 'static_checks': static_checks,
+ 'review_register': review_register,
+ 'failure_models': failure_models,
  'constraints': constraints,
  'version_counters': VERSION_COUNTERS,
  'platforms': ['macOS arm64', 'Windows x64'],
@@ -564,6 +602,10 @@ if described:
 # key whose CONTENT disagrees with the prose. The opening sentence counts the gates that cannot be
 # decided; the manifest derives the same set. They must agree, or the sentence is the next third
 # statement.
+for label, arr in [('static_checks', static_checks), ('review_register', review_register),
+                   ('failure_models', failure_models)]:
+    if len(arr) != 8:
+        bad('RECORD-SECTION-COUNT', f'{len(arr)} {label} extracted, the packet has 8 gates')
 if len(constraints) != 4:
     bad('CONSTRAINTS-COUNT', f'{len(constraints)} implementation constraints extracted, expected 4')
 for vc in VERSION_COUNTERS:
