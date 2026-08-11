@@ -361,6 +361,10 @@ action. It supersedes stale ticket rows above where they conflict.
   independent review pending.
 - `66bf20d`: owner PASS/89 controls; AST-based EXTRACTOR-TEXT ratchet floor 35;
   independent review pending.
+- Exact review of `66bf20d` is **BLOCKED**: the AST ratchet misreads positional
+  arguments, omits raw sites, has no registered ratchet control, and item-body
+  line metadata corrupts when hidden bytes are present. Treat its 7/35 floor as
+  untrusted until a signature-aware inventory is independently verified.
 - `0a796fe`: owner PASS/89 controls; `_unhidden` reference-definition overblank
   claimed fixed; independent review pending.
 - `f7495b6`: BLOCKED; hidden/code split exposed raw-site and dependency
