@@ -333,6 +333,24 @@ action. It supersedes stale ticket rows above where they conflict.
   merge hotspots (`shared_memory.h`, `event_payloads.h`, `layout.rs`,
   `control.rs`, engine ring files) to one integration owner.
 
+### Throughput and parallelism monitor
+
+When implementation begins, use overlapping lanes rather than a serial
+implement-review loop:
+
+- Lead implements the currently authorized slice.
+- Packet owner prepares the next decision/ticket on a disjoint scope.
+- Semantic reviewer reviews the previous immutable SHA or the next design.
+- Evidence reviewer builds fixtures and mutation probes for the current/previous
+  slice without editing its implementation.
+
+For every slice, record start time, handoff time, review latency, verification
+latency, idle-worker minutes, rework rounds, and the reason for any blocked
+overlap. Weekly adjustment rule: if a lane is idle for more than one review
+interval, assign it the next disjoint design/fixture task; if rework exceeds one
+corrective round, stop parallel edits and redesign the contract. Never trade
+away exact-SHA review or shared-hotspot ownership to improve throughput.
+
 ### Immediate next actions
 
 1. Obtain the final bounded independent review of `6f05846`; do not expand parser
