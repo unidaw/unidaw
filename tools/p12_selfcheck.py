@@ -11,7 +11,7 @@ not caller-supplied, and every control asserts its mutation reached the populati
 verdict is read. An earlier version of this file took the pin as an argument with no verification,
 claimed ten RAW checks while executing seven, and never validated the RULE arithmetic at all.
 """
-import hashlib, json, os, re, shlex, subprocess, sys
+import ast, hashlib, json, os, re, shlex, subprocess, sys
 
 PACKET_PATH  = 'docs/architecture/tasks/AE-P1.2-shm-contract.md'
 PRODUCT_SHA  = '75c6f0646417828641e43287c260bea3d38b5a6f'
@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'f7495b68e8a2ded1684fb13375b95dd6b53fd616'
+PREV_TIP     = 'd709770cb8774660f4d19c9317c27006602e2242'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -1013,18 +1013,40 @@ if _outside:
 # It is a FLOOR, not a gate: 35 sites are unconverted and the number must not grow. A ratchet that
 # demanded zero today would be a wish; one that pins the current count makes every new extractor
 # declare which text it reads.
-_src = open(__file__).read()
-_calls = re.findall(r're\.(?:finditer|search|findall|match|sub)\(\s*(r?["\'][^\n]*?["\'])\s*,\s*'
-                    r'([A-Za-z_][A-Za-z0-9_]*)', _src)
-_decor_raw = [(pat[:38], txt) for pat, txt in _calls
-              if '`' not in pat and txt in ('pkt', 'body') ]
+# PARSED, NOT MATCHED. My first version of this ratchet used a regex with `[^\n]*?` in it, so it
+# could not see a `re.*` call whose arguments WRAP ACROSS LINES — and this file has eleven. My 38 was
+# a count of single-line calls. claude-worker-1 found the same defect in their own scanner the hard
+# way: their two passes over one question returned 35 and then 29, and when two of your own outputs
+# disagree THAT is the finding rather than an input to averaging.
+# **A REGEX OVER SOURCE CODE IS A PROXY FOR PARSING IT**, and it fails exactly where the source is
+# formatted unusually — which in a file this heavily commented is not rare. Same family as counting
+# mentions instead of instances, and a span detector that matched the gaps between spans. `ast` was
+# available the whole time and costs six lines; I reached for a regex because I had one written.
+_decor_raw = []
+for _node in ast.walk(ast.parse(open(__file__).read())):
+    if not (isinstance(_node, ast.Call) and isinstance(_node.func, ast.Attribute)
+            and isinstance(_node.func.value, ast.Name) and _node.func.value.id == 're'
+            and len(_node.args) >= 2):
+        continue
+    # a pattern BUILT BY CONCATENATION is still a pattern. Restricting to `ast.Constant` dropped
+    # every `r'...' + GATE_ID + r'...'` call — eleven of them — so my parsed count came out 24 while
+    # claude-worker-1's came out 35 with the same DATA count of 7. **My predicate excluded what it
+    # could not represent**, which is the defect this ratchet exists to catch, committed inside the
+    # parse written to end the regex version of it. Every string constant anywhere in the pattern
+    # expression is collected instead.
+    _pat, _txt = _node.args[0], _node.args[-1]
+    _lits = [x.value for x in ast.walk(_pat)
+             if isinstance(x, ast.Constant) and isinstance(x.value, str)]
+    _tname = _txt.id if isinstance(_txt, ast.Name) else None
+    if _lits and not any('`' in _l for _l in _lits) and _tname in ('pkt', 'body', 'head'):
+        _decor_raw.append((_lits[0][:38], _tname))
 # 38, MEASURED HERE — claude-worker-1 counted 35 with their own scan. TWO MEASUREMENTS OF ONE
 # POPULATION DISAGREEING BY THREE is the shape this packet has hit six times, and the resolution is
 # the same each time: the predicates differ, not the arithmetic. Mine includes `re.sub` and patterns
 # reading `body`; theirs may not. The floor is MY count because this check is the one enforcing it,
 # and the discrepancy is recorded rather than averaged away — whichever of us is right, the number
 # may only go DOWN from here.
-_DECOR_FLOOR = 38
+_DECOR_FLOOR = 35
 if len(_decor_raw) > _DECOR_FLOOR:
     bad('EXTRACTOR-TEXT', f'{len(_decor_raw)} prose extractors read raw text, floor is '
                           f'{_DECOR_FLOOR} — a pattern that quotes no backtick reads prose and must '
