@@ -1226,6 +1226,14 @@ excluding writes while R8 included them.
       cross-agent byte-consuming reads   claims 7 — floor, name-reachable addressing only — `git grep -n -E 'safeAudioOutPtr\(blockIndex|audioOutChannelPtr\(' apps/engine_produce_block.cpp apps/juce_host_process_main.cpp apps/engine_master_render.cpp | wc -l` returns 4.
       host byte-producing writes         claims 8 — SUPERSET, includes addressing, zero-fills and the `:834` self-read — `git grep -n -E 'outputPtrs\[ch\]|auxOutputPtrs\[ch\]' apps/juce_host_process_main.cpp | wc -l` returns 13.
 
+**A THIRD FRAGILITY, named by claude-worker-1 and not by any check here.** `engine_produce_block.cpp`
+has THREE bindings spelled `input` — `:535` and `:817` are `const float*` aimed at other buffers, and
+only `:945` is the plane. The engine-write row greps the FILE for the name and returns exactly the
+eleven that belong to `:945`'s scope, so it is right at this pin and right for the wrong reason: it
+would absorb a write through either other binding the moment one stopped being const. A row bounded
+by a name inside a file with three same-named bindings is a floor, and the row that stated the
+binding as its rule is the one that found the eleven.
+
 **The two OUT rows are the ones a reader should distrust**, and stating 4 against a claim of seven
 and 13 against a claim of eight is the point: the gap IS the hand classification, and a row that
 quoted a pattern returning exactly the claimed number would be a pattern reverse-engineered from the
@@ -1236,10 +1244,13 @@ times.** The host reaches the input plane through TWO hops: `state.inputPtrs` �
 (`:862`) → `pluginInputPtrs` (`:880`). Five of the byte reads dereference the SECOND alias
 (`:924`/`:927`/`:930` the level-matched bypass copy, `:939`/`:942` the bypass meter, `:975`/`:980`
 the input meter) and a census over the member name `state.inputPtrs` returns FOUR sites and sees
-none of them. claude-worker-1's input census reported five engine writes; the engine writes twelve,
-because the window started at the visible branch (`:1016`) while the binding that governs every
-write is `float* input = safeAudioInPtr(blockIndex, ch)` at `:945` — the sampler-stem, sidechain and
-sampler-audio branches at `:967`–`:1017` write the same plane through the same pointer. **A census
+none of them. claude-worker-1's input census reported five engine writes in this file; the file holds
+ELEVEN, because the window started at the visible branch (`:1016`) while the binding that governs
+every write is `float* input = safeAudioInPtr(blockIndex, ch)` at `:945` — the sampler-stem,
+sidechain and sampler-audio branches at `:967`–`:1017` write the same plane through the same
+pointer. Eleven here plus the master summed-mix write is twelve engine writes in all, and those are
+TWO census rows rather than one figure: writing "twelve writes through two addressing routes" as a
+single number, as this paragraph did, is the conflation the rows exist to prevent. **A census
 is bounded by the BINDING, never by the branch you were reading.**
 
 **`engine_produce_block.cpp:1032` IS A MEMBER OF BOTH RELATIONS AT ONCE.** `std::memcpy(input,
@@ -1367,7 +1378,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `5849f0dfa08cb5aec7448b0259733501ebc79f22`, A.0 SCRIPT BLOB `8514587227bc4fe72bd805c1953d1aff5e0a4736`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `ce996ed7c12ce56083de1330568630a763abd1e7`, A.0 SCRIPT BLOB `856d7c8b7d6311a79f81e280c7dea9e4654ec8ef`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1433,7 +1444,9 @@ eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
 `unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`. The last six exist because
-backend MUTATED THIS PACKET AND THE GATE STILL SAID PASS: deleting the item's reopening sentence,
+**codex-worker-1** MUTATED THIS PACKET AND THE GATE STILL SAID PASS (the finding reached me relayed
+by backend, and two commit messages in this lineage credit the relay rather than the author —
+`e26f91f` and `c332c03`, immutable and wrong on this point): deleting the item's reopening sentence,
 inverting input for output, changing R8's 7/8 to 70/80, R9's one to two and item 31's four to five —
 every one of them survived. **Thirty-four controls were checking status ARITHMETIC and no control
 was checking a substantive claim**, which is the difference between a gate and a gate's appearance.
