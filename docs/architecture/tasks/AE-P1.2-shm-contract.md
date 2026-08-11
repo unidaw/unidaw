@@ -1275,7 +1275,9 @@ binding as its rule is the one that found the eleven.
 **The two OUT rows are the ones a reader should distrust**, and stating 4 against a claim of seven
 and 13 against a claim of eight is the point: the gap IS the hand classification, and a row that
 quoted a pattern returning exactly the claimed number would be a pattern reverse-engineered from the
-answer. The five IN rows have no such gap because the roles there are separable by shape.
+answer. The SEVEN IN rows have no such gap because the roles there are separable by shape —
+seven, not the five this sentence said after the unit split added two, which is the same stale-count
+shape the checks below exist for and which no check reaches inside a prose paragraph.
 
 **THE ALIAS CHAIN IS THE FINDING, and it is the same defect this population has now made four
 times.** The host reaches the input plane through TWO hops: `state.inputPtrs` → `inputPtrs`
@@ -1416,7 +1418,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `612455c57c10e4155cd968243f2afeb094e1159b`, A.0 SCRIPT BLOB `7b1b03fe8033082dd0e832061aa074ad47ae73b3`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `c6058cc124e07713e18aed7814847f92f4581dce`, A.0 SCRIPT BLOB `9677c41ff163353e869667b4908f96a00684eb0c`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1474,14 +1476,14 @@ back to: A.0's "what it does not decide" list is the exact place where a stale s
 what has been settled.)
 And nothing about the product beyond what a text search can see.
 
-**Controls.** Forty-six, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Forty-eight, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
-`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`. The last twelve exist because
+`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`. The last fourteen exist because
 **codex-worker-1** MUTATED THIS PACKET AND THE GATE STILL SAID PASS (the finding reached me relayed
 by backend, and two commit messages in this lineage credit the relay rather than the author —
 `e26f91f` and `c332c03`, immutable and wrong on this point): deleting the item's reopening sentence,

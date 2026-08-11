@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '49b80fb59afa2c4dbbb10f369a98387d2a3b0205'
+PREV_TIP     = 'e5f9b4c6fb4744b7bb1d028baa4a2e6b830c44f4'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -30,19 +30,74 @@ PREV_BLOB    = ''                    # parent's packet blob; filled below from t
 # IDENTITY was unbound. A roster inside the packet would be one more statement in the file being
 # mutated; this one lives in the script, which the packet blob-pins and which the commit pins in
 # turn, so a mutation of the rows is checked against a file it did not touch.
-# sites are the LINE NUMBERS the row's command must return — member identity, not just arity.
+# A member is (PATH, LINE, fingerprint of the matched text) — not a bare line number. codex-worker-1
+# substituted a command pointing at a DIFFERENT FILE whose hits land on the same line numbers and it
+# passed; a line number is an address, and an address is not an identity. The fingerprint also stops
+# a command that emits `file:line:` text of its own making.
 CENSUS_ROSTER = {
- ('IN',  'engine addressing sites'):        ([62, 945], 2),
- ('IN',  'engine byte-producing writes'):   ([967, 970, 978, 981, 1009, 1013, 1017, 1020, 1026,
-                                              1032, 1035], 11),
- ('IN',  'master summed-mix write'):        ([69], 1),
- ('IN',  'host plane-address acquisitions'):([644, 862, 879, 924, 939, 975], 6),
- ('IN',  'host byte loads'):                ([686, 720, 927, 930, 942, 980], 6),
- ('IN',  'host indirect handoff'):          ([987], 1),
- ('IN',  'alias leaves the plane'):         ([1061], 1),
- ('OUT', 'cross-agent byte-consuming reads'): ([638, 1030, 1112, 1150], 7),
- ('OUT', 'host byte-producing writes'):     ([638, 656, 664, 665, 686, 719, 725, 726, 834, 925,
-                                              952, 956, 1015], 8),
+ ('IN', 'engine addressing sites'): (2, [
+      ('apps/engine_master_render.cpp', 62, 'c99fbc2684'),
+      ('apps/engine_produce_block.cpp', 945, '31bffcdd43'),
+  ]),
+ ('IN', 'engine byte-producing writes'): (11, [
+      ('apps/engine_produce_block.cpp', 967, '65b7fab765'),
+      ('apps/engine_produce_block.cpp', 970, '4b5a2140db'),
+      ('apps/engine_produce_block.cpp', 978, '17118e6c42'),
+      ('apps/engine_produce_block.cpp', 981, '4b5a2140db'),
+      ('apps/engine_produce_block.cpp', 1009, '2cb28bc611'),
+      ('apps/engine_produce_block.cpp', 1013, '7dc078b1d6'),
+      ('apps/engine_produce_block.cpp', 1017, '6112a862bc'),
+      ('apps/engine_produce_block.cpp', 1020, '4b5a2140db'),
+      ('apps/engine_produce_block.cpp', 1026, '7dc078b1d6'),
+      ('apps/engine_produce_block.cpp', 1032, '6a2694a612'),
+      ('apps/engine_produce_block.cpp', 1035, '4b5a2140db'),
+  ]),
+ ('IN', 'master summed-mix write'): (1, [
+      ('apps/engine_master_render.cpp', 69, '7c7b8e9e9f'),
+  ]),
+ ('IN', 'host plane-address acquisitions'): (6, [
+      ('apps/juce_host_process_main.cpp', 644, '83e585fa64'),
+      ('apps/juce_host_process_main.cpp', 862, '244bf433ac'),
+      ('apps/juce_host_process_main.cpp', 879, '8d11f7050a'),
+      ('apps/juce_host_process_main.cpp', 924, '13ad8adbbe'),
+      ('apps/juce_host_process_main.cpp', 939, '13ad8adbbe'),
+      ('apps/juce_host_process_main.cpp', 975, '13ad8adbbe'),
+  ]),
+ ('IN', 'host byte loads'): (6, [
+      ('apps/juce_host_process_main.cpp', 686, 'b0d8bdd2f3'),
+      ('apps/juce_host_process_main.cpp', 720, 'b6f3f99a0b'),
+      ('apps/juce_host_process_main.cpp', 927, '1355deed03'),
+      ('apps/juce_host_process_main.cpp', 930, '5242e55145'),
+      ('apps/juce_host_process_main.cpp', 942, '95887f882a'),
+      ('apps/juce_host_process_main.cpp', 980, 'e7c88540c8'),
+  ]),
+ ('IN', 'host indirect handoff'): (1, [
+      ('apps/juce_host_process_main.cpp', 987, 'ac5e663d74'),
+  ]),
+ ('IN', 'alias leaves the plane'): (1, [
+      ('apps/juce_host_process_main.cpp', 1061, '85b174e0d8'),
+  ]),
+ ('OUT', 'cross-agent byte-consuming reads'): (7, [
+      ('apps/engine_produce_block.cpp', 1030, 'f0bfb74eb2'),
+      ('apps/engine_produce_block.cpp', 1112, '6c42a8d7a5'),
+      ('apps/engine_produce_block.cpp', 1150, 'bf2344301e'),
+      ('apps/juce_host_process_main.cpp', 638, '34c359a21e'),
+  ]),
+ ('OUT', 'host byte-producing writes'): (8, [
+      ('apps/juce_host_process_main.cpp', 638, '34c359a21e'),
+      ('apps/juce_host_process_main.cpp', 656, '319a198116'),
+      ('apps/juce_host_process_main.cpp', 664, '372911ff1e'),
+      ('apps/juce_host_process_main.cpp', 665, '5dc69993e5'),
+      ('apps/juce_host_process_main.cpp', 686, 'b0d8bdd2f3'),
+      ('apps/juce_host_process_main.cpp', 719, 'fdbf815b7c'),
+      ('apps/juce_host_process_main.cpp', 725, 'cf65d84dd4'),
+      ('apps/juce_host_process_main.cpp', 726, 'cc6279f30f'),
+      ('apps/juce_host_process_main.cpp', 834, 'c7983155d9'),
+      ('apps/juce_host_process_main.cpp', 925, 'be1ff5e934'),
+      ('apps/juce_host_process_main.cpp', 952, '8f93a108b7'),
+      ('apps/juce_host_process_main.cpp', 956, '8f93a108b7'),
+      ('apps/juce_host_process_main.cpp', 1015, 'f2d0b8495a'),
+  ]),
 }
 
 fail = []
@@ -212,6 +267,15 @@ CONTROLS = {
                       1, 'CENSUS-RESTATED'),
  # the ruling->item edge, unbound in both directions until now
  'ruling-item-swap': ('**R10 — item 30 (G2-A)', '**R10 — item 29 (G2-A)', 1, 'RULING-ITEM-BIND'),
+ # codex-worker-1's graph mutations: an unknown gate id and a cycle, both of which propagated
+ # nothing and read as a satisfied closure.
+ 'dep-unknown':      ('**Dependencies** G0-A, G0-B', '**Dependencies** G0-A, G9-A', 1,
+                      'GATE-DEP-UNKNOWN'),
+ # binds the roster to CONTENT, not to an address: this points the row at a different file whose
+ # hit lands where the roster expects a line.
+ 'census-wrong-file': ("`git grep -n 'process(pluginInputPtrs' apps/juce_host_process_main.cpp | wc -l` returns 1.",
+                      "`git grep -n 'audioInOffset = offset' apps/engine_ui_shm.cpp | wc -l` returns 1.", 1,
+                      'CENSUS-SITES'),
  'accept-prose':     ('GATES ARE ACCEPTANCE-DECIDABLE — G0-A, G1-A and G1-B',
                       'GATES ARE ACCEPTANCE-DECIDABLE — G0-A, G1-A and G3', 1, 'GATE-ACCEPT-PROSE'),
  'restate-census-i': ('sized by the two OUT census rows', 'sized at 7 cross-agent reads', 1,
@@ -332,7 +396,7 @@ if extra:   bad('CENSUS-ROSTER', f'rows not in the roster: {sorted(extra)}')
 for r in census_rows:
     k = (r['relation'], r['role'])
     if k not in CENSUS_ROSTER: continue
-    sites, claimed = CENSUS_ROSTER[k]
+    claimed, sites = CENSUS_ROSTER[k]
     if r['claimed'] != claimed:
         bad('CENSUS-ROSTER', f'{k} claims {r["claimed"]}, roster pins {claimed}')
     try:
@@ -342,9 +406,14 @@ for r in census_rows:
                             capture_output=True, text=True, timeout=TIMEOUT)
     except subprocess.TimeoutExpired:
         bad('CENSUS-SITES', f'{k} timed out'); continue
-    got = sorted(int(m.group(1)) for m in re.finditer(r'(?m)^[^:\n]*:(\d+):', pr.stdout))
+    got = sorted((m.group(1), int(m.group(2)),
+                  hashlib.sha1(m.group(3).strip().encode()).hexdigest()[:10])
+                 for m in re.finditer(r'(?m)^([^:\n]+):(\d+):(.*)$', pr.stdout))
     if got != sorted(sites):
-        bad('CENSUS-SITES', f'{k} returns lines {got}, roster pins {sorted(sites)}')
+        onlyg = [x for x in got if x not in sites][:3]
+        onlyr = [x for x in sites if x not in got][:3]
+        bad('CENSUS-SITES', f'{k}: {len(got)} members returned, roster pins {len(sites)}; '
+                            f'unexpected {onlyg}, missing {onlyr}')
 
 rids = [int(x) for x in re.findall(r'(?m)^\*\*R(\d+) — ', pkt)]
 if not rids:
@@ -729,14 +798,27 @@ for g in gate_hdr:
 # unacceptable. The dependency edges were emitted and never USED, which is the same defect as a
 # named hole emitted as an empty field: present in the data, absent from the conclusion.
 by_id = {g['id']: g for g in gates}
-def closure(gid, seen=None):
+# FAIL-OPEN, both ways, until codex-worker-1 tried them: a dependency on a gate that does not exist
+# was skipped silently (`d not in by_id: continue`), so `G9-A` in a Dependencies line propagated
+# nothing and read as a clean closure; and a cycle G2-A <-> G4 was absorbed by the visited set, so
+# two gates each waiting on the other both reported a satisfied closure. An unknown name and a cycle
+# are DEFECTS IN THE GRAPH and must be refused before any status is derived from it — a traversal
+# that treats "I cannot follow this edge" as "there is no edge" answers the wrong question.
+for g in gates:
+    for d in g['dependencies']:
+        if d not in by_id:
+            bad('GATE-DEP-UNKNOWN', f'{g["id"]} depends on {d}, which is not a gate in this packet')
+def closure(gid, seen=None, path=()):
     seen = seen if seen is not None else set()
     for d in by_id.get(gid, {}).get('dependencies', []):
-        if d in seen or d not in by_id: continue
-        seen.add(d); closure(d, seen)
+        if d not in by_id: continue                      # already reported as GATE-DEP-UNKNOWN
+        if d in path:
+            bad('GATE-DEP-CYCLE', f'dependency cycle {" -> ".join(path + (d,))}'); continue
+        if d in seen: continue
+        seen.add(d); closure(d, seen, path + (d,))
     return seen
 for g in gates:
-    deps = sorted(closure(g['id']))
+    deps = sorted(closure(g['id'], None, (g['id'],)))
     g['dependency_closure'] = deps
     g['acceptance_blocked_by'] = [d for d in deps if not by_id[d]['decidable_for_acceptance']]
     g['planning_blocked_by'] = [d for d in deps if not by_id[d]['decidable_for_planning']]
