@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'b93994e236d85fa81cdbe4b03eefeb4affdd2a29'
+PREV_TIP     = 'fc23820a8ad9a0839c9295d337507fbeaea40d31'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -446,11 +446,16 @@ pass_bullets = []
 for gid, gbody in zip(parts[0::2], parts[1::2]):
     mm = re.search(r'\*\*PASS conditions\.\*\*(.*?)\*\*Static checks', gbody, re.S)
     if not mm: continue
-    base = pkt.find(mm.group(1))
-    for i, b in enumerate(re.findall(r'(?m)^(\d+)\. (.{0,90})', mm.group(1)), 1):
-        pass_bullets.append({'gate': gid, 'n': int(b[0]),
-                             'withdrawn': 'WITHDRAWN' in b[1],
-                             'text': re.sub(r'\s+', ' ', b[1]).strip()})
+    block = mm.group(1)
+    base = pkt.find(block)
+    for bm in re.finditer(r'(?m)^(\d+)\. (.*?)(?=\n\d+\. |\Z)', block, re.S):
+        txt = re.sub(r'\s+', ' ', bm.group(2)).strip()
+        pass_bullets.append({'gate': gid, 'n': int(bm.group(1)),
+                             'line': line_of(base + bm.start()),
+                             'withdrawn': 'WITHDRAWN' in txt,
+                             'refuted_by': (re.search(r'\*REFUTED BY\* (.*)$', txt).group(1)
+                                            if re.search(r'\*REFUTED BY\* ', txt) else None),
+                             'text': txt})
 pop_headings = [{'name': m.group(0).strip('* '), 'line': line_of(m.start()),
                  'hand_classified': MARK in own_bullet(m.start())}
                 for m in re.finditer(r'\*[A-Z][^*\n]{4,70}\* — ', pkt)]
@@ -475,7 +480,7 @@ rulings = [{'id': m.group(1), 'applied': 'PROPAGATED at this SHA' in m.group(0)
             'line': line_of(m.start())}
            for m in re.finditer(r'\*\*(R[1-4]) — .*?(?=\n\n\*\*R[1-4] — |\*\*What these rulings do NOT)', pkt, re.S)]
 man = {
- 'schema': 'ae-p1.2-manifest/1',
+ 'schema': 'ae-p1.2-manifest/2',
  'gates': gates,
  'rulings': rulings,
  'product': {'sha': PRODUCT_SHA, 'tree': PRODUCT_TREE},
@@ -494,6 +499,7 @@ man = {
                  'command': (re.search(r'\(`([^`]+)`\)', pkt[a:b]).group(1)
                              if re.search(r'\(`([^`]+)`\)', pkt[a:b]) else None),
                  'line': line_of(a),
+                 'hand_ruled': bool(re.findall(r'minus \*{0,2}\d+', pkt[a:b])),
                  'minus': [int(x) for x in re.findall(r'minus \*{0,2}(\d+)', pkt[a:b])],
                  'results': [int(x) for x in re.findall(r'→ \*{0,2}(\d+)', pkt[a:b])]}
                 for a, b in spans if b > a],
