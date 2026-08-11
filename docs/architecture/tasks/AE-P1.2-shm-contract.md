@@ -483,17 +483,27 @@ returns 7.
     RequestAutomationLane  = 62  →  read_automation_slot
     RequestSamplerKit      = 75  →  read_sampler_kit_slot
     RequestSamplerEnvelope = 97  →  read_sampler_envelope_slot
-    RequestChainSnapshot   = 37  →  NO REGION READER — `handleRequestChainSnapshot`
-                                    (`engine_request_commands.cpp:16-42`) calls `emitChainSnapshot`,
-                                    which publishes into the DIFF RING; its answer is consumed by
-                                    `drain_ui_out`, not by any `read_*`.
+    RequestChainSnapshot   = 37  →  drain_ui_out  — answered by `UiChainDiffPayload` on the UI-OUT
+                                    ring, NO request identity, 0..N diffs. IN the population.
 
-**Six, and one EXCLUDED MEMBER — not an absence.** `RequestChainSnapshot` is a member of the
-request set that this rule excludes, with a reason, exactly as "there is no S3" is a requirement
-rather than a gap: `emitChainSnapshot` (`engine_chain_host.cpp:10`) binds `getRingUiOut()` and
-writes the UI-OUT RING, and `control.rs` has ZERO hits for `read_chain`/`chain_snapshot`, so no
-region reader exists to be in the population. A rule that admitted it would be counting requests
-rather than finding readers.
+**SEVEN. The population is the seven requests and their answers, and the seventh is the WORST
+CASE, not an exclusion.** I first wrote "reads the REGION one publishes" and excluded
+`RequestChainSnapshot` because its answer travels by ring. codex-worker-1 blocked that and is right:
+filtering by TRANSPORT drops exactly the member whose answer is least correlatable, and G1-B's
+invariant governs every answer to a UI request regardless of how it travels.
+Measured: `handleRequestChainSnapshot` emits `UiChainDiffPayload` into the UI-OUT ring, consumed by
+`drain_ui_out`. That payload's fields are `diffType, flags, trackId, chainVersion, deviceId,
+deviceKind, position, patcherNodeId, hostSlotIndex` — **no sender request identity of any kind** —
+and the handler emits ZERO OR MANY diffs (`payload.trackId == 0xFFFFFFFFu` fans out to every track,
+an unknown track yields none). An answer with no request identity and no fixed cardinality is the
+sharpest instance of this gate's subject, and my rule had it outside the population.
+
+**THAT IS THE SECOND TIME ONE OF MY PREDICATES EXCLUDED THE WORST MEMBER, BY THE SAME MECHANISM.**
+The `requestSeq` rule keyed on a correlation TOKEN and dropped `read_device_params`, which has none.
+The region rule keyed on a correlation TRANSPORT and dropped the chain snapshot, which has neither
+token nor region. **Any predicate keyed on the mechanism that PROVIDES correlation excludes exactly
+the members that lack correlation — and those are the defects.** Enumerating from the request was
+right; filtering the answers by how they arrive was the residual form of the same error.
 
 **THE SECOND SIGNAL IS OF A DIFFERENT KIND, which is the only sort that counts here.** The seven
 `Request*` members are mirrored in `ui/daw-bridge/src/layout.rs` with identical names and identical
@@ -1141,7 +1151,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `0383b77b76d3d042480183c1993efe301c03a6e0`, A.0 SCRIPT BLOB `f2cfb5062a1f97f62efb131ceb0b96b0697d7474`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `f87289d6de9b2c2b7fdb28c74fba4dfedb951fb1`, A.0 SCRIPT BLOB `0ccd731bbd834a992bf4679f348e65e0a8bea236`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1366,11 +1376,11 @@ carrying one cannot be decided by any implementation.
     21 candidates and is explicitly NOT a population, and the `Region*` intersection returns 2 and
     is published as WRONG with the FAIL clause it shipped with. A recipe that names its true output
     cannot fail to reproduce its list, because it no longer claims one.
-11. **G1-B** — **CLOSED at this SHA by AUTHORING under R1, on a request-side predicate.** The
-    request set is the `Request*` UiCommandType enum values (7); a reader is request/answer iff it
-    reads the REGION one publishes; `RequestChainSnapshot` answers into the ring and has no region
-    reader, so the population is 6 — the evidence-backed six, now with a rule that produces them.
-    Previously: The `requestSeq` predicate is
+11. **G1-B** — **CLOSED at this SHA by AUTHORING under R1: SEVEN.** The request set is the
+    `Request*` UiCommandType enum values (7) and the population is their ANSWERS, not filtered by
+    transport: six region readers plus `drain_ui_out` for `RequestChainSnapshot`, whose answer
+    carries no request identity and has 0..N cardinality — the sharpest instance of the gate's own
+    subject, which a region-based rule had excluded. Previously: The `requestSeq` predicate is
     CIRCULAR: it cannot see a request/answer reader that lacks a correlation token, which is the
     defect the gate exists to find. `read_device_params` is request-driven with no `requestSeq`;
     `read_clip_window` carries a `requestId` under the global seqlock. Previously: A reader is
