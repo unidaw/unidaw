@@ -553,6 +553,13 @@ sweep matching, set-derived `active_open`, stale-docstring removal, and removal
 of the permanent-gating phrase. Exact review is pending; mixed item37
 packet/product representation and carried gate decisions remain gated.
 
+Exact audit of `0c65b54` is **BLOCKED on propagation**. The source correction
+passes, but canonical R15/G3/register/item36/manifest surfaces still assert the
+retracted static/no-M1 conclusion. M1 itself lacks an ordered identity/census/
+hostReady/send-failure/restart evidence model. This creates packet work for
+item36 as well as item37; both remain typed PRODUCT-only while the opening still
+contradicts mixed packet/product work.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
