@@ -258,9 +258,10 @@ action. It supersedes stale ticket rows above where they conflict.
   `699abfe8f72e597cfd1b6fb3da93ee7f35aa7fef`).
 - Governance worktree: `/Users/jak/src/daw-backend`.
 - Current packet owner: `claude-worker-2`; current latest packet reported:
-  `d709770cb8774660f4d19c9317c27006602e2242`.
-- Latest packet status: mechanical PASS, 89 controls, but overall **BLOCKED**
-  by independent review and unresolved design decisions.
+  `66bf20d74d23212a9b9413d2226e1e52c1efa3a4`.
+- Latest packet status: mechanical PASS, 89 controls, AST-based EXTRACTOR-TEXT
+  ratchet floor 35 (DATA 7, PROSE 35, plus 3 unhidden-view readers); exact
+  independent review is pending. Prior packet `d709770` remains BLOCKED.
 
 ### Required review protocol
 
@@ -333,8 +334,8 @@ action. It supersedes stale ticket rows above where they conflict.
 
 ### Immediate next actions
 
-1. Obtain the exact independent review of the latest packet successor; do not
-   treat `d709770` as settled while the comma shield and gate decisions remain.
+1. Obtain the exact independent review of `66bf20d`; do not treat it as settled
+   while the comma shield and gate decisions remain.
 2. Consolidate the six owner decisions into one decision record: G2-B oracle,
    G2-A universe/item 28, G3 M1/watchdog/static, G0-A A13/A15, G0-B items 1–4,
    and writer/extractor/identity acceptance criteria.
@@ -357,6 +358,8 @@ action. It supersedes stale ticket rows above where they conflict.
 ### Latest review trail (newest first)
 
 - `d709770`: owner PASS/89 controls; EXTRACTOR-TEXT ratchet, 38 raw sites;
+  independent review pending.
+- `66bf20d`: owner PASS/89 controls; AST-based EXTRACTOR-TEXT ratchet floor 35;
   independent review pending.
 - `f7495b6`: BLOCKED; hidden/code split exposed raw-site and dependency
   extraction gaps.
