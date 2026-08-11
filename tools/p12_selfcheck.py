@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '90462e1ccac9a82fa8d50c2ddf977bc81f3eb0ba'
+PREV_TIP     = 'b843cc70e4d567daf5ade270f95ff6b0166c5fe6'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -2072,10 +2072,16 @@ def _sweep_patterns(name, tag):
     The tag line is `[TAG] ` with the space, not a bare prefix: `  [TAG]garbage` matched before,
     which is the same prefix-acceptance defect one layer down from the one it was fixing."""
     nm, tg = re.escape(name), re.escape(tag)
+    # ASCII digit classes, not `\d`: Python's `\d` matches every Unicode decimal, so `fired (١)`
+    # was accepted from an emitter that prints `str(len(...))`. And the detail is `.+`, not `.*` —
+    # `other[0]` is an element of a list already tested non-empty, so an empty detail is impossible
+    # too. Same for the tag line, which required only `[TAG] ` and so accepted a bare separator.
+    # Every one of these is the SAME defect as the prefix arm before it: a grammar wider than the
+    # emitter it claims to match exactly. codex-worker-2 found this set.
     return (re.compile(rf'^CONTROL {nm} OK'
-                       rf'(?: — \[{tg}\] fired \([1-9]\d*\)|'
-                       rf' \(\+[1-9]\d* consequential: .*\))$'),
-            re.compile(rf'^ {{2}}\[{tg}\] '))
+                       rf'(?: — \[{tg}\] fired \([1-9][0-9]*\)|'
+                       rf' \(\+[1-9][0-9]* consequential: .+\))$'),
+            re.compile(rf'^ {{2}}\[{tg}\] \S'))
 
 if '--prove-sweep-predicate' in sys.argv:
     # A CRAFTED-LINE PROOF, committed rather than run at a prompt. codex-worker-2's standing point is
@@ -2084,7 +2090,13 @@ if '--prove-sweep-predicate' in sys.argv:
     okline, tagline = _sweep_patterns('open-count', 'OPEN-COUNT')
     CASES = [
         ('CONTROL open-count OK — [OPEN-COUNT] fired (1)',              True,  'form 1'),
+        # POSITIVE COVERAGE WAS ONE FORM, so narrowing the shared arm to exactly (1) left the proof
+        # green while five real controls emit fired (2) — the proof verified its cases, not the
+        # emitter's language. codex-worker-2 demonstrated it by making that edit.
+        ('CONTROL open-count OK — [OPEN-COUNT] fired (2)',              True,  'form 1, count > 1'),
+        ('CONTROL open-count OK — [OPEN-COUNT] fired (12)',             True,  'form 1, two digits'),
         ('CONTROL open-count OK (+2 consequential: [X] y)',             True,  'form 2'),
+        ('CONTROL open-count OK (+1 consequential: z)',                 True,  'form 2, single'),
         ('CONTROL open-count OK — [WRONG-TAG] fired (1)',               False, 'wrong tag'),
         ('CONTROL open-count OK (+ suffix I made up',                   False, 'prefix-only spoof'),
         ('CONTROL open-count OK (+1 consequential: x) trailing junk',   False, 'unanchored tail'),
@@ -2092,9 +2104,13 @@ if '--prove-sweep-predicate' in sys.argv:
         ('CONTROL open-count OK — [OPEN-COUNT] fired (0)',              False, 'count the emitter cannot print'),
         ('CONTROL open-count OK — [OPEN-COUNT] fired (01)',             False, 'non-canonical integer'),
         ('CONTROL open-count OK (+0 consequential: x)',                 False, 'zero consequential'),
+        ('CONTROL open-count OK — [OPEN-COUNT] fired (١)',              False, 'non-ASCII digit'),
+        ('CONTROL open-count OK (+٢ consequential: x)',                 False, 'non-ASCII count'),
+        ('CONTROL open-count OK (+1 consequential: )',                  False, 'empty detail'),
     ]
     TAGS = [('  [OPEN-COUNT] header 37, body 36', True,  'emitter-shaped tag line'),
             ('  [OPEN-COUNT]garbage',             False, 'tag prefix with no separator'),
+            ('  [OPEN-COUNT] ',                   False, 'separator with no message'),
             ('  [OPEN-COUNTX] header',            False, 'longer tag sharing the prefix')]
     wrong = [w for ln, want, w in CASES if bool(okline.fullmatch(ln)) != want]
     wrong += [w for ln, want, w in TAGS if bool(tagline.match(ln)) != want]

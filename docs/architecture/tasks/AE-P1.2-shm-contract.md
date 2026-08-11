@@ -1399,7 +1399,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `7f1f88e39f430fa8939d0a81b7054dc2863e0116`, A.0 SCRIPT BLOB `e7f7728a79719f4e6905380257dbe3624887c0ad`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `b6111362f30cc4fbef8280b511e17596f2b0be98`, A.0 SCRIPT BLOB `e3655c8a5134af39c1ddf5479087b90bd9d0e07a`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1497,8 +1497,8 @@ that correctly, but the refusal ECHOES the name it rejected, the rejected name w
 and the loop's predicate searched the run's output for substrings of that same list. It printed
 `ALL 1 CONTROLS FIRED`. **A harness whose failure output satisfies its own success predicate**, with
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
-dead anchor turns all eighty-nine red, and a single control given a tag nothing emits turns exactly
-that one red while the other eighty-eight stay green. Individual controls still run with
+dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
+that one red while the rest stay green. Individual controls still run with
 `--negative <name>`, list with `--list`: `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
@@ -1878,8 +1878,7 @@ the frozen host still owes dispatched blocks and whether the producer is gated o
 refutation clause is right about the window — after `kill -CONT` at `:92` the host is running
 normally — and it stays.
 
-**M1 CANNOT BE BUILT FROM THE INSTRUMENTS I FIRST NAMED, and the register's demand for it therefore
-survives this ruling.** I defined M1 as recording (a) `kill -0 $FROZEN` and (b) the armed stall log's
+**M1 CANNOT BE BUILT FROM THE INSTRUMENTS I FIRST NAMED.** I defined M1 as recording (a) `kill -0 $FROZEN` and (b) the armed stall log's
 per-host `hosts=[…]` vector. Neither carries the needed fact. `kill -0` proves a process EXISTS; a
 SIGSTOPped process and a running one answer it identically, so it cannot establish the
 alive-but-stopped state I claimed for it. And the per-host vector is positional and thin: `:262-266`
@@ -2429,8 +2428,11 @@ carrying one cannot be decided by any implementation.
     the mechanism it believes in: "the host is dropped" (`:101-104`). `completedMinimum` (`apps/engine_rt_helpers.cpp:492-511`) counts exactly
     such a host: its three exclusions are `!active`, `completedBlockId == 0` and owes-nothing, and a
     frozen producing host meets none (and the `!active` exclusion is unreachable in production —
-    `:249-251` hardcodes it). The gate at `apps/engine_producer_thread.cpp:282-283` is then
-    ABSORBING, because a gated producer dispatches nothing and neither id can move again. No liveness
+    `:249-251` hardcodes it). The gate at `apps/engine_producer_thread.cpp:282-283` then closes and
+    that host cannot advance on its own. R15 narrows the stronger claim this item used to
+    carry: the state is NOT statically absorbing, because `:232-233` and `:236-237` skip a host
+    on a failed try_lock or an absent mailbox, so the counted population varies between
+    iterations. No liveness
     drop exists to appeal to. **R15 settles the mechanism claim against the check.** What makes this
     PRODUCT work is that the check has at least two identified ways to report zero stalls while the
     producer is gated forever, both found by codex-worker-1 and both decidable at the pin: its
