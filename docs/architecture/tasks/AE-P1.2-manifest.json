@@ -2147,10 +2147,6 @@
    "line": 1702,
    "named_at": [
     {
-     "context": "ng defect from the other side — `R[1-9]` could not match `**R10 — `, so R9's block ran to the end and s",
-     "line": 1832
-    },
-    {
      "context": "atch `**R10 — `, so R9's block ran to the end and swallowed R10 and R11 into R9's text. **A hardcoded r",
      "line": 1833
     },

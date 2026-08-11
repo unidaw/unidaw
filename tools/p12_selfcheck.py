@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'ba7e007c2899858e008fbf30cd1b12f50ad1ae87'
+PREV_TIP     = '1032b7357638ef6b89c4e77f1e67d9b1777ca5aa'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -205,6 +205,22 @@ if not os.environ.get('AE_P12_DRAFT'):
     if rc or committed != oid:
         print(f'[A0-BLOB-MISMATCH] working blob {oid[:12]} != HEAD blob {committed[:12] or "?"}')
         sys.exit(2)
+
+# A VISIBLE VIEW. named_at and RULING-SET scanned raw Markdown, so a ruling token inside an HTML
+# comment or a code span produced canonical evidence records — and a real mention could be DELETED
+# and replaced by a comment while the manifest still showed it. Hidden text is not text a reader
+# sees, and evidence a reader cannot see is not evidence. Comments and code spans are blanked with
+# spaces rather than removed, so every offset and line number computed from this view still matches
+# the file — normalising by deletion would have shifted them and broken every citation.
+def _visible(t):
+    out = list(t)
+    for m in re.finditer(r'<!--.*?-->', t, re.S):
+        for i in range(m.start(), m.end()):
+            if out[i] != '\n': out[i] = ' '
+    for m in re.finditer(r'`[^`\n]*`', t):
+        for i in range(m.start(), m.end()):
+            out[i] = ' '
+    return ''.join(out)
 
 NEG = None
 for i, a in enumerate(sys.argv):
@@ -418,6 +434,8 @@ if NEG:
     if pkt == before_pkt:
         print(f'[A0-CONTROL-DID-NOT-LAND] {NEG}'); sys.exit(2)
 
+vis = _visible(pkt)
+
 # ---- 1. open items: header == body, contiguous, no orphan markers ---------------------------
 body = re.search(r'# Open items.*?(?=\n# |\Z)', pkt, re.S).group(0)
 hdr  = re.search(r'# Open items — (\d+) atomic, (\d+) CLOSED at this SHA, (\d+) open', pkt)
@@ -575,7 +593,7 @@ for r in census_rows:
         if hashlib.sha1(txt.encode()).hexdigest()[:10] != fp:
             bad('CENSUS-SITES', f'{k}: {path}:{line} has drifted: {txt[:44]!r}')
 
-rids = [int(x) for x in re.findall(r'(?m)^\*\*R(\d+) — ', pkt)]
+rids = [int(x) for x in re.findall(r'(?m)^\*\*R(\d+) — ', vis)]
 if not rids:
     bad('RULING-SET', 'no "**Rn — " ruling headings parsed at all')
 else:
@@ -1240,7 +1258,7 @@ for m in re.finditer(r'(?m)^\*\*(R\d+) — .*?(?=\n\n\*\*R\d+ — |\n# |\*\*What
                      # that show a ruling being applied. Removing the [:12] cap and keeping this
                      # filter left "every place the packet names it" false for a second reason.
                      # The heading is now excluded by LINE, which is what it actually is.
-                     for mm in re.finditer(r'\b%s\b' % m.group(1), pkt)
+                     for mm in re.finditer(r'\b%s\b' % m.group(1), vis)
                      if line_of(mm.start()) != line_of(m.start())],
         # from the HEADING only. Deriving from the whole block made R9 claim items [26, 31]
         # because its body MENTIONS item 31 — a mention became an ownership claim, and a
