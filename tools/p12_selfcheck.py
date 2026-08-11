@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '36c6df0941ca44fc64b3b7bcb1765a7baf9b9a67'
+PREV_TIP     = '9df808fed5e2b34d28defd59bb71aad1a16e44de'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -93,9 +93,9 @@ for i, a in enumerate(sys.argv):
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
  'open-count':       ('# Open items — 29 atomic', '# Open items — 30 atomic', 1, 'OPEN-COUNT'),
- 'closed-count':     ('9 CLOSED at this SHA, 20 open', '8 CLOSED at this SHA, 21 open', 1,
+ 'closed-count':     ('6 CLOSED at this SHA, 23 open', '5 CLOSED at this SHA, 24 open', 1,
                       'OPEN-CLOSED-COUNT'),
- 'open-arithmetic':  ('9 CLOSED at this SHA, 20 open', '9 CLOSED at this SHA, 17 open', 1,
+ 'open-arithmetic':  ('6 CLOSED at this SHA, 23 open', '6 CLOSED at this SHA, 17 open', 1,
                       'OPEN-ARITHMETIC'),
  # anchored on the tree hash, not on a count: the previous anchor was '11 RAW +', which the
  # document outgrew, leaving the control unable to land while the gate still reported PASS
@@ -106,7 +106,7 @@ CONTROLS = {
                       'COMMAND-ROOT-WIDE'),
  'unmarked-popn':    ('exact. [HAND-CLASSIFIED — open item 25 (all)]', 'exact.', 1,
                       'POPULATION-UNCOMMANDED'),
- 'handmade-count':   ('**6 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
+ 'handmade-count':   ('**8 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
                       'HANDMADE-COUNT'),
  # rewrite a labelled block into the OTHER spelling and require the labels to survive: without
  # this, the next gate that writes S.1 or "Static 1" disappears exactly as G0-B did.
@@ -114,8 +114,8 @@ CONTROLS = {
                       'MANIFEST-STALE'),
  'constraint-lost':  ('1. Production atomic **size/alignment', '1x. Production atomic **size/alignment', 1,
                       'CONSTRAINTS-COUNT'),
- 'opening-gates':    ('**EVERY GATE IS PLANNABLE AT THIS SHA.**',
-                      '**FOUR OF THE EIGHT GATES CANNOT BE DECIDED.**', 1, 'OPENING-GATE-COUNT'),
+ 'opening-gates':    ('**THREE OF THE EIGHT GATES CANNOT BE DECIDED',
+                      '**FOUR OF THE EIGHT GATES CANNOT BE DECIDED', 1, 'OPENING-GATE-COUNT'),
  'manifest-stale':   ('18. **G2-B** — **BLOCKING', '18. **G2-B** — **blocking', 1,
                       'MANIFEST-STALE'),
  'unresolved-tail':  ('master-track stores (`engine_master_render.cpp:121` and `:132`) → **13 IN\nSCOPE**.',
@@ -387,18 +387,20 @@ def own_bullet(q):
     nxt = [pkt.find('\n- ', q + 1), pkt.find('\n\n', q + 1)]
     nxt = [x for x in nxt if x != -1]
     return pkt[q:min(nxt)] if nxt else pkt[q:q + 600]
-seen_marks = 0
+claimed = set()
 for i, q in enumerate(starts):
     seg = own_bullet(q)
     k = seg.count(MARK)
-    seen_marks += k
+    off = 0
+    for _ in range(k):
+        off = seg.index(MARK, off); claimed.add(q + off); off += 1
     if k > 1:
         bad('MARKER-NOT-BIJECTIVE', f'{k} markers on one heading: {re.sub(chr(92)+"s+"," ",seg)[:56]}')
     if k >= 1: handmade += 1; continue
     if re.search(r'`(git grep|grep|awk|sed)\s', seg): continue
     bad('POPULATION-UNCOMMANDED', re.sub(r'\s+', ' ', seg)[:70])
-if seen_marks != pkt.count(MARK):
-    bad('MARKER-ORPHANED', f'{pkt.count(MARK)} markers in the document, {seen_marks} inside a '
+if len(claimed) != pkt.count(MARK):
+    bad('MARKER-ORPHANED', f'{pkt.count(MARK)} markers in the document, {len(claimed)} attached to a '
                            f'population heading — one is attached to no population')
 claimed = re.search(r'(\d+) populations are HAND-CLASSIFIED', pkt)
 if not claimed:
@@ -493,7 +495,7 @@ for g in gate_hdr:
     # TWO decidabilities, because the packet makes the distinction deliberately and one boolean
     # collapsed it toward less work: G3 is plannable (R3 authored N) and not acceptance-decidable.
     withdrawn_pop = bool(re.search(r'(SELECTION WITHDRAWN|SCOPE FALSIFIED|no derivable population|'
-                                   r'declares NO population)', seg))
+                                   r'declares NO population|AUTHORING RETRACTED)', seg))
     gates.append({'id': g['gate'], 'line': g['line'], 'end_line': g['end_line'],
                   'dependencies': [d for d in deps if d != g['gate']],
                   'dependencies_text': dep_text,
