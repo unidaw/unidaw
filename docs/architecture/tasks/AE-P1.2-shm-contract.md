@@ -28,7 +28,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    the manifest keeps the two apart deliberately. The zero case is a different sentence rather than
    a missing one, so the check cannot pass by the claim disappearing. G1-B's readers were withdrawn and are AUTHORED again under R1
    with rules, members and drift detectors; G2-A's scope and G4's out-plane are not. **TWO GATES ARE ACCEPTANCE-DECIDABLE — G0-A and G1-A —
-   and seven items block (18, 19, 24, 26, 27, 29 and 33)** and three of them need product
+   and eight items block (18, 19, 24, 26, 27, 29, 33 and 34)** and three of them need product
    work rather than packet work. That list is derived from the items themselves and every
    restatement of it anywhere in this document is compared against the derivation
    (`BLOCKER-SET-RESTATED`) — this paragraph carried (18, 19, 23, 24, 29) for several SHAs, three
@@ -58,7 +58,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    packet**: a sentence of the form "each population carries its extraction command" is false at
    this SHA by construction, and this paragraph previously ended with one while opening with the
    disqualification, because I patched its head across three rounds and left its tail alone.
-2. **The open list is 33 atomic items, not 15 categories.** The four that compression swallowed are
+2. **The open list is 34 atomic items, not 15 categories.** The four that compression swallowed are
    restored: G0-B's unowned mutation floor, G2-A's BATCH blindness, G2-B's probe-order false-green,
    and G3's debug-env requirement plus its self-contradicting static check.
 3. **G0-A's mailbox census was wrong twice and is corrected with its method.** See G0-A.
@@ -1374,7 +1374,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `3ac35ff88fa0ec3105b2defe8e6b1a5f94f74323`, A.0 SCRIPT BLOB `025febcb752e4adb1879bde2f0687a6ab059d9a3`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `deeeb71b1477cea5d92fa415a04c87332337135f`, A.0 SCRIPT BLOB `a3dc040ab2448a8300dd6267c2b74bf388d171f4`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1382,7 +1382,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 33 items, 25 open · 14 RAW (13 hand-ruled) + 31 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 34 items, 26 open · 14 RAW (13 hand-ruled) + 31 commanded claims, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1762,12 +1762,39 @@ worse, not uniquely wrong.
 product defect; a population defined to exclude its own failing members would be a population chosen
 to pass, and one narrowed to a single failing member would have understated the work by two thirds.
 
+**R13 — item 34 (G2-B): THE DISCARD BOUNDARY EXISTS AND IS KEYED ONE EVENT TOO EARLY.**
+codex-worker-1 asked for an explicit non-consumption boundary around the priming ProcessBlock. One
+exists — `mirrorOnly` in `apps/engine_produce_block.cpp:333-341` — and measuring it at the pin shows
+the boundary is real and placed wrong:
+
+    mirrorOnly = mirrorPending && !mirrorPrimed          produce_block.cpp:335-336, :508-509
+    mirrorPrimed = true          immediately after writeMirrorParams, :512-513
+    mirrorPending = false        only when ack >= gateTime, producer_thread.cpp:214-215
+
+**`mirrorPrimed` means the engine has WRITTEN the params; `mirrorPending` clears when the host has
+APPLIED them.** Between those two events `mirrorOnly` is false and `mirrorPending` is still true, so
+the producer leaves mirror-only mode and its blocks are consumed as ordinary audio while the host
+may not yet have applied every replayed parameter. The gap is the whole round trip: write, dispatch,
+process, ack.
+
+**RULED: the boundary must key on the ACKNOWLEDGEMENT, not on the write** — `mirrorOnly` should be
+`mirrorPending` alone. Priming still happens inside the produce path, so the flag being true does not
+prevent the params being written; it only prevents the blocks between write and ack being consumed.
+That is a one-condition PRODUCT change and it is item 34 (G2-B), not a packet edit.
+
+**And R2 is not wrong, it is silent.** R2 ruled two-level readiness — mapped-and-bypassed, then
+mirror-complete — and "mirror-complete" is exactly `ack >= gateTime`. The defect is that a SECOND
+flag, introduced for the priming path, gates consumption on a weaker event than the one R2 names. **A
+readiness rule and a consumption gate that disagree are the same failure as a population and a test
+that disagree**, which is what items 26 and 33 are; this is the third instance and the first found in
+the product rather than in the packet.
+
 **What these rulings do NOT do.** None of them closes an item that names PRODUCT work — R1 through
-R12 make such items implementable, and each stays open until the work exists and is verified by
+R13 make such items implementable, and each stays open until the work exists and is verified by
 someone other than me. **A ruling CAN close an item whose whole content was a packet decision**, and
 item 11 is the case: it asked for an authored population, R1 authored one, and there was nothing
 left in it. That distinction was missing and the rule read as universal, which contradicted item
-11's own CLOSED marker three SHAs running. That range — "R1 through R12" above — is checked against the rulings actually parsed
+11's own CLOSED marker three SHAs running. That range — "R1 through R13" above — is checked against the rulings actually parsed
 (`RULING-SET`), because it read "R1 through R4" for as long as there were eleven: the sentence was
 written when four was the whole set and no later ruling was an edit to it. The manifest's parser
 had the matching defect from the other side — `R[1-9]` could not match `**R10 — `, so R9's block ran
@@ -1775,9 +1802,9 @@ to the end and swallowed R10 and R11 into R9's text. **A hardcoded range and a s
 the same failure in two notations, and this packet has now shipped both.** A ruling recorded as a closure would be the same error as a
 census recorded as a proof, which this packet has already made once at item 7.
 
-# Open items — 33 atomic, 8 CLOSED at this SHA, 25 open
+# Open items — 34 atomic, 8 CLOSED at this SHA, 26 open
 
-One per line, numbered in document order, so the count is checkable. SEVEN are BLOCKING — 18, 19, 24, 26, 27, 29 and 33. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
+One per line, numbered in document order, so the count is checkable. EIGHT are BLOCKING — 18, 19, 24, 26, 27, 29, 33 and 34. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
 
 1. **G0-B** — The generated header breaks the documented `-DDAW_BUILD_PATCHER_RUST=OFF` build for six unconditional targets, with no stated path, include directory or target-ordering edge.
@@ -2052,6 +2079,15 @@ carrying one cannot be decided by any implementation.
     the population work is what got done because it is the part a packet can do. Product work; the
     detectors belong with the LayoutSpec assertions in constraint 1, and the ratchet is a sibling of
     the one item 31 (all) now executes.
+
+34. **G2-B** — **BLOCKING (R13): the mirror discard boundary keys on PRIMED, and the invariant needs
+    ACKED.** `mirrorOnly` (`apps/engine_produce_block.cpp:335-336`) is
+    `mirrorPending && !mirrorPrimed`; `mirrorPrimed` is set the instant the params are WRITTEN
+    (`:512-513`) while `mirrorPending` clears only when the host acknowledges
+    (`apps/engine_producer_thread.cpp:214-215`). Every block in between is consumed as ordinary
+    audio while the host may not have applied the replayed parameters. The fix is one condition —
+    gate on `mirrorPending` alone — and it is PRODUCT work. Found by measuring a boundary
+    codex-worker-1 asked whether existed; it existed, which is why nobody had looked at where it was.
 
 # Provenance of this packet's own numbers
 
