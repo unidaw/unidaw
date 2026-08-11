@@ -739,6 +739,13 @@ malformed markers can evade, while escaped link openers/backticks evade and
 valid nested links/four-backtick code falsely trigger. G4/item18/G0/G3/M1 and
 item37 oracle remain blocked.
 
+Exact review of `a2de738` is **BLOCKED**. G4’s current ten-item union is correct
+but remains hand-kept: mutating TEN to NINE and its prose passes after
+regeneration. The paragraph carries stale labels for items18/27/26 and the
+population. The visible-view regex still overblanks `](` without an opener,
+causing both malformed-marker evasion and valid nested-link/four-backtick false
+positives. G0-A/B and G3 M1/item37 oracle/N/Watchdog remain blocked.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
