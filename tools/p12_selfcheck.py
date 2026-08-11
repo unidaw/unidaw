@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '3ac0544476b7e8ab8ba047daa941cc2fbb14d9ba'
+PREV_TIP     = '152a539c29874d2296b968ef9228aa545a1473a5'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -468,6 +468,10 @@ CONTROLS = {
  'packet-marker-move': ('1. **G0-B** — The generated header breaks',
                       '1. **G0-B** — ⟦PACKET⟧ The generated header breaks', 1,
                       'PACKET-SET-RESTATED'),
+ 'marker-qualified': ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
+                      '37. **G3** — ⟦PRODUCT⟧ ⟦PACKET: extra⟧ ', 1, 'KIND-MARKER-UNKNOWN'),
+ 'marker-empty':     ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
+                      '37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ⟦⟧ ', 1, 'KIND-MARKER-UNKNOWN'),
  'edge-malformed':   ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
                       '37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ⟦BLOCKED-ON: abc⟧ ', 1,
                       'KIND-MARKER-UNKNOWN'),
@@ -932,14 +936,30 @@ _bodies = {int(m.group(1)): m.group(0) for m in
 #
 # Parsing the LEADING RUN is what makes position meaningful — a marker is a classification of the
 # item, not a word that appears somewhere in its first paragraph.
-_MARKER_RUN = re.compile(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ((?:⟦[^⟧\n]+⟧ ?)*)')
+# `[^⟧\n]*`, not `+`: an EMPTY ⟦⟧ fell outside the old grammar, so the run parser stopped before
+# it and the token was skipped in silence. A grammar must be able to MATCH what it intends to
+# reject — anything it cannot represent it reports as absent, which is this packet's oldest shape.
+_MARKER_RUN = re.compile(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ((?:⟦[^⟧\n]*⟧ ?)*)')
 _KIND_TOKENS = {'PRODUCT', 'PACKET'}
 _KINDS, _MARKER_ERR = {}, []
 for _m in _MARKER_RUN.finditer(_unhidden(body)):
-    _n, _seq = int(_m.group(1)), re.findall(r'⟦([^⟧]+)⟧', _m.group(2))
+    # `*` here too. Widening the RUN grammar to admit ⟦⟧ and leaving this extractor at `+` meant the
+    # empty marker was matched by the outer pattern and then dropped by the inner one — the same
+    # normalisation, one layer down, inside the fix for it.
+    _n, _seq = int(_m.group(1)), re.findall(r'⟦([^⟧]*)⟧', _m.group(2))
     _kinds = []
     for _tok in _seq:
+        # ONLY BLOCKED-ON CARRIES A PAYLOAD. Splitting at ':' and validating the prefix accepted
+        # ⟦PACKET: extra⟧, which emitted a clean PACKET while the unsupported qualifier stayed in
+        # the title — the parser discarding the part it had no field for.
         _name = _tok.split(':')[0].strip()
+        if not _name:
+            _MARKER_ERR.append(f'item {_n} carries an empty ⟦⟧ marker')
+            continue
+        if ':' in _tok and _name != 'BLOCKED-ON':
+            _MARKER_ERR.append(f'item {_n} qualifies ⟦{_name}⟧ with "{_tok.split(":",1)[1].strip()}"; '
+                               f'only BLOCKED-ON takes a payload')
+            continue
         if _name == 'BLOCKED-ON':
             # the PAYLOAD is validated here rather than left to the digit-only edge parser, which
             # ignored what it could not read: ⟦BLOCKED-ON: abc⟧ emitted blocked_on [] while the
@@ -1506,7 +1526,9 @@ WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twen
         89: 'Eighty-nine', 90: 'Ninety', 91: 'Ninety-one', 92: 'Ninety-two',
         93: 'Ninety-three', 94: 'Ninety-four', 95: 'Ninety-five', 96: 'Ninety-six',
         33: 'Thirty-three', 34: 'Thirty-four', 35: 'Thirty-five', 36: 'Thirty-six',
-        37: 'Thirty-seven', 38: 'Thirty-eight', 39: 'Thirty-nine', 40: 'Forty'}
+        37: 'Thirty-seven', 38: 'Thirty-eight', 39: 'Thirty-nine', 40: 'Forty',
+        95: 'Ninety-five', 96: 'Ninety-six', 97: 'Ninety-seven',
+        98: 'Ninety-eight', 99: 'Ninety-nine', 100: 'One hundred'}
 if not listed:
     bad('CONTROL-PROSE-MISSING', 'no "**Controls.** <N>, each naming" sentence')
 elif listed.group(1) != WORD.get(len(CONTROLS), '?'):
