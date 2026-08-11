@@ -18,7 +18,11 @@ never written is the same error's fingerprint.
 
 Six blockers from the exact review are reconciled here:
 
-1. **The per-gate record contract is now met for all eight gates.** Each carries population with its
+1. **The per-gate record contract is met in FORM for all eight gates, and three gates have no
+   POPULATION to put in it.** G1-B declares none (item 11), G2-A's scope is falsified and unreplaced
+   (item 27) and G4's out-plane selection is withdrawn (item 26). A record whose population slot
+   reads "withdrawn" satisfies the contract and decides nothing, so the completeness claim is about
+   the form and is stated that way rather than left to imply the gates are ready. Each carries population with its
    extraction command and floor, failure model, deterministic test, PASS conditions each naming their
    refutation, static checks, and review register. Nothing points at a table that does not exist.
 2. **The open list is 27 atomic items, not 15 categories.** The four that compression swallowed are
@@ -54,7 +58,11 @@ MEDIUM-HIGH · F8 re-scoped.
 
 ## Gate sequence
 
-    G0-A ∥ G0-B  →  G1-A ∥ G1-B  →  G2-A  →  G2-B  →  G3  →  G4
+    G0-A ∥ G0-B  →  G1-A  →  G1-B  →  G2-A  →  G2-B  →  G3  →  G4
+
+The diagram previously showed `G1-A ∥ G1-B`, which contradicts G1-B's own **Dependencies** line: it
+depends on G1-A. A picture that disagrees with the text it illustrates is worse than no picture,
+because it is the part a reader trusts without checking.
 
 **No downstream end-to-end success waives a failed primitive gate.** A green G4 over a red G1-A means
 the G4 fixture did not exercise the primitive. Every test exposes deterministic barriers; a timing or
@@ -362,7 +370,8 @@ reproducible, and four populations in the predecessor were exactly that.
   partition is visible: 12 + 9 = 21, and the 9 split 4 data / 5 flag. Inside a command:
   `grep -rnF 'entries[' apps/ | grep -e pluginCache -e cache.entries` returns 12.
 - ***RING* index sites — the population PASS 7 and S4 actually range over — AUTHORED under R1, and
-  CROSS-LANGUAGE.** This gate governs a ring that both sides of the SHM boundary index, and every
+  CROSS-LANGUAGE.** [HAND-CLASSIFIED — open item 25 (all)] An authored population IS a hand-classified one; creating it and leaving
+  the exception count at five would have hidden the sixth inside the fix for the fifth. This gate governs a ring that both sides of the SHM boundary index, and every
   earlier version of this population searched `apps/` only, so the Rust half was not omitted by a
   rule — it was never in view. **C++ production (8):** `event_ring.cpp:95`, `:96`, `:109`, `:116`,
   `:126`, `:138`, `:149`, `:163`. **Rust production (3):** `ui/daw-bridge/src/control.rs:454`
@@ -642,8 +651,10 @@ foreign record; Layer 3 asserts process exit code and stdout, not internal verdi
 
 **Static checks.** S1 the mark is sampled before the send — no `handle` method call inside any
 `await_clip_outcome(` argument. S2 the echo is a copy, not a computation, at each of the three emit
-sites. S3 the counter-only decisions are extracted and each
-replaced — the figure THIRTEEN is WITHDRAWN. It was stated with no predicate, no command and no
+sites. S3 the counter-only decisions are extracted and each replaced — **and the EXTRACTION itself has no
+predicate, no command and no member list at this SHA, so this check cannot be run**; it is carried
+under open item 27 (G2-A) with the withdrawn thirteen, because a static check over an unspecified
+extraction is a sentence, not a check — the figure THIRTEEN is WITHDRAWN. It was stated with no predicate, no command and no
 member list, so it could not be reproduced or refuted; the independent evidence run records it as
 `UNREPRODUCIBLE_NO_PREDICATE` and that is correct. The static check stands over whatever set the
 extraction yields, and the count returns when a predicate does, under open item 27 (G2-A). S4 the BATCH's two
@@ -748,7 +759,8 @@ SHALL confirm by reading `apps/daw_engine_main.cpp:1106-1125` that the recovery 
 `SetBypass` per slot. The reviewer SHALL confirm no artifact describing the fix says "the authored
 bypass value" without qualifying it as the copy at `:1113`. The reviewer SHALL confirm, when the fix
 lands, that mechanism substitution has not voided the gate. The reviewer SHALL classify any NEW
-`hostReady` publish site, which S1 can detect but not judge. **The reviewer SHALL rule on the mirror-ack circularity**: the ack arrives only during a
+`hostReady` publish site, which S1 can detect but not judge. **The mirror-ack circularity is RULED (R2: two-level readiness) and the reviewer SHALL confirm the
+propagation rather than choose**, which this paragraph asked for before the ruling existed: the ack arrives only during a
 `ProcessBlock`, which `processTrack` refuses while `hostReady` is false. Either recovery gets a
 priming path that dispatches under an explicit recovery-only exemption, or readiness is staged in two
 levels (mapped-and-bypassed versus mirror-complete) with dispatch permitted at the lower one. Both are
@@ -761,8 +773,11 @@ predecessor did not state and which is a design decision, not a detail.
 
 # G3 — Per-host failure containment
 
-**Severity** HIGH; blast radius is the entire session. **STATUS: NOT DECIDABLE AT THIS SHA — BLOCKED
-ON AN OWNER RULING.** Every PASS condition below is written against a bound N counted in observations,
+**Severity** HIGH; blast radius is the entire session. **STATUS: RULED (R3: N = 3, authored), NOT YET
+ACCEPTANCE-DECIDABLE.** The ruling exists; what is missing is the ticket that pins it — N with units
+and semantics, a STATIC CHECK ON THE LITERAL (which does not exist at this SHA and is required),
+watchdog instrumentation, drift acceptance and independent validation. Describing this gate as
+"blocked on an owner ruling" was true when written and is now false. Every PASS condition below is written against a bound N counted in observations,
 and nothing in the tree sources N: all three production `Watchdog`s use `hardTimeoutBlocks = 500`,
 which is a block count and not an observation count, and no other artifact proposes one. The exact
 review's verdict that this gate "remains undecidable" is accepted rather than argued. The bullets are
@@ -876,8 +891,8 @@ the rename PASS 9 is RED without, and 26 and 27 are G4's and G2-A's own withdraw
 11/18/19/24 are RULED (R1-R4) and all four are still open; a ruling is a decision about what to
 build and says nothing about whether it exists. Stating the condition as "until those are ruled"
 would already be satisfied and would license a PASS over six open blockers. G4 is written
-in full so the work is specified, but no PASS verdict on it may be recorded until those FOUR are
-ruled; a final gate that reports green over blocked dependencies is the exact shape of a check that
+in full so the work is specified, but no PASS verdict on it may be recorded until every dependency
+GATE PASSES — not until items are ruled, which they already are; a final gate that reports green over blocked dependencies is the exact shape of a check that
 passes with the defect present.
 
 **Invariant.** For every dispatch, identified by the quadruple (host generation `g`, `blockId b`,
@@ -1008,7 +1023,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `0cff9a82befd8ce65545d3d2e3343e1356d39679`, A.0 SCRIPT BLOB `65f92e5efc0ac122a855dac471fcf470b310460c`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `ce5d41e7ac8b9b97c989bf80d8b88b20557624a0`, A.0 SCRIPT BLOB `ba8cec14257f7f374caccde6547f2894210d4c50`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1214,7 +1229,9 @@ carrying one cannot be decided by any implementation.
     table can join them. PASS 9 is RED until this lands and states so. Which side renames is an owner
     call, not a derivation: `reserved` is the C++ convention used elsewhere in that header and `_pad0`
     is the Rust convention, so the choice trades one file's internal consistency against the other's.
-25. **all** — **RULED (R1): authored with drift detectors.** The five HAND-CLASSIFIED populations, tracked rather than claimed away. `Regions the
+25. **all** — **RULED (R1): authored with drift detectors.** The SIX HAND-CLASSIFIED populations
+    — five semantic groupings plus G1-A's authored cross-language RING index population, which
+    became the sixth when the R1 mechanism was applied to it, tracked rather than claimed away. `Regions the
     engine addresses` (8), `Bounds checks anchored on the child's number` (7), `Ring constructions
     over a host-created mapping` (3), `One-sided members` (1) and `Tracks whose production must
     continue` are semantic groupings, not text matches: no grep distinguishes a REGION from the
@@ -1239,7 +1256,7 @@ carrying one cannot be decided by any implementation.
 
 Every count is stated as RAW → RULE → IN SCOPE, so that the command reproduces the raw figure and the
 rule reproduces the rest; and every count is a floor where a runtime value defeats the extraction.
-**5 populations are HAND-CLASSIFIED and exempt from that sentence**, each carrying a marker and
+**6 populations are HAND-CLASSIFIED and exempt from that sentence**, each carrying a marker and
 open item 25 (all). **And of the 13 RAW claims, 12 of them apply their RULE BY HAND** — the command
 returns the raw figure and a stated subtraction reaches the in-scope one — while none now carries its rule inside the command without also subtracting. That 12 is the honest size of what this gate
 cannot decide: it checks every subtraction's arithmetic and none of their justifications, and the
