@@ -587,6 +587,13 @@ early-parenthesis bypass is replaced by an arithmetic length check. It leaves
 M1 specification open deliberately. Exact review is pending; `/5` validation,
 active-open history, and G3/G2/G0/G4 closure remain gated.
 
+Interim exact audit of `e67ba00` is **BLOCKED**: `/5` still validates only
+`PRODUCT`, so removing item36's `PACKET` marker regenerates a clean but wrong
+manifest. G3/PASS1 and R15 directly contradict each other over dependence on a
+nonexistent M1, and item36 still says both that the drop ruling is retracted and
+that R15 settles against the check. M1 remains underspecified; the sweep
+arithmetic rewrite appears to close its prior internal-parenthesis bypass.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
