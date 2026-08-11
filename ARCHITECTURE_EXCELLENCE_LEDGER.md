@@ -594,6 +594,12 @@ nonexistent M1, and item36 still says both that the drop ruling is retracted and
 that R15 settles against the check. M1 remains underspecified; the sweep
 arithmetic rewrite appears to close its prior internal-parenthesis bypass.
 
+Fresh sweep audit adds a concrete fail-open: the consequence tail accepts an
+empty message (`[X] `), although `bad()` always emits nonempty detail; the
+proof omits this case. Its comment also falsely attributes the length bound to
+excluding `)`, while implementation correctly uses arithmetic length and allows
+`)`.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
