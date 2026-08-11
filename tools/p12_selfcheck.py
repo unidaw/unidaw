@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'e2ab4adfeaa7aaead541f496ef0fbf7994ed0115'
+PREV_TIP     = 'b93994e236d85fa81cdbe4b03eefeb4affdd2a29'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -454,8 +454,30 @@ for gid, gbody in zip(parts[0::2], parts[1::2]):
 pop_headings = [{'name': m.group(0).strip('* '), 'line': line_of(m.start()),
                  'hand_classified': MARK in own_bullet(m.start())}
                 for m in re.finditer(r'\*[A-Z][^*\n]{4,70}\* — ', pkt)]
+# gates[]: EVERY gate heading, including one that owns no open item. Deriving gates from
+# items[].gate made G0-A invisible — a gate is not a property of the items that happen to cite it.
+gates = []
+for g in gate_hdr:
+    seg = pkt[pkt.find('\n# %s — ' % g['gate']):]
+    seg = seg[:seg.find('\n# ', 3) if seg.find('\n# ', 3) != -1 else len(seg)]
+    dep = re.search(r'\*\*Dependencies\*\* ([^.\n]{0,120})', seg)
+    deps = sorted(set(re.findall(r'G[0-9]-?[AB]?', dep.group(1)))) if dep else []
+    blk = sorted(i for i in nums
+                                           if entry.get(i) == g['gate'] and i not in closed_set
+                                           and re.search(r'(?m)^%d\. \*\*[^*]+\*\* — [^\n]{0,120}BLOCKING' % i, body))
+    gates.append({'id': g['gate'], 'line': g['line'], 'end_line': g['end_line'],
+                  'dependencies': [d for d in deps if d != g['gate']],
+                  'blocking_items': blk,
+                  'decidable': not blk,
+                  'reason_if_not': ('blocked by items %s' % blk) if blk else None})
+rulings = [{'id': m.group(1), 'applied': 'PROPAGATED at this SHA' in m.group(0)
+                                          or 'is PROPAGATED' in m.group(0),
+            'line': line_of(m.start())}
+           for m in re.finditer(r'\*\*(R[1-4]) — .*?(?=\n\n\*\*R[1-4] — |\*\*What these rulings do NOT)', pkt, re.S)]
 man = {
  'schema': 'ae-p1.2-manifest/1',
+ 'gates': gates,
+ 'rulings': rulings,
  'product': {'sha': PRODUCT_SHA, 'tree': PRODUCT_TREE},
  'packet_path': PACKET_PATH,
  'gate_sections': gate_hdr,
@@ -483,6 +505,15 @@ man = {
 emitted = json.dumps(man, indent=1, ensure_ascii=False, sort_keys=True) + '\n'
 if '--emit-manifest' in sys.argv or '--manifest' in sys.argv:
     open(MANIFEST, 'w').write(emitted); print(f'wrote {MANIFEST}'); sys.exit(0)
+# A.0 describes what the manifest carries. That sentence is a THIRD statement — the emitter and the
+# committed file agree with each other and neither is compared to the prose, which is how the
+# manifest came to announce two keys it did not emit. The described keys are now checked.
+described = re.search(r'carries ([^.]{0,400})\.', pkt[pkt.find('canonical machine-readable source'):] or '')
+if described:
+    for key, word in [('gates', 'gates'), ('rulings', 'rulings'), ('items', 'item'),
+                      ('raw_claims', 'RAW claim'), ('controls', 'control'), ('counts', 'count')]:
+        if word in described.group(1) and key not in man:
+            bad('MANIFEST-OVERPROMISED', f'A.0 says the manifest carries {word}; no {key} key')
 try:
     if open(MANIFEST).read() != emitted:
         bad('MANIFEST-STALE', 'the committed manifest is not what this packet emits')

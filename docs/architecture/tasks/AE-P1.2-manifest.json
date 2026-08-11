@@ -82,6 +82,115 @@
    "line": 894
   }
  ],
+ "gates": [
+  {
+   "blocking_items": [],
+   "decidable": true,
+   "dependencies": [],
+   "end_line": 218,
+   "id": "G0-A",
+   "line": 83,
+   "reason_if_not": null
+  },
+  {
+   "blocking_items": [
+    24
+   ],
+   "decidable": false,
+   "dependencies": [],
+   "end_line": 331,
+   "id": "G0-B",
+   "line": 219,
+   "reason_if_not": "blocked by items [24]"
+  },
+  {
+   "blocking_items": [],
+   "decidable": true,
+   "dependencies": [
+    "G0-A"
+   ],
+   "end_line": 462,
+   "id": "G1-A",
+   "line": 332,
+   "reason_if_not": null
+  },
+  {
+   "blocking_items": [
+    11
+   ],
+   "decidable": false,
+   "dependencies": [
+    "G0-A",
+    "G1-A"
+   ],
+   "end_line": 566,
+   "id": "G1-B",
+   "line": 463,
+   "reason_if_not": "blocked by items [11]"
+  },
+  {
+   "blocking_items": [
+    27
+   ],
+   "decidable": false,
+   "dependencies": [
+    "G1-A",
+    "G1-B"
+   ],
+   "end_line": 680,
+   "id": "G2-A",
+   "line": 567,
+   "reason_if_not": "blocked by items [27]"
+  },
+  {
+   "blocking_items": [
+    18
+   ],
+   "decidable": false,
+   "dependencies": [
+    "G0-A",
+    "G1-A",
+    "G1-B",
+    "G2-A"
+   ],
+   "end_line": 789,
+   "id": "G2-B",
+   "line": 681,
+   "reason_if_not": "blocked by items [18]"
+  },
+  {
+   "blocking_items": [
+    19
+   ],
+   "decidable": false,
+   "dependencies": [
+    "G2-B"
+   ],
+   "end_line": 893,
+   "id": "G3",
+   "line": 790,
+   "reason_if_not": "blocked by items [19]"
+  },
+  {
+   "blocking_items": [
+    26
+   ],
+   "decidable": false,
+   "dependencies": [
+    "G0-A",
+    "G0-B",
+    "G1-A",
+    "G1-B",
+    "G2-A",
+    "G2-B",
+    "G3"
+   ],
+   "end_line": 1041,
+   "id": "G4",
+   "line": 894,
+   "reason_if_not": "blocked by items [26]"
+  }
+ ],
  "items": [
   {
    "blocking": false,
@@ -1011,6 +1120,28 @@
    "results": [
     2
    ]
+  }
+ ],
+ "rulings": [
+  {
+   "applied": false,
+   "id": "R1",
+   "line": 1128
+  },
+  {
+   "applied": true,
+   "id": "R2",
+   "line": 1149
+  },
+  {
+   "applied": false,
+   "id": "R3",
+   "line": 1164
+  },
+  {
+   "applied": false,
+   "id": "R4",
+   "line": 1187
   }
  ],
  "schema": "ae-p1.2-manifest/1"
