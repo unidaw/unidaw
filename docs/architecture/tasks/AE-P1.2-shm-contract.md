@@ -25,7 +25,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    packet**: a sentence of the form "each population carries its extraction command" is false at
    this SHA by construction, and this paragraph previously ended with one while opening with the
    disqualification, because I patched its head across three rounds and left its tail alone.
-2. **The open list is 31 atomic items, not 15 categories.** The four that compression swallowed are
+2. **The open list is 32 atomic items, not 15 categories.** The four that compression swallowed are
    restored: G0-B's unowned mutation floor, G2-A's BATCH blindness, G2-B's probe-order false-green,
    and G3's debug-env requirement plus its self-contradicting static check.
 3. **G0-A's mailbox census was wrong twice and is corrected with its method.** See G0-A.
@@ -1255,7 +1255,13 @@ not inside either arm. Refuse-on-timeout shape: any deadline at `:1030`, `:1112`
 READ inside the success branch. The compared value must have a host-side producer — it must be the
 word the HOST stores, never `sentOk`.
 
-**Review register.** The reviewer SHALL rule on the DUPLICATED AUX-OFFSET DERIVATION: host and
+**Review register.** The reviewer SHALL read `juce_host_process_main.cpp:925` beside `:1015` before
+accepting any role classification in this gate: `float* dst` at :925 is a DESTINATION and
+`const float* dst` at :1015 is a SOURCE — the same identifier, opposite roles, ninety lines apart in
+one file, separated only by a `const` and what the loop does with it. That is the defect that
+produced this packet's out-plane retraction (`float* output` used as a memcpy source) living in the
+same file in a second pair, and it is why "classify by USE, not by name" is a rule here rather than
+a correction. The reviewer SHALL rule on the DUPLICATED AUX-OFFSET DERIVATION: host and
 engine compute the same address by two independent expressions with no assertion tying them. They
 agree at this SHA — verified, not assumed — so this is a risk to pin, not a bug to fix, and pinning
 it costs less than the day it takes when they diverge. The reviewer SHALL confirm by reading
@@ -1283,7 +1289,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `078f62e4e019e66d7e2fcd9b16a7e65e24be6885`, A.0 SCRIPT BLOB `6a1c45bfc2991e5c20a6b447674e482202fca169`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `fb0d98f67b5373969c8ac62c8b37c5546ebb34df`, A.0 SCRIPT BLOB `cb582b9d6347cac7d142c54f66c357bf0a19f933`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1291,7 +1297,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 31 items, 22 open · 13 RAW (12 hand-ruled) + 21 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 32 items, 23 open · 13 RAW (12 hand-ruled) + 21 commanded claims, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1464,12 +1470,33 @@ engine's own ring; a per-gate scope is not a packet-wide one. **Cost:** the popu
 rebuilt by derivation from `ShmHeader::audioOutOffset` rather than by matching spellings, which is a
 harder census than a grep and is why item 26 stays open rather than closing on a corrected number.
 
+**R10 — item 30 (G2-A): THE UNDO ARBITER IS DEAD WIRING, THE HAZARD IS REAL, AND THE INSTRUMENT IS
+WRONG FOR IT.** Measured before ruling. `handleUndo` (`engine_undo_commands.cpp:46-72`) calls
+`deps.applyDocument(doc)` — it replaces the ENTIRE `ProjectDocument` from history, then restores
+plugin state. A per-clip `requireMatchingClipVersion` cannot express "the document you are undoing
+from is the one you saw": it arbitrates ONE clip's version while undo swaps everything.
+**So the `std::function` member at `engine_undo_commands.h:38` is dead wiring — remove it.** Keeping
+an unused gate wired in suggests to every reader that arbitration happens here, which is worse than
+its absence: it is a check that exists in the type system and nowhere in the behaviour.
+**And the hazard it appears to cover is REAL and uncovered**: undo applies a whole document, so an
+edit made between the user's view and their undo is silently reverted. Closing that needs a
+DOCUMENT-level version, which does not exist at this SHA. Item 30 records the removal and the
+hazard separately, because deleting the wiring must not read as dismissing the risk.
+
+**R11 — item 32 (G2-A): `commandMutatesDocument(Undo)` RETURNS FALSE WHILE UNDO REPLACES THE
+DOCUMENT.** `engine_command_mutates.h:58` classifies `Undo` as "no document state" and returns
+false; `handleUndo` calls `applyDocument`. The classifier is answering "does this command CARRY
+document state in its payload" and its name asks "does it MUTATE the document" — and G2-A's
+arbitrated population is derived from that classifier. A command that replaces the entire document
+while classified as not mutating it is a live inconsistency in the predicate this gate depends on,
+not merely a misleading name.
+
 **What these rulings do NOT do.** None of them closes its item — R1 through R4 are decisions that
 make the items IMPLEMENTABLE, and each item stays open until the work it names exists and is
 verified by someone other than me. A ruling recorded as a closure would be the same error as a
 census recorded as a proof, which this packet has already made once at item 7.
 
-# Open items — 31 atomic, 9 CLOSED at this SHA, 22 open
+# Open items — 32 atomic, 9 CLOSED at this SHA, 23 open
 
 One per line, numbered in document order, so the count is checkable. FOUR are BLOCKING — 18, 19, 24 and 27. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
@@ -1632,7 +1659,12 @@ carrying one cannot be decided by any implementation.
     `engine_clip_edit.cpp:439`. This is a refusal-path defect and it is a PRODUCT fix, not a packet
     edit.
 
-30. **G2-A** — **The undo path holds an arbiter it never calls**, measured by claude-worker-1 at
+30. **G2-A** — **RULED (R10): the wiring is DEAD, the hazard is REAL, and they are separate work.**
+    Remove the unused `requireMatchingClipVersion` member from `UndoCommandDeps`; separately, undo
+    replaces the whole document via `applyDocument`, so an edit made between a user's view and their
+    undo is silently reverted, and covering that needs a DOCUMENT-level version which does not
+    exist. Deleting the wiring must not read as dismissing the risk. Originally: the undo path holds
+    an arbiter it never calls, measured by claude-worker-1 at
     the frozen product with TYPE-LEVEL evidence rather than a call-site census, which is the only
     kind that can see it: `engine_undo_commands.h:38` declares the clip arbiter as a
     `std::function` member and `engine_undo_commands.cpp` contains ZERO occurrences of the name.
@@ -1648,6 +1680,13 @@ carrying one cannot be decided by any implementation.
     pointer-returning helper appears, since the argument's falsifiability is its whole value and a
     silent third helper would leave it reading as sound. claude-worker-1 named this against their
     own measurement rather than letting the argument stand on their word.
+
+32. **G2-A** — **RULED (R11).** `commandMutatesDocument(Undo)` returns FALSE with the comment "no
+    document state" (`engine_command_mutates.h:58`) while `handleUndo` calls `applyDocument` and
+    replaces the entire `ProjectDocument`. The classifier answers "does this command CARRY document
+    state in its payload"; its NAME asks "does it MUTATE the document"; and G2-A's arbitrated
+    population is derived from it. A predicate this gate depends on is inconsistent with the
+    behaviour it names, which is a defect in the predicate and not in its wording.
 
 # Provenance of this packet's own numbers
 

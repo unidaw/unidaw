@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'dc73a23476aa0e6f991530a864dfdcbf34ab6f8d'
+PREV_TIP     = '9cd64abb8075e2c90ec521955fda37336f8e0aa9'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -92,10 +92,10 @@ for i, a in enumerate(sys.argv):
 # merely makes the run FAIL proves nothing — the fifth way a negative control lies is landing in
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
- 'open-count':       ('# Open items — 31 atomic', '# Open items — 32 atomic', 1, 'OPEN-COUNT'),
- 'closed-count':     ('9 CLOSED at this SHA, 22 open', '8 CLOSED at this SHA, 23 open', 1,
+ 'open-count':       ('# Open items — 32 atomic', '# Open items — 33 atomic', 1, 'OPEN-COUNT'),
+ 'closed-count':     ('9 CLOSED at this SHA, 23 open', '8 CLOSED at this SHA, 24 open', 1,
                       'OPEN-CLOSED-COUNT'),
- 'open-arithmetic':  ('9 CLOSED at this SHA, 22 open', '9 CLOSED at this SHA, 17 open', 1,
+ 'open-arithmetic':  ('9 CLOSED at this SHA, 23 open', '9 CLOSED at this SHA, 17 open', 1,
                       'OPEN-ARITHMETIC'),
  # anchored on the tree hash, not on a count: the previous anchor was '11 RAW +', which the
  # document outgrew, leaving the control unable to land while the gate still reported PASS
