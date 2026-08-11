@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'a2de738232139a56e2b7f38d0e4fa9a922d9e8cd'
+PREV_TIP     = '2e9880ee8dfd8cc91103b72c1a7231255c0a7f94'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -343,6 +343,8 @@ CONTROLS = {
  'ruling-body-swap': ('CLOSED at this SHA.** The static-check contradiction was not one. R17 shows',
                       'CLOSED at this SHA.** The static-check contradiction was not one. R16 shows', 1,
                       'RULING-BODY-BIND'),
+ 'g4-dep-count':     ('on TEN dependency blockers plus', 'on NINE dependency blockers plus', 1,
+                      'GATE-DEP-BLOCKERS'),
  'restate-blockers': ('block (18, 19, 24, 26, 27, 28, 29, 33, 35, 36 and 37)', 'block (18, 19, 24, 26, 27, 28, 29, 33, 35, 36 and 21)', 1,
                       'BLOCKER-SET-RESTATED'),
  # the item half of the same check: item 26's history is where the digits went when R8 lost them,
@@ -1586,7 +1588,8 @@ WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twen
         33: 'Thirty-three', 34: 'Thirty-four', 35: 'Thirty-five', 36: 'Thirty-six',
         37: 'Thirty-seven', 38: 'Thirty-eight', 39: 'Thirty-nine', 40: 'Forty',
         95: 'Ninety-five', 96: 'Ninety-six', 97: 'Ninety-seven',
-        98: 'Ninety-eight', 99: 'Ninety-nine', 100: 'One hundred'}
+        98: 'Ninety-eight', 99: 'Ninety-nine', 100: 'One hundred', 101: 'One hundred one',
+        102: 'One hundred two', 103: 'One hundred three'}
 if not listed:
     bad('CONTROL-PROSE-MISSING', 'no "**Controls.** <N>, each naming" sentence')
 elif listed.group(1) != WORD.get(len(CONTROLS), '?'):
@@ -1755,6 +1758,33 @@ for g in gates:
     for d in g['dependencies']:
         if d not in by_id:
             bad('GATE-DEP-UNKNOWN', f'{g["id"]} depends on {d}, which is not a gate in this packet')
+# G4's DEPENDENCY-BLOCKER COUNT, DERIVED. The packet states it in prose ("on TEN dependency
+# blockers plus one of its own") and I described that as derived when it was still hand-kept:
+# changing TEN to NINE while leaving all ten IDs listed emitted a clean PASS and a false manifest.
+# codex-worker-1's probe. The union below is the same treatment BLOCKER-SET-RESTATED gives the
+# global list — a stated figure compared against the graph that produces it.
+_final = [g for g in gates if 'Final gate' in (g.get('dependencies_text') or '')]
+for _g in _final:
+    _union = sorted({n for d in _g['dependencies'] for n in by_id.get(d, {}).get('blocking_items', [])}
+                    - set(_g.get('blocking_items', [])))
+    # a prose extractor reads a blanked view, like every other stated-count check here
+    _said = re.search(r'on ([A-Z]+) dependency blockers plus', _visible(pkt))
+    if not _said:
+        bad('GATE-DEP-BLOCKERS', f'{_g["id"]} states no dependency-blocker count to check')
+    elif WORDNUM.get(_said.group(1).upper()) != len(_union):
+        bad('GATE-DEP-BLOCKERS', f'{_g["id"]} says {_said.group(1)} dependency blockers, '
+                                 f'the graph gives {len(_union)}: {_union}')
+    _listed = re.search(r'\*\*The ' + (_said.group(1).lower() if _said else 'ten') +
+                        r'\*\*, carried by gates [^:]*: (.*?)(?=\n\*\*|\n\n)', _visible(pkt), re.S)
+    if _listed:
+        # ONLY the `N (Gx)` form. The first version also scraped bare numbers up to the first
+        # em-dash, which picked "4" out of "PASS 4" and truncated the moment prose gained a dash —
+        # my own edit tripped it within the minute. Every member is written in the typed form, so
+        # the extractor needs no fallback and no delimiter guess.
+        _ids = sorted({int(x) for x in re.findall(r'(?<![0-9])(\d{1,2}) \(G', _listed.group(1))})
+        if not set(_union) <= set(_ids):
+            bad('GATE-DEP-BLOCKERS', f'{_g["id"]} names {sorted(_ids)}, graph requires {_union}')
+
 def closure(gid, seen=None, path=()):
     seen = seen if seen is not None else set()
     for d in by_id.get(gid, {}).get('dependencies', []):
