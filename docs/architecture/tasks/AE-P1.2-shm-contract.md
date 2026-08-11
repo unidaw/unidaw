@@ -28,7 +28,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    the manifest keeps the two apart deliberately. The zero case is a different sentence rather than
    a missing one, so the check cannot pass by the claim disappearing. G1-B's readers were withdrawn and are AUTHORED again under R1
    with rules, members and drift detectors; G2-A's scope and G4's out-plane are not. **TWO GATES ARE ACCEPTANCE-DECIDABLE — G0-A and G1-A —
-   and eight items block (18, 19, 24, 26, 27, 29, 33 and 35)** and ALL EIGHT need product
+   and nine items block (18, 19, 24, 26, 27, 29, 33, 35 and 36)** and ALL NINE need product
    work, none of them currently waiting on another item — **classification and state are orthogonal
    and the markers no longer pretend otherwise**: ⟦PRODUCT⟧ says what KIND of work closes an item,
    ⟦BLOCKED-ON: n⟧ says what it WAITS ON, and an item may carry both. Item 27 carried an edge to
@@ -71,7 +71,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    packet**: a sentence of the form "each population carries its extraction command" is false at
    this SHA by construction, and this paragraph previously ended with one while opening with the
    disqualification, because I patched its head across three rounds and left its tail alone.
-2. **The open list is 35 atomic items, not 15 categories.** The four that compression swallowed are
+2. **The open list is 36 atomic items, not 15 categories.** The four that compression swallowed are
    restored: G0-B's unowned mutation floor, G2-A's BATCH blindness, G2-B's probe-order false-green,
    and G3's debug-env requirement plus its self-contradicting static check.
 3. **G0-A's mailbox census was wrong twice and is corrected with its method.** See G0-A.
@@ -1384,7 +1384,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `85f4cc03faf520c262bdf4b2c4b88036311415f1`, A.0 SCRIPT BLOB `b3d386cd48479d3212fb16d1fe6a217de9987683`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `216c48c4a91c431a55534d53fee221dc461813e9`, A.0 SCRIPT BLOB `2e95eb2c28b219f20c1eda8afc30b3349229be1a`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1392,7 +1392,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 35 items, 27 open · 14 RAW (13 hand-ruled) + 31 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 36 items, 28 open · 14 RAW (13 hand-ruled) + 31 commanded claims, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1823,12 +1823,63 @@ patcher path a distinct transfer type that is not claimed to be the same ABI. A 
 alone does NOT satisfy this — it would leave 7 members against 6 and the invariant unmet, which is
 the trap codex-worker-1 named.
 
+**R15 — item 36 (G3): G3's M1 IS DEFINED HERE, AND ON THE CONTRADICTION THE REGISTER NAMES THE
+CHECK IS THE STALE SIDE — on its mechanism claim, which is decidable at the pin. What survives is a
+sharper question than the register asked.** G3's Deterministic-test block names Layer 0, Layer 1 and
+Layer 2 and never defines an M1; PASS 1 and the register then both refer to one, borrowing G0-B's
+M-label convention (`:335`) across a gate boundary that does not carry it. **M1 is hereby Layer 0's
+mechanism**: run `tools/host_stall_check.sh` against the pinned tree with `DAW_ENGINE_DEBUG_STALL`
+set, and record, WITHIN the SIGSTOP window the script opens at `:85` and closes at `:92`, both (a)
+`kill -0 $FROZEN` and (b) the armed stall log's `next=`, `minCompleted=` and per-host `hosts=[…]`
+vector, for the frozen host's index. (a) establishes the host is alive-but-stopped, so no liveness
+drop can be credited for what follows; (b) is the discriminator. PASS 1's refutation clause is
+exactly right about the window and needs no change — after `kill -CONT` at `:92` the host is running
+normally and `kill -0` answers a question nobody asked.
+
+**The two statements.** The check says the producer does not stay gated
+(`tools/host_stall_check.sh:16-19`), names the mechanism at `:101-104` — "Frozen host + fix = the
+host is dropped and production continues" — and makes it EXECUTABLE at `:105-109`, failing when more
+than three `producer stall (inFlight)` lines follow its in-log marker. The producer comment the
+register asks for is `apps/engine_rt_helpers.h:232-234`, which says the opposite while naming the
+check: "a stopped host still OWES its dispatched blocks, which is the one case where holding the
+gate shut is the correct answer."
+
+**The mechanism half is decidable at the pin, and the check is wrong.** `completedMinimum`
+(`apps/engine_rt_helpers.cpp:492-511`) excludes a host on exactly three conditions — `!active`
+(`:493`), `completedBlockId == 0` (`:496`), and owes-nothing —
+`lastDispatchedBlockId > 0 && completedBlockId >= lastDispatchedBlockId` (`:502`).
+A SIGSTOPped host that had been producing
+satisfies none: `active` is a latch over "has this track ever produced"
+(`apps/engine_rt_helpers.h:236`), its completed id is non-zero, and its dispatched blocks are
+precisely what it has stopped finishing. It is counted at `:509-510`, holds `lowest` at its frozen
+id, and `apps/engine_producer_thread.cpp:282-283` gates. **The state is absorbing**: once gated the
+producer dispatches nothing, so neither id can move again. Nor is there a liveness drop to appeal
+to — `.active = false` is written only at `apps/engine_ui_thread.cpp:57` and `:77`, both UI watches,
+and no `kill(pid, 0)`/`ESRCH` test exists under `apps/` outside test mains and teardown. **"The host
+is dropped" names nothing in this tree.** On the register's question, the check is the stale side.
+
+**What that does NOT settle, and it is the part worth having.** The check's other half is not prose,
+it is an assertion — and if the producer comment is right, that assertion should be failing. Three
+readings survive the pin and `kill -0` alone separates none of them, because the host is alive in all
+three: the check does not run; the check runs and freezes a host the gate was never going to count,
+which exclusion `:496` makes concrete for any host that has completed nothing; or something outside
+`completedMinimum` intervenes. **The second is the one to fear**, because `:82-83` selects the victim
+by `pgrep`, preferring `_0.sock` and otherwise taking whichever host comes first — a selection blind
+to whether that host is in the counted set. A check that passes because it froze the wrong host is a
+check that passes with its subject absent, which is this packet's oldest recurring shape and the
+reason M1 must read the per-host vector and not a liveness bit.
+
+**Recorded next to both, as the register requires.** The two addresses are
+`tools/host_stall_check.sh:16-19`, with `:101-104` carrying the mechanism claim that fails, and
+`apps/engine_rt_helpers.h:232-234`. Both sit in PRODUCT, which I do not edit; the ruling is recorded
+here against both addresses and item 36 carries the product-side correction.
+
 **What these rulings do NOT do.** None of them closes an item that names PRODUCT work — R1 through
-R13 make such items implementable, and R13 is RETRACTED rather than applied, and each stays open until the work exists and is verified by
+R15 make such items implementable, and R13 is RETRACTED rather than applied, and each stays open until the work exists and is verified by
 someone other than me. **A ruling CAN close an item whose whole content was a packet decision**, and
 item 11 is the case: it asked for an authored population, R1 authored one, and there was nothing
 left in it. That distinction was missing and the rule read as universal, which contradicted item
-11's own CLOSED marker three SHAs running. That range — "R1 through R14" above — is checked against the rulings actually parsed
+11's own CLOSED marker three SHAs running. That range — "R1 through R15" above — is checked against the rulings actually parsed
 (`RULING-SET`), because it read "R1 through R4" for as long as there were eleven: the sentence was
 written when four was the whole set and no later ruling was an edit to it. The manifest's parser
 had the matching defect from the other side — `R[1-9]` could not match `**R10 — `, so R9's block ran
@@ -1836,9 +1887,9 @@ to the end and swallowed R10 and R11 into R9's text. **A hardcoded range and a s
 the same failure in two notations, and this packet has now shipped both.** A ruling recorded as a closure would be the same error as a
 census recorded as a proof, which this packet has already made once at item 7.
 
-# Open items — 35 atomic, 8 CLOSED at this SHA, 27 open
+# Open items — 36 atomic, 8 CLOSED at this SHA, 28 open
 
-One per line, numbered in document order, so the count is checkable. EIGHT are BLOCKING — 18, 19, 24, 26, 27, 29, 33 and 35. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
+One per line, numbered in document order, so the count is checkable. NINE are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 35 and 36. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
 
 1. **G0-B** — The generated header breaks the documented `-DDAW_BUILD_PATCHER_RUST=OFF` build for six unconditional targets, with no stated path, include directory or target-ordering edge.
@@ -2145,6 +2196,21 @@ carrying one cannot be decided by any implementation.
     Give the
     Rust struct an explicit `ready: u32` so the layouts match member-for-member, or make `push_event`
     assign field-wise so the flag's bytes are never touched. PRODUCT work.
+36. **G3** — ⟦PRODUCT⟧ **BLOCKING. `tools/host_stall_check.sh` asserts a producer behaviour the
+    shipped back-pressure rule contradicts, so one of the two is wrong in PRODUCT.** The check's pass
+    predicate (`:105-109`: at most three post-marker `producer stall (inFlight)` lines) requires a
+    SIGSTOPped host to stop holding the minimum, and its comment names the mechanism — "the host is
+    dropped" (`:101-104`). `completedMinimum` (`apps/engine_rt_helpers.cpp:492-511`) counts exactly
+    such a host: its three exclusions are `!active`, `completedBlockId == 0` and owes-nothing, and a
+    frozen producing host meets none. The gate at `apps/engine_producer_thread.cpp:282-283` is then
+    ABSORBING, because a gated producer dispatches nothing and neither id can move again. No liveness
+    drop exists to appeal to. So either the check passes for a reason unrelated to its subject —
+    `:82-83` picks its victim by `pgrep`, with no test that the chosen host is in the counted set —
+    or a bypass exists that `apps/engine_rt_helpers.h:232-234` does not describe. **R15 settles the
+    mechanism claim against the check and deliberately does not guess which of the three readings
+    holds**; M1 as defined in R15 separates them by reading the per-host vector, and no static
+    reading can. The product-side correction is whichever of the check or the comment M1 refutes, and
+    the answer is not knowable from the tree alone. PRODUCT work.
     **How this got missed:** the register asked the right question and I answered it by reading
     `ui/daw-bridge/src/layout.rs`, a DIFFERENT Rust endpoint that does declare `ready`, then marked
     it resolved. See the G0-B register entry, which now records the substitution.
