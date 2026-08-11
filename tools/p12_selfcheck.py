@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '548755a9fe14900a9a4c35385fe7c15b769b0b16'
+PREV_TIP     = '7dfbe040d768eace9911440a07a882f94b2fcf3d'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -235,8 +235,8 @@ CONTROLS = {
  # this, the next gate that writes S.1 or "Static 1" disappears exactly as G0-B did.
  'label-spelling':   ('**Static checks.** S1 the ready-clear', '**Static checks.** S-1 the ready-clear', 1,
                       'MANIFEST-STALE'),
- 'blocker-set':      ('SIX are BLOCKING — 18, 19, 24, 26, 27 and 33',
-                      'SIX are BLOCKING — 18, 19, 24, 26, 27 and 28', 1, 'BLOCKER-SET'),
+ 'blocker-set':      ('SEVEN are BLOCKING — 18, 19, 24, 26, 27, 29 and 33',
+                      'SEVEN are BLOCKING — 18, 19, 24, 26, 27, 29 and 28', 1, 'BLOCKER-SET'),
  'constraint-lost':  ('1. Production atomic **size/alignment', '1x. Production atomic **size/alignment', 1,
                       'CONSTRAINTS-COUNT'),
  'opening-gates':    ('**EVERY GATE IS PLANNABLE AT THIS SHA**',
@@ -297,7 +297,7 @@ CONTROLS = {
  # the mutation backend actually ran, now expressible only as an INSERTION because R8 carries
  # no digits: proving the number cannot come back rather than that this one instance is right.
  # proves the second-site check is not vacuous: the opening's list, not the header's.
- 'restate-blockers': ('block (18, 19, 24, 26, 27 and 33)', 'block (18, 19, 24, 26, 27 and 28)', 1,
+ 'restate-blockers': ('block (18, 19, 24, 26, 27, 29 and 33)', 'block (18, 19, 24, 26, 27, 29 and 28)', 1,
                       'BLOCKER-SET-RESTATED'),
  # the item half of the same check: item 26's history is where the digits went when R8 lost them,
  # and a check that ranged only over rulings would have watched them move.

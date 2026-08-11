@@ -28,7 +28,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    the manifest keeps the two apart deliberately. The zero case is a different sentence rather than
    a missing one, so the check cannot pass by the claim disappearing. G1-B's readers were withdrawn and are AUTHORED again under R1
    with rules, members and drift detectors; G2-A's scope and G4's out-plane are not. **TWO GATES ARE ACCEPTANCE-DECIDABLE — G0-A and G1-A —
-   and six items block (18, 19, 24, 26, 27 and 33)** and three of them need product
+   and seven items block (18, 19, 24, 26, 27, 29 and 33)** and three of them need product
    work rather than packet work. That list is derived from the items themselves and every
    restatement of it anywhere in this document is compared against the derivation
    (`BLOCKER-SET-RESTATED`) — this paragraph carried (18, 19, 23, 24, 29) for several SHAs, three
@@ -357,8 +357,15 @@ string — no map or table literal keyed by a member name.
 
 **Review register.** The reviewer SHALL confirm: that libclang's layout for the eight types equals
 that of the compiler building `engine_core`, since the C++ numbers come from bindgen and the product
-comes from the host compiler; whether Rust's whole-struct store `*slot = entry` (`lib.rs:157-158`)
-writes `EventEntry` bytes [60,64), the C++ `ready` member; the ruling on the
+comes from the host compiler; ~~whether Rust's whole-struct store writes `EventEntry` bytes [60,64), the C++ `ready`
+member~~ — **ANSWERED at this SHA, and the premise was wrong.** `ready` is a DECLARED field on both
+sides, not tail padding: `apps/shared_memory.h:450` and `ui/daw-bridge/src/layout.rs:714`, each a
+`u32` after `payload[40]` in a 64-byte struct. The whole-object store does write [60,64) — with
+ZERO, the correct pre-publication value — and `control.rs:1939-1944` then stores `ready = 1` through
+an `AtomicU32` with Release ordering, after a CAS reservation on `write_index`. The publication
+order is sound and the consumer cannot observe a torn entry because it waits on `ready`. **A
+register entry is a question, and a question can be answered NO**; carrying this one as an open
+hazard would have kept G0-B blocked on a fact rather than on a defect; the ruling on the
 `PatcherSliceSelectConfig` name collision, the gate being RED until one side renames; and that no ABI
 type is passed through `node_config` while declared outside `apps/patcher_abi.h`, which the file
 closure cannot see.
@@ -1367,7 +1374,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `0ff6d1ae9d36a2048bd0d21280ebe1c9bc2eb7a4`, A.0 SCRIPT BLOB `72b9cea9417a1d45bc7bb451cfce9534cecc59e3`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `e558cd720429c5b3c04087814a71b4c1e5d6c8cc`, A.0 SCRIPT BLOB `3780b422d266d49b69777110636a785f40716926`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1770,7 +1777,7 @@ census recorded as a proof, which this packet has already made once at item 7.
 
 # Open items — 33 atomic, 8 CLOSED at this SHA, 25 open
 
-One per line, numbered in document order, so the count is checkable. SIX are BLOCKING — 18, 19, 24, 26, 27 and 33. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
+One per line, numbered in document order, so the count is checkable. SEVEN are BLOCKING — 18, 19, 24, 26, 27, 29 and 33. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
 
 1. **G0-B** — The generated header breaks the documented `-DDAW_BUILD_PATCHER_RUST=OFF` build for six unconditional targets, with no stated path, include directory or target-ordering edge.
@@ -1952,16 +1959,24 @@ carrying one cannot be decided by any implementation.
     extracted and each replaced, and no check over that extraction can be written until the
     extraction has a predicate, a command and a member list.
 
-29. **G2-A** — The `SetRowOps` refusal is malformed for the channel it rides, measured at the
-    frozen product by claude-worker-1 and independent of this packet's scope question.
+29. **G2-A** — **BLOCKING. The `SetRowOps` refusal is malformed for the channel it rides**, measured
+    at the frozen product by claude-worker-1 and independent of this packet's scope question. It was
+    unmarked while item 27 delegated its blocking status to it — **an item can only delegate to an
+    item that carries the weight**, and for two SHAs the delegation pointed at an item the manifest
+    reported as non-blocking.
     `engine_rowops_commands.cpp:49` passes `/*sentBase=*/0, /*currentBase=*/0` where the other
     emit sites pass real values, and the payload's own comment calls `currentBase` "the value to
     retry with" — there is nothing to retry with. Zero is a LIVE value (`clipVersion` initialises
     to 0 at `shared_memory.h:1376` and `daw_engine_main.cpp:675`), so a consumer cannot distinguish
     these from a genuine base of 0 on a fresh track. `ui/daw-cli/src/main.rs:1179` correlates on
     `(track, command_type, sentBase)`, so for `SetRowOps` the third key is INERT and two concurrent
-    refusals on one track are indistinguishable — the bug that function's own doc-comment records
-    having hit. Acceptance is unaffected: `applySetRowOps` bumps the clip version at
+    refusals on one track would be indistinguishable — **but NO CONSUMER AWAITS A SetRowOps REFUSAL
+    at this SHA**, so the collision is latent rather than live. The CLI's SetRowOps path
+    (`ui/daw-cli/src/main.rs:4263-4288`) sends and prints; `await_clip_outcome`'s four callers pass
+    note, delete and chord command types. This item said the collision was happening and item 27
+    said it was not, for a SHA and a half — **two items of one gate holding opposite readings of one
+    line of Rust**, because I corrected the sentence where the argument lived and not the sentence
+    where the finding was filed. Acceptance is unaffected: `applySetRowOps` bumps the clip version at
     `engine_clip_edit.cpp:439`. This is a refusal-path defect and it is a PRODUCT fix, not a packet
     edit.
 
