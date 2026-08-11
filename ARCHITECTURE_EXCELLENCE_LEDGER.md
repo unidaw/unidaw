@@ -661,6 +661,12 @@ malformed `BLOCKED-ON` is rejected, move control is real, item26 is `[PACKET]`,
 item35's self-contradictory remedy was deleted, and the sweep reaches 95
 controls. Exact review is pending; M1/G3 and carried gate decisions remain.
 
+Exact review of `152a539` is **BLOCKED**. Item28 must be blocking `[PRODUCT,
+PACKET]` (missing S3/counter-only acceptance). Validator/emitter edge parsing
+disagrees on whitespace, and kind parsing still normalizes qualifiers such as
+`PACKET: extra`; empty markers are ignored. Item18, G3/M1/N/Watchdog/item37,
+G0, G4, and opening packet-count contradictions remain.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
