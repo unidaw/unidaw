@@ -258,11 +258,11 @@ action. It supersedes stale ticket rows above where they conflict.
   `699abfe8f72e597cfd1b6fb3da93ee7f35aa7fef`).
 - Governance worktree: `/Users/jak/src/daw-backend`.
 - Current packet owner: `claude-worker-2`; current latest packet reported:
-  `6f0584621c71083e790ca47fe6706875a549f0c1`.
+  `b91034320fe5d513354c175aacb73840c5cd29b4`.
 - Latest packet status: mechanical PASS, 89 controls plus three executable
-  proofs; classifier now discovers compiled patterns from `re.compile` bindings
-  rather than receiver capitalization. Remaining under-inclusions are named;
-  one final bounded independent review is pending.
+  proofs; ratchet floor is claimed bound to the live count. Exact independent
+  review is pending. Prior `6f05846` bounded review is BLOCKED because its proof
+  ran a copied classifier rather than the live implementation.
 
 ### Required review protocol
 
@@ -353,8 +353,8 @@ away exact-SHA review or shared-hotspot ownership to improve throughput.
 
 ### Immediate next actions
 
-1. Obtain the final bounded independent review of `6f05846`; do not expand parser
-   hunting beyond the claimed classifier/proof binding.
+1. Obtain the exact independent review of `b910343`; do not expand parser
+   hunting beyond the claimed live-ratchet binding.
    while the comma shield and gate decisions remain.
 2. Consolidate the six owner decisions into one decision record: G2-B oracle,
    G2-A universe/item 28, G3 M1/watchdog/static, G0-A A13/A15, G0-B items 1–4,
@@ -402,6 +402,10 @@ away exact-SHA review or shared-hotspot ownership to improve throughput.
   compiled-pattern discovery replaces capitalization heuristics. This is the
   planned final instrumentation review before pivoting to the six semantic
   decision records.
+- Exact review of `6f05846` is **BLOCKED**: extractor proof copied the classifier
+  and ignored the live floor/failure branch.
+- `b910343`: owner PASS/89 controls; floor claimed equal to live count and proof
+  claimed bound to production values; exact independent review pending.
 - Exact review of `2699a2c` is **BLOCKED**: the extractor proof duplicates rather
   than binds the production classifier/floor, blanking proof is narrow, hidden
   link destinations still become dependencies, identity proves bytes only, and
