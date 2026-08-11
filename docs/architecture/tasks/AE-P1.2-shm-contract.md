@@ -1422,7 +1422,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `d5961288ac94e747e16b0f020dd945bd9eb53edf`, A.0 SCRIPT BLOB `29573686de863f470caf77b0f7a8805499bcb273`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `569c09ebfe3fe5385e8c5ca32c2db09dd7e72fd0`, A.0 SCRIPT BLOB `4010b6739e9f14a9163f64fa6a9119061a326258`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -2244,10 +2244,13 @@ carrying one cannot be decided by any implementation.
 15. **G2-B** — The self-deadlock: the admitted fix class requires `applyHostBypassStates` to stop taking `controllerMutex`.
 16. **G2-B** — The swap trap rests on an unratcheted guard at `apps/daw_engine_main.cpp:1107-1109`.
 17. **G2-B** — Probe ordering: without forbidding the offline probe from acquiring before the RT probe reports, the PASS token is producible by the packet's own fixture.
-18. **G2-B** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING, RULED (R2) and PROPAGATED into the gates at this SHA; open for the
-    product implementation only.** The circularity is dissolved in the specification: dispatch is
+18. **G2-B** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING, RULED (R2) and PROPAGATED into the gates at this SHA; open for
+    BOTH product and packet work.** The circularity is dissolved in the specification: dispatch is
     permitted at `mapped-and-bypassed`, so the ack that establishes `mirror-complete` arrives during
-    a `ProcessBlock` the gate now allows. What remains is building the two levels. Original
+    a `ProcessBlock` the gate now allows. What remains in PRODUCT is building the two levels. **What
+    remains in this PACKET is that G2-B's PASS 4 is still withdrawn with no replacement, so no PASS
+    condition accepts the two-level design R2 ruled** — an earlier version of this line said "open
+    for the product implementation only", which the item's own kind marker then contradicted. Original
     statement of the circularity. The ack arrives only during a `ProcessBlock` that `processTrack` refuses while `hostReady` is false. A PASS bullet was withdrawn rather than reworded, and the owner HAS ruled (R2: two-level readiness) and the mirror half is unspecified until that ruling is PROPAGATED into this gate and G4 — the item is open for the propagation, not for the decision.
 19. **G3** — ⟦PRODUCT⟧ **BLOCKING, not closed. The ruling is MADE (R3: N = 3, authored) and no further ruling is required.** N has no source in the tree; R3 supplies it as an authored constant. What remains is implementation, not decision (R3: N = 3, authored), which makes the gate decidable for PLANNING; it is not decidable for ACCEPTANCE until the ticket lands — N pinned with units and semantics, a static check on the literal, watchdog instrumentation, drift acceptance and independent validation.
 20. **G3** — `DAW_ENGINE_DEBUG_STALL` must be set by the Layer-2 fixture or the channel a PASS bullet reads does not exist.
