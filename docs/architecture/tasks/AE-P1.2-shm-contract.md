@@ -31,7 +31,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    and eleven items block (18, 19, 24, 26, 27, 28, 29, 33, 35, 36 and 37)** and ALL ELEVEN need product
    work. **Item 37 needs a PACKET EDIT BESIDES**, and the opening used to imply otherwise: G3's
    acceptance surface cannot see the defect that item names, so writing its oracle into the
-   deterministic test, PASS conditions and static checks is packet work. None of the ten is
+   deterministic test, PASS conditions and static checks is packet work. None of the eleven is
    currently waiting on another item — **classification and state are orthogonal
    and the markers no longer pretend otherwise**: ⟦PRODUCT⟧ says what KIND of work closes an item,
    ⟦BLOCKED-ON: n⟧ says what it WAITS ON, and an item may carry both. Item 27 carried an edge to
@@ -1422,7 +1422,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `569c09ebfe3fe5385e8c5ca32c2db09dd7e72fd0`, A.0 SCRIPT BLOB `4010b6739e9f14a9163f64fa6a9119061a326258`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `65477f327165b3686db4097381c298ab55518801`, A.0 SCRIPT BLOB `46d893177d6c06a727ba74b12fb7210ad47792f1`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
