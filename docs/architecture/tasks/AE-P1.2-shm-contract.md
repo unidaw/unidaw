@@ -1130,8 +1130,8 @@ all**, which is exactly why the four-term census could not see reader 7.
                                                 -> enqueueInboundAudio   (deref in the CALLEE)
     5  engine_master_render.cpp:100      main   header->audioOutOffset + ..., direct (master mix)
     6  engine_consumer.cpp:766           aux    auxOutputPlaneOffset(*h) -> peak scan
-    7  engine_audio_callback.h:448,:463  either track.planeByteOffset -> track.shmBase + offset
-                                                -> trackChannel[i]       (NAMES NO OFFSET SYMBOL)
+    7  engine_audio_callback.h:404       either track.planeByteOffset -> track.shmBase + offset,
+                                                consumed at :448 and :463 (NAMES NO OFFSET SYMBOL)
 
 Four of the seven reach the plane through a helper, a struct field or a callee. **That is why every
 name-based census of this population has been wrong**, and why the in-scope selection stays open at
@@ -1434,7 +1434,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `9bbc6b978adda0791d0bd711959e04b00ca5f826`, A.0 SCRIPT BLOB `3d0f92ded5b1802412f1256c78b0c84b33ad78d8`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `ecf81508abd61e983b7a97cb8597742b5c670a27`, A.0 SCRIPT BLOB `5d292a798ccf5d3f08aeef1b970d3b01b0ad8b59`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1592,8 +1592,16 @@ may not be derived from its binding. **Cost:** one unidiomatic name in the Rust 
 goes from RED to decidable the moment the rename lands.
 
 **R5 — item 26 (G4): THE IN-SCOPE POPULATION IS BYTE-CONSUMING READS, the whole census row and not a
-subset of it.** With
-the reader table above derived, this ruling now selects a named set rather than a category: readers
+subset of it. SUPERSEDED IN SCOPE BY R8(c), which is stated here rather than left for a reader to
+infer from two rulings that disagree.** R5 selects the READER role; R8(c) rules that the gate ranges
+over readers AND writers, because an ordering invariant is a relation between a write and a read and
+a gate enumerating one end can never observe the pair. So R5 is operative for what a READER is and
+superseded for what the GATE ranges over. codex-worker-1 found both standing unmarked, each correct
+alone and jointly unsatisfiable — the pattern this packet has hit three times, and the repair is
+always to say which one yields where rather than to soften both.** With
+the reader table above HAND-CLASSIFIED — not derived; the manifest marks that row
+`derived: false` and this sentence said otherwise — this ruling now selects a named set rather than
+a category: readers
 1-7, main plane and aux, direct and helper-mediated and callee-deref alike. A reader does not leave
 the population by reaching the bytes through a helper; the invariant is about consuming bytes
 another agent wrote, and the route is irrelevant to that. **This resolves the R5/R7 relationship

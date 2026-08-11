@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '548cd78b5066aae9c8c78f2638f2c80fa35317ff'
+PREV_TIP     = 'bd5575d68cfb9c79d47f05921d396c141f91d26d'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -112,7 +112,7 @@ OUT_READERS = [
       ('apps/engine_produce_block.cpp', 1150, 'bf2344301e'),
       ('apps/engine_master_render.cpp', 100, '4991667fa0'),
       ('apps/engine_consumer.cpp', 766, 'b9cc84f346'),
-      ('apps/engine_audio_callback.h', 448, '9186a80c34'),
+      ('apps/engine_audio_callback.h', 404, '258e27bdfd'),
 ]
 OUT_WRITERS = [
       ('apps/juce_host_process_main.cpp', 664, '372911ff1e'),
