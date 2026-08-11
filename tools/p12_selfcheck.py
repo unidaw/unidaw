@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '4256372f9e1b34ee522ce1d9c38c12ba2ef17e36'
+PREV_TIP     = '8dfd096348870c24ddc4dbf7015e5ba01e563e6c'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -106,7 +106,7 @@ CONTROLS = {
                       'COMMAND-ROOT-WIDE'),
  'unmarked-popn':    ('exact. [HAND-CLASSIFIED — open item 25 (all)]', 'exact.', 1,
                       'POPULATION-UNCOMMANDED'),
- 'handmade-count':   ('**7 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
+ 'handmade-count':   ('**8 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
                       'HANDMADE-COUNT'),
  # rewrite a labelled block into the OTHER spelling and require the labels to survive: without
  # this, the next gate that writes S.1 or "Static 1" disappears exactly as G0-B did.

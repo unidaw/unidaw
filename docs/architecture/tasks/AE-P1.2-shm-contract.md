@@ -1078,7 +1078,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `81ab4a37890dd38632d8fcf831577c88e89790ab`, A.0 SCRIPT BLOB `7f4d966579127a9daafca5a60d7bbb13faa903f5`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `f4d49e3a285a631ae223619b3fdd43db913882e4`, A.0 SCRIPT BLOB `e4eaf3e38a44837693af6b2344828369ac6b5f16`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1409,7 +1409,7 @@ carrying one cannot be decided by any implementation.
 
 Every count is stated as RAW → RULE → IN SCOPE, so that the command reproduces the raw figure and the
 rule reproduces the rest; and every count is a floor where a runtime value defeats the extraction.
-**7 populations are HAND-CLASSIFIED and exempt from that sentence**, each carrying a marker and
+**8 populations are HAND-CLASSIFIED and exempt from that sentence**, each carrying a marker and
 open item 25 (all). **And of the 13 RAW claims, 12 of them apply their RULE BY HAND** — the command
 returns the raw figure and a stated subtraction reaches the in-scope one — while none now carries its rule inside the command without also subtracting. That 12 is the honest size of what this gate
 cannot decide: it checks every subtraction's arithmetic and none of their justifications, and the
