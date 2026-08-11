@@ -672,6 +672,13 @@ explicitly, edge/move controls are live, and the prose count-word table extends
 past 100 (97 controls). Exact review is pending; item28 classification and
 carried G2/G3/G0/G4 decisions remain gated.
 
+Exact review of `56dd20e` is **BLOCKED**. Edge validation/emission still differ
+on whitespace (`BLOCKED-ON:29` validates but emits no edge); item28 must be
+blocking `[PRODUCT, PACKET]`, making current count10 false-green. Unclosed
+markers are ignored, the named move control only copies, and the WORD[100]
+parser entry is unreachable. Item18 prose, G3 M1/N/Watchdog/item37 oracle,
+G0, G4, and opening packet-count contradictions remain.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
