@@ -1007,17 +1007,36 @@ mains, 6 non-calls: a design doc, a tools script, a log line, a declaration, a c
 definition) → **3 production**. ⟂ The predecessor stated the split beside the command instead of as a
 subtraction, which put it outside the arithmetic the gate checks. *Out-plane readers* — RAW **27**
 (`grep -rn -e audioOutOffset -e safeAudioOutPtr -e audioOutChannelPtr -e auxOutputPlaneOffset apps/`)
-⟂ → **AUTHORING RETRACTED. Open item 26 (G4) is BLOCKING again.** I partitioned the 27 by ROLE and
-got the roles wrong, because I classified by the NAME of the variable rather than by how the pointer
-is USED: `engine_produce_block.cpp:1030` binds `float* output` and then passes it as the SOURCE of a
-`memcpy` — a READ; `:1112` fills `outputPtrs` which is immediately bound to `currentInput` and fed to
-the patcher node — a READ; `engine_consumer.cpp:766` computes an aux offset and reads the completed
-block through it — a READ. I called the first two "byte-producing writes" on the strength of the word
-`output`. The exact review's count is **at least six byte-consuming reads plus an indirect callback
-reader**, and I am not publishing a third guess at the boundary.
-**And the arithmetic I offered as the proof it was checkable does not add up**: I wrote
-3 + 2 + 5 + 3 + 1 + 2 + 4 = 27 and that sum is 20. Seven sites are unaccounted for in the very
-sentence claiming the partition was total. A stated sum is only evidence if someone adds it. *Input-plane writers in engine production code* — RAW 13
+⟂ → **THE POPULATION IS INCOMPLETE, not merely its subtraction. Open item 26 (G4) is BLOCKING.**
+The four RAW terms are four SPELLINGS, and the host uses a fifth: `grep -rn audioAuxOutOffset apps/`
+returns 5 sites and ZERO of them match any RAW term. The engine spells the aux plane
+`auxOutputPlaneOffset` (a function); the host stores `state.audioAuxOutOffset` (a member). Same
+plane — the host's own comment at `:498` says "the engine derives this same offset via
+auxOutputPlaneOffset(header)".
+**Among the five is a BYTE-PRODUCING WRITE the population cannot see:**
+`juce_host_process_main.cpp:657-665` computes `state.auxOutputPtrs[ch]` into the plane and
+`std::fill(..., 0.0f)` zeroes every aux slot every block. G4's invariant is a consumer reading bytes
+ANOTHER AGENT WROTE — the other agent is the host, and this gate's population is blind to it
+writing. That is the `S-1` spelling defect at the scale of a whole agent.
+**R7 (below) rules the host IN SCOPE**, so the population must be rebuilt around the artifact that
+cannot be absent: every access to either plane resolves through `ShmHeader::audioOutOffset`, the
+main plane directly and the aux plane by derivation, and there is no second way to find the plane.
+A population defined as "every dereference of the mapped base at an offset derived from
+`audioOutOffset`" cannot miss a spelling. That census has NOT been done and I am not stating a
+reader floor from a selector known to be partial.
+**The 27 partition itself is total and sums**, measured by claude-worker-1 and reproduced here:
+11 non-code · 3 test mains · 2 header-field writes (`juce_host_process_main.cpp:496`,
+`engine_ui_shm.cpp:40` — these assign the OFFSET FIELD, not plane bytes, a role my earlier partition
+folded into "writes") · 4 establishing · 5 direct reads · 1 indirect read
+(`engine_produce_block.cpp:1150`, dereferenced inside `enqueueInboundAudio`) · 1 host establishing.
+11+3+2+4+5+1+1 = 27.
+**UNRESOLVED and not reconciled:** that gives SIX byte-consuming reads. The exact review states "at
+least six byte-consuming reads plus an indirect callback reader", which reads as seven. Neither
+claude-worker-1 nor I can reproduce a seventh inside the 27, and promoting an establishing site to
+reach the number would be exactly the arithmetic-driven classification this gate has already been
+burned by. The reviewer should name the seventh site.
+
+*Input-plane writers in engine production code* — RAW 13
 (`grep -rn -e audioInOffset -e safeAudioInPtr -e audioInChannelPtr apps/`) → minus 11 (tests,
 declarations and reads) → **2**. ⟂
 
@@ -1122,7 +1141,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `33f6d96368be9db5fe5cd9b4832725e6a55ee2e7`, A.0 SCRIPT BLOB `ab7d1e3ef6dd7d3f491b46961915412b57c56fec`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `0383b77b76d3d042480183c1993efe301c03a6e0`, A.0 SCRIPT BLOB `f2cfb5062a1f97f62efb131ceb0b96b0697d7474`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1130,7 +1149,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 30 items, 22 open · 13 RAW (12 hand-ruled) + 20 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 30 items, 22 open · 13 RAW (12 hand-ruled) + 21 commanded claims, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1280,6 +1299,15 @@ RELATED population it must not be confused with. Every control states which one 
 **Cost, and it is the whole reason this ruling is needed:** the two sets differ in both directions,
 so neither can stand in for the other. A control written against "arbitrated" while claiming
 "refusable" is the error this packet published and retracted.
+
+**R7 — item 26 (G4): THE HOST PROCESS IS IN SCOPE.** G4's invariant is a consumer reading bytes
+ANOTHER AGENT wrote, and the other agent is `juce_host_process_main`. A scope that excluded it would
+leave the gate unable to see the write side of its own invariant — and it already does not see it,
+because the population's four name-terms miss the host's spelling entirely. Note this differs from
+G1-A, whose RAW deliberately excludes `juce_host_process_main` because that gate is about the
+engine's own ring; a per-gate scope is not a packet-wide one. **Cost:** the population must be
+rebuilt by derivation from `ShmHeader::audioOutOffset` rather than by matching spellings, which is a
+harder census than a grep and is why item 26 stays open rather than closing on a corrected number.
 
 **What these rulings do NOT do.** None of them closes its item — R1 through R4 are decisions that
 make the items IMPLEMENTABLE, and each item stays open until the work it names exists and is

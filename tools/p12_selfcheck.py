@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'd93138c9cafa8bb3430ea47f44841bd1ee71621f'
+PREV_TIP     = '8e97f7d25871670fb9c127af4a2cbd292e0582ba'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -497,7 +497,7 @@ for g in gate_hdr:
     # TWO decidabilities, because the packet makes the distinction deliberately and one boolean
     # collapsed it toward less work: G3 is plannable (R3 authored N) and not acceptance-decidable.
     withdrawn_pop = bool(re.search(r'(SELECTION WITHDRAWN|SCOPE FALSIFIED|no derivable population|'
-                                   r'declares NO population|AUTHORING RETRACTED)', seg))
+                                   r'declares NO population|AUTHORING RETRACTED|POPULATION IS INCOMPLETE)', seg))
     gates.append({'id': g['gate'], 'line': g['line'], 'end_line': g['end_line'],
                   'dependencies': [d for d in deps if d != g['gate']],
                   'dependencies_text': dep_text,
