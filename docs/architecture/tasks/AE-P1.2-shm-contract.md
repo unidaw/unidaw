@@ -890,9 +890,14 @@ proving omission rather than design, and they bound the blast radius to three sh
 interleaving VST and non-VST devices, a patcher audio node after a plugin, and track-to-track routing
 from a plugin-bearing track. **Dependencies** G0-A, G0-B, G1-A, G1-B, G2-A, G2-B, G3. Final gate — and therefore NOT DECIDABLE
 at this SHA, because its dependencies carry SIX BLOCKING items: 11 (G1-B) has no reader
-population, 18 (G2-B) has the mirror-ack circularity, 19 (G3) has no source for N, 24 (G0-B) holds
-the rename PASS 9 is RED without, and 26 and 27 are G4's and G2-A's own withdrawn populations.
-**The condition is that the dependency GATES PASS, not that their items are ruled.** All four of
+population, 18 (G2-B) has the mirror-ack circularity, 19 (G3) has no source for N, and 24 (G0-B) holds
+the rename PASS 9 is RED without. Items 26 and 27 are NOT dependency blockers: 26 is G4's own
+withdrawn population and 27 is G2-A's, and they are listed separately for that reason.
+**Two conditions, and the second was missing.** (a) The dependency GATES PASS — not that their items
+are ruled. (b) **G4's OWN population exists**: item 26 is not a dependency blocker, it is G4's
+out-plane selection, withdrawn and unreplaced, so every dependency could pass and this gate would
+still have nothing to range over. Classing 26 among the dependency blockers made a gate's own
+missing population look like someone else's problem. All four of
 11/18/19/24 are RULED (R1-R4) and all four are still open; a ruling is a decision about what to
 build and says nothing about whether it exists. Stating the condition as "until those are ruled"
 would already be satisfied and would license a PASS over six open blockers. G4 is written
@@ -1028,7 +1033,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `712715f2bc1c37700dc49938e1b8d86eae88cb02`, A.0 SCRIPT BLOB `dfcacc261a060389520e2e294b56683862537ffc`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `e6a018a724e67481bb9eb0a3ef61a9169067ffa6`, A.0 SCRIPT BLOB `2e41f644c5d3b6e8de945b44605a6ef9e93f8bb7`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1068,13 +1073,13 @@ there, not from the document. Whether a rename is the right resolution for open 
 names differ and cannot choose which side moves.
 And nothing about the product beyond what a text search can see.
 
-**Controls.** Twenty-four, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Twenty-five, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
-`byhand-count`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
+`borrowed-cmd`, `byhand-count`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
 `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`. Two of them were themselves defective when first
 written and are recorded here rather than quietly fixed: `raw-without-cmd` changed a claim's NUMBER
 and so provoked a different check entirely, and the landing assertion demanded the anchor count DROP,

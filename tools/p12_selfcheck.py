@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '265c720344f2d47e530e2586100e398dad5786bd'
+PREV_TIP     = 'e9ae9eaa757f784d22f8961a9dd3d2f659895914'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -108,6 +108,8 @@ CONTROLS = {
                       'POPULATION-UNCOMMANDED'),
  'handmade-count':   ('**6 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
                       'HANDMADE-COUNT'),
+ 'borrowed-cmd':     ("RAW 13 (`grep -rn -e '>audioInOffset'", "RAW 13 \u27c2 (`grep -rn -e '>audioInOffset'", 1,
+                      'RAW-WITHOUT-COMMAND'),
  'no-terminator':    ('→ **12 executable derivations**. \u27c2', '→ **12 executable derivations**.', 1,
                       'RAW-NO-TERMINATOR'),
  'byhand-count':     ('12 of them apply their RULE BY HAND', '10 of them apply their RULE BY HAND', 1,
@@ -228,9 +230,16 @@ for a, b in spans:
     if not fin:
         bad('RULE-NO-RESULT', f'RAW {n} subtracts {minus} and states no result'); continue
     checked += 1
-    if n - sum(minus) != int(fin[-1]):
-        bad('RULE-ARITHMETIC', f'RAW {n} minus {"+".join(map(str, minus))} stated as {fin[-1]}, '
-                               f'not {n - sum(minus)}')
+    # EVERY step, not just the last: summing all subtractions and comparing to the final figure
+    # lets a wrong intermediate pass, because two errors that cancel look like one correct total.
+    steps = re.findall(r'(minus \*{0,2}\d+|→ \*{0,2}\d+)', seg)
+    run = n
+    for st in steps:
+        v = int(re.search(r'\d+', st).group(0))
+        if st.startswith('minus'):
+            run -= v
+        elif run != v:
+            bad('RULE-ARITHMETIC', f'RAW {n}: step states {v}, arithmetic gives {run}'); break
 if checked != byhand:
     bad('RULE-COVERAGE', f'{byhand} RAW claims subtract, {checked} arithmetic-checked')
 declared_byhand = re.search(r'(\d+) of them apply their RULE BY HAND\b', pkt)
@@ -240,7 +249,13 @@ elif int(declared_byhand.group(1)) != byhand:
     bad('BYHAND-COUNT', f'document says {declared_byhand.group(1)}, {byhand} RAW claims subtract')
 # the command may wrap to the next line: forbidding newlines here made a commanded claim look
 # uncommanded, which is the instrument reporting its own regex as a packet defect
-withcmd = re.findall(r'RAW \*{0,2}(\d+)\*{0,2}[^(]{0,80}?\(`([^`]+)`\)', pkt, re.S)
+# bounded by the claim's own terminator: a global look-ahead could borrow the NEXT claim's command
+withcmd = []
+for a_, b_ in spans:
+    if b_ <= a_: continue
+    seg_ = pkt[a_:b_]
+    mm_ = re.search(r'RAW \*{0,2}(\d+)\*{0,2}[^(]{0,80}?\(`([^`]+)`\)', seg_, re.S)
+    if mm_: withcmd.append((mm_.group(1), mm_.group(2)))
 if len(tokens) != len(withcmd):
     bad('RAW-WITHOUT-COMMAND', f'{len(tokens)} RAW claims, {len(withcmd)} carry a command')
 executed = 0
@@ -352,7 +367,8 @@ elif int(claimed.group(1)) != handmade:
 listed = re.search(r'\*\*Controls\.\*\* ([\w-]+), each naming', pkt)  # 'Twenty-two' is not \w+
 names = set(re.findall(r'`([a-z0-9-]+)`', pkt[pkt.find('**Controls.**'):pkt.find('**Controls.**') + 900]))
 WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twenty',
-        21: 'Twenty-one', 22: 'Twenty-two', 23: 'Twenty-three', 24: 'Twenty-four'}
+        21: 'Twenty-one', 22: 'Twenty-two', 23: 'Twenty-three', 24: 'Twenty-four',
+        25: 'Twenty-five', 26: 'Twenty-six', 27: 'Twenty-seven'}
 if not listed:
     bad('CONTROL-PROSE-MISSING', 'no "**Controls.** <N>, each naming" sentence')
 elif listed.group(1) != WORD.get(len(CONTROLS), '?'):
