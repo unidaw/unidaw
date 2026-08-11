@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'f0f3b6bbe83a8e2e9b395b77bf78dbc23a73c4aa'
+PREV_TIP     = '2cdce03b18b4c8e8d6ce43b088d895657812ca4f'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -347,6 +347,8 @@ CONTROLS = {
                       '    x  engine_consumer.cpp:766', 1, 'OUT-MEMBERS'),
  # a manifest must never be published from a packet that failed its own gate
  'emit-fail-open':   ('# Open items — 32 atomic', '# Open items — 33 atomic', 1, 'OPEN-COUNT'),
+ # both items are G2-A, so the forward gate check agrees and only the backward one can catch it
+ 'ruling-item-swap2': ('**R12 — item 27 (G2-A)', '**R12 — item 28 (G2-A)', 1, 'RULING-ITEM-BIND'),
  'ratchet-count':    ('ratchet holds at **four** at this SHA', 'ratchet holds at **five** at this SHA', 1,
                       'RATCHET-DRIFT'),
  'dep-self':         ('**Dependencies** G0-A, G0-B', '**Dependencies** G0-A, G0-B, G4', 1,
@@ -672,8 +674,14 @@ for m in re.finditer(r'(?m)^\*\*(R\d+) — (.*?):', pkt):
             bad('RULING-ITEM-BIND', f'{m.group(1)} names item {n}, which does not exist')
         elif entry.get(n) != g:
             bad('RULING-ITEM-BIND', f'{m.group(1)} names item {n} as {g}, the list says {entry.get(n)!r}')
-for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — [^\n]{0,80}RULED \((R\d+)\)', body):
-    n, r = int(m.group(1)), m.group(2)
+# the backward direction matched only `RULED (Rn)`. Items that say `AUTHORED under Rn` — the form
+# every scope authoring uses — were outside it, so swapping R12's heading from item 27 to item 28
+# passed: both are G2-A, so the forward gate check agreed, and no backward check existed for the
+# spelling item 27 actually uses. Two items of one gate are interchangeable to a check that only
+# compares gates.
+for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — [^\n]{0,120}?'
+                     r'(?:RULED \((R\d+)\)|AUTHORED under (R\d+))', body):
+    n, r = int(m.group(1)), (m.group(2) or m.group(3))
     if n not in ruling_items.get(r, set()):
         bad('RULING-ITEM-BIND', f'item {n} claims {r}; {r} names {sorted(ruling_items.get(r, []))}')
 
@@ -1085,6 +1093,10 @@ if sorted(_rid_emitted) != sorted('R%d' % i for i in rids):
 if len(set(_rid_emitted)) != len(_rid_emitted):
     bad('RULING-SET', f'duplicate ruling records emitted: {_rid_emitted}')
 for _r in rulings:
+    # an itemless ruling could be appended silently: R13 with no `item N (Gx)` in its heading owned
+    # nothing and was checked by nothing.
+    if not _r['items']:
+        bad('RULING-ITEM-BIND', f'{_r["id"]} names no item in its heading')
     if not _r['decision']:
         bad('RULING-DECISION-NULL', f'{_r["id"]} emits no decision — the manifest contract says every '
                                     f'ruling carries the decision text, and a null is a lost sentence')

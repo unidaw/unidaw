@@ -610,31 +610,41 @@ halves with barrier-paused writers.
    populated view for 2f — the image carrying `trackId`/`deviceId` from
    `apps/engine_request_commands.cpp:122-123` beside a stale `paramCount`.
 7. Neither of the two named readers loads a peer-written word through a plain non-atomic load. The
-   universal form ("no reader ...") is deliberately NOT used: it quantifies over the withdrawn
-   population and would be undecidable for the same reason the population is. Both named sites fail today
+   universal form ("no reader ...") is still NOT used, but the reason has CHANGED and this sentence
+   outlived the change: it said the universal quantifies over a WITHDRAWN population, and R1
+   authored that population — item 11 (G1-B) is CLOSED. The universal remains unused now only
+   because the authored population is seven members and this bullet is about two of them; a bullet
+   naming its two sites is decidable where "no reader" would require re-deciding all seven at every
+   run. Both named sites fail today
    and the bullet names both: `ui/daw-bridge/src/control.rs:944-949`. Quantified over THOSE TWO
-   SITES, not over "the six" — the six are withdrawn, and a bullet phrased "two of the six" would
-   have been undecidable for the same reason the population is. Whether two is the whole set of
+   SITES, and the phrase "two of the six" would have been wrong twice over: the hand-selected six
+   were withdrawn, and what replaced them under R1 is seven. A bullet naming its sites survives a
+   population being re-authored underneath it, which is why for the same reason the population is. Whether two is the whole set of
    offending sites is open item 11 (G1-B); that these two offend is decidable at this SHA and is
    what the bullet asserts. *REFUTED BY* either remaining.
 8. An abandoned publication is distinguishable from an unanswered one within a bounded number of
    observations, and the reader reports which it saw. *REFUTED BY* a reader that returns the same
    value for both. This replaces a predecessor bullet requiring only that the condition be
    "observable", which any implementation satisfies.
-9. **WITHDRAWN WITH THE POPULATION.** The bullet required a mechanical echo ratchet over "the send
-   sites" and a ratchet needs a set to range over; this packet withdraws that set, so the bullet
-   ranged over nothing. It is withdrawn for the same reason PASS 7 was re-quantified rather than
-   deleted — the requirement is real and returns with open item 11 (G1-B), which must deliver a
-   population before any ratchet over it can be specified. Leaving it standing would have been a
+9. **RESTORED — the population it waited for exists.** This bullet was withdrawn because a
+   mechanical echo ratchet needs a set to range over and the set was withdrawn; R1 authored it and
+   item 11 (G1-B) is CLOSED, so the condition it was waiting on is met and the withdrawal outlived
+   it. The requirement is a ratchet over the seven authored send sites, and it is stated here as
+   OPEN WORK rather than as satisfied: no such ratchet exists yet, which is a gap in the gate's
+   tests and not in its population. *REFUTED BY* adding an eighth send site to the authored
+   population and observing the ratchet stay green — which is what it does today, there being no
+   ratchet, so this bullet is refuted at this SHA and says so rather than reading as met. Leaving it standing would have been a
    PASS condition satisfiable by ratcheting the empty set.
 
 **Static checks.** S1 fence between open and first payload store — statement ORDER is invisible from
 any return value, since a clean image proves nothing about the fence. S2 write order inside the
 device-params body: identity words first (`:122-123`), `paramCount` last (`:169`), which is what makes
 the stale answer readable as complete. S3 minting expressions, naming the two collapsing forms. S4
-**WITHDRAWN WITH THE POPULATION** — it required drift detectors asserting "the three counts", which
-were counts over the hand-selected six this packet withdraws. A drift detector over a withdrawn
-population detects drift in nothing. It returns with open item 11 (G1-B), and the requirement it
+**RESTORED — the population it waited for exists.** It required drift detectors asserting "the
+three counts", which were counts over the hand-selected six the packet withdrew; a drift detector
+over a withdrawn population detects drift in nothing. R1 authored the replacement and item 11 (G1-B)
+is CLOSED, so the detectors now have a set to pin. **They are not written yet**, which makes this an
+open test rather than a withdrawn one — the distinction the whole gate turns on. It returns with open item 11 (G1-B), and the requirement it
 encodes — that whatever population replaces the six must have detectors pinning its size — is
 carried there rather than left as an unrooted static check here.
 
@@ -1438,7 +1448,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `123179d1cb0bca78238d9d367c96def7a8ddcadb`, A.0 SCRIPT BLOB `25ed12cd97db8e7da8e7e4ba7662502fa1245346`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `f588b74d9fe7f092ba060903e824127d3cddebfa`, A.0 SCRIPT BLOB `7f5b8b3483348494b0d8f3c554cce32ce9907a1d`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1496,14 +1506,14 @@ back to: A.0's "what it does not decide" list is the exact place where a stale s
 what has been settled.)
 And nothing about the product beyond what a text search can see.
 
-**Controls.** Sixty-one, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Sixty-two, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
-`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`, `ratchet-count`, `writer-extra`, `reader-row-moved`, `emit-fail-open`. The last twenty-seven exist because
+`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`, `ratchet-count`, `writer-extra`, `reader-row-moved`, `emit-fail-open`, `ruling-item-swap2`. The last twenty-eight exist because
 **codex-worker-1** MUTATED THIS PACKET AND THE GATE STILL SAID PASS (the finding reached me relayed
 by backend, and two commit messages in this lineage credit the relay rather than the author —
 `e26f91f` and `c332c03`, immutable and wrong on this point): deleting the item's reopening sentence,
@@ -1669,15 +1679,27 @@ production `emitClipReject` sites — RAW 4 (`git grep -n -E '^ +emitClipReject\
 
 **The three channels, each with a different adoptability.**
 
-    ClipRejected, adoptable      requireMatchingClipVersion (the DEPS one) -> emitClipReject
-                                 reached from 6 arbitration call sites
+    ClipRejected                 requireMatchingClipVersion (the DEPS one) -> emitClipReject.
+      command-specific           `UiClipRejectPayload` carries **commandType** — it names what was
+                                 refused. Reached from 6 arbitration call sites
                                  (`git grep -n -E 'requireMatchingClipVersion\((auto|chord|diff|h|p|payload)' apps | wc -l` returns 6)
-    UiDiffType::ResyncNeeded     daw::requireMatchingClipVersion (the FREE one, `clip_edit.cpp:12`)
-                                 fills a diff; no retry value, nothing to adopt
+    UiDiffType::ResyncNeeded     daw::requireMatchingClipVersion (the FREE one, `clip_edit.cpp:5-15`)
+      terminal, not addressed    fills a diff with `clipVersion = currentVersion` and NO command
+                                 field
     UiHarmonyDiffType::           HarmonyTimeline::requireMatchingHarmonyVersion
-      ResyncNeeded               (`engine_harmony_timeline.cpp:119`), reached from
+      ResyncNeeded               (`engine_harmony_timeline.cpp:111-120`) sets
+      terminal, not addressed    `harmonyVersion = current`, no command field. Reached from
                                  `engine_note_commands.cpp:93` and `:112` — WriteHarmony and
                                  DeleteHarmony, which never reach either clip arbiter
+
+**A CORRECTION TO THIS RULING'S FIRST STATED REASON, which was false at the pin.** R12 originally
+excluded the two ResyncNeeded channels because they "carry no retry value, nothing to adopt".
+**They both carry one** — `diffOut.clipVersion = currentVersion` at `clip_edit.cpp:13` and
+`diffPayload.harmonyVersion = current` at `engine_harmony_timeline.cpp:119`. codex-worker-1 caught
+it. The real distinction is that a `ClipRejected` NAMES A COMMAND and a ResyncNeeded diff does not:
+one is addressed to a caller, the other is a terminal "you are stale" that any reader may pick up.
+The exclusion stands and its reason was wrong, which is worth more than a quiet edit — I authored a
+ruling on a property I had not read the payload for.
 
 **WHY THE EMIT SITES AND NOT THE ARBITRATED COMMANDS.** G2-A's invariant is that a refused command
 tells the UI what to retry with. That is a property of the EMIT, not of the check. Selecting on
@@ -1688,11 +1710,21 @@ at all. **Every previous scope here was falsified by the same move: it selected 
 gate is about the answer.** The containment claim B = A ∪ {SetRowOps} failed for the same reason —
 the two sets are not nested because they are indexed on different things.
 
-**One member fails the invariant at this SHA, and that is a finding rather than a reason to exclude
-it.** `engine_rowops_commands.cpp:49` passes `/*sentBase=*/0, /*currentBase=*/0` — constants — where
-the other two pass real values, and zero is a live `clipVersion`. The gate ranging over three sites
-of which one cannot satisfy it is the correct state: open item 29 (G2-A) is that product defect, and
-a population defined to exclude its own failing member would be a population chosen to pass.
+**ALL THREE MEMBERS FAIL THE INVARIANT, not one — and that correction is codex-worker-1's.** I wrote
+that `engine_rowops_commands.cpp:49` was the single failing member because it passes
+`/*sentBase=*/0, /*currentBase=*/0` — constants, where the other two pass real values and zero is a
+live `clipVersion`. That is true and it is not the whole defect. **`commandType` names a KIND, not
+an INSTANCE**, and `UiClipRejectPayload` carries no sender-minted per-command identity at all
+(`event_payloads.h`: diffType, reason, trackId, sentBase, currentBase, commandType, reserved). The
+consumer correlates on `(track, commandType, sentBase)` — `ui/daw-cli/src/main.rs:1179`, live, with
+four call sites of `await_clip_outcome` at `:2989`, `:3000`, `:5418`, `:5430` — so two concurrent
+refusals of the SAME command type on one track at the same base are indistinguishable for every
+member of the population, not just for the one that zeroes its bases. rowops:49 is additionally
+worse, not uniquely wrong.
+
+**A population all of whose members fail is the right population.** Open item 29 (G2-A) is the
+product defect; a population defined to exclude its own failing members would be a population chosen
+to pass, and one narrowed to a single failing member would have understated the work by two thirds.
 
 **What these rulings do NOT do.** None of them closes its item — R1 through R12 are decisions that
 make the items IMPLEMENTABLE, and each item stays open until the work it names exists and is
