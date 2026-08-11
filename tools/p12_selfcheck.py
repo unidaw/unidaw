@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '152a539c29874d2296b968ef9228aa545a1473a5'
+PREV_TIP     = '56dd20ee29861711cecb35ae6f6af302d5b4158c'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -278,8 +278,8 @@ CONTROLS = {
  # this, the next gate that writes S.1 or "Static 1" disappears exactly as G0-B did.
  'label-spelling':   ('**Static checks.** S1 the ready-clear', '**Static checks.** S-1 the ready-clear', 1,
                       'MANIFEST-STALE'),
- 'blocker-set':      ('TEN are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 35, 36 and 37',
-                      'TEN are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 35, 36 and 28', 1, 'BLOCKER-SET'),
+ 'blocker-set':      ('ELEVEN are BLOCKING — 18, 19, 24, 26, 27, 28, 29, 33, 35, 36 and 37',
+                      'ELEVEN are BLOCKING — 18, 19, 24, 26, 27, 28, 29, 33, 35, 36 and 21', 1, 'BLOCKER-SET'),
  'constraint-lost':  ('1. Production atomic **size/alignment', '1x. Production atomic **size/alignment', 1,
                       'CONSTRAINTS-COUNT'),
  'opening-gates':    ('**EVERY GATE IS PLANNABLE AT THIS SHA**',
@@ -343,7 +343,7 @@ CONTROLS = {
  'ruling-body-swap': ('CLOSED at this SHA.** The static-check contradiction was not one. R17 shows',
                       'CLOSED at this SHA.** The static-check contradiction was not one. R16 shows', 1,
                       'RULING-BODY-BIND'),
- 'restate-blockers': ('block (18, 19, 24, 26, 27, 29, 33, 35, 36 and 37)', 'block (18, 19, 24, 26, 27, 29, 33, 35, 36 and 28)', 1,
+ 'restate-blockers': ('block (18, 19, 24, 26, 27, 28, 29, 33, 35, 36 and 37)', 'block (18, 19, 24, 26, 27, 28, 29, 33, 35, 36 and 21)', 1,
                       'BLOCKER-SET-RESTATED'),
  # the item half of the same check: item 26's history is where the digits went when R8 lost them,
  # and a check that ranged only over rulings would have watched them move.
@@ -474,6 +474,9 @@ CONTROLS = {
                       '37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ⟦⟧ ', 1, 'KIND-MARKER-UNKNOWN'),
  'edge-malformed':   ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
                       '37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ⟦BLOCKED-ON: abc⟧ ', 1,
+                      'KIND-MARKER-UNKNOWN'),
+ 'edge-nospace':     ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
+                      '37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ⟦BLOCKED-ON:29⟧ ', 1,
                       'KIND-MARKER-UNKNOWN'),
  'packet-marker-dupe': ('36. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
                       '36. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ⟦PACKET⟧ ', 1, 'KIND-MARKER-UNKNOWN'),
@@ -965,7 +968,11 @@ for _m in _MARKER_RUN.finditer(_unhidden(body)):
             # ignored what it could not read: ⟦BLOCKED-ON: abc⟧ emitted blocked_on [] while the
             # marker sat in the body, so a malformed edge was indistinguishable from no edge.
             # Normalisation upstream of validation, one more time.
-            if not re.fullmatch(r'BLOCKED-ON:\s*\d+', _tok.strip()):
+            # EXACTLY the emitter's form. The validator accepted `BLOCKED-ON:\s*\d+` while the
+            # graph and the manifest read `BLOCKED-ON: (\d+)` with one space, so ⟦BLOCKED-ON:29⟧
+            # validated and emitted blocked_on [] — the same validator/emitter split as the kind
+            # markers, one field over, found by the same reviewer within the hour.
+            if not re.fullmatch(r'BLOCKED-ON: \d+', _tok.strip()):
                 _MARKER_ERR.append(f'item {_n} carries a malformed ⟦{_tok}⟧ edge marker')
             continue
         if _name not in _KIND_TOKENS:

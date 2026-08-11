@@ -28,7 +28,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    the manifest keeps the two apart deliberately. The zero case is a different sentence rather than
    a missing one, so the check cannot pass by the claim disappearing. G1-B's readers were withdrawn and are AUTHORED again under R1
    with rules, members and drift detectors; G2-A's scope and G4's out-plane are not. **TWO GATES ARE ACCEPTANCE-DECIDABLE — G0-A and G1-A —
-   and ten items block (18, 19, 24, 26, 27, 29, 33, 35, 36 and 37)** and ALL TEN need product
+   and eleven items block (18, 19, 24, 26, 27, 28, 29, 33, 35, 36 and 37)** and ALL ELEVEN need product
    work. **Item 37 needs a PACKET EDIT BESIDES**, and the opening used to imply otherwise: G3's
    acceptance surface cannot see the defect that item names, so writing its oracle into the
    deterministic test, PASS conditions and static checks is packet work. None of the ten is
@@ -44,16 +44,18 @@ The blockers from the exact review are reconciled here, and the count is deliber
    **The derivation is only as good as the marking, and the marking is mine** — this check can catch
    a marker missing from a blocker, and cannot catch a blocker marked wrongly; item 27 was marked
    ⟦PRODUCT⟧ for one SHA when its scope is authored and its blocker is item 29's defect. **A classification cannot be read out of prose that was not written
-   to carry it.** FOUR blockers are packet edits as well as product fixes — item 26, whose gate
+   to carry it.** FIVE blockers are packet edits as well as product fixes — item 28, whose
+   extraction predicate, command and member list have never been authored while a counter-only
+   decision survives at `ui/daw-cli/src/main.rs:1183-1184`; item 26, whose gate
    writes its PASS conditions, deterministic test and static checks against one plane while its
    population covers two, so those surfaces must be authored before any implementation can decide
    it; item 37, whose
    acceptance oracle is unwritten; item 36, whose Layer 0, PASS 1 and register text all need
    rewriting alongside the telemetry it waits on; and item 18, where G2-B's PASS 4 is withdrawn with
    no replacement, so no PASS condition accepts the two-level implementation that exists and writing
-   one is packet work. Both carry ⟦PACKET⟧ beside ⟦PRODUCT⟧ so the
+   one is packet work. Each carries ⟦PACKET⟧ beside ⟦PRODUCT⟧ so the
    manifest can say so; until `kind` became an array that fact was unrepresentable and the record
-   said PRODUCT. An earlier version of this sentence named only item 37. **⟦PACKET⟧ MARKS (18, 26, 36, 37)**, derived from the item heads and compared against this restatement, because representing a
+   said PRODUCT. An earlier version of this sentence named only item 37. **⟦PACKET⟧ MARKS (18, 26, 28, 36, 37)**, derived from the item heads and compared against this restatement, because representing a
    kind is not binding it: deleting the marker, moving it to a nonblocking item, DUPLICATING it and
    misspelling it all passed until these checks existed, and a marker parked later in a head
    validated as present while emitting as absent because the validator and the emitter read the
@@ -1419,7 +1421,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `56c57f1ea4373dd573ac392bd2af5d3c19cbe98b`, A.0 SCRIPT BLOB `ffc5444e73ce80351ee13c69c7b20e4f47835194`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `12f59413d9f2bd9581e7e9ac7bc5c0d18ac4c1fd`, A.0 SCRIPT BLOB `ccbbc03ee77decb6d3a1e7f07cd3b4e247a5ce3f`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1498,7 +1500,7 @@ extractor count at its floor. `--prove-sweep-predicate` classifies a crafted-lin
 every spoof a reviewer has landed on the sweep's success test — a bare `OK (+` prefix, an unanchored
 tail, a wrong tag, a count the emitter cannot print, and a tag line with no separator.
 
-**Controls.** Ninety-seven, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Ninety-eight, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1519,7 +1521,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-move`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-move`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
@@ -2172,7 +2174,7 @@ census recorded as a proof, which this packet has already made once at item 7.
 
 # Open items — 37 atomic, 9 CLOSED at this SHA, 28 open
 
-One per line, numbered in document order, so the count is checkable. TEN are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 35, 36 and 37. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
+One per line, numbered in document order, so the count is checkable. ELEVEN are BLOCKING — 18, 19, 24, 26, 27, 28, 29, 33, 35, 36 and 37. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
 
 1. **G0-B** — The generated header breaks the documented `-DDAW_BUILD_PATCHER_RUST=OFF` build for six unconditional targets, with no stated path, include directory or target-ordering edge.
@@ -2352,7 +2354,15 @@ carrying one cannot be decided by any implementation.
     enumeration, or the gate states which refusals it governs and why the rest are out — and the two
     populations must stop being treated as one set.
 
-28. **G2-A** — The requirement that was S3, split out of item 27 because they are separately
+28. **G2-A** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING, and it was NONBLOCKING for too long.** G2-A's PASS 4
+    requires every counter-only decision to be replaced, and `ui/daw-cli/src/main.rs:1183-1184`
+    returns `ClipOutcome::Applied` solely because the track's clip version moved — no identity of
+    the command that moved it is read. Items 27 and 29 do not touch that consumer, so nothing else
+    on the blocker list closes it. It needs PACKET authoring (the extraction predicate, its command
+    and its member list, which this item has never carried) and PRODUCT replacement of each such
+    decision. codex-worker-1 supplied the argument and the call site; I marked it after reading
+    `main.rs:1183-1184` at the pin rather than on the claim. The requirement that was S3, split out
+    of item 27 because they are separately
     fixable and bundling them means neither can be closed: the counter-only decisions must be
     extracted and each replaced, and no check over that extraction can be written until the
     extraction has a predicate, a command and a member list.
