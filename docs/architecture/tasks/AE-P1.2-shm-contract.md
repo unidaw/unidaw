@@ -976,28 +976,18 @@ correctly gated by the mechanism this gate generalises. `apps/engine_audio_callb
 `apps/engine_produce_block.cpp:907-919` indexes by the COMPLETED id. Those are counter-examples
 proving omission rather than design, and they bound the blast radius to three shapes: chains
 interleaving VST and non-VST devices, a patcher audio node after a plugin, and track-to-track routing
-from a plugin-bearing track. **Dependencies** G0-A, G0-B, G1-A, G1-B, G2-A, G2-B, G3. Final gate — and therefore NOT DECIDABLE
-at this SHA on FIVE dependency blockers plus one of its own. The five are carried by gates G4
-depends on: 11 (G1-B) has no reader
-population, 18 (G2-B) has the mirror-ack circularity, 19 (G3) has no source for N, and 24 (G0-B) holds
-the rename PASS 9 is RED without. Item 27 IS a dependency blocker — G2-A is one of G4's dependencies, so
-G2-A's undefined scope blocks G4 exactly as G1-B's missing population does; I had excluded it on the
-irrelevant ground that it is a gate's OWN population rather than asking whose gate. Item 26 is the
-only own-population blocker, because G4 is the gate that owns it.
-**Two conditions, and the second keeps getting lost in edits to the first.** (b) **G4's OWN
-population exists** — item 26 is G4's withdrawn out-plane selection, so every dependency could pass
-and this gate would still have nothing to range over. (a) The dependency GATES PASS — not that their items
-are ruled. (b) **G4's OWN population exists**: item 26 is not a dependency blocker, it is G4's
-out-plane selection, withdrawn and unreplaced, so every dependency could pass and this gate would
-still have nothing to range over. Classing 26 among the dependency blockers made a gate's own
-missing population look like someone else's problem. All four of
-11/18/19/24 are RULED (R1-R4) and all four are still open; a ruling is a decision about what to
-build and says nothing about whether it exists. Stating the condition as "until those are ruled"
-would already be satisfied and would license a PASS over six open blockers. G4 is written
-in full so the work is specified, but no PASS verdict on it may be recorded until every dependency
-GATE PASSES — not until items are ruled, which they already are; a final gate that reports green over blocked dependencies is the exact shape of a check that
-passes with the defect present.
-
+from a plugin-bearing track. **Dependencies** G0-A, G0-B, G1-A, G1-B, G2-A, G2-B, G3. Final gate — and therefore NOT DECIDABLE at
+this SHA, on FOUR dependency blockers plus one of its own.
+**The four**, carried by gates G4 depends on: 18 (G2-B) the mirror-ack circularity, 19 (G3) no
+source for N, 24 (G0-B) the rename PASS 9 is RED without, and 27 (G2-A) the undefined arbitrated
+scope — G2-A is one of G4's dependencies, so its undefined scope blocks G4 exactly as a missing
+population would. Item 11 was a fifth until it CLOSED; leaving a closed item in a blocker list is
+how a gate acquires a permanent-looking obstacle that no longer exists.
+**The one of its own** is 26, G4's out-plane population, whose selector is proven partial.
+**TWO CONDITIONS, stated once.** (a) Every dependency GATE PASSES — not that its items are ruled,
+which they already are. (b) G4's OWN population exists. Both are required; (b) has been lost twice
+in edits to (a), and this paragraph carried it twice at once after the second recovery, which is
+what a patched-head-and-tail produces.
 **Invariant.** For every dispatch, identified by the QUINTUPLE (host generation `g`, `blockId b`,
 `segmentStart s0`, `segmentLength sl`, readiness level `r`) — the fifth component is R2 propagated:
 a dispatch minted at `mapped-and-bypassed` and one minted at `mirror-complete` are DIFFERENT
@@ -1176,7 +1166,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `c971bb7f7d9d14e97fba939fafeab7349e2800ea`, A.0 SCRIPT BLOB `76d72f37eb8c7e7de7e4698886af4d7743cb85ad`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `92b577734c3044e1aa2f25726d61f8af9aa46402`, A.0 SCRIPT BLOB `be74bec7e1c516822a8127a256f19305deaf3308`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1214,7 +1204,13 @@ dozen exact claims written in the other shape unexecuted. No command written in 
 
 **What it does NOT decide, stated because a gate silent about its limits reads as total coverage.**
 Whether a RULE's subtraction is *justified* — it checks the arithmetic, not that the excluded lines
-deserved excluding. Whether a population's predicate is the right one: three figures in this packet
+deserved excluding. **Membership and dataflow.** Every check here counts, matches text, or verifies arithmetic. None
+of them decides whether a named site actually READS the bytes it is classified as reading, whether
+two spellings denote one address, or whether a pointer reaches a dereference through a helper. Every
+population defect found in this packet — the four-spelling census that missed the host, the seventh
+reader that had to be named, `:1030` classified a write because a variable is called `output` —
+was invisible to A.0 by construction and was found by a person reading code. A gate that counts
+cannot see membership. Whether a population's predicate is the right one: three figures in this packet
 were re-derived against a predicate of the author's that was wrong (mentions for call sites, `apps/`
 for the whole root, a forwarding lambda for an emit site), and in all three the packet was right and
 the recheck was wrong. Whether this commit is the intended one. The binding pins the PARENT commit and the parent's

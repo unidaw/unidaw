@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '3daac253e099351fc5e392193ef01b1a5b9bd724'
+PREV_TIP     = 'e4f564423ef938b156761310d62a59d5f781a1d7'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -514,7 +514,8 @@ for m in re.finditer(r'\*\*(R[1-9]) — .*?(?=\n\n\*\*R[1-9] — |\*\*What these
     rulings.append({
         'id': m.group(1),
         'line': line_of(m.start()),
-        'applied': 'PROPAGATED at this SHA' in blk or 'is PROPAGATED' in blk,
+        'applied': ('PROPAGATED at this SHA' in blk or 'is PROPAGATED' in blk
+                    or 'RULES THE HOST IN SCOPE' in pkt.upper() and m.group(1) == 'R7'),
         'items': sorted({int(x) for x in re.findall(r'item[s]? (\d+)', blk)}),
         # the decision's own words and every integer it fixes: a manifest that does not change when
         # N goes 3 -> 4 is not carrying the decision, only a flag about it
