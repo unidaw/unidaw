@@ -20,8 +20,30 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'd21c0539fc3f70e65e4fa431cd0ae313056da94a'
+PREV_TIP     = '117d2f9678a44e834d78327624f65d1f99ee140e'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
+
+# ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
+# codex-worker-1's second mutation round: delete the master row, relabel IN as OUT, duplicate a row,
+# swap in an arbitrary command whose count happens to match, mutate a member citation — every one
+# PASSED, because A.0 checked only that each row's command returns the number beside it. The row's
+# IDENTITY was unbound. A roster inside the packet would be one more statement in the file being
+# mutated; this one lives in the script, which the packet blob-pins and which the commit pins in
+# turn, so a mutation of the rows is checked against a file it did not touch.
+# sites are the LINE NUMBERS the row's command must return — member identity, not just arity.
+CENSUS_ROSTER = {
+ ('IN',  'engine addressing sites'):        ([62, 945], 2),
+ ('IN',  'engine byte-producing writes'):   ([967, 970, 978, 981, 1009, 1013, 1017, 1020, 1026,
+                                              1032, 1035], 11),
+ ('IN',  'master summed-mix write'):        ([69], 1),
+ ('IN',  'host plane-address acquisitions'):([644, 862, 879, 924, 939, 975], 6),
+ ('IN',  'host byte loads'):                ([686, 720, 927, 930, 942, 980], 6),
+ ('IN',  'host indirect handoff'):          ([987], 1),
+ ('IN',  'alias leaves the plane'):         ([1061], 1),
+ ('OUT', 'cross-agent byte-consuming reads'): ([638, 1030, 1112, 1150], 7),
+ ('OUT', 'host byte-producing writes'):     ([638, 656, 664, 665, 686, 719, 725, 726, 834, 925,
+                                              952, 956, 1015], 8),
+}
 
 fail = []
 def bad(tag, detail): fail.append(f'[{tag}] {detail}')
@@ -174,6 +196,15 @@ CONTROLS = {
  # the item half of the same check: item 26's history is where the digits went when R8 lost them,
  # and a check that ranged only over rulings would have watched them move.
  # flips the opening's universal without touching a gate: the sentence must be derived, not trusted.
+ # codex-worker-1's second round, one control per mutation they ran. All five passed before the
+ # roster existed; each now names the tag that stops it.
+ 'census-row-gone':  ("      master summed-mix write            `git grep -n -E 'const_cast<daw::ShmHeader\\*>\\(header\\)\\) \\+ off' apps/engine_master_render.cpp | wc -l` returns 1.\n", '', 1,
+                      'CENSUS-ROSTER'),
+ 'census-relabel':   ('      host indirect handoff  ', '      host indirect handof   ', 1,
+                      'CENSUS-ROSTER'),
+ 'census-cmd-swap':  ("`git grep -n -E 'const_cast<daw::ShmHeader\\*>\\(header\\)\\) \\+ off' apps/engine_master_render.cpp | wc -l` returns 1.",
+                      "`git grep -n 'inputPtrs = outputPtrs;' apps/juce_host_process_main.cpp | wc -l` returns 1.", 1,
+                      'CENSUS-SITES'),
  'accept-prose':     ('GATES ARE ACCEPTANCE-DECIDABLE — G0-A, G1-A and G1-B',
                       'GATES ARE ACCEPTANCE-DECIDABLE — G0-A, G1-A and G3', 1, 'GATE-ACCEPT-PROSE'),
  'restate-census-i': ('sized by the two OUT census rows', 'sized at 7 cross-agent reads', 1,
@@ -282,9 +313,31 @@ for ln in pkt.splitlines():
                             'command': r.group(4), 'returns': int(r.group(5)),
                             'claimed': int(r.group(2)) if r.group(2) else int(r.group(5)),
                             'derived': _rel == 'IN'})
-if len(census_rows) < 7:
-    bad('CENSUS-BLOCK', f'{len(census_rows)} census rows parsed, the block defines 7 — an extraction '
-                        f'that returns nothing must never read as a document containing nothing')
+# the roster comparison: exact key set, no duplicates, claimed value bound, and every row's command
+# must return the ROSTER'S LINE NUMBERS — which is what makes an arbitrary command with a matching
+# count fail. A count is an arity; the sites are the members.
+keys = [(r['relation'], r['role']) for r in census_rows]
+dupes = sorted({k for k in keys if keys.count(k) > 1})
+if dupes: bad('CENSUS-ROSTER', f'duplicate rows: {dupes}')
+missing, extra = set(CENSUS_ROSTER) - set(keys), set(keys) - set(CENSUS_ROSTER)
+if missing: bad('CENSUS-ROSTER', f'rows absent from the document: {sorted(missing)}')
+if extra:   bad('CENSUS-ROSTER', f'rows not in the roster: {sorted(extra)}')
+for r in census_rows:
+    k = (r['relation'], r['role'])
+    if k not in CENSUS_ROSTER: continue
+    sites, claimed = CENSUS_ROSTER[k]
+    if r['claimed'] != claimed:
+        bad('CENSUS-ROSTER', f'{k} claims {r["claimed"]}, roster pins {claimed}')
+    try:
+        # the row's own command ends in `| wc -l` so its stated return is an integer; the SITES
+        # need the lines behind that integer, so the counter is stripped and the same grep re-run.
+        pr = subprocess.run(re.sub(r'\s*\|\s*wc -l\s*$', '', r['command']), shell=True, cwd=pin,
+                            capture_output=True, text=True, timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        bad('CENSUS-SITES', f'{k} timed out'); continue
+    got = sorted(int(m.group(1)) for m in re.finditer(r'(?m)^[^:\n]*:(\d+):', pr.stdout))
+    if got != sorted(sites):
+        bad('CENSUS-SITES', f'{k} returns lines {got}, roster pins {sorted(sites)}')
 
 rids = [int(x) for x in re.findall(r'(?m)^\*\*R(\d+) — ', pkt)]
 if not rids:

@@ -1221,20 +1221,48 @@ the pinned tree, so the same mutation now fails as `COMMAND-MISMATCH`. Rulings a
 by role name; **no ruling restates a count**, which is also the fix for the drift that had R5
 excluding writes while R8 included them.
 
-    IN plane — the ownership half, and the half open item 26 (G4) found missing. Every row DERIVED.
+    IN plane — the ownership half, and the half open item 26 (G4) found missing. Every row DERIVED,
+    and every row's MEMBERS pinned in A.0's roster, not only its count.
       engine addressing sites            `git grep -n -E 'safeAudioInPtr\(blockIndex|header->audioInOffset \+' apps/engine_produce_block.cpp apps/engine_master_render.cpp | wc -l` returns 2.
       engine byte-producing writes       `git grep -n -E 'std::(memcpy|fill)\(input' apps/engine_produce_block.cpp | wc -l` returns 11.
       master summed-mix write            `git grep -n -E 'const_cast<daw::ShmHeader\*>\(header\)\) \+ off' apps/engine_master_render.cpp | wc -l` returns 1.
-      host addressing + alias hops       `git grep -n -E 'audioInChannelPtr\(state.shmBase|const float\* const\* (plugin)?[iI]nputPtrs' apps/juce_host_process_main.cpp | wc -l` returns 3.
-      host byte-consuming reads          `git grep -n -E 'state\.inputPtrs\[(src|ch)\],|= pluginInputPtrs\[ch\]' apps/juce_host_process_main.cpp | wc -l` returns 5.
+      host plane-address acquisitions    `git grep -n -E 'audioInChannelPtr\(state.shmBase|const float\* const\* (plugin)?[iI]nputPtrs|= pluginInputPtrs\[ch\]' apps/juce_host_process_main.cpp | wc -l` returns 6.
+      host byte loads                    `git grep -n -E 'state\.inputPtrs\[(src|ch)\],|std::copy\(src,|dst\[i\] = src\[i\]|std::fabs\(src\[i\]\)|std::fabs\(static_cast<double>\(src\[i\]\)\)' apps/juce_host_process_main.cpp | wc -l` returns 6.
+      host indirect handoff              `git grep -n 'process(pluginInputPtrs' apps/juce_host_process_main.cpp | wc -l` returns 1.
+      alias leaves the plane             `git grep -n 'inputPtrs = outputPtrs;' apps/juce_host_process_main.cpp | wc -l` returns 1.
+
+**THE UNIT WAS MIXED AND codex-worker-1 NAMED IT.** One row previously counted five and meant
+"acquisitions and direct memcpy sources together" — address sites and byte loads in one figure. They
+are now separate rows with separate units: SIX acquisitions (`:644` establishes, `:862` and `:879`
+are the two alias hops, `:924`/`:939`/`:975` take a channel address) and SIX byte loads (`:686` and
+`:720` read through `state.inputPtrs` directly; `:927`/`:930` are the level-matched bypass copy,
+`:942` the bypass meter, `:980` the input meter). A census whose unit shifts inside one number
+cannot be checked by anyone, including its author.
+
+**AND FOUR OF THOSE LOADS ARE PLANE READS ONLY FOR THE FIRST PLUGIN IN A SEGMENT.** `:862` binds the
+alias to the plane BEFORE the per-plugin loop at `:866`, and `:1061` rebinds it —
+`inputPtrs = outputPtrs;` — at the end of every iteration. So `:927`, `:930`, `:942`, `:980` and the
+handoff at `:987` touch the input plane on the first plugin and host-local output buffers on every
+plugin after it. **That is a positional rule, and no site list can carry it**, which is why
+`alias leaves the plane` is a row: the fact that the population ENDS is a member of the population.
+It also narrows G4's ownership window usefully — the host reads the input plane during one plugin,
+not throughout the segment.
 
     OUT plane — the ordering half (`write_output → release-ack → acquire-wait → read_output`).
     BOTH ROWS ARE THE HAND-CLASSIFIED ROLE CENSUS OF THE POPULATION BULLET ABOVE — they carry no
     marker of their own because they are not a second population, and a marker here would inflate
     the hand-classified count by restating one. No single pattern reproduces either row.
-    What the patterns DO return is stated, so the distance is visible rather than implied:
       cross-agent byte-consuming reads   claims 7 — floor, name-reachable addressing only — `git grep -n -E 'safeAudioOutPtr\(blockIndex|audioOutChannelPtr\(' apps/engine_produce_block.cpp apps/juce_host_process_main.cpp apps/engine_master_render.cpp | wc -l` returns 4.
       host byte-producing writes         claims 8 — SUPERSET, includes addressing, zero-fills and the `:834` self-read — `git grep -n -E 'outputPtrs\[ch\]|auxOutputPtrs\[ch\]' apps/juce_host_process_main.cpp | wc -l` returns 13.
+
+**EVERY ROW IS BOUND TWICE, and neither binding lives in this file.** A.0 holds a roster of
+(relation, role) → (member line numbers, claimed count) and requires the parsed rows to equal it
+exactly: no row missing, none extra, none duplicated, no claim altered, and **each row's command
+must return the roster's LINE NUMBERS** — so an arbitrary command that happens to return the right
+count fails on its members. codex-worker-1 mutated this block five ways — deleting the master row,
+relabelling IN as OUT, duplicating a row, substituting a command, altering a member citation — and
+all five passed while A.0 checked only the counts. A roster written into this document would have
+been one more statement in the file being mutated; it is in the script, which this packet blob-pins.
 
 **A THIRD FRAGILITY, named by claude-worker-1 and not by any check here.** `engine_produce_block.cpp`
 has THREE bindings spelled `input` — `:535` and `:817` are `const float*` aimed at other buffers, and
@@ -1388,7 +1416,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `cd31d11d63c8673fad408884502b181c6c9a6dc6`, A.0 SCRIPT BLOB `ef9f61fd94225216600b75d9f5dd330373251b75`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `f9f1f5303338c330649ec9c2733eb4d288a8773f`, A.0 SCRIPT BLOB `fb3aa223d18c6bd91d4d89059f4dfed2dc467419`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1396,7 +1424,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 32 items, 24 open · 13 RAW (12 hand-ruled) + 28 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 32 items, 24 open · 13 RAW (12 hand-ruled) + 30 commanded claims, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1446,14 +1474,14 @@ back to: A.0's "what it does not decide" list is the exact place where a stale s
 what has been settled.)
 And nothing about the product beyond what a text search can see.
 
-**Controls.** Forty-one, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Forty-four, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
-`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`. The last seven exist because
+`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`. The last ten exist because
 **codex-worker-1** MUTATED THIS PACKET AND THE GATE STILL SAID PASS (the finding reached me relayed
 by backend, and two commit messages in this lineage credit the relay rather than the author —
 `e26f91f` and `c332c03`, immutable and wrong on this point): deleting the item's reopening sentence,
