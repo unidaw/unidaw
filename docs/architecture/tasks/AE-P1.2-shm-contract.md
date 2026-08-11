@@ -485,7 +485,15 @@ whose return type is an `*Answer`. Both halves are measured, not asserted —
 **What the rule EXCLUDES and why, because a population is defined by its complement too:**
 `read_arrange_summary`, `read_clip_extents` and `read_automation_lanes` carry a `generation` and are
 SNAPSHOT readers — a generation counter is a staleness check on a continuously published region, not
-an answer to a request. The other twelve name neither.
+an answer to a request. The other twelve name neither, and 6 + 3 + 12 = 21 exactly, so the partition
+is total over the candidates.
+**The two NEAR-MISSES, named because a rule is best judged against what it nearly admits:**
+`read_device_meters` and `read_sampler_kit_slot` are SLOT-INDEXED — `(&self, index: usize)`, the
+shape of "ask for slot N and read the answer" — which was my own first hypothesis for what makes a
+reader request/answer. The stated rule excludes them because they name no request-written region and
+return no `*Answer`. If slot-indexing IS the signature, this population is 8 and not 6; the rule
+makes that disagreement visible instead of absorbing it, which is the property the hand-selected six
+lacked.
 
 **The disagreement this surfaces, recorded rather than resolved in my favour.** Open item 23 says
 the exact review named `read_clip_window` as a request/answer reader this gate omits. Under the rule
@@ -982,9 +990,19 @@ routing), `engine_master_render.cpp:100` (master mix). G4's invariant is about a
 bytes another agent wrote; a site that computes an address reads nothing, and a site that writes is
 the producer.
 **Drift detector:** the command above returns 27; any change invalidates this authored list until
-it is re-authored. The remaining 17 are declarations, tests and non-engine mappings and are named by
-exclusion rather than individually, which is the weaker half of this authoring and is stated as
-such. *Input-plane writers in engine production code* — RAW 13
+it is re-authored. **HOST-SIDE — the counterparty, and naming it matters because G4 is about who owns
+these bytes:** `juce_host_process_main.cpp:496` establishes the plane
+(`header.audioOutOffset = offset`) and `:638` writes into it
+(`state.outputPtrs[ch] = audioOutChannelPtr(...)`). My first pass swept both into "declarations,
+tests and non-engine mappings", which buried the two most relevant sites in the gate under a
+dismissive label — I found that by enumerating the residue rather than trusting the phrase, which
+is the check this packet has needed at every population.
+**The remaining 15**, named by category with counts rather than as a lump: 5 helper definitions and
+their bodies (`shared_memory.cpp:52`/`:55`, `audio_shm.cpp:5`/`:12`, `audio_shm.h:9`), 3 tests
+(`device_chain_ui_live_tests_main.cpp:127`, `phase3_tests_main.cpp:164`,
+`phase2_tests_main.cpp:184`), 1 UI-shm establish for a DIFFERENT plane (`engine_ui_shm.cpp:40`),
+2 declarations (`shared_memory.h:187`, `:1436`), and 4 comments (`shared_memory.cpp:36`,
+`juce_host_process_main.cpp:499`, `shared_memory.h:1433`, `:1435`). 3 + 2 + 5 + 3 + 1 + 2 + 4 = 27. *Input-plane writers in engine production code* — RAW 13
 (`grep -rn -e audioInOffset -e safeAudioInPtr -e audioInChannelPtr apps/`) → minus 11 (tests,
 declarations and reads) → **2**. ⟂
 
@@ -1089,7 +1107,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `6e4e798e7ff0f09579848bc487c0e7327335f09c`, A.0 SCRIPT BLOB `4550b2c7d467f119a3058f24e225c326a86c2237`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `57fcd64a05e75dcab7f1bb0d35c83fc356ea616a`, A.0 SCRIPT BLOB `ecafd8b782dd036a381eafa8b357b919b35a7578`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
