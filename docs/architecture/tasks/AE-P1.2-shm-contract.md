@@ -28,7 +28,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    the manifest keeps the two apart deliberately. The zero case is a different sentence rather than
    a missing one, so the check cannot pass by the claim disappearing. G1-B's readers were withdrawn and are AUTHORED again under R1
    with rules, members and drift detectors; G2-A's scope and G4's out-plane are not. **TWO GATES ARE ACCEPTANCE-DECIDABLE — G0-A and G1-A —
-   and ten items block (18, 19, 24, 26, 27, 29, 33, 35, 36 and 37)** and ALL TEN need product
+   and nine items block (18, 19, 24, 26, 27, 29, 33, 35 and 36)** and ALL NINE need product
    work, none of them currently waiting on another item — **classification and state are orthogonal
    and the markers no longer pretend otherwise**: ⟦PRODUCT⟧ says what KIND of work closes an item,
    ⟦BLOCKED-ON: n⟧ says what it WAITS ON, and an item may carry both. Item 27 carried an edge to
@@ -1046,9 +1046,12 @@ SHALL confirm that evicting a host which still owes dispatched blocks cannot cor
 host reads or publishes. The reviewer SHALL decide `daw::Watchdog`'s fate — deletion or
 re-specification — since the gate accepts either with equal force and deliberately cannot choose.
 **The reviewer SHALL resolve the static-check contradiction**: one check places the eviction inside
-`apps/engine_producer_thread.cpp:225-252`, whose natural implementation adds a `continue` and moves
-the exit count off 12, which a sibling check forbids. One of the two must yield, and the packet does
-not choose.
+`apps/engine_producer_thread.cpp:225-252`, whose natural implementation was said to move the exit
+count off 12, which a sibling check was said to forbid. **R17 DISCHARGES THIS AND ITEM 21 IS
+CLOSED**: there is no sibling check — G3's four static checks never mention the exit count — and the
+12 is a census row pinned to `PRODUCT_SHA`, compared for equality against a frozen tree the
+implementation will not be on, and carrying an explicit floor besides. Neither statement has to
+yield, so the demand that one of them must is withdrawn with this sentence.
 
 ---
 
@@ -1390,7 +1393,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `c4e0df7bf46973a0382b577798319c242940a60b`, A.0 SCRIPT BLOB `250014292af2345f536ffa6ea4d1ddbf5c29ea2f`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `21e9164a119b705626ad2c3a24f72a345205be6c`, A.0 SCRIPT BLOB `e6ca2c624c18876dc6c2ea46d106fdf2e84aefce`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1398,7 +1401,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 37 items, 28 open · 14 RAW (13 hand-ruled) + 32 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 37 items, 28 open · 14 RAW (13 hand-ruled) + 32 commanded-claim occurrences, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1458,7 +1461,7 @@ check, staged and atomically replaced, and `MANIFEST-STALE` is suppressed on an 
 a check that forbids its own remedy is a deadlock rather than a guard — that deadlock appeared the
 moment the write moved, and is recorded here because it is the predictable cost of the fix.
 
-**Controls.** Eighty-nine, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Ninety, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1472,14 +1475,14 @@ invented tail, and a genuine line with junk appended — while the self-derived 
 vacuous rather than admitting a spoof. **An approximation reappeared inside the repair for a
 self-certifying harness**, which is where this packet keeps finding them. As a shell loop the sweep
 tested nothing and said so affirmatively — under zsh, which does not word-split unquoted
-expansions, `for n in $NAMES` ran once with all eighty-nine names as one argument; the gate refused
+expansions, `for n in $NAMES` ran once with all the names as one argument; the gate refused
 that correctly, but the refusal ECHOES the name it rejected, the rejected name was the whole list,
 and the loop's predicate searched the run's output for substrings of that same list. It printed
 `ALL 1 CONTROLS FIRED`. **A harness whose failure output satisfies its own success predicate**, with
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns all eighty-nine red, and a single control given a tag nothing emits turns exactly
 that one red while the other eighty-eight stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
@@ -1941,8 +1944,38 @@ question, not an acceptance one.
 `apps/engine_rt_helpers.h:232-234`. Both sit in PRODUCT, which I do not edit; the ruling is recorded
 here against both addresses and item 36 carries the product-side correction.
 
-**R16 — item 37 (G3): THE REGISTER ASKS FOR A CONFIRMATION THAT CANNOT BE GIVEN, BECAUSE
-BACK-PRESSURE IS ITSELF THE SLOT-REUSE GUARD.** The register directs the reviewer to confirm that evicting
+**R16 — item 37 (G3): RETRACTED. I ruled on a mechanism this gate explicitly forbids, and what
+survives is PASS 7's missing rationale rather than a defect.** R16 argued that evicting a host which
+still owes dispatched blocks removes the invariant making `blockId % numBlocks` unambiguous, and
+derived a corrupt read, a corrupt publish and a returning deadlock. Every step assumed eviction means
+REMOVAL FROM THE PRODUCER'S MINIMUM. **G3 does not define it that way, and says so twice**: the
+Invariant requires the host to have `hostReady` stored false by an autonomous engine path
+(`:961-965`), and PASS 7 reads "The eviction lands on `hostReady`, not merely on the producer's
+vector" — naming the producer-vector-only form as its own refutation. I ruled on the shape the gate
+rules out.
+
+At the pin, `hostReady == false` closes all three doors R16 needed open. The producer skips the host
+at `apps/engine_producer_thread.cpp:226-227`, before it can enter `hostProgress` at all, so it cannot
+hold the minimum. `processTrack` returns at `apps/engine_produce_block.cpp:362-363` before any newer
+input or output is written to that track's planes, so a resumed host reads its OWN block's input. The
+mixer skips the track at `apps/engine_audio_callback.h:305-306`, so a late write cannot be played.
+And readiness is never restored in place: the production `hostReady.store(true)` that follows an
+eviction is `apps/engine_restart_worker.cpp:87`, immediately after `runtime->controller.launch(…)`
+(`:70`) — a RELAUNCH with a new child and a new mapping. SIGCONT alone cannot readmit the frozen
+host. codex-worker-1 established all of it.
+
+**What survives is PASS 7's rationale, which the packet never stated.** PASS 7 reads as a placement
+preference; R16's analysis is the reason it is a SAFETY requirement. Producer-vector-only eviction
+removes exactly the back-pressure invariant that makes a slot address unambiguous, while
+`hostReady = false` additionally gates the input write and the mix, so the slot cannot be lapped for
+that track at all. **The bullet was already right; what it lacked was the consequence of violating
+it.** That is recorded here instead of as a defect, and item 37 is WITHDRAWN.
+
+**How this got missed.** I read "eviction" as the word means in general — dropping a member from a
+set — and derived consequences from that, inside a gate that defines the term four paragraphs above
+the register sentence I was answering. **A gate's vocabulary is not the ambient one**, and PASS 7
+exists precisely to forbid my reading. The retracted argument follows, unchanged, because it is the
+rationale:  The register directs the reviewer to confirm that evicting
 a host which still owes dispatched blocks cannot corrupt what a RESUMED host reads or publishes. It
 cannot be confirmed, and the opposite is derivable at the pin. The demand should be re-read as a
 design requirement rather than a check.
@@ -2002,8 +2035,12 @@ future edit — being unable to move is what pinning means.**
 
 **And the packet already declares this number an inequality**: "The producer-exit count is a floor of
 12: a `return` or a `break` out of a nested scope is not a `continue`." A floor says 12 UNDERCOUNTS
-the real exits. Eviction inside the collection loop adds a `continue` and takes the count to 13,
-which is the direction a floor permits. So both readings of "sibling check" fail, in opposite
+the real exits. **The defensible conclusion is only that 12 is not a forward acceptance
+constraint** — an earlier draft of this ruling said eviction "adds a `continue` and takes the count
+to 13", which overreaches: an implementation inside `:225-252` need not add one at all (it could
+store `hostReady = false` and append inactive progress, or guard the existing append), and if it
+does, a floor permits the increase anyway. codex-worker-1 named the overclaim. Either way nothing
+here binds the implementation. So both readings of "sibling check" fail, in opposite
 directions: as an acceptance check it does not exist, and as a census row it is pinned to a tree the
 implementation will not be on, carrying an explicit floor besides.
 
@@ -2016,7 +2053,7 @@ describes, and that question is not visible in the sentence that uses it. Item 2
 whole content was a packet decision and there is nothing left for an implementer to choose between.
 
 **What these rulings do NOT do.** None of them closes an item that names PRODUCT work — R1 through
-R17 make such items implementable, and R13 is RETRACTED rather than applied, and each stays open until the work exists and is verified by
+R17 make such items implementable, R13 and R16 are RETRACTED rather than applied,, and R13 is RETRACTED rather than applied, and each stays open until the work exists and is verified by
 someone other than me. **A ruling CAN close an item whose whole content was a packet decision**, and
 item 11 is the case: it asked for an authored population, R1 authored one, and there was nothing
 left in it. That distinction was missing and the rule read as universal, which contradicted item
@@ -2030,7 +2067,7 @@ census recorded as a proof, which this packet has already made once at item 7.
 
 # Open items — 37 atomic, 9 CLOSED at this SHA, 28 open
 
-One per line, numbered in document order, so the count is checkable. TEN are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 35, 36 and 37. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
+One per line, numbered in document order, so the count is checkable. NINE are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 35 and 36. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
 
 1. **G0-B** — The generated header breaks the documented `-DDAW_BUILD_PATCHER_RUST=OFF` build for six unconditional targets, with no stated path, include directory or target-ordering edge.
@@ -2106,7 +2143,7 @@ carrying one cannot be decided by any implementation.
     statement of the circularity. The ack arrives only during a `ProcessBlock` that `processTrack` refuses while `hostReady` is false. A PASS bullet was withdrawn rather than reworded, and the owner HAS ruled (R2: two-level readiness) and the mirror half is unspecified until that ruling is PROPAGATED into this gate and G4 — the item is open for the propagation, not for the decision.
 19. **G3** — ⟦PRODUCT⟧ **BLOCKING, not closed. The ruling is MADE (R3: N = 3, authored) and no further ruling is required.** N has no source in the tree; R3 supplies it as an authored constant. What remains is implementation, not decision (R3: N = 3, authored), which makes the gate decidable for PLANNING; it is not decidable for ACCEPTANCE until the ticket lands — N pinned with units and semantics, a static check on the literal, watchdog instrumentation, drift acceptance and independent validation.
 20. **G3** — `DAW_ENGINE_DEBUG_STALL` must be set by the Layer-2 fixture or the channel a PASS bullet reads does not exist.
-21. **G3** — **CLOSED at this SHA.** The static-check contradiction was not one. R17 shows there is no sibling check to conflict with — G3's four static checks never mention the exit count — and that the 12 is a census row pinned to `PRODUCT_SHA`, checked for equality against a frozen tree the implementation will not be on, and already declared a FLOOR ("a `return` or a `break` out of a nested scope is not a `continue`"). Eviction inside the collection loop takes the count to 13, which is the direction a floor permits. Nothing for an implementer to choose between; a packet decision with no product work in it.
+21. **G3** — **CLOSED at this SHA.** The static-check contradiction was not one. R17 shows there is no sibling check to conflict with — G3's four static checks never mention the exit count — and that the 12 is a census row pinned to `PRODUCT_SHA`, checked for equality against a frozen tree the implementation will not be on, and already declared a FLOOR ("a `return` or a `break` out of a nested scope is not a `continue`"). An implementation inside `:225-252` need not add a `continue` at all, and if it does, a floor permits the increase — either way nothing here binds it. Nothing for an implementer to choose between; a packet decision with no product work in it.
 22. **G4** — The fixture definitions added here (F0-F6, S1-S8) and the corrected ack-census counts have not been run against anything; the reviewer should confirm them against the fixture rather than against this packet.
 23. **all** — **CLOSED at this SHA.** `read_clip_window` IS a request/answer reader:
     `RequestClipWindow` is command 30 and it reads that command's region. The exact review was right;
@@ -2364,8 +2401,17 @@ carrying one cannot be decided by any implementation.
     today's telemetry: the per-host vector carries no host identity and no `lastDispatchedBlockId`,
     so nothing currently emitted can evaluate the owes-nothing predicate at
     `apps/engine_rt_helpers.cpp:502`. PRODUCT work.
-37. **G3** — ⟦PRODUCT⟧ **BLOCKING. Eviction has no resume protocol, and back-pressure is the only
-    thing that makes a slot address unambiguous.** Every side addresses an audio slot as
+37. **G3** — **WITHDRAWN at this SHA. Filed on a mechanism G3 forbids, and retracted the same day.**
+    R16 is RETRACTED in full: this item read eviction as removal from the producer's minimum, which
+    PASS 7 names as its own refutation, and the Invariant at `:961-965` requires `hostReady` stored
+    false instead. At the pin that excludes the host from the producer loop
+    (`apps/engine_producer_thread.cpp:226-227`), from any newer input or output write
+    (`apps/engine_produce_block.cpp:362-363`) and from the mix
+    (`apps/engine_audio_callback.h:305-306`), and readiness returns only via a RELAUNCH
+    (`apps/engine_restart_worker.cpp:70`, `:87`), so SIGCONT cannot readmit the frozen host. None of
+    the three consequences follows. codex-worker-1 refuted it. The analysis is kept in R16 as PASS
+    7's rationale — the reason that bullet is a safety requirement and not a placement preference.
+    What this item claimed: Every side addresses an audio slot as
     `blockId % numBlocks` — `apps/engine_produce_block.cpp:724`,
     `apps/juce_host_process_main.cpp:635`, `apps/engine_master_render.cpp:58`,
     `apps/engine_audio_callback.h:363` — and no slot carries the id of the block it holds, so the

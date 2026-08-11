@@ -84,22 +84,22 @@
  ],
  "constraints": [
   {
-   "line": 1381,
+   "line": 1384,
    "n": 1,
    "text": "Production atomic **size/alignment/`is_always_lock_free` assertions** and the canonical checked `LayoutSpec` land FIRST, before any gate's fix."
   },
   {
-   "line": 1383,
+   "line": 1386,
    "n": 2,
    "text": "**One coordinated `kShmVersion` bump** for layout/snapshot/ring changes; `kControlVersion` if the host ring or Hello changes; `kPatcherAbiVersion` separately, carrying `{magic, version, struct_size, status}`."
   },
   {
-   "line": 1386,
+   "line": 1389,
    "n": 3,
    "text": "`SHM_LAYOUT.md` and the C++↔Rust generated parity are updated in the **same changeset**."
   },
   {
-   "line": 1387,
+   "line": 1390,
    "n": 4,
    "text": "Barrier fixtures run on **macOS arm64 AND Windows x64**. A timing or stress result is not accepted in place of a deterministic transition test. This project has a documented history of \"zero underruns, therefore correct\" conclusions that were wrong, so the rule is stated, not assumed."
   }
@@ -167,6 +167,7 @@
   "rg-command",
   "root-wide-grep",
   "rule-arithmetic",
+  "ruling-body-swap",
   "ruling-item-swap",
   "ruling-item-swap2",
   "ruling-long-head",
@@ -196,11 +197,11 @@
   "wrong-raw"
  ],
  "counts": {
-  "blocking": 10,
+  "blocking": 9,
   "census_rows": 9,
   "closed": 9,
   "commanded_claims": 32,
-  "controls": 89,
+  "controls": 90,
   "hand_ruled": 13,
   "items": 37,
   "open": 28,
@@ -245,7 +246,7 @@
   },
   {
    "gate": "G4",
-   "line": 1287,
+   "line": 1290,
    "text": "(1) Input overwritten under the host: the host is delayed before reading segment k's input; the engine memcpys segment k+1 over it (`:944-1037`). (2) Stale lap read as fresh: the host is delayed before WRITING segment k's output, and `:1030-1033` reads the audioOut slot for the same `blockIndex`, which still holds the block from `numBlocks` ago — ~32 ms at 512@48k. (3) Torn input plane, with no generation or marker to detect it. (4) Routing copies the same un-awaited plane (`:1147-1154`). The host publishes `completedBlockId` only on the last segment (`apps/juce_host_process_main.cpp:1069-1087`), so **there is no per-segment signal to wait on even in principle** — which is why the invariant demands an ack keyed on the quintuple."
   }
  ],
@@ -281,14 +282,14 @@
    "line": 836
   },
   {
-   "end_line": 1054,
+   "end_line": 1057,
    "gate": "G3",
    "line": 945
   },
   {
-   "end_line": 1378,
+   "end_line": 1381,
    "gate": "G4",
-   "line": 1055
+   "line": 1058
   }
  ],
  "gates": [
@@ -459,8 +460,7 @@
    ],
    "blocking_items": [
     19,
-    36,
-    37
+    36
    ],
    "cross_cutting_blocking": [],
    "decidable_for_acceptance": false,
@@ -476,7 +476,7 @@
     "G2-A",
     "G2-B"
    ],
-   "end_line": 1054,
+   "end_line": 1057,
    "id": "G3",
    "line": 945,
    "non_gate_prerequisites": [
@@ -484,7 +484,7 @@
    ],
    "plannable_with_dependencies": true,
    "planning_blocked_by": [],
-   "reason_if_not_acceptance": "blocked by items [19, 36, 37]",
+   "reason_if_not_acceptance": "blocked by items [19, 36]",
    "reason_if_not_planning": null
   },
   {
@@ -521,9 +521,9 @@
     "G2-B",
     "G3"
    ],
-   "end_line": 1378,
+   "end_line": 1381,
    "id": "G4",
-   "line": 1055,
+   "line": 1058,
    "non_gate_prerequisites": [],
    "plannable_with_dependencies": true,
    "planning_blocked_by": [],
@@ -539,7 +539,7 @@
    "closed": false,
    "gate": "G0-B",
    "kind": null,
-   "line": 2036,
+   "line": 2073,
    "n": 1,
    "title": "The generated header breaks the documented `-DDAW_BUILD_PATCHER_RUST=OFF` build for six unconditional targets,"
   },
@@ -550,7 +550,7 @@
    "closed": false,
    "gate": "G0-B",
    "kind": null,
-   "line": 2037,
+   "line": 2074,
    "n": 2,
    "title": "The declaring macro invalidates the `#[repr(C` grep this gate's population floor depends on."
   },
@@ -561,7 +561,7 @@
    "closed": false,
    "gate": "G0-B",
    "kind": null,
-   "line": 2038,
+   "line": 2075,
    "n": 3,
    "title": "The mutation floor \">= 600\" is asserted with no derivation and counts near 551 over the real 131 members, so t"
   },
@@ -572,7 +572,7 @@
    "closed": false,
    "gate": "G0-B",
    "kind": null,
-   "line": 2039,
+   "line": 2076,
    "n": 4,
    "title": "600 is a fifth pinned integer with no owner."
   },
@@ -583,7 +583,7 @@
    "closed": true,
    "gate": "G0-B",
    "kind": null,
-   "line": 2040,
+   "line": 2077,
    "n": 5,
    "title": "CLOSED at this SHA. Both member counts are produced by a printed command over the pinned tree, the C++ one spa"
   },
@@ -594,7 +594,7 @@
    "closed": true,
    "gate": "G1-A",
    "kind": null,
-   "line": 2041,
+   "line": 2078,
    "n": 6,
    "title": "CLOSED at this SHA. The entry-address extraction's rule ships inside the printed command: the data-statement a"
   },
@@ -605,7 +605,7 @@
    "closed": false,
    "gate": "G1-A",
    "kind": null,
-   "line": 2042,
+   "line": 2079,
    "n": 7,
    "title": "**OPEN. REOPENED at this SHA after being wrongly closed.** The census I closed it"
   },
@@ -616,7 +616,7 @@
    "closed": true,
    "gate": "G1-B",
    "kind": null,
-   "line": 2066,
+   "line": 2103,
    "n": 8,
    "title": "CLOSED at this SHA, by withdrawal rather than by reconciliation. The three"
   },
@@ -627,7 +627,7 @@
    "closed": true,
    "gate": "G1-B",
    "kind": null,
-   "line": 2071,
+   "line": 2108,
    "n": 9,
    "title": "CLOSED at this SHA as a defect, SUBSUMED by open item 11 (G1-B) as subject matter."
   },
@@ -638,7 +638,7 @@
    "closed": true,
    "gate": "G1-B",
    "kind": null,
-   "line": 2078,
+   "line": 2115,
    "n": 10,
    "title": "CLOSED at this SHA as a defect, SUBSUMED by open item 11 (G1-B). Both recipes now"
   },
@@ -649,7 +649,7 @@
    "closed": true,
    "gate": "G1-B",
    "kind": null,
-   "line": 2083,
+   "line": 2120,
    "n": 11,
    "title": "**CLOSED at this SHA by AUTHORING under R1: SEVEN.** The request set is the"
   },
@@ -660,7 +660,7 @@
    "closed": false,
    "gate": "G2-A",
    "kind": null,
-   "line": 2096,
+   "line": 2133,
    "n": 12,
    "title": "Layer-1 fixture arithmetic: eleven journal lines, not six, and ids legitimately repeat, so a correct implement"
   },
@@ -671,7 +671,7 @@
    "closed": true,
    "gate": "G2-A",
    "kind": null,
-   "line": 2097,
+   "line": 2134,
    "n": 13,
    "title": "CLOSED at this SHA. The fifty-one correlator sites are no longer carried on attribution: the G2-A population s"
   },
@@ -682,7 +682,7 @@
    "closed": false,
    "gate": "G2-A",
    "kind": null,
-   "line": 2098,
+   "line": 2135,
    "n": 14,
    "title": "The BATCH note branch: `resolve_base` keeps the counter crossing on the path a browser transpose takes, and th"
   },
@@ -693,7 +693,7 @@
    "closed": false,
    "gate": "G2-B",
    "kind": null,
-   "line": 2099,
+   "line": 2136,
    "n": 15,
    "title": "The self-deadlock: the admitted fix class requires `applyHostBypassStates` to stop taking `controllerMutex`."
   },
@@ -704,7 +704,7 @@
    "closed": false,
    "gate": "G2-B",
    "kind": null,
-   "line": 2100,
+   "line": 2137,
    "n": 16,
    "title": "The swap trap rests on an unratcheted guard at `apps/daw_engine_main.cpp:1107-1109`."
   },
@@ -715,7 +715,7 @@
    "closed": false,
    "gate": "G2-B",
    "kind": null,
-   "line": 2101,
+   "line": 2138,
    "n": 17,
    "title": "Probe ordering: without forbidding the offline probe from acquiring before the RT probe reports, the PASS toke"
   },
@@ -726,7 +726,7 @@
    "closed": false,
    "gate": "G2-B",
    "kind": "PRODUCT",
-   "line": 2102,
+   "line": 2139,
    "n": 18,
    "title": "⟦PRODUCT⟧ **BLOCKING, RULED (R2) and PROPAGATED into the gates at this SHA; open for the"
   },
@@ -737,7 +737,7 @@
    "closed": false,
    "gate": "G3",
    "kind": "PRODUCT",
-   "line": 2107,
+   "line": 2144,
    "n": 19,
    "title": "⟦PRODUCT⟧ **BLOCKING, not closed. The ruling is MADE (R3: N = 3, authored) and no further ruling is required.*"
   },
@@ -748,18 +748,18 @@
    "closed": false,
    "gate": "G3",
    "kind": null,
-   "line": 2108,
+   "line": 2145,
    "n": 20,
    "title": "`DAW_ENGINE_DEBUG_STALL` must be set by the Layer-2 fixture or the channel a PASS bullet reads does not exist."
   },
   {
    "blocked_on": [],
    "blocking": false,
-   "body": "21. **G3** — **CLOSED at this SHA.** The static-check contradiction was not one. R17 shows there is no sibling check to conflict with — G3's four static checks never mention the exit count — and that the 12 is a census row pinned to `PRODUCT_SHA`, checked for equality against a frozen tree the implementation will not be on, and already declared a FLOOR (\"a `return` or a `break` out of a nested scope is not a `continue`\"). Eviction inside the collection loop takes the count to 13, which is the direction a floor permits. Nothing for an implementer to choose between; a packet decision with no product work in it.",
+   "body": "21. **G3** — **CLOSED at this SHA.** The static-check contradiction was not one. R17 shows there is no sibling check to conflict with — G3's four static checks never mention the exit count — and that the 12 is a census row pinned to `PRODUCT_SHA`, checked for equality against a frozen tree the implementation will not be on, and already declared a FLOOR (\"a `return` or a `break` out of a nested scope is not a `continue`\"). An implementation inside `:225-252` need not add a `continue` at all, and if it does, a floor permits the increase — either way nothing here binds it. Nothing for an implementer to choose between; a packet decision with no product work in it.",
    "closed": true,
    "gate": "G3",
    "kind": null,
-   "line": 2109,
+   "line": 2146,
    "n": 21,
    "title": "**CLOSED at this SHA.** The static-check contradiction was not one. R17 shows there is no sibling check to con"
   },
@@ -770,7 +770,7 @@
    "closed": false,
    "gate": "G4",
    "kind": null,
-   "line": 2110,
+   "line": 2147,
    "n": 22,
    "title": "The fixture definitions added here (F0-F6, S1-S8) and the corrected ack-census counts have not been run agains"
   },
@@ -781,7 +781,7 @@
    "closed": true,
    "gate": "all",
    "kind": null,
-   "line": 2111,
+   "line": 2148,
    "n": 23,
    "title": "**CLOSED at this SHA.** `read_clip_window` IS a request/answer reader:"
   },
@@ -792,7 +792,7 @@
    "closed": false,
    "gate": "G0-B",
    "kind": "PRODUCT",
-   "line": 2116,
+   "line": 2153,
    "n": 24,
    "title": "⟦PRODUCT⟧ BLOCKING for G0-B only. **RULED (R4): the Rust side renames.** The pure name join requires one renam"
   },
@@ -803,7 +803,7 @@
    "closed": false,
    "gate": "all",
    "kind": null,
-   "line": 2123,
+   "line": 2160,
    "n": 25,
    "title": "**RULED (R1): authored with drift detectors.** The SIX HAND-CLASSIFIED populations"
   },
@@ -814,7 +814,7 @@
    "closed": false,
    "gate": "G4",
    "kind": "PRODUCT",
-   "line": 2131,
+   "line": 2168,
    "n": 26,
    "title": "⟦PRODUCT⟧ **BLOCKING, and the reason has MOVED: the population now covers both planes and the"
   },
@@ -825,7 +825,7 @@
    "closed": false,
    "gate": "G2-A",
    "kind": "PRODUCT",
-   "line": 2166,
+   "line": 2203,
    "n": 27,
    "title": "⟦PRODUCT⟧ **BLOCKING, and the scope is AUTHORED under R12: the gate ranges over the three"
   },
@@ -836,7 +836,7 @@
    "closed": false,
    "gate": "G2-A",
    "kind": null,
-   "line": 2213,
+   "line": 2250,
    "n": 28,
    "title": "The requirement that was S3, split out of item 27 because they are separately"
   },
@@ -847,7 +847,7 @@
    "closed": false,
    "gate": "G2-A",
    "kind": "PRODUCT",
-   "line": 2218,
+   "line": 2255,
    "n": 29,
    "title": "⟦PRODUCT⟧ **BLOCKING. The `SetRowOps` refusal is malformed for the channel it rides**, measured"
   },
@@ -858,7 +858,7 @@
    "closed": false,
    "gate": "G2-A",
    "kind": null,
-   "line": 2239,
+   "line": 2276,
    "n": 30,
    "title": "**RULED (R10): the wiring is DEAD, the hazard is REAL, and they are separate work.**"
   },
@@ -869,7 +869,7 @@
    "closed": false,
    "gate": "all",
    "kind": null,
-   "line": 2259,
+   "line": 2296,
    "n": 31,
    "title": "**The pointer-helper RATCHET, and it must pin the GENERAL population, not G4's"
   },
@@ -880,7 +880,7 @@
    "closed": false,
    "gate": "G2-A",
    "kind": null,
-   "line": 2285,
+   "line": 2322,
    "n": 32,
    "title": "**RULED (R11).** `commandMutatesDocument(Undo)` returns FALSE with the comment \"no"
   },
@@ -891,7 +891,7 @@
    "closed": false,
    "gate": "G1-B",
    "kind": "PRODUCT",
-   "line": 2292,
+   "line": 2329,
    "n": 33,
    "title": "⟦PRODUCT⟧ **BLOCKING. The tests PASS 9 and S4 name do not exist.** Restoring them from"
   },
@@ -902,7 +902,7 @@
    "closed": false,
    "gate": "G2-B",
    "kind": null,
-   "line": 2307,
+   "line": 2344,
    "n": 34,
    "title": "**WITHDRAWN at this SHA. Filed on a false premise and retracted the same day.** It"
   },
@@ -913,7 +913,7 @@
    "closed": false,
    "gate": "G0-B",
    "kind": "PRODUCT",
-   "line": 2316,
+   "line": 2353,
    "n": 35,
    "title": "⟦PRODUCT⟧ **BLOCKING. The patcher's `EventEntry` has no `ready` field and its writer stores the"
   },
@@ -924,20 +924,20 @@
    "closed": false,
    "gate": "G3",
    "kind": "PRODUCT",
-   "line": 2343,
+   "line": 2380,
    "n": 36,
    "title": "⟦PRODUCT⟧ **BLOCKING. `tools/host_stall_check.sh` asserts a producer behaviour the"
   },
   {
    "blocked_on": [],
-   "blocking": true,
-   "body": "37. **G3** — ⟦PRODUCT⟧ **BLOCKING. Eviction has no resume protocol, and back-pressure is the only thing that makes a slot address unambiguous.** Every side addresses an audio slot as `blockId % numBlocks` — `apps/engine_produce_block.cpp:724`, `apps/juce_host_process_main.cpp:635`, `apps/engine_master_render.cpp:58`, `apps/engine_audio_callback.h:363` — and no slot carries the id of the block it holds, so the mapping is unambiguous only while `inFlight < numBlocks` holds. G3's eviction removes exactly that for the evicted host. A resumed host then binds its pointers from a stale `request.blockId` with no currency test (`:635`, `:643-648`), writes a lapped slot the audio callback reads without an identity check, and stores its old id unconditionally at `:1085`, which the producer consumes at `apps/engine_producer_thread.cpp:239` with no monotonic clamp — lowering the minimum and re-closing the gate the eviction existed to open. `completedSampleTime` cannot serve as the guard: its only consumer under `apps/` is a test main (`apps/device_chain_ui_live_tests_main.cpp:170`). **R16 rules that the register's confirmation cannot be given and states the requirement instead**: a resumed host must not write a lapped slot, and a stale `completedBlockId` must not lower the minimum. Which mechanism delivers that — a host-side currency test, a reader-side monotonic clamp, a re-baseline on resume, or a per-slot block stamp — is an owner choice R16 deliberately leaves open. PRODUCT work.",
+   "blocking": false,
+   "body": "37. **G3** — **WITHDRAWN at this SHA. Filed on a mechanism G3 forbids, and retracted the same day.** R16 is RETRACTED in full: this item read eviction as removal from the producer's minimum, which PASS 7 names as its own refutation, and the Invariant at `:961-965` requires `hostReady` stored false instead. At the pin that excludes the host from the producer loop (`apps/engine_producer_thread.cpp:226-227`), from any newer input or output write (`apps/engine_produce_block.cpp:362-363`) and from the mix (`apps/engine_audio_callback.h:305-306`), and readiness returns only via a RELAUNCH (`apps/engine_restart_worker.cpp:70`, `:87`), so SIGCONT cannot readmit the frozen host. None of the three consequences follows. codex-worker-1 refuted it. The analysis is kept in R16 as PASS 7's rationale — the reason that bullet is a safety requirement and not a placement preference. What this item claimed: Every side addresses an audio slot as `blockId % numBlocks` — `apps/engine_produce_block.cpp:724`, `apps/juce_host_process_main.cpp:635`, `apps/engine_master_render.cpp:58`, `apps/engine_audio_callback.h:363` — and no slot carries the id of the block it holds, so the mapping is unambiguous only while `inFlight < numBlocks` holds. G3's eviction removes exactly that for the evicted host. A resumed host then binds its pointers from a stale `request.blockId` with no currency test (`:635`, `:643-648`), writes a lapped slot the audio callback reads without an identity check, and stores its old id unconditionally at `:1085`, which the producer consumes at `apps/engine_producer_thread.cpp:239` with no monotonic clamp — lowering the minimum and re-closing the gate the eviction existed to open. `completedSampleTime` cannot serve as the guard: its only consumer under `apps/` is a test main (`apps/device_chain_ui_live_tests_main.cpp:170`). **R16 rules that the register's confirmation cannot be given and states the requirement instead**: a resumed host must not write a lapped slot, and a stale `completedBlockId` must not lower the minimum. Which mechanism delivers that — a host-side currency test, a reader-side monotonic clamp, a re-baseline on resume, or a per-slot block stamp — is an owner choice R16 deliberately leaves open. PRODUCT work.",
    "closed": false,
    "gate": "G3",
-   "kind": "PRODUCT",
-   "line": 2367,
+   "kind": null,
+   "line": 2404,
    "n": 37,
-   "title": "⟦PRODUCT⟧ **BLOCKING. Eviction has no resume protocol, and back-pressure is the only"
+   "title": "**WITHDRAWN at this SHA. Filed on a mechanism G3 forbids, and retracted the same day.**"
   }
  ],
  "packet_path": "docs/architecture/tasks/AE-P1.2-shm-contract.md",
@@ -1440,7 +1440,7 @@
   },
   {
    "gate": "G4",
-   "line": 1315,
+   "line": 1318,
    "n": 1,
    "refuted_by": "any count differing.",
    "text": "Ack census, non-vacuity first: exactly one ack per `recv_request`, and the count equals what the fixture's chain implies — **F1/F2: 2, F3: 2, F4: 2 on track A**, and for F6 **exactly ONE `recv_request` per `masterBlockId`**, which is the master-stays-unsegmented ratchet. *REFUTED BY* any count differing.",
@@ -1448,7 +1448,7 @@
   },
   {
    "gate": "G4",
-   "line": 1319,
+   "line": 1322,
    "n": 2,
    "refuted_by": "any pair inverted under any schedule.",
    "text": "Ordering in the merged log: `recv_request` before `read_input` before `ack`; and every next-segment `write_input`, patcher `read_output` and routing read strictly after that ack. *REFUTED BY* any pair inverted under any schedule.",
@@ -1456,7 +1456,7 @@
   },
   {
    "gate": "G4",
-   "line": 1322,
+   "line": 1325,
    "n": 3,
    "refuted_by": "a `read_output` with no intervening acquire, or an ack released before the output write.",
    "text": "**Output ordering**: every `read_output` is preceded by an acquire-load of the acknowledgement whose release-store follows the host's `write_output`. *REFUTED BY* a `read_output` with no intervening acquire, or an ack released before the output write.",
@@ -1464,7 +1464,7 @@
   },
   {
    "gate": "G4",
-   "line": 1325,
+   "line": 1328,
    "n": 4,
    "refuted_by": "one differing byte.",
    "text": "Input immutability observed in the BYTES, not the schedule: every AFTER_INPUT_READ snapshot equals what the engine's `write_input` recorded for that quintuple. *REFUTED BY* one differing byte.",
@@ -1472,7 +1472,7 @@
   },
   {
    "gate": "G4",
-   "line": 1327,
+   "line": 1330,
    "n": 5,
    "refuted_by": "a consumer reading on four of five.",
    "text": "Full-identity comparison, not a field echo: each consumer refuses when ANY ONE of the FIVE components is wrong and the other four right — including the readiness level, which R2 added. *REFUTED BY* a consumer reading on four of five.",
@@ -1480,7 +1480,7 @@
   },
   {
    "gate": "G4",
-   "line": 1330,
+   "line": 1333,
    "n": 6,
    "refuted_by": "a generation the host originates.",
    "text": "Generation is engine-minted and host-echoed. *REFUTED BY* a generation the host originates.",
@@ -1488,7 +1488,7 @@
   },
   {
    "gate": "G4",
-   "line": 1331,
+   "line": 1334,
    "n": 7,
    "refuted_by": "any pair differing.",
    "text": "Segmentation-isolating content: three renders of F0 byte-identical, three of F1 byte-identical. *REFUTED BY* any pair differing.",
@@ -1496,7 +1496,7 @@
   },
   {
    "gate": "G4",
-   "line": 1333,
+   "line": 1336,
    "n": 8,
    "refuted_by": "a zero-filled slot, which would make the assertion pass for the wrong reason.",
    "text": "Stale-lap priming and absence: the previous lap's content is non-zero, distinct, and differs from the value it could masquerade as. *REFUTED BY* a zero-filled slot, which would make the assertion pass for the wrong reason.",
@@ -1504,7 +1504,7 @@
   },
   {
    "gate": "G4",
-   "line": 1336,
+   "line": 1339,
    "n": 9,
    "refuted_by": "any verdict or WAV that changes with the multiplier.",
    "text": "**Wall clock out of the decision**: re-running every schedule with holds ×1, ×10, ×100 produces the identical verdict and byte-identical WAVs. *REFUTED BY* any verdict or WAV that changes with the multiplier.",
@@ -1512,7 +1512,7 @@
   },
   {
    "gate": "G4",
-   "line": 1339,
+   "line": 1342,
    "n": 10,
    "refuted_by": "the key carrying b's value.",
    "text": "Sidechain carve-out preserved: with track A pinned at b−2, track B's key channels carry A's b−2 sentinel. *REFUTED BY* the key carrying b's value.",
@@ -1520,7 +1520,7 @@
   },
   {
    "gate": "G4",
-   "line": 1341,
+   "line": 1344,
    "n": 11,
    "refuted_by": "one differing byte, by a snapshot equal to the primed lap, and — the vacuity guard — by a fixture in which the fresh and primed payloads compare equal, which would make this pass for the reason 8 exists to prevent.",
    "text": "**Output equality in the BYTES — the mirror of 4, and the bullet whose absence let a stale-slot read satisfy this whole gate.** Every consumer's BEFORE_OUTPUT_READ snapshot equals what the host's `write_output` recorded for the SAME quintuple, and differs from the lap primed by 8. Conditions 3, 5 and 8 are each satisfied by a read of stale content: 3 decides ORDERING (an acquire happened), 5 decides IDENTITY (the four fields are right), and 8 decides only that the priming is distinguishable — it establishes the precondition for catching failure model (2) and never asserts the failure is absent. Failure model (2) is a byte-level claim and needs a byte-level bullet. *REFUTED BY* one differing byte, by a snapshot equal to the primed lap, and — the vacuity guard — by a fixture in which the fresh and primed payloads compare equal, which would make this pass for the reason 8 exists to prevent.",
@@ -1644,17 +1644,17 @@
   },
   {
    "hand_classified": false,
-   "line": 1088,
+   "line": 1091,
    "name": "Dispatch sites"
   },
   {
    "hand_classified": false,
-   "line": 1091,
+   "line": 1094,
    "name": "Out-plane readers"
   },
   {
    "hand_classified": false,
-   "line": 1147,
+   "line": 1150,
    "name": "Input-plane writers in engine production code"
   }
  ],
@@ -1788,7 +1788,7 @@
   {
    "command": "git grep -n sendProcessBlock",
    "hand_ruled": true,
-   "line": 1088,
+   "line": 1091,
    "minus": [
     14
    ],
@@ -1800,7 +1800,7 @@
   {
    "command": "grep -rn -e audioOutOffset -e safeAudioOutPtr -e audioOutChannelPtr -e auxOutputPlaneOffset apps/",
    "hand_ruled": false,
-   "line": 1091,
+   "line": 1094,
    "minus": [],
    "raw": 27,
    "results": []
@@ -1808,7 +1808,7 @@
   {
    "command": "grep -rn -e audioInOffset -e safeAudioInPtr -e audioInChannelPtr apps/",
    "hand_ruled": true,
-   "line": 1147,
+   "line": 1150,
    "minus": [
     11
    ],
@@ -1820,7 +1820,7 @@
   {
    "command": "git grep -n -E '^ +emitClipReject\\(' apps",
    "hand_ruled": true,
-   "line": 1747,
+   "line": 1750,
    "minus": [
     1
    ],
@@ -1864,11 +1864,11 @@
   {
    "gate": "G3",
    "line": 1038,
-   "text": "The reviewer SHALL obtain an owner ruling for N and record its derivation: nothing in the tree sources one, all three production `Watchdog`s using `hardTimeoutBlocks = 500`. The reviewer SHALL rule on which of two contradictory statements is stale, and record the ruling next to BOTH — `tools/host_stall_check.sh:16-19` and the producer comment. **R15 DISCHARGES THIS**, and without M1: the mechanism claim is decidable at the pin and the check is the stale side. What this sentence originally deferred to M1 no longer waits on it, and what remains — which false-green channel operates in a given run — needs telemetry that does not exist, per item 36. The reviewer SHALL confirm that evicting a host which still owes dispatched blocks cannot corrupt what a RESUMED host reads or publishes. The reviewer SHALL decide `daw::Watchdog`'s fate — deletion or re-specification — since the gate accepts either with equal force and deliberately cannot choose. **The reviewer SHALL resolve the static-check contradiction**: one check places the eviction inside `apps/engine_producer_thread.cpp:225-252`, whose natural implementation adds a `continue` and moves the exit count off 12, which a sibling check forbids. One of the two must yield, and the packet does not choose."
+   "text": "The reviewer SHALL obtain an owner ruling for N and record its derivation: nothing in the tree sources one, all three production `Watchdog`s using `hardTimeoutBlocks = 500`. The reviewer SHALL rule on which of two contradictory statements is stale, and record the ruling next to BOTH — `tools/host_stall_check.sh:16-19` and the producer comment. **R15 DISCHARGES THIS**, and without M1: the mechanism claim is decidable at the pin and the check is the stale side. What this sentence originally deferred to M1 no longer waits on it, and what remains — which false-green channel operates in a given run — needs telemetry that does not exist, per item 36. The reviewer SHALL confirm that evicting a host which still owes dispatched blocks cannot corrupt what a RESUMED host reads or publishes. The reviewer SHALL decide `daw::Watchdog`'s fate — deletion or re-specification — since the gate accepts either with equal force and deliberately cannot choose. **The reviewer SHALL resolve the static-check contradiction**: one check places the eviction inside `apps/engine_producer_thread.cpp:225-252`, whose natural implementation was said to move the exit count off 12, which a sibling check was said to forbid. **R17 DISCHARGES THIS AND ITEM 21 IS CLOSED**: there is no sibling check — G3's four static checks never mention the exit count — and the 12 is a census row pinned to `PRODUCT_SHA`, compared for equality against a frozen tree the implementation will not be on, and carrying an explicit floor besides. Neither statement has to yield, so the demand that one of them must is withdrawn with this sentence."
   },
   {
    "gate": "G4",
-   "line": 1359,
+   "line": 1362,
    "text": "The reviewer SHALL read `juce_host_process_main.cpp:925` beside `:1015` before accepting any role classification in this gate: `float* dst` at :925 is a DESTINATION and `const float* dst` at :1015 is a SOURCE — the same identifier, opposite roles, ninety lines apart in one file, separated only by a `const` and what the loop does with it. That is the defect that produced this packet's out-plane retraction (`float* output` used as a memcpy source) living in the same file in a second pair, and it is why \"classify by USE, not by name\" is a rule here rather than a correction. The reviewer SHALL rule on the DUPLICATED AUX-OFFSET DERIVATION: host and engine compute the same address by two independent expressions with no assertion tying them. They agree at this SHA — verified, not assumed — so this is a risk to pin, not a bug to fix, and pinning it costs less than the day it takes when they diverge. The reviewer SHALL confirm by reading `apps/juce_host_process_main.cpp:606-1096` that the SHIPPING host stores the acknowledgement after the last `process`. The reviewer SHALL confirm G3 has passed and that the adopted wait carries an independent per-host deadline whose expiry FAILS the render with a diagnostic rather than proceeding. The reviewer SHALL confirm the new wait cannot re-enter either deadlock door documented at `apps/engine_rt_helpers.h:200-234`. The reviewer SHALL confirm where the acknowledgement lands and accept the consequences: inside `BlockMailbox`'s `reserved[11]` (`apps/shared_memory.h:499`) nothing moves; growing the mailbox is a `kShmVersion` bump."
   }
  ],
@@ -1881,7 +1881,7 @@
     11,
     25
    ],
-   "line": 1507,
+   "line": 1510,
    "named_at": [
     {
      "context": " G1-B's readers were withdrawn and are AUTHORED again under R1 with rules, members and drift detect",
@@ -1917,39 +1917,39 @@
     },
     {
      "context": "t been done at this SHA. The reviewer found this by reading R1 against the gates rather than against i",
-     "line": 1522
+     "line": 1525
     },
     {
      "context": "es G3 decidable FOR IMPLEMENTATION PLANNING in the same way R1 does for the authored populations: N = ",
-     "line": 1553
+     "line": 1556
     },
     {
      "context": "do.** None of them closes an item that names PRODUCT work — R1 through R17 make such items implementab",
-     "line": 2018
+     "line": 2055
     },
     {
      "context": "d item 11 is the case: it asked for an authored population, R1 authored one, and there was nothing lef",
-     "line": 2021
+     "line": 2058
     },
     {
      "context": "em 11's own CLOSED marker three SHAs running. That range — \"R1 through R17\" above — is checked against",
-     "line": 2023
+     "line": 2060
     },
     {
      "context": "he rulings actually parsed (`RULING-SET`), because it read \"R1 through R4\" for as long as there were e",
-     "line": 2024
+     "line": 2061
     },
     {
      "context": "one. 11. **G1-B** — **CLOSED at this SHA by AUTHORING under R1: SEVEN.** The request set is the `R",
-     "line": 2083
+     "line": 2120
     },
     {
      "context": ", not for the choice, which is made. 25. **all** — **RULED (R1): authored with drift detectors.** The ",
-     "line": 2123
+     "line": 2160
     },
     {
      "context": " RING index population, which became the sixth when the R1 mechanism was applied to it, tracked ra",
-     "line": 2125
+     "line": 2162
     }
    ],
    "text": "**R1 — item 11 (G1-B) and item 25 (all): AUTHORED POPULATIONS, with drift detectors.** No predicate distinguishes a request/answer reader from any other `read_` function, and none distinguishes a REGION from the offset fields addressing it. Three attempts at a predicate produced 6 by hand, then 2 by intersection, then a withdrawal. The ruling is that these populations are **authored, not derived**: each authored population must carry an EXPLICIT MEMBER LIST and a DRIFT DETECTOR — a command whose figure is pinned, so that a change in the surrounding code invalidates the authored list instead of silently outdating it. For G1-B that detector is `grep -rn 'pub fn read_' ui/daw-bridge/src/control.rs` returns 21; if it ever returns anything else, the authored list is stale by construction and the gate fails until it is re-authored. This is weaker than a derivation and stronger than what preceded it, which was a hand selection presented as a population. It also matches what the packet already does for the hand-classified populations, so the two items resolve on one mechanism rather than two. **NOT YET APPLIED, and the ruling does not pretend otherwise.** G1-B still declares NO population and item 25's categories carry no member lists and no detectors — the ruling states the mechanism, and writing the lists is work that has not been done at this SHA. The reviewer found this by reading R1 against the gates rather than against itself, which is the right test and one I did not run: I wrote \"the packet lists the members explicitly\" in the same commit in which it did not. **Cost:** a reviewer must read the lists, not re-run a command; the detector bounds staleness, not correctness. Item 11 and item 25 stay open FOR THIS WORK, which is now named rather than implied."
@@ -1961,7 +1961,7 @@
    "items": [
     18
    ],
-   "line": 1528,
+   "line": 1531,
    "named_at": [
     {
      "context": "dSetBypass` failed without the readiness being withdrawn. **R2 is propagated here:** readiness is `map",
@@ -1989,23 +1989,23 @@
     },
     {
      "context": "ntLength sl`, readiness level `r`) — the fifth component is R2 propagated: a dispatch minted at `mappe",
-     "line": 1076
+     "line": 1079
     },
     {
      "context": "the other four right — including the readiness level, which R2 added. *REFUTED BY* a consumer readi",
-     "line": 1328
+     "line": 1331
     },
     {
      "context": " G2-B's PASS 4 is still withdrawn with no replacement while R2 says propagation is done, and no PASS c",
-     "line": 1830
+     "line": 1833
     },
     {
      "context": "'s own fixture. 18. **G2-B** — ⟦PRODUCT⟧ **BLOCKING, RULED (R2) and PROPAGATED into the gates at this ",
-     "line": 2102
+     "line": 2139
     },
     {
      "context": "as withdrawn rather than reworded, and the owner HAS ruled (R2: two-level readiness) and the mirror ha",
-     "line": 2106
+     "line": 2143
     }
    ],
    "text": "**R2 — item 18 (G2-B): TWO-LEVEL READINESS, not a recovery-only exemption.** Readiness is staged — `mapped-and-bypassed` and `mirror-complete` — and dispatch is permitted at the lower level. The exemption was the smaller change and is the worse one: it creates a dispatch path that exists only during recovery, which is the least-exercised state in the system and the one that runs when something has already gone wrong. A LEVEL is a value that every dispatch can carry and every assertion can read; an EXEMPTION is a rule that lives in whichever branch remembered it, which is this repo's documented failure shape. **Cost, stated because it is real, and PROPAGATED at this SHA:** G4's dispatch identity carries the readiness level: the identity is a QUINTUPLE and PASS 5 compares five components. G2-B's invariant permits dispatch at `mapped-and-bypassed` and requires `mirror-complete` only for processing that depends on mirrored parameters. **That propagation is DONE at this SHA** — it was described here as pending for three SHAs while I wrote notes about it, and a ruling that contradicts the gates it governs is worse than an open question, because a reader can satisfy the gates and violate the ruling. Item 18 stays open for the IMPLEMENTATION of the two levels in the product, which no packet edit can deliver."
@@ -2019,7 +2019,7 @@
    "items": [
     19
    ],
-   "line": 1543,
+   "line": 1546,
    "named_at": [
     {
      "context": "r_acceptance`, and G3 shows why one boolean will not do: R3 makes it plannable and it is not accept",
@@ -2031,19 +2031,19 @@
     },
     {
      "context": " though it exists. **Per backend's direction at this SHA**, R3 makes G3 decidable FOR IMPLEMENTATION P",
-     "line": 1553
+     "line": 1556
     },
     {
      "context": "3** — ⟦PRODUCT⟧ **BLOCKING, not closed. The ruling is MADE (R3: N = 3, authored) and no further ruling",
-     "line": 2107
+     "line": 2144
     },
     {
      "context": " further ruling is required.** N has no source in the tree; R3 supplies it as an authored constant. Wh",
-     "line": 2107
+     "line": 2144
     },
     {
      "context": "red constant. What remains is implementation, not decision (R3: N = 3, authored), which makes the gate",
-     "line": 2107
+     "line": 2144
     }
    ],
    "text": "**R3 — item 19 (G3): N IS AUTHORED AT 3, and the packet says authored, not derived.** Nothing in the tree sources an observation count; `hardTimeoutBlocks = 500` is a block count and converting it would be inventing a rate. So N is a design constant: **a host must fail to advance across 3 consecutive observations before eviction, and 3N = 9 observations of absence**. The constraint the value must satisfy is stated so a successor can rule differently on evidence: N observations must be long enough to survive ordinary scheduling jitter and strictly shorter in wall-clock than the existing hard timeout, so containment happens before the blunt instrument fires. **No static check pins the literal at this SHA**, and one is required: without it N = 3 lives only in this prose and a change to the implementation would not be visible to any gate. That check is part of item 19's ticket, and the packet says the check is absent rather than describing it as though it exists. **Per backend's direction at this SHA**, R3 makes G3 decidable FOR IMPLEMENTATION PLANNING in the same way R1 does for the authored populations: N = 3 is an authored parameter, not a derived fact, and the work it implies is a ticket — pin N with its units and semantics, instrument the production watchdogs, define drift and measurement acceptance, and have it independently validated. Item 19 stays OPEN until that passes. G3 is NOT permanently resolution-blocked and must not be classified as such. **Cost, and a correction to this ruling's own reasoning:** I first justified 3 as \"the smallest value that is not 1\". Two is. The reviewer caught it and the justification is replaced rather than patched: 1 evicts on a single unlucky sweep, and 2 evicts on any two adjacent sweeps, which one scheduling hiccup spanning a sweep boundary produces — 3 is the smallest bound that requires a host to miss a sweep it had a full interval to make. That is an argument, not a measurement, and it is offered as a starting point measurement should overturn. A ruling whose stated reason contains an arithmetic error is worth less than the number it defends, so the error is recorded here rather than silently corrected."
@@ -2055,31 +2055,31 @@
    "items": [
     24
    ],
-   "line": 1566,
+   "line": 1569,
    "named_at": [
     {
      "context": " them from there, not from the document. Whether the rename R4 chose for open item 24 (G0-B) is the ri",
-     "line": 1446
+     "line": 1449
     },
     {
      "context": " the two names differ; it cannot judge a design choice, and R4 made one. (This sentence previously sai",
-     "line": 1447
+     "line": 1450
     },
     {
      "context": "(This sentence previously said the choice was unmade, which R4 falsified and I did not come back to: A",
-     "line": 1448
+     "line": 1451
     },
     {
      "context": "actually parsed (`RULING-SET`), because it read \"R1 through R4\" for as long as there were eleven: the ",
-     "line": 2024
+     "line": 2061
     },
     {
      "context": " 24. **G0-B** — ⟦PRODUCT⟧ BLOCKING for G0-B only. **RULED (R4): the Rust side renames.** The pure nam",
-     "line": 2116
+     "line": 2153
     },
     {
      "context": "hem. PASS 9 is RED until this lands and states so. **RULED (R4): the RUST side renames**, `_pad0` ",
-     "line": 2119
+     "line": 2156
     }
    ],
    "text": "**R4 — item 24 (G0-B): THE RUST SIDE RENAMES.** `patcher_abi.h:75` keeps `reserved`; `patcher_rust/src/lib.rs:86` changes `_pad0` to `reserved`. The C++ header is the ABI AUTHORITY — renaming the authority to match its mirror inverts which document defines the contract. **Correction to my own reasoning as published:** I wrote that bindgen consumes the header through an `allowlist_file` closure. It does not — there is no `build.rs` under `patcher_rust/` and no `allowlist_file` in the tree. The ruling stands on the weaker and true premise that `patcher_abi.h` is where the C++ side of the ABI is DECLARED and the Rust file mirrors it, but a reader should know the generation story I gave was wrong. The convention argument cuts the other way (`_pad0` is idiomatic Rust) and loses to that: a binding may be unidiomatic, an authority may not be derived from its binding. **Cost:** one unidiomatic name in the Rust file, and PASS 9 goes from RED to decidable the moment the rename lands."
@@ -2091,43 +2091,43 @@
    "items": [
     26
    ],
-   "line": 1578,
+   "line": 1581,
    "named_at": [
     {
      "context": "tes a count**, which is also the fix for the drift that had R5 excluding writes while R8 included them",
-     "line": 1219
+     "line": 1222
     },
     {
      "context": "eft for a reader to infer from two rulings that disagree.** R5 selects the READER role; R8(c) rules th",
-     "line": 1580
+     "line": 1583
     },
     {
      "context": "d a gate enumerating one end can never observe the pair. So R5 is operative for what a READER is and s",
-     "line": 1582
+     "line": 1585
     },
     {
      "context": "e, and the route is irrelevant to that. **This resolves the R5/R7 relationship codex-worker-1 asked ab",
-     "line": 1591
+     "line": 1594
     },
     {
      "context": "solves the R5/R7 relationship codex-worker-1 asked about:** R5 selects the ROLE (byte-consuming reads)",
-     "line": 1592
+     "line": 1595
     },
     {
      "context": "t), and they are orthogonal — R7 widens which agents count, R5 narrows which sites within them do. **S",
-     "line": 1593
+     "line": 1596
     },
     {
      "context": " a comparison — it is that there is nothing here to mutate. R5 named the readers, and a reader set alo",
-     "line": 1638
+     "line": 1641
     },
     {
      "context": "ting only one end can never observe the pair. This corrects R5 rather than extending it: R5 said \"the ",
-     "line": 1641
+     "line": 1644
     },
     {
      "context": "bserve the pair. This corrects R5 rather than extending it: R5 said \"the in-scope population is byte-c",
-     "line": 1641
+     "line": 1644
     }
    ],
    "text": "**R5 — item 26 (G4): THE IN-SCOPE POPULATION IS BYTE-CONSUMING READS, the whole census row and not a subset of it. SUPERSEDED IN SCOPE BY R8(c), which is stated here rather than left for a reader to infer from two rulings that disagree.** R5 selects the READER role; R8(c) rules that the gate ranges over readers AND writers, because an ordering invariant is a relation between a write and a read and a gate enumerating one end can never observe the pair. So R5 is operative for what a READER is and superseded for what the GATE ranges over. codex-worker-1 found both standing unmarked, each correct alone and jointly unsatisfiable — the pattern this packet has hit three times, and the repair is always to say which one yields where rather than to soften both.** With the reader table above HAND-CLASSIFIED — not derived; the manifest marks that row `derived: false` and this sentence said otherwise — this ruling now selects a named set rather than a category: readers 1-7, main plane and aux, direct and helper-mediated and callee-deref alike. A reader does not leave the population by reaching the bytes through a helper; the invariant is about consuming bytes another agent wrote, and the route is irrelevant to that. **This resolves the R5/R7 relationship codex-worker-1 asked about:** R5 selects the ROLE (byte-consuming reads), R7 fixes the SCOPE (the host is an agent within it), and they are orthogonal — R7 widens which agents count, R5 narrows which sites within them do. **SUPERSEDED TAIL, recorded as history and no longer as rule.** This ruling used to continue: that the population the GATE ranges over is the sites dereferencing the out-plane for sample data, that byte-PRODUCING writes are out of scope, and — stated as a cost — that the gate therefore does not govern the write side. **R8(c) rules the opposite and is operative**: the gate ranges over both endpoints, because an ordering invariant is a relation and a gate holding one end cannot observe the pair. The paragraph above kept saying otherwise in the present tense while carrying a SUPERSEDED label at its head, which is a document stating a rule two ways — the failure this packet has now made four times, and marking the heading is not marking the text. What survives from that tail is the point about PARTITION: establishing sites and writes must still appear in the partition even where they are outside a role, because a partition that drops a class cannot be checked for totality, and that is how an earlier attempt here asserted a sum of 27 over terms adding to 20."
@@ -2139,7 +2139,7 @@
    "items": [
     27
    ],
-   "line": 1606,
+   "line": 1609,
    "named_at": [],
    "text": "**R6 — item 27 (G2-A): THE GATE RANGES OVER THE REFUSAL-EMITTER POPULATION.** G2-A is about command identity through a refusal — a UI adopting an engine refusal as the outcome of the command it sent — so the governed set is the emitters of an adoptable refusal, and the version-arbitrated set is a RELATED population it must not be confused with. Every control states which one it ranges over. **Cost, and it is the whole reason this ruling is needed:** the two sets differ in both directions, so neither can stand in for the other. A control written against \"arbitrated\" while claiming \"refusable\" is the error this packet published and retracted."
   },
@@ -2150,27 +2150,27 @@
    "items": [
     26
    ],
-   "line": 1614,
+   "line": 1617,
    "named_at": [
     {
      "context": " the `S-1` spelling defect at the scale of a whole agent. **R7 (below) rules the host IN SCOPE.** The ",
-     "line": 1109
+     "line": 1112
     },
     {
      "context": "oint: on this census the host is MOST of the population, so R7 is not a marginal scope call.** **That ",
-     "line": 1120
+     "line": 1123
     },
     {
      "context": "and the route is irrelevant to that. **This resolves the R5/R7 relationship codex-worker-1 asked about",
-     "line": 1591
+     "line": 1594
     },
     {
      "context": " asked about:** R5 selects the ROLE (byte-consuming reads), R7 fixes the SCOPE (the host is an agent w",
-     "line": 1592
+     "line": 1595
     },
     {
      "context": "(the host is an agent within it), and they are orthogonal — R7 widens which agents count, R5 narrows w",
-     "line": 1593
+     "line": 1596
     }
    ],
    "text": "**R7 — item 26 (G4): THE HOST PROCESS IS IN SCOPE.** G4's invariant is a consumer reading bytes ANOTHER AGENT wrote, and the other agent is `juce_host_process_main`. A scope that excluded it would leave the gate unable to see the write side of its own invariant — and it already does not see it, because the population's four name-terms miss the host's spelling entirely. Note this differs from G1-A, whose RAW deliberately excludes `juce_host_process_main` because that gate is about the engine's own ring; a per-gate scope is not a packet-wide one. **Cost:** the population must be rebuilt by derivation from `ShmHeader::audioOutOffset` rather than by matching spellings, which is a harder census than a grep and is why item 26 stays open rather than closing on a corrected number."
@@ -2182,39 +2182,39 @@
    "items": [
     26
    ],
-   "line": 1623,
+   "line": 1626,
    "named_at": [
     {
      "context": "tated ONCE, as a command that returns it.** Backend changed R8's `7/8` to `70/80` and R9's `one` to `t",
-     "line": 1216
+     "line": 1219
     },
     {
      "context": "so the fix for the drift that had R5 excluding writes while R8 included them. IN plane — the owne",
-     "line": 1220
+     "line": 1223
     },
     {
      "context": "'s reopening sentence, inverting input for output, changing R8's 7/8 to 70/80, R9's one to two and ite",
-     "line": 1490
+     "line": 1493
     },
     {
      "context": "e census row and not a subset of it. SUPERSEDED IN SCOPE BY R8(c), which is stated here rather than le",
-     "line": 1579
+     "line": 1582
     },
     {
      "context": "om two rulings that disagree.** R5 selects the READER role; R8(c) rules that the gate ranges over read",
-     "line": 1580
+     "line": 1583
     },
     {
      "context": "— that the gate therefore does not govern the write side. **R8(c) rules the opposite and is operative*",
-     "line": 1597
+     "line": 1600
     },
     {
      "context": "putPtrs` to the plugin, which reads it — the same treatment R8(b) gives the indirect WRITER, and for t",
-     "line": 1720
+     "line": 1723
     },
     {
      "context": "y the two OUT census rows and split direct/indirect per R8(c), with two same-agent readbacks exclu",
-     "line": 2154
+     "line": 2191
     }
    ],
    "text": "**R8 — item 26 (G4): THE THREE ROLE RULINGS claude-worker-1 correctly refused to make.** **(a) SAME-AGENT READBACK IS OUT OF THE POPULATION, and named rather than dropped.** `juce:834` and `:1015` are the writer reading bytes it wrote itself. G4's invariant is a consumer reading bytes ANOTHER AGENT wrote; a self-read has no cross-agent ordering hazard because there is no acknowledgement to wait on. They are byte reads of the plane, so they are listed as EXCLUDED MEMBERS with this reason — an exclusion by argument, not by the selector failing to see them. **(b) THE INDIRECT WRITER IS ONE SITE, AND IT IS THE HOST'S.** `juce:989/994` hands `outputPtrs` and `auxOutputPtrs` to the plugin, which writes them. The plugin is third-party code this packet does not govern; the host is accountable for what it hands over, so the site is the handover. Attributing it to the plugin would put a member of G4's population outside anything the packet can require. **(c) THE GATE RANGES OVER BOTH SIDES: the CENSUS rows *out-plane cross-agent byte-consuming reads* AND *out-plane host byte-producing writes*.** This ruling carries NO DIGITS, by rule and by check (`CENSUS-RESTATED`): backend changed a `7/8` written here to `70/80` and the gate passed, because a number restated in a ruling is a second statement of a fact the census already owns and nothing compares them. The fix is not a comparison — it is that there is nothing here to mutate. R5 named the readers, and a reader set alone cannot check an ORDERING invariant — \"no consumer reads before the acknowledgement\" is a relation between a write and a read, and a gate enumerating only one end can never observe the pair. This corrects R5 rather than extending it: R5 said \"the in-scope population is byte-consuming reads\", and that was half a population for a two-sided invariant. **THE COMPLETENESS ARGUMENT, which is what this population actually needed and what NEITHER census gave alone.** A mapped-base census is not total either, for the mirror of the reason a name census is not: four of the seven readers never cast a base themselves — they take a pointer from a helper, and the census collapses them into the helper unless callers are followed. There are exactly THREE ways a plane address can arise: A a direct cast of the mapped base 5 sites B the return of `audioOutChannelPtr` (`audio_shm.cpp:5-12`) caller: juce:638 C the return of `safeAudioOutPtr` (`engine_produce_block.cpp:861-866`) callers: :1030, :1112, :1150 **The two helpers are G4's, and the FILE has four.** `audio_shm.cpp:5` / `:17` and `engine_produce_block.cpp:861` / `:848` are two symmetric pairs, one per plane — `audioOutChannelPtr`/`audioInChannelPtr` and `safeAudioOutPtr`/`safeAudioInPtr`. G4's argument is unaffected because its population is the OUT plane and the two out-plane helpers are the two named; but \"exactly two pointer-returning helpers\" is a claim about the FILE and is false about it, and claude-worker-1 tested their own premise and said so before it hardened into one. **The argument:** a site can only touch plane bytes by holding a plane pointer; a plane pointer can only be obtained by casting the mapped base or by calling one of the two functions that return one; all three sets are enumerated. That is an argument from the code's STRUCTURE rather than from a grep's recall, and it is FALSIFIABLE — add a third pointer-returning helper and it must be extended. The offset-returning helpers (`auxOutputPlaneOffset`, `audioChannelOffset`) feed route A and are already counted there."
@@ -2226,23 +2226,23 @@
    "items": [
     26
    ],
-   "line": 1669,
+   "line": 1672,
    "named_at": [
     {
      "context": "hat returns it.** Backend changed R8's `7/8` to `70/80` and R9's `one` to `two` in the packet text and",
-     "line": 1216
+     "line": 1219
     },
     {
      "context": "ce, inverting input for output, changing R8's 7/8 to 70/80, R9's one to two and item 31's four to five",
-     "line": 1490
+     "line": 1493
     },
     {
      "context": "om the other side — `R[1-9]` could not match `**R10 — `, so R9's block ran to the end and swallowed R1",
-     "line": 2026
+     "line": 2063
     },
     {
      "context": "so R9's block ran to the end and swallowed R10 and R11 into R9's text. **A hardcoded range and a summa",
-     "line": 2027
+     "line": 2064
     }
    ],
    "text": "**R9 — item 26 (G4): THE POPULATION COUNTS ADDRESSING SITES, and consumption sites are named separately.** `engine_audio_callback.h` contains exactly ONE segment-base dereference, at `:404`; `:448` and `:463` are the two places `trackChannel[i]` is CONSUMED — the PDC fast path and the PDC delay path. Both descriptions are correct and they count different things, which is why the packet must say which: the reader that `engine_audio_callback.h` contributes is a single member on addressing sites and a pair on consumption sites, and the row total moves with the unit chosen. **The gate counts ADDRESSING sites, because the invariant is about acquiring a plane address and reading through it before an acknowledgement.** But the two consumption sites are named, because **a fixture that exercises only the fast path never touches the delay branch** — which reads through a ring one block behind, and that is precisely the shape a barrier test should target. A population that hid the delay path behind its addressing site would have made the fixture look complete while missing the harder case. **THE RATCHET THIS ARGUMENT REQUIRES, and item 31 carries it:** the completeness argument rests on \"exactly two pointer-returning helpers\", which is itself a census and deserves a check rather than anyone's word. **A THIRD FRAGILITY, named by claude-worker-1 and not by any check here.** `engine_produce_block.cpp` has THREE bindings spelled `input` — `:535` and `:817` are `const float*` aimed at other buffers, and only `:945` is the plane. The engine-write row greps the FILE for the name and returns exactly the eleven that belong to `:945`'s scope, so it is right at this pin and right for the wrong reason: it would absorb a write through either other binding the moment one stopped being const. A row bounded by a name inside a file with three same-named bindings is a floor, and the row that stated the binding as its rule is the one that found the eleven. **The two OUT rows are the ones a reader should distrust**, and stating 4 against a claim of seven and 13 against a claim of eight is the point: the gap IS the hand classification, and a row that quoted a pattern returning exactly the claimed number would be a pattern reverse-engineered from the answer. The SEVEN IN rows have no such gap because the roles there are separable by shape — seven, not the five this sentence said after the unit split added two, which is the same stale-count shape the checks below exist for and which no check reaches inside a prose paragraph. **THE ALIAS CHAIN IS THE FINDING, and it is the same defect this population has now made four times.** The host reaches the input plane through TWO hops: `state.inputPtrs` → `inputPtrs` (`:862`) → `pluginInputPtrs` (`:880`). Five of the byte reads dereference the SECOND alias (`:924`/`:927`/`:930` the level-matched bypass copy, `:939`/`:942` the bypass meter, `:975`/`:980` the input meter) and a census over the member name `state.inputPtrs` returns FOUR sites and sees none of them. claude-worker-1's input census reported five engine writes in this file; the file holds ELEVEN, because the window started at the visible branch (`:1016`) while the binding that governs every write is `float* input = safeAudioInPtr(blockIndex, ch)` at `:945` — the sampler-stem, sidechain and sampler-audio branches at `:967`–`:1017` write the same plane through the same pointer. Eleven here plus the master summed-mix write is twelve engine writes in all, and those are TWO census rows rather than one figure: writing \"twelve writes through two addressing routes\" as a single number, as this paragraph did, is the conflation the rows exist to prevent. **A census is bounded by the BINDING, never by the branch you were reading.** **`engine_produce_block.cpp:1032` IS A MEMBER OF BOTH RELATIONS AT ONCE.** `std::memcpy(input, output, ...)` is an out-plane byte read and an in-plane byte write in a single statement. Any partition into \"the readers\" and \"the writers\" either double-counts it or drops it, and two controls ranging over the two lists would each claim it. It is named once here, in both roles, deliberately. **HOST ROLES, and one is INDIRECT.** `:686` (aux copy) and `:720` (passthrough) read through `state.inputPtrs` directly; `:685` is a null-and-size guard and reads no bytes; `:644` establishes the address. `:987` hands `pluginInputPtrs` to the plugin, which reads it — the same treatment R8(b) gives the indirect WRITER, and for the same reason: the plugin is third-party code this packet does not govern, so the host's handover is the accountable site."
@@ -2254,19 +2254,19 @@
    "items": [
     30
    ],
-   "line": 1724,
+   "line": 1727,
    "named_at": [
     {
      "context": "atch `**R10 — `, so R9's block ran to the end and swallowed R10 and R11 into R9's text. **A hardcoded r",
-     "line": 2027
+     "line": 2064
     },
     {
      "context": "RODUCT fix, not a packet edit. 30. **G2-A** — **RULED (R10): the wiring is DEAD, the hazard is REA",
-     "line": 2239
+     "line": 2276
     },
     {
      "context": "ade and that item 27's scope could not close until it was — R10 made the call (dead wiring, removed",
-     "line": 2251
+     "line": 2288
     }
    ],
    "text": "**R10 — item 30 (G2-A): THE UNDO ARBITER IS DEAD WIRING, THE HAZARD IS REAL, AND THE INSTRUMENT IS WRONG FOR IT.** Measured before ruling. `handleUndo` (`engine_undo_commands.cpp:46-72`) calls `deps.applyDocument(doc)` — it replaces the ENTIRE `ProjectDocument` from history, then restores plugin state. A per-clip `requireMatchingClipVersion` cannot express \"the document you are undoing from is the one you saw\": it arbitrates ONE clip's version while undo swaps everything. **So the `std::function` member at `engine_undo_commands.h:38` is dead wiring — remove it.** Keeping an unused gate wired in suggests to every reader that arbitration happens here, which is worse than its absence: it is a check that exists in the type system and nowhere in the behaviour. **And the hazard it appears to cover is REAL and uncovered**: undo applies a whole document, so an edit made between the user's view and their undo is silently reverted. Closing that needs a DOCUMENT-level version, which does not exist at this SHA. Item 30 records the removal and the hazard separately, because deleting the wiring must not read as dismissing the risk."
@@ -2278,15 +2278,15 @@
    "items": [
     32
    ],
-   "line": 1737,
+   "line": 1740,
    "named_at": [
     {
      "context": "R10 — `, so R9's block ran to the end and swallowed R10 and R11 into R9's text. **A hardcoded range and",
-     "line": 2027
+     "line": 2064
     },
     {
      "context": "chet without sharing a population. 32. **G2-A** — **RULED (R11).** `commandMutatesDocument(Undo)` retu",
-     "line": 2285
+     "line": 2322
     }
    ],
    "text": "**R11 — item 32 (G2-A): `commandMutatesDocument(Undo)` RETURNS FALSE WHILE UNDO REPLACES THE DOCUMENT.** `engine_command_mutates.h:58` classifies `Undo` as \"no document state\" and returns false; `handleUndo` calls `applyDocument`. The classifier is answering \"does this command CARRY document state in its payload\" and its name asks \"does it MUTATE the document\" — and G2-A's arbitrated population is derived from that classifier. A command that replaces the entire document while classified as not mutating it is a live inconsistency in the predicate this gate depends on, not merely a misleading name."
@@ -2298,7 +2298,7 @@
    "items": [
     27
    ],
-   "line": 1745,
+   "line": 1748,
    "named_at": [
     {
      "context": "mpleted across BOTH halves of its invariant; G2-A left when R12 authored its scope as the adoptable-",
@@ -2314,19 +2314,19 @@
     },
     {
      "context": "RULING'S FIRST STATED REASON, which was false at the pin.** R12 originally excluded the two ResyncNeede",
-     "line": 1766
+     "line": 1769
     },
     {
      "context": "A** — ⟦PRODUCT⟧ **BLOCKING, and the scope is AUTHORED under R12: the gate ranges over the three pro",
-     "line": 2166
+     "line": 2203
     },
     {
      "context": "ragraph also said \"one of the three\" for two SHAs after R12 said all three: I corrected the RULING ",
-     "line": 2180
+     "line": 2217
     },
     {
      "context": " call (dead wiring, removed separately from the hazard) and R12 authored item 27's scope without re",
-     "line": 2252
+     "line": 2289
     }
    ],
    "text": "**R12 — item 27 (G2-A): THE GATE RANGES OVER THE ADOPTABLE-REFUSAL EMIT SITES, and the reason the old scope kept falsifying is that THERE ARE THREE REFUSAL CHANNELS, not one.** The population is the production `emitClipReject` sites — RAW 4 (`git grep -n -E '^ +emitClipReject\\(' apps`) → minus 1 (`engine_ui_publish_tests_main.cpp:198`, a test main) → **3 IN SCOPE**: `engine_clip_edit.cpp:965` (UnknownTrack), `:986` (StaleBase) and `engine_rowops_commands.cpp:49` (SetRowOps). ⟂ **The three channels, each with a different adoptability.** ClipRejected requireMatchingClipVersion (the DEPS one) -> emitClipReject. command-specific `UiClipRejectPayload` carries **commandType** — it names what was refused. Reached from 6 arbitration call sites (`git grep -n -E 'requireMatchingClipVersion\\((auto|chord|diff|h|p|payload)' apps | wc -l` returns 6) UiDiffType::ResyncNeeded daw::requireMatchingClipVersion (the FREE one, `clip_edit.cpp:5-15`) terminal, not addressed fills a diff with `clipVersion = currentVersion` and NO command field UiHarmonyDiffType:: HarmonyTimeline::requireMatchingHarmonyVersion ResyncNeeded (`engine_harmony_timeline.cpp:111-120`) sets terminal, not addressed `harmonyVersion = current`, no command field. Reached from `engine_note_commands.cpp:93` and `:112` — WriteHarmony and DeleteHarmony, which never reach either clip arbiter **A CORRECTION TO THIS RULING'S FIRST STATED REASON, which was false at the pin.** R12 originally excluded the two ResyncNeeded channels because they \"carry no retry value, nothing to adopt\". **They both carry one** — `diffOut.clipVersion = currentVersion` at `clip_edit.cpp:13` and `diffPayload.harmonyVersion = current` at `engine_harmony_timeline.cpp:119`. codex-worker-1 caught it. The real distinction is that a `ClipRejected` NAMES A COMMAND and a ResyncNeeded diff does not: one is addressed to a caller, the other is a terminal \"you are stale\" that any reader may pick up. The exclusion stands and its reason was wrong, which is worth more than a quiet edit — I authored a ruling on a property I had not read the payload for. **WHY THE EMIT SITES AND NOT THE ARBITRATED COMMANDS.** G2-A's invariant is that a refused command tells the UI what to retry with. That is a property of the EMIT, not of the check. Selecting on arbitration includes commands whose refusal the gate cannot test — the two ResyncNeeded channels carry no retry value — and EXCLUDES a site that fails the invariant, because `SetRowOps` emits an adoptable refusal while being arbitrated by nothing: `UiSetRowOpsPayload` has no `baseVersion` field at all. **Every previous scope here was falsified by the same move: it selected on the check and the gate is about the answer.** The containment claim B = A ∪ {SetRowOps} failed for the same reason — the two sets are not nested because they are indexed on different things. **ALL THREE MEMBERS FAIL THE INVARIANT, not one — and that correction is codex-worker-1's.** I wrote that `engine_rowops_commands.cpp:49` was the single failing member because it passes `/*sentBase=*/0, /*currentBase=*/0` — constants, where the other two pass real values and zero is a live `clipVersion`. That is true and it is not the whole defect. **`commandType` names a KIND, not an INSTANCE**, and `UiClipRejectPayload` carries no sender-minted per-command identity at all (`event_payloads.h`: diffType, reason, trackId, sentBase, currentBase, commandType, reserved). The consumer correlates on `(track, commandType, sentBase)` — `ui/daw-cli/src/main.rs:1179`, live, with four call sites of `await_clip_outcome` at `:2989`, `:3000`, `:5418`, `:5430` — so two concurrent refusals of the SAME command type on one track at the same base are indistinguishable for every member of the population, not just for the one that zeroes its bases. rowops:49 is additionally worse, not uniquely wrong. **A population all of whose members fail is the right population.** That class-wide defect is open item 27 (G2-A)'s OWN — item 29 (G2-A) is only the narrower `SetRowOps` constant-base case, and this sentence attributed the broad defect to it for four SHAs after codex-worker-2 ruled otherwise and after the edge was removed from the item. **Correcting the item and leaving the ruling is the same half-fix as correcting the ruling and leaving the item**, which this packet did in the opposite direction three SHAs ago. A population defined to exclude its own failing members would be a population chosen to pass, and one narrowed to a single failing member would have understated the work by two thirds."
@@ -2338,19 +2338,23 @@
    "items": [
     34
    ],
-   "line": 1804,
+   "line": 1807,
    "named_at": [
     {
      "context": "se from its NAME and both halves of the ruling are false.** R13 claimed `mirrorOnly` was a consumption ",
-     "line": 1805
+     "line": 1808
     },
     {
-     "context": "CT work — R1 through R17 make such items implementable, and R13 is RETRACTED rather than applied, and e",
-     "line": 2019
+     "context": "RODUCT work — R1 through R17 make such items implementable, R13 and R16 are RETRACTED rather than appli",
+     "line": 2056
+    },
+    {
+     "context": "ntable, R13 and R16 are RETRACTED rather than applied,, and R13 is RETRACTED rather than applied, and e",
+     "line": 2056
     },
     {
      "context": "ed ring as the block, so they drain before its DSP. See R13, which records the retraction and the ",
-     "line": 2312
+     "line": 2349
     }
    ],
    "text": "**R13 — item 34 (G2-B): RETRACTED. I inferred a guard's purpose from its NAME and both halves of the ruling are false.** R13 claimed `mirrorOnly` was a consumption boundary keyed one event too early. codex-worker-1 refused it and measuring settles it against me: mirrorOnly is read at exactly TWO sites, `engine_produce_block.cpp:602` and `:620`, both `if (!mirrorOnly && isPlaying)` — renderTrack and note emission. `sendProcessBlock` at `:1075` and `:1089` is OUTSIDE any mirrorOnly guard. **So `mirrorOnly` is not a discard boundary at all** — it suppresses track rendering and MIDI while a mirror is pending-and-unprimed, and the block is dispatched and consumed regardless. My ruling opened with \"one exists\", and one does not. And the hazard it was built on does not follow either: `writeMirrorParams` (`engine_ui_publish.cpp:92-130`) stamps each mirrored param into the SAME time-ordered event ring as the block, at the priming block's own `sampleTime`, so the params are drained in order before that block's DSP rather than racing it. **The error is one I wrote a note about earlier in this same session and then repeated twice.** I reasoned from a name — `mirrorOnly` sounds like a mode that suppresses everything — instead of reading the statements it guards, exactly as I reasoned about `ResyncNeeded` from its channel name instead of its payload, and about `EventEntry` from a struct in the wrong crate. **The fix that would have caught all three costs one command: read the guarded region, not the guard's name.** Item 34 is WITHDRAWN. The proposed one-condition change would also have been wrong on its own terms — `mirrorPending` is a per-track flag consulted in a loop over all tracks, so gating on it globally would silence unrelated tracks' timeline events. **Do not implement it.** What survives as a real question, and it is codex-worker-1's rather than mine: G2-B's PASS 4 is still withdrawn with no replacement while R2 says propagation is done, and no PASS condition accepts the two-level implementation that exists. That is item 18's, where it already lives."
@@ -2362,7 +2366,7 @@
    "items": [
     35
    ],
-   "line": 1833,
+   "line": 1836,
    "named_at": [
     {
      "context": "y byte-disjointness and **counted PER TYPE** — **AMENDED BY R14 for `EventEntry`, where the admission d",
@@ -2370,7 +2374,7 @@
     },
     {
      "context": " breaks silently. That is what the gate stays blocked on. **R14 chooses between the two fixes that were",
-     "line": 2333
+     "line": 2370
     }
    ],
    "text": "**R14 — item 35 (G0-B): EXACT MEMBER PARITY IS REQUIRED FOR `EventEntry`, and PASS 8's byte-disjointness exception does not reach it.** G0-B's invariant demands per-member parity between the C++ and Rust declarations of a shared type; PASS 8 permits a one-sided member where the bytes are provably disjoint. Those two are not in conflict in general — a member one side never touches is genuinely harmless — but they cannot BOTH be satisfied by this pair, and item 35 named the mismatch without saying which rule wins. **Ruling: parity.** The exception is about bytes NEITHER side treats as live data. `ready` is written and read as the multi-producer publication flag on the C++ side, so disjointness would require the Rust side never to write [60,64) — and `*slot = entry` is a whole-object store whose width is `size_of`, which includes the padding. **A byte-disjointness argument that depends on a compiler's discretion about padding is not a disjointness argument.** Whatever fixes item 35 must make the two declarations agree member-for-member: declare `ready` on the Rust side, or give the patcher path a distinct transfer type that is not claimed to be the same ABI. A field-wise copy alone does NOT satisfy this — it would leave 7 members against 6 and the invariant unmet, which is the trap codex-worker-1 named."
@@ -2382,7 +2386,7 @@
    "items": [
     36
    ],
-   "line": 1850,
+   "line": 1853,
    "named_at": [
     {
      "context": "indow the freeze is held open — and NOT by `kill -0`, which R15 retracts as this bullet's instrument",
@@ -2394,30 +2398,54 @@
     },
     {
      "context": "can move again. No liveness drop exists to appeal to. **R15 settles the mechanism claim against the",
-     "line": 2353
+     "line": 2390
     }
    ],
    "text": "**R15 — item 36 (G3): G3's M1 IS DEFINED HERE, AND ON THE CONTRADICTION THE REGISTER NAMES THE CHECK IS THE STALE SIDE — on its mechanism claim, which is decidable at the pin. What survives is a sharper question than the register asked.** G3's Deterministic-test block names Layer 0, Layer 1 and Layer 2 and never defines an M1; PASS 1 and the register then both refer to one, borrowing G0-B's M-label convention (`:335`) across a gate boundary that does not carry it. **M1 is hereby Layer 0's mechanism**: run `tools/host_stall_check.sh` against the pinned tree with `DAW_ENGINE_DEBUG_STALL` set, and observe, WITHIN the SIGSTOP window the script opens at `:85` and closes at `:92`, whether the frozen host still owes dispatched blocks and whether the producer is gated on it. PASS 1's refutation clause is right about the window — after `kill -CONT` at `:92` the host is running normally — and it stays. **M1 CANNOT BE BUILT FROM THE INSTRUMENTS I FIRST NAMED, and the register's demand for it therefore survives this ruling.** I defined M1 as recording (a) `kill -0 $FROZEN` and (b) the armed stall log's per-host `hosts=[…]` vector. Neither carries the needed fact. `kill -0` proves a process EXISTS; a SIGSTOPped process and a running one answer it identically, so it cannot establish the alive-but-stopped state I claimed for it. And the per-host vector is positional and thin: `:262-266` emits `active` as a two-way separator and `completedBlockId`, with **no track or PID identity and no `lastDispatchedBlockId`** — so it cannot evaluate the owes-nothing predicate at `apps/engine_rt_helpers.cpp:502`, which is the entire question, and it cannot even say which entry is the frozen host. codex-worker-1 caught both. **I specified an oracle by confirming a log exists and never reading what it emits**, which is the same shape as a guard that is present but watches the wrong moment. A usable M1 needs a channel that carries `lastDispatchedBlockId` and host identity, and building one is PRODUCT work that this packet does not authorise. Item 36 is therefore blocked on an instrument that does not yet exist, and says so. **The two statements.** The check says the producer does not stay gated (`tools/host_stall_check.sh:16-19`), names the mechanism at `:101-104` — \"Frozen host + fix = the host is dropped and production continues\" — and makes it EXECUTABLE at `:105-109`, failing when more than three `producer stall (inFlight)` lines follow its in-log marker. The producer comment the register asks for is `apps/engine_rt_helpers.h:232-234`, which says the opposite while naming the check: \"a stopped host still OWES its dispatched blocks, which is the one case where holding the gate shut is the correct answer.\" **The mechanism half is decidable at the pin, and the check is wrong.** `completedMinimum` (`apps/engine_rt_helpers.cpp:492-511`) excludes a host on exactly three conditions — `!active` (`:493`), `completedBlockId == 0` (`:496`), and owes-nothing — `lastDispatchedBlockId > 0 && completedBlockId >= lastDispatchedBlockId` (`:502`). A SIGSTOPped host that had been producing satisfies none: its completed id is non-zero, and its dispatched blocks are precisely what it has stopped finishing. It is counted at `:509-510`, holds `lowest` at its frozen id, and `apps/engine_producer_thread.cpp:282-283` gates. **The state is absorbing**: once gated the producer dispatches nothing, so neither id can move again. The first exclusion never participates at all — the engine's only caller builds every entry as `hostProgress.push_back({true, completed, …})` (`apps/engine_producer_thread.cpp:249-251`), so `active` is hardcoded and `!active` is unreachable from production; the `\":inactive@\"` branch in the same function's log (`:265`) prints for a state that cannot occur. Nor is there a liveness drop to appeal to: no `kill(pid, 0)`/`ESRCH` test exists under `apps/` outside test mains and teardown. **\"The host is dropped\" names nothing in this tree.** On the register's question, the check is the stale side. **A CORRECTION TO THIS RULING'S OWN EVIDENCE, and it is the same error twice in one day.** The sentence above first cited `apps/engine_ui_thread.cpp:57` and `:77` as the only writes of `.active = false`, offered as proof that no host is ever dropped. Those two lines belong to `struct StallWatch` (`apps/engine_ui_thread.cpp:51`), a UI ring-recovery type with no relation to `HostProgress`. codex-worker-1 caught it. I had grepped a MEMBER NAME across a directory and taken the hits without reading their type — the identical mistake as answering a question about `patcher_rust/src/lib.rs` by measuring `ui/daw-bridge/src/layout.rs`, which is recorded three items above this one. **A grep for `.active` is a grep for a word, not for a field**, and the conclusion it supported happened to be true, which is exactly why it survived a re-read. The claim now rests on the construction site, where the value is visible. **What that does NOT settle.** The check's other half is not prose, it is an assertion — and if the producer comment is right, that assertion should be failing. **I gave three readings and said no static reading could decide between them. codex-worker-1 supplied a fourth and a fifth, and both are decidable at the pin**, which also refutes the \"no static reading can\" claim I attached to item 36: 1. the check does not run; 2. it freezes a host the gate was never going to count — `:82-83` picks by `pgrep`, preferring `_0.sock` and otherwise the first match, with no test of membership in the counted set, and exclusion `:496` makes this concrete for any host that has completed nothing; 3. something outside `completedMinimum` intervenes; 4. **the marker is overwritten before `awk` can see it.** The engine's output is `>\"$TMP/eng.log\"` inside a subshell (`:65`) — one open file description the engine holds for its lifetime — while `froze-host-marker` is appended through a SEPARATE description at `:89`. The engine's offset does not advance when another descriptor appends, so its next write lands at its own offset and can overwrite the marker. `:105` then never sets `seen`, `n` stays 0, and `STALLS_AFTER=0` passes; 5. **the gate holds but says nothing.** `cli do play --force … || true` (`:77`) discards a failed play, and at `apps/engine_producer_thread.cpp:283-289` only the `logStall` call is wrapped in `if (isPlaying)` — the `continue` at `:289` is OUTSIDE it. **So a non-playing producer stays gated exactly as before and emits no `inFlight` line at all.** The check counts log lines, so it reads a permanently gated producer as zero stalls. Readings 4 and 5 are two independent channels by which the check returns 0 while the producer is gated forever, and neither needs a bypass in the engine. **That dissolves the contradiction rather than deferring it**: `apps/engine_rt_helpers.h:232-234` is consistent with the implementation, the check's mechanism comment names nothing, and the check's green is explainable without any of it being true. What remains unobserved is which channel actually operates in a given run — a debugging question, not an acceptance one. **Recorded next to both, as the register requires.** The two addresses are `tools/host_stall_check.sh:16-19`, with `:101-104` carrying the mechanism claim that fails, and `apps/engine_rt_helpers.h:232-234`. Both sit in PRODUCT, which I do not edit; the ruling is recorded here against both addresses and item 36 carries the product-side correction."
   },
   {
-   "decision": "item 37 (G3): THE REGISTER ASKS FOR A CONFIRMATION THAT CANNOT BE GIVEN, BECAUSE BACK-PRESSURE IS ITSELF THE SLOT-REUSE GUARD",
+   "decision": "item 37 (G3): RETRACTED. I ruled on a mechanism this gate explicitly forbids, and what survives is PASS 7's missing rationale rather than a defect",
    "decision_values": [],
    "id": "R16",
    "items": [
     37
    ],
-   "line": 1944,
+   "line": 1947,
    "named_at": [
     {
+     "context": "vives is PASS 7's missing rationale rather than a defect.** R16 argued that evicting a host which still",
+     "line": 1948
+    },
+    {
+     "context": "t. At the pin, `hostReady == false` closes all three doors R16 needed open. The producer skips the hos",
+     "line": 1957
+    },
+    {
+     "context": "ket never stated.** PASS 7 reads as a placement preference; R16's analysis is the reason it is a SAFETY",
+     "line": 1968
+    },
+    {
+     "context": "ork — R1 through R17 make such items implementable, R13 and R16 are RETRACTED rather than applied,, and",
+     "line": 2056
+    },
+    {
+     "context": "n a mechanism G3 forbids, and retracted the same day.** R16 is RETRACTED in full: this item read ev",
+     "line": 2405
+    },
+    {
+     "context": "follows. codex-worker-1 refuted it. The analysis is kept in R16 as PASS 7's rationale — the reason ",
+     "line": 2412
+    },
+    {
      "context": "ain (`apps/device_chain_ui_live_tests_main.cpp:170`). **R16 rules that the register's confirmat",
-     "line": 2379
+     "line": 2425
     },
     {
      "context": " resume, or a per-slot block stamp — is an owner choice R16 deliberately leaves open. PRODUCT w",
-     "line": 2383
+     "line": 2429
     }
    ],
-   "text": "**R16 — item 37 (G3): THE REGISTER ASKS FOR A CONFIRMATION THAT CANNOT BE GIVEN, BECAUSE BACK-PRESSURE IS ITSELF THE SLOT-REUSE GUARD.** The register directs the reviewer to confirm that evicting a host which still owes dispatched blocks cannot corrupt what a RESUMED host reads or publishes. It cannot be confirmed, and the opposite is derivable at the pin. The demand should be re-read as a design requirement rather than a check. Audio slots are addressed `blockId % numBlocks` on every side — engine (`apps/engine_produce_block.cpp:724`), host (`apps/juce_host_process_main.cpp:635`), master (`apps/engine_master_render.cpp:58`) and the audio callback (`apps/engine_audio_callback.h:363`). Nothing stamps a slot with the block it holds; `apps/engine_audio_callback.h:362` states the mapping as a COMMENT and reads on that basis. **The invariant that makes `blockId % numBlocks` unambiguous is exactly `inFlight < numBlocks`** — the back-pressure gate at `apps/engine_producer_thread.cpp:282-283`. Evicting a host from the minimum while it still owes dispatched blocks is, by construction, the removal of that invariant for that host. Three consequences follow, each a read of the pinned tree rather than a prediction: 1. **Corrupt read.** The resumed host binds input pointers from its OLD request — `blockIndex = request.blockId % numBlocks` (`:635`), then `audioInChannelPtr(…)` (`:643-648`) — with no test that the request is still current. The producer has since written a newer block's input into that slot. 2. **Corrupt publish.** It writes its output into the same lapped slot, and `apps/engine_audio_callback.h:363` reads that slot for the newer block with no identity check, so mismatched audio is PLAYED rather than dropped. 3. **The deadlock returns.** It stores its stale id — `completedBlockId.store(request.blockId)` (`:1085`), unconditional — and the producer reads it at `apps/engine_producer_thread.cpp:239` with NO monotonic clamp. `completedMinimum` then counts a host whose completed id has gone BACKWARDS and the gate closes again. **The eviction designed to open the gate re-closes it through the resumed host.** `completedSampleTime` is not an escape. The host publishes it at `:1083` and its only consumer under `apps/` is a test main (`apps/device_chain_ui_live_tests_main.cpp:170`); no production code reads it. **What this means for G3.** Eviction cannot land as a producer-side rule alone — it needs a RESUME protocol, and the packet must say so before any implementation is attempted. The requirement is statable without designing it: a resumed host must be prevented from writing a lapped slot, and a stale `completedBlockId` must not be able to lower the minimum. Whether that is a currency test the host performs, a monotonic clamp on the reader, a re-baseline on resume, or a block-id stamp per slot is an OWNER choice and this ruling deliberately does not make it. What is ruled out is the option the gate currently accepts by silence: no protocol at all."
+   "text": "**R16 — item 37 (G3): RETRACTED. I ruled on a mechanism this gate explicitly forbids, and what survives is PASS 7's missing rationale rather than a defect.** R16 argued that evicting a host which still owes dispatched blocks removes the invariant making `blockId % numBlocks` unambiguous, and derived a corrupt read, a corrupt publish and a returning deadlock. Every step assumed eviction means REMOVAL FROM THE PRODUCER'S MINIMUM. **G3 does not define it that way, and says so twice**: the Invariant requires the host to have `hostReady` stored false by an autonomous engine path (`:961-965`), and PASS 7 reads \"The eviction lands on `hostReady`, not merely on the producer's vector\" — naming the producer-vector-only form as its own refutation. I ruled on the shape the gate rules out. At the pin, `hostReady == false` closes all three doors R16 needed open. The producer skips the host at `apps/engine_producer_thread.cpp:226-227`, before it can enter `hostProgress` at all, so it cannot hold the minimum. `processTrack` returns at `apps/engine_produce_block.cpp:362-363` before any newer input or output is written to that track's planes, so a resumed host reads its OWN block's input. The mixer skips the track at `apps/engine_audio_callback.h:305-306`, so a late write cannot be played. And readiness is never restored in place: the production `hostReady.store(true)` that follows an eviction is `apps/engine_restart_worker.cpp:87`, immediately after `runtime->controller.launch(…)` (`:70`) — a RELAUNCH with a new child and a new mapping. SIGCONT alone cannot readmit the frozen host. codex-worker-1 established all of it. **What survives is PASS 7's rationale, which the packet never stated.** PASS 7 reads as a placement preference; R16's analysis is the reason it is a SAFETY requirement. Producer-vector-only eviction removes exactly the back-pressure invariant that makes a slot address unambiguous, while `hostReady = false` additionally gates the input write and the mix, so the slot cannot be lapped for that track at all. **The bullet was already right; what it lacked was the consequence of violating it.** That is recorded here instead of as a defect, and item 37 is WITHDRAWN. **How this got missed.** I read \"eviction\" as the word means in general — dropping a member from a set — and derived consequences from that, inside a gate that defines the term four paragraphs above the register sentence I was answering. **A gate's vocabulary is not the ambient one**, and PASS 7 exists precisely to forbid my reading. The retracted argument follows, unchanged, because it is the rationale: The register directs the reviewer to confirm that evicting a host which still owes dispatched blocks cannot corrupt what a RESUMED host reads or publishes. It cannot be confirmed, and the opposite is derivable at the pin. The demand should be re-read as a design requirement rather than a check. Audio slots are addressed `blockId % numBlocks` on every side — engine (`apps/engine_produce_block.cpp:724`), host (`apps/juce_host_process_main.cpp:635`), master (`apps/engine_master_render.cpp:58`) and the audio callback (`apps/engine_audio_callback.h:363`). Nothing stamps a slot with the block it holds; `apps/engine_audio_callback.h:362` states the mapping as a COMMENT and reads on that basis. **The invariant that makes `blockId % numBlocks` unambiguous is exactly `inFlight < numBlocks`** — the back-pressure gate at `apps/engine_producer_thread.cpp:282-283`. Evicting a host from the minimum while it still owes dispatched blocks is, by construction, the removal of that invariant for that host. Three consequences follow, each a read of the pinned tree rather than a prediction: 1. **Corrupt read.** The resumed host binds input pointers from its OLD request — `blockIndex = request.blockId % numBlocks` (`:635`), then `audioInChannelPtr(…)` (`:643-648`) — with no test that the request is still current. The producer has since written a newer block's input into that slot. 2. **Corrupt publish.** It writes its output into the same lapped slot, and `apps/engine_audio_callback.h:363` reads that slot for the newer block with no identity check, so mismatched audio is PLAYED rather than dropped. 3. **The deadlock returns.** It stores its stale id — `completedBlockId.store(request.blockId)` (`:1085`), unconditional — and the producer reads it at `apps/engine_producer_thread.cpp:239` with NO monotonic clamp. `completedMinimum` then counts a host whose completed id has gone BACKWARDS and the gate closes again. **The eviction designed to open the gate re-closes it through the resumed host.** `completedSampleTime` is not an escape. The host publishes it at `:1083` and its only consumer under `apps/` is a test main (`apps/device_chain_ui_live_tests_main.cpp:170`); no production code reads it. **What this means for G3.** Eviction cannot land as a producer-side rule alone — it needs a RESUME protocol, and the packet must say so before any implementation is attempted. The requirement is statable without designing it: a resumed host must be prevented from writing a lapped slot, and a stale `completedBlockId` must not be able to lower the minimum. Whether that is a currency test the host performs, a monotonic clamp on the reader, a re-baseline on resume, or a block-id stamp per slot is an OWNER choice and this ruling deliberately does not make it. What is ruled out is the option the gate currently accepts by silence: no protocol at all."
   },
   {
    "decision": "item 21 (G3): THE CONTRADICTION DOES NOT EXIST, AND WHAT MANUFACTURED IT WAS READING A PINNED PROVENANCE FIGURE AS A FORWARD CONSTRAINT",
@@ -2426,22 +2454,26 @@
    "items": [
     21
    ],
-   "line": 1985,
+   "line": 2018,
    "named_at": [
     {
-     "context": "of them closes an item that names PRODUCT work — R1 through R17 make such items implementable, and R13 ",
-     "line": 2019
+     "context": "t count off 12, which a sibling check was said to forbid. **R17 DISCHARGES THIS AND ITEM 21 IS CLOSED**",
+     "line": 1050
+    },
+    {
+     "context": "of them closes an item that names PRODUCT work — R1 through R17 make such items implementable, R13 and ",
+     "line": 2056
     },
     {
      "context": " CLOSED marker three SHAs running. That range — \"R1 through R17\" above — is checked against the rulings",
-     "line": 2023
+     "line": 2060
     },
     {
      "context": " at this SHA.** The static-check contradiction was not one. R17 shows there is no sibling check to conf",
-     "line": 2109
+     "line": 2146
     }
    ],
-   "text": "**R17 — item 21 (G3): THE CONTRADICTION DOES NOT EXIST, AND WHAT MANUFACTURED IT WAS READING A PINNED PROVENANCE FIGURE AS A FORWARD CONSTRAINT.** The register asks the reviewer to resolve a conflict between the check that places eviction lexically inside `apps/engine_producer_thread.cpp:225-252` and \"a sibling check\" that pins the producer-exit count at 12, saying one of the two must yield. Neither has to. **There is no sibling check.** G3's Static-checks paragraph names four: lexical containment in the collection loop, no `chrono`/`steady_clock`/`system_clock`/`time(` token in the eviction span, a containment event emitted on a TRANSITION and appearing exactly once under `apps/`, and the `hostReady` write-form ratchet. None of them mentions the exit count. **The 12 is a census row, and a census row is a fact about a FROZEN tree.** `sed -n '134,373p' apps/engine_producer_thread.cpp | grep -c 'continue;'` returns 12, and A.0 checks every such row for equality (`tools/p12_selfcheck.py:1276`) against the pinned product SHA. It asserts what that command returns at that SHA and nothing else. An implementation lands on a different SHA and is measured by that SHA's successor packet. **A pinned figure cannot forbid a future edit — being unable to move is what pinning means.** **And the packet already declares this number an inequality**: \"The producer-exit count is a floor of 12: a `return` or a `break` out of a nested scope is not a `continue`.\" A floor says 12 UNDERCOUNTS the real exits. Eviction inside the collection loop adds a `continue` and takes the count to 13, which is the direction a floor permits. So both readings of \"sibling check\" fail, in opposite directions: as an acceptance check it does not exist, and as a census row it is pinned to a tree the implementation will not be on, carrying an explicit floor besides. **What is worth keeping is how the false conflict was manufactured.** A number stated with a reproducing command reads as a rule, because that is what a reproducing command usually accompanies. This packet's convention is the opposite — every census figure is a fact about `PRODUCT_SHA` — and the register wrote a sentence that spends one as a budget. **A pinned measurement and a forward constraint are indistinguishable in prose**; they are told apart only by asking which tree the number describes, and that question is not visible in the sentence that uses it. Item 21 is CLOSED: its whole content was a packet decision and there is nothing left for an implementer to choose between. "
+   "text": "**R17 — item 21 (G3): THE CONTRADICTION DOES NOT EXIST, AND WHAT MANUFACTURED IT WAS READING A PINNED PROVENANCE FIGURE AS A FORWARD CONSTRAINT.** The register asks the reviewer to resolve a conflict between the check that places eviction lexically inside `apps/engine_producer_thread.cpp:225-252` and \"a sibling check\" that pins the producer-exit count at 12, saying one of the two must yield. Neither has to. **There is no sibling check.** G3's Static-checks paragraph names four: lexical containment in the collection loop, no `chrono`/`steady_clock`/`system_clock`/`time(` token in the eviction span, a containment event emitted on a TRANSITION and appearing exactly once under `apps/`, and the `hostReady` write-form ratchet. None of them mentions the exit count. **The 12 is a census row, and a census row is a fact about a FROZEN tree.** `sed -n '134,373p' apps/engine_producer_thread.cpp | grep -c 'continue;'` returns 12, and A.0 checks every such row for equality (`tools/p12_selfcheck.py:1276`) against the pinned product SHA. It asserts what that command returns at that SHA and nothing else. An implementation lands on a different SHA and is measured by that SHA's successor packet. **A pinned figure cannot forbid a future edit — being unable to move is what pinning means.** **And the packet already declares this number an inequality**: \"The producer-exit count is a floor of 12: a `return` or a `break` out of a nested scope is not a `continue`.\" A floor says 12 UNDERCOUNTS the real exits. **The defensible conclusion is only that 12 is not a forward acceptance constraint** — an earlier draft of this ruling said eviction \"adds a `continue` and takes the count to 13\", which overreaches: an implementation inside `:225-252` need not add one at all (it could store `hostReady = false` and append inactive progress, or guard the existing append), and if it does, a floor permits the increase anyway. codex-worker-1 named the overclaim. Either way nothing here binds the implementation. So both readings of \"sibling check\" fail, in opposite directions: as an acceptance check it does not exist, and as a census row it is pinned to a tree the implementation will not be on, carrying an explicit floor besides. **What is worth keeping is how the false conflict was manufactured.** A number stated with a reproducing command reads as a rule, because that is what a reproducing command usually accompanies. This packet's convention is the opposite — every census figure is a fact about `PRODUCT_SHA` — and the register wrote a sentence that spends one as a budget. **A pinned measurement and a forward constraint are indistinguishable in prose**; they are told apart only by asking which tree the number describes, and that question is not visible in the sentence that uses it. Item 21 is CLOSED: its whole content was a packet decision and there is nothing left for an implementer to choose between. "
   }
  ],
  "schema": "ae-p1.2-manifest/3",
@@ -2606,7 +2638,7 @@
    "gate": "G4",
    "labelled": false,
    "labels": [],
-   "line": 1352,
+   "line": 1355,
    "text": "Ack-after-process in the host: the per-segment acknowledgement is stored AFTER the last `slot.instance->process(...)` (`apps/juce_host_process_main.cpp:987`). Both dispatch branches: the wait is placed after the join of `if (debugStall) … else …` (`apps/engine_produce_block.cpp:1073-1095`), not inside either arm. Refuse-on-timeout shape: any deadline at `:1030`, `:1112` or `:1150` places the READ inside the success branch. The compared value must have a host-side producer — it must be the word the HOST stores, never `sentOk`."
   }
  ],

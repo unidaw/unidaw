@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '7985aca8e0fb1f90c8194e78399f65ef1fdaa6da'
+PREV_TIP     = '93618fb39069a1c9fa237168b439dda4e74cfb9c'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -278,8 +278,8 @@ CONTROLS = {
  # this, the next gate that writes S.1 or "Static 1" disappears exactly as G0-B did.
  'label-spelling':   ('**Static checks.** S1 the ready-clear', '**Static checks.** S-1 the ready-clear', 1,
                       'MANIFEST-STALE'),
- 'blocker-set':      ('TEN are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 35, 36 and 37',
-                      'TEN are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 35, 36 and 28', 1, 'BLOCKER-SET'),
+ 'blocker-set':      ('NINE are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 35 and 36',
+                      'NINE are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 35 and 28', 1, 'BLOCKER-SET'),
  'constraint-lost':  ('1. Production atomic **size/alignment', '1x. Production atomic **size/alignment', 1,
                       'CONSTRAINTS-COUNT'),
  'opening-gates':    ('**EVERY GATE IS PLANNABLE AT THIS SHA**',
@@ -340,7 +340,10 @@ CONTROLS = {
  # the mutation backend actually ran, now expressible only as an INSERTION because R8 carries
  # no digits: proving the number cannot come back rather than that this one instance is right.
  # proves the second-site check is not vacuous: the opening's list, not the header's.
- 'restate-blockers': ('block (18, 19, 24, 26, 27, 29, 33, 35, 36 and 37)', 'block (18, 19, 24, 26, 27, 29, 33, 35, 36 and 28)', 1,
+ 'ruling-body-swap': ('CLOSED at this SHA.** The static-check contradiction was not one. R17 shows',
+                      'CLOSED at this SHA.** The static-check contradiction was not one. R16 shows', 1,
+                      'RULING-BODY-BIND'),
+ 'restate-blockers': ('block (18, 19, 24, 26, 27, 29, 33, 35 and 36)', 'block (18, 19, 24, 26, 27, 29, 33, 35 and 28)', 1,
                       'BLOCKER-SET-RESTATED'),
  # the item half of the same check: item 26's history is where the digits went when R8 lost them,
  # and a check that ranged only over rulings would have watched them move.
@@ -1132,6 +1135,38 @@ for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — [^\n]{0,120}?'
     if n not in ruling_items.get(r, set()):
         bad('RULING-ITEM-BIND', f'item {n} claims {r}; {r} names {sorted(ruling_items.get(r, []))}')
 
+# ---- 2c. the binding RATCHET, because both directions above read only the item HEADLINE ---------
+# codex-worker-1 mutated item 21's body from "R17 shows" to "R16 shows", regenerated, and the gate
+# passed: R17.items stayed [21] from its own heading while the item pointed somewhere else, and the
+# two forms above never look past the first 120 characters of the item line.
+#
+# The obvious rule -- every ruling must be named in the body of each item it owns -- MISFIRES, and
+# measuring first is what showed it: four bindings are legitimately unrecorded. R5/R7/R9 authored
+# item 26's population and the item describes the RESULT ("seven derived census rows") without
+# naming them, and R6 was SUPERSEDED on item 27 by R12, which is the ruling item 27 names. A check
+# that failed those would be demanding text that is either redundant or wrong.
+#
+# So it is a ratchet on the unrecorded set instead: these four may stay, a fifth may not. That fails
+# the R17->R16 mutation (it makes (R17, 21) unrecorded) without asserting anything false about the
+# four, and it puts the gaps in the open where a reader can close them deliberately.
+# read through the UNHIDDEN view: a mention of `R17` inside a fence or an HTML comment is not the
+# item recording its ruling, and the extractor ratchet is what insisted on this.
+_ITEM_BODIES = {}
+_parts = re.split(r'(?m)^(\d{1,2})\. ', _unhidden(body))
+for _i in range(1, len(_parts) - 1, 2):
+    _ITEM_BODIES[int(_parts[_i])] = _parts[_i + 1]
+_BIND_RATCHET = {('R5', 26), ('R6', 27), ('R7', 26), ('R9', 26)}
+_unrecorded = {(r, n) for r, ns in ruling_items.items() for n in ns
+               if n in _ITEM_BODIES and not re.search(rf'\b{r}\b', _ITEM_BODIES[n])}
+_new = _unrecorded - _BIND_RATCHET
+if _new:
+    bad('RULING-BODY-BIND', f'ruling(s) own an item whose body never names them: {sorted(_new)} '
+                            f'— the ratchet allows only {sorted(_BIND_RATCHET)}')
+_gone = _BIND_RATCHET - _unrecorded
+if _gone:
+    bad('RULING-BODY-RATCHET', f'{sorted(_gone)} now records its ruling — tighten the ratchet, '
+                               f'an allowance that no longer applies hides the next one')
+
 # ---- 3. a withdrawn bullet may not be described as covered ----------------------------------
 if 'WITHDRAWN AS CIRCULAR' in pkt:
     for ph in ['covers mirror replay', 'covers the whole readiness promise', 'Mirror replay is staged']:
@@ -1397,7 +1432,7 @@ if extra: bad('CONTROL-PHANTOM', 'listed but not implemented: ' + ', '.join(sort
 # ---- 6. RULE arithmetic is decided in the span pass above, not by a proximity regex ----------
 
 sample = re.search(r'packet blob <oid> · product (\S+) tree (\S+) · (\d+) items, (\d+) open · '
-                   r'(\d+) RAW \((\d+) hand-ruled\) \+ (\d+) commanded claims', pkt)
+                   r'(\d+) RAW \((\d+) hand-ruled\) \+ (\d+) commanded-claim occurrences', pkt)
 if not sample:
     bad('A0-SAMPLE-MISSING', 'A.0 prints no expected-output line to check')
 else:
@@ -1872,7 +1907,7 @@ except FileNotFoundError:
 
 print(f'packet blob {oid[:12]} · product {PRODUCT_SHA[:12]} tree {PRODUCT_TREE[:12]} · '
       f'{len(nums)} items, {len(nums)-closed} open · {len(tokens)} RAW ({byhand} hand-ruled) + '
-      f'{cmd_claims} commanded claims, all executed')
+      f'{cmd_claims} commanded-claim occurrences, all executed')
 if NEG_TAG:
     hit = [f for f in fail if f.startswith(f'[{NEG_TAG}]')]
     for f in fail[:30]: print('  ' + f)
