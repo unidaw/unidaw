@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'bd5575d68cfb9c79d47f05921d396c141f91d26d'
+PREV_TIP     = 'bfed299a77281817723f33ad84fc2efd64cb7e7d'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -303,6 +303,10 @@ CONTROLS = {
  'out-writer-moved': (':925 dst', ':999 dst', 1, 'OUT-MEMBERS'),
  # a cycle needs a control or deleting the cycle logic leaves every other control green
  'dep-cycle':        ('**Dependencies** G1-A, G1-B', '**Dependencies** G1-A, G1-B, G4', 1,
+                      'GATE-DEP-CYCLE'),
+ # the SHORTEST cycle, which the detector could not see because self-edges were filtered
+ # out before validation ran
+ 'dep-self':         ('**Dependencies** G0-A, G0-B', '**Dependencies** G0-A, G0-B, G4', 1,
                       'GATE-DEP-CYCLE'),
  # the spoof: a command that reads NOTHING and prints a triple the roster expects
  'census-fake-out':  ("`git grep -n 'inputPtrs = outputPtrs;' apps/juce_host_process_main.cpp | wc -l` returns 1.",
@@ -810,6 +814,8 @@ WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twen
         41: 'Forty-one', 42: 'Forty-two', 43: 'Forty-three', 44: 'Forty-four',
         45: 'Forty-five', 46: 'Forty-six', 47: 'Forty-seven', 48: 'Forty-eight',
         49: 'Forty-nine', 50: 'Fifty', 51: 'Fifty-one', 52: 'Fifty-two',
+        53: 'Fifty-three', 54: 'Fifty-four', 55: 'Fifty-five', 56: 'Fifty-six',
+        57: 'Fifty-seven', 58: 'Fifty-eight', 59: 'Fifty-nine', 60: 'Sixty',
         33: 'Thirty-three', 34: 'Thirty-four', 35: 'Thirty-five', 36: 'Thirty-six',
         37: 'Thirty-seven', 38: 'Thirty-eight', 39: 'Thirty-nine', 40: 'Forty'}
 if not listed:
@@ -877,6 +883,12 @@ for g in gate_hdr:
     dep = re.search(r'\*\*Dependencies\*\* ([^.]{0,200})', seg)
     dep_text = re.sub(r'\s+', ' ', dep.group(1)).strip() if dep else ''
     deps = sorted(set(re.findall(r'G[0-9]-?[AB]?', dep_text)))
+    # a SELF-edge must be rejected, not filtered. The gate record dropped `d == id` before anything
+    # validated it, so G4 -> G4 regenerated a clean manifest and passed: the shortest possible cycle
+    # was the one the cycle detector could never see, because the tidying happened first. Filtering
+    # a malformed edge on the way in is indistinguishable from the edge not being there.
+    if g['gate'] in deps:
+        bad('GATE-DEP-CYCLE', f'{g["gate"]} declares itself a dependency')
     blk = sorted(i for i in nums
                                            if entry.get(i) == g['gate'] and i not in closed_set
                                            and re.search(r'(?m)^%d\. \*\*[^*]+\*\* — [^\n]{0,120}BLOCKING' % i, body))

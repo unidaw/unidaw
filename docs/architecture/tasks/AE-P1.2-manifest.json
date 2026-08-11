@@ -119,6 +119,7 @@
   "control-unlisted",
   "dangling-ref",
   "dep-cycle",
+  "dep-self",
   "dep-unknown",
   "drop-gate-block",
   "drop-item-block",
@@ -161,7 +162,7 @@
  "counts": {
   "blocking": 5,
   "closed": 8,
-  "controls": 52,
+  "controls": 53,
   "hand_ruled": 12,
   "items": 32,
   "open": 24,
