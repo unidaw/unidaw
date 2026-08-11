@@ -22,6 +22,7 @@
   }
  ],
  "controls": [
+  "blocker-set",
   "borrowed-cmd",
   "byhand-count",
   "closed-count",
@@ -59,7 +60,7 @@
  "counts": {
   "blocking": 6,
   "closed": 6,
-  "controls": 33,
+  "controls": 34,
   "hand_ruled": 12,
   "items": 29,
   "open": 23,
@@ -1416,7 +1417,7 @@
   {
    "gate": "G1-A",
    "line": 450,
-   "text": "The reviewer SHALL decide whether a producer publishing into a slot it no longer owns after the 2-second grace is in scope; SHALL establish or explicitly decline the producer census on `ui_out`; SHALL confirm no second consumer of `ui_out` exists, since the disarm is safe only under the single-consumer contract; and SHALL confirm Fixture A compiles, nothing in the pin having been built. **Correction carried.** The claim of \"uninitialised `EventEntry` / indeterminate flags\" is withdrawn: `EventEntry` has an NSDMI."
+   "text": "The reviewer SHALL decide whether a producer publishing into a slot it no longer owns after the 2-second grace is in scope; SHALL establish or explicitly decline the producer census on `ui_out`; SHALL confirm no second consumer of `ui_out` exists, since the disarm is safe only under the single-consumer contract; and SHALL confirm Fixture A compiles, nothing in the pin having been built."
   },
   {
    "gate": "G1-B",
@@ -1472,8 +1473,7 @@
    "applied": false,
    "decision": "item 19 (G3): N IS AUTHORED AT 3, and the packet says authored, not derived",
    "decision_values": [
-    3,
-    9
+    3
    ],
    "id": "R3",
    "items": [

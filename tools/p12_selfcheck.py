@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '9df808fed5e2b34d28defd59bb71aad1a16e44de'
+PREV_TIP     = '26c46519fca45fadad3f6854e63cad586a7ed5a4'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -112,6 +112,8 @@ CONTROLS = {
  # this, the next gate that writes S.1 or "Static 1" disappears exactly as G0-B did.
  'label-spelling':   ('**Static checks.** S1 the ready-clear', '**Static checks.** S-1 the ready-clear', 1,
                       'MANIFEST-STALE'),
+ 'blocker-set':      ('SIX are BLOCKING — 11, 18, 19, 24, 26 and 27',
+                      'SIX are BLOCKING — 11, 18, 19, 24, 26 and 28', 1, 'BLOCKER-SET'),
  'constraint-lost':  ('1. Production atomic **size/alignment', '1x. Production atomic **size/alignment', 1,
                       'CONSTRAINTS-COUNT'),
  'opening-gates':    ('**THREE OF THE EIGHT GATES CANNOT BE DECIDED',
@@ -420,7 +422,7 @@ WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twen
         21: 'Twenty-one', 22: 'Twenty-two', 23: 'Twenty-three', 24: 'Twenty-four',
         25: 'Twenty-five', 26: 'Twenty-six', 27: 'Twenty-seven', 28: 'Twenty-eight',
         29: 'Twenty-nine', 30: 'Thirty', 31: 'Thirty-one', 32: 'Thirty-two',
-        33: 'Thirty-three'}
+        33: 'Thirty-three', 34: 'Thirty-four', 35: 'Thirty-five'}
 if not listed:
     bad('CONTROL-PROSE-MISSING', 'no "**Controls.** <N>, each naming" sentence')
 elif listed.group(1) != WORD.get(len(CONTROLS), '?'):
@@ -517,7 +519,7 @@ for m in re.finditer(r'\*\*(R[1-4]) — .*?(?=\n\n\*\*R[1-4] — |\*\*What these
         # the decision's own words and every integer it fixes: a manifest that does not change when
         # N goes 3 -> 4 is not carrying the decision, only a flag about it
         'decision': re.sub(r'\s+', ' ', head.group(2)).strip() if head else None,
-        'decision_values': sorted({int(v) for v in re.findall(r'N = (\d+)', blk)}),
+        'decision_values': sorted({int(v) for v in re.findall(r'(?<![0-9A-Za-z])N = (\d+)', blk)}),
         'text': re.sub(r'\s+', ' ', blk)[:600]})
 # constraints[]: the four non-negotiables. Constraint 1 -- atomics and the checked LayoutSpec land
 # FIRST -- survived only as free text inside G1-B's dependencies_text, and G1-B is RESOLUTION-ONLY,
@@ -538,7 +540,8 @@ VERSION_COUNTERS = ['kShmVersion', 'kControlVersion', 'kPatcherAbiVersion']
 # about its limits reads as total coverage. These three sections carry the residue.
 def section(gbody, label, gid, gstart):
     NEXT = (r'\n\*\*(?:Severity|Dependencies|Scope|Invariant|Population|Floor|Failure model|'
-            r'Deterministic test|PASS conditions|Static checks|Review register)')
+            r'Deterministic test|PASS conditions|Static checks|Review register|Correction'
+            r'|Floor, and|Scope,)')
     m = re.search(r'\*\*%s\*\*(.*?)(?=%s|\n# |\n---|\Z)' % (label, NEXT), gbody, re.S)
     if not m: return None
     return {'gate': gid, 'line': line_of(gstart + m.start()),
@@ -630,8 +633,18 @@ if len(constraints) != 4:
 for vc in VERSION_COUNTERS:
     if vc not in pkt:
         bad('VERSION-COUNTER-ABSENT', f'{vc} is named in the manifest and not in the packet')
-notplan = [g['id'] for g in man['gates'] if not g['decidable_for_planning']]
 WORDNUM = {'ONE': 1, 'TWO': 2, 'THREE': 3, 'FOUR': 4, 'FIVE': 5, 'SIX': 6, 'SEVEN': 7, 'EIGHT': 8}
+# the prose names the blocking items; the manifest derives them. A count agreeing while the SET
+# differs is the failure this catches — my last commit message said 8 where the derivation says 6.
+prose_blk = re.search(r'(\w+) are BLOCKING — ([0-9, and]+)\.', pkt)
+derived_blk = sorted(i['n'] for i in man['items'] if i['blocking'])
+if prose_blk:
+    listed = sorted(int(x) for x in re.findall(r'\d+', prose_blk.group(2)))
+    if listed != derived_blk:
+        bad('BLOCKER-SET', f'prose lists {listed}, manifest derives {derived_blk}')
+    if WORDNUM.get(prose_blk.group(1).upper()) != len(derived_blk):
+        bad('BLOCKER-COUNT', f'prose says {prose_blk.group(1)}, manifest derives {len(derived_blk)}')
+notplan = [g['id'] for g in man['gates'] if not g['decidable_for_planning']]
 # the zero case is a DIFFERENT sentence, not a missing one: when nothing is unplannable the
 # document must say so positively, and the check has to accept both forms or it fails the moment
 # the work succeeds.

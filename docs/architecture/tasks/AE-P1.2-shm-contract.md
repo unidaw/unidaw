@@ -1063,7 +1063,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `f7f96b796f18efdea7878d3ab7292f7d87005267`, A.0 SCRIPT BLOB `e60a77e9c2ab57f294cd17d5405b9f83bcfa4440`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `c192f51376a2d0615ccdd39aff7d21456b9c7de0`, A.0 SCRIPT BLOB `219ee4c40929b432bcf14951e04f5ef6771785a9`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1115,13 +1115,13 @@ back to: A.0's "what it does not decide" list is the exact place where a stale s
 what has been settled.)
 And nothing about the product beyond what a text search can see.
 
-**Controls.** Thirty-three, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Thirty-four, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
-`borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
+`blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
 `unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`. Two of them were themselves defective when first
 written and are recorded here rather than quietly fixed: `raw-without-cmd` changed a claim's NUMBER
 and so provoked a different check entirely, and the landing assertion demanded the anchor count DROP,
