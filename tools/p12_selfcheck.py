@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '93618fb39069a1c9fa237168b439dda4e74cfb9c'
+PREV_TIP     = '895223fc34fac14453182b8784d66fcd2f84ddab'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -2039,6 +2039,49 @@ if '--emit-manifest' in sys.argv or '--manifest' in sys.argv:
     tmp = MANIFEST + '.tmp'
     open(tmp, 'w').write(emitted); os.replace(tmp, MANIFEST)
     print(f'wrote {MANIFEST}'); sys.exit(0)
+def _sweep_patterns(name, tag):
+    """The two lines the --negative success path can print, and the tag line that must accompany
+    them. ONE definition, used by --sweep and by --prove-sweep-predicate: the last time this logic
+    existed twice the proof drifted from the check it certified, twice in one day.
+
+    The counts are `[1-9]\\d*`, not `\\d+`. `\\d+` admitted `fired (0)`, `fired (01)` and
+    `(+0 consequential: …)` — none of which the emitter can produce, since both lines print
+    `len(...)` of a list it has already tested non-empty (`:1877`, `:1887`). A grammar wider than
+    its emitter is not the exact match this claims to be; codex-worker-2 named the gap.
+
+    The tag line is `[TAG] ` with the space, not a bare prefix: `  [TAG]garbage` matched before,
+    which is the same prefix-acceptance defect one layer down from the one it was fixing."""
+    nm, tg = re.escape(name), re.escape(tag)
+    return (re.compile(rf'^CONTROL {nm} OK'
+                       rf'(?: — \[{tg}\] fired \([1-9]\d*\)|'
+                       rf' \(\+[1-9]\d* consequential: .*\))$'),
+            re.compile(rf'^ {{2}}\[{tg}\] '))
+
+if '--prove-sweep-predicate' in sys.argv:
+    # A CRAFTED-LINE PROOF, committed rather than run at a prompt. codex-worker-2's standing point is
+    # that a check verified at a shell is evidence for the person who ran it and nobody else, and
+    # every hole below was reported by a reviewer against a predicate I had called exact.
+    okline, tagline = _sweep_patterns('open-count', 'OPEN-COUNT')
+    CASES = [
+        ('CONTROL open-count OK — [OPEN-COUNT] fired (1)',              True,  'form 1'),
+        ('CONTROL open-count OK (+2 consequential: [X] y)',             True,  'form 2'),
+        ('CONTROL open-count OK — [WRONG-TAG] fired (1)',               False, 'wrong tag'),
+        ('CONTROL open-count OK (+ suffix I made up',                   False, 'prefix-only spoof'),
+        ('CONTROL open-count OK (+1 consequential: x) trailing junk',   False, 'unanchored tail'),
+        ('[A0-UNKNOWN-CONTROL] CONTROL open-count OK — [OPEN-COUNT] fired (1)', False, 'quoted in a refusal'),
+        ('CONTROL open-count OK — [OPEN-COUNT] fired (0)',              False, 'count the emitter cannot print'),
+        ('CONTROL open-count OK — [OPEN-COUNT] fired (01)',             False, 'non-canonical integer'),
+        ('CONTROL open-count OK (+0 consequential: x)',                 False, 'zero consequential'),
+    ]
+    TAGS = [('  [OPEN-COUNT] header 37, body 36', True,  'emitter-shaped tag line'),
+            ('  [OPEN-COUNT]garbage',             False, 'tag prefix with no separator'),
+            ('  [OPEN-COUNTX] header',            False, 'longer tag sharing the prefix')]
+    wrong = [w for ln, want, w in CASES if bool(okline.fullmatch(ln)) != want]
+    wrong += [w for ln, want, w in TAGS if bool(tagline.match(ln)) != want]
+    print(f'sweep predicate: {len(CASES) + len(TAGS)} crafted lines, '
+          + ('all classified correctly' if not wrong else f'WRONG on {wrong}'))
+    sys.exit(0 if not wrong else 1)
+
 if '--sweep' in sys.argv:
     # THE SWEEP BELONGS TO THE GATE, because as a shell loop it silently tested NOTHING and said so
     # in the affirmative. Under zsh — which does not word-split unquoted expansions — `for n in
@@ -2071,11 +2114,7 @@ if '--sweep' in sys.argv:
     for name in names:
         r = subprocess.run([sys.executable, __file__, '--negative', name],
                            capture_output=True, text=True, env={**os.environ})
-        nm, tg = re.escape(name), re.escape(CONTROLS[name][3])
-        okline = re.compile(rf'^CONTROL {nm} OK'
-                            rf'(?: — \[{tg}\] fired \(\d+\)|'
-                            rf' \(\+\d+ consequential: .*\))$')
-        tagline = re.compile(rf'^ {{2}}\[{tg}\]')
+        okline, tagline = _sweep_patterns(name, CONTROLS[name][3])
         lines = r.stdout.splitlines()
         ok = (r.returncode == 0
               and any(okline.fullmatch(ln) for ln in lines)

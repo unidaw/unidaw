@@ -1002,11 +1002,13 @@ the packet must not carry into a verdict. Layer 1 decides the rule with no proce
 predecessor's open list dropped.
 
 **PASS conditions.**
-1. Layer 0 decided the experiment, not the engine's lifespan. *REFUTED BY* an M1 whose observation
-   is taken outside the window the freeze is held open — and NOT by `kill -0`, which R15 retracts as
-   this bullet's instrument: it answers identically for a stopped and a running process, so it can
-   never establish the state Layer 0 is about. The window remains the property; the liveness probe
-   that used to stand for it does not.
+1. Layer 0 decided the experiment, not the engine's lifespan. **THIS BULLET NO LONGER DEPENDS ON
+   M1**, which R15 rules is diagnostic rather than acceptance evidence and which cannot be built from
+   today's telemetry; a PASS condition resting on it would make the gate undecidable by construction.
+   What Layer 0 asserts is settled statically in R15. *REFUTED BY* any Layer-0 verdict that reads a
+   duration or an engine lifetime instead of the experiment's own outcome — and specifically NOT by
+   `kill -0`, which R15 retracts as an instrument here: it answers identically for a stopped and a
+   running process, so it never established the state this bullet is about.
 2. The Layer-1 boundary is exact and the bound is COUNTED: not evicting at observation N−1, evicting
    at exactly N. *REFUTED BY* eviction at N−1, or non-eviction at N.
 3. **The counter resets on advance, not on catching up**: a host that owes, advances one block per
@@ -1393,7 +1395,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `21e9164a119b705626ad2c3a24f72a345205be6c`, A.0 SCRIPT BLOB `e6ca2c624c18876dc6c2ea46d106fdf2e84aefce`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `8ee72fad5cb48013148fed09b42119c302b3b31f`, A.0 SCRIPT BLOB `df9d7dbe8d5a1766038ed55a3a2c7575daac2f83`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1460,6 +1462,17 @@ code 0. A guard placed early tests only the failures known early. The write is n
 check, staged and atomically replaced, and `MANIFEST-STALE` is suppressed on an emitting run because
 a check that forbids its own remedy is a deadlock rather than a guard — that deadlock appeared the
 moment the write moved, and is recorded here because it is the predictable cost of the fix.
+
+**Executable proofs.** Four, each a flag on the same script, because a check verified at somebody's
+shell prompt is evidence for that person and nobody else. `--prove-blanking` is a DIFFERENTIAL, not
+an absolute: text injected outside a hiding place must raise the count and text injected inside must
+not, so the blanking is shown to be doing work rather than merely agreeing with its author on a clean
+document. `--prove-emit-identity` drives a real failure into a real run and requires the committed
+manifest to be byte-identical afterwards — it REFUSES when the artifact is absent, because
+`None == None` proved nothing the first time. `--prove-extractor-ratchet` holds the raw-prose
+extractor count at its floor. `--prove-sweep-predicate` classifies twelve crafted lines, including
+every spoof a reviewer has landed on the sweep's success test — a bare `OK (+` prefix, an unanchored
+tail, a wrong tag, a count the emitter cannot print, and a tag line with no separator.
 
 **Controls.** Ninety, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
@@ -1872,8 +1885,16 @@ emits `active` as a two-way separator and `completedBlockId`, with **no track or
 is the frozen host. codex-worker-1 caught both. **I specified an oracle by confirming a log exists
 and never reading what it emits**, which is the same shape as a guard that is present but watches the
 wrong moment. A usable M1 needs a channel that carries `lastDispatchedBlockId` and host identity, and
-building one is PRODUCT work that this packet does not authorise. Item 36 is therefore blocked on an
-instrument that does not yet exist, and says so.
+building one is PRODUCT work that this packet does not authorise.
+
+**WHICH LEAVES M1 WITH ONE STATUS, STATED ONCE, because three sentences in this packet gave it
+three.** R15 said the register's demand for M1 "survives", item 36 said it "remains owed", and the
+register records R15 as having discharged the decision — while R15 itself calls the remaining
+question debugging rather than acceptance. codex-worker-1 named the incoherence. The single status
+is: **M1 IS NOT ACCEPTANCE EVIDENCE FOR G3 AND IS NOT OWED.** The contradiction the register raised
+it for is settled without it, statically. What M1 would answer — which false-green channel operates
+in a given run — is DIAGNOSTIC, needed to fix item 36's check but not to decide this gate, and the
+telemetry it would need does not exist. No PASS bullet may depend on it.
 
 **The two statements.** The check says the producer does not stay gated
 (`tools/host_stall_check.sh:16-19`), names the mechanism at `:101-104` — "Frozen host + fix = the
@@ -1890,8 +1911,12 @@ gate shut is the correct answer."
 A SIGSTOPped host that had been producing
 satisfies none: its completed id is non-zero, and its dispatched blocks are precisely what it has
 stopped finishing. It is counted at `:509-510`, holds `lowest` at its frozen id, and
-`apps/engine_producer_thread.cpp:282-283` gates. **The state is absorbing**: once gated the producer
-dispatches nothing, so neither id can move again. The first exclusion never participates at all —
+`apps/engine_producer_thread.cpp:282-283` gates. Once gated the producer dispatches nothing, so
+neither of that host's ids can move again. **An earlier draft called the state ABSORBING and that is
+not statically established** — codex-worker-1 pointed at `:232-233` and `:236-237`, where a failed
+`controllerMutex` try_lock or an absent mailbox `continue`s past a host, so WHICH hosts are counted
+varies between iterations and the observed minimum can change with no block id moving at all. The
+claim that survives is narrower and sufficient: the frozen host cannot advance on its own. The first exclusion never participates at all —
 the engine's only caller builds every entry as `hostProgress.push_back({true, completed, …})`
 (`apps/engine_producer_thread.cpp:249-251`), so `active` is hardcoded and `!active` is unreachable
 from production; the `":inactive@"` branch in the same function's log (`:265`) prints for a state
@@ -2397,9 +2422,10 @@ carrying one cannot be decided by any implementation.
     `:77` discards the failure — stays gated and silent. **A check counting log lines cannot see a
     gate that does not log.** Fixing the check means making its oracle the gate rather than the
     logging of the gate; fixing the comment at `:101-104` means deleting a mechanism that does not
-    exist. Both are PRODUCT edits. The register's M1 also remains owed and cannot be built from
-    today's telemetry: the per-host vector carries no host identity and no `lastDispatchedBlockId`,
-    so nothing currently emitted can evaluate the owes-nothing predicate at
+    exist. Both are PRODUCT edits. M1 is DIAGNOSTIC for this item and is not owed as
+    acceptance evidence — R15 gives the single status — and it cannot be built from today's
+    telemetry anyway: the per-host vector carries no host identity and no `lastDispatchedBlockId`, so
+    nothing currently emitted can evaluate the owes-nothing predicate at
     `apps/engine_rt_helpers.cpp:502`. PRODUCT work.
 37. **G3** — **WITHDRAWN at this SHA. Filed on a mechanism G3 forbids, and retracted the same day.**
     R16 is RETRACTED in full: this item read eviction as removal from the producer's minimum, which
