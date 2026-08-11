@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'f30d64db6b884c60aede09af9f401b98a1c2e896'
+PREV_TIP     = '455f5a97516bd2215e9061a43c26046c7b342f95'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -92,10 +92,10 @@ for i, a in enumerate(sys.argv):
 # merely makes the run FAIL proves nothing — the fifth way a negative control lies is landing in
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
- 'open-count':       ('# Open items — 27 atomic', '# Open items — 28 atomic', 1, 'OPEN-COUNT'),
- 'closed-count':     ('6 CLOSED at this SHA, 21 open', '5 CLOSED at this SHA, 22 open', 1,
+ 'open-count':       ('# Open items — 28 atomic', '# Open items — 29 atomic', 1, 'OPEN-COUNT'),
+ 'closed-count':     ('6 CLOSED at this SHA, 22 open', '5 CLOSED at this SHA, 23 open', 1,
                       'OPEN-CLOSED-COUNT'),
- 'open-arithmetic':  ('6 CLOSED at this SHA, 21 open', '6 CLOSED at this SHA, 17 open', 1,
+ 'open-arithmetic':  ('6 CLOSED at this SHA, 22 open', '6 CLOSED at this SHA, 17 open', 1,
                       'OPEN-ARITHMETIC'),
  # anchored on the tree hash, not on a count: the previous anchor was '11 RAW +', which the
  # document outgrew, leaving the control unable to land while the gate still reported PASS
@@ -108,6 +108,9 @@ CONTROLS = {
                       'POPULATION-UNCOMMANDED'),
  'handmade-count':   ('**6 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
                       'HANDMADE-COUNT'),
+ 'unresolved-tail':  ('master-track stores (`engine_master_render.cpp:121` and `:132`) → **13 IN\nSCOPE**.',
+                      'master-track stores (`engine_master_render.cpp:121` and `:132`).', 1,
+                      'RULE-UNRESOLVED-TAIL'),
  'two-markers':      ('— 8, exact. [HAND-CLASSIFIED — open item 25 (all)]',
                       '— 8, exact. [HAND-CLASSIFIED — open item 25 (all)] [HAND-CLASSIFIED — open item 25 (all)]',
                       1, 'MARKER-NOT-BIJECTIVE'),
@@ -242,6 +245,8 @@ for a, b in spans:
     # EVERY step, not just the last: summing all subtractions and comparing to the final figure
     # lets a wrong intermediate pass, because two errors that cancel look like one correct total.
     steps = re.findall(r'(minus \*{0,2}\d+|→ \*{0,2}\d+)', seg)
+    if steps and steps[-1].startswith('minus'):
+        bad('RULE-UNRESOLVED-TAIL', f'RAW {n}: last step is a subtraction, no result stated')
     run = n
     for st in steps:
         v = int(re.search(r'\d+', st).group(0))

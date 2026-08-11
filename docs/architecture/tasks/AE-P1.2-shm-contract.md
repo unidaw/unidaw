@@ -27,7 +27,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    packet**: a sentence of the form "each population carries its extraction command" is false at
    this SHA by construction, and this paragraph previously ended with one while opening with the
    disqualification, because I patched its head across three rounds and left its tail alone.
-2. **The open list is 27 atomic items, not 15 categories.** The four that compression swallowed are
+2. **The open list is 28 atomic items, not 15 categories.** The four that compression swallowed are
    restored: G0-B's unowned mutation floor, G2-A's BATCH blindness, G2-B's probe-order false-green,
    and G3's debug-env requirement plus its self-contradicting static check.
 3. **G0-A's mailbox census was wrong twice and is corrected with its method.** See G0-A.
@@ -141,7 +141,7 @@ observable from a return value, so (d) is decided statically.
 
 **Floor.** Only the DERIVATION census is a name-grep, and it is exact because the names are the
 mechanism. The region, bounds and ring censuses are NOT name-greps and this paragraph said they were
-— they carry hand-classified markers eight lines above (the marker
+— they carry hand-classified markers on their own headings (the marker
 text is described here and not reproduced: a marker quoted in prose is indistinguishable from a
 marker, which is how this paragraph came to hold a seventh one attached to nothing), so the floor
 paragraph and the population contradicted each other within one gate. A semantic grouping has no
@@ -702,7 +702,10 @@ the mirror half was in scope with an unsatisfiable bullet behind it.
 "Authored" means the vector as copied at `apps/daw_engine_main.cpp:1113` under `trackMutex` — that
 copy is the only referent that exists, because the guard is released at `:1114` while the `SetBypass`
 loop runs at `:1116-1124` under `controllerMutex` alone, so the chain can change across the gap.
-MECHANISM: `hostReady` is release-published only after all three are staged and acknowledged.
+MECHANISM: `hostReady` is release-published at `mapped-and-bypassed` once bypass is staged and
+acknowledged; the mirror ack raises the level to `mirror-complete` and does NOT gate the initial
+publication. Requiring all three acks before publishing was the pre-R2 formulation and is what made
+the circularity unbreakable.
 
 **Population.** *`hostReady` publish sites* — RAW 4 (`grep -rn 'hostReady' apps | grep 'store(true'`) → minus 1 in `_tests_main` → **3 production** ⟂: `engine_restart_worker.cpp:87` (the site under gate),
 `engine_track_setup.cpp:62` and `engine_track_setup.cpp:403`. All three are named because the
@@ -900,7 +903,9 @@ the rename PASS 9 is RED without. Item 27 IS a dependency blocker — G2-A is on
 G2-A's undefined scope blocks G4 exactly as G1-B's missing population does; I had excluded it on the
 irrelevant ground that it is a gate's OWN population rather than asking whose gate. Item 26 is the
 only own-population blocker, because G4 is the gate that owns it.
-**Two conditions, and the second was missing.** (a) The dependency GATES PASS — not that their items
+**Two conditions, and the second keeps getting lost in edits to the first.** (b) **G4's OWN
+population exists** — item 26 is G4's withdrawn out-plane selection, so every dependency could pass
+and this gate would still have nothing to range over. (a) The dependency GATES PASS — not that their items
 are ruled. (b) **G4's OWN population exists**: item 26 is not a dependency blocker, it is G4's
 out-plane selection, withdrawn and unreplaced, so every dependency could pass and this gate would
 still have nothing to range over. Classing 26 among the dependency blockers made a gate's own
@@ -1044,7 +1049,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `b0228d0b847c2d8498fa874d8f287958aa75abba`, A.0 SCRIPT BLOB `0e1e1a142a05d45ee58b48d1a1506da7e4398af3`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `409ca35878a6d7e06a9108dc705406f6c631913e`, A.0 SCRIPT BLOB `cf3130c02df54ab367e6dd0243ec193243300226`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1052,7 +1057,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 27 items, 21 open · 13 RAW (12 hand-ruled) + 20 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 28 items, 22 open · 13 RAW (12 hand-ruled) + 20 commanded claims, all executed
     PASS
 
 **The two claim categories are DISJOINT**, which they were not until this SHA: a RAW claim whose
@@ -1087,14 +1092,14 @@ back to: A.0's "what it does not decide" list is the exact place where a stale s
 what has been settled.)
 And nothing about the product beyond what a text search can see.
 
-**Controls.** Twenty-eight, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Twenty-nine, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `borrowed-cmd`, `byhand-count`, `heading-regress`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
-`unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`. Two of them were themselves defective when first
+`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`. Two of them were themselves defective when first
 written and are recorded here rather than quietly fixed: `raw-without-cmd` changed a claim's NUMBER
 and so provoked a different check entirely, and the landing assertion demanded the anchor count DROP,
 which an insertion control can never do — it reported a landed mutation as unlanded. The named-tag
@@ -1134,7 +1139,7 @@ exemption was the smaller change and is the worse one: it creates a dispatch pat
 during recovery, which is the least-exercised state in the system and the one that runs when
 something has already gone wrong. A LEVEL is a value that every dispatch can carry and every
 assertion can read; an EXEMPTION is a rule that lives in whichever branch remembered it, which is
-this repo's documented failure shape. **Cost, stated because it is real, and NOT YET PROPAGATED:**
+this repo's documented failure shape. **Cost, stated because it is real, and PROPAGATED at this SHA:**
 G4's dispatch identity carries the readiness level: the identity is a
 QUINTUPLE and PASS 5 compares five components. G2-B's invariant permits dispatch at
 `mapped-and-bypassed` and requires `mirror-complete` only for processing that depends on mirrored
@@ -1183,7 +1188,7 @@ make the items IMPLEMENTABLE, and each item stays open until the work it names e
 verified by someone other than me. A ruling recorded as a closure would be the same error as a
 census recorded as a proof, which this packet has already made once at item 7.
 
-# Open items — 27 atomic, 6 CLOSED at this SHA, 21 open
+# Open items — 28 atomic, 6 CLOSED at this SHA, 22 open
 
 One per line, numbered in document order, so the count is checkable. SIX are BLOCKING — 11, 18, 19, 24, 26 and 27. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
@@ -1276,15 +1281,18 @@ carrying one cannot be decided by any implementation.
     distinguishing `engine_consumer.cpp:670` from `:730`, which assign the same field for a normal
     track and an aux child. A predicate must separate "establishes where the out-plane is read from"
     into the cases this gate governs, or the gate must range over all 27.
-27. **G2-A** — **BLOCKING.** It also carries the requirement that was G2-A's S3 static check, now
-    removed from that list: the counter-only decisions must be extracted and each replaced, and no
-    check over that extraction can be written until the extraction has a predicate, a command and a
-    member list. The arbitrated-command SCOPE is FALSIFIED and unreplaced, so G2-A
+27. **G2-A** — **BLOCKING.** The arbitrated-command SCOPE is falsified and unreplaced (exhibit
+    below), so G2-A governs an undefined set. The arbitrated-command SCOPE is FALSIFIED and unreplaced, so G2-A
     governs an undefined set. Falsified by exhibit: `engine_rowops_commands.cpp:49`
     emits an adoptable refusal for `SetRowOps`, outside the nine. The 51 correlators also span
     chain, sampler, mod-link and journal refusals. Either the nine becomes ten-or-more by
     enumeration, or the gate states which refusals it governs and why the rest are out — and the two
     populations must stop being treated as one set.
+
+28. **G2-A** — The requirement that was S3, split out of item 27 because they are separately
+    fixable and bundling them means neither can be closed: the counter-only decisions must be
+    extracted and each replaced, and no check over that extraction can be written until the
+    extraction has a predicate, a command and a member list.
 
 # Provenance of this packet's own numbers
 
