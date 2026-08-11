@@ -746,6 +746,11 @@ population. The visible-view regex still overblanks `](` without an opener,
 causing both malformed-marker evasion and valid nested-link/four-backtick false
 positives. G0-A/B and G3 M1/item37 oracle/N/Watchdog remain blocked.
 
+Owner successor `2e9880e` claims delimiter validation is now view-independent:
+raw marker delimiters are forbidden outside the leading marker run, all four
+prior view probes fire, and extractor floor 44 records the intentional raw-byte
+exception. Exact review is pending; G3/G0/M1/item37 remain gated.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
