@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '0bd43312707b9a955de71bcc07a6fdfa178bc138'
+PREV_TIP     = '63f8c595c06061fb0e2b590058422798b9a80361'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -1778,6 +1778,37 @@ if os.environ.get('AE_P12_INJECT_FAIL'):
 # records the manifest's digest, runs the real branch under an injected failure in a subprocess, and
 # fails unless the digest is unchanged. codex-worker-2 asked for exactly this and was right that a
 # hand-probe is not a control.
+# THE CONTROL FOR A HIDING PLACE IS A DIFFERENTIAL — claude-worker-1's shape, built and measured by
+# them before proposing it. A correct blanking makes NO tag fire, so any control demanding a tag is
+# asking the fix to fail; that is why my two attempts reported BLIND. And a bare "the count is
+# unchanged" is vacuous, because a count is also unchanged when the extractor is dead.
+#
+#     A  inject a fake ruling OUTSIDE any construct        the count must RISE
+#     B  inject the SAME text INSIDE the blanked construct  the count must NOT rise
+#     assert count(A) > count(B)
+#
+# It cannot pass vacuously: a dead extractor gives 0 > 0, a dead blanking gives 15 > 15, and a
+# mutation that did not land gives 14 > 14 — all false. Arm A IS the landing assertion, so the
+# separate one this harness needs elsewhere is not needed here. YOU CANNOT PROVE AN ABSENCE, BUT YOU
+# CAN PROVE A DIFFERENCE, AND A DIFFERENCE IS WHAT A HIDING PLACE ACTUALLY IS.
+if '--prove-blanking' in sys.argv:
+    FAKE = '**R99 — item 11 (G1-B): injected.**'
+    def _count(doc):
+        return len(re.findall(r'(?m)^\*\*R\d+ — ', _visible(doc)))
+    _base = _count(pkt)
+    _ok = True
+    for _name, _wrap in [('fenced', '```\n%s\n```'), ('indented fence', '   ```\n   %s\n   ```'),
+                         ('html comment', '<!-- %s -->'), ('double-backtick', '``%s``'),
+                         ('reference def', '[n]: http://x.invalid/%s')]:
+        _a = _count(pkt.replace('# Provenance of this packet', _wrap.replace('%s', '') and
+                                FAKE + '\n\n# Provenance of this packet', 1))
+        _b = _count(pkt.replace('# Provenance of this packet',
+                                (_wrap % FAKE) + '\n\n# Provenance of this packet', 1))
+        _v = _a > _b
+        print(f'  {_name:<16} outside={_a} inside={_b}  {"PASS" if _v else "FAIL"}')
+        _ok = _ok and _v
+    print(f'baseline {_base} · differential {"holds" if _ok else "BROKEN"}')
+    sys.exit(0 if _ok else 1)
 if '--prove-emit-identity' in sys.argv:
     before = hashlib.sha1(open(MANIFEST, 'rb').read()).hexdigest() if os.path.exists(MANIFEST) else None
     env = {**os.environ, 'AE_P12_INJECT_FAIL': '1'}
