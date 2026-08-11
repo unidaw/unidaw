@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '8131e1542731cc5c30a8348e6f0f314d1ada777b'
+PREV_TIP     = '78a1394eb2bd5c46b3ca064331bb91a67c294d96'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -108,7 +108,7 @@ CONTROLS = {
                       'POPULATION-UNCOMMANDED'),
  'handmade-count':   ('**5 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
                       'HANDMADE-COUNT'),
- 'byhand-count':     ('12 of them apply their RULE BY HAND', '10 of them apply their RULE BY HAND', 1,
+ 'byhand-count':     ('13 of them apply their RULE BY HAND', '10 of them apply their RULE BY HAND', 1,
                       'BYHAND-COUNT'),
  'control-unlisted': ('`wrong-raw`.', '`wrong-ray`.', 1, 'CONTROL-UNLISTED'),
  'drop-refutation':  ('*REFUTED BY*', 'see above', 'LAST', 'NO-REFUTATION'),

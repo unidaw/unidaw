@@ -108,7 +108,11 @@ observable from a return value, so (d) is decided statically.
   controller-derived header plus the two derived functions.
 - *Raw region derivations outside any validator* — RAW 13 (`grep -rn -e '>audioInOffset' -e '>audioOutOffset' -e '>ringStdOffset' -e '>ringCtrlOffset' -e '>mailboxOffset' -e auxOutputPlaneOffset -e hostKeyRingOffset apps/ | grep -v _tests_main | grep -v juce_host_process_main | grep -v engine_ui_shm | grep -v audio_shm | grep -v shared_memory | grep -v uiShm`) returns 13 with the exclusions carried INSIDE the
   pipeline (the predecessor said 12, and stated the exclusions in prose beside a command that did
-  not apply them).
+  not apply them) → minus 1, `apps/ipc_protocol.h:46`, which is a COMMENT naming `hostKeyRingOffset`
+  and not a derivation → **12 executable derivations**. A grep over source text cannot tell a
+  mention in a comment from the code it describes, and comments are where the warnings about the
+  code live, so a text census will always over-count in exactly the place the code is most carefully
+  documented.
 - *Bounds checks anchored on the child's number* — 7, exact. [HAND-CLASSIFIED — open item 25 (all)]
 - *Ring constructions over a host-created mapping* — 3, exact. [HAND-CLASSIFIED — open item 25 (all)]
 - **Mailbox `completedBlockId` LOADS — 7 live, 8 syntactic.** Command:
@@ -214,8 +218,11 @@ a pointer spine with per-level mut/const and a normalised terminal type. Type fo
 because offset+size+name are together blind to `float sample_rate` becoming `uint32_t`.
 
 **Population.** *ABI types* — 8. Command: `grep -n '#\[repr(C' patcher_rust/src/lib.rs` returns 8 (lines 23, 40,
-55, 68, 82, 89, 97, 107), cross-checked against bindgen's `allowlist_file` closure over
-`apps/patcher_abi.h`. *Members* — 66 C++ / 65 Rust, each produced by a command rather than by reading, which is what
+55, 68, 82, 89, 97, 107), **NOT cross-checked against bindgen**: the packet claimed a
+cross-check against an `allowlist_file` closure over `apps/patcher_abi.h`, and no `build.rs` exists
+under `patcher_rust/` and no `allowlist_file` appears anywhere in the tree. The claim described a
+generation mechanism that is not there, so the two sides of the ABI are joined by NAME and OFFSET
+only, which is exactly why the `reserved`/`_pad0` mismatch at item 24 matters. *Members* — 66 C++ / 65 Rust, each produced by a command rather than by reading, which is what
 open item 5 (G0-B) required. C++: `awk '/^struct (alignas\([0-9]+\) )?(HarmonyEvent|MusicalLogicPayload|PatcherEuclideanConfig|PatcherSliceSelectConfig|PatcherRandomDegreeConfig|PatcherLfoConfig|PatcherContext|EventEntry) \{/{inb=1;next} inb&&/^};/{inb=0;next} inb{l=$0;sub(/\/\/.*/,"",l); if(l~/;/ && l!~/static_assert|static constexpr|typedef|using |\(/) c++} END{print c}' apps/harmony_timeline.h apps/patcher_abi.h apps/shared_memory.h` returns 66. Rust: `awk '/^#\[repr\(C/{r=1;next} r&&/^pub struct/{inb=1;r=0;next} inb&&/^}/{inb=0;next} inb&&/^[ \t]+(pub )?[A-Za-z_][A-Za-z0-9_]*[ \t]*:/{c++} END{print c}' patcher_rust/src/lib.rs` returns 65. The PER-TYPE breakdown is commanded too, because a total that
 agrees says nothing about where a difference sits: C++ `awk '/^struct (alignas\([0-9]+\) )?(HarmonyEvent|MusicalLogicPayload|PatcherEuclideanConfig|PatcherSliceSelectConfig|PatcherRandomDegreeConfig|PatcherLfoConfig|PatcherContext|EventEntry) \{/{n=$NF=="{"?$(NF-1):$NF;inb=1;c=0;next} inb&&/^};/{print n,c;inb=0;next} inb{l=$0;sub(/\/\/.*/,"",l); if(l~/;/ && l!~/static_assert|static constexpr|typedef|using |\(/) c++}' apps/harmony_timeline.h apps/patcher_abi.h apps/shared_memory.h` returns 8, Rust `awk '/^#\[repr\(C/{r=1;next} r&&/^pub struct/{n=$3;inb=1;c=0;r=0;next} inb&&/^}/{print n,c;inb=0;next} inb&&/^[ \t]+(pub )?[A-Za-z_][A-Za-z0-9_]*[ \t]*:/{c++}' patcher_rust/src/lib.rs` returns 8, and
 the two outputs are the block below. A total is a sum; the claim that the difference is one type is
@@ -331,7 +338,8 @@ reproducible, and four populations in the predecessor were exactly that.
   The ring filter is in the rule, not implied: without it this population measures the wrong set.
 - *Read-cursor stores* — RAW **14** (`grep -rn -e readIndex.store -e read_index.store apps/ ui/`) → minus 10 non-ring and test stores → **4**. The predecessor printed this command beside the figure 4, which
   the command does not produce.
-- *Index sites* — RAW 21 (`grep -rnF 'entries[' apps/`) → minus 9 event-ring statements → **12**,
+- *Plugin-cache index sites, which are NOT ring sites* — RAW 21 (`grep -rnF 'entries[' apps/`)
+  → minus 9 event-ring statements → **12**,
   being exactly the plugin-cache reads subtracted above: `plugin_cache.cpp:388/:460/:469/:478/:492`,
   `engine_chain_commands.cpp:81`, `engine_save_project.cpp:265/:362`, `daw_engine_main.cpp:291/:1078`,
   and two in `_tests_main` files. The two populations partition the same 21 and are stated so the
@@ -368,7 +376,15 @@ the array.
 5. Discard is conditional: `ringSkipStalledSlot` leaves cursor and entry untouched when the slot
    became ready. *REFUTED BY* the retirement being indistinguishable from a discard.
 6. Order and ordering decided on the source. *REFUTED BY* S1–S3 passing on the pinned file.
-7. Index discipline at all twelve sites. *REFUTED BY* any site whose index operand is neither a mask
+7. **CORRECTED AND NARROWED — the twelve are NOT ring index sites.** This bullet required mask
+   discipline at "all twelve sites", and the twelve are plugin-cache reads: bounds-checked accesses
+   into `pluginCache.entries`, a `std::vector`, guarded by `device.hostSlotIndex <
+   pluginCache.entries.size()` at `engine_chain_commands.cpp:80-81`. Applying ring-mask semantics to
+   them would be a DEFECT, not a discipline: masking a bounds-checked vector index silently aliases
+   one plugin's entry onto another instead of refusing an out-of-range slot. The bullet as written
+   would have made a correct site fail review and, if implemented, corrupted the chain. It now
+   ranges over the RING index sites only, and the plugin-cache reads are named as excluded.
+   *REFUTED BY* any RING site whose index operand is neither a mask
    expression nor a local all of whose assignments are.
 8. Reservation values do not recur after a lap, on both sides. *REFUTED BY* the raw write cursor
    returning to its pre-lap value.
@@ -381,7 +397,8 @@ the array.
 **Static checks.** S1 the ready-clear lexically precedes the cursor store at all four sites, same
 function, no return or branch between. S2 the read guard's load is an acquire load of THAT SLOT's
 `ready`, and the clear is a release. S3 the re-check and the advance are one step in the callee. S4
-mask-in-expression at all twelve index sites.
+mask-in-expression at the RING index sites, explicitly NOT at the twelve plugin-cache reads — see
+PASS 7, where the same error appeared and would have corrupted a bounds-checked vector access.
 
 **Review register.** The reviewer SHALL decide whether a producer publishing into a slot it no longer
 owns after the 2-second grace is in scope; SHALL establish or explicitly decline the producer census
@@ -521,7 +538,10 @@ at `:1739` and `:1744`) → **9 call sites**. The predecessor described this com
 printing one, so its 9 could not be re-run. The nine COMMANDS map onto the nine sites non-bijectively
 — the chord site carries both `WriteChord` and `DeleteChord` through a runtime-computed type — so the
 correspondence is established by the Floor paragraph below, not by this arithmetic.
-`commandMutatesDocument` (`apps/engine_command_mutates.h:46-236`) has **93** case arms, 69 returning
+`commandMutatesDocument` (`apps/engine_command_mutates.h:46-236`) has **93** case arms — **68**
+returning true and 25 returning false. A raw count of `return true` gives 69; the 69th is at `:235`,
+AFTER the switch closes at `:234`, and is the unreachable post-switch fallback for a hostile cast,
+not an arm. Previously stated as 69 returning
 true — the predecessor said 186, off by 2× in the section whose credibility rests on counts — but for
 the other ~60 families no `ClipRejected` is ever emitted, so an identity obligation over them would
 require inventing emit sites the code says do not exist. *Terminal refusal records* — 3 `emitClipReject` sites
@@ -929,7 +949,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `de5917d0a3ece156ea47a6af8702ee97f1c9605a`, A.0 SCRIPT BLOB `09ff586c22fd7204d9be32feef9f86fb306c3a23`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `84c131c812567e1fdf149263eba4af2bb2095131`, A.0 SCRIPT BLOB `d7b957f3cf755c10560a111e9dac3a8b5a845f2a`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -937,7 +957,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 25 items, 19 open · 13 RAW (12 hand-ruled) + 20 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 25 items, 19 open · 13 RAW (13 hand-ruled) + 20 commanded claims, all executed
     PASS
 
 **What it decides.** Open-item header against body, contiguity, and orphaned numbers. Every
@@ -1022,8 +1042,12 @@ a starting point that measurement should overturn.
 
 **R4 — item 24 (G0-B): THE RUST SIDE RENAMES.** `patcher_abi.h:75` keeps `reserved`;
 `patcher_rust/src/lib.rs:86` changes `_pad0` to `reserved`. The C++ header is the ABI AUTHORITY —
-bindgen consumes it through an `allowlist_file` closure — and renaming the authority to match its
-own generated mirror inverts which document defines the contract. The convention argument cuts the
+renaming the authority to match its mirror inverts which document
+defines the contract. **Correction to my own reasoning as published:** I wrote that bindgen consumes
+the header through an `allowlist_file` closure. It does not — there is no `build.rs` under
+`patcher_rust/` and no `allowlist_file` in the tree. The ruling stands on the weaker and true
+premise that `patcher_abi.h` is where the C++ side of the ABI is DECLARED and the Rust file mirrors
+it, but a reader should know the generation story I gave was wrong. The convention argument cuts the
 other way (`_pad0` is idiomatic Rust) and loses to that: a binding may be unidiomatic, an authority
 may not be derived from its binding. **Cost:** one unidiomatic name in the Rust file, and PASS 9
 goes from RED to decidable the moment the rename lands.
@@ -1115,9 +1139,8 @@ carrying one cannot be decided by any implementation.
 Every count is stated as RAW → RULE → IN SCOPE, so that the command reproduces the raw figure and the
 rule reproduces the rest; and every count is a floor where a runtime value defeats the extraction.
 **5 populations are HAND-CLASSIFIED and exempt from that sentence**, each carrying a marker and
-open item 25 (all). **And of the 13 RAW claims, 12 of them apply their RULE BY HAND** — the command
-returns the raw figure and a stated subtraction reaches the in-scope one — while 1 carries the rule
-inside the command and needs no subtraction at all. That 12 is the honest size of what this gate
+open item 25 (all). **And of the 13 RAW claims, 13 of them apply their RULE BY HAND** — the command
+returns the raw figure and a stated subtraction reaches the in-scope one — while none now carries its rule inside the command without also subtracting. That 12 is the honest size of what this gate
 cannot decide: it checks every subtraction's arithmetic and none of their justifications, and the
 one time a justification was wrong (G1-A's five ready-flag operations counted as four) the
 arithmetic was perfect. The exact review reached this by noticing G4's dispatch split was
