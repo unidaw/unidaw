@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '2699a2cf204fb0ed4e21ad9ea8e74b5ee8ab5f49'
+PREV_TIP     = '6f0584621c71083e790ca47fe6706875a549f0c1'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -1117,6 +1117,16 @@ _decor_raw += [(p_, t_) for p_, t_ in _re_calls]
 # by a second, unrelated defect. **A number that keeps coming out the same is not thereby right; it
 # may be the same wrong instrument, or two of them.** The floor is 43 and monotone down.
 _DECOR_FLOOR = 43
+# THE FLOOR MUST EQUAL TODAY'S COUNT, not merely bound it. As a `>` test the floor could be raised
+# to 999 and the ratchet would pass forever while asserting nothing — codex-worker-2 demonstrated
+# exactly that, and the executable proof stayed green because it tested the CLASSIFIER and never the
+# FLOOR. **A ratchet whose floor may be set to anything is not a ratchet**; it is a variable with a
+# comment. Equality forces the number down only by real conversion, and forces anyone raising it to
+# say so in a diff.
+if len(_decor_raw) != _DECOR_FLOOR and len(_decor_raw) < _DECOR_FLOOR:
+    bad('EXTRACTOR-TEXT', f'floor is {_DECOR_FLOOR} but only {len(_decor_raw)} prose extractors read '
+                          f'raw — the floor moved down without being lowered; set it to '
+                          f'{len(_decor_raw)}')
 if len(_decor_raw) > _DECOR_FLOOR:
     bad('EXTRACTOR-TEXT', f'{len(_decor_raw)} prose extractors read raw text, floor is '
                           f'{_DECOR_FLOOR} — a pattern that quotes no backtick reads prose and must '
@@ -1992,6 +2002,16 @@ if '--prove-extractor-ratchet' in sys.argv:
         return n
     _self = open(__file__).read()
     _n0 = _classify(_self)
+    # BOUND TO PRODUCTION. The proof used to verify its own copy of the classifier and never touch
+    # the live floor, so raising `_DECOR_FLOOR` to 999 left it green. It now asserts the classifier
+    # agrees with the production count AND that the floor equals it — the two facts the ratchet's
+    # usefulness actually rests on.
+    if _n0 != len(_decor_raw):
+        print(f'  classifier disagrees with production: proof {_n0}, live {len(_decor_raw)}')
+        sys.exit(1)
+    if _DECOR_FLOOR != len(_decor_raw):
+        print(f'  floor {_DECOR_FLOOR} != live count {len(_decor_raw)} — the ratchet asserts nothing')
+        sys.exit(1)
     _shapes = [("_z1 = None if True else re.search(r'X', pkt)", True, 'positional'),
                ("_z2 = None if True else re.search(r'X', string=pkt)", True, 'keyword'),
                ("RXZ = re.compile(r'X')\n_z3 = None if True else RXZ.finditer(pkt)", True, 'compiled'),
