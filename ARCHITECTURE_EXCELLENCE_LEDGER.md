@@ -408,6 +408,10 @@ away exact-SHA review or shared-hotspot ownership to improve throughput.
 - `b20d5d6`: owner PASS/89 controls; classifier/proof logic deduplicated into a
   shared function with sabotage probes for compiled detection, floor, and raw
   name detection; exact independent review pending.
+- Exact review of `b20d5d6` is **BLOCKED overall** (deduplication PASS): alias/
+  slice/helper dataflow remains intentionally invisible, comma writer spoof and
+  hidden link dependency remain, inode identity can change under byte-identical
+  replacement, and the six semantic blockers remain unchanged.
 - Exact review of `2699a2c` is **BLOCKED**: the extractor proof duplicates rather
   than binds the production classifier/floor, blanking proof is narrow, hidden
   link destinations still become dependencies, identity proves bytes only, and
