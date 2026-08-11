@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'eb973ea3767543e5259aa60514d823f4bf070860'
+PREV_TIP     = '2699a2cf204fb0ed4e21ad9ea8e74b5ee8ab5f49'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -1040,21 +1040,41 @@ _decor_raw = []
 # needs dataflow rather than a syntax walk. The number is a floor on raw readers, not a census of
 # them, and it is written here rather than implied by a passing run.
 _re_calls = []
-for _node in ast.walk(ast.parse(open(__file__).read())):
+_self_tree = ast.parse(open(__file__).read())
+# names bound from re.compile(...), with the literals of the pattern they were compiled from
+_COMPILED = {}
+for _a in ast.walk(_self_tree):
+    if (isinstance(_a, ast.Assign) and len(_a.targets) == 1 and isinstance(_a.targets[0], ast.Name)
+            and isinstance(_a.value, ast.Call) and isinstance(_a.value.func, ast.Attribute)
+            and _a.value.func.attr == 'compile' and isinstance(_a.value.func.value, ast.Name)
+            and _a.value.func.value.id == 're' and _a.value.args):
+        _COMPILED[_a.targets[0].id] = [x.value for x in ast.walk(_a.value.args[0])
+                                       if isinstance(x, ast.Constant) and isinstance(x.value, str)]
+for _node in ast.walk(_self_tree):
     if not isinstance(_node, ast.Call) or not isinstance(_node.func, ast.Attribute):
         continue
     _recv = _node.func.value
     _is_re = isinstance(_recv, ast.Name) and _recv.id == 're'
-    _is_compiled = isinstance(_recv, ast.Name) and _recv.id.isupper() and len(_recv.id) > 1
+    # BY DEFINITION, not by capitalisation. `_recv.id.isupper()` treated CONTROLS.items, WORD.get,
+    # WORDNUM.get and _TEXT_ARG.get — four dicts — as compiled patterns; they escaped being counted
+    # only because their first argument happens not to be a bare `pkt`, which is luck rather than
+    # correctness, and codex-worker-2 called it an over-inclusion before it cost anything. A
+    # compiled pattern is a name BOUND FROM `re.compile(...)`, and that is discoverable in the same
+    # tree. The compile site's own literals also decide DATA-vs-PROSE, which the capitalisation
+    # heuristic could not do at all.
+    _is_compiled = isinstance(_recv, ast.Name) and _recv.id in _COMPILED
     if not (_is_re or _is_compiled):
         continue
     # a compiled pattern's first positional arg IS the text; `re.f`'s is the pattern
     _kw = {k.arg: k.value for k in _node.keywords}
     if _is_compiled:
         _txts = ([_node.args[0]] if _node.args else []) + ([_kw['string']] if 'string' in _kw else [])
+        _clits = _COMPILED.get(_recv.id, [])
+        if any('`' in _l for _l in _clits):
+            continue                                   # DATA: the compiled pattern quotes a backtick
         for _t in _txts:
             if isinstance(_t, ast.Name) and _t.id in ('pkt', 'body', 'head'):
-                _re_calls.append(('<compiled>', _t.id))
+                _re_calls.append((f'<{_recv.id}>', _t.id))
         continue
     if len(_node.args) < 1:
         continue
@@ -1937,10 +1957,27 @@ if '--prove-extractor-ratchet' in sys.argv:
             if not isinstance(nd, ast.Call) or not isinstance(nd.func, ast.Attribute): continue
             rv = nd.func.value
             isre = isinstance(rv, ast.Name) and rv.id == 're'
-            isc = isinstance(rv, ast.Name) and rv.id.isupper() and len(rv.id) > 1
+            # THE SAME DEFINITION-BASED RULE THE CHECK USES. This proof carried its own copy of the
+            # capitalisation heuristic after the check moved to `re.compile` bindings — so for one
+            # commit the proof verified a classifier that was no longer the one enforcing anything.
+            # FOURTH emitter/validator divergence today, and the first inside a proof: a proof of a
+            # check must run the check, not a paraphrase of it.
+            comp = {}
+            for a2 in ast.walk(ast.parse(src_text)):
+                if (isinstance(a2, ast.Assign) and len(a2.targets) == 1
+                        and isinstance(a2.targets[0], ast.Name) and isinstance(a2.value, ast.Call)
+                        and isinstance(a2.value.func, ast.Attribute)
+                        and a2.value.func.attr == 'compile'
+                        and isinstance(a2.value.func.value, ast.Name)
+                        and a2.value.func.value.id == 're' and a2.value.args):
+                    comp[a2.targets[0].id] = [x.value for x in ast.walk(a2.value.args[0])
+                                              if isinstance(x, ast.Constant)
+                                              and isinstance(x.value, str)]
+            isc = isinstance(rv, ast.Name) and rv.id in comp
             if not (isre or isc): continue
             kw = {k.arg: k.value for k in nd.keywords}
             if isc:
+                if any('`' in l for l in comp.get(rv.id, [])): continue
                 for t in ([nd.args[0]] if nd.args else []) + ([kw['string']] if 'string' in kw else []):
                     if isinstance(t, ast.Name) and t.id in ('pkt', 'body', 'head'): n += 1
                 continue
