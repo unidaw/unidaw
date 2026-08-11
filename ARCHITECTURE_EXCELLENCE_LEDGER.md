@@ -258,11 +258,10 @@ action. It supersedes stale ticket rows above where they conflict.
   `699abfe8f72e597cfd1b6fb3da93ee7f35aa7fef`).
 - Governance worktree: `/Users/jak/src/daw-backend`.
 - Current packet owner: `claude-worker-2`; current latest packet reported:
-  `b91034320fe5d513354c175aacb73840c5cd29b4`.
+  `b20d5d61ad8be812f21a0462b3366a38c551a4f1`.
 - Latest packet status: mechanical PASS, 89 controls plus three executable
-  proofs; ratchet floor is claimed bound to the live count. Exact independent
-  review is pending. Prior `6f05846` bounded review is BLOCKED because its proof
-  ran a copied classifier rather than the live implementation.
+  proofs; classifier/proof logic is claimed deduplicated into one live function
+  and sabotage probes now fail the proof. Exact independent review pending.
 
 ### Required review protocol
 
@@ -353,7 +352,7 @@ away exact-SHA review or shared-hotspot ownership to improve throughput.
 
 ### Immediate next actions
 
-1. Obtain the exact independent review of `b910343`; do not expand parser
+1. Obtain the exact independent review of `b20d5d6`; do not expand parser
    hunting beyond the claimed live-ratchet binding.
    while the comma shield and gate decisions remain.
 2. Consolidate the six owner decisions into one decision record: G2-B oracle,
@@ -406,6 +405,9 @@ away exact-SHA review or shared-hotspot ownership to improve throughput.
   and ignored the live floor/failure branch.
 - `b910343`: owner PASS/89 controls; floor claimed equal to live count and proof
   claimed bound to production values; exact independent review pending.
+- `b20d5d6`: owner PASS/89 controls; classifier/proof logic deduplicated into a
+  shared function with sabotage probes for compiled detection, floor, and raw
+  name detection; exact independent review pending.
 - Exact review of `2699a2c` is **BLOCKED**: the extractor proof duplicates rather
   than binds the production classifier/floor, blanking proof is narrow, hidden
   link destinations still become dependencies, identity proves bytes only, and
