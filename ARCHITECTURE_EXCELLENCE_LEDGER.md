@@ -560,6 +560,14 @@ hostReady/send-failure/restart evidence model. This creates packet work for
 item36 as well as item37; both remain typed PRODUCT-only while the opening still
 contradicts mixed packet/product work.
 
+Full exact review of `0c65b54` remains **BLOCKED**. R15 source/drop correction
+passes, but canonical R15/G3/register/item36/manifest surfaces still assert the
+retracted static/no-M1 decision. M1's identity/ordering/census/cause oracle is
+underspecified, and packet work applies to items36 and 37 while both remain
+scalar PRODUCT-only. The active-open “delta” is not a real delta, and sweep
+matching has a concrete early-`)` fail-open on an overlong detail plus comment
+grammar drift. G2/G3/G0/G4 blockers remain.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
