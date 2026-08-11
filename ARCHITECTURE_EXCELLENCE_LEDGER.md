@@ -481,6 +481,15 @@ G4, stale citations/count prose, and summary defects remain. No P1.2 product
 implementation is authorized until a successor receives exact PASS and the
 remaining semantic decisions are recorded.
 
+Exact review of `b843cc7` is also **BLOCKED**. Mechanical 90/90 controls pass
+and the item37 race is source-valid, but R16/item37 status is contradictory,
+item37 lacks a complete generation-bound acceptance oracle across all callback
+paths and external-host policy, and `completedBlockId` is misclassified. R15/M1
+and ABSORBING propagation still conflict; typed withdrawal lacks schema/count
+closure and remains spoofable through hidden link destinations; sweep proof
+coverage omits impossible Unicode/empty/bare-tag forms and positive `fired(2)`;
+G3 N/Watchdog, G2-A/B, G0-A/B, G4, and control-count prose remain blocked.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
