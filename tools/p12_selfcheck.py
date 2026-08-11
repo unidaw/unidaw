@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'ce6de7b3e47055d1e9703b6564a327ae150178d9'
+PREV_TIP     = 'ca799db2cc576ca925c11fa76e93f7a38f82ec52'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -233,15 +233,20 @@ def _visible(t):
     # And `\Z` closed an unterminated fence at end-of-file: one stray ``` blanked 1,927 of 2,188
     # lines and the failure surfaced 1,400 lines away as MISSING RULINGS. An unterminated fence is a
     # DOCUMENT DEFECT and says so now (FENCE-UNCLOSED), rather than being silently tolerated.
-    for m in re.finditer(r'(?ms)^(?P<f>```+|~~~+).*?^(?P=f)', t): blank(m.start(), m.end())
+    for m in re.finditer(r'(?ms)^ {0,3}(?P<f>```+|~~~+).*?^ {0,3}(?P=f)', t): blank(m.start(), m.end())
     for m in re.finditer(r'<!--.*?-->', t, re.S):                        blank(m.start(), m.end())
     # a fence opener with no matching closer survives the pass above; catch it on the blanked text
-    for m in re.finditer(r'(?m)^(```+|~~~+)', ''.join(out)):
+    for m in re.finditer(r'(?m)^ {0,3}(```+|~~~+)', ''.join(out)):
         bad('FENCE-UNCLOSED', f'an unterminated code fence at line {t.count(chr(10), 0, m.start()) + 1}'
                               f' — it would blank the rest of the document')
     for m in re.finditer(r'``[^\n]*?``', ''.join(out)):                  blank(m.start(), m.end())
     for m in re.finditer(r'`[^`\n]*`', ''.join(out)):                    blank(m.start(), m.end())
     for m in re.finditer(r'\]\([^)\n]*\)', ''.join(out)):               blank(m.start(), m.end())
+    # REFERENCE forms too. A definition line renders as NOTHING AT ALL, so text in one is read by
+    # this parser and by no human — strictly worse than the inline case, which at least shows its
+    # label. `[text][ref]` hides its ref the same way. claude-worker-1's probes 3 and 4.
+    for m in re.finditer(r'(?m)^ {0,3}\[[^\]\n]+\]:.*$', ''.join(out)): blank(m.start(), m.end())
+    for m in re.finditer(r'\]\[[^\]\n]*\]', ''.join(out)):              blank(m.start(), m.end())
     return ''.join(out)
 
 NEG = None
@@ -414,6 +419,14 @@ CONTROLS = {
  # the digit-SUFFIX variant, which the last-character allow-list could not see
  # codex-worker-2's remaining classes, one control each so none can regress silently
  # claude-worker-1's two fence probes and codex-worker-2's remaining three
+ # claude-worker-1's probes 3 and 4 are FIXED but have NO control, and the reason is worth keeping:
+ # a correct fix for a hiding place produces SILENCE, not a tag. A reference definition carrying a
+ # ruling is now blanked, so nothing fires — there is no failure to name, and a control that named
+ # one was BLIND because it demanded a tag the fix exists to prevent. Verified by direct probe
+ # instead: the ruling in a reference definition produces no ruling record, and the indented fence
+ # is caught by OPEN-REF-DANGLING reading raw text, which is a different check doing the work.
+ 'md-outside-subset': ('# Provenance of this packet', '> a blockquote\n\n# Provenance of this packet',
+                      1, 'MD-SUBSET'),
  'fence-unclosed':   ('# Provenance of this packet', '```\n\n# Provenance of this packet', 1,
                       'FENCE-UNCLOSED'),
  'fence-mixed':      ('# Provenance of this packet',
@@ -937,6 +950,31 @@ if not _said:
 elif WORDNUM.get(_said.group(1).upper()) != len(_prod):
     bad('BLOCKER-KIND', f'opening says {_said.group(1)} blockers need product work; '
                         f'{len(_prod)} say so themselves: {_prod}')
+
+# ---- 2e6. THE PERMITTED MARKDOWN SUBSET -------------------------------------------------------
+# claude-worker-1's structural argument, and it is the right one: this parser's model of what a
+# reader sees is a REGEX APPROXIMATION OF A GRAMMAR, CommonMark is not regular, and every probe
+# finds another place the two diverge. Four rounds of narrowing the gap never closes it. The cheaper
+# of their two proposals is an explicit SUBSET the packet may use, with everything outside REJECTED
+# rather than approximated — which turns "we keep finding constructs" into "these are the only
+# constructs permitted", a finite claim someone can check.
+# Measured before writing: SEVEN line shapes cover all 2,188 lines of the packet with zero
+# exceptions. That is what makes this affordable, and it is why it is a rule rather than a wish.
+# MY FIRST VERSION OF THIS LIST WAS VACUOUS: its last shape was `\S`, a catch-all that permits any
+# line beginning with a non-space, so "seven shapes cover all 2,188 lines with zero exceptions" was
+# true because one shape covered everything. A blockquote — outside the subset by intent — passed.
+# **A coverage claim that holds because the predicate is unbounded is the defect this whole packet
+# is about**, and I wrote one into the check built to end that class. The prose-start shape is an
+# explicit character class now; with it, twelve lines fell outside and both of their shapes (`---`
+# rules and `→` continuations) are real and named. That is what a subset costs when it is real.
+MD_SUBSET = [r'$', r'#{1,3} ', r'\d{1,2}\. ', r' *- ', r' {4,}', r' {1,3}\S', r'---\s*$',
+             r'→ ', r'[A-Za-z0-9*`\[(⟂⟦"\'—]']
+_outside = [i for i, _l in enumerate(pkt.split('\n'), 1)
+            if not any(re.match(_p + r'|\Z', _l) for _p in MD_SUBSET)]
+if _outside:
+    bad('MD-SUBSET', f'{len(_outside)} line(s) outside the permitted Markdown subset, first at '
+                     f'{_outside[0]} — the visible view approximates a grammar, so the document is '
+                     f'restricted to the shapes that approximation is known to handle')
 
 # ---- 2f. a ruling names an item, and that mapping was unbound in both directions --------------
 # codex-worker-1 changed R10's "item 30" to "item 29" and it passed. The OPEN-REF checks match
