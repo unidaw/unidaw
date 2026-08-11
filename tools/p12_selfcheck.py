@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '9574317f952e9f420e7db9c6060b6e5162dea6e6'
+PREV_TIP     = 'a2de738232139a56e2b7f38d0e4fa9a922d9e8cd'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -949,20 +949,34 @@ _bodies = {int(m.group(1)): m.group(0) for m in
 # reject — anything it cannot represent it reports as absent, which is this packet's oldest shape.
 _MARKER_RUN = re.compile(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ((?:⟦[^⟧\n]*⟧ ?)*)')
 _KIND_TOKENS = {'PRODUCT', 'PACKET'}
-# TO THE LINE BOUNDARY, not to a character count, and through the VISIBLE view.
+# TO THE LINE BOUNDARY, and through the RAW line — no Markdown view at all.
 #
 # `.{0,200}` was a cap sitting inside the check I had just called structural: a malformed marker
 # placed after character 200 of the same headline escaped it, so out-of-run detection was
 # length-dependent. Parse to the delimiter — the headline is a LINE — and there is no outside.
 #
-# `_unhidden` kept link destinations, so an ordinary `[text](https://host/⟦path⟧)` in a head FAILED
-# the stray-delimiter check for a delimiter no reader sees. `_visible` blanks destinations, and the
-# marker run below reads the SAME view: two views of one text is the split this packet keeps
-# rediscovering, and it would have been reintroduced here by fixing only the false positive.
+# AND THEN THE VIEW ITSELF WAS THE PROBLEM. `_unhidden` kept link destinations, so an ordinary
+# `[text](url/⟦path⟧)` failed for a delimiter no reader sees; `_visible` blanks destinations, but it
+# recognises one by `](`  without proving an opening `[`, so a LITERAL `](` in prose blanked a
+# malformed marker after it. Then escaped backticks, escaped link openers, nested parentheses and
+# four-backtick spans each disagreed with the renderer in one direction or the other.
+#
+# codex-worker-1 named the real problem: the view's regex language is neither Markdown's hidden
+# language nor its visible complement, and every round produced another construct where they part.
+# That is four rounds of widening a pattern, which is the signal to stop widening.
+#
+# SO THE CHECK NO LONGER ASKS WHAT A READER SEES. ⟦ and ⟧ (U+27E6/U+27E7) are this packet's private
+# marker delimiters; nothing else needs them. The rule is simply that an item HEADLINE may not
+# contain either character outside its leading marker run — raw, unrendered, no view. A link
+# destination carrying one is now a rule violation rather than a false positive, which is the
+# correct answer for a character that exists here only to mean "marker".
+#
+# This ends the family instead of its next member: there is no Markdown construct left to disagree
+# about, because Markdown is no longer being parsed.
 _HEAD_TEXT = {int(m.group(1)): m.group(2) for m in
-              re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ([^\n]*)', _visible(body))}
+              re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ([^\n]*)', body)}
 _KINDS, _MARKER_ERR = {}, []
-for _m in _MARKER_RUN.finditer(_visible(body)):
+for _m in _MARKER_RUN.finditer(body):
     # `*` here too. Widening the RUN grammar to admit ⟦⟧ and leaving this extractor at `+` meant the
     # empty marker was matched by the outer pattern and then dropped by the inner one — the same
     # normalisation, one layer down, inside the fix for it.
@@ -1008,7 +1022,8 @@ for _m in _MARKER_RUN.finditer(_visible(body)):
     _tail = _HEAD_TEXT.get(_n, '')[len(_m.group(2)):]
     _stray = [d for d in ('⟦', '⟧') if d in _tail]
     if _stray:
-        _MARKER_ERR.append(f'item {_n} has a stray {"".join(_stray)} outside its marker run')
+        _MARKER_ERR.append(f'item {_n} has a stray {"".join(_stray)} outside its marker run — '
+                           f'⟦ and ⟧ are marker delimiters and may not appear elsewhere in a head')
     _KINDS[_n] = _kinds
 for _e in _MARKER_ERR:
     bad('KIND-MARKER-UNKNOWN', _e)
@@ -1226,7 +1241,12 @@ def classify_raw_prose(src_text):
     return out
 
 _decor_raw = classify_raw_prose(open(__file__).read())
-_DECOR_FLOOR = 42   # 43 -> 42 when the duplicate kind-marker enum was deleted, not relaxed
+# 43 -> 42 when the duplicate kind-marker enum was deleted; 42 -> 44 when the marker-run and
+# head extractors moved to the RAW line ON PURPOSE. The ratchet is what forced this to be a
+# decision rather than a drift: raw-prose reads are normally the defect, and these two are the
+# exception because ⟦⟧ are packet-private delimiters whose presence is a fact about the BYTES, not
+# about what Markdown renders. An exception the ratchet made me write down.
+_DECOR_FLOOR = 44
 # THE FLOOR MUST EQUAL TODAY'S COUNT, not merely bound it. As a `>` test the floor could be raised
 # to 999 and the ratchet would pass forever while asserting nothing — codex-worker-2 demonstrated
 # exactly that, and the executable proof stayed green because it tested the CLASSIFIER and never the
