@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '1be98a6913fca6db01b055974862438d30bfc758'
+PREV_TIP     = '548cd78b5066aae9c8c78f2638f2c80fa35317ff'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -299,6 +299,15 @@ CONTROLS = {
  # nothing and read as a satisfied closure.
  # the hand-classified half: a member citation that goes stale against the product, and a reader
  # table that disagrees with the pinned members. codex-worker-1 asked for exactly these two.
+ # codex-worker-1's exact writer mutation, which passed while only the reader table was parsed
+ 'out-writer-moved': (':925 dst', ':999 dst', 1, 'OUT-MEMBERS'),
+ # a cycle needs a control or deleting the cycle logic leaves every other control green
+ 'dep-cycle':        ('**Dependencies** G1-A, G1-B', '**Dependencies** G1-A, G1-B, G4', 1,
+                      'GATE-DEP-CYCLE'),
+ # the spoof: a command that reads NOTHING and prints a triple the roster expects
+ 'census-fake-out':  ("`git grep -n 'inputPtrs = outputPtrs;' apps/juce_host_process_main.cpp | wc -l` returns 1.",
+                      '`awk \'BEGIN { print "apps/juce_host_process_main.cpp:1061:x" }\' | wc -l` returns 1.', 1,
+                      'CENSUS-COMMAND-FORM'),
  'out-member-stale': ('    6  engine_consumer.cpp:766', '    6  engine_consumer.cpp:767', 1,
                       'OUT-MEMBERS'),
  'dep-unknown':      ('**Dependencies** G0-A, G0-B', '**Dependencies** G0-A, G9-A', 1,
@@ -438,14 +447,39 @@ for r in census_rows:
                             capture_output=True, text=True, timeout=TIMEOUT)
     except subprocess.TimeoutExpired:
         bad('CENSUS-SITES', f'{k} timed out'); continue
-    got = sorted((m.group(1), int(m.group(2)),
-                  hashlib.sha1(m.group(3).strip().encode()).hexdigest()[:10])
-                 for m in re.finditer(r'(?m)^([^:\n]+):(\d+):(.*)$', pr.stdout))
-    if got != sorted(sites):
-        onlyg = [x for x in got if x not in sites][:3]
-        onlyr = [x for x in sites if x not in got][:3]
-        bad('CENSUS-SITES', f'{k}: {len(got)} members returned, roster pins {len(sites)}; '
+    if pr.returncode != 0:
+        bad('CENSUS-SITES', f'{k}: command exited {pr.returncode}'); continue
+    # THE COMMAND MUST BE A DERIVATION, not an assertion. Reading the pinned bytes (below) made the
+    # fingerprint sound but not the MEMBERSHIP: `awk BEGIN { print "path:line:x" }` reads nothing,
+    # names an address the roster expects, and the content check then confirms that address against
+    # the real file — so a row asserting its own membership passed a check built to verify content.
+    # A census row is a search over the frozen tree; anything else is a claim wearing a command's
+    # syntax. This is a SYNTACTIC guard and says so: it cannot stop a misleading git grep, only a
+    # command that never looks.
+    if not re.match(r'git grep -n ', r['command'].strip()):
+        bad('CENSUS-COMMAND-FORM', f'{k}: a census row must derive its members with `git grep -n`, '
+                                   f'not {r["command"][:44]!r}')
+        continue
+    # THE COMMAND ESTABLISHES MEMBERSHIP; THE PINNED TREE ESTABLISHES CONTENT. Hashing the command's
+    # own stdout made the fingerprint self-certifying: codex-worker-1 replaced a row's command with
+    # `awk BEGIN { print "path:line:text" }`, which reads nothing at all, and both the manifest and
+    # the verdict passed. A command's output is a CLAIM about the product, never evidence about it.
+    # So the path and line come from stdout and the bytes are read here, from the pin, by me.
+    addrs = sorted((m.group(1), int(m.group(2)))
+                   for m in re.finditer(r'(?m)^([^:\n]+):(\d+):', pr.stdout))
+    want_addrs = sorted((p_, l) for p_, l, _ in sites)
+    if addrs != want_addrs:
+        onlyg = [x for x in addrs if x not in want_addrs][:3]
+        onlyr = [x for x in want_addrs if x not in addrs][:3]
+        bad('CENSUS-SITES', f'{k}: {len(addrs)} members returned, roster pins {len(sites)}; '
                             f'unexpected {onlyg}, missing {onlyr}')
+    for path, line, fp in sites:
+        try:
+            txt = open(os.path.join(pin, path)).read().splitlines()[line - 1].strip()
+        except (IOError, IndexError):
+            bad('CENSUS-SITES', f'{k}: {path}:{line} does not exist at the pin'); continue
+        if hashlib.sha1(txt.encode()).hexdigest()[:10] != fp:
+            bad('CENSUS-SITES', f'{k}: {path}:{line} has drifted: {txt[:44]!r}')
 
 rids = [int(x) for x in re.findall(r'(?m)^\*\*R(\d+) — ', pkt)]
 if not rids:
@@ -453,6 +487,7 @@ if not rids:
 else:
     if sorted(rids) != list(range(1, max(rids) + 1)):
         bad('RULING-SET', f'ruling ids are not contiguous 1..{max(rids)}: {sorted(rids)}')
+    emitted = [r['id'] for r in rulings] if 'rulings' in dir() else []
     rng = re.search(r'R1 through R(\d+) are decisions', pkt)
     if not rng:
         bad('RULING-SET', 'no "R1 through Rn are decisions" range sentence to check')
@@ -511,8 +546,10 @@ for label, members, n in [('readers', OUT_READERS, 7), ('writers', OUT_WRITERS, 
             bad('OUT-MEMBERS', f'{path}:{line} does not exist at the pin'); continue
         if hashlib.sha1(txt.encode()).hexdigest()[:10] != fp:
             bad('OUT-MEMBERS', f'{path}:{line} has drifted: {txt[:44]!r}')
-# and the packet's reader table must cite exactly those seven, so the table and the roster cannot
-# disagree the way the prose and the census did
+# and the packet's OWN tables must cite exactly those members. The first version parsed the reader
+# table only, and only its FIRST path:line per row — so reader 7's second consumption site and every
+# one of the eight writer citations were unbound, and moving a writer from :925 to :999 passed.
+# A binding that covers one of two tables is the coverage-of-one-shape defect again.
 tbl = sorted((m.group(2), int(m.group(3))) for m in
              re.finditer(r'(?m)^    ([1-7])  (\S+?):(\d+)', pkt))
 want = sorted((os.path.basename(p_), l) for p_, l, _ in OUT_READERS)
@@ -520,6 +557,20 @@ if tbl and tbl != want:
     bad('OUT-MEMBERS', f'reader table cites {tbl}, roster pins {want}')
 elif not tbl:
     bad('OUT-MEMBERS', 'no reader table rows parsed — an extraction returning nothing is not a table')
+# the writer rows of the role census: every `juce:NNN` and bare `:NNN` in the two writer lines
+wseg = re.search(r'host byte WRITERS.*?(?=\n    \d+  same-agent)', pkt, re.S)
+if not wseg:
+    bad('OUT-MEMBERS', 'no host-writer rows found in the role census')
+else:
+    cited = sorted({int(x) for x in re.findall(r':(\d{3,4})', wseg.group(0))})
+    pinned = sorted({l for _, l, _ in OUT_WRITERS})
+    # the citations spell multi-line fills as ranges (:664-665, :725-726) and the indirect writer as
+    # a pair (:989/994), so the pinned set must be a SUBSET and every pin must appear
+    if not set(pinned) <= set(cited):
+        bad('OUT-MEMBERS', f'writer citations {cited} do not cover pinned {pinned}')
+    stray = [c for c in cited if c not in pinned and c - 1 not in pinned and c + 5 not in pinned]
+    if stray:
+        bad('OUT-MEMBERS', f'writer citations name {stray}, which the roster does not pin')
 
 # ---- 2f. a ruling names an item, and that mapping was unbound in both directions --------------
 # codex-worker-1 changed R10's "item 30" to "item 29" and it passed. The OPEN-REF checks match
@@ -888,7 +939,12 @@ rulings = []
 # absent from the manifest, and their text attributed to R9. `R[1-4]` did exactly this to R5/R6
 # earlier. The digits are now unbounded and the boundary is a negative lookahead, so R10..R99 are
 # separated by the same rule that separates R1..R9.
-for m in re.finditer(r'\*\*(R\d+) — .*?(?=\n\n\*\*R\d+ — |\n# |\*\*What these rulings do NOT)', pkt, re.S):
+# ANCHORED, like RULING-SET's. Unanchored, it matched a `**R10 —` written inside inline code in
+# the prose and emitted a TWELFTH ruling record with a bogus decision and item list, while the
+# validator counted eleven. Two regexes over one population, one anchored and one not, is the
+# same defect as two statements of one fact — and MANIFEST-STALE preserved the bad extraction
+# faithfully, because equality to the emitter is not correctness of the emitter.
+for m in re.finditer(r'(?m)^\*\*(R\d+) — .*?(?=\n\n\*\*R\d+ — |\n# |\*\*What these rulings do NOT)', pkt, re.S):
     blk = m.group(0)
     head = re.match(r'\*\*(R\d+) — ([^*]{0,160}?)(?:\.\*\*|\*\*)', blk)
     rulings.append({
@@ -902,6 +958,14 @@ for m in re.finditer(r'\*\*(R\d+) — .*?(?=\n\n\*\*R\d+ — |\n# |\*\*What thes
         'decision': re.sub(r'\s+', ' ', head.group(2)).strip() if head else None,
         'decision_values': sorted({int(v) for v in re.findall(r'(?<![0-9A-Za-z])N = (\d+)', blk)}),
         'text': re.sub(r'\s+', ' ', blk)[:600]})
+# emitted ruling ids reconciled against the validated headings, and unique
+_rid_emitted = [r['id'] for r in rulings]
+if sorted(_rid_emitted) != sorted('R%d' % i for i in rids):
+    bad('RULING-SET', f'manifest emits {sorted(_rid_emitted)}, headings validate '
+                      f'{sorted("R%d" % i for i in rids)}')
+if len(set(_rid_emitted)) != len(_rid_emitted):
+    bad('RULING-SET', f'duplicate ruling records emitted: {_rid_emitted}')
+
 # constraints[]: the four non-negotiables. Constraint 1 -- atomics and the checked LayoutSpec land
 # FIRST -- survived only as free text inside G1-B's dependencies_text, and G1-B is RESOLUTION-ONLY,
 # so a planner walking the plannable gates would never have read the rule that orders every

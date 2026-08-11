@@ -110,6 +110,7 @@
   "borrowed-cmd",
   "byhand-count",
   "census-cmd-swap",
+  "census-fake-out",
   "census-relabel",
   "census-row-gone",
   "census-wrong-file",
@@ -117,6 +118,7 @@
   "constraint-lost",
   "control-unlisted",
   "dangling-ref",
+  "dep-cycle",
   "dep-unknown",
   "drop-gate-block",
   "drop-item-block",
@@ -134,6 +136,7 @@
   "orphan-marker",
   "orphan-number",
   "out-member-stale",
+  "out-writer-moved",
   "raw-without-cmd",
   "restate-blockers",
   "restate-census",
@@ -158,7 +161,7 @@
  "counts": {
   "blocking": 5,
   "closed": 8,
-  "controls": 49,
+  "controls": 52,
   "hand_ruled": 12,
   "items": 32,
   "open": 24,
@@ -1806,17 +1809,6 @@
    ],
    "line": 1640,
    "text": "**R11 — item 32 (G2-A): `commandMutatesDocument(Undo)` RETURNS FALSE WHILE UNDO REPLACES THE DOCUMENT.** `engine_command_mutates.h:58` classifies `Undo` as \"no document state\" and returns false; `handleUndo` calls `applyDocument`. The classifier is answering \"does this command CARRY document state in its payload\" and its name asks \"does it MUTATE the document\" — and G2-A's arbitrated population is derived from that classifier. A command that replaces the entire document while classified as not mutating it is a live inconsistency in the predicate this gate depends on, not merely a misleading na"
-  },
-  {
-   "applied": false,
-   "decision": "`, so R9's block ran to the end and swallowed R10 and R11 into R9's text.",
-   "decision_values": [],
-   "id": "R10",
-   "items": [
-    7
-   ],
-   "line": 1653,
-   "text": "**R10 — `, so R9's block ran to the end and swallowed R10 and R11 into R9's text. **A hardcoded range and a summary sentence are the same failure in two notations, and this packet has now shipped both.** A ruling recorded as a closure would be the same error as a census recorded as a proof, which this packet has already made once at item 7. "
   }
  ],
  "schema": "ae-p1.2-manifest/2",
