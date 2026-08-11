@@ -11,7 +11,7 @@ not caller-supplied, and every control asserts its mutation reached the populati
 verdict is read. An earlier version of this file took the pin as an argument with no verification,
 claimed ten RAW checks while executing seven, and never validated the RULE arithmetic at all.
 """
-import hashlib, json, os, re, subprocess, sys
+import hashlib, json, os, re, shlex, subprocess, sys
 
 PACKET_PATH  = 'docs/architecture/tasks/AE-P1.2-shm-contract.md'
 PRODUCT_SHA  = '75c6f0646417828641e43287c260bea3d38b5a6f'
@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '3a7ec6bfeb9158891f576d5285fab7a5fe8b2377'
+PREV_TIP     = 'b256a3a55b8a876dafeda3bb6ef8ce9dd0148cea'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -308,6 +308,21 @@ CONTROLS = {
                       'GATE-DEP-CYCLE'),
  # the SHORTEST cycle, which the detector could not see because self-edges were filtered
  # out before validation ran
+ # codex-worker-1's compound spoof: a real git grep, a shell operator, then fabricated triples
+ 'census-compound':  ("`git grep -n 'inputPtrs = outputPtrs;' apps/juce_host_process_main.cpp | wc -l` returns 1.",
+                      "`git grep -n 'inputPtrs = outputPtrs;' apps/juce_host_process_main.cpp ; echo x | wc -l` returns 1.", 1,
+                      'CENSUS-COMMAND-FORM'),
+ # the dependency parser, three ways
+ 'dep-heading':      ('**Dependencies** G0-A, G0-B', '**Prerequisites** G0-A, G0-B', 1,
+                      'GATE-DEP-SECTION'),
+ 'dep-bad-token':    ('**Dependencies** G0-A, G0-B', '**Dependencies** G0-A, G2-AX', 1,
+                      'GATE-DEP-UNKNOWN'),
+ # a ruling heading long enough that a capped parser drops its decision
+ 'ruling-long-head': ('**R6 — item 27 (G2-A): THE GATE RANGES OVER THE REFUSAL-EMITTER POPULATION.**',
+                      '**R6 — item 27 (G2-A): THE GATE RANGES OVER THE REFUSAL-EMITTER POPULATION, and this'
+                      ' heading is deliberately written past any fixed character cap a parser might apply'
+                      ' to it, so that a truncating extractor emits a null decision here.**', 1,
+                      'MANIFEST-STALE'),
  'dep-self':         ('**Dependencies** G0-A, G0-B', '**Dependencies** G0-A, G0-B, G4', 1,
                       'GATE-DEP-CYCLE'),
  # the spoof: a command that reads NOTHING and prints a triple the roster expects
@@ -446,31 +461,39 @@ for r in census_rows:
     claimed, sites = CENSUS_ROSTER[k]
     if r['claimed'] != claimed:
         bad('CENSUS-ROSTER', f'{k} claims {r["claimed"]}, roster pins {claimed}')
+    # A PREFIX IS NOT A GRAMMAR. `git grep -n ...` as a prefix test accepted a dummy git grep
+    # followed by `;` and fabricated triples piped to wc -l — the spoof walked straight through the
+    # guard built for it, because the guard checked how the command STARTS and a shell cares how it
+    # continues. The site derivation now runs WITHOUT A SHELL: one argv, `git grep -n` at its head,
+    # and any shell metacharacter refused before that. Removing the interpreter removes the grammar
+    # it would have interpreted. (The row's own `| wc -l` is stripped first: that suffix exists so
+    # the row's STATED RETURN is an integer, and the sites need the lines behind it.)
+    core = re.sub(r'\s*\|\s*wc -l\s*$', '', r['command']).strip()
     try:
-        # the row's own command ends in `| wc -l` so its stated return is an integer; the SITES
-        # need the lines behind that integer, so the counter is stripped and the same grep re-run.
-        pr = subprocess.run(re.sub(r'\s*\|\s*wc -l\s*$', '', r['command']), shell=True, cwd=pin,
-                            capture_output=True, text=True, timeout=TIMEOUT)
+        argv = shlex.split(core)
+    except ValueError:
+        bad('CENSUS-COMMAND-FORM', f'{k}: unparseable command {core[:52]!r}'); continue
+    # the metacharacter test must run on TOKENS, not on the raw string: these patterns contain `|`
+    # as regex alternation and `$` as an anchor INSIDE quotes, and a first attempt at this rejected
+    # four honest rows. shlex consumes the quoting, so an operator that survives as its own token is
+    # one the author wrote unquoted — and since nothing is executed through a shell, that token is
+    # the only evidence a row meant to do something a single grep cannot.
+    SHELLOP = {';', '&', '&&', '|', '||', '>', '>>', '<', '<<', '(', ')'}
+    if argv[:2] != ['git', 'grep'] or '-n' not in argv:
+        bad('CENSUS-COMMAND-FORM', f'{k}: a census row must be one `git grep -n`, '
+                                   f'not {r["command"][:52]!r}'); continue
+    if any(t in SHELLOP or t.startswith('$(') or '`' in t for t in argv):
+        bad('CENSUS-COMMAND-FORM', f'{k}: shell operators in a row that is executed without a '
+                                   f'shell: {[t for t in argv if t in SHELLOP][:3]}'); continue
+    try:
+        pr = subprocess.run(argv, cwd=pin, capture_output=True, text=True, timeout=TIMEOUT)
     except subprocess.TimeoutExpired:
         bad('CENSUS-SITES', f'{k} timed out'); continue
     if pr.returncode != 0:
         bad('CENSUS-SITES', f'{k}: command exited {pr.returncode}'); continue
-    # THE COMMAND MUST BE A DERIVATION, not an assertion. Reading the pinned bytes (below) made the
-    # fingerprint sound but not the MEMBERSHIP: `awk BEGIN { print "path:line:x" }` reads nothing,
-    # names an address the roster expects, and the content check then confirms that address against
-    # the real file — so a row asserting its own membership passed a check built to verify content.
-    # A census row is a search over the frozen tree; anything else is a claim wearing a command's
-    # syntax. This is a SYNTACTIC guard and says so: it cannot stop a misleading git grep, only a
-    # command that never looks.
-    if not re.match(r'git grep -n ', r['command'].strip()):
-        bad('CENSUS-COMMAND-FORM', f'{k}: a census row must derive its members with `git grep -n`, '
-                                   f'not {r["command"][:44]!r}')
-        continue
-    # THE COMMAND ESTABLISHES MEMBERSHIP; THE PINNED TREE ESTABLISHES CONTENT. Hashing the command's
-    # own stdout made the fingerprint self-certifying: codex-worker-1 replaced a row's command with
-    # `awk BEGIN { print "path:line:text" }`, which reads nothing at all, and both the manifest and
-    # the verdict passed. A command's output is a CLAIM about the product, never evidence about it.
-    # So the path and line come from stdout and the bytes are read here, from the pin, by me.
+    # THE PINNED TREE ESTABLISHES CONTENT. Hashing the command's own stdout made the fingerprint
+    # self-certifying; a command's output is a CLAIM about the product, never evidence about it. The
+    # path and line come from stdout and the bytes are read here, from the pin.
     addrs = sorted((m.group(1), int(m.group(2)))
                    for m in re.finditer(r'(?m)^([^:\n]+):(\d+):', pr.stdout))
     want_addrs = sorted((p_, l) for p_, l, _ in sites)
@@ -818,6 +841,7 @@ WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twen
         49: 'Forty-nine', 50: 'Fifty', 51: 'Fifty-one', 52: 'Fifty-two',
         53: 'Fifty-three', 54: 'Fifty-four', 55: 'Fifty-five', 56: 'Fifty-six',
         57: 'Fifty-seven', 58: 'Fifty-eight', 59: 'Fifty-nine', 60: 'Sixty',
+        61: 'Sixty-one', 62: 'Sixty-two', 63: 'Sixty-three', 64: 'Sixty-four',
         33: 'Thirty-three', 34: 'Thirty-four', 35: 'Thirty-five', 36: 'Thirty-six',
         37: 'Thirty-seven', 38: 'Thirty-eight', 39: 'Thirty-nine', 40: 'Forty'}
 if not listed:
@@ -882,9 +906,19 @@ gates = []
 for g in gate_hdr:
     seg = pkt[pkt.find('\n# %s — ' % g['gate']):]
     seg = seg[:seg.find('\n# ', 3) if seg.find('\n# ', 3) != -1 else len(seg)]
-    dep = re.search(r'\*\*Dependencies\*\* ([^.]{0,200})', seg)
-    dep_text = re.sub(r'\s+', ' ', dep.group(1)).strip() if dep else ''
-    deps = sorted(set(re.findall(r'G[0-9]-?[AB]?', dep_text)))
+    # three defects in two lines, all found by mutation: renaming the heading dropped every edge and
+    # PASSED (a missing section read as no dependencies); the 200-char window truncated long tails so
+    # an edge could hide past it; and `G[0-9]-?[AB]?` matched the prefix of `G2-AX`, so an invalid id
+    # parsed as a valid one. A section that must exist is not optional, a window is not a boundary,
+    # and a prefix match is not a token.
+    dep_all = re.findall(r'\*\*Dependencies\*\*(.*?)(?=\n\n|\n\*\*)', seg, re.S)
+    if len(dep_all) != 1:
+        bad('GATE-DEP-SECTION', f'{g["gate"]} has {len(dep_all)} Dependencies sections, needs exactly 1')
+    dep_text = re.sub(r'\s+', ' ', dep_all[0]).strip() if dep_all else ''
+    for tok in re.findall(r'(?<![A-Za-z0-9-])G[0-9][A-Za-z0-9-]*', dep_text):
+        if not re.fullmatch(r'G[0-9]-?[AB]?', tok):
+            bad('GATE-DEP-UNKNOWN', f'{g["gate"]} names {tok!r}, which is not a gate id')
+    deps = sorted({t for t in re.findall(r'(?<![A-Za-z0-9-])G[0-9]-?[AB]?(?![A-Za-z0-9])', dep_text)})
     # a SELF-edge must be rejected, not filtered. The gate record dropped `d == id` before anything
     # validated it, so G4 -> G4 regenerated a clean manifest and passed: the shortest possible cycle
     # was the one the cycle detector could never see, because the tidying happened first. Filtering
@@ -960,7 +994,11 @@ rulings = []
 # faithfully, because equality to the emitter is not correctness of the emitter.
 for m in re.finditer(r'(?m)^\*\*(R\d+) — .*?(?=\n\n\*\*R\d+ — |\n# |\*\*What these rulings do NOT)', pkt, re.S):
     blk = m.group(0)
-    head = re.match(r'\*\*(R\d+) — ([^*]{0,160}?)(?:\.\*\*|\*\*)', blk)
+    # the 160-char cap silently emitted `decision: null` for R5, whose heading grew past it when
+    # the supersession was written into it — so the manifest lost the very sentence that
+    # resolves R5 against R8(c), and A0 checked ids only. A cap is a truncation wearing a
+    # parser's clothes; parse to the delimiter and require the field.
+    head = re.match(r'\*\*(R\d+) — ([^*]+?)(?:\.\*\*|\*\*)', blk)
     rulings.append({
         'id': m.group(1),
         'line': line_of(m.start()),
@@ -979,6 +1017,10 @@ if sorted(_rid_emitted) != sorted('R%d' % i for i in rids):
                       f'{sorted("R%d" % i for i in rids)}')
 if len(set(_rid_emitted)) != len(_rid_emitted):
     bad('RULING-SET', f'duplicate ruling records emitted: {_rid_emitted}')
+for _r in rulings:
+    if not _r['decision']:
+        bad('RULING-DECISION-NULL', f'{_r["id"]} emits no decision — the manifest contract says every '
+                                    f'ruling carries the decision text, and a null is a lost sentence')
 
 # constraints[]: the four non-negotiables. Constraint 1 -- atomics and the checked LayoutSpec land
 # FIRST -- survived only as free text inside G1-B's dependencies_text, and G1-B is RESOLUTION-ONLY,
