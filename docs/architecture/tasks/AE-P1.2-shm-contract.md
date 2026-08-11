@@ -1002,8 +1002,11 @@ the packet must not carry into a verdict. Layer 1 decides the rule with no proce
 predecessor's open list dropped.
 
 **PASS conditions.**
-1. Layer 0 decided the experiment, not the engine's lifespan. *REFUTED BY* an M1 whose `kill -0`
-   result is taken outside the observation window.
+1. Layer 0 decided the experiment, not the engine's lifespan. *REFUTED BY* an M1 whose observation
+   is taken outside the window the freeze is held open — and NOT by `kill -0`, which R15 retracts as
+   this bullet's instrument: it answers identically for a stopped and a running process, so it can
+   never establish the state Layer 0 is about. The window remains the property; the liveness probe
+   that used to stand for it does not.
 2. The Layer-1 boundary is exact and the bound is COUNTED: not evicting at observation N−1, evicting
    at exactly N. *REFUTED BY* eviction at N−1, or non-eviction at N.
 3. **The counter resets on advance, not on catching up**: a host that owes, advances one block per
@@ -1034,8 +1037,11 @@ guarded by the eviction transition. The `hostReady` write-form ratchet, 21 total
 
 **Review register.** The reviewer SHALL obtain an owner ruling for N and record its derivation:
 nothing in the tree sources one, all three production `Watchdog`s using `hardTimeoutBlocks = 500`.
-The reviewer SHALL rule on which of two contradictory statements is stale after M1 runs, and record
-the ruling next to BOTH — `tools/host_stall_check.sh:16-19` and the producer comment. The reviewer
+The reviewer SHALL rule on which of two contradictory statements is stale, and record the ruling
+next to BOTH — `tools/host_stall_check.sh:16-19` and the producer comment. **R15 DISCHARGES THIS**,
+and without M1: the mechanism claim is decidable at the pin and the check is the stale side. What
+this sentence originally deferred to M1 no longer waits on it, and what remains — which false-green
+channel operates in a given run — needs telemetry that does not exist, per item 36. The reviewer
 SHALL confirm that evicting a host which still owes dispatched blocks cannot corrupt what a RESUMED
 host reads or publishes. The reviewer SHALL decide `daw::Watchdog`'s fate — deletion or
 re-specification — since the gate accepts either with equal force and deliberately cannot choose.
@@ -1384,7 +1390,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `9ccc614049ff13dc1ea555ea31c2b9def86c60f6`, A.0 SCRIPT BLOB `a420556a592351b0643f8d2a22e90d9e29ece025`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `c4e0df7bf46973a0382b577798319c242940a60b`, A.0 SCRIPT BLOB `250014292af2345f536ffa6ea4d1ddbf5c29ea2f`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1456,8 +1462,15 @@ moment the write moved, and is recorded here because it is the predictable cost 
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
-number of controls VISITED equals the number declared, and counts a control as fired only on an
-exact line the success path alone emits. Both properties are repairs. As a shell loop the sweep
+number of controls VISITED equals the number declared, and counts a control as fired only on a
+FULLY ANCHORED match of a line the success path alone emits, with the control's own tag required
+separately in the printed failure list. Both properties are repairs, and the second needed repairing
+twice: its first version tested one success form by PREFIX while this paragraph claimed an exact
+match, and built the other form's expected string out of the line it was testing. codex-worker-1
+named both. The prefix arm was the one that opened holes — it accepted a bare `OK (+` with any
+invented tail, and a genuine line with junk appended — while the self-derived arm made a component
+vacuous rather than admitting a spoof. **An approximation reappeared inside the repair for a
+self-certifying harness**, which is where this packet keeps finding them. As a shell loop the sweep
 tested nothing and said so affirmatively — under zsh, which does not word-split unquoted
 expansions, `for n in $NAMES` ran once with all eighty-nine names as one argument; the gate refused
 that correctly, but the refusal ECHOES the name it rejected, the rejected name was the whole list,
@@ -2329,9 +2342,10 @@ carrying one cannot be decided by any implementation.
     it resolved. See the G0-B register entry, which now records the substitution.
 36. **G3** — ⟦PRODUCT⟧ **BLOCKING. `tools/host_stall_check.sh` asserts a producer behaviour the
     shipped back-pressure rule contradicts, so one of the two is wrong in PRODUCT.** The check's pass
-    predicate (`:105-109`: at most three post-marker `producer stall (inFlight)` lines) requires a
-    SIGSTOPped host to stop holding the minimum, and its comment names the mechanism — "the host is
-    dropped" (`:101-104`). `completedMinimum` (`apps/engine_rt_helpers.cpp:492-511`) counts exactly
+    predicate (`:105-109`: at most three post-marker `producer stall (inFlight)` lines) PASSES only
+    when few such lines are logged, which the check reads as a SIGSTOPped host having stopped holding
+    the minimum — an inference, not an observation, and the two come apart below. Its comment names
+    the mechanism it believes in: "the host is dropped" (`:101-104`). `completedMinimum` (`apps/engine_rt_helpers.cpp:492-511`) counts exactly
     such a host: its three exclusions are `!active`, `completedBlockId == 0` and owes-nothing, and a
     frozen producing host meets none (and the `!active` exclusion is unreachable in production —
     `:249-251` hardcodes it). The gate at `apps/engine_producer_thread.cpp:282-283` is then

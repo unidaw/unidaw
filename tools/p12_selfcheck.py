@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '5150b5cf9b2bd18402114ff632dc7cf649f053fe'
+PREV_TIP     = '7985aca8e0fb1f90c8194e78399f65ef1fdaa6da'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -2017,18 +2017,34 @@ if '--sweep' in sys.argv:
     # (1) the ITERATION COUNT is asserted against len(CONTROLS), so a sweep that visits one control
     #     cannot report on eighty-nine — the broken loop's own output carried `1` next to the word
     #     ALL and that was the whole tell;
-    # (2) a control counts as fired only on an EXACT line the success path alone emits, never a
-    #     substring of the run's output, so no refusal that quotes its input can satisfy it.
+    # (2) a control counts as fired only on a FULLY ANCHORED match of a line the success path alone
+    #     emits, so no refusal that quotes its input can satisfy it.
+    #
+    # THE FIRST VERSION OF (2) WAS ITSELF AN APPROXIMATION, twice over, and codex-worker-1 named
+    # both: one arm was `ln.startswith('CONTROL <name> OK (+')`, a prefix test standing where an
+    # exact match was claimed in this very comment; the other built its expected string from the
+    # line being tested (`ln.rsplit('(', 1)`), so the count component could never disagree — the
+    # same self-certification the sweep exists to end, reintroduced inside its cure. Both arms are
+    # now `fullmatch` over the two forms the emitter can print (`:1889`, `:1891`), with the name and
+    # the tag escaped and nothing read back off the line.
+    #
+    # The `(+N consequential: …)` form does not carry the tag, so matching it alone would accept a
+    # run whose named tag never fired. The tag is therefore required SEPARATELY, in the printed
+    # failure list — which is where the emitter puts it (`:1878`) before either OK line.
     names = list(CONTROLS)
     fired, dead = [], []
     for name in names:
         r = subprocess.run([sys.executable, __file__, '--negative', name],
                            capture_output=True, text=True, env={**os.environ})
+        nm, tg = re.escape(name), re.escape(CONTROLS[name][3])
+        okline = re.compile(rf'^CONTROL {nm} OK'
+                            rf'(?: — \[{tg}\] fired \(\d+\)|'
+                            rf' \(\+\d+ consequential: .*\))$')
+        tagline = re.compile(rf'^ {{2}}\[{tg}\]')
         lines = r.stdout.splitlines()
-        ok = r.returncode == 0 and any(
-            ln == f'CONTROL {name} OK — [{CONTROLS[name][3]}] fired ({n})'
-            or ln.startswith(f'CONTROL {name} OK (+')
-            for ln in lines for n in [ln.rsplit('(', 1)[-1].rstrip(')')])
+        ok = (r.returncode == 0
+              and any(okline.fullmatch(ln) for ln in lines)
+              and any(tagline.match(ln) for ln in lines))
         (fired if ok else dead).append(name)
     visited = len(fired) + len(dead)
     if visited != len(CONTROLS):
