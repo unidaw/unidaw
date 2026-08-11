@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '2e9880ee8dfd8cc91103b72c1a7231255c0a7f94'
+PREV_TIP     = 'f49273bfc79c6b835958dd1d42261a8031fbb80f'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -473,6 +473,9 @@ CONTROLS = {
                       'PACKET-SET-RESTATED'),
  'marker-unclosed':  ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
                       '37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ⟦BROKEN ', 1, 'KIND-MARKER-UNKNOWN'),
+ 'marker-in-comment': ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
+                      '37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ <!-- ⟦BROKEN --> ', 1,
+                      'KIND-MARKER-UNKNOWN'),
  'marker-closer':    ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
                       '37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ⟧ ', 1, 'KIND-MARKER-UNKNOWN'),
  'marker-qualified': ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
@@ -570,6 +573,13 @@ unhid = _unhidden(pkt)
 
 # ---- 1. open items: header == body, contiguous, no orphan markers ---------------------------
 body = re.search(r'# Open items.*?(?=\n# |\Z)', unhid, re.S).group(0)
+# THE SAME SECTION FROM THE TRUE SOURCE. `body` is sliced from `unhid`, so anything reading it is
+# reading a NORMALISED document however raw the reader believes it is being — I moved the marker
+# checks onto `body` and wrote "raw, unrendered, no view" three times in the comments, and an
+# `<!-- ⟦BROKEN -->` in a headline sailed through because `_unhidden` had already blanked it
+# upstream. codex-worker-1's probe. A claim about a variable is worth exactly what a check of that
+# variable is worth, and I checked the code I wrote instead of the input it consumes.
+body_raw = re.search(r'# Open items.*?(?=\n# |\Z)', pkt, re.S).group(0)
 hdr  = re.search(r'# Open items — (\d+) atomic, (\d+) CLOSED at this SHA, (\d+) open', pkt)
 cand = [int(n) for n in re.findall(r'(?m)^(\d{1,2})\. ', body)]
 nums, nxt = [], 1
@@ -976,9 +986,9 @@ _KIND_TOKENS = {'PRODUCT', 'PACKET'}
 # This ends the family instead of its next member: there is no Markdown construct left to disagree
 # about, because Markdown is no longer being parsed.
 _HEAD_TEXT = {int(m.group(1)): m.group(2) for m in
-              re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ([^\n]*)', body)}
+              re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ([^\n]*)', body_raw)}
 _KINDS, _MARKER_ERR = {}, []
-for _m in _MARKER_RUN.finditer(body):
+for _m in _MARKER_RUN.finditer(body_raw):
     # `*` here too. Widening the RUN grammar to admit ⟦⟧ and leaving this extractor at `+` meant the
     # empty marker was matched by the outer pattern and then dropped by the inner one — the same
     # normalisation, one layer down, inside the fix for it.
@@ -1213,7 +1223,10 @@ def classify_raw_prose(src_text):
                 and a_.value.args):
             compiled[a_.targets[0].id] = [x.value for x in ast.walk(a_.value.args[0])
                                           if isinstance(x, ast.Constant) and isinstance(x.value, str)]
-    RAW = ('pkt', 'body', 'head')
+    # `body_raw` BELONGS HERE, and adding a raw source without adding its NAME here makes the
+    # ratchet blind to exactly the reads it exists to count — the new source would have been
+    # invisible and the floor would have appeared to drop on its own.
+    RAW = ('pkt', 'body', 'body_raw', 'head')
     out = []
     for nd in ast.walk(tree):
         if not isinstance(nd, ast.Call) or not isinstance(nd.func, ast.Attribute):
@@ -1248,7 +1261,10 @@ _decor_raw = classify_raw_prose(open(__file__).read())
 # decision rather than a drift: raw-prose reads are normally the defect, and these two are the
 # exception because ⟦⟧ are packet-private delimiters whose presence is a fact about the BYTES, not
 # about what Markdown renders. An exception the ratchet made me write down.
-_DECOR_FLOOR = 44
+# 44 -> 45: `body_raw` is a new raw source and its reads are now COUNTED. The floor moved because
+# the population grew, not because a check relaxed — and it only moved visibly because `body_raw`
+# was added to RAW in the same edit.
+_DECOR_FLOOR = 45
 # THE FLOOR MUST EQUAL TODAY'S COUNT, not merely bound it. As a `>` test the floor could be raised
 # to 999 and the ratchet would pass forever while asserting nothing — codex-worker-2 demonstrated
 # exactly that, and the executable proof stayed green because it tested the CLASSIFIER and never the
