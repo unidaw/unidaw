@@ -88,6 +88,19 @@ for individual fragments. Do not build, run product code, or edit the pinned
 checkout. Report paths/lines from that checkout and retain exact-SHA/read-only
 evidence.
 
+**Review convergence protocol.** See
+`docs/architecture/REVIEW_CONVERGENCE_PROTOCOL.md`. Every packet uses a
+machine-readable manifest as the single source of truth for gates, populations,
+rulings, dependencies, counts, and controls; prose and summaries are generated
+or mechanically checked from it. Semantic review and evidence verification run
+in parallel against the same immutable packet SHA and frozen product base,
+using bounded checklists and returning PASS or numbered blockers. After the
+same defect class fails twice, sentence edits are forbidden: the next revision
+must add a structural invariant, parser, generated field, delimiter, or
+negative control. A release candidate is frozen after both independent PASS
+results; follow-up improvements require a named successor packet. No
+implementation is authorized before that point.
+
 **SHM contract.** `apps/shared_memory.h` ↔ `ui/daw-bridge/src/layout.rs` are
 lockstep (C++ `static_assert`s / Rust `offset_of!` asserts), `kShmVersion` = 37.
 Any header/struct change bumps the version in BOTH + updates the offset asserts.
