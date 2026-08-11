@@ -1384,7 +1384,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `216c48c4a91c431a55534d53fee221dc461813e9`, A.0 SCRIPT BLOB `2e95eb2c28b219f20c1eda8afc30b3349229be1a`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `f894e3cc5197156bdca44c0545ebb7f8a7af29ed`, A.0 SCRIPT BLOB `817cb9a5771f1ee4ff3ceec9ef3046b642f76fdb`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1455,7 +1455,18 @@ moment the write moved, and is recorded here because it is the predictable cost 
 **Controls.** Eighty-nine, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
-eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
+eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
+number of controls VISITED equals the number declared, and counts a control as fired only on an
+exact line the success path alone emits. Both properties are repairs. As a shell loop the sweep
+tested nothing and said so affirmatively — under zsh, which does not word-split unquoted
+expansions, `for n in $NAMES` ran once with all eighty-nine names as one argument; the gate refused
+that correctly, but the refusal ECHOES the name it rejected, the rejected name was the whole list,
+and the loop's predicate searched the run's output for substrings of that same list. It printed
+`ALL 1 CONTROLS FIRED`. **A harness whose failure output satisfies its own success predicate**, with
+the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
+dead anchor turns all eighty-nine red, and a single control given a tag nothing emits turns exactly
+that one red while the other eighty-eight stay green. Individual controls still run with
+`--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,

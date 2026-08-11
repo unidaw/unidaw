@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'b20d5d61ad8be812f21a0462b3366a38c551a4f1'
+PREV_TIP     = '80521601f0dd2c0d77416cf608f82647e9938eb0'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -2004,6 +2004,40 @@ if '--emit-manifest' in sys.argv or '--manifest' in sys.argv:
     tmp = MANIFEST + '.tmp'
     open(tmp, 'w').write(emitted); os.replace(tmp, MANIFEST)
     print(f'wrote {MANIFEST}'); sys.exit(0)
+if '--sweep' in sys.argv:
+    # THE SWEEP BELONGS TO THE GATE, because as a shell loop it silently tested NOTHING and said so
+    # in the affirmative. Under zsh — which does not word-split unquoted expansions — `for n in
+    # $NAMES` ran ONCE with all 89 names as one argument. The gate refused that correctly
+    # (A0-UNKNOWN-CONTROL, rc=2), but the refusal ECHOES the name it rejected, the rejected name was
+    # the whole list, and the loop's predicate was `grep -q "^CONTROL $n OK"` with $n also the whole
+    # list — so grep read it as 89 alternative patterns and matched bare control names inside the
+    # gate's own error text. It printed `ALL 1 CONTROLS FIRED THEIR NAMED TAG`.
+    #
+    # Two properties of this replacement are the point, and neither is "it is in Python now":
+    # (1) the ITERATION COUNT is asserted against len(CONTROLS), so a sweep that visits one control
+    #     cannot report on eighty-nine — the broken loop's own output carried `1` next to the word
+    #     ALL and that was the whole tell;
+    # (2) a control counts as fired only on an EXACT line the success path alone emits, never a
+    #     substring of the run's output, so no refusal that quotes its input can satisfy it.
+    names = list(CONTROLS)
+    fired, dead = [], []
+    for name in names:
+        r = subprocess.run([sys.executable, __file__, '--negative', name],
+                           capture_output=True, text=True, env={**os.environ})
+        lines = r.stdout.splitlines()
+        ok = r.returncode == 0 and any(
+            ln == f'CONTROL {name} OK — [{CONTROLS[name][3]}] fired ({n})'
+            or ln.startswith(f'CONTROL {name} OK (+')
+            for ln in lines for n in [ln.rsplit('(', 1)[-1].rstrip(')')])
+        (fired if ok else dead).append(name)
+    visited = len(fired) + len(dead)
+    if visited != len(CONTROLS):
+        print(f'SWEEP INVALID: visited {visited} of {len(CONTROLS)} controls'); sys.exit(2)
+    if dead:
+        for d in dead: print(f'  DEAD {d} — [{CONTROLS[d][3]}] did not fire')
+        print(f'SWEEP FAIL: {len(dead)} of {len(CONTROLS)} did not fire'); sys.exit(1)
+    print(f'SWEEP OK: {len(fired)} of {len(CONTROLS)} controls fired their named tag'); sys.exit(0)
+
 if fail:
     for f in fail[:30]: print('  ' + f)
     print(f'FAIL ({len(fail)})'); sys.exit(1)
