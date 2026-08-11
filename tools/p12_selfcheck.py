@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'd709770cb8774660f4d19c9317c27006602e2242'
+PREV_TIP     = '66bf20d74d23212a9b9413d2226e1e52c1efa3a4'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -521,9 +521,16 @@ vis = _visible(pkt)
 # raw because a command in a code span is its content, not a hiding place.
 def _unhidden(t):
     out = list(t)
-    for pat in (r'(?ms)^ {0,3}(?P<f>```+|~~~+).*?^ {0,3}(?P=f)', r'<!--.*?-->',
-                r'(?m)^ {0,3}\[[^\]\n]+\]:.*$'):
-        for m in re.finditer(pat, t, re.S):
+    # FLAGS PER PATTERN, not one `re.S` over all three. The reference-definition arm is LINE
+    # oriented — `.*$` — and DOTALL made its `.` cross newlines, so one definition blanked 3,966
+    # characters instead of 24: everything to the last `$` in the document. A blanking that overruns
+    # is a FALSE PASS, because a real dangling citation downstream simply disappears. codex-worker-2
+    # found it. **A flag applied to a group of patterns is applied to the one it was not written
+    # for**, and the two fence/comment arms genuinely need re.S while the third genuinely must not.
+    for pat, flags in ((r'(?ms)^ {0,3}(?P<f>```+|~~~+).*?^ {0,3}(?P=f)', 0),
+                       (r'<!--.*?-->', re.S),
+                       (r'(?m)^ {0,3}\[[^\]\n]+\]:.*$', 0)):
+        for m in re.finditer(pat, t, flags):
             for i in range(m.start(), m.end()):
                 if out[i] != '\n': out[i] = ' '
     return ''.join(out)
