@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'd53c741f6937496dcca674a5972cd71ee146fdec'
+PREV_TIP     = '8e65c5330dbb65e4bd5a2ecdd74d6c012eb36160'
 
 fail = []
 def bad(tag, detail): fail.append(f'[{tag}] {detail}')
@@ -55,9 +55,24 @@ if not os.environ.get('AE_P12_DRAFT'):
     if rc or parent != PREV_TIP:
         print(f'[A0-CHAIN-BROKEN] HEAD^ is {parent[:12] or "?"}, PREV_TIP pins {PREV_TIP[:12]}')
         sys.exit(2)
+def blob_oid(b): return hashlib.sha1(b'blob %d\x00' % len(b) + b).hexdigest()
+
 raw = open(PACKET_PATH, 'rb').read()
 pkt = raw.decode()
-oid = hashlib.sha1(b'blob %d\x00' % len(raw) + raw).hexdigest()
+oid = blob_oid(raw)
+selfoid = blob_oid(open(__file__, 'rb').read())
+declared = re.search(r'A\.0 SCRIPT BLOB `([0-9a-f]{40})`', pkt)
+if not declared:
+    print('[A0-SCRIPT-UNPINNED] the packet records no "A.0 SCRIPT BLOB <oid>"'); sys.exit(2)
+if declared.group(1) != selfoid:
+    print(f'[A0-SCRIPT-DRIFTED] this script is {selfoid[:12]}, the packet pins '
+          f'{declared.group(1)[:12]} — the gate and the document it decides must move together')
+    sys.exit(2)
+if not os.environ.get('AE_P12_DRAFT'):
+    rc, committed = git('.', 'rev-parse', f'HEAD:{PACKET_PATH}')
+    if rc or committed != oid:
+        print(f'[A0-BLOB-MISMATCH] working blob {oid[:12]} != HEAD blob {committed[:12] or "?"}')
+        sys.exit(2)
 
 NEG = None
 for i, a in enumerate(sys.argv):
@@ -68,14 +83,21 @@ for i, a in enumerate(sys.argv):
 # merely makes the run FAIL proves nothing — the fifth way a negative control lies is landing in
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
- 'open-count':       ('# Open items — 24 atomic', '# Open items — 25 atomic', 1, 'OPEN-COUNT'),
- 'closed-count':     ('3 CLOSED at this SHA, 21 open', '2 CLOSED at this SHA, 22 open', 1,
+ 'open-count':       ('# Open items — 25 atomic', '# Open items — 26 atomic', 1, 'OPEN-COUNT'),
+ 'closed-count':     ('3 CLOSED at this SHA, 22 open', '2 CLOSED at this SHA, 23 open', 1,
                       'OPEN-CLOSED-COUNT'),
- 'open-arithmetic':  ('3 CLOSED at this SHA, 21 open', '3 CLOSED at this SHA, 19 open', 1,
+ 'open-arithmetic':  ('3 CLOSED at this SHA, 22 open', '3 CLOSED at this SHA, 19 open', 1,
                       'OPEN-ARITHMETIC'),
  'stale-a0-sample':  ('· 11 RAW + ', '· 12 RAW + ', 1, 'A0-SAMPLE-STALE'),
  'member-per-type':  ('EventEntry 7/6', 'EventEntry 7/7', 1, 'MEMBER-RUST'),
  'member-dropped':   ('    HarmonyEvent 4/4\n', '', 1, 'MEMBER-UNLISTED'),
+ 'root-wide-grep':   ('`git grep -n sendProcessBlock`', '`grep -rn sendProcessBlock .`', 1,
+                      'COMMAND-ROOT-WIDE'),
+ 'unmarked-popn':    ('exact. [HAND-CLASSIFIED — open item 25 (all)]', 'exact.', 1,
+                      'POPULATION-UNCOMMANDED'),
+ 'handmade-count':   ('**5 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
+                      'HANDMADE-COUNT'),
+ 'control-unlisted': ('`wrong-raw`.', '`wrong-ray`.', 1, 'CONTROL-UNLISTED'),
  'drop-refutation':  ('*REFUTED BY*', 'see above', 'LAST', 'NO-REFUTATION'),
  'wrong-raw':        ('RAW **27**', 'RAW **28**', 1, 'RAW-MISMATCH'),
  'wrong-command':    ('` returns 28.', '` returns 26.', 1, 'COMMAND-MISMATCH'),
@@ -110,7 +132,7 @@ if NEG:
         print(f'[A0-CONTROL-DID-NOT-LAND] {NEG}'); sys.exit(2)
 
 # ---- 1. open items: header == body, contiguous, no orphan markers ---------------------------
-body = re.search(r'# Open items.*?(?=# Provenance)', pkt, re.S).group(0)
+body = re.search(r'# Open items.*?(?=\n# |\Z)', pkt, re.S).group(0)
 hdr  = re.search(r'# Open items — (\d+) atomic, (\d+) CLOSED at this SHA, (\d+) open', pkt)
 cand = [int(n) for n in re.findall(r'(?m)^(\d{1,2})\. ', body)]
 nums, nxt = [], 1
@@ -188,10 +210,15 @@ if executed != len(tokens):
 # cannot be run by a reviewer, and what answered it here was not the tool named.
 for m in re.finditer(r'`(rg\s[^`]*)`', pkt):
     bad('COMMAND-NEEDS-RG', m.group(1)[:60])
+# a root-wide `grep -r ... .` is environment-dependent: --exclude-dir=build does not exclude
+# build-debug, and a canonical checkout returned 100 where the tracked tree has 17. git grep
+# searches TRACKED files, so it is the same set on every machine.
+for m in re.finditer(r'`(grep -[a-zA-Z]*r[a-zA-Z]*\s[^`]*\s\.)`', pkt):
+    bad('COMMAND-ROOT-WIDE', f'use git grep: {m.group(1)[:60]}')
 
 def runnable(c):
     c = c.strip()
-    return re.match(r'^(grep|rg|sed|awk)\s', c) and len(c.split()) > 2
+    return re.match(r'^(git grep|grep|rg|sed|awk)\s', c) and len(c.split()) > 2
 cmd_claims = 0
 for m in re.finditer(r'`([^`]+)`', pkt, re.S):
     c = m.group(1)
@@ -237,6 +264,36 @@ else:
             if rust.get(t) != r: bad('MEMBER-RUST', f'{t}: block {r}, command {rust.get(t)}')
         for t in sorted(set(cpp) | set(rust)):
             if t not in stated: bad('MEMBER-UNLISTED', f'{t} returned by a command, absent from the block')
+
+# ---- 5d. no population is silently uncommanded ---------------------------------------------
+# "Every count is command-derived" was false for five hand-classified populations. The repair is
+# not a better adjective: each exception carries a marker naming the item that tracks it, the
+# markers are counted, and the count is asserted against what the provenance paragraph claims.
+MARK = '[HAND-CLASSIFIED — open item 25 (all)]'
+starts = [m.start() for m in re.finditer(r'\*[A-Z][^*\n]{4,70}\* — ', pkt)]
+handmade = 0
+for i, q in enumerate(starts):
+    seg = pkt[q:starts[i + 1] if i + 1 < len(starts) else q + 600]
+    if MARK in seg: handmade += 1; continue
+    if re.search(r'`(git grep|grep|awk|sed)\s', seg): continue
+    bad('POPULATION-UNCOMMANDED', re.sub(r'\s+', ' ', seg)[:70])
+claimed = re.search(r'(\d+) populations are HAND-CLASSIFIED', pkt)
+if not claimed:
+    bad('HANDMADE-COUNT-MISSING', 'provenance states no hand-classified count')
+elif int(claimed.group(1)) != handmade:
+    bad('HANDMADE-COUNT', f'provenance says {claimed.group(1)}, document marks {handmade}')
+
+# ---- 5e. the prose control list must equal the harness ------------------------------------
+listed = re.search(r'\*\*Controls\.\*\* ([\w-]+), each naming', pkt)  # 'Twenty-two' is not \w+
+names = set(re.findall(r'`([a-z0-9-]+)`', pkt[pkt.find('**Controls.**'):pkt.find('**Controls.**') + 900]))
+WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twenty',
+        21: 'Twenty-one', 22: 'Twenty-two', 23: 'Twenty-three', 24: 'Twenty-four'}
+if not listed:
+    bad('CONTROL-PROSE-MISSING', 'no "**Controls.** <N>, each naming" sentence')
+elif listed.group(1) != WORD.get(len(CONTROLS), '?'):
+    bad('CONTROL-COUNT-PROSE', f'prose says {listed.group(1)}, harness has {len(CONTROLS)}')
+missing = set(CONTROLS) - names
+if missing: bad('CONTROL-UNLISTED', ', '.join(sorted(missing)))
 
 # ---- 6. RULE arithmetic: RAW n → minus k → m must satisfy n - k == m ------------------------
 for n, k, m in re.findall(r'RAW \*{0,2}(\d+)\*{0,2}.{0,200}?minus \*{0,2}(\d+)\*{0,2}[^→]{0,60}→ \*{0,2}(\d+)\*{0,2}', pkt, re.S):

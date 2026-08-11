@@ -21,7 +21,7 @@ Six blockers from the exact review are reconciled here:
 1. **The per-gate record contract is now met for all eight gates.** Each carries population with its
    extraction command and floor, failure model, deterministic test, PASS conditions each naming their
    refutation, static checks, and review register. Nothing points at a table that does not exist.
-2. **The open list is 24 atomic items, not 15 categories.** The four that compression swallowed are
+2. **The open list is 25 atomic items, not 15 categories.** The four that compression swallowed are
    restored: G0-B's unowned mutation floor, G2-A's BATCH blindness, G2-B's probe-order false-green,
    and G3's debug-env requirement plus its self-contradicting static check.
 3. **G0-A's mailbox census was wrong twice and is corrected with its method.** See G0-A.
@@ -104,13 +104,13 @@ no derived pointer is published before every gate passes. At pin both are violat
 observable from a return value, so (d) is decided statically.
 
 **Population.**
-- *Regions the engine addresses* — 8, exact. Every `ShmHeader` offset field read off a
+- *Regions the engine addresses* — 8, exact. [HAND-CLASSIFIED — open item 25 (all)] Every `ShmHeader` offset field read off a
   controller-derived header plus the two derived functions.
 - *Raw region derivations outside any validator* — RAW 13 (`grep -rn -e '>audioInOffset' -e '>audioOutOffset' -e '>ringStdOffset' -e '>ringCtrlOffset' -e '>mailboxOffset' -e auxOutputPlaneOffset -e hostKeyRingOffset apps/ | grep -v _tests_main | grep -v juce_host_process_main | grep -v engine_ui_shm | grep -v audio_shm | grep -v shared_memory | grep -v uiShm`) returns 13 with the exclusions carried INSIDE the
   pipeline (the predecessor said 12, and stated the exclusions in prose beside a command that did
   not apply them).
-- *Bounds checks anchored on the child's number* — 7, exact.
-- *Ring constructions over a host-created mapping* — 3, exact.
+- *Bounds checks anchored on the child's number* — 7, exact. [HAND-CLASSIFIED — open item 25 (all)]
+- *Ring constructions over a host-created mapping* — 3, exact. [HAND-CLASSIFIED — open item 25 (all)]
 - **Mailbox `completedBlockId` LOADS — 7 live, 8 syntactic.** Command:
   `grep -rn 'completedBlockId' apps | grep -v -e _tests_main.cpp -e juce_host_process_main.cpp | grep -E '\->load|\.load'`
   returns 8: `engine_produce_block.cpp:910` (sidechain), `engine_audio_callback.h:284`, `:328`,
@@ -235,7 +235,7 @@ about the summands, so the summands carry the commands.
 isolates to ONE type, and the commands corroborate the one-sided member below instead of merely
 agreeing with it. The eight C++ declarations live in three headers
 (`harmony_timeline.h`, `patcher_abi.h`, `shared_memory.h`), which is why a single-file recipe could
-not have reproduced this. *One-sided members* — exactly 1: C++ `EventEntry::ready`, offset 60, size 4
+not have reproduced this. *One-sided members* — exactly 1 [HAND-CLASSIFIED — open item 25 (all)], corroborated independently by the per-type block above, whose only row with unequal sides is `EventEntry 7/6`: C++ `EventEntry::ready`, offset 60, size 4
 (`apps/shared_memory.h:450`, offset pinned at `:463`).
 
 **Floor.** Four floors. The type population is blind if either method's count moves without the other:
@@ -500,8 +500,9 @@ correspondence is established by the Floor paragraph below, not by this arithmet
 `commandMutatesDocument` (`apps/engine_command_mutates.h:46-236`) has **93** case arms, 69 returning
 true — the predecessor said 186, off by 2× in the section whose credibility rests on counts — but for
 the other ~60 families no `ClipRejected` is ever emitted, so an identity obligation over them would
-require inventing emit sites the code says do not exist. *Terminal refusal records* — 3 `emitClipReject`
-sites plus 2 refusal journal lines. *Correlator call sites* — RAW 56 mentions
+require inventing emit sites the code says do not exist. *Terminal refusal records* — 3 `emitClipReject` sites
+(`git grep -n 'emitClipReject(' -- apps | grep -v -e 'void emitClipReject' -e daw_engine_main.cpp -e _tests_main`
+returns 3) plus 2 refusal journal lines. *Correlator call sites* — RAW 56 mentions
 (`grep -rn -e await_clip_outcome -e report_outcome_from -e report_refusal_outcome -e refused_or ui/daw-cli/src ui/daw-agent/src`)
 → minus 5 (four `fn` definitions, and the doc comment at `ui/daw-cli/src/main.rs:1262` that names
 `await_clip_outcome` in prose) → **51 call sites**, which is 4 + 6 + 17 + 24 exactly as the exact
@@ -694,7 +695,7 @@ that stops advancing its `completedBlockId` while its control socket stays writa
 declared bound N counted in OBSERVATIONS OF THAT HOST, have `hostReady` stored false by an autonomous
 engine path, and block production for the remaining tracks must continue.
 
-**Population.** *Tracks whose production must continue* — the `tracks` vector, read at
+**Population.** *Tracks whose production must continue* — [HAND-CLASSIFIED — open item 25 (all)] the `tracks` vector, read at
 `apps/daw_engine_main.cpp:962-969`. *Writes that remove a host from the gate population* — RAW 17
 (`grep -rn 'hostReady' apps/ | grep 'store(false'`) → minus **2** in `_tests_main` → **15 production**. The
 whole census is RAW 21 (`grep -rn 'hostReady' apps/ | grep 'store('`) → minus 3 in `_tests_main` → **18 production**. The predecessor said
@@ -775,8 +776,10 @@ correctly gated by the mechanism this gate generalises. `apps/engine_audio_callb
 proving omission rather than design, and they bound the blast radius to three shapes: chains
 interleaving VST and non-VST devices, a patcher audio node after a plugin, and track-to-track routing
 from a plugin-bearing track. **Dependencies** G0-A, G0-B, G1-A, G1-B, G2-A, G2-B, G3. Final gate — and therefore NOT DECIDABLE
-at this SHA, because three of its dependencies carry BLOCKING items: 11 (G1-B) has no reader
-population, 18 (G2-B) has the mirror-ack circularity, and 19 (G3) has no source for N. G4 is written
+at this SHA, because FOUR of its dependencies carry BLOCKING items: 11 (G1-B) has no reader
+population, 18 (G2-B) has the mirror-ack circularity, 19 (G3) has no source for N, and 24 (G0-B)
+holds the rename PASS 9 is RED without — G4 depends on G0-B, so a count of three was wrong the
+moment 24 was registered. G4 is written
 in full so the work is specified, but no PASS verdict on it may be recorded until those three are
 ruled; a final gate that reports green over blocked dependencies is the exact shape of a check that
 passes with the defect present.
@@ -793,7 +796,7 @@ input immutability and ack identity but omitted this ordering, which is what mak
 sound rather than merely acknowledged.
 
 **Population.** *Dispatch sites* — 3 production, 8 test, 6 non-calls; the command
-`grep -rn --exclude-dir=target --exclude-dir=build --exclude-dir=node_modules --exclude-dir=.git sendProcessBlock .` returns 17
+`git grep -n sendProcessBlock` returns 17
 over the pinned root, every hit classified. *Out-plane readers* — RAW **27**
 (`grep -rn -e audioOutOffset -e safeAudioOutPtr -e audioOutChannelPtr -e auxOutputPlaneOffset apps/`)
 → minus 20 (three in `_tests_main`, the remainder declarations and non-reads) → **7 production**. The
@@ -897,7 +900,52 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
    in place of a deterministic transition test. This project has a documented history of "zero
    underruns, therefore correct" conclusions that were wrong, so the rule is stated, not assumed.
 
-# Open items — 24 atomic, 3 CLOSED at this SHA, 21 open
+# A.0 — the gate this packet is decided by
+
+`tools/p12_selfcheck.py` at this SHA, A.0 SCRIPT BLOB `e80f933a1a0ac24092ad4f0c32ca620e01f58ffe`
+— the script hashes itself and refuses if the packet pins a different blob, so the gate and the
+document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
+product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
+its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run. Every refusal exits
+**2**, so a broken gate can never be read as a passing one. Invocation and expected output:
+
+    AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 25 items, 22 open · 11 RAW + 19 commanded claims, all executed
+    PASS
+
+**What it decides.** Open-item header against body, contiguity, and orphaned numbers. Every
+`open item N (Gx)` cross-reference resolving AND naming the gate that item belongs to — three
+references in the predecessor pointed at real items belonging to other gates, and every one of them
+"resolved", so resolution alone was never the property at risk. Every PASS bullet carrying a
+`REFUTED BY` or an explicit withdrawal. No withdrawn bullet described elsewhere as covered. Every RAW
+claim carrying a runnable command that reproduces its figure, and every `RAW n → minus k → m`
+satisfying `n − k == m`. Every runnable command in the document — not only the RAW-form ones —
+stating what it returns and returning it; the predecessor's instrument decided one shape and left a
+dozen exact claims written in the other shape unexecuted. No command written in `rg`.
+
+**What it does NOT decide, stated because a gate silent about its limits reads as total coverage.**
+Whether a RULE's subtraction is *justified* — it checks the arithmetic, not that the excluded lines
+deserved excluding. Whether a population's predicate is the right one: three figures in this packet
+were re-derived against a predicate of the author's that was wrong (mentions for call sites, `apps/`
+for the whole root, a forwarding lambda for an emit site), and in all three the packet was right and
+the recheck was wrong. Whether a rename is the right resolution for open item 24 (G0-B) — the gate can see the two
+names differ and cannot choose which side moves.
+And nothing about the product beyond what a text search can see.
+
+**Controls.** Twenty-two, each naming the tag it must provoke; a control that mutates the file without
+provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
+checked against the harness, because this list said thirteen for two SHAs after the harness had
+eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
+`drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
+`orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
+`control-unlisted`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
+`unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`. Two of them were themselves defective when first
+written and are recorded here rather than quietly fixed: `raw-without-cmd` changed a claim's NUMBER
+and so provoked a different check entirely, and the landing assertion demanded the anchor count DROP,
+which an insertion control can never do — it reported a landed mutation as unlanded. The named-tag
+requirement is what exposed both.
+
+# Open items — 25 atomic, 3 CLOSED at this SHA, 22 open
 
 One per line, numbered in document order, so the count is checkable. Three are BLOCKING: a gate
 carrying one cannot be decided by any implementation.
@@ -926,58 +974,31 @@ carrying one cannot be decided by any implementation.
 22. **G4** — The fixture definitions added here (F0-F6, S1-S8) and the corrected ack-census counts have not been run against anything; the reviewer should confirm them against the fixture rather than against this packet.
 23. **all** — `read_clip_window` is named by the exact review as a request/answer reader G1-B omits. It cannot be placed until item 11 gives the gate a population.
 
-# A.0 — the gate this packet is decided by
-
-`tools/p12_selfcheck.py` at this SHA. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
-product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
-its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run. Every refusal exits
-**2**, so a broken gate can never be read as a passing one. Invocation and expected output:
-
-    AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 24 items, 21 open · 11 RAW + 18 commanded claims, all executed
-    PASS
-
-**What it decides.** Open-item header against body, contiguity, and orphaned numbers. Every
-`open item N (Gx)` cross-reference resolving AND naming the gate that item belongs to — three
-references in the predecessor pointed at real items belonging to other gates, and every one of them
-"resolved", so resolution alone was never the property at risk. Every PASS bullet carrying a
-`REFUTED BY` or an explicit withdrawal. No withdrawn bullet described elsewhere as covered. Every RAW
-claim carrying a runnable command that reproduces its figure, and every `RAW n → minus k → m`
-satisfying `n − k == m`. Every runnable command in the document — not only the RAW-form ones —
-stating what it returns and returning it; the predecessor's instrument decided one shape and left a
-dozen exact claims written in the other shape unexecuted. No command written in `rg`.
-
-**What it does NOT decide, stated because a gate silent about its limits reads as total coverage.**
-Whether a RULE's subtraction is *justified* — it checks the arithmetic, not that the excluded lines
-deserved excluding. Whether a population's predicate is the right one: three figures in this packet
-were re-derived against a predicate of the author's that was wrong (mentions for call sites, `apps/`
-for the whole root, a forwarding lambda for an emit site), and in all three the packet was right and
-the recheck was wrong. Whether a rename is the right resolution for open item 24 (G0-B) — the gate can see the two
-names differ and cannot choose which side moves.
-And nothing about the product beyond what a text search can see.
-
-**Controls.** Thirteen, each naming the tag it must provoke; a control that mutates the file without
-provoking its own tag reports `BLIND` and fails. Run them with `--negative <name>`, list with
-`--list`: `dangling-ref`, `drop-refutation`, `open-count`, `orphan-number`, `raw-without-cmd`,
-`rg-command`, `rule-arithmetic`, `ungated-ref`, `unstated-return`, `withdrawn-claim`,
-`wrong-command`, `wrong-gate-ref`, `wrong-raw`. Two of them were themselves defective when first
-written and are recorded here rather than quietly fixed: `raw-without-cmd` changed a claim's NUMBER
-and so provoked a different check entirely, and the landing assertion demanded the anchor count DROP,
-which an insertion control can never do — it reported a landed mutation as unlanded. The named-tag
-requirement is what exposed both.
 24. **G0-B** — BLOCKING for G0-B only. The pure name join requires one rename: `patcher_abi.h:75`
     declares `uint8_t reserved[4]{}` where `patcher_rust/src/lib.rs:86` declares `pub _pad0: [u8; 4]`,
     so the two sides of a byte-identical member disagree by NAME and no rule that forbids an alias
     table can join them. PASS 9 is RED until this lands and states so. Which side renames is an owner
     call, not a derivation: `reserved` is the C++ convention used elsewhere in that header and `_pad0`
     is the Rust convention, so the choice trades one file's internal consistency against the other's.
+25. **all** — The five HAND-CLASSIFIED populations, tracked rather than claimed away. `Regions the
+    engine addresses` (8), `Bounds checks anchored on the child's number` (7), `Ring constructions
+    over a host-created mapping` (3), `One-sided members` (1) and `Tracks whose production must
+    continue` are semantic groupings, not text matches: no grep distinguishes a REGION from the
+    offset fields that address it, and counting `Offset` declarations in `apps/shared_memory.h`
+    returns 27 against a claim of 8, which is the distance between the two ideas. Each carries the
+    marker and this item; a sixth appearing without one fails the gate. Deriving them needs a
+    predicate nobody has proposed, so this is open, not closed.
 
 # Provenance of this packet's own numbers
 
 Every count is stated as RAW → RULE → IN SCOPE, so that the command reproduces the raw figure and the
 rule reproduces the rest; and every count is a floor where a runtime value defeats the extraction.
-**No population is exempt from that sentence at this SHA**, which is the first time it has been
-true in this lineage. Two were: G0-B's member counts, obtained by reading both declarations, and
+**5 populations are HAND-CLASSIFIED and exempt from that sentence**, each carrying a marker and
+open item 25 (all). The previous version of this paragraph said no population was exempt, which was
+false when written: the exact review named G0-A's and G4's semantic groupings while I was quoting
+that sentence back at reviewers as the packet's strongest claim. The repair is not a softer
+adjective — the exceptions are marked in place, counted, and the count is checked against this
+number, so a sixth cannot appear silently. Two were: G0-B's member counts, obtained by reading both declarations, and
 G2-A's 51 correlator sites, carried from the exact review on attribution. Both are now derived by
 printed commands, and deriving them paid twice — the member commands localise the whole 66-vs-65
 difference to `EventEntry`, and the correlator command refuted the author's competing figure of 56,
