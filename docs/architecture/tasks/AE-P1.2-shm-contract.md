@@ -1028,23 +1028,44 @@ auxOutputPlaneOffset(header)".
 `std::fill(..., 0.0f)` zeroes every aux slot every block. G4's invariant is a consumer reading bytes
 ANOTHER AGENT WROTE — the other agent is the host, and this gate's population is blind to it
 writing. That is the `S-1` spelling defect at the scale of a whole agent.
-**R7 (below) rules the host IN SCOPE**, so the population must be rebuilt around the artifact that
-cannot be absent: every access to either plane resolves through `ShmHeader::audioOutOffset`, the
-main plane directly and the aux plane by derivation, and there is no second way to find the plane.
-A population defined as "every dereference of the mapped base at an offset derived from
-`audioOutOffset`" cannot miss a spelling. That census has NOT been done and I am not stating a
-reader floor from a selector known to be partial.
+**R7 (below) rules the host IN SCOPE.** The census must be rebuilt, and the OBVIOUS rebuild is also
+wrong: keying on `ShmHeader::audioOutOffset` STILL misses the host, because
+`juce_host_process_main.cpp:487-504` walks a running accumulator —
+`header.audioOutOffset = offset; offset += alignUp(outBlockBytes, 64); state.audioAuxOutOffset =
+offset;` — so the host's aux offset is numerically a DESCENDANT of the field and SYNTACTICALLY A
+SIBLING. A census keyed on the field NAME misses it for exactly the reason the four-spelling census
+did. claude-worker-1 proposed that shape and withdrew it themselves before it was built on.
+**The implementable version keys on the MAPPED BASE.** Plane bytes cannot be touched without
+reinterpret-casting a segment base pointer and adding an offset — `state.shmBase`, `track.shmBase`,
+`shmView->base` — and that artifact cannot be absent, because it is the only route to the memory.
+The exact count depends on how tightly the cast pattern is written (a strict pattern gives 10
+non-test sites, 7 of them in the host; a looser one catching header-relative casts gives more), and
+**the distribution is the point: on this census the host is MOST of the population, so R7 is not a
+marginal scope call.** Not finalised, and I am not stating a reader floor from a selector known to
+be partial.
 **The 27 partition itself is total and sums**, measured by claude-worker-1 and reproduced here:
 11 non-code · 3 test mains · 2 header-field writes (`juce_host_process_main.cpp:496`,
 `engine_ui_shm.cpp:40` — these assign the OFFSET FIELD, not plane bytes, a role my earlier partition
 folded into "writes") · 4 establishing · 5 direct reads · 1 indirect read
 (`engine_produce_block.cpp:1150`, dereferenced inside `enqueueInboundAudio`) · 1 host establishing.
 11+3+2+4+5+1+1 = 27.
-**UNRESOLVED and not reconciled:** that gives SIX byte-consuming reads. The exact review states "at
-least six byte-consuming reads plus an indirect callback reader", which reads as seven. Neither
-claude-worker-1 nor I can reproduce a seventh inside the 27, and promoting an establishing site to
-reach the number would be exactly the arithmetic-driven classification this gate has already been
-burned by. The reviewer should name the seventh site.
+**THE SEVENTH READER IS RESOLVED AND IT IS OUTSIDE THE 27.** codex-worker-1 named it and it is
+verified here: `EngineAudioCallback::process` (`apps/engine_audio_callback.h`) takes the
+`planeByteOffset` derived at `engine_consumer.cpp:670`/`:730-731`, resolves a channel pointer at
+`:397-404` (`reinterpret_cast<uint8_t*>(track.shmBase) + *planeOffset`) and CONSUMES samples at
+`:448` (`trackChannel[i] * channelGain`) and `:463` (`ring[w] = trackChannel[i]`). It names none of
+the four RAW terms, which is why the name-census could not see it — and
+`engine_produce_block.cpp:1150` is the indirect ROUTING read already counted, not this one.
+**Seven logical readers.** The seventh had to be NAMED by someone who knew where to look rather than
+found by the selector, which is the whole argument for rebuilding the census on the mapped base.
+
+**A NEGATIVE RESULT, recorded because re-chasing it would cost someone a day.** Two independent
+derivations of one address is this project's most expensive shape, so claude-worker-1 checked
+whether they agree: host `audioOutOffset + alignUp(numChannelsOut * stride * numBlocks, 64)` against
+engine `audioOutOffset + alignUp((numChannelsOut * stride) * numBlocks, 64)` — the SAME VALUE, no
+live divergence at this SHA. The duplication is a standing RISK (two expressions, one address, no
+assertion tying them), recorded in the review register as a risk and NOT as a defect, because
+nothing is currently wrong.
 
 *Input-plane writers in engine production code* — RAW 13
 (`grep -rn -e audioInOffset -e safeAudioInPtr -e audioInChannelPtr apps/`) → minus 11 (tests,
@@ -1127,8 +1148,12 @@ not inside either arm. Refuse-on-timeout shape: any deadline at `:1030`, `:1112`
 READ inside the success branch. The compared value must have a host-side producer — it must be the
 word the HOST stores, never `sentOk`.
 
-**Review register.** The reviewer SHALL confirm by reading `apps/juce_host_process_main.cpp:606-1096`
-that the SHIPPING host stores the acknowledgement after the last `process`. The reviewer SHALL confirm
+**Review register.** The reviewer SHALL rule on the DUPLICATED AUX-OFFSET DERIVATION: host and
+engine compute the same address by two independent expressions with no assertion tying them. They
+agree at this SHA — verified, not assumed — so this is a risk to pin, not a bug to fix, and pinning
+it costs less than the day it takes when they diverge. The reviewer SHALL confirm by reading
+`apps/juce_host_process_main.cpp:606-1096` that the SHIPPING host stores the acknowledgement after
+the last `process`. The reviewer SHALL confirm
 G3 has passed and that the adopted wait carries an independent per-host deadline whose expiry FAILS
 the render with a diagnostic rather than proceeding. The reviewer SHALL confirm the new wait cannot
 re-enter either deadlock door documented at `apps/engine_rt_helpers.h:200-234`. The reviewer SHALL
@@ -1151,7 +1176,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `f87289d6de9b2c2b7fdb28c74fba4dfedb951fb1`, A.0 SCRIPT BLOB `0ccd731bbd834a992bf4679f348e65e0a8bea236`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `c971bb7f7d9d14e97fba939fafeab7349e2800ea`, A.0 SCRIPT BLOB `76d72f37eb8c7e7de7e4698886af4d7743cb85ad`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
