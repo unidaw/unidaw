@@ -490,6 +490,12 @@ closure and remains spoofable through hidden link destinations; sweep proof
 coverage omits impossible Unicode/empty/bare-tag forms and positive `fired(2)`;
 G3 N/Watchdog, G2-A/B, G0-A/B, G4, and control-count prose remain blocked.
 
+Owner successor `8dcc0cd` claims the repeated sweep/R15/M1/count-prose defects
+were corrected by deleting stale restatements and widening the positive sweep
+proof. It remains **PENDING exact review**; the item37 generation-bound oracle,
+typed withdrawal/schema closure, and carried G2/G0/G3/G4 decisions must still
+be independently verified.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
