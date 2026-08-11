@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '716c72b18c60690f01c3018439949780f0959cca'
+PREV_TIP     = '6e9b862356a6adef38b2058bc32502e5c7ef3fe9'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -226,8 +226,19 @@ def _visible(t):
     # ``code`` was two empty single spans to the old pass, ~~~ was not a fence at all, and a link
     # destination is text a reader never sees. Order is load-bearing — a wider delimiter must be
     # consumed before a narrower one can mistake its halves for a pair.
-    for m in re.finditer(r'(?ms)^(?:```|~~~).*?(?:^(?:```|~~~)|\Z)', t): blank(m.start(), m.end())
+    # SAME CHARACTER, and no `\Z` escape hatch. CommonMark closes a fence only with the delimiter
+    # that opened it; the alternation let ``` be closed by ~~~, so a document a RENDERER shows as
+    # one long code block was parsed as ending at the tilde — claude-worker-1 measured 2,086 lines
+    # visible to this parser that a reader never sees, which is `_visible`'s own purpose inverted.
+    # And `\Z` closed an unterminated fence at end-of-file: one stray ``` blanked 1,927 of 2,188
+    # lines and the failure surfaced 1,400 lines away as MISSING RULINGS. An unterminated fence is a
+    # DOCUMENT DEFECT and says so now (FENCE-UNCLOSED), rather than being silently tolerated.
+    for m in re.finditer(r'(?ms)^(?P<f>```+|~~~+).*?^(?P=f)', t): blank(m.start(), m.end())
     for m in re.finditer(r'<!--.*?-->', t, re.S):                        blank(m.start(), m.end())
+    # a fence opener with no matching closer survives the pass above; catch it on the blanked text
+    for m in re.finditer(r'(?m)^(```+|~~~+)', ''.join(out)):
+        bad('FENCE-UNCLOSED', f'an unterminated code fence at line {t.count(chr(10), 0, m.start()) + 1}'
+                              f' — it would blank the rest of the document')
     for m in re.finditer(r'``[^\n]*?``', ''.join(out)):                  blank(m.start(), m.end())
     for m in re.finditer(r'`[^`\n]*`', ''.join(out)):                    blank(m.start(), m.end())
     for m in re.finditer(r'\]\([^)\n]*\)', ''.join(out)):               blank(m.start(), m.end())
@@ -402,6 +413,19 @@ CONTROLS = {
  # codex-worker-2's numeric wrapper, which a letter-initial deny-list could not see
  # the digit-SUFFIX variant, which the last-character allow-list could not see
  # codex-worker-2's remaining classes, one control each so none can regress silently
+ # claude-worker-1's two fence probes and codex-worker-2's remaining three
+ 'fence-unclosed':   ('# Provenance of this packet', '```\n\n# Provenance of this packet', 1,
+                      'FENCE-UNCLOSED'),
+ 'fence-mixed':      ('# Provenance of this packet',
+                      '```\n**R19 — item 11 (G1-B): fake.**\n~~~\n\n# Provenance of this packet', 1,
+                      'FENCE-UNCLOSED'),
+ 'span-dbl-across':  ('# Provenance of this packet',
+                      '``R12\ncontinued`` here.\n\n# Provenance of this packet', 1, 'VISIBLE-FLOOR'),
+ 'gate-wrapped':     ('**Dependencies** G1-A, G1-B', '**Dependencies** G1-A, _G2-B', 1,
+                      'GATE-DEP-UNKNOWN'),
+ 'edge-second':      ('27. **G2-A** — ⟦PRODUCT⟧ ',
+                      '27. **G2-A** — ⟦PRODUCT⟧ ⟦BLOCKED-ON: 29⟧ ⟦BLOCKED-ON: 999⟧ ', 1,
+                      'BLOCKER-KIND'),
  'marker-nonblocker': ('1. **G0-B** — ', '1. **G0-B** — ⟦BLOCKED-ON: 999⟧ ', 1, 'BLOCKER-KIND'),
  # item 27's edge to 29 was WRONG and is removed, so no BLOCKED-ON edge exists at this SHA. The
  # control inserts one pointing at a NON-BLOCKING item, which the target check rejects — the cycle
@@ -837,16 +861,22 @@ if _marked != sorted(_derived_blk):
 _said = re.search(r'and (?:ALL )?(\w+)(?: of them)? need\s+product\s+work', pkt)
 # a ⟦BLOCKED-ON: n⟧ blocker must name a real blocking item, or the delegation points at air
 _edges_i = {}
-for _b in re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — (?:⟦PRODUCT⟧ )?⟦BLOCKED-ON: (\d+)⟧', body):
-    _src, _dst = int(_b.group(1)), int(_b.group(2))
-    if _dst not in _derived_blk:
-        bad('BLOCKER-KIND', f'item {_src} is BLOCKED-ON {_dst}, which is not a blocking item')
-    if _dst == _src:
-        bad('BLOCKER-KIND', f'item {_src} is BLOCKED-ON itself')
-    _edges_i.setdefault(_src, []).append(_dst)
-for _src, _dsts in _edges_i.items():
+# EVERY marker on the head, read from the head STRING. The anchored finditer matched once per line,
+# so a second BLOCKED-ON was emitted and never validated — and my first repair kept the anchored
+# form and only LOOKED like a fix, which the control caught by reporting BLIND. That is the control
+# doing the one job a green suite cannot: telling me my repair did not repair anything.
+for _n in nums:
+    _h = re.search(r'(?m)^%d\. \*\*[^*]+\*\* — ((?:⟦[^⟧]+⟧ ?)*)' % _n, body)
+    if not _h: continue
+    _dsts = [int(x) for x in re.findall(r'⟦BLOCKED-ON: (\d+)⟧', _h.group(1))]
+    for _dst in _dsts:
+        if _dst not in _derived_blk:
+            bad('BLOCKER-KIND', f'item {_n} is BLOCKED-ON {_dst}, which is not a blocking item')
+        if _dst == _n:
+            bad('BLOCKER-KIND', f'item {_n} is BLOCKED-ON itself')
     if len(_dsts) != len(set(_dsts)):
-        bad('BLOCKER-KIND', f'item {_src} repeats a BLOCKED-ON target: {_dsts}')
+        bad('BLOCKER-KIND', f'item {_n} repeats a BLOCKED-ON target: {_dsts}')
+    if _dsts: _edges_i[_n] = _dsts
 def _cyc(a, seen):
     for b in _edges_i.get(a, []):
         if b in seen: return seen + [b]
@@ -856,7 +886,6 @@ def _cyc(a, seen):
 for _src in list(_edges_i):
     _c = _cyc(_src, [_src])
     if _c: bad('BLOCKER-KIND', f'BLOCKED-ON cycle {" -> ".join(map(str, _c))}')
-
 # THE VISIBLE VIEW'S FLOORS, ENFORCED RATHER THAN DESCRIBED. It blanks fenced blocks, HTML comments
 # and single-line inline spans. It does NOT see into a multi-line inline span or a 4-space indented
 # code block, and claude-worker-1 named both as remaining floors. Rather than record them as caveats
@@ -880,6 +909,15 @@ for _i, _ln in enumerate(_nofence.splitlines(), 1):
     if re.match(r'^ {4,}', _ln) and re.search(r'⟦|^\s+\*\*R\d+ — ', _ln):
         bad('VISIBLE-FLOOR', f'line {_i} is indented four spaces and carries a structural token — '
                              f'an indented code block is not blanked by the visible view')
+# the DOUBLE delimiter needs its own toggle: the single-backtick parity below counts ``…`` as two
+# balanced pairs, so a ``span`` crossing a line was invisible to it. codex-worker-2's exact input.
+_dbl = False
+for _i, _ln in enumerate(_nofence.splitlines(), 1):
+    if _dbl:
+        bad('VISIBLE-FLOOR', f'line {_i} begins inside a double-backtick span — the visible view '
+                             f'cannot see into one, so a span crossing a line break is forbidden')
+    if _ln.count('``') % 2:
+        _dbl = not _dbl
 _open = False
 for _i, _ln in enumerate(_nofence.splitlines(), 1):
     if _open:
@@ -1254,7 +1292,11 @@ for g in gate_hdr:
     # whole tokens on BOTH sides: `G0-B_x` was accepted as G0-B because the scan stopped at the
     # underscore, and `G-1` was dropped because it never started. A token runs to the next
     # non-token character, and every one of them must be a gate id.
-    for tok in re.findall(r'(?<![A-Za-z0-9_-])G[-A-Za-z0-9_]*', dep_text):
+    # ONE boundary for both scans. The invalid-token scan started at `(?<![A-Za-z0-9_-])G` while the
+    # extractor used its own, so `_G2-B`, `xG0-B` and `G2-B/x` were truncated or dropped by one and
+    # never seen by the other. The dependency clause is now tokenized whole: every run of
+    # gate-ish characters is a candidate, and each must be exactly a gate id.
+    for tok in re.findall(r'[A-Za-z0-9_/-]*G[A-Za-z0-9_/-]*', dep_text):
         if not re.fullmatch(GATE_ID, tok):
             bad('GATE-DEP-UNKNOWN', f'{g["gate"]} names {tok!r}, which is not a gate id')
     deps = sorted({t for t in re.findall(r'(?<![A-Za-z0-9-])' + GATE_ID + r'(?![A-Za-z0-9])',
