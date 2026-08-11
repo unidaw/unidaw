@@ -703,6 +703,11 @@ PRODUCT and PACKET halves, with a visible-floor check catching indented-code
 misplacement; 99 controls pass. Exact review is pending. G3 N/Watchdog/item37
 oracle, G0, G4, M1, and marker-lexer closure remain gated.
 
+Owner successor `83b4edc` claims the structural stray-opener check catches
+two-space malformed markers and the stale ten-versus-eleven opening text is
+fixed; 99 controls pass. Exact review is pending. G3 N/Watchdog/item37 oracle,
+M1, G0-A/B, and G4 remain open.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
