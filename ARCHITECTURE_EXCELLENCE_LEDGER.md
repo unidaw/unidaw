@@ -258,11 +258,11 @@ action. It supersedes stale ticket rows above where they conflict.
   `699abfe8f72e597cfd1b6fb3da93ee7f35aa7fef`).
 - Governance worktree: `/Users/jak/src/daw-backend`.
 - Current packet owner: `claude-worker-2`; current latest packet reported:
-  `5150b5c`.
+  `7985aca`.
 - Latest packet status: mechanical PASS, 89 controls, 37 items/10 blockers;
-  R16 adds the resumed-host eviction/slot-reuse safety rule as blocking item
-  37. N derivation, Watchdog fate, and static-check reconciliation remain owner
-  decisions. Exact review pending.
+  R17 closes item 21 by distinguishing the pinned continue-count census from a
+  forward constraint. G3 still needs owner decisions for N derivation and
+  `daw::Watchdog` fate. Exact review pending.
 
 ### Required review protocol
 
@@ -353,7 +353,7 @@ away exact-SHA review or shared-hotspot ownership to improve throughput.
 
 ### Immediate next actions
 
-1. Obtain the exact independent review of `5150b5c`; do not expand parser
+1. Obtain the exact independent review of `7985aca`; do not expand parser
    hunting beyond the claimed live-ratchet binding.
    while the comma shield and gate decisions remain.
 2. Consolidate the six owner decisions into one decision record: G2-B oracle,
@@ -427,6 +427,9 @@ away exact-SHA review or shared-hotspot ownership to improve throughput.
 - `5150b5c`: owner PASS/89 controls; R16 rules resumed-host eviction unsafe
   without a resume/currency protocol and adds blocking item37. Exact review
   pending.
+- `7985aca`: owner PASS/89 controls; R17 closes item21 as a census-vs-constraint
+  clarification. G3 N derivation and Watchdog fate remain owner decisions;
+  exact review pending.
 - Exact review of `2699a2c` is **BLOCKED**: the extractor proof duplicates rather
   than binds the production classifier/floor, blanking proof is narrow, hidden
   link destinations still become dependencies, identity proves bytes only, and
