@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '3ab06fef9aac4a8fdcbc62fa0f1240ce759e2ba1'
+PREV_TIP     = 'b154a271df2e17ecf715672c73d11c48411f0e92'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -93,9 +93,9 @@ for i, a in enumerate(sys.argv):
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
  'open-count':       ('# Open items — 29 atomic', '# Open items — 30 atomic', 1, 'OPEN-COUNT'),
- 'closed-count':     ('6 CLOSED at this SHA, 23 open', '5 CLOSED at this SHA, 24 open', 1,
+ 'closed-count':     ('7 CLOSED at this SHA, 22 open', '6 CLOSED at this SHA, 23 open', 1,
                       'OPEN-CLOSED-COUNT'),
- 'open-arithmetic':  ('6 CLOSED at this SHA, 23 open', '6 CLOSED at this SHA, 17 open', 1,
+ 'open-arithmetic':  ('7 CLOSED at this SHA, 22 open', '7 CLOSED at this SHA, 17 open', 1,
                       'OPEN-ARITHMETIC'),
  # anchored on the tree hash, not on a count: the previous anchor was '11 RAW +', which the
  # document outgrew, leaving the control unable to land while the gate still reported PASS
@@ -106,17 +106,17 @@ CONTROLS = {
                       'COMMAND-ROOT-WIDE'),
  'unmarked-popn':    ('exact. [HAND-CLASSIFIED — open item 25 (all)]', 'exact.', 1,
                       'POPULATION-UNCOMMANDED'),
- 'handmade-count':   ('**8 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
+ 'handmade-count':   ('**6 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
                       'HANDMADE-COUNT'),
  # rewrite a labelled block into the OTHER spelling and require the labels to survive: without
  # this, the next gate that writes S.1 or "Static 1" disappears exactly as G0-B did.
  'label-spelling':   ('**Static checks.** S1 the ready-clear', '**Static checks.** S-1 the ready-clear', 1,
                       'MANIFEST-STALE'),
- 'blocker-set':      ('SIX are BLOCKING — 11, 18, 19, 24, 26 and 27',
-                      'SIX are BLOCKING — 11, 18, 19, 24, 26 and 28', 1, 'BLOCKER-SET'),
+ 'blocker-set':      ('FIVE are BLOCKING — 18, 19, 24, 26 and 27',
+                      'FIVE are BLOCKING — 18, 19, 24, 26 and 28', 1, 'BLOCKER-SET'),
  'constraint-lost':  ('1. Production atomic **size/alignment', '1x. Production atomic **size/alignment', 1,
                       'CONSTRAINTS-COUNT'),
- 'opening-gates':    ('**THREE OF THE EIGHT GATES CANNOT BE DECIDED',
+ 'opening-gates':    ('**TWO OF THE EIGHT GATES CANNOT BE DECIDED',
                       '**FOUR OF THE EIGHT GATES CANNOT BE DECIDED', 1, 'OPENING-GATE-COUNT'),
  'manifest-stale':   ('18. **G2-B** — **BLOCKING', '18. **G2-B** — **blocking', 1,
                       'MANIFEST-STALE'),

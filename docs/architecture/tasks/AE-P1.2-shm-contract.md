@@ -18,7 +18,7 @@ never written is the same error's fingerprint.
 
 The blockers from the exact review are reconciled here, and the count is deliberately not restated: it moved between rounds and a fixed number here would be a twin of the item list, which is the authority:
 
-1. **THREE OF THE EIGHT GATES CANNOT BE DECIDED AT THIS SHA.** They were briefly authored and the authorings are RETRACTED — see items 11, 26, 27 and the retraction note in each gate.** All three withdrawn populations — G1-B's readers, G2-A's scope, G4's out-plane — are AUTHORED under R1 with rules, members and drift detectors. No gate is acceptance-decidable: five items still block (18, 19, 23, 24, 29) and every one needs product work, not packet work.** G2-A was the third until its scope was AUTHORED under R1 at this SHA; authoring a withdrawn population is how a gate leaves this list, and it is packet work rather than product work. Six gates additionally carry a blocking item and so are not ACCEPTANCE-decidable; the manifest publishes both senses as `decidable_for_planning` and `decidable_for_acceptance`, and G3 is the case that shows why one boolean will not do: R3 makes it plannable and it is not acceptance-decidable until the N ticket lands.  Every gate carries the record's SHAPE — population slot,
+1. **TWO OF THE EIGHT GATES CANNOT BE DECIDED AT THIS SHA.** They were briefly authored and the authorings are RETRACTED — see items 11, 26, 27 and the retraction note in each gate.** All three withdrawn populations — G1-B's readers, G2-A's scope, G4's out-plane — are AUTHORED under R1 with rules, members and drift detectors. No gate is acceptance-decidable: five items still block (18, 19, 23, 24, 29) and every one needs product work, not packet work.** G2-A was the third until its scope was AUTHORED under R1 at this SHA; authoring a withdrawn population is how a gate leaves this list, and it is packet work rather than product work. Six gates additionally carry a blocking item and so are not ACCEPTANCE-decidable; the manifest publishes both senses as `decidable_for_planning` and `decidable_for_acceptance`, and G3 is the case that shows why one boolean will not do: R3 makes it plannable and it is not acceptance-decidable until the N ticket lands.  Every gate carries the record's SHAPE — population slot,
    failure model, deterministic test, PASS conditions each naming their refutation, static checks,
    review register — and for those three the population slot reads "withdrawn", which satisfies the
    shape and decides nothing. **No universal claim about populations is made anywhere in this
@@ -469,20 +469,47 @@ engine — not by the engine's version counter, not by non-emptiness, and not by
 the address the client asked about; and (ii) a complete image of exactly one execution of the writer,
 never fields from publication N+1 beside fields from N.
 
-**Population.** *Seqlock opens and closes* — 4 + 4. Command: `grep -rn 'seq\.store' apps` returns 8, cross-checked per file with grep's count mode. *Request/answer readers* — [HAND-CLASSIFIED — open item 25 (all)] **AUTHORING RETRACTED. Open item 11 (G1-B) is BLOCKING again.** My rule
-was "names a region an engine request handler writes, or returns an `*Answer`", and it is wrong in
-both directions. It ADMITTED `read_scales` and `read_audio_sources`, which the exact review reports
-are snapshot readers that merely mention those types, and it EXCLUDED `read_sampler_kit_slot` and
-`read_clip_window`, which are request/answer readers. The review's semantic six are
-`read_device_params`, `read_waveform_slot`, `read_automation_slot`, `read_sampler_envelope_slot`,
-`read_sampler_kit_slot`, `read_clip_window`; `read_device_meters` is not one.
-**My own near-miss note pointed at `read_sampler_kit_slot` and I ruled it out anyway.** I wrote that
-slot-indexing was my first hypothesis, measured a rule that excluded it, and treated the measurement
-as settling the question — when the thing being measured was whether my rule matched the SEMANTICS,
-which no text pattern decides. That is the same error as classifying a pointer by its variable name.
-Also unresolved at this SHA and noted so the closure is not read as tidier than it is: this gate's
-population is still described as withdrawn elsewhere, and PASS 7, PASS 9 and S4 still reference the
-withdrawn set.
+**Population.** *Seqlock opens and closes* — 4 + 4. Command: `grep -rn 'seq\.store' apps` returns 8, cross-checked per file with grep's count mode. *Request/answer readers* — **AUTHORED under R1: 4, by a SEMANTIC predicate with a total partition,
+measured independently twice.** Candidate census
+(`grep -c 'pub fn read_' ui/daw-bridge/src/control.rs`) returns 21. The predicate is not a text pattern over type names — that is what
+sank two previous attempts. It is the structure that exists ONLY when there is a request:
+
+> A reader is a REQUEST/ANSWER reader iff the value it reads carries `requestSeq` — equivalently,
+> iff it is guarded by a PER-SLOT `seq` rather than the global `ui_version` seqlock.
+
+Two independent markers, and at `75c6f064` they select the same set exactly:
+`read_waveform_slot` (`:1053`), `read_automation_slot` (`:1164`), `read_sampler_envelope_slot`
+(`:1205`), `read_sampler_kit_slot` (`:1575`).
+
+**The partition is TOTAL over the 21 candidates — 4 / 10 / 7 — and the third class is real, not
+residue.** 10 are published snapshots under the global `ui_version` seqlock. The 7 that are NEITHER
+include readers of a region-private `version` counter (`read_audio_sources` reads
+`(*region).version`) and one that is the REQUEST side rather than an answer:
+`read_automation_lanes`, whose own doc says "Asks for one lane's points". A `read_*` name that
+ISSUES rather than answers is exactly what a name-based rule cannot see.
+
+**THE NUMBER SIX IS UNREPRODUCED, NOT SUPERSEDED, AND HOW IT AROSE IS THE MORE IMPORTANT RECORD.**
+Two independent measurements — claude-worker-1's and mine, by different people against different
+code — BOTH returned six, by DIFFERENT boundary bugs, and six was the number under dispute.
+claude-worker-1 bounded each body at the next `pub fn`, and Rust doc comments sit ABOVE the item
+they document, so trailing `///` lines belonged to the next function and fell inside: `:1037` is a
+doc comment for `send_waveform_request` and `:1147-1148` for `send_automation_lane_request`. My own
+pass bounded at the next `pub fn read_`, so those intervening `send_*` functions were absorbed whole
+into the preceding reader. Different bugs, same two false positives, same wrong total.
+**A wrong method that reproduces the expected answer is worse than one that contradicts it**,
+because nothing in the result invites a second look — and had we compared totals rather than
+methods, agreement would have certified it. The four above is what both of us reproduce once the
+boundary is right.
+
+**Drift detectors:** `grep -c 'pub fn read_' ui/daw-bridge/src/control.rs` returns 21, and the
+partition must remain total; either the count changing or the three classes failing to sum to it
+invalidates this authored list until it is re-authored.
+
+**STILL OPEN — `read_clip_window`, open item 23 (all).** The exact review names it a request/answer
+reader. Structurally it reads the published region under the global seqlock, and `read_track_clip`'s
+doc says of that same region "No request needed — any read-only observer sees notes this way." One
+of those is wrong and neither claude-worker-1 nor I have settled which, so it is not silently
+resolved by this rule excluding it.
 
 **Floor.** Four blind spots, each with its count: `seq.store` == 8 at pin, and a whole-header memcpy
 or a helper taking the region by reference is invisible to it; `pub fn read_` == 21; the call-site
@@ -1073,7 +1100,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `51bbcce5430c4a4aa5f8e37bad08a1c88e051a52`, A.0 SCRIPT BLOB `5a0b2a120d4cd99925db7afcc139c27ddb9467a0`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `d3c04016fcc5a38b3f507db5edf55a7efd6bf0f4`, A.0 SCRIPT BLOB `39aabffb4e5bc57a72bbaf3afac0e66a63543287`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1081,7 +1108,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 29 items, 23 open · 13 RAW (12 hand-ruled) + 18 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 29 items, 22 open · 13 RAW (12 hand-ruled) + 20 commanded claims, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1221,9 +1248,9 @@ make the items IMPLEMENTABLE, and each item stays open until the work it names e
 verified by someone other than me. A ruling recorded as a closure would be the same error as a
 census recorded as a proof, which this packet has already made once at item 7.
 
-# Open items — 29 atomic, 6 CLOSED at this SHA, 23 open
+# Open items — 29 atomic, 7 CLOSED at this SHA, 22 open
 
-One per line, numbered in document order, so the count is checkable. SIX are BLOCKING — 11, 18, 19, 24, 26 and 27. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
+One per line, numbered in document order, so the count is checkable. FIVE are BLOCKING — 18, 19, 24, 26 and 27. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
 
 1. **G0-B** — The generated header breaks the documented `-DDAW_BUILD_PATCHER_RUST=OFF` build for six unconditional targets, with no stated path, include directory or target-ordering edge.
@@ -1273,11 +1300,12 @@ carrying one cannot be decided by any implementation.
     21 candidates and is explicitly NOT a population, and the `Region*` intersection returns 2 and
     is published as WRONG with the FAIL clause it shipped with. A recipe that names its true output
     cannot fail to reproduce its list, because it no longer claims one.
-11. **G1-B** — **BLOCKING. Authoring RETRACTED at this SHA.** My rule admitted two snapshot
-    readers and excluded two real members. The exact review's semantic six are `read_device_params`,
-    `read_waveform_slot`, `read_automation_slot`, `read_sampler_envelope_slot`,
-    `read_sampler_kit_slot`, `read_clip_window`. Adopting a list I cannot derive is what R1 permits,
-    but it must be adopted WITH ATTRIBUTION and a stated rule, and I do not have the rule. The hand selection of six was irreproducible; the predicate proposed to replace it yields two, not six, and is withdrawn. This gate cannot be decided until a population exists, as G3 cannot until N exists.
+11. **G1-B** — **CLOSED at this SHA by AUTHORING under R1, on a SEMANTIC predicate.** A reader is
+    request/answer iff the value carries `requestSeq`, equivalently iff guarded by a per-slot `seq`
+    rather than the global `ui_version`. Two independent markers select the same 4, and the 21
+    partition 4 / 10 / 7 with the third class named. The number SIX is recorded as UNREPRODUCED:
+    two independent measurements returned it via two different boundary bugs, which is why the
+    packet records the method and not only the members. The hand selection of six was irreproducible; the predicate proposed to replace it yields two, not six, and is withdrawn. This gate cannot be decided until a population exists, as G3 cannot until N exists.
 12. **G2-A** — Layer-1 fixture arithmetic: eleven journal lines, not six, and ids legitimately repeat, so a correct implementation fails the gate's only runnable integration assertion.
 13. **G2-A** — CLOSED at this SHA. The fifty-one correlator sites are no longer carried on attribution: the G2-A population states the command, its raw count and the subtraction, and reaches the exact review's 4 + 6 + 17 + 24. The count is written once, there, so this entry does not restate it. Re-deriving it is also what refuted my own competing figure — that one counted mentions rather than call sites, so the disagreement was my predicate and not the reviewer's arithmetic.
 14. **G2-A** — The BATCH note branch: `resolve_base` keeps the counter crossing on the path a browser transpose takes, and the static check as written is satisfied by fixing the chord branch alone.
@@ -1374,7 +1402,7 @@ carrying one cannot be decided by any implementation.
 
 Every count is stated as RAW → RULE → IN SCOPE, so that the command reproduces the raw figure and the
 rule reproduces the rest; and every count is a floor where a runtime value defeats the extraction.
-**8 populations are HAND-CLASSIFIED and exempt from that sentence**, each carrying a marker and
+**6 populations are HAND-CLASSIFIED and exempt from that sentence**, each carrying a marker and
 open item 25 (all). **And of the 13 RAW claims, 12 of them apply their RULE BY HAND** — the command
 returns the raw figure and a stated subtraction reaches the in-scope one — while none now carries its rule inside the command without also subtracting. That 12 is the honest size of what this gate
 cannot decide: it checks every subtraction's arithmetic and none of their justifications, and the
