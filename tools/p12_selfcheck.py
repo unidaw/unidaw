@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '35837be0ce4b51e21c873c14bad6193cde57a2c5'
+PREV_TIP     = '8131e1542731cc5c30a8348e6f0f314d1ada777b'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -108,7 +108,7 @@ CONTROLS = {
                       'POPULATION-UNCOMMANDED'),
  'handmade-count':   ('**5 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
                       'HANDMADE-COUNT'),
- 'byhand-count':     ('11 of them apply their RULE BY HAND', '10 of them apply their RULE BY HAND', 1,
+ 'byhand-count':     ('12 of them apply their RULE BY HAND', '10 of them apply their RULE BY HAND', 1,
                       'BYHAND-COUNT'),
  'control-unlisted': ('`wrong-raw`.', '`wrong-ray`.', 1, 'CONTROL-UNLISTED'),
  'drop-refutation':  ('*REFUTED BY*', 'see above', 'LAST', 'NO-REFUTATION'),
@@ -191,12 +191,28 @@ for gid, gbody in zip(parts[0::2], parts[1::2]):
 
 # ---- 5. EVERY RAW claim carries a command, and the command reproduces it --------------------
 tokens = re.findall(r'RAW \*{0,2}(\d+)\*{0,2}', pkt)
-# a RULE applied by hand is one the command does not carry: the command returns the RAW figure and
-# a stated subtraction reaches the in-scope one. A.0 checks that subtraction's ARITHMETIC and not
-# its justification, so the number of such rules is the size of what the gate cannot decide, and it
-# is stated in the document rather than left to be discovered by a reviewer counting them.
-byhand = len(re.findall(r'RAW \*{0,2}\d+\*{0,2}.{0,220}?minus \*{0,2}\d+', pkt, re.S))
-# \b: without it the control's 'BY HANDS' still matched as a prefix and the check read as blind
+# Each RAW claim owns the span from its token to the next RAW token: no proximity window, so a
+# claim whose rule is stated over several lines is measured the same as a terse one. The previous
+# 220-character window saw 11 of 12 subtraction clauses and the arithmetic regex verified 7, under
+# a sentence claiming every subtraction was checked.
+raw_pos = [m.start() for m in re.finditer(r'RAW \*{0,2}\d+', pkt)]
+spans = [(raw_pos[i], raw_pos[i + 1] if i + 1 < len(raw_pos) else len(pkt)) for i in range(len(raw_pos))]
+byhand, checked = 0, 0
+for a, b in spans:
+    seg = pkt[a:b]
+    n = int(re.match(r'RAW \*{0,2}(\d+)', seg).group(1))
+    minus = [int(x) for x in re.findall(r'minus \*{0,2}(\d+)', seg)]
+    if not minus: continue
+    byhand += 1
+    fin = re.findall(r'→ \*{0,2}(\d+)', seg)
+    if not fin:
+        bad('RULE-NO-RESULT', f'RAW {n} subtracts {minus} and states no result'); continue
+    checked += 1
+    if n - sum(minus) != int(fin[-1]):
+        bad('RULE-ARITHMETIC', f'RAW {n} minus {"+".join(map(str, minus))} stated as {fin[-1]}, '
+                               f'not {n - sum(minus)}')
+if checked != byhand:
+    bad('RULE-COVERAGE', f'{byhand} RAW claims subtract, {checked} arithmetic-checked')
 declared_byhand = re.search(r'(\d+) of them apply their RULE BY HAND\b', pkt)
 if not declared_byhand:
     bad('BYHAND-COUNT-MISSING', 'no "<N> of them apply their RULE BY HAND" statement')
@@ -319,10 +335,7 @@ elif listed.group(1) != WORD.get(len(CONTROLS), '?'):
 missing = set(CONTROLS) - names
 if missing: bad('CONTROL-UNLISTED', ', '.join(sorted(missing)))
 
-# ---- 6. RULE arithmetic: RAW n → minus k → m must satisfy n - k == m ------------------------
-for n, k, m in re.findall(r'RAW \*{0,2}(\d+)\*{0,2}.{0,200}?minus \*{0,2}(\d+)\*{0,2}[^→]{0,60}→ \*{0,2}(\d+)\*{0,2}', pkt, re.S):
-    if int(n) - int(k) != int(m):
-        bad('RULE-ARITHMETIC', f'RAW {n} minus {k} stated as {m}, not {int(n)-int(k)}')
+# ---- 6. RULE arithmetic is decided in the span pass above, not by a proximity regex ----------
 
 sample = re.search(r'packet blob <oid> · product (\S+) tree (\S+) · (\d+) items, (\d+) open · '
                    r'(\d+) RAW \((\d+) hand-ruled\) \+ (\d+) commanded claims', pkt)

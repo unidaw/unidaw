@@ -310,15 +310,18 @@ CONFORMS to obligation (b) while committing the defect.
 reproducible, and four populations in the predecessor were exactly that.
 - *Rings* — RAW 17 (`grep -rnF '>capacity' apps/ | grep '=' | grep -v '=='`) → minus 9 non-ring and
   test-fixture assignments → **8**.
-- *Statements interpreting an entry's bytes as data* — RAW 21 (`grep -rnF 'entries[' apps/`) → minus
-  17 (twelve plugin-cache index sites, which are a DIFFERENT `entries` array, and five ready-flag
+- *Statements interpreting an entry's bytes as data* — RAW 21 (`grep -rnF 'entries[' apps/`)
+  → minus 17 (twelve plugin-cache index sites, which are a DIFFERENT `entries` array, and five ready-flag
   operations, which touch a synchronisation field rather than the entry's data) → **4**:
   `event_ring.cpp:95` (`entries[write] = staged`), `:116` and `:163` (`entry = entries[read]`), and
   `device_chain_ui_live_tests_main.cpp:112`, which is a test — so **3 production**. The five excluded
   flag operations are `:96`, `:109`, `:126`, `:138`, `:149`, all `storeReady`/`loadReady` on
-  `.ready`. Previously stated as 5 against a rule of "minus 16 (twelve plugin-cache reads and four
-  non-data operations)"; the twelve are right and spread over six files, the non-data operations are
-  five and not four, and the in-scope figure is 4. The self-check verified 21 − 16 == 5 and could not
+  `.ready`. A predecessor of this bullet subtracted sixteen rather than
+  seventeen and reached five: the twelve plugin-cache sites were right and spread over six files, but
+  it counted four non-data operations where there are five. The superseded arithmetic is described
+  here rather than quoted, because a retired rule written verbatim inside a claim's own span cannot
+  be told from the live one by anything reading the text — which is how it survived a checker that
+  was reading for exactly this. The self-check verified 21 − 16 == 5 and could not
   see it, which is why A.0 says in terms that it decides a RULE's arithmetic and not its
   justification. The members are named here so the classification is auditable without re-running the
   grep — and the rule now also ships INSIDE a command, which is what open item 6 (G1-A) asked for:
@@ -456,7 +459,9 @@ halves with barrier-paused writers.
 6. Fixtures 2c and 2f are refused; 2b and 2d accepted. *REFUTED BY* `read_device_params` returning a
    populated view for 2f — the image carrying `trackId`/`deviceId` from
    `apps/engine_request_commands.cpp:122-123` beside a stale `paramCount`.
-7. No reader loads a peer-written word through a plain non-atomic load. Two named sites fail today
+7. Neither of the two named readers loads a peer-written word through a plain non-atomic load. The
+   universal form ("no reader ...") is deliberately NOT used: it quantifies over the withdrawn
+   population and would be undecidable for the same reason the population is. Both named sites fail today
    and the bullet names both: `ui/daw-bridge/src/control.rs:944-949`. Quantified over THOSE TWO
    SITES, not over "the six" — the six are withdrawn, and a bullet phrased "two of the six" would
    have been undecidable for the same reason the population is. Whether two is the whole set of
@@ -717,9 +722,10 @@ engine path, and block production for the remaining tracks must continue.
 **Population.** *Tracks whose production must continue* — [HAND-CLASSIFIED — open item 25 (all)] the `tracks` vector, read at
 `apps/daw_engine_main.cpp:962-969`. *Writes that remove a host from the gate population* — RAW 17
 (`grep -rn 'hostReady' apps/ | grep 'store(false'`) → minus **2** in `_tests_main` → **15 production**. The
-whole census is RAW 21 (`grep -rn 'hostReady' apps/ | grep 'store('`) → minus 3 in `_tests_main` → **18 production**. The predecessor said
-"minus 3" here: it applied the test count of the TOTAL population (21) to the FALSE subset (17), which
-is a count borrowed from one population and spent in another. *Producer-loop exits* — 12 `continue;`. Command:
+whole census is RAW 21 (`grep -rn 'hostReady' apps/ | grep 'store('`) → minus 3 in `_tests_main` → **18 production**. The predecessor subtracted
+the same three from the FALSE subset of seventeen, applying the test count of the total population to
+a subset — a count borrowed from one population and spent in another. Its figure is described, not
+restated, for the reason given at the entry-statement population above. *Producer-loop exits* — 12 `continue;`. Command:
 `sed -n '134,373p' apps/engine_producer_thread.cpp | grep -c 'continue;'` returns 12.
 
 **Floor.** The `hostReady` write census is exact at 21 total (4 true / 17 false) with zero non-literal
@@ -923,7 +929,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `e85cd212d09ece96cc7706e2b456f4ef61a1846e`, A.0 SCRIPT BLOB `4b0a2639d944b0d2bd74ec52b088cf323749d8cf`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `de5917d0a3ece156ea47a6af8702ee97f1c9605a`, A.0 SCRIPT BLOB `09ff586c22fd7204d9be32feef9f86fb306c3a23`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -931,7 +937,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 25 items, 19 open · 13 RAW (11 hand-ruled) + 20 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 25 items, 19 open · 13 RAW (12 hand-ruled) + 20 commanded claims, all executed
     PASS
 
 **What it decides.** Open-item header against body, contiguity, and orphaned numbers. Every
@@ -1029,7 +1035,7 @@ census recorded as a proof, which this packet has already made once at item 7.
 
 # Open items — 25 atomic, 6 CLOSED at this SHA, 19 open
 
-One per line, numbered in document order, so the count is checkable. Three are BLOCKING: a gate
+One per line, numbered in document order, so the count is checkable. FOUR are BLOCKING — 11, 18, 19 and 24, matching the four G4 names as its undecidability: a gate
 carrying one cannot be decided by any implementation.
 
 1. **G0-B** — The generated header breaks the documented `-DDAW_BUILD_PATCHER_RUST=OFF` build for six unconditional targets, with no stated path, include directory or target-ordering edge.
@@ -1109,9 +1115,9 @@ carrying one cannot be decided by any implementation.
 Every count is stated as RAW → RULE → IN SCOPE, so that the command reproduces the raw figure and the
 rule reproduces the rest; and every count is a floor where a runtime value defeats the extraction.
 **5 populations are HAND-CLASSIFIED and exempt from that sentence**, each carrying a marker and
-open item 25 (all). **And of the 13 RAW claims, 11 of them apply their RULE BY HAND** — the command
-returns the raw figure and a stated subtraction reaches the in-scope one — while 2 carry the rule
-inside the command and need no subtraction at all. That 12 is the honest size of what this gate
+open item 25 (all). **And of the 13 RAW claims, 12 of them apply their RULE BY HAND** — the command
+returns the raw figure and a stated subtraction reaches the in-scope one — while 1 carries the rule
+inside the command and needs no subtraction at all. That 12 is the honest size of what this gate
 cannot decide: it checks every subtraction's arithmetic and none of their justifications, and the
 one time a justification was wrong (G1-A's five ready-flag operations counted as four) the
 arithmetic was perfect. The exact review reached this by noticing G4's dispatch split was
