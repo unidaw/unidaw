@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '0047af3b879acceff6ece62fc3abb2e6ec8ad057'
+PREV_TIP     = 'f462a6dccb1531567cc6af220424f1bc5a5b4b6d'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -796,9 +796,28 @@ if _marked != sorted(_derived_blk):
 # subject, which is how a check comes to report a missing claim instead of a wrong one.
 _said = re.search(r'and (?:ALL )?(\w+)(?: of them)? need\s+product\s+work', pkt)
 # a ⟦BLOCKED-ON: n⟧ blocker must name a real blocking item, or the delegation points at air
-for _b in re.finditer(r'⟦BLOCKED-ON: (\d+)⟧', pkt):
-    if int(_b.group(1)) not in _derived_blk:
-        bad('BLOCKER-KIND', f'item is BLOCKED-ON {_b.group(1)}, which is not a blocking item')
+for _b in re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ⟦BLOCKED-ON: (\d+)⟧', body):
+    _src, _dst = int(_b.group(1)), int(_b.group(2))
+    if _dst not in _derived_blk:
+        bad('BLOCKER-KIND', f'item {_src} is BLOCKED-ON {_dst}, which is not a blocking item')
+    if _dst == _src:
+        bad('BLOCKER-KIND', f'item {_src} is BLOCKED-ON itself')
+
+# THE VISIBLE VIEW'S FLOORS, ENFORCED RATHER THAN DESCRIBED. It blanks fenced blocks, HTML comments
+# and single-line inline spans. It does NOT see into a multi-line inline span or a 4-space indented
+# code block, and claude-worker-1 named both as remaining floors. Rather than record them as caveats
+# — which is what I did with fenced blocks one SHA before having to close it — the constructs are
+# FORBIDDEN in this document, so an unhandled case cannot arrive unnoticed. Neither exists here.
+# the CONDITION, not a pattern that looks like it. My first version matched `...`\n`...` — which is
+# the GAP BETWEEN two adjacent spans, not a span crossing a line — and reported 684 of them in a
+# correct document. A span crosses a line boundary iff that line carries an ODD number of backticks,
+# once fenced blocks are out of the way. Counting the delimiter is the condition; matching text
+# between delimiters was a guess at it.
+_nofence = re.sub(r'(?ms)^```.*?(?:^```|\Z)', lambda m: re.sub(r'[^\n]', ' ', m.group(0)), pkt)
+for _i, _ln in enumerate(_nofence.splitlines(), 1):
+    if _ln.count('`') % 2:
+        bad('VISIBLE-FLOOR', f'line {_i} leaves an inline code span open across a line break — the '
+                             f'visible view cannot see into one, so it is not permitted here')
 if not _said:
     bad('BLOCKER-KIND', 'the opening states no product-work count to check')
 elif WORDNUM.get(_said.group(1).upper()) != len(_prod):
@@ -1430,9 +1449,10 @@ man = {
             # one, so a planner can walk it without knowing the marker's spelling.
             'kind': ('PRODUCT' if '⟦PRODUCT⟧' in item_body.get(n, '')
                      else 'BLOCKED-ON' if '⟦BLOCKED-ON:' in item_body.get(n, '') else None),
-            'blocked_on': (int(re.search(r'⟦BLOCKED-ON: (\d+)⟧', item_body[n]).group(1))
-                           if n in item_body and re.search(r'⟦BLOCKED-ON: (\d+)⟧', item_body[n])
-                           else None),
+            # an ARRAY: an item can wait on more than one, and a scalar would have to be widened
+            # by a schema change the day that happens. Empty when it waits on nothing.
+            'blocked_on': sorted(int(x) for x in
+                                 re.findall(r'⟦BLOCKED-ON: (\d+)⟧', item_body.get(n, ''))),
             'closed': n in closed_set} for n in nums],
  'raw_claims': [{'raw': int(re.match(r'RAW \*{0,2}(\d+)', pkt[a:b]).group(1)),
                  'command': (re.search(r'\(`([^`]+)`\)', pkt[a:b]).group(1)

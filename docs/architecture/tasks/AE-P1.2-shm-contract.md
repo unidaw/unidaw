@@ -266,8 +266,7 @@ removed, so they do not stand as the pattern to copy.
 
 **Why re-scoped.** The finding — `patcher_process_lfo` (`patcher_rust/src/lib.rs:745-753`) and
 `patcher_process_audio_passthrough` (`:808-817`) lack the `abi_version` guard their three siblings
-carry — is NOT a live defect at this SHA: all seven `PatcherContext` sites are `daw::PatcherContext
-ctx{}`, applying the NSDMI at `apps/patcher_abi.h:114` before their explicit assignment; a repo-wide
+carry — is NOT a live defect at this SHA: all seven `PatcherContext` sites are `daw::PatcherContext ctx{}`, applying the NSDMI at `apps/patcher_abi.h:114` before their explicit assignment; a repo-wide
 grep shows `abi_version` is never sourced from SHM, a project file or a UI command; `patcher_rust` is
 a staticlib with no `dlopen`. **The guard is also not the mechanism it appears to be:** `abi_version`
 is field 0, so it catches only "layout changed AND version bumped AND artifact stale". In the sibling
@@ -481,8 +480,7 @@ the array.
 6. Order and ordering decided on the source. *REFUTED BY* S1–S3 passing on the pinned file.
 7. **CORRECTED AND NARROWED — the twelve are NOT ring index sites.** This bullet required mask
    discipline at "all twelve sites", and the twelve are plugin-cache reads: bounds-checked accesses
-   into `pluginCache.entries`, a `std::vector`, guarded by `device.hostSlotIndex <
-   pluginCache.entries.size()` at `engine_chain_commands.cpp:80-81`. Applying ring-mask semantics to
+   into `pluginCache.entries`, a `std::vector`, guarded by `device.hostSlotIndex < pluginCache.entries.size()` at `engine_chain_commands.cpp:80-81`. Applying ring-mask semantics to
    them would be a DEFECT, not a discipline: masking a bounds-checked vector index silently aliases
    one plugin's entry onto another instead of refusing an out-of-range slot. The bullet as written
    would have made a correct site fail review and, if implemented, corrupted the chain. It now
@@ -548,8 +546,7 @@ CASE, not an exclusion.** I first wrote "reads the REGION one publishes" and exc
 filtering by TRANSPORT drops exactly the member whose answer is least correlatable, and G1-B's
 invariant governs every answer to a UI request regardless of how it travels.
 Measured: `handleRequestChainSnapshot` emits `UiChainDiffPayload` into the UI-OUT ring, consumed by
-`drain_ui_out`. That payload's fields are `diffType, flags, trackId, chainVersion, deviceId,
-deviceKind, position, patcherNodeId, hostSlotIndex` — **no sender request identity of any kind** —
+`drain_ui_out`. That payload's fields are `diffType, flags, trackId, chainVersion, deviceId, deviceKind, position, patcherNodeId, hostSlotIndex` — **no sender request identity of any kind** —
 and the handler emits ZERO OR MANY diffs (`payload.trackId == 0xFFFFFFFFu` fans out to every track,
 an unknown track yields none). An answer with no request identity and no fixed cardinality is the
 sharpest instance of this gate's subject, and my rule had it outside the population.
@@ -1072,8 +1069,7 @@ minted under or a stale-level ack satisfies a fresh-level read — not by the lo
 from `trackState.chainDevices` every block (`apps/engine_produce_block.cpp:660-716`) so a chain edit
 renumbers ordinals while `(s0,sl)` still names the same plugins — the bytes of that host's INPUT plane
 slot for `blockIndex = b % numBlocks` are owned by the host from dispatch until that exact segment
-acknowledges consumption. **The full ordering is `write_output → release-ack → acquire-wait →
-read_output`**: the host writes its output, releases the acknowledgement with release ordering, and no
+acknowledges consumption. **The full ordering is `write_output → release-ack → acquire-wait → read_output`**: the host writes its output, releases the acknowledgement with release ordering, and no
 consumer reads that output before an acquire-load of that acknowledgement. The predecessor stated
 input immutability and ack identity but omitted this ordering, which is what makes the output half
 sound rather than merely acknowledged.
@@ -1102,8 +1098,7 @@ writing. That is the `S-1` spelling defect at the scale of a whole agent.
 **R7 (below) rules the host IN SCOPE.** The census must be rebuilt, and the OBVIOUS rebuild is also
 wrong: keying on `ShmHeader::audioOutOffset` STILL misses the host, because
 `juce_host_process_main.cpp:487-504` walks a running accumulator —
-`header.audioOutOffset = offset; offset += alignUp(outBlockBytes, 64); state.audioAuxOutOffset =
-offset;` — so the host's aux offset is numerically a DESCENDANT of the field and SYNTACTICALLY A
+`header.audioOutOffset = offset; offset += alignUp(outBlockBytes, 64); state.audioAuxOutOffset = offset;` — so the host's aux offset is numerically a DESCENDANT of the field and SYNTACTICALLY A
 SIBLING. A census keyed on the field NAME misses it for exactly the reason the four-spelling census
 did. claude-worker-1 proposed that shape and withdrew it themselves before it was built on.
 **The implementable version keys on the MAPPED BASE.** Plane bytes cannot be touched without
@@ -1153,8 +1148,7 @@ planes fall out of it:
     header.ringStdOffset  = offset
 
 The aux offset is therefore **published nowhere**: the host keeps it in a private member and the
-engine RE-DERIVES it — `auxOutputPlaneOffset(header) = header.audioOutOffset +
-alignUp(outBlockBytes * numBlocks, 64)` (`shared_memory.cpp:52-57`). Two expressions, one address.
+engine RE-DERIVES it — `auxOutputPlaneOffset(header) = header.audioOutOffset + alignUp(outBlockBytes * numBlocks, 64)` (`shared_memory.cpp:52-57`). Two expressions, one address.
 **They agree at this SHA and the reason is a trap worth naming:** `outBlockBytes` DENOTES DIFFERENT
 QUANTITIES in the two files — the host's includes `numBlocks` (`:491-493`), the engine's does not
 (`shared_memory.cpp:54`) — and the values match only because each multiplies by `numBlocks` at a
@@ -1385,7 +1379,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `df01285d49fe9cdfa8c9e92e675c2ff77d393bf5`, A.0 SCRIPT BLOB `50c09ab755721bd8032aa109f91afb437de1c1a5`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `ce5837479b7cc8ffec6c4e14625b8660759f0f69`, A.0 SCRIPT BLOB `a0fd4b4e4c09a8e57efc498fe4bed9401eb4ebbe`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1688,8 +1682,7 @@ TWO census rows rather than one figure: writing "twelve writes through two addre
 single number, as this paragraph did, is the conflation the rows exist to prevent. **A census
 is bounded by the BINDING, never by the branch you were reading.**
 
-**`engine_produce_block.cpp:1032` IS A MEMBER OF BOTH RELATIONS AT ONCE.** `std::memcpy(input,
-output, ...)` is an out-plane byte read and an in-plane byte write in a single statement. Any partition
+**`engine_produce_block.cpp:1032` IS A MEMBER OF BOTH RELATIONS AT ONCE.** `std::memcpy(input, output, ...)` is an out-plane byte read and an in-plane byte write in a single statement. Any partition
 into "the readers" and "the writers" either double-counts it or drops it, and two controls ranging
 over the two lists would each claim it. It is named once here, in both roles, deliberately.
 
@@ -1928,10 +1921,7 @@ carrying one cannot be decided by any implementation.
     binding. This item is open for the RENAME, not for the choice, which is made.
 25. **all** — **RULED (R1): authored with drift detectors.** The SIX HAND-CLASSIFIED populations
     — five semantic groupings plus G1-A's authored cross-language RING index population, which
-    became the sixth when the R1 mechanism was applied to it, tracked rather than claimed away. `Regions the
-    engine addresses` (8), `Bounds checks anchored on the child's number` (7), `Ring constructions
-    over a host-created mapping` (3), `One-sided members` (1) and `Tracks whose production must
-    continue` are semantic groupings, not text matches: no grep distinguishes a REGION from the
+    became the sixth when the R1 mechanism was applied to it, tracked rather than claimed away. `Regions the engine addresses` (8), `Bounds checks anchored on the child's number` (7), `Ring constructions over a host-created mapping` (3), `One-sided members` (1) and `Tracks whose production must continue` are semantic groupings, not text matches: no grep distinguishes a REGION from the
     offset fields that address it, and counting `Offset` declarations in `apps/shared_memory.h`
     returns 27 against a claim of 8, which is the distance between the two ideas. Each carries the
     marker and this item; a sixth appearing without one fails the gate. Deriving them needs a
