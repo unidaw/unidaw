@@ -28,7 +28,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    the manifest keeps the two apart deliberately. The zero case is a different sentence rather than
    a missing one, so the check cannot pass by the claim disappearing. G1-B's readers were withdrawn and are AUTHORED again under R1
    with rules, members and drift detectors; G2-A's scope and G4's out-plane are not. **TWO GATES ARE ACCEPTANCE-DECIDABLE — G0-A and G1-A —
-   and eight items block (18, 19, 24, 26, 27, 29, 33 and 34)** and three of them need product
+   and nine items block (18, 19, 24, 26, 27, 29, 33, 34 and 35)** and three of them need product
    work rather than packet work. That list is derived from the items themselves and every
    restatement of it anywhere in this document is compared against the derivation
    (`BLOCKER-SET-RESTATED`) — this paragraph carried (18, 19, 23, 24, 29) for several SHAs, three
@@ -58,7 +58,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    packet**: a sentence of the form "each population carries its extraction command" is false at
    this SHA by construction, and this paragraph previously ended with one while opening with the
    disqualification, because I patched its head across three rounds and left its tail alone.
-2. **The open list is 34 atomic items, not 15 categories.** The four that compression swallowed are
+2. **The open list is 35 atomic items, not 15 categories.** The four that compression swallowed are
    restored: G0-B's unowned mutation floor, G2-A's BATCH blindness, G2-B's probe-order false-green,
    and G3's debug-env requirement plus its self-contradicting static check.
 3. **G0-A's mailbox census was wrong twice and is corrected with its method.** See G0-A.
@@ -357,15 +357,18 @@ string — no map or table literal keyed by a member name.
 
 **Review register.** The reviewer SHALL confirm: that libclang's layout for the eight types equals
 that of the compiler building `engine_core`, since the C++ numbers come from bindgen and the product
-comes from the host compiler; ~~whether Rust's whole-struct store writes `EventEntry` bytes [60,64), the C++ `ready`
-member~~ — **ANSWERED at this SHA, and the premise was wrong.** `ready` is a DECLARED field on both
-sides, not tail padding: `apps/shared_memory.h:450` and `ui/daw-bridge/src/layout.rs:714`, each a
-`u32` after `payload[40]` in a 64-byte struct. The whole-object store does write [60,64) — with
-ZERO, the correct pre-publication value — and `control.rs:1939-1944` then stores `ready = 1` through
-an `AtomicU32` with Release ordering, after a CAS reservation on `write_index`. The publication
-order is sound and the consumer cannot observe a torn entry because it waits on `ready`. **A
-register entry is a question, and a question can be answered NO**; carrying this one as an open
-hazard would have kept G0-B blocked on a fact rather than on a defect; the ruling on the
+comes from the host compiler; **whether Rust's whole-struct store writes `EventEntry` bytes [60,64), the C++ `ready` member —
+STILL OPEN, and my ANSWER TO IT WAS INVALID.** I marked this ANSWERED-NO by reading
+`ui/daw-bridge/src/layout.rs:714`, which declares `ready` explicitly, and concluded there was no
+overlap. **That is not the endpoint this gate governs.** G0-B's population compares
+`apps/shared_memory.h` against `patcher_rust/src/lib.rs`, and `lib.rs:97-105` is
+`#[repr(C, align(64))]` with SIX members summing to 60 bytes — **no `ready` field, tail padding at
+[60,64)** — while `push_event` at `:158` does `*slot = entry`, a whole-object write. The overlap the
+register asked about is exactly there, and the evidence now points AT the hazard rather than away
+from it. codex-worker-1 caught the substitution. **I answered a question about one file by
+measuring another and published it as resolved** — silently changing the endpoints of a comparison
+is worse than getting a number wrong, because the answer looks derived and its subject is not the
+one asked about. The register entry stands OPEN and G0-B stays blocked on it; the ruling on the
 `PatcherSliceSelectConfig` name collision, the gate being RED until one side renames; and that no ABI
 type is passed through `node_config` while declared outside `apps/patcher_abi.h`, which the file
 closure cannot see.
@@ -1374,7 +1377,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `deeeb71b1477cea5d92fa415a04c87332337135f`, A.0 SCRIPT BLOB `a3dc040ab2448a8300dd6267c2b74bf388d171f4`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `beab1932e0235bb203b2b7659c07530d869f268b`, A.0 SCRIPT BLOB `88cfb775a32983fcb99851ab97a160814f13e363`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1382,7 +1385,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 34 items, 26 open · 14 RAW (13 hand-ruled) + 31 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 35 items, 27 open · 14 RAW (13 hand-ruled) + 31 commanded claims, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1440,14 +1443,14 @@ check, staged and atomically replaced, and `MANIFEST-STALE` is suppressed on an 
 a check that forbids its own remedy is a deadlock rather than a guard — that deadlock appeared the
 moment the write moved, and is recorded here because it is the predictable cost of the fix.
 
-**Controls.** Seventy, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Seventy-one, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
-`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`, `ratchet-count`, `writer-extra`, `reader-row-moved`, `emit-fail-open`, `ruling-item-swap2`, `diagram-edge`, `control-phantom`, `writer-regroup`, `gate-multidigit`, `withdrawn-status`, `census-row-moved`, `writer-wrong-path`, `control-dupe`. The last thirty-six exist because
+`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`, `ratchet-count`, `writer-extra`, `reader-row-moved`, `emit-fail-open`, `ruling-item-swap2`, `diagram-edge`, `control-phantom`, `writer-regroup`, `gate-multidigit`, `withdrawn-status`, `census-row-moved`, `writer-wrong-path`, `writer-path-prefix`, `control-dupe`. The last thirty-seven exist because
 **codex-worker-1** MUTATED THIS PACKET AND THE GATE STILL SAID PASS (the finding reached me relayed
 by backend, and two commit messages in this lineage credit the relay rather than the author —
 `e26f91f` and `c332c03`, immutable and wrong on this point): deleting the item's reopening sentence,
@@ -1802,9 +1805,9 @@ to the end and swallowed R10 and R11 into R9's text. **A hardcoded range and a s
 the same failure in two notations, and this packet has now shipped both.** A ruling recorded as a closure would be the same error as a
 census recorded as a proof, which this packet has already made once at item 7.
 
-# Open items — 34 atomic, 8 CLOSED at this SHA, 26 open
+# Open items — 35 atomic, 8 CLOSED at this SHA, 27 open
 
-One per line, numbered in document order, so the count is checkable. EIGHT are BLOCKING — 18, 19, 24, 26, 27, 29, 33 and 34. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
+One per line, numbered in document order, so the count is checkable. NINE are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 34 and 35. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
 
 1. **G0-B** — The generated header breaks the documented `-DDAW_BUILD_PATCHER_RUST=OFF` build for six unconditional targets, with no stated path, include directory or target-ordering edge.
@@ -2088,6 +2091,22 @@ carrying one cannot be decided by any implementation.
     audio while the host may not have applied the replayed parameters. The fix is one condition —
     gate on `mirrorPending` alone — and it is PRODUCT work. Found by measuring a boundary
     codex-worker-1 asked whether existed; it existed, which is why nobody had looked at where it was.
+
+35. **G0-B** — **BLOCKING. The patcher's `EventEntry` has no `ready` field and its writer stores the
+    whole object over C++'s.** `patcher_rust/src/lib.rs:97-105` is `#[repr(C, align(64))]` with six
+    members summing to 60 bytes, so [60,64) is TAIL PADDING; `apps/shared_memory.h:450` puts the
+    multi-producer publication flag `ready` in exactly those bytes; and `push_event`
+    (`patcher_rust/src/lib.rs:158`) writes `*slot = entry` for the whole 64-byte object. Rust does
+    not guarantee that padding bytes are written and does not guarantee they are not — a
+    `size_of`-wide copy may include them — so this is UNPROVEN SAFE rather than proven broken, which
+    is precisely the state a gate must stay blocked on. **The consequence if it does write: a
+    patcher-emitted event clears a slot's `ready` and the engine refuses to read a command that was
+    fully written.** Two fixes are available and this item does not choose between them: give the
+    Rust struct an explicit `ready: u32` so the layouts match member-for-member, or make `push_event`
+    assign field-wise so the flag's bytes are never touched. PRODUCT work.
+    **How this got missed:** the register asked the right question and I answered it by reading
+    `ui/daw-bridge/src/layout.rs`, a DIFFERENT Rust endpoint that does declare `ready`, then marked
+    it resolved. See the G0-B register entry, which now records the substitution.
 
 # Provenance of this packet's own numbers
 

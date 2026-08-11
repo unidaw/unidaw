@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'c250689c112473c3f441b9cb83013dcc38f3a4e2'
+PREV_TIP     = '8275e075f8ea1778c8221499cedd4d270d2eed33'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -138,7 +138,7 @@ RATCHET_MEMBERS = [
 ]
 
 WORDNUM = {'ONE': 1, 'TWO': 2, 'THREE': 3, 'FOUR': 4, 'FIVE': 5, 'SIX': 6, 'SEVEN': 7,
-           'EIGHT': 8}
+           'EIGHT': 8, 'NINE': 9, 'TEN': 10, 'ELEVEN': 11, 'TWELVE': 12}
 
 # ONE gate-id grammar, used by the heading parser, the dependency parser and the reference checks.
 # They had diverged: headings matched `G[0-9]+-?[AB]?` (so G10 is a gate) while the dependency and
@@ -215,10 +215,10 @@ for i, a in enumerate(sys.argv):
 # merely makes the run FAIL proves nothing — the fifth way a negative control lies is landing in
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
- 'open-count':       ('# Open items — 34 atomic', '# Open items — 35 atomic', 1, 'OPEN-COUNT'),
- 'closed-count':     ('8 CLOSED at this SHA, 26 open', '7 CLOSED at this SHA, 27 open', 1,
+ 'open-count':       ('# Open items — 35 atomic', '# Open items — 36 atomic', 1, 'OPEN-COUNT'),
+ 'closed-count':     ('8 CLOSED at this SHA, 27 open', '7 CLOSED at this SHA, 28 open', 1,
                       'OPEN-CLOSED-COUNT'),
- 'open-arithmetic':  ('8 CLOSED at this SHA, 26 open', '8 CLOSED at this SHA, 17 open', 1,
+ 'open-arithmetic':  ('8 CLOSED at this SHA, 27 open', '8 CLOSED at this SHA, 17 open', 1,
                       'OPEN-ARITHMETIC'),
  # anchored on the tree hash, not on a count: the previous anchor was '11 RAW +', which the
  # document outgrew, leaving the control unable to land while the gate still reported PASS
@@ -235,8 +235,8 @@ CONTROLS = {
  # this, the next gate that writes S.1 or "Static 1" disappears exactly as G0-B did.
  'label-spelling':   ('**Static checks.** S1 the ready-clear', '**Static checks.** S-1 the ready-clear', 1,
                       'MANIFEST-STALE'),
- 'blocker-set':      ('EIGHT are BLOCKING — 18, 19, 24, 26, 27, 29, 33 and 34',
-                      'EIGHT are BLOCKING — 18, 19, 24, 26, 27, 29, 33 and 28', 1, 'BLOCKER-SET'),
+ 'blocker-set':      ('NINE are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 34 and 35',
+                      'NINE are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 34 and 28', 1, 'BLOCKER-SET'),
  'constraint-lost':  ('1. Production atomic **size/alignment', '1x. Production atomic **size/alignment', 1,
                       'CONSTRAINTS-COUNT'),
  'opening-gates':    ('**EVERY GATE IS PLANNABLE AT THIS SHA**',
@@ -297,7 +297,7 @@ CONTROLS = {
  # the mutation backend actually ran, now expressible only as an INSERTION because R8 carries
  # no digits: proving the number cannot come back rather than that this one instance is right.
  # proves the second-site check is not vacuous: the opening's list, not the header's.
- 'restate-blockers': ('block (18, 19, 24, 26, 27, 29, 33 and 34)', 'block (18, 19, 24, 26, 27, 29, 33 and 28)', 1,
+ 'restate-blockers': ('block (18, 19, 24, 26, 27, 29, 33, 34 and 35)', 'block (18, 19, 24, 26, 27, 29, 33, 34 and 28)', 1,
                       'BLOCKER-SET-RESTATED'),
  # the item half of the same check: item 26's history is where the digits went when R8 lost them,
  # and a check that ranged only over rulings would have watched them move.
@@ -352,7 +352,7 @@ CONTROLS = {
  'reader-row-moved': ('    6  engine_consumer.cpp:766',
                       '    x  engine_consumer.cpp:766', 1, 'OUT-MEMBERS'),
  # a manifest must never be published from a packet that failed its own gate
- 'emit-fail-open':   ('# Open items — 34 atomic', '# Open items — 35 atomic', 1, 'OPEN-COUNT'),
+ 'emit-fail-open':   ('# Open items — 35 atomic', '# Open items — 36 atomic', 1, 'OPEN-COUNT'),
  # both items are G2-A, so the forward gate check agrees and only the backward one can catch it
  'ruling-item-swap2': ('**R12 — item 27 (G2-A)', '**R12 — item 28 (G2-A)', 1, 'RULING-ITEM-BIND'),
  # the diagram has contradicted the text twice; it is checked now, so make sure the check fires
@@ -364,6 +364,8 @@ CONTROLS = {
  'census-row-moved': ("      host indirect handoff              `git grep -n 'process(pluginInputPtrs' apps/juce_host_process_main.cpp | wc -l` returns 1.\n", '', 1,
                       'CENSUS-ROSTER'),
  'writer-wrong-path': ('juce:989/994', 'fake:989/994', 1, 'OUT-MEMBERS'),
+ # the PREFIXED variant: anchoring alone left the label unparsed and the sticky path absorbed it
+ 'writer-path-prefix': ('juce:989/994', 'fake/juce:989/994', 1, 'OUT-MEMBERS'),
  'control-dupe':     ('`member-per-type`,', '`member-per-type`, `member-per-type`,', 1,
                       'CONTROL-DUPLICATE'),
  'gate-multidigit':  ('**Dependencies** G0-A, G0-B', '**Dependencies** G0-A, G10-B', 1,
@@ -666,9 +668,20 @@ else:
     # groups are declared with their form.
     # the PATH is part of a citation. `juce:989/994` rewritten as `fake:989/994` passed, because the
     # parser read line numbers and forms and never looked at what file they were in.
+    # ANCHORED. The path group was `(?:\b(\w+):)?` — `\b` matches INSIDE `fake/juce:989`, so a
+    # prefixed path spoofed the label while the parser read the suffix it expected. A token must
+    # begin where the parser thinks it begins; a word boundary is not a start anchor.
+    # every LABEL in the segment must be one the roster knows. Anchoring the path group only made
+    # the spoofed `fake/juce:989` unparseable, and an unparsed label left `_path` STICKY from the
+    # previous citation — so the spoof rode in on the last good path. Rejecting an unknown token is
+    # not the same as failing to recognise it: silence must not inherit.
+    for _lab in re.finditer(r'(?m)([A-Za-z_][\w/.]*):\d{3,4}', wseg.group(0)):
+        if _lab.group(1) not in ('juce',):
+            bad('OUT-MEMBERS', f'writer citation names an unknown path label {_lab.group(1)!r}')
     cited = []
     _path = None
-    for m in re.finditer(r'(?:\b(\w+):)?(\d{3,4})(?:\s*([-/])\s*:?(\d{3,4}))?', wseg.group(0)):
+    for m in re.finditer(r'(?:(?<![\w/])([A-Za-z_][\w]*):)?(\d{3,4})(?:\s*([-/])\s*:?(\d{3,4}))?',
+                         wseg.group(0)):
         if m.group(1): _path = m.group(1)
         cited.append((_path, int(m.group(2)), m.group(3) or '',
                       int(m.group(4)) if m.group(4) else None))
@@ -1169,8 +1182,13 @@ for m in re.finditer(r'(?m)^\*\*(R\d+) — .*?(?=\n\n\*\*R\d+ — |\n# |\*\*What
         # "applied to one of its two items" should not be a flag.
         'named_at': [{'line': line_of(mm.start()),
                       'context': re.sub(r'\s+', ' ', pkt[max(0, mm.start() - 60):mm.end() + 40])}
+                     # NO exclusions. The `**`-preceded filter was meant to skip a ruling's own
+                     # heading and instead dropped every OPERATIVE BOLD mention — exactly the ones
+                     # that show a ruling being applied. Removing the [:12] cap and keeping this
+                     # filter left "every place the packet names it" false for a second reason.
+                     # The heading is now excluded by LINE, which is what it actually is.
                      for mm in re.finditer(r'\b%s\b' % m.group(1), pkt)
-                     if not pkt[mm.start() - 2:mm.start()] == '**'],
+                     if line_of(mm.start()) != line_of(m.start())],
         # from the HEADING only. Deriving from the whole block made R9 claim items [26, 31]
         # because its body MENTIONS item 31 — a mention became an ownership claim, and a
         # planner reading the manifest would have seen item 31 owned by two rulings.
