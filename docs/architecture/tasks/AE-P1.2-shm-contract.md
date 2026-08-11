@@ -44,13 +44,16 @@ The blockers from the exact review are reconciled here, and the count is deliber
    **The derivation is only as good as the marking, and the marking is mine** — this check can catch
    a marker missing from a blocker, and cannot catch a blocker marked wrongly; item 27 was marked
    ⟦PRODUCT⟧ for one SHA when its scope is authored and its blocker is item 29's defect. **A classification cannot be read out of prose that was not written
-   to carry it.** THREE blockers are packet edits as well as product fixes — item 37, whose
+   to carry it.** FOUR blockers are packet edits as well as product fixes — item 26, whose gate
+   writes its PASS conditions, deterministic test and static checks against one plane while its
+   population covers two, so those surfaces must be authored before any implementation can decide
+   it; item 37, whose
    acceptance oracle is unwritten; item 36, whose Layer 0, PASS 1 and register text all need
    rewriting alongside the telemetry it waits on; and item 18, where G2-B's PASS 4 is withdrawn with
    no replacement, so no PASS condition accepts the two-level implementation that exists and writing
    one is packet work. Both carry ⟦PACKET⟧ beside ⟦PRODUCT⟧ so the
    manifest can say so; until `kind` became an array that fact was unrepresentable and the record
-   said PRODUCT. An earlier version of this sentence named only item 37. **⟦PACKET⟧ MARKS (18, 36, 37)**, derived from the item heads and compared against this restatement, because representing a
+   said PRODUCT. An earlier version of this sentence named only item 37. **⟦PACKET⟧ MARKS (18, 26, 36, 37)**, derived from the item heads and compared against this restatement, because representing a
    kind is not binding it: deleting the marker, moving it to a nonblocking item, DUPLICATING it and
    misspelling it all passed until these checks existed, and a marker parked later in a head
    validated as present while emitting as absent because the validator and the emitter read the
@@ -1416,7 +1419,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `74b99aa1202620351af87322d8d055c0f834bdca`, A.0 SCRIPT BLOB `37452f08f2e423389d56e0f75fc53b1eb25f03ac`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `e339aabc83f35cd6fbe48fde62d39fa53cc0abe6`, A.0 SCRIPT BLOB `4d0316d202f734004cd16120ec78c53a4e417dc3`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1495,7 +1498,7 @@ extractor count at its floor. `--prove-sweep-predicate` classifies a crafted-lin
 every spoof a reviewer has landed on the sweep's success test — a bare `OK (+` prefix, an unanchored
 tail, a wrong tag, a count the emitter cannot print, and a tag line with no separator.
 
-**Controls.** Ninety-four, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Ninety-five, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1516,7 +1519,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `packet-marker-gone`, `packet-marker-move`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `edge-malformed`, `packet-marker-gone`, `packet-marker-move`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
@@ -2267,7 +2270,7 @@ carrying one cannot be decided by any implementation.
     marker and this item; a sixth appearing without one fails the gate. Deriving them needs a
     predicate nobody has proposed, so this is open, not closed.
 
-26. **G4** — ⟦PRODUCT⟧ **BLOCKING, and the reason has MOVED: the population now covers both planes and the
+26. **G4** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING, and the reason has MOVED: the population now covers both planes and the
     GATE'S TESTS still cover one.** The input relation is enumerated — seven derived census rows,
     every member pinned by path, line and content — so the incompleteness that reopened this item is
     closed. What is not closed is that G4's PASS conditions, its deterministic test and its static
@@ -2474,13 +2477,15 @@ carrying one cannot be decided by any implementation.
     one-sided member on byte-disjointness, and this pair cannot satisfy both. Parity wins; a
     field-wise copy alone does NOT close this item, since it would leave seven members against six.
     Give the
-    Rust struct an explicit `ready: u32` so the layouts match member-for-member, or make `push_event`
-    assign field-wise so the flag's bytes are never touched. PRODUCT work.
+    Rust struct an explicit `ready: u32` so the layouts match member-for-member. **An earlier version
+    of this sentence offered "or make `push_event` assign field-wise" as an alternative — the fix R14
+    explicitly rejects two paragraphs above, because it would leave seven members against six and
+    the invariant unmet.** An item may not offer a remedy its own ruling refuses. PRODUCT work.
     **How this got missed:** the register asked the right question and I answered it by reading
     `ui/daw-bridge/src/layout.rs`, a DIFFERENT Rust endpoint that does declare `ready`, then marked
     it resolved. See the G0-B register entry, which now records the substitution.
 36. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING. `tools/host_stall_check.sh` CANNOT DISTINGUISH THE
-    OUTCOMES IT IS ASKED TO DECIDE, and no measurement that could exists.** An earlier headline said
+    OUTCOMES IT IS ASKED TO DECIDE, and no measurement that could distinguish them exists yet.** An earlier headline said
     the check contradicts the shipped rule so one of the two must be wrong — which this item's own
     body then conceded is false, since the failed-send drop the check's comment names is real
     (`apps/engine_produce_block.cpp:1096-1100`). The defect is not a contradiction; it is that the

@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '43edccd006df0864b1033a4ad277f595bb43c1dc'
+PREV_TIP     = '3ac0544476b7e8ab8ba047daa941cc2fbb14d9ba'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -462,8 +462,15 @@ CONTROLS = {
  'blocker-kind':     ('35. **G0-B** — ⟦PRODUCT⟧ ', '35. **G0-B** — ', 1, 'BLOCKER-KIND'),
  'packet-marker-gone': ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ', '37. **G3** — ⟦PRODUCT⟧ ', 1,
                       'PACKET-SET-RESTATED'),
- 'packet-marker-move': ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
-                      '37. **G3** — ⟦PRODUCT⟧ ', 1, 'PACKET-SET-RESTATED'),
+ # AN ACTUAL MOVE, which this was not: it was byte-for-byte the deletion above, so the packet
+ # advertised three distinct mutations and shipped two. A control named for a behaviour it does not
+ # perform is worse than a missing one, because the prose counts it.
+ 'packet-marker-move': ('1. **G0-B** — The generated header breaks',
+                      '1. **G0-B** — ⟦PACKET⟧ The generated header breaks', 1,
+                      'PACKET-SET-RESTATED'),
+ 'edge-malformed':   ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
+                      '37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ⟦BLOCKED-ON: abc⟧ ', 1,
+                      'KIND-MARKER-UNKNOWN'),
  'packet-marker-dupe': ('36. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
                       '36. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ⟦PACKET⟧ ', 1, 'KIND-MARKER-UNKNOWN'),
  'packet-marker-typo': ('36. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ', '36. **G3** — ⟦PRODUCT⟧ ⟦PAKCET⟧ ', 1,
@@ -909,8 +916,12 @@ _bodies = {int(m.group(1)): m.group(0) for m in
 # and 26 need product work and say so in other words — so the predicate was measuring vocabulary,
 # not kind. Marking in place and counting the markers is the same repair as the hand-classified
 # populations elsewhere in this packet.
-_prod = sorted(n for n in _derived_blk if '⟦PRODUCT⟧' in _bodies.get(n, ''))
-# every blocker states a KIND; a dependency marker is additional, never a substitute
+# READS THE ONE DERIVATION. This searched whole item BODIES by substring while the manifest used
+# the leading-run `_KINDS`, so a blocker whose leading marker was ⟦PACKET⟧ could still satisfy the
+# opening's product count off a ⟦PRODUCT⟧ mentioned later in its prose — the manifest said
+# kind [PACKET] and the packet said all ten need product work, both green. My commit message for
+# the previous SHA claimed `_KINDS` was the only place a kind is decided; it was not, and
+# codex-worker-1 built the counterexample. There is one now.
 # ONE KIND DERIVATION, read by validation here and by the emitter below. The previous pair
 # DIVERGED IN THEIR VIEW OF THE SAME TEXT: validation searched the whole 200-character head by
 # substring while the emitter consumed only the LEADING MARKER RUN, so a ⟦PACKET⟧ parked later in a
@@ -930,6 +941,12 @@ for _m in _MARKER_RUN.finditer(_unhidden(body)):
     for _tok in _seq:
         _name = _tok.split(':')[0].strip()
         if _name == 'BLOCKED-ON':
+            # the PAYLOAD is validated here rather than left to the digit-only edge parser, which
+            # ignored what it could not read: ⟦BLOCKED-ON: abc⟧ emitted blocked_on [] while the
+            # marker sat in the body, so a malformed edge was indistinguishable from no edge.
+            # Normalisation upstream of validation, one more time.
+            if not re.fullmatch(r'BLOCKED-ON:\s*\d+', _tok.strip()):
+                _MARKER_ERR.append(f'item {_n} carries a malformed ⟦{_tok}⟧ edge marker')
             continue
         if _name not in _KIND_TOKENS:
             _MARKER_ERR.append(f'item {_n} carries ⟦{_name}⟧, which is not a kind')
@@ -942,6 +959,8 @@ for _e in _MARKER_ERR:
     bad('KIND-MARKER-UNKNOWN', _e)
 _HEADS = {int(m.group(1)): m.group(2) for m in
           re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — (.{0,200})', _unhidden(body))}
+_prod = sorted(n for n in _derived_blk if 'PRODUCT' in _KINDS.get(n, []))
+# every blocker states a KIND; a dependency marker is additional, never a substitute
 _pkt_kind = sorted(n for n in nums if 'PACKET' in _KINDS.get(n, []))
 # A KIND IS AT LEAST ONE MARKER, not specifically PRODUCT. Requiring ⟦PRODUCT⟧ made a packet-only
 # blocker unrepresentable — the model could not say "this is blocked on work in this document",
