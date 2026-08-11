@@ -340,8 +340,11 @@ CONFORMS to obligation (b) while committing the defect.
 reproducible, and four populations in the predecessor were exactly that.
 - *Rings* — RAW 17 (`grep -rnF '>capacity' apps/ | grep '=' | grep -v '=='`) → minus 9 non-ring and
   test-fixture assignments → **8**.
-- *Statements interpreting an entry's bytes as data* — RAW 21 (`grep -rnF 'entries[' apps/`)
-  → minus 17 (twelve plugin-cache index sites, which are a DIFFERENT `entries` array, and five ready-flag
+- *Statements interpreting an entry's bytes as data* — RAW 23 EXPRESSIONS
+  (`grep -roF 'entries[' apps/`). The line census `grep -rnF` returns 21 because
+  `plugin_cache.cpp:460` and `:492` each carry TWO accesses, and this population is named in
+  STATEMENTS, so the unit is the expression and not the line.
+  → minus 19 (fourteen plugin-cache index sites, which are a DIFFERENT `entries` array, and five ready-flag
   operations, which touch a synchronisation field rather than the entry's data) → **4**:
   `event_ring.cpp:95` (`entries[write] = staged`), `:116` and `:163` (`entry = entries[read]`), and
   `device_chain_ui_live_tests_main.cpp:112`, which is a test — so **3 production**. The five excluded
@@ -361,14 +364,15 @@ reproducible, and four populations in the predecessor were exactly that.
   The ring filter is in the rule, not implied: without it this population measures the wrong set.
 - *Read-cursor stores* — RAW **14** (`grep -rn -e readIndex.store -e read_index.store apps/ ui/`) → minus 10 non-ring and test stores → **4**. The predecessor printed this command beside the figure 4, which
   the command does not produce.
-- *Plugin-cache index sites, which are NOT ring sites* — RAW 21 (`grep -rnF 'entries[' apps/`)
-  → minus 9 event-ring statements → **12**. These twelve are the
+- *Plugin-cache index sites, which are NOT ring sites* — RAW 23 (`grep -roF 'entries[' apps/`)
+  → minus 9 event-ring statements → **14 expressions across 12 lines**. These twelve are the
   plugin-cache reads and are NOT the population PASS 7 and S4 range over; the RING index sites are
   the separate authored population below. The twelve are: `plugin_cache.cpp:388/:460/:469/:478/:492`,
   `engine_chain_commands.cpp:81`, `engine_save_project.cpp:265/:362`, `daw_engine_main.cpp:291/:1078`,
-  and two in `_tests_main` files. The two populations partition the same 21 and are stated so the
-  partition is visible: 12 + 9 = 21, and the 9 split 4 data / 5 flag. Inside a command:
-  `grep -rnF 'entries[' apps/ | grep -e pluginCache -e cache.entries` returns 12.
+  and two in `_tests_main` files. The two populations partition the same 23 EXPRESSIONS and are
+  stated so the partition is visible: 14 + 9 = 23, and the 9 split 4 data / 5 flag. The line census
+  said 12 + 9 = 21 and was a partition of LINES, which is a different set from the sites the gate
+  governs — `grep` counts lines, and two of these lines carry two accesses each.
 - ***RING* index sites — the population PASS 7 and S4 actually range over — AUTHORED under R1, and
   CROSS-LANGUAGE.** [HAND-CLASSIFIED — open item 25 (all)] An authored population IS a hand-classified one; creating it and leaving
   the exception count at five would have hidden the sixth inside the fix for the fifth. This gate governs a ring that both sides of the SHM boundary index, and every
@@ -379,7 +383,7 @@ reproducible, and four populations in the predecessor were exactly that.
   (`ring.entries.add(write)`). **11 production**, plus one C++ test
   (`device_chain_ui_live_tests_main.cpp:112`) and one Rust BASE-POINTER construction
   (`control.rs:1969`, `entries.add(entries_offset) as *mut EventEntry`) which indexes nothing and is
-  excluded by name rather than by rule. **Drift detectors:** `grep -rnF 'entries[' apps/` returns 21
+  excluded by name rather than by rule. **Drift detectors:** `grep -roF 'entries[' apps/` returns 23
   and `git grep -n 'entries.add' -- ui` returns 4; either figure changing invalidates this authored
   list until it is re-authored. A single-language census of a two-language boundary is not a floor,
   it is a different population wearing the gate's name.
@@ -1023,7 +1027,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `ce5d41e7ac8b9b97c989bf80d8b88b20557624a0`, A.0 SCRIPT BLOB `ba8cec14257f7f374caccde6547f2894210d4c50`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `43c3755bc9a65c86f0e6cd5479dff8db713f5014`, A.0 SCRIPT BLOB `acddb28eb170e017a7669e339287ff6347595c38`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1031,7 +1035,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 27 items, 21 open · 13 RAW (12 hand-ruled) + 21 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 27 items, 21 open · 13 RAW (12 hand-ruled) + 20 commanded claims, all executed
     PASS
 
 **The two claim categories are DISJOINT**, which they were not until this SHA: a RAW claim whose

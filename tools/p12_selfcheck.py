@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'b9dbad491633387fc5729f26899a14b8e1cd9c66'
+PREV_TIP     = '5f9521af8cd3ae8b7d8b44c2fc13a5b14b954306'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -126,8 +126,8 @@ CONTROLS = {
                       'RAW 13, and the command that produces it appears only after this deliberately '
                       'long interposed clause, which is what a claim with no reachable command looks '
                       'like in practice (`grep', 1, 'RAW-WITHOUT-COMMAND'),
- 'rule-arithmetic':  ('→ minus 17 (twelve plugin-cache index sites',
-                      '→ minus 97 (twelve plugin-cache index sites', 1, 'RULE-ARITHMETIC'),
+ 'rule-arithmetic':  ('→ minus 19 (fourteen plugin-cache index sites',
+                      '→ minus 97 (fourteen plugin-cache index sites', 1, 'RULE-ARITHMETIC'),
 }
 if len(sys.argv) > 1 and sys.argv[1] == '--list':
     print('\n'.join(sorted(CONTROLS))); sys.exit(0)
@@ -201,8 +201,9 @@ raw_pos = [m.start() for m in re.finditer(r'RAW \*{0,2}\d+', pkt)]
 # could satisfy a claim that states neither — a span that large is as much a proxy as the window
 # it replaced.
 def claim_end(a, hard):
-    para = pkt.find('\n\n', a)
-    return min(hard, para if para != -1 else hard)
+    ends = [pkt.find('\n\n', a), pkt.find('\n- ', a + 1), pkt.find('\n* ', a + 1)]
+    ends = [e for e in ends if e != -1] + [hard]
+    return min(hard, min(ends))
 spans = [(raw_pos[i], claim_end(raw_pos[i], raw_pos[i + 1] if i + 1 < len(raw_pos) else len(pkt)))
          for i in range(len(raw_pos))]
 byhand, checked = 0, 0
