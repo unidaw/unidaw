@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '2cdce03b18b4c8e8d6ce43b088d895657812ca4f'
+PREV_TIP     = '84e9779fc21be66bf77faa35e9faf60efaf32903'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -139,6 +139,12 @@ RATCHET_MEMBERS = [
 
 WORDNUM = {'ONE': 1, 'TWO': 2, 'THREE': 3, 'FOUR': 4, 'FIVE': 5, 'SIX': 6, 'SEVEN': 7,
            'EIGHT': 8}
+
+# ONE gate-id grammar, used by the heading parser, the dependency parser and the reference checks.
+# They had diverged: headings matched `G[0-9]+-?[AB]?` (so G10 is a gate) while the dependency and
+# opening parsers matched a single digit, so a G10 could exist and be undependable-upon in silence.
+# A grammar stated three times is three grammars.
+GATE_ID = r'G[0-9]+-?[AB]?'
 
 fail = []
 def bad(tag, detail): fail.append(f'[{tag}] {detail}')
@@ -349,6 +355,8 @@ CONTROLS = {
  'emit-fail-open':   ('# Open items — 32 atomic', '# Open items — 33 atomic', 1, 'OPEN-COUNT'),
  # both items are G2-A, so the forward gate check agrees and only the backward one can catch it
  'ruling-item-swap2': ('**R12 — item 27 (G2-A)', '**R12 — item 28 (G2-A)', 1, 'RULING-ITEM-BIND'),
+ # the diagram has contradicted the text twice; it is checked now, so make sure the check fires
+ 'diagram-edge':     ('    G0-B → G4', '    G0-B → G1-A', 1, 'DIAGRAM-EDGE'),
  'ratchet-count':    ('ratchet holds at **four** at this SHA', 'ratchet holds at **five** at this SHA', 1,
                       'RATCHET-DRIFT'),
  'dep-self':         ('**Dependencies** G0-A, G0-B', '**Dependencies** G0-A, G0-B, G4', 1,
@@ -986,10 +994,23 @@ for g in gate_hdr:
     if len(dep_all) != 1:
         bad('GATE-DEP-SECTION', f'{g["gate"]} has {len(dep_all)} Dependencies sections, needs exactly 1')
     dep_text = re.sub(r'\s+', ' ', dep_all[0]).strip() if dep_all else ''
-    for tok in re.findall(r'(?<![A-Za-z0-9-])G[0-9][A-Za-z0-9-]*', dep_text):
-        if not re.fullmatch(r'G[0-9]-?[AB]?', tok):
+    for tok in re.findall(r'(?<![A-Za-z0-9-])G[0-9]+[A-Za-z0-9-]*', dep_text):
+        if not re.fullmatch(GATE_ID, tok):
             bad('GATE-DEP-UNKNOWN', f'{g["gate"]} names {tok!r}, which is not a gate id')
-    deps = sorted({t for t in re.findall(r'(?<![A-Za-z0-9-])G[0-9]-?[AB]?(?![A-Za-z0-9])', dep_text)})
+    deps = sorted({t for t in re.findall(r'(?<![A-Za-z0-9-])' + GATE_ID + r'(?![A-Za-z0-9])',
+                                         dep_text)})
+    # NON-GATE prerequisites existed in two gates and were invisible to every derived field: G1-B
+    # waits on "the production atomic size/alignment" work and G3 on "an owner ruling on N". They
+    # sat in dependencies_text, which no closure reads, so a consumer walking the graph saw a gate
+    # whose blockers were satisfied. A prerequisite that is not a gate is still a prerequisite; the
+    # closure cannot resolve it, and the manifest must at least SAY it exists rather than drop it.
+    # bounded to the dependency CLAUSE — the first version ran to the end of the paragraph and
+    # emitted "therefore NOT DECIDABLE at this SHA" as a prerequisite of G4. Noise in a typed field
+    # is the same defect as a wrong value in one: a consumer cannot tell it from data.
+    clause = re.split(r'\.\s|\s—\s', dep_text)[0]
+    residual = re.sub(r'(?<![A-Za-z0-9-])' + GATE_ID + r'(?![A-Za-z0-9])', '', clause)
+    residual = re.sub(r'\b(none|first gate|and|then|of this packet|Final gate)\b', '', residual, flags=re.I)
+    nongate = [c.strip(' ,.—-') for c in re.split(r'[,;.]', residual) if len(c.strip(' ,.—-')) > 6]
     # a SELF-edge must be rejected, not filtered. The gate record dropped `d == id` before anything
     # validated it, so G4 -> G4 regenerated a clean manifest and passed: the shortest possible cycle
     # was the one the cycle detector could never see, because the tidying happened first. Filtering
@@ -1010,6 +1031,7 @@ for g in gate_hdr:
     gates.append({'id': g['gate'], 'line': g['line'], 'end_line': g['end_line'],
                   'dependencies': [d for d in deps if d != g['gate']],
                   'dependencies_text': dep_text,
+                  'non_gate_prerequisites': nongate,
                   'blocking_items': blk,
                   'cross_cutting_blocking': xcut,
                   'decidable_for_planning': not withdrawn_pop,
@@ -1084,7 +1106,32 @@ for m in re.finditer(r'(?m)^\*\*(R\d+) — .*?(?=\n\n\*\*R\d+ — |\n# |\*\*What
         # N goes 3 -> 4 is not carrying the decision, only a flag about it
         'decision': re.sub(r'\s+', ' ', head.group(2)).strip() if head else None,
         'decision_values': sorted({int(v) for v in re.findall(r'(?<![0-9A-Za-z])N = (\d+)', blk)}),
-        'text': re.sub(r'\s+', ' ', blk)[:600]})
+        # NOT truncated. A 600-char cap cut R8(c)'s correction of R5 and all of R12's rationale
+        # out of the manifest, so a consumer reading the canonical artifact got the decision
+        # heading and none of the argument. The packet is the size it is.
+        'text': re.sub(r'\s+', ' ', blk)})
+# ---- 2e4. the diagram is a claim about the graph, so it is checked against the graph -----------
+_dia = re.search(r'## Gate sequence\n\n(.*?)\n\n', pkt, re.S)
+if not _dia:
+    bad('DIAGRAM-EDGE', 'no gate-sequence diagram found')
+else:
+    _edges, _by = set(), {g['id']: g for g in gates}
+    for _line in _dia.group(1).splitlines():
+        _seq = re.findall(GATE_ID, _line)
+        for _a, _b2 in zip(_seq, _seq[1:]):
+            _edges.add((_a, _b2))
+    for _a, _b2 in sorted(_edges):
+        if _b2 not in _by:
+            bad('DIAGRAM-EDGE', f'diagram names {_b2}, which is not a gate'); continue
+        if _a not in _by[_b2]['dependencies']:
+            bad('DIAGRAM-EDGE', f'diagram draws {_a} -> {_b2}; {_b2} depends on '
+                                f'{_by[_b2]["dependencies"]}')
+    for _g in gates:
+        for _d in _g['dependencies']:
+            if (_d, _g['id']) not in _edges and not any(
+                    (_d, _m) in _edges or (_m, _g['id']) in _edges for _m in _by):
+                bad('DIAGRAM-EDGE', f'{_d} -> {_g["id"]} is in the text and not reachable in the diagram')
+
 # emitted ruling ids reconciled against the validated headings, and unique
 _rid_emitted = [r['id'] for r in rulings]
 if sorted(_rid_emitted) != sorted('R%d' % i for i in rids):

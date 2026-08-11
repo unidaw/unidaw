@@ -88,11 +88,16 @@ MEDIUM-HIGH · F8 re-scoped.
 
 ## Gate sequence
 
-    G0-A ∥ G0-B  →  G1-A  →  G1-B  →  G2-A  →  G2-B  →  G3  →  G4
+    G0-A → G1-A → G1-B → G2-A → G2-B → G3 → G4
+    G0-B → G4
 
-The diagram previously showed `G1-A ∥ G1-B`, which contradicts G1-B's own **Dependencies** line: it
-depends on G1-A. A picture that disagrees with the text it illustrates is worse than no picture,
-because it is the part a reader trusts without checking.
+The diagram has now contradicted the text TWICE. It showed `G1-A ∥ G1-B` while G1-B's Dependencies
+line names G1-A; that was fixed, and the fix introduced `G0-A ∥ G0-B → G1-A`, which asserts an edge
+G0-B → G1-A that G1-A's own line does not have — G0-B is a dependency of G4 alone. **A picture that
+disagrees with the text it illustrates is worse than no picture, because it is the part a reader
+trusts without checking**, and a picture is also the part nobody re-derives when the text changes.
+So it is no longer only a picture: every `X → Y` in the block above is now checked against the
+dependency lines (`DIAGRAM-EDGE`), which is the only reason to believe this third version.
 
 **No downstream end-to-end success waives a failed primitive gate.** A green G4 over a red G1-A means
 the G4 fixture did not exercise the primitive. Every test exposes deterministic barriers; a timing or
@@ -1448,7 +1453,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `f588b74d9fe7f092ba060903e824127d3cddebfa`, A.0 SCRIPT BLOB `7f5b8b3483348494b0d8f3c554cce32ce9907a1d`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `9ed8d5190b04011fc86b95638dda381c98ffa750`, A.0 SCRIPT BLOB `b601e226c0bbca0c6c90edbc087072bf84c7c4e4`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1506,14 +1511,14 @@ back to: A.0's "what it does not decide" list is the exact place where a stale s
 what has been settled.)
 And nothing about the product beyond what a text search can see.
 
-**Controls.** Sixty-two, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Sixty-three, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
-`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`, `ratchet-count`, `writer-extra`, `reader-row-moved`, `emit-fail-open`, `ruling-item-swap2`. The last twenty-eight exist because
+`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`, `ratchet-count`, `writer-extra`, `reader-row-moved`, `emit-fail-open`, `ruling-item-swap2`, `diagram-edge`. The last twenty-nine exist because
 **codex-worker-1** MUTATED THIS PACKET AND THE GATE STILL SAID PASS (the finding reached me relayed
 by backend, and two commit messages in this lineage credit the relay rather than the author —
 `e26f91f` and `c332c03`, immutable and wrong on this point): deleting the item's reopening sentence,
