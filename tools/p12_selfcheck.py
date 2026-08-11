@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '2d6a42d9fd89b24ca2efff648307f228a1980b37'
+PREV_TIP     = '97729ee14c61126dda9c963b0db7936e003cd647'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -273,6 +273,11 @@ for m in re.finditer(r'`([^`]+)`', pkt, re.S):
     if not runnable(c): continue
     after = pkt[m.end():m.end() + 44]
     if re.match(r'\s*\)?\s*(→|is a RAW)', after):   # RAW form, executed above
+        continue
+    # a command belonging to a RAW claim is a RAW claim's command even when it states a return:
+    # counting it here too made the two categories overlap and their sum exceed the population
+    before = pkt[max(0, m.start() - 200):m.start()]
+    if re.search(r'RAW \*{0,2}\d+\*{0,2}[^.]{0,180}$', before):
         continue
     st = re.match(r'\s*\)?\s*returns\s+(?:exactly\s+)?\*{0,2}(\d+)', after)
     if not st:

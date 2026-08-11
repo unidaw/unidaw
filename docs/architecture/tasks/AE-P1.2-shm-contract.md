@@ -123,8 +123,12 @@ observable from a return value, so (d) is decided statically.
   **`watchdog.h:47` is DEAD**: `Watchdog::check` has no production caller — which is G3's own finding,
   so counting it as a live reader would make this packet contradict itself across two gates.
 
-**Floor.** The region, derivation, bounds and ring censuses are name-greps and are exact because the
-names are the mechanism. The mailbox census is a **pointer-flow** census and is a FLOOR of 7 live: a
+**Floor.** Only the DERIVATION census is a name-grep, and it is exact because the names are the
+mechanism. The region, bounds and ring censuses are NOT name-greps and this paragraph said they were
+— they carry `[HAND-CLASSIFIED — open item 25 (all)]` markers eight lines above, so the floor
+paragraph and the population contradicted each other within one gate. A semantic grouping has no
+floor of the kind this paragraph describes: its blind spot is not "a name the grep missed" but "a
+member a reader did not think of", which no command bounds. The mailbox census is a **pointer-flow** census and is a FLOOR of 7 live: a
 new `TrackInfo` copy is invisible to it. **This census was stated as SIX and then as TEN, and both
 were wrong** — six omitted the three RT loads and the direct load; ten added `watchdog.h:47` (dead)
 and `engine_producer_thread.cpp:209` (not a load). It is reported with its method so the next reader
@@ -971,7 +975,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `81961f2afa953a64cc1b5440e5a7b1386c0dc941`, A.0 SCRIPT BLOB `e6dabc81338a47d2f6466951fd54c0992de9d73c`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `b7e9b4c3d785c99c6e05e2bda89b7676ba2802a7`, A.0 SCRIPT BLOB `443741c665440067d595b59ede407c40bb14445c`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -979,8 +983,14 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 27 items, 21 open · 13 RAW (12 hand-ruled) + 20 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 27 items, 21 open · 13 RAW (12 hand-ruled) + 19 commanded claims, all executed
     PASS
+
+**The two claim categories are DISJOINT**, which they were not until this SHA: a RAW claim whose
+command states a return was counted as a RAW claim AND as a commanded claim, so the printed sum
+exceeded the population it summed and neither number meant what it said. A command belonging to a
+RAW claim now belongs to it alone. The correction removed exactly one claim from the commanded
+count, which is the size of the overlap and not an estimate of it.
 
 **What it decides.** Open-item header against body, contiguity, and orphaned numbers. Every
 `open item N (Gx)` cross-reference resolving AND naming the gate that item belongs to — three
