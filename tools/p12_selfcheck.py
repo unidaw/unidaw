@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'b973f2606879709f8bd6340b07866050512f372d'
+PREV_TIP     = '0715a9d197e9ffbd1f9239b91415f82f5171baa9'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -221,9 +221,16 @@ def _visible(t):
     # `[^`\n]*` — which matches the FIRST TWO BACKTICKS of a ``` fence as an empty span, corrupting
     # the fence marker before the fence pass could see it. So a ruling hidden in a fenced block was
     # still counted, and the "fix" reported PASS. Fences first, then comments, then inline code.
-    for m in re.finditer(r'(?ms)^```.*?(?:^```|\Z)', t): blank(m.start(), m.end())
-    for m in re.finditer(r'<!--.*?-->', t, re.S):         blank(m.start(), m.end())
-    for m in re.finditer(r'`[^`\n]*`', ''.join(out)):     blank(m.start(), m.end())
+    # BOTH fence characters, DOUBLE before single, then comments, then single spans, then link
+    # destinations. Each was a construct codex-worker-2 could hide a citation or a ruling in:
+    # ``code`` was two empty single spans to the old pass, ~~~ was not a fence at all, and a link
+    # destination is text a reader never sees. Order is load-bearing — a wider delimiter must be
+    # consumed before a narrower one can mistake its halves for a pair.
+    for m in re.finditer(r'(?ms)^(?:```|~~~).*?(?:^(?:```|~~~)|\Z)', t): blank(m.start(), m.end())
+    for m in re.finditer(r'<!--.*?-->', t, re.S):                        blank(m.start(), m.end())
+    for m in re.finditer(r'``[^\n]*?``', ''.join(out)):                  blank(m.start(), m.end())
+    for m in re.finditer(r'`[^`\n]*`', ''.join(out)):                    blank(m.start(), m.end())
+    for m in re.finditer(r'\]\([^)\n]*\)', ''.join(out)):               blank(m.start(), m.end())
     return ''.join(out)
 
 NEG = None
@@ -394,6 +401,12 @@ CONTROLS = {
  # becomes a detached label once the wrapper is blanked to spaces.
  # codex-worker-2's numeric wrapper, which a letter-initial deny-list could not see
  # the digit-SUFFIX variant, which the last-character allow-list could not see
+ # codex-worker-2's remaining classes, one control each so none can regress silently
+ 'marker-nonblocker': ('1. **G0-B** — ', '1. **G0-B** — ⟦BLOCKED-ON: 999⟧ ', 1, 'BLOCKER-KIND'),
+ 'edge-cycle':       ('29. **G2-A** — ⟦PRODUCT⟧ ', '29. **G2-A** — ⟦PRODUCT⟧ ⟦BLOCKED-ON: 27⟧ ', 1,
+                      'BLOCKER-KIND'),
+ 'gate-bad-suffix':  ('**Dependencies** G0-A, G0-B', '**Dependencies** G0-A, G0-B_x', 1,
+                      'GATE-DEP-UNKNOWN'),
  'writer-num-suffix': ('juce:989/994', 'fake9 :989/994', 1, 'OUT-MEMBERS'),
  'writer-num-prefix': ('juce:989/994', '9/ :989/994', 1, 'OUT-MEMBERS'),
  'writer-in-comment': ('juce:989/994', '<!--juce:989/994-->', 1, 'OUT-MEMBERS'),
@@ -815,12 +828,26 @@ if _marked != sorted(_derived_blk):
 # subject, which is how a check comes to report a missing claim instead of a wrong one.
 _said = re.search(r'and (?:ALL )?(\w+)(?: of them)? need\s+product\s+work', pkt)
 # a ⟦BLOCKED-ON: n⟧ blocker must name a real blocking item, or the delegation points at air
+_edges_i = {}
 for _b in re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — (?:⟦PRODUCT⟧ )?⟦BLOCKED-ON: (\d+)⟧', body):
     _src, _dst = int(_b.group(1)), int(_b.group(2))
     if _dst not in _derived_blk:
         bad('BLOCKER-KIND', f'item {_src} is BLOCKED-ON {_dst}, which is not a blocking item')
     if _dst == _src:
         bad('BLOCKER-KIND', f'item {_src} is BLOCKED-ON itself')
+    _edges_i.setdefault(_src, []).append(_dst)
+for _src, _dsts in _edges_i.items():
+    if len(_dsts) != len(set(_dsts)):
+        bad('BLOCKER-KIND', f'item {_src} repeats a BLOCKED-ON target: {_dsts}')
+def _cyc(a, seen):
+    for b in _edges_i.get(a, []):
+        if b in seen: return seen + [b]
+        r = _cyc(b, seen + [b])
+        if r: return r
+    return None
+for _src in list(_edges_i):
+    _c = _cyc(_src, [_src])
+    if _c: bad('BLOCKER-KIND', f'BLOCKED-ON cycle {" -> ".join(map(str, _c))}')
 
 # THE VISIBLE VIEW'S FLOORS, ENFORCED RATHER THAN DESCRIBED. It blanks fenced blocks, HTML comments
 # and single-line inline spans. It does NOT see into a multi-line inline span or a 4-space indented
@@ -838,6 +865,13 @@ _nofence = re.sub(r'(?ms)^```.*?(?:^```|\Z)', lambda m: re.sub(r'[^\n]', ' ', m.
 # counted as two independent oddities and a chain of them could balance out to look clean. The state
 # is cumulative across the document: a line that BEGINS inside a span is a crossing, whatever its own
 # backtick count.
+for _i, _ln in enumerate(_nofence.splitlines(), 1):
+    # a 4-space indented block is Markdown code the view does not blank. The packet indents prose
+    # and tables, so the rule is narrow: an indented line is forbidden only when it carries a token
+    # the checker treats as structure — otherwise every table row would trip it.
+    if re.match(r'^ {4,}', _ln) and re.search(r'⟦|^\s+\*\*R\d+ — ', _ln):
+        bad('VISIBLE-FLOOR', f'line {_i} is indented four spaces and carries a structural token — '
+                             f'an indented code block is not blanked by the visible view')
 _open = False
 for _i, _ln in enumerate(_nofence.splitlines(), 1):
     if _open:
@@ -1115,6 +1149,8 @@ WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twen
         69: 'Sixty-nine', 70: 'Seventy', 71: 'Seventy-one', 72: 'Seventy-two',
         73: 'Seventy-three', 74: 'Seventy-four', 75: 'Seventy-five', 76: 'Seventy-six',
         77: 'Seventy-seven', 78: 'Seventy-eight', 79: 'Seventy-nine', 80: 'Eighty',
+        81: 'Eighty-one', 82: 'Eighty-two', 83: 'Eighty-three', 84: 'Eighty-four',
+        85: 'Eighty-five', 86: 'Eighty-six', 87: 'Eighty-seven', 88: 'Eighty-eight',
         33: 'Thirty-three', 34: 'Thirty-four', 35: 'Thirty-five', 36: 'Thirty-six',
         37: 'Thirty-seven', 38: 'Thirty-eight', 39: 'Thirty-nine', 40: 'Forty'}
 if not listed:
@@ -1159,6 +1195,9 @@ for cname, (canchor, _, _, _) in sorted(CONTROLS.items()):
 # has produced in every other form today.
 MANIFEST = 'docs/architecture/tasks/AE-P1.2-manifest.json'
 def line_of(off): return pkt.count('\n', 0, off) + 1     # offsets are useless to a planner
+def _head_of(n):
+    m = re.search(r'(?m)^%d\. \*\*[^*]+\*\* — ((?:⟦[^⟧]+⟧ ?)*)' % n, body)
+    return m.group(1) if m else ''
 item_line = {int(m.group(1)): line_of(pkt.find(body) + m.start())
              for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*', body)}
 item_body = {int(m.group(1)): m.group(0) for m in
@@ -1204,7 +1243,10 @@ for g in gate_hdr:
     if len(dep_all) != 1:
         bad('GATE-DEP-SECTION', f'{g["gate"]} has {len(dep_all)} Dependencies sections, needs exactly 1')
     dep_text = re.sub(r'\s+', ' ', dep_all[0]).strip() if dep_all else ''
-    for tok in re.findall(r'(?<![A-Za-z0-9-])G[0-9]+[A-Za-z0-9-]*', dep_text):
+    # whole tokens on BOTH sides: `G0-B_x` was accepted as G0-B because the scan stopped at the
+    # underscore, and `G-1` was dropped because it never started. A token runs to the next
+    # non-token character, and every one of them must be a gate id.
+    for tok in re.findall(r'(?<![A-Za-z0-9_-])G[-A-Za-z0-9_]*', dep_text):
         if not re.fullmatch(GATE_ID, tok):
             bad('GATE-DEP-UNKNOWN', f'{g["gate"]} names {tok!r}, which is not a gate id')
     deps = sorted({t for t in re.findall(r'(?<![A-Za-z0-9-])' + GATE_ID + r'(?![A-Za-z0-9])',
@@ -1482,11 +1524,13 @@ man = {
             # KIND and STATE are orthogonal: `kind` is what closes the item, `blocked_on` is what
             # it waits on, and an item can be both. Encoding them as alternatives made item 27 lose
             # its PRODUCT classification the moment it gained a dependency.
-            'kind': 'PRODUCT' if '⟦PRODUCT⟧' in item_body.get(n, '') else None,
+            # FROM THE HEAD, because that is where validation reads them. Emitting from the whole
+            # body while validating the head let a marker added anywhere in a NONBLOCKING item's
+            # prose produce a typed record nothing had checked.
+            'kind': 'PRODUCT' if '⟦PRODUCT⟧' in _head_of(n) else None,
             # an ARRAY: an item can wait on more than one, and a scalar would have to be widened
             # by a schema change the day that happens. Empty when it waits on nothing.
-            'blocked_on': sorted(int(x) for x in
-                                 re.findall(r'⟦BLOCKED-ON: (\d+)⟧', item_body.get(n, ''))),
+            'blocked_on': sorted(int(x) for x in re.findall(r'⟦BLOCKED-ON: (\d+)⟧', _head_of(n))),
             'closed': n in closed_set} for n in nums],
  'raw_claims': [{'raw': int(re.match(r'RAW \*{0,2}(\d+)', pkt[a:b]).group(1)),
                  'command': (re.search(r'\(`([^`]+)`\)', pkt[a:b]).group(1)
