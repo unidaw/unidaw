@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '0c403469e1ac5a34153f7c31dcd9fea9891edc7f'
+PREV_TIP     = '35837be0ce4b51e21c873c14bad6193cde57a2c5'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []

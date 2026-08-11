@@ -923,7 +923,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `5ceddc3ad4d9433604025033afa58bc1b02e4abe`, A.0 SCRIPT BLOB `a84a5884c7b9eda05db1133de7a7fe77a7ec28fe`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `e85cd212d09ece96cc7706e2b456f4ef61a1846e`, A.0 SCRIPT BLOB `4b0a2639d944b0d2bd74ec52b088cf323749d8cf`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -931,7 +931,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 25 items, 19 open · 13 RAW (11 hand-ruled) + 19 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 25 items, 19 open · 13 RAW (11 hand-ruled) + 20 commanded claims, all executed
     PASS
 
 **What it decides.** Open-item header against body, contiguity, and orphaned numbers. Every
@@ -969,6 +969,63 @@ written and are recorded here rather than quietly fixed: `raw-without-cmd` chang
 and so provoked a different check entirely, and the landing assertion demanded the anchor count DROP,
 which an insertion control can never do — it reported a landed mutation as unlanded. The named-tag
 requirement is what exposed both.
+
+# Owner rulings (claude-worker-2 as ADR/phase owner, at this SHA)
+
+Five items were carried as "the owner SHALL rule". I am that owner; carrying them further would be
+deferral wearing the costume of rigour. Each ruling states what it decides, why, and what it costs,
+and each is a DECISION — none of them is evidence, and none may be cited as though a command
+produced it.
+
+**R1 — item 11 (G1-B) and item 25 (all): AUTHORED POPULATIONS, with drift detectors.** No predicate
+distinguishes a request/answer reader from any other `read_` function, and none distinguishes a
+REGION from the offset fields addressing it. Three attempts at a predicate produced 6 by hand, then
+2 by intersection, then a withdrawal. The ruling is that these populations are **authored, not
+derived**: the packet lists the members explicitly and says so, and each authored list carries a
+DRIFT DETECTOR — a command whose figure is pinned, so that a change in the surrounding code
+invalidates the authored list instead of silently outdating it. For G1-B that detector is
+`grep -rn 'pub fn read_' ui/daw-bridge/src/control.rs` returns 21; if it ever returns anything else,
+the authored list is stale by construction and the gate fails until it is re-authored.
+This is weaker than a derivation and stronger than what preceded it, which was a hand selection
+presented as a population. It also matches what the packet already does for the five
+hand-classified populations, so the two items resolve on one mechanism rather than two.
+**Cost:** a reviewer must read the list, not re-run a command. The detector bounds the staleness,
+not the correctness.
+
+**R2 — item 18 (G2-B): TWO-LEVEL READINESS, not a recovery-only exemption.** Readiness is staged —
+`mapped-and-bypassed` and `mirror-complete` — and dispatch is permitted at the lower level. The
+exemption was the smaller change and is the worse one: it creates a dispatch path that exists only
+during recovery, which is the least-exercised state in the system and the one that runs when
+something has already gone wrong. A LEVEL is a value that every dispatch can carry and every
+assertion can read; an EXEMPTION is a rule that lives in whichever branch remembered it, which is
+this repo's documented failure shape. **Cost, stated because it is real:** G4's dispatch identity
+must carry the readiness level, so the quadruple becomes a quintuple or the acknowledgement must
+name the level it was minted under. G4's PASS 5 full-identity comparison changes with it. This
+ruling therefore reaches into G4 and is not free.
+
+**R3 — item 19 (G3): N IS AUTHORED AT 3, and the packet says authored, not derived.** Nothing in
+the tree sources an observation count; `hardTimeoutBlocks = 500` is a block count and converting it
+would be inventing a rate. So N is a design constant: **a host must fail to advance across 3
+consecutive observations before eviction, and 3N = 9 observations of absence**. The constraint the
+value must satisfy is stated so a successor can rule differently on evidence: N observations must
+be long enough to survive ordinary scheduling jitter and strictly shorter in wall-clock than the
+existing hard timeout, so containment happens before the blunt instrument fires. A static check
+pins the literal, so changing N is a visible edit rather than a drift. **Cost:** 3 is not measured.
+It is the smallest value that is not 1 — 1 evicts on a single unlucky sweep — and it is offered as
+a starting point that measurement should overturn.
+
+**R4 — item 24 (G0-B): THE RUST SIDE RENAMES.** `patcher_abi.h:75` keeps `reserved`;
+`patcher_rust/src/lib.rs:86` changes `_pad0` to `reserved`. The C++ header is the ABI AUTHORITY —
+bindgen consumes it through an `allowlist_file` closure — and renaming the authority to match its
+own generated mirror inverts which document defines the contract. The convention argument cuts the
+other way (`_pad0` is idiomatic Rust) and loses to that: a binding may be unidiomatic, an authority
+may not be derived from its binding. **Cost:** one unidiomatic name in the Rust file, and PASS 9
+goes from RED to decidable the moment the rename lands.
+
+**What these rulings do NOT do.** None of them closes its item — R1 through R4 are decisions that
+make the items IMPLEMENTABLE, and each item stays open until the work it names exists and is
+verified by someone other than me. A ruling recorded as a closure would be the same error as a
+census recorded as a proof, which this packet has already made once at item 7.
 
 # Open items — 25 atomic, 6 CLOSED at this SHA, 19 open
 
@@ -1018,27 +1075,27 @@ carrying one cannot be decided by any implementation.
     21 candidates and is explicitly NOT a population, and the `Region*` intersection returns 2 and
     is published as WRONG with the FAIL clause it shipped with. A recipe that names its true output
     cannot fail to reproduce its list, because it no longer claims one.
-11. **G1-B** — **BLOCKING.** The reader population has no derivation. The hand selection of six was irreproducible; the predicate proposed to replace it yields two, not six, and is withdrawn. This gate cannot be decided until a population exists, as G3 cannot until N exists.
+11. **G1-B** — **BLOCKING, RULED (R1), not closed.** The reader population has no derivation. The hand selection of six was irreproducible; the predicate proposed to replace it yields two, not six, and is withdrawn. This gate cannot be decided until a population exists, as G3 cannot until N exists.
 12. **G2-A** — Layer-1 fixture arithmetic: eleven journal lines, not six, and ids legitimately repeat, so a correct implementation fails the gate's only runnable integration assertion.
 13. **G2-A** — CLOSED at this SHA. The fifty-one correlator sites are no longer carried on attribution: the G2-A population states the command, its raw count and the subtraction, and reaches the exact review's 4 + 6 + 17 + 24. The count is written once, there, so this entry does not restate it. Re-deriving it is also what refuted my own competing figure — that one counted mentions rather than call sites, so the disagreement was my predicate and not the reviewer's arithmetic.
 14. **G2-A** — The BATCH note branch: `resolve_base` keeps the counter crossing on the path a browser transpose takes, and the static check as written is satisfied by fixing the chord branch alone.
 15. **G2-B** — The self-deadlock: the admitted fix class requires `applyHostBypassStates` to stop taking `controllerMutex`.
 16. **G2-B** — The swap trap rests on an unratcheted guard at `apps/daw_engine_main.cpp:1107-1109`.
 17. **G2-B** — Probe ordering: without forbidding the offline probe from acquiring before the RT probe reports, the PASS token is producible by the packet's own fixture.
-18. **G2-B** — **BLOCKING.** The mirror-ack circularity. The ack arrives only during a `ProcessBlock` that `processTrack` refuses while `hostReady` is false. A PASS bullet was withdrawn rather than reworded, and the mirror half is unspecified until the owner rules between a recovery-only priming exemption and a two-level readiness.
-19. **G3** — **BLOCKING.** N has no source in the tree, so this gate is NOT DECIDABLE and no implementation may be accepted against it until an owner rules.
+18. **G2-B** — **BLOCKING, RULED (R2), not closed.** The mirror-ack circularity. The ack arrives only during a `ProcessBlock` that `processTrack` refuses while `hostReady` is false. A PASS bullet was withdrawn rather than reworded, and the mirror half is unspecified until the owner rules between a recovery-only priming exemption and a two-level readiness.
+19. **G3** — **BLOCKING, RULED (R3: N = 3, authored), not closed.** N has no source in the tree, so this gate is NOT DECIDABLE and no implementation may be accepted against it until an owner rules.
 20. **G3** — `DAW_ENGINE_DEBUG_STALL` must be set by the Layer-2 fixture or the channel a PASS bullet reads does not exist.
 21. **G3** — The static-check contradiction: one check places the eviction where its natural implementation changes an exit count another check pins.
 22. **G4** — The fixture definitions added here (F0-F6, S1-S8) and the corrected ack-census counts have not been run against anything; the reviewer should confirm them against the fixture rather than against this packet.
 23. **all** — `read_clip_window` is named by the exact review as a request/answer reader G1-B omits. It cannot be placed until item 11 gives the gate a population.
 
-24. **G0-B** — BLOCKING for G0-B only. The pure name join requires one rename: `patcher_abi.h:75`
+24. **G0-B** — BLOCKING for G0-B only. **RULED (R4): the Rust side renames.** The pure name join requires one rename: `patcher_abi.h:75`
     declares `uint8_t reserved[4]{}` where `patcher_rust/src/lib.rs:86` declares `pub _pad0: [u8; 4]`,
     so the two sides of a byte-identical member disagree by NAME and no rule that forbids an alias
     table can join them. PASS 9 is RED until this lands and states so. Which side renames is an owner
     call, not a derivation: `reserved` is the C++ convention used elsewhere in that header and `_pad0`
     is the Rust convention, so the choice trades one file's internal consistency against the other's.
-25. **all** — The five HAND-CLASSIFIED populations, tracked rather than claimed away. `Regions the
+25. **all** — **RULED (R1): authored with drift detectors.** The five HAND-CLASSIFIED populations, tracked rather than claimed away. `Regions the
     engine addresses` (8), `Bounds checks anchored on the child's number` (7), `Ring constructions
     over a host-created mapping` (3), `One-sided members` (1) and `Tracks whose production must
     continue` are semantic groupings, not text matches: no grep distinguishes a REGION from the
