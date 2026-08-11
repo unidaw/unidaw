@@ -18,7 +18,7 @@ never written is the same error's fingerprint.
 
 The blockers from the exact review are reconciled here, and the count is deliberately not restated: it moved between rounds and a fixed number here would be a twin of the item list, which is the authority:
 
-1. **TWO OF THE EIGHT GATES CANNOT BE DECIDED AT THIS SHA.** They were briefly authored and the authorings are RETRACTED — see items 11, 26, 27 and the retraction note in each gate.** All three withdrawn populations — G1-B's readers, G2-A's scope, G4's out-plane — are AUTHORED under R1 with rules, members and drift detectors. No gate is acceptance-decidable: five items still block (18, 19, 23, 24, 29) and every one needs product work, not packet work.** G2-A was the third until its scope was AUTHORED under R1 at this SHA; authoring a withdrawn population is how a gate leaves this list, and it is packet work rather than product work. Six gates additionally carry a blocking item and so are not ACCEPTANCE-decidable; the manifest publishes both senses as `decidable_for_planning` and `decidable_for_acceptance`, and G3 is the case that shows why one boolean will not do: R3 makes it plannable and it is not acceptance-decidable until the N ticket lands.  Every gate carries the record's SHAPE — population slot,
+1. **ONE OF THE EIGHT GATES CANNOT BE DECIDED AT THIS SHA.** They were briefly authored and the authorings are RETRACTED — see items 11, 26, 27 and the retraction note in each gate.** All three withdrawn populations — G1-B's readers, G2-A's scope, G4's out-plane — are AUTHORED under R1 with rules, members and drift detectors. No gate is acceptance-decidable: five items still block (18, 19, 23, 24, 29) and every one needs product work, not packet work.** G2-A was the third until its scope was AUTHORED under R1 at this SHA; authoring a withdrawn population is how a gate leaves this list, and it is packet work rather than product work. Six gates additionally carry a blocking item and so are not ACCEPTANCE-decidable; the manifest publishes both senses as `decidable_for_planning` and `decidable_for_acceptance`, and G3 is the case that shows why one boolean will not do: R3 makes it plannable and it is not acceptance-decidable until the N ticket lands.  Every gate carries the record's SHAPE — population slot,
    failure model, deterministic test, PASS conditions each naming their refutation, static checks,
    review register — and for those three the population slot reads "withdrawn", which satisfies the
    shape and decides nothing. **No universal claim about populations is made anywhere in this
@@ -1007,8 +1007,9 @@ mains, 6 non-calls: a design doc, a tools script, a log line, a declaration, a c
 definition) → **3 production**. ⟂ The predecessor stated the split beside the command instead of as a
 subtraction, which put it outside the arithmetic the gate checks. *Out-plane readers* — RAW **27**
 (`grep -rn -e audioOutOffset -e safeAudioOutPtr -e audioOutChannelPtr -e auxOutputPlaneOffset apps/`)
-⟂ → **THE POPULATION IS INCOMPLETE, not merely its subtraction. Open item 26 (G4) is BLOCKING.**
-The four RAW terms are four SPELLINGS, and the host uses a fifth: `grep -rn audioAuxOutOffset apps/`
+⟂ → **THIS SELECTOR IS RETIRED. The population is rebuilt below from the mapped base; what follows
+records why the selector had to go, because a retired selector with no reason invites its own
+return.** The four RAW terms are four SPELLINGS, and the host uses a fifth: `grep -rn audioAuxOutOffset apps/`
 returns 5 sites and ZERO of them match any RAW term. The engine spells the aux plane
 `auxOutputPlaneOffset` (a function); the host stores `state.audioAuxOutOffset` (a member). Same
 plane — the host's own comment at `:498` says "the engine derives this same offset via
@@ -1031,8 +1032,8 @@ reinterpret-casting a segment base pointer and adding an offset — `state.shmBa
 The exact count depends on how tightly the cast pattern is written (a strict pattern gives 10
 non-test sites, 7 of them in the host; a looser one catching header-relative casts gives more), and
 **the distribution is the point: on this census the host is MOST of the population, so R7 is not a
-marginal scope call.** Not finalised, and I am not stating a reader floor from a selector known to
-be partial.
+marginal scope call.** **That census is now DONE — see the complete role census below** — and this paragraph stands as the
+record of what the four-spelling selector could and could not see.
 **The 27 partition itself is total and sums**, measured by claude-worker-1 and reproduced here:
 11 non-code · 3 test mains · 2 header-field writes (`juce_host_process_main.cpp:496`,
 `engine_ui_shm.cpp:40` — these assign the OFFSET FIELD, not plane bytes, a role my earlier partition
@@ -1104,6 +1105,44 @@ all**, which is exactly why the four-term census could not see reader 7.
 Four of the seven reach the plane through a helper, a struct field or a callee. **That is why every
 name-based census of this population has been wrong**, and why the in-scope selection stays open at
 item 26 until the mapped-base census replaces the four-term grep.
+
+**THE COMPLETE ROLE CENSUS, measured by claude-worker-1 from the MAPPED BASE and alias-followed —
+23 role-bearing sites, and the arithmetic closes.** Role assigned by USE at the dereference, never
+by variable name.
+
+    7  cross-agent READERS      the seven above (engine consuming what the host/plugin wrote)
+    7  host byte WRITERS        juce:664-665 fill · :686 memcpy into aux · :719 memcpy into out ·
+                                :725-726 fill · :925 dst · :952, :956 fill
+    1  host INDIRECT writer     juce:989/994 — outputPtrs and auxOutputPtrs handed to the plugin
+    2  same-agent READBACK      juce:834, :1015 — the writer reading what it just wrote
+    2  host ESTABLISHING        juce:638 main · :656 aux
+    4  engine ESTABLISHING      engine_consumer.cpp:670, :730 · engine_produce_block.cpp:861, :866
+    --
+    23      7+7+1+2+2+4 = 23. The RAW-27 remainder is 16: 11 non-code, 3 test mains, 2 header-field
+            assignments — of which 14 are not sites at all.
+
+**AND THE SELECTOR'S BLINDNESS IS NOW QUANTIFIED, which is what makes it retirable rather than
+merely suspect:** of the seven cross-agent readers the four RAW terms match SIX; of the eight host
+writers they match ZERO of the aux ones, because those reach the plane through `audioAuxOutOffset`,
+which is not in the selector. So the four-spelling census understates the read side by one and the
+write side by most of it, and cannot be a floor for either.
+
+**R8 — item 26 (G4): THE THREE ROLE RULINGS claude-worker-1 correctly refused to make.**
+**(a) SAME-AGENT READBACK IS OUT OF THE POPULATION, and named rather than dropped.** `juce:834` and
+`:1015` are the writer reading bytes it wrote itself. G4's invariant is a consumer reading bytes
+ANOTHER AGENT wrote; a self-read has no cross-agent ordering hazard because there is no
+acknowledgement to wait on. They are byte reads of the plane, so they are listed as EXCLUDED
+MEMBERS with this reason — an exclusion by argument, not by the selector failing to see them.
+**(b) THE INDIRECT WRITER IS ONE SITE, AND IT IS THE HOST'S.** `juce:989/994` hands `outputPtrs`
+and `auxOutputPtrs` to the plugin, which writes them. The plugin is third-party code this packet
+does not govern; the host is accountable for what it hands over, so the site is the handover.
+Attributing it to the plugin would put a member of G4's population outside anything the packet can
+require.
+**(c) THE GATE RANGES OVER BOTH SIDES: the 7 cross-agent readers AND the 8 host writers.** R5 named
+the readers, and a reader set alone cannot check an ORDERING invariant — "no consumer reads before
+the acknowledgement" is a relation between a write and a read, and a gate enumerating only one end
+can never observe the pair. This corrects R5 rather than extending it: R5 said "the in-scope
+population is byte-consuming reads", and that was half a population for a two-sided invariant.
 
 **Floor.** Dispatch sites floor 3: `rg` finds every syntactic call but is blind to a dispatch through
 a function pointer. The WRITER census is a floor of 2 for the same reason plus helper indirection. There is no
@@ -1210,7 +1249,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `225bf8deb7de4b3c60f66cae1248b2c3e742f514`, A.0 SCRIPT BLOB `2943df29bcb93fe699510d2c04e9d9df90a15f08`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `847f04a72987bbf1c0f4582146ad1dd5ffa1b288`, A.0 SCRIPT BLOB `2f55f78b3fadaa6ba6c5e8dc288777cdad811413`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1218,7 +1257,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 30 items, 22 open · 13 RAW (12 hand-ruled) + 21 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 30 items, 21 open · 13 RAW (12 hand-ruled) + 21 commanded claims, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1396,9 +1435,9 @@ make the items IMPLEMENTABLE, and each item stays open until the work it names e
 verified by someone other than me. A ruling recorded as a closure would be the same error as a
 census recorded as a proof, which this packet has already made once at item 7.
 
-# Open items — 30 atomic, 8 CLOSED at this SHA, 22 open
+# Open items — 30 atomic, 9 CLOSED at this SHA, 21 open
 
-One per line, numbered in document order, so the count is checkable. FIVE are BLOCKING — 18, 19, 24, 26 and 27. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
+One per line, numbered in document order, so the count is checkable. FOUR are BLOCKING — 18, 19, 24 and 27. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
 
 1. **G0-B** — The generated header breaks the documented `-DDAW_BUILD_PATCHER_RUST=OFF` build for six unconditional targets, with no stated path, include directory or target-ordering edge.
@@ -1499,9 +1538,12 @@ carrying one cannot be decided by any implementation.
     marker and this item; a sixth appearing without one fails the gate. Deriving them needs a
     predicate nobody has proposed, so this is open, not closed.
 
-26. **G4** — **BLOCKING. Authoring RETRACTED at this SHA** — the role partition classified by
-    variable name, the "writes" are reads, and the residue arithmetic summed to 20 against a stated
-    27. Previously: The out-plane population is the 3
+26. **G4** — **CLOSED at this SHA.** The population is measured from the MAPPED BASE with aliases
+    followed and roles assigned by USE at the dereference: 7 cross-agent readers + 8 host writers
+    (7 direct, 1 indirect) in scope per R8(c), with 2 same-agent readbacks excluded by argument, 6
+    establishing sites and 16 non-sites accounted — 23 role-bearing, arithmetic closing. The
+    four-spelling selector is RETIRED with its blindness quantified: it saw 6 of 7 readers and none
+    of the aux writes. Previously: The out-plane population is the 3
     BYTE-CONSUMING READS (`engine_produce_block.cpp:923`, `:1150`, `engine_master_render.cpp:100`),
     separated from plane-establishing sites and byte-producing writes by ROLE rather than by name.
     The `:670`/`:730` pair that forced the withdrawal is resolved by putting both in the same role:

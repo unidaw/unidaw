@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '61ce674533307d66684948aae25eaf27f4701f43'
+PREV_TIP     = '79400aa32a2d15587da50f09b6e5d2a024c25448'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -93,9 +93,9 @@ for i, a in enumerate(sys.argv):
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
  'open-count':       ('# Open items — 30 atomic', '# Open items — 31 atomic', 1, 'OPEN-COUNT'),
- 'closed-count':     ('8 CLOSED at this SHA, 22 open', '7 CLOSED at this SHA, 23 open', 1,
+ 'closed-count':     ('9 CLOSED at this SHA, 21 open', '8 CLOSED at this SHA, 22 open', 1,
                       'OPEN-CLOSED-COUNT'),
- 'open-arithmetic':  ('8 CLOSED at this SHA, 22 open', '8 CLOSED at this SHA, 17 open', 1,
+ 'open-arithmetic':  ('9 CLOSED at this SHA, 21 open', '9 CLOSED at this SHA, 17 open', 1,
                       'OPEN-ARITHMETIC'),
  # anchored on the tree hash, not on a count: the previous anchor was '11 RAW +', which the
  # document outgrew, leaving the control unable to land while the gate still reported PASS
@@ -112,11 +112,11 @@ CONTROLS = {
  # this, the next gate that writes S.1 or "Static 1" disappears exactly as G0-B did.
  'label-spelling':   ('**Static checks.** S1 the ready-clear', '**Static checks.** S-1 the ready-clear', 1,
                       'MANIFEST-STALE'),
- 'blocker-set':      ('FIVE are BLOCKING — 18, 19, 24, 26 and 27',
-                      'FIVE are BLOCKING — 18, 19, 24, 26 and 28', 1, 'BLOCKER-SET'),
+ 'blocker-set':      ('FOUR are BLOCKING — 18, 19, 24 and 27',
+                      'FOUR are BLOCKING — 18, 19, 24 and 28', 1, 'BLOCKER-SET'),
  'constraint-lost':  ('1. Production atomic **size/alignment', '1x. Production atomic **size/alignment', 1,
                       'CONSTRAINTS-COUNT'),
- 'opening-gates':    ('**TWO OF THE EIGHT GATES CANNOT BE DECIDED',
+ 'opening-gates':    ('**ONE OF THE EIGHT GATES CANNOT BE DECIDED',
                       '**FOUR OF THE EIGHT GATES CANNOT BE DECIDED', 1, 'OPENING-GATE-COUNT'),
  'manifest-stale':   ('18. **G2-B** — **BLOCKING', '18. **G2-B** — **blocking', 1,
                       'MANIFEST-STALE'),
