@@ -721,6 +721,12 @@ destination delimiters). G4 still says four versus ten dependency blockers;
 G0-A/B planning is falsely green; R15/M1/item36/item37 oracle and G3 N/Watchdog
 remain blocked.
 
+Owner successor `9574317` claims the parser now runs to the headline line
+boundary, checks both delimiters, and uses the visible view consistently for
+marker and stray checks; 100 controls pass and the prose-count regex was widened
+for “One hundred.” Exact review is pending; G3/G0/G4/M1 and item18 propagation
+remain gated.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
