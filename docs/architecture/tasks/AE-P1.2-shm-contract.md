@@ -1208,8 +1208,12 @@ alias to the plane BEFORE the per-plugin loop at `:866`, and `:1061` rebinds it 
 handoff at `:987` touch the input plane on the first plugin and host-local output buffers on every
 plugin after it. **That is a positional rule, and no site list can carry it**, which is why
 `alias leaves the plane` is a row: the fact that the population ENDS is a member of the population.
-It also narrows G4's ownership window usefully — the host reads the input plane during one plugin,
-not throughout the segment.
+**It does NOT narrow G4's ownership window**, and an earlier version of this paragraph said it did.
+The invariant runs from dispatch to the segment's acknowledgement; there is no per-plugin signal for
+the engine to observe, so what the host happens to read after plugin one cannot shorten a window the
+engine has no way to learn about. What the rule does establish is a FIXTURE requirement: a
+single-plugin segment exercises none of this, so the deterministic test must dispatch a multi-plugin
+segment or it tests the one arrangement where the rebinding never happens.
 
     OUT plane — the ordering half (`write_output → release-ack → acquire-wait → read_output`).
     BOTH ROWS ARE THE HAND-CLASSIFIED ROLE CENSUS OF THE POPULATION BULLET ABOVE — they carry no
@@ -1453,7 +1457,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `9ed8d5190b04011fc86b95638dda381c98ffa750`, A.0 SCRIPT BLOB `b601e226c0bbca0c6c90edbc087072bf84c7c4e4`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `7d8866da98e25abe269b0ea84465ca7c21ea1689`, A.0 SCRIPT BLOB `d9b447263789798b3c6b46e5af313747f575e95c`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1510,6 +1514,14 @@ one. (This sentence previously said the choice was unmade, which R4 falsified an
 back to: A.0's "what it does not decide" list is the exact place where a stale sentence understates
 what has been settled.)
 And nothing about the product beyond what a text search can see.
+
+**Emission is the LAST thing A.0 does.** The manifest write sat above a dozen later checks with an
+`if fail` guard in front of it, so every late failure still published — codex-worker-1 reproduced it
+twice, once renaming a review-register heading to emit a structurally incomplete manifest with exit
+code 0. A guard placed early tests only the failures known early. The write is now after every
+check, staged and atomically replaced, and `MANIFEST-STALE` is suppressed on an emitting run because
+a check that forbids its own remedy is a deadlock rather than a guard — that deadlock appeared the
+moment the write moved, and is recorded here because it is the predictable cost of the fix.
 
 **Controls.** Sixty-three, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
@@ -1850,10 +1862,16 @@ carrying one cannot be decided by any implementation.
     closed. What is not closed is that G4's PASS conditions, its deterministic test and its static
     checks were all written against the OUTPUT relation, and a gate whose population covers both
     halves of its invariant while its tests cover one half is not decidable by any implementation of
-    those tests. **A population is not a gate.** Two specifics no existing PASS condition expresses:
-    failure model (1) "input overwritten under the host" has no test at all, and the positional rule
-    at `:1061` means the host's ownership of the input plane spans ONE PLUGIN rather than the
-    segment — a fixture that dispatches a single-plugin segment can never distinguish the two.
+    those tests. **A population is not a gate.** **Both specifics I gave for that were wrong and are withdrawn.** I wrote that failure model (1)
+    has "no test at all" — G4 specifies input coverage in S2, S5, PASS 2's ordering and PASS 4's
+    input immutability, so the gap is not the absence of a test. **The precise missing case is a
+    MULTI-PLUGIN SEGMENT fixture**, and it is the only one that can exercise the alias rebinding at
+    `:1061`. I also wrote that the rebinding NARROWS the host's ownership of the input plane to one
+    plugin. It does not: the invariant runs from dispatch to the segment's acknowledgement, there is
+    no per-plugin signal for the engine to observe, and what the host happens to READ after plugin
+    one cannot shorten a window the engine has no way to learn about. **A fact about behaviour is
+    not a licence to narrow a contract** — that is the same move as reading a race as absent because
+    the code usually wins it.
     **The incompleteness that reopened this item was the third in this population and the first that
     was not a selector defect.** The four-spelling census missed a spelling; the mapped-base census
     missed helper-mediated readers; that one missed HALF THE SUBJECT, because I enumerated what the
@@ -1898,10 +1916,15 @@ carrying one cannot be decided by any implementation.
     nothing to retry with. **And zero is a live value**: `clipVersion` initialises to 0
     (`shared_memory.h:1376`, `daw_engine_main.cpp:675`), so a consumer cannot tell these zeros from a
     genuine base of 0 on a fresh track — the one value that should mean "nothing to say" already
-    means something on this wire. The consequence is wired: `ui/daw-cli/src/main.rs:1179` correlates
-    on `(track, command_type, sentBase)`, so for `SetRowOps` the third key is INERT and two
-    concurrent refusals on one track are indistinguishable, which is the bug that function's own
-    doc-comment records having hit once. Acceptance is unaffected — `applySetRowOps` bumps the clip
+    means something on this wire. **The consequence is LATENT, not wired, and I defended the wrong half of this.**
+    `ui/daw-cli/src/main.rs:1179` correlates on `(track, command_type, sentBase)` and
+    `await_clip_outcome` is live with four callers (`:2989`, `:3000`, `:5418`, `:5430`) — so when
+    codex-worker-1 said the correlator was dead I checked, and it is not. But **none of those
+    callers is SetRowOps**: the CLI's SetRowOps path at `:4263-4288` sends and prints, with no await
+    at all, and the agent and sidecar do not wait either. So the inert third key harms no consumer
+    TODAY; it makes the refusal uncorrelatable for any consumer that starts waiting. I was right
+    that the function is live and wrong about the case this item uses it for, which is the half that
+    mattered. Acceptance is unaffected — `applySetRowOps` bumps the clip
     version at `engine_clip_edit.cpp:439` — so this is a refusal-path defect only. The arbitrated-command SCOPE is FALSIFIED and unreplaced, so G2-A
     governs an undefined set. Falsified by exhibit: `engine_rowops_commands.cpp:49`
     emits an adoptable refusal for `SetRowOps`, outside the nine. The 51 correlators also span

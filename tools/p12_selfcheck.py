@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '84e9779fc21be66bf77faa35e9faf60efaf32903'
+PREV_TIP     = '5be99953173e765742b58557baab5fc8b635fbe0'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -1095,8 +1095,15 @@ for m in re.finditer(r'(?m)^\*\*(R\d+) — .*?(?=\n\n\*\*R\d+ — |\n# |\*\*What
     rulings.append({
         'id': m.group(1),
         'line': line_of(m.start()),
-        'applied': ('PROPAGATED at this SHA' in blk or 'is PROPAGATED' in blk
-                    or 'RULES THE HOST IN SCOPE' in pkt.upper() and m.group(1) == 'R7'),
+        # DERIVED from use, not sniffed from phrasing. As a phrase heuristic this published
+        # `R1.applied = false` while G1-B's population is authored under R1 and item 11 is CLOSED,
+        # and `R12.applied = false` while item 27 says AUTHORED under R12 — a flag about a ruling
+        # disagreeing with the item the ruling names. A ruling is applied iff an item or gate says
+        # it applied it; the ruling's own prose is the last place to ask.
+        # the window is the CLAUSE, not an exact phrase: the packet writes "AUTHORED under R12",
+        # "AUTHORED again under R1" and "RULED (R10)", and an exact-phrase match saw only the third.
+        'applied': bool(re.search(r'(?:AUTHORED|RULED|authored)[^.\n]{0,50}\b%s\b' % m.group(1), pkt)
+                        or 'PROPAGATED at this SHA' in blk or 'is PROPAGATED' in blk),
         # from the HEADING only. Deriving from the whole block made R9 claim items [26, 31]
         # because its body MENTIONS item 31 — a mention became an ownership claim, and a
         # planner reading the manifest would have seen item 31 owned by two rulings.
@@ -1246,15 +1253,6 @@ man = {
             'census_rows': len(census_rows), 'rulings': len(rulings)},
 }
 emitted = json.dumps(man, indent=1, ensure_ascii=False, sort_keys=True) + '\n'
-if '--emit-manifest' in sys.argv or '--manifest' in sys.argv:
-    # FAIL CLOSED. This exited 0 and wrote the file before any accumulated failure was read, so a
-    # packet that fails its own gate could still publish a manifest — and the manifest is what a
-    # planner consumes. A writer that ignores the verdict of the checker it lives inside is the
-    # `probe writes go nowhere` shape: the artifact is produced regardless of whether it is true.
-    if fail:
-        print('\n'.join('  ' + f for f in fail))
-        print(f'REFUSED to write {MANIFEST}: {len(fail)} check(s) failed'); sys.exit(2)
-    open(MANIFEST, 'w').write(emitted); print(f'wrote {MANIFEST}'); sys.exit(0)
 # A.0 describes what the manifest carries. That sentence is a THIRD statement — the emitter and the
 # committed file agree with each other and neither is compared to the prose, which is how the
 # manifest came to announce two keys it did not emit. The described keys are now checked.
@@ -1313,8 +1311,13 @@ elif opening and WORDNUM[opening.group(1)] != len(notplan):
 elif allplan and notplan:
     bad('OPENING-GATE-COUNT', f'opening says every gate is plannable, manifest derives '
                               f'{len(notplan)} that are not ({", ".join(notplan)})')
+# MANIFEST-STALE compares the COMMITTED manifest to what this run emits — which is exactly what an
+# emitting run is about to fix, so on `--manifest` it is not a failure but the reason for the run.
+# Moving emission after every check (correct) created this bootstrap: the stale manifest blocked the
+# regeneration that would clear it. A check that forbids its own remedy is a deadlock, not a guard.
 try:
-    if open(MANIFEST).read() != emitted:
+    if open(MANIFEST).read() != emitted and not ('--emit-manifest' in sys.argv
+                                                 or '--manifest' in sys.argv):
         bad('MANIFEST-STALE', 'the committed manifest is not what this packet emits')
 except FileNotFoundError:
     bad('MANIFEST-MISSING', MANIFEST)
@@ -1338,6 +1341,21 @@ if NEG_TAG:
         print(f'CONTROL {NEG} OK (+{len(other)} consequential: {other[0][:60]})')
         sys.exit(0)
     print(f'CONTROL {NEG} OK — [{NEG_TAG}] fired ({len(hit)})'); sys.exit(0)
+# EMISSION IS THE LAST THING THAT HAPPENS. My first fail-closed fix guarded the write with `if fail`
+# — and left the write where it was, ABOVE a dozen later checks, so every late failure
+# (GATE-ACCEPT-PROSE, RECORD-SECTION-COUNT, the census site checks) still published. codex-worker-1
+# reproduced it twice: renaming a review-register heading emitted a structurally incomplete manifest
+# with rc 0. A guard placed early tests the failures known early; the ONLY correct position for a
+# publish is after everything that could refuse it. Staged write and atomic replace, so a crash
+# between cannot leave a half-written canonical artifact either.
+if '--emit-manifest' in sys.argv or '--manifest' in sys.argv:
+    if fail or NEG:
+        for f in fail[:30]: print('  ' + f)
+        print(f'REFUSED to write {MANIFEST}: '
+              f'{len(fail)} check(s) failed' + (' (mutated run)' if NEG else '')); sys.exit(2)
+    tmp = MANIFEST + '.tmp'
+    open(tmp, 'w').write(emitted); os.replace(tmp, MANIFEST)
+    print(f'wrote {MANIFEST}'); sys.exit(0)
 if fail:
     for f in fail[:30]: print('  ' + f)
     print(f'FAIL ({len(fail)})'); sys.exit(1)
