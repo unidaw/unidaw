@@ -18,16 +18,15 @@ never written is the same error's fingerprint.
 
 The blockers from the exact review are reconciled here, and the count is deliberately not restated: it moved between rounds and a fixed number here would be a twin of the item list, which is the authority:
 
-1. **THREE OF THE EIGHT GATES CANNOT BE DECIDED AT THIS SHA — meaning they are NOT PLANNABLE, because their own population is withdrawn.** Six gates additionally carry a blocking item and so are not ACCEPTANCE-decidable; the manifest publishes both senses as `decidable_for_planning` and `decidable_for_acceptance`, and G3 is the case that shows why one boolean will not do: R3 makes it plannable and it is not acceptance-decidable until the N ticket lands. G1-B declares no reader population
-   (item 11), G2-A's arbitrated scope is falsified and unreplaced (item 27), and G4's out-plane
-   selection is withdrawn (item 26). Every gate carries the record's SHAPE — population slot,
+1. **TWO OF THE EIGHT GATES CANNOT BE DECIDED AT THIS SHA — meaning they are NOT PLANNABLE, because their own population is withdrawn.** G2-A was the third until its scope was AUTHORED under R1 at this SHA; authoring a withdrawn population is how a gate leaves this list, and it is packet work rather than product work. Six gates additionally carry a blocking item and so are not ACCEPTANCE-decidable; the manifest publishes both senses as `decidable_for_planning` and `decidable_for_acceptance`, and G3 is the case that shows why one boolean will not do: R3 makes it plannable and it is not acceptance-decidable until the N ticket lands. G1-B declares no reader population
+   (item 11) and G4's out-plane selection is withdrawn (item 26). Every gate carries the record's SHAPE — population slot,
    failure model, deterministic test, PASS conditions each naming their refutation, static checks,
    review register — and for those three the population slot reads "withdrawn", which satisfies the
    shape and decides nothing. **No universal claim about populations is made anywhere in this
    packet**: a sentence of the form "each population carries its extraction command" is false at
    this SHA by construction, and this paragraph previously ended with one while opening with the
    disqualification, because I patched its head across three rounds and left its tail alone.
-2. **The open list is 28 atomic items, not 15 categories.** The four that compression swallowed are
+2. **The open list is 29 atomic items, not 15 categories.** The four that compression swallowed are
    restored: G0-B's unowned mutation floor, G2-A's BATCH blindness, G2-B's probe-order false-green,
    and G3's debug-env requirement plus its self-contradicting static check.
 3. **G0-A's mailbox census was wrong twice and is corrected with its method.** See G0-A.
@@ -578,7 +577,22 @@ that one command instance and the engine copied through unchanged. The mechanism
 engine-side discriminator cannot empty the clause: a correlator presented with a record whose every
 content field equals its own command, but whose identity it did not mint, must return not-mine.
 
-**Population.** *Arbitrated commands* — **SCOPE FALSIFIED BY EXHIBIT; see open item 27 (G2-A).**
+**Population.** *Two populations, AUTHORED under R1, related by containment rather than equality.*
+**(A) Commands arbitrated against a version counter** — reached through
+`requireMatchingClipVersion`/`requireMatchingHarmonyVersion`, whose 9 production call sites are
+derived below. **(B) Commands that emit an adoptable `ClipRejected`** — determined by the three
+production emit sites and NOT by a name list: `engine_clip_edit.cpp:965` (`UnknownTrack`) and
+`:986` (`StaleBase`) pass the CALLER's `commandType` through, so they range over exactly (A), and
+`engine_rowops_commands.cpp:49` hardcodes `SetRowOps`. Therefore **B = A ∪ {SetRowOps}** and
+`SetRowOps` is the only member of B outside A — it has no `baseVersion` field in
+`UiSetRowOpsPayload`, so it cannot be arbitrated even in principle. **Drift detector:**
+`git grep -n 'emitClipReject(' -- apps | grep -v -e 'void emitClipReject' -e daw_engine_main.cpp -e _tests_main`
+returns 3; a fourth emit site invalidates this authored scope until it is re-authored, because a new
+site may carry a hardcoded type as `:49` does.
+**Every control in this gate MUST name which population it ranges over.** The predecessor's scope
+sentence — "the only commands that can produce an adoptable refusal" over a list of nine — asserted
+A and named B, which is why one exhibit falsified it.
+**Superseded scope, retained as the record of what was falsified:**
 `engine_rowops_commands.cpp:49` emits `emitClipReject(..., daw::UiCommandType::SetRowOps)` from a
 true-mutating arm, and `SetRowOps` is not among the nine, so "the only commands that can produce an
 adoptable refusal" is false as written. The 51 correlator call sites compound it: they correlate
@@ -1053,7 +1067,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `d83be3843a7a78158334d0afbcda26d3874a83ae`, A.0 SCRIPT BLOB `b4536321a8d19ad8c285930ebbd7c08231d8b35e`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `e4e8b354519a3a52d960852a610808b3b008e3f4`, A.0 SCRIPT BLOB `255b09906c7dd11c55d0476c89039f4dcff247eb`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1061,7 +1075,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 28 items, 22 open · 13 RAW (12 hand-ruled) + 20 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 29 items, 22 open · 13 RAW (12 hand-ruled) + 21 commanded claims, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1201,7 +1215,7 @@ make the items IMPLEMENTABLE, and each item stays open until the work it names e
 verified by someone other than me. A ruling recorded as a closure would be the same error as a
 census recorded as a proof, which this packet has already made once at item 7.
 
-# Open items — 28 atomic, 6 CLOSED at this SHA, 22 open
+# Open items — 29 atomic, 7 CLOSED at this SHA, 22 open
 
 One per line, numbered in document order, so the count is checkable. SIX are BLOCKING — 11, 18, 19, 24, 26 and 27. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
@@ -1294,8 +1308,12 @@ carrying one cannot be decided by any implementation.
     distinguishing `engine_consumer.cpp:670` from `:730`, which assign the same field for a normal
     track and an aux child. A predicate must separate "establishes where the out-plane is read from"
     into the cases this gate governs, or the gate must range over all 27.
-27. **G2-A** — **BLOCKING.** The arbitrated-command SCOPE is falsified and unreplaced, so G2-A
-    governs an undefined set. **The two populations are NOT NESTED**, which is the finding that
+27. **G2-A** — **CLOSED at this SHA by AUTHORING under R1.** The scope is two populations related
+    by containment: A (arbitrated against a version counter, 9 call sites) and B (emits an adoptable
+    `ClipRejected`), with **B = A ∪ {SetRowOps}** determined from the three production emit sites
+    rather than from a name list, and a drift detector on that site count. Every control must name
+    which it ranges over. What is NOT closed is the PRODUCT defect this exposed, which is open item
+    29 (G2-A). **The two populations are NOT NESTED**, which is the finding that
     settles the shape of the fix: "commands arbitrated against a version counter" and "commands that
     emit an adoptable refusal" are different sets, and `SetRowOps` is in the second and not the
     first. Any control here must say WHICH population it ranges over.
@@ -1322,6 +1340,19 @@ carrying one cannot be decided by any implementation.
     fixable and bundling them means neither can be closed: the counter-only decisions must be
     extracted and each replaced, and no check over that extraction can be written until the
     extraction has a predicate, a command and a member list.
+
+29. **G2-A** — The `SetRowOps` refusal is malformed for the channel it rides, measured at the
+    frozen product by claude-worker-1 and independent of this packet's scope question.
+    `engine_rowops_commands.cpp:49` passes `/*sentBase=*/0, /*currentBase=*/0` where the other
+    emit sites pass real values, and the payload's own comment calls `currentBase` "the value to
+    retry with" — there is nothing to retry with. Zero is a LIVE value (`clipVersion` initialises
+    to 0 at `shared_memory.h:1376` and `daw_engine_main.cpp:675`), so a consumer cannot distinguish
+    these from a genuine base of 0 on a fresh track. `ui/daw-cli/src/main.rs:1179` correlates on
+    `(track, command_type, sentBase)`, so for `SetRowOps` the third key is INERT and two concurrent
+    refusals on one track are indistinguishable — the bug that function's own doc-comment records
+    having hit. Acceptance is unaffected: `applySetRowOps` bumps the clip version at
+    `engine_clip_edit.cpp:439`. This is a refusal-path defect and it is a PRODUCT fix, not a packet
+    edit.
 
 # Provenance of this packet's own numbers
 

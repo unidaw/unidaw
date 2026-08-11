@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'acd3e65ff37e16e150e3fe1c4149752d8859443b'
+PREV_TIP     = 'c507dea4c4b1ca9580d398dd557f15d1c644f89e'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -92,10 +92,10 @@ for i, a in enumerate(sys.argv):
 # merely makes the run FAIL proves nothing — the fifth way a negative control lies is landing in
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
- 'open-count':       ('# Open items — 28 atomic', '# Open items — 29 atomic', 1, 'OPEN-COUNT'),
- 'closed-count':     ('6 CLOSED at this SHA, 22 open', '5 CLOSED at this SHA, 23 open', 1,
+ 'open-count':       ('# Open items — 29 atomic', '# Open items — 30 atomic', 1, 'OPEN-COUNT'),
+ 'closed-count':     ('7 CLOSED at this SHA, 22 open', '6 CLOSED at this SHA, 23 open', 1,
                       'OPEN-CLOSED-COUNT'),
- 'open-arithmetic':  ('6 CLOSED at this SHA, 22 open', '6 CLOSED at this SHA, 17 open', 1,
+ 'open-arithmetic':  ('7 CLOSED at this SHA, 22 open', '7 CLOSED at this SHA, 17 open', 1,
                       'OPEN-ARITHMETIC'),
  # anchored on the tree hash, not on a count: the previous anchor was '11 RAW +', which the
  # document outgrew, leaving the control unable to land while the gate still reported PASS
@@ -114,7 +114,7 @@ CONTROLS = {
                       'MANIFEST-STALE'),
  'constraint-lost':  ('1. Production atomic **size/alignment', '1x. Production atomic **size/alignment', 1,
                       'CONSTRAINTS-COUNT'),
- 'opening-gates':    ('**THREE OF THE EIGHT GATES CANNOT BE DECIDED',
+ 'opening-gates':    ('**TWO OF THE EIGHT GATES CANNOT BE DECIDED',
                       '**FOUR OF THE EIGHT GATES CANNOT BE DECIDED', 1, 'OPENING-GATE-COUNT'),
  'manifest-stale':   ('26. **G4** — **BLOCKING.**', '26. **G4** — **blocking.**', 1,
                       'MANIFEST-STALE'),
@@ -178,7 +178,7 @@ nums, nxt = [], 1
 for c in cand:
     if c == nxt: nums.append(c); nxt += 1
 closed_set = {int(m.group(1)) for m in
-              re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — CLOSED at this SHA', body)}
+              re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — \*{0,2}CLOSED at this SHA', body)}
 closed = len(closed_set)
 blocking_n = len(re.findall(r'(?m)^\d{1,2}\. \*\*[^*]+\*\* — [^\n]{0,120}BLOCKING', body))
 if not hdr:
