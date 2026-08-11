@@ -469,6 +469,18 @@ latest exact independent verdict recorded here.
 
 ### Provisional implementation ticket handoff
 
+Latest owner packet `b843cc7` (successor to `90462e1`) remains under exact
+independent review. The prior exact review of `90462e1` is **BLOCKED**:
+mechanical 90-control sweep passes, but impossible Unicode/empty/bare-tag
+emitter forms remain accepted; positive emitter-language coverage is missing;
+R15/M1 status and ABSORBING propagation conflict; item37 still lacks a
+generation-bound readiness/mapping publication (including an external-host
+relaunch counterexample); withdrawal is not typed; ruling-body binding can be
+spoofed through invisible link destinations; and N/Watchdog, G2-A/B, G0-A/B,
+G4, stale citations/count prose, and summary defects remain. No P1.2 product
+implementation is authorized until a successor receives exact PASS and the
+remaining semantic decisions are recorded.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
