@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '1032b7357638ef6b89c4e77f1e67d9b1777ca5aa'
+PREV_TIP     = '9322d43530dafe2315f0864c1e5126acdde4e9e3'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -384,6 +384,8 @@ CONTROLS = {
  'writer-path-prefix': ('juce:989/994', 'fake/juce:989/994', 1, 'OUT-MEMBERS'),
  # the NUMERIC prefix, which walked past both the label scan and the tokenizer
  # the blocker KIND classification, now marked in place and derived from the markers
+ # a label detached from its colon by a space, riding the sticky path
+ 'writer-detached':  ('juce:989/994', 'fake :989/994', 1, 'OUT-MEMBERS'),
  'blocker-kind':     ('35. **G0-B** — ⟦PRODUCT⟧ ', '35. **G0-B** — ', 1, 'BLOCKER-KIND'),
  'writer-path-numeric': ('juce:989/994', '9/juce:989/994', 1, 'OUT-MEMBERS'),
  'control-dupe':     ('`member-per-type`,', '`member-per-type`, `member-per-type`,', 1,
@@ -703,6 +705,15 @@ else:
     # consumed atom by atom from a delimiter, and ANY non-whitespace run that is not a recognised
     # atom is an error. A tokenizer that must account for every byte cannot be walked past.
     _ATOM = re.compile(r'`[^`]*`|juce:\d{3,4}|:\d{3,4}|[-/]|,|·|—|\d{1,4}|[A-Za-z()\[\]\'"*.;=%><_+&|{}#!?@^~$\\]+')
+    # a WORD immediately before a bare-colon citation is a label wearing a space. `fake :989/994`
+    # tokenizes as an ordinary word followed by a bare citation, which then inherits the STICKY path
+    # — so a different file is named while the check reads `juce`. The sticky path is legitimate only
+    # after a citation that DECLARED one; a word in that position is a claim about the path and is
+    # rejected as one. (An earlier version of this check was written and silently did not land: its
+    # anchor no longer existed. It is verified against the spoof below rather than assumed.)
+    for _w in re.finditer(r'([A-Za-z_][\w/.]*)\s+:\d{3,4}', wseg.group(0)):
+        bad('OUT-MEMBERS', f'writer citation has a detached label {_w.group(1)!r} before a bare '
+                           f'`:NNN` — a path is declared with a colon or not at all')
     _rest = wseg.group(0)
     _pos = 0
     while _pos < len(_rest):
@@ -1399,6 +1410,11 @@ man = {
             'body': re.sub(r'\s+', ' ', item_body.get(n, '')).strip(),
             'blocking': 'BLOCKING' in (re.search(r'(?m)^%d\. \*\*[^*]+\*\* — (.{0,200})' % n, body).group(1)
                                        if re.search(r'(?m)^%d\. ' % n, body) else ''),
+            # the KIND marker, emitted rather than left in prose: a consumer planning the
+            # blockers needs to know which are product work and which wait on another item,
+            # and that was readable only by eye until now.
+            'kind': (re.search(r'⟦(PRODUCT|BLOCKED-ON: \d+)⟧', item_body.get(n, '')).group(1)
+                     if re.search(r'⟦(PRODUCT|BLOCKED-ON: \d+)⟧', item_body.get(n, '')) else None),
             'closed': n in closed_set} for n in nums],
  'raw_claims': [{'raw': int(re.match(r'RAW \*{0,2}(\d+)', pkt[a:b]).group(1)),
                  'command': (re.search(r'\(`([^`]+)`\)', pkt[a:b]).group(1)
