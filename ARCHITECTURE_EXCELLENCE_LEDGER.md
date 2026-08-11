@@ -607,6 +607,12 @@ packet blockers (items18/28/26/35) remain untyped. Item37 taxonomy/source
 description is inaccurate, and the empty-message sweep fail-open plus stale
 comment remain. G2/G3/G0/G4 are unresolved.
 
+Owner successor `d6d64df` claims PACKET markers are now bound by a derived-set
+restatement, enum validation, and two mutation controls (`92` controls total),
+with corrected item37 publication taxonomy. M1 and G3 N/Watchdog remain open by
+design. Exact review is pending; prior R15/sweep and carried gate closures must
+still be verified.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
