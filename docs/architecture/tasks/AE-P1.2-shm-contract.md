@@ -354,12 +354,26 @@ reproducible, and four populations in the predecessor were exactly that.
 - *Read-cursor stores* — RAW **14** (`grep -rn -e readIndex.store -e read_index.store apps/ ui/`) → minus 10 non-ring and test stores → **4**. The predecessor printed this command beside the figure 4, which
   the command does not produce.
 - *Plugin-cache index sites, which are NOT ring sites* — RAW 21 (`grep -rnF 'entries[' apps/`)
-  → minus 9 event-ring statements → **12**,
-  being exactly the plugin-cache reads subtracted above: `plugin_cache.cpp:388/:460/:469/:478/:492`,
+  → minus 9 event-ring statements → **12**. These twelve are the
+  plugin-cache reads and are NOT the population PASS 7 and S4 range over; the RING index sites are
+  the separate authored population below. The twelve are: `plugin_cache.cpp:388/:460/:469/:478/:492`,
   `engine_chain_commands.cpp:81`, `engine_save_project.cpp:265/:362`, `daw_engine_main.cpp:291/:1078`,
   and two in `_tests_main` files. The two populations partition the same 21 and are stated so the
   partition is visible: 12 + 9 = 21, and the 9 split 4 data / 5 flag. Inside a command:
   `grep -rnF 'entries[' apps/ | grep -e pluginCache -e cache.entries` returns 12.
+- ***RING* index sites — the population PASS 7 and S4 actually range over — AUTHORED under R1, and
+  CROSS-LANGUAGE.** This gate governs a ring that both sides of the SHM boundary index, and every
+  earlier version of this population searched `apps/` only, so the Rust half was not omitted by a
+  rule — it was never in view. **C++ production (8):** `event_ring.cpp:95`, `:96`, `:109`, `:116`,
+  `:126`, `:138`, `:149`, `:163`. **Rust production (3):** `ui/daw-bridge/src/control.rs:454`
+  (`read_volatile(ring.entries.add(..))`), `:1465` (`*ring.entries.add(read)`), `:1941`
+  (`ring.entries.add(write)`). **11 production**, plus one C++ test
+  (`device_chain_ui_live_tests_main.cpp:112`) and one Rust BASE-POINTER construction
+  (`control.rs:1969`, `entries.add(entries_offset) as *mut EventEntry`) which indexes nothing and is
+  excluded by name rather than by rule. **Drift detectors:** `grep -rnF 'entries[' apps/` returns 21
+  and `git grep -n 'entries.add' -- ui` returns 4; either figure changing invalidates this authored
+  list until it is re-authored. A single-language census of a two-language boundary is not a floor,
+  it is a different population wearing the gate's name.
 
 **Floor.** All four are token greps and blind in the same four ways: a cursor mutated through a
 whole-`RingHeader` memcpy, a `reinterpret_cast`, a helper that takes the header by reference, or a
@@ -855,10 +869,13 @@ correctly gated by the mechanism this gate generalises. `apps/engine_audio_callb
 proving omission rather than design, and they bound the blast radius to three shapes: chains
 interleaving VST and non-VST devices, a patcher audio node after a plugin, and track-to-track routing
 from a plugin-bearing track. **Dependencies** G0-A, G0-B, G1-A, G1-B, G2-A, G2-B, G3. Final gate — and therefore NOT DECIDABLE
-at this SHA, because FOUR of its dependencies carry BLOCKING items: 11 (G1-B) has no reader
-population, 18 (G2-B) has the mirror-ack circularity, 19 (G3) has no source for N, and 24 (G0-B)
-holds the rename PASS 9 is RED without — G4 depends on G0-B, so a count of three was wrong the
-moment 24 was registered. G4 is written
+at this SHA, because its dependencies carry SIX BLOCKING items: 11 (G1-B) has no reader
+population, 18 (G2-B) has the mirror-ack circularity, 19 (G3) has no source for N, 24 (G0-B) holds
+the rename PASS 9 is RED without, and 26 and 27 are G4's and G2-A's own withdrawn populations.
+**The condition is that the dependency GATES PASS, not that their items are ruled.** All four of
+11/18/19/24 are RULED (R1-R4) and all four are still open; a ruling is a decision about what to
+build and says nothing about whether it exists. Stating the condition as "until those are ruled"
+would already be satisfied and would license a PASS over six open blockers. G4 is written
 in full so the work is specified, but no PASS verdict on it may be recorded until those FOUR are
 ruled; a final gate that reports green over blocked dependencies is the exact shape of a check that
 passes with the defect present.
@@ -892,8 +909,9 @@ The in-scope selection is open item 26 (G4). *Input-plane writers in engine prod
 declarations and reads) → **2**.
 
 **Floor.** Dispatch sites floor 3: `rg` finds every syntactic call but is blind to a dispatch through
-a function pointer. Reader and writer censuses are floors of 7 and 2 for the same reason plus helper
-indirection.
+a function pointer. The WRITER census is a floor of 2 for the same reason plus helper indirection. There is no
+reader floor: the reader selection is withdrawn (open item 26 (G4)), and quoting a floor of 7 for a
+withdrawn population would restate the very number the withdrawal removed.
 
 **Failure model.** (1) Input overwritten under the host: the host is delayed before reading segment
 k's input; the engine memcpys segment k+1 over it (`:944-1037`). (2) Stale lap read as fresh: the host
@@ -990,7 +1008,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `11720fc33a3ffbace9fa01bf8b17f44c15d95ef7`, A.0 SCRIPT BLOB `da24fe14c0f727c9b8d1d1706485234e4a4f68a0`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `0cff9a82befd8ce65545d3d2e3343e1356d39679`, A.0 SCRIPT BLOB `65f92e5efc0ac122a855dac471fcf470b310460c`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -998,7 +1016,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 27 items, 21 open · 13 RAW (12 hand-ruled) + 19 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 27 items, 21 open · 13 RAW (12 hand-ruled) + 21 commanded claims, all executed
     PASS
 
 **The two claim categories are DISJOINT**, which they were not until this SHA: a RAW claim whose
@@ -1126,7 +1144,7 @@ census recorded as a proof, which this packet has already made once at item 7.
 
 # Open items — 27 atomic, 6 CLOSED at this SHA, 21 open
 
-One per line, numbered in document order, so the count is checkable. FOUR are BLOCKING — 11, 18, 19 and 24, matching the four G4 names as its undecidability: a gate
+One per line, numbered in document order, so the count is checkable. SIX are BLOCKING — 11, 18, 19, 24, 26 and 27. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
 
 1. **G0-B** — The generated header breaks the documented `-DDAW_BUILD_PATCHER_RUST=OFF` build for six unconditional targets, with no stated path, include directory or target-ordering edge.
@@ -1183,8 +1201,8 @@ carrying one cannot be decided by any implementation.
 15. **G2-B** — The self-deadlock: the admitted fix class requires `applyHostBypassStates` to stop taking `controllerMutex`.
 16. **G2-B** — The swap trap rests on an unratcheted guard at `apps/daw_engine_main.cpp:1107-1109`.
 17. **G2-B** — Probe ordering: without forbidding the offline probe from acquiring before the RT probe reports, the PASS token is producible by the packet's own fixture.
-18. **G2-B** — **BLOCKING, RULED (R2), not closed.** The mirror-ack circularity. The ack arrives only during a `ProcessBlock` that `processTrack` refuses while `hostReady` is false. A PASS bullet was withdrawn rather than reworded, and the mirror half is unspecified until the owner rules between a recovery-only priming exemption and a two-level readiness.
-19. **G3** — **BLOCKING, RULED (R3: N = 3, authored), not closed.** N has no source in the tree, so this gate is NOT DECIDABLE and no implementation may be accepted against it until an owner rules.
+18. **G2-B** — **BLOCKING, RULED (R2), not closed.** The mirror-ack circularity. The ack arrives only during a `ProcessBlock` that `processTrack` refuses while `hostReady` is false. A PASS bullet was withdrawn rather than reworded, and the owner HAS ruled (R2: two-level readiness) and the mirror half is unspecified until that ruling is PROPAGATED into this gate and G4 — the item is open for the propagation, not for the decision.
+19. **G3** — **BLOCKING, RULED (R3: N = 3, authored), not closed.** N has no source in the tree. The owner HAS ruled (R3: N = 3, authored), which makes the gate decidable for PLANNING; it is not decidable for ACCEPTANCE until the ticket lands — N pinned with units and semantics, a static check on the literal, watchdog instrumentation, drift acceptance and independent validation.
 20. **G3** — `DAW_ENGINE_DEBUG_STALL` must be set by the Layer-2 fixture or the channel a PASS bullet reads does not exist.
 21. **G3** — The static-check contradiction: one check places the eviction where its natural implementation changes an exit count another check pins.
 22. **G4** — The fixture definitions added here (F0-F6, S1-S8) and the corrected ack-census counts have not been run against anything; the reviewer should confirm them against the fixture rather than against this packet.
@@ -1205,11 +1223,13 @@ carrying one cannot be decided by any implementation.
     marker and this item; a sixth appearing without one fails the gate. Deriving them needs a
     predicate nobody has proposed, so this is open, not closed.
 
-26. **G4** — The out-plane in-scope selection. The raw figure stands; the subtraction to 7 had no rule
+26. **G4** — **BLOCKING.** The out-plane in-scope selection is UNDEFINED after the withdrawal, so
+    G4 has no population to range over. The raw figure stands; the subtraction to 7 had no rule
     distinguishing `engine_consumer.cpp:670` from `:730`, which assign the same field for a normal
     track and an aux child. A predicate must separate "establishes where the out-plane is read from"
     into the cases this gate governs, or the gate must range over all 27.
-27. **G2-A** — The arbitrated-command SCOPE, falsified by exhibit: `engine_rowops_commands.cpp:49`
+27. **G2-A** — **BLOCKING.** The arbitrated-command SCOPE is FALSIFIED and unreplaced, so G2-A
+    governs an undefined set. Falsified by exhibit: `engine_rowops_commands.cpp:49`
     emits an adoptable refusal for `SetRowOps`, outside the nine. The 51 correlators also span
     chain, sampler, mod-link and journal refusals. Either the nine becomes ten-or-more by
     enumeration, or the gate states which refusals it governs and why the rest are out — and the two
