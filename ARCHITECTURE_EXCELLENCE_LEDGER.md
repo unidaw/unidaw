@@ -600,6 +600,13 @@ proof omits this case. Its comment also falsely attributes the length bound to
 excluding `)`, while implementation correctly uses arithmetic length and allows
 `)`.
 
+Full exact review of `e67ba00` is **BLOCKED**. `/5` still has no PACKET
+validation: deleting or relocating item36's marker passes. R15 propagation is
+contradictory across PASS1/R15/item36/opening; M1 remains underspecified; other
+packet blockers (items18/28/26/35) remain untyped. Item37 taxonomy/source
+description is inaccurate, and the empty-message sweep fail-open plus stale
+comment remain. G2/G3/G0/G4 are unresolved.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
