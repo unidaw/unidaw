@@ -141,7 +141,9 @@ observable from a return value, so (d) is decided statically.
 
 **Floor.** Only the DERIVATION census is a name-grep, and it is exact because the names are the
 mechanism. The region, bounds and ring censuses are NOT name-greps and this paragraph said they were
-— they carry `[HAND-CLASSIFIED — open item 25 (all)]` markers eight lines above, so the floor
+— they carry hand-classified markers eight lines above (the marker
+text is described here and not reproduced: a marker quoted in prose is indistinguishable from a
+marker, which is how this paragraph came to hold a seventh one attached to nothing), so the floor
 paragraph and the population contradicted each other within one gate. A semantic grouping has no
 floor of the kind this paragraph describes: its blind spot is not "a name the grep missed" but "a
 member a reader did not think of", which no command bounds. The mailbox census is a **pointer-flow** census and is a FLOOR of 7 live: a
@@ -1048,7 +1050,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `1d1d0ae5447d12225fc18f91355a73da23080d65`, A.0 SCRIPT BLOB `664163eb2699dabaf4fa00f558bdd02ced8374aa`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `1f92346647bc0bdb47f3d87136f4afbe658dbefc`, A.0 SCRIPT BLOB `79daabc1242d5f0384106d460efd85c2a2f31564`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1084,17 +1086,20 @@ the recheck was wrong. Whether this commit is the intended one. The binding pins
 packet blob, so the chain is immutable link by link — but two sibling children of the same parent
 are indistinguishable from inside either of them, because no commit can contain its own hash. The
 tip SHA and packet blob in the announcement are the external pin; a reviewer must take them from
-there, not from the document. Whether a rename is the right resolution for open item 24 (G0-B) — the gate can see the two
-names differ and cannot choose which side moves.
+there, not from the document. Whether the rename R4 chose for open item 24 (G0-B) is the right
+resolution — the gate can see the two names differ; it cannot judge a design choice, and R4 made
+one. (This sentence previously said the choice was unmade, which R4 falsified and I did not come
+back to: A.0's "what it does not decide" list is the exact place where a stale sentence understates
+what has been settled.)
 And nothing about the product beyond what a text search can see.
 
-**Controls.** Twenty-five, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Twenty-six, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
-`borrowed-cmd`, `byhand-count`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
+`borrowed-cmd`, `byhand-count`, `orphan-marker`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
 `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`. Two of them were themselves defective when first
 written and are recorded here rather than quietly fixed: `raw-without-cmd` changed a claim's NUMBER
 and so provoked a different check entirely, and the landing assertion demanded the anchor count DROP,

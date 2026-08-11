@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'daaa8d92cafd1e8b2e13f8e43d81eaf97d263dac'
+PREV_TIP     = '4bc4649880e3f06d54fdd28e655fde70620af860'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -108,6 +108,9 @@ CONTROLS = {
                       'POPULATION-UNCOMMANDED'),
  'handmade-count':   ('**6 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
                       'HANDMADE-COUNT'),
+ 'orphan-marker':    ('\n# Provenance of this packet',
+                      '\n[HAND-CLASSIFIED — open item 25 (all)]\n\n# Provenance of this packet', 1,
+                      'MARKER-ORPHANED'),
  'borrowed-cmd':     ("RAW 13 (`grep -rn -e '>audioInOffset'", "RAW 13 \u27c2 (`grep -rn -e '>audioInOffset'", 1,
                       'RAW-WITHOUT-COMMAND'),
  'no-terminator':    ('→ **12 executable derivations**. \u27c2', '→ **12 executable derivations**.', 1,
@@ -352,11 +355,19 @@ else:
 MARK = '[HAND-CLASSIFIED — open item 25 (all)]'
 starts = [m.start() for m in re.finditer(r'\*[A-Z][^*\n]{4,70}\* — ', pkt)]
 handmade = 0
+seen_marks = 0
 for i, q in enumerate(starts):
     seg = pkt[q:starts[i + 1] if i + 1 < len(starts) else q + 600]
-    if MARK in seg: handmade += 1; continue
+    k = seg.count(MARK)
+    seen_marks += k
+    if k > 1:
+        bad('MARKER-NOT-BIJECTIVE', f'{k} markers in one population: {re.sub(chr(92)+"s+"," ",seg)[:60]}')
+    if k == 1: handmade += 1; continue
     if re.search(r'`(git grep|grep|awk|sed)\s', seg): continue
     bad('POPULATION-UNCOMMANDED', re.sub(r'\s+', ' ', seg)[:70])
+if seen_marks != pkt.count(MARK):
+    bad('MARKER-ORPHANED', f'{pkt.count(MARK)} markers in the document, {seen_marks} inside a '
+                           f'population heading — one is attached to no population')
 claimed = re.search(r'(\d+) populations are HAND-CLASSIFIED', pkt)
 if not claimed:
     bad('HANDMADE-COUNT-MISSING', 'provenance states no hand-classified count')
