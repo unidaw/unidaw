@@ -26,7 +26,7 @@ Six blockers from the exact review are reconciled here:
    and G3's debug-env requirement plus its self-contradicting static check.
 3. **G0-A's mailbox census was wrong twice and is corrected with its method.** See G0-A.
 4. **G2-B reaches bypass and `sendSetBypass` failure**; its mirror-replay bullet is WITHDRAWN as
-   circular rather than reworded, and the mirror half is open item 18.
+   circular rather than reworded, and the mirror half is open item 18 (G2-B).
 5. **G4 now states the full ordering** `write_output → release-ack → acquire-wait → read_output`, and
    its negative control is respecified so it can run.
 6. **G2-A's room arithmetic is corrected and the correlator population completed.**
@@ -106,15 +106,13 @@ observable from a return value, so (d) is decided statically.
 **Population.**
 - *Regions the engine addresses* — 8, exact. Every `ShmHeader` offset field read off a
   controller-derived header plus the two derived functions.
-- *Raw region derivations outside any validator* — RAW 13 with the exclusions applied (the
-  predecessor said 12). Command:
-  `grep -rn -e '->audioInOffset' -e '->audioOutOffset' -e '->ringStdOffset' -e '->ringCtrlOffset' -e '->mailboxOffset' -e 'auxOutputPlaneOffset' -e 'hostKeyRingOffset' apps/`
-  minus `_tests_main`, `juce_host_process_main.cpp`, `engine_ui_shm.cpp`, `audio_shm.cpp`,
-  `shared_memory.*`, and the `uiShm` pattern.
+- *Raw region derivations outside any validator* — RAW 13 (`grep -rn -e '>audioInOffset' -e '>audioOutOffset' -e '>ringStdOffset' -e '>ringCtrlOffset' -e '>mailboxOffset' -e auxOutputPlaneOffset -e hostKeyRingOffset apps/ | grep -v _tests_main | grep -v juce_host_process_main | grep -v engine_ui_shm | grep -v audio_shm | grep -v shared_memory | grep -v uiShm`) returns 13 with the exclusions carried INSIDE the
+  pipeline (the predecessor said 12, and stated the exclusions in prose beside a command that did
+  not apply them).
 - *Bounds checks anchored on the child's number* — 7, exact.
 - *Ring constructions over a host-created mapping* — 3, exact.
 - **Mailbox `completedBlockId` LOADS — 7 live, 8 syntactic.** Command:
-  `rg -n 'completedBlockId' apps --glob '!*_tests_main.cpp' --glob '!juce_host_process_main.cpp' | grep -E '\->load|\.load'`
+  `grep -rn 'completedBlockId' apps | grep -v -e _tests_main.cpp -e juce_host_process_main.cpp | grep -E '\->load|\.load'`
   returns 8: `engine_produce_block.cpp:910` (sidechain), `engine_audio_callback.h:284`, `:328`,
   `:951` (RT thread), `engine_consumer.cpp:762` (direct, via `shmView->completedBlockId`),
   `engine_master_render.cpp:83`, `engine_producer_thread.cpp:239`, and `watchdog.h:47`.
@@ -215,8 +213,8 @@ offset, byte size, normalised name, and normalised TYPE FORM — integer width A
 a pointer spine with per-level mut/const and a normalised terminal type. Type form is in the tuple
 because offset+size+name are together blind to `float sample_rate` becoming `uint32_t`.
 
-**Population.** *ABI types* — 8. Command: `grep -n '#\[repr(C' patcher_rust/src/lib.rs` (8 hits:
-lines 23, 40, 55, 68, 82, 89, 97, 107), cross-checked against bindgen's `allowlist_file` closure over
+**Population.** *ABI types* — 8. Command: `grep -n '#\[repr(C' patcher_rust/src/lib.rs` returns 8 (lines 23, 40,
+55, 68, 82, 89, 97, 107), cross-checked against bindgen's `allowlist_file` closure over
 `apps/patcher_abi.h`. *Members* — 66 C++ / 65 Rust, counted by reading both declarations:
 `PatcherContext` 26/26 (`patcher_abi.h:114-152` / `lib.rs:109-143`), `MusicalLogicPayload` 9/9, and
 six further types. *One-sided members* — exactly 1: C++ `EventEntry::ready`, offset 60, size 4
@@ -262,7 +260,7 @@ BOTH the cargo leg and the cmake leg. A mutation battery drives single-sided edi
    lands. *REFUTED BY* the check exiting 0 with `patcher_abi.h:75 reserved` and `lib.rs:86 _pad0` both
    unchanged.
 
-**Static checks.** S-1 the generated table's include sits above `lib.rs:893`'s first export, a
+**Static checks.** S-1 the generated table's include sits above the first export at `patcher_rust/src/lib.rs:5` (`pub const PATCHER_ABI_VERSION`); the predecessor anchored this to `lib.rs:893`, which is the `#[cfg(test)]` line 892 lines BELOW that export, so the check it stated would have passed for an include placed under every export in the file. A
 position invisible from any run's output. S-2 the check's non-generated sources contain no literal
 list of the eight type names. S-3 the one-sided admission is a byte-range disjointness predicate, with
 no member name used as an admission key. S-4 name normalisation is a pure function of the input
@@ -291,14 +289,16 @@ CONFORMS to obligation (b) while committing the defect.
 **Population.** Every count is stated as RAW (what the command returns) → RULE (the classification)
 → IN SCOPE, because a bare figure that is a hand-classified subset of its own command is not
 reproducible, and four populations in the predecessor were exactly that.
-- *Rings* — RAW 17 (`grep -rnF '>capacity' apps/ | grep '=' | grep -v '=='`) → minus 2 test fixtures → **8**.
-- *Statements interpreting an entry's bytes as data* — RAW 21 (`grep -rnF 'entries[' apps/`)
+- *Rings* — RAW 17 (`grep -rnF '>capacity' apps/ | grep '=' | grep -v '=='`) → minus 9 non-ring and
+  test-fixture assignments → **8**.
+- *Statements interpreting an entry's bytes as data* — RAW 21 (`grep -rnF 'entries[' apps/`) → minus
+  16 (twelve plugin-cache reads and four non-data operations) → **5**. The rule is ONE subtraction
+  because two written as one is how the predecessor produced arithmetic that does not hold.
   → minus 12 plugin-cache reads, minus 4 test-only → **5**. The ring filter is in the rule, not
   implied: without it this population measures the wrong set.
-- *Read-cursor stores* — RAW **14** (`grep -rn -e readIndex.store -e read_index.store apps/ ui/`) → minus
-  test and non-ring stores → **4**. The predecessor printed this command beside the figure 4, which
+- *Read-cursor stores* — RAW **14** (`grep -rn -e readIndex.store -e read_index.store apps/ ui/`) → minus 10 non-ring and test stores → **4**. The predecessor printed this command beside the figure 4, which
   the command does not produce.
-- *Index sites* — RAW 21, same command as the entry-address population → **12** after the same rule.
+- *Index sites* — RAW 21 (`grep -rnF 'entries[' apps/`) → minus 9 non-indexing matches → **12**.
 
 **Floor.** All four are token greps and blind in the same four ways: a cursor mutated through a
 whole-`RingHeader` memcpy, a `reinterpret_cast`, a helper that takes the header by reference, or a
@@ -367,15 +367,14 @@ engine — not by the engine's version counter, not by non-emptiness, and not by
 the address the client asked about; and (ii) a complete image of exactly one execution of the writer,
 never fields from publication N+1 beside fields from N.
 
-**Population.** *Seqlock opens and closes* — 4 + 4. Command: `rg -n 'seq\.store' apps` returns exactly
-8, cross-checked per file with `rg -c`. *Request/answer readers* — RAW 21 (`grep -rn 'pub fn read_' ui/daw-bridge/src/control.rs`) → RULE: **NONE THAT WORKS — WITHDRAWN.** The
+**Population.** *Seqlock opens and closes* — 4 + 4. Command: `grep -rn 'seq\.store' apps` returns 8, cross-checked per file with grep's count mode. *Request/answer readers* — the command `grep -rn 'pub fn read_' ui/daw-bridge/src/control.rs` returns 21 candidates; this gate declares NO population, so no RAW claim is made and none may be inferred. RULE: **NONE THAT WORKS — WITHDRAWN.** The
 predecessor selected six BY HAND, which made the number honest and the population irreproducible. This
 packet proposed a predicate — intersect the reader's region symbol with the regions an engine REQUEST
-handler writes — and it is WRONG: `grep -rn 'Region\*' apps/engine_request_commands.cpp` yields two
+handler writes — and it is WRONG: `grep -rn 'Region\*' apps/engine_request_commands.cpp` returns 2, two
 region types (`UiDeviceParamsRegion`, `UiWaveformRegion`), so the intersection produces **2**, not 6,
 and the FAIL clause that predicate shipped with fires at the SHA it was published at. It is withdrawn
 rather than replaced by a third guess. **This gate has no derivable population and cannot be decided
-until one exists** — open item 10, and it blocks G1-B the way the missing N blocks G3. *Call sites of
+until one exists** — open item 11 (G1-B), and it blocks G1-B the way the missing N blocks G3. *Call sites of
 those six* — 16 production, 2 test, obtained per name and discarding definitions and three doc
 comments.
 
@@ -456,19 +455,27 @@ content field equals its own command, but whose identity it did not mint, must r
 
 **Population.** *Arbitrated commands* — **9**, being the only commands that can produce an adoptable
 refusal: `WriteNote`, `DeleteNote`, `WriteChord`, `DeleteChord`, `RevertPlacementOverrides`,
-`SetAutomationTarget`, `SetClipText`, `WriteHarmony`, `DeleteHarmony`. Command: `grep -rn` for
-`requireMatchingClipVersion(` and `requireMatchingHarmonyVersion(` over `apps/*.cpp` minus tests.
+`SetAutomationTarget`, `SetClipText`, `WriteHarmony`, `DeleteHarmony`. RAW 17
+(`grep -rn -e 'requireMatchingClipVersion(' -e 'requireMatchingHarmonyVersion(' apps | grep -v tests_main`)
+→ minus 8 (three definitions, three declarations, and the two `daw_engine_main.cpp` lambda forwarders
+at `:1739` and `:1744`) → **9 call sites**. The predecessor described this command in prose instead of
+printing one, so its 9 could not be re-run. The nine COMMANDS map onto the nine sites non-bijectively
+— the chord site carries both `WriteChord` and `DeleteChord` through a runtime-computed type — so the
+correspondence is established by the Floor paragraph below, not by this arithmetic.
 `commandMutatesDocument` (`apps/engine_command_mutates.h:46-236`) has **93** case arms, 69 returning
 true — the predecessor said 186, off by 2× in the section whose credibility rests on counts — but for
 the other ~60 families no `ClipRejected` is ever emitted, so an identity obligation over them would
 require inventing emit sites the code says do not exist. *Terminal refusal records* — 3 `emitClipReject`
-sites plus 2 refusal journal lines. *Correlator call sites* — **51 in product code**, tests excluded. The predecessor said 40; the exact
-review's 51 is the correct figure and is adopted rather than argued, because my 40 was a subtraction
+sites plus 2 refusal journal lines. *Correlator call sites* — RAW 56 mentions
+(`grep -rn -e await_clip_outcome -e report_outcome_from -e report_refusal_outcome -e refused_or ui/daw-cli/src ui/daw-agent/src`)
+→ minus 5 (four `fn` definitions, and the doc comment at `ui/daw-cli/src/main.rs:1262` that names
+`await_clip_outcome` in prose) → **51 call sites**, which is 4 + 6 + 17 + 24 exactly as the exact
+review stated. This gate no longer carries that number on attribution: the command above reproduces
+it, and re-deriving it is what showed my own competing figure of 56 to be a MENTION count — the
+predicate was mine, not an arithmetic error of the reviewer's. The predecessor said 40; my 40 was a subtraction
 from a hand-classified list and the reviewer's is a re-derivation. The set includes `refused_or` →
 `await_refusal` (`ui/daw-agent/src/tools.rs:62-67`) with 24 call sites, one of them `set_clip_text`
-(`:3239`), a governed command — a family the predecessor omitted entirely. **This packet does not
-publish the 51 as its own derivation**: it is carried with attribution, and open item 12 requires it
-to be re-derived by a printed command before any gate is decided on it.
+(`:3239`), a governed command — a family the predecessor omitted entirely.
 
 **Floor.** Three, in the model of `tools/version_arbiter_check.sh:69-78` ("finding FEWER means the
 extraction broke, not that the code got safer"), which the predecessor cited nowhere. The nine are
@@ -539,7 +546,7 @@ record at all, since at this SHA a refused harmony write publishes only a scope-
 
 **Scope, widened from the predecessor.** The gate reaches per-slot **bypass** and the **failure of `sendSetBypass`**.
 It does NOT currently reach the **parameter mirror replay**: the bullet that did was withdrawn as
-circular (see PASS 4), so the mirror half is specified by the register and open item 22, not by a PASS
+circular (see PASS 4), so the mirror half is specified by the register and open item 18 (G2-B), not by a PASS
 condition. The predecessor asserted the mirror half was in scope while its bullet was unsatisfiable, which is
 worse than the gap it was closing.
 
@@ -551,12 +558,13 @@ copy is the only referent that exists, because the guard is released at `:1114` 
 loop runs at `:1116-1124` under `controllerMutex` alone, so the chain can change across the gap.
 MECHANISM: `hostReady` is release-published only after all three are staged and acknowledged.
 
-**Population.** *`hostReady` publish sites* — RAW 4 (`grep -rn 'hostReady' apps | grep 'store(true'`) →
-minus 1 in `_tests_main` → **3 production**: `engine_restart_worker.cpp:87` (the site under gate),
-`engine_track_setup.cpp:62`, and one other. The predecessor said "exactly 4", counting the test. *`controllerMutex` acquisitions in product code* — 28.
-Command: `rg -n -g 'apps/**' -g '!apps/*tests_main.cpp' '(lock_guard|unique_lock)<std::mutex>[^;()]*\([^;]*controllerMutex'`.
+**Population.** *`hostReady` publish sites* — RAW 4 (`grep -rn 'hostReady' apps | grep 'store(true'`) → minus 1 in `_tests_main` → **3 production**: `engine_restart_worker.cpp:87` (the site under gate),
+`engine_track_setup.cpp:62` and `engine_track_setup.cpp:403`. All three are named because the
+predecessor's "and one other" left a member of an exact population unidentified. The predecessor also
+said "exactly 4", counting `engine_track_setup_tests_main.cpp:52`. *`controllerMutex` acquisitions in product code* — 28.
+Command: `grep -rnE '(lock_guard|unique_lock)<std::mutex>[^;()]*\([^;]*controllerMutex' apps | grep -v tests_main` returns 28.
 *`hostReady` read sites in product code* — exactly 20, `daw_engine_main.cpp:1107` among them. Command:
-`rg -n -g 'apps/**' -g '!apps/*tests_main.cpp' 'hostReady(\.|->)load' apps`.
+`grep -rnE 'hostReady(\.|->)load' apps | grep -v tests_main` returns 20.
 
 **Floor.** All three are token greps over `apps/` at this SHA and reproduce from the printed commands.
 They are blind to a publish or read reached through a function pointer or a `std::function`, which is
@@ -603,7 +611,7 @@ false-green the predecessor's open list dropped.
    holding under a build whose publish precedes the recovery.
 
 **Static checks.** S1 publish-site ratchet, exactly the recorded 4 lines. S2 single arming site for
-the mirror: `rg -n 'mirrorPending(\.|->)store\(true' apps` returns exactly `engine_rt_helpers.cpp:38`.
+the mirror: `grep -rnE 'mirrorPending(\.|->)store\(true' apps` returns 1, `engine_rt_helpers.cpp:38`.
 S3 anti-deadlock: no `mirrorPending|mirrorPrimed|mirrorGateSampleTime` token between
 `engine_produce_block.cpp:361` and the lock construction. S4 probe fidelity: `:362` still reads
 `hostReady` with acquire and `:385-387` still constructs the blocking lock.
@@ -645,11 +653,11 @@ engine path, and block production for the remaining tracks must continue.
 
 **Population.** *Tracks whose production must continue* — the `tracks` vector, read at
 `apps/daw_engine_main.cpp:962-969`. *Writes that remove a host from the gate population* — RAW 17
-(`grep -rn 'hostReady\.store(false' apps/`) → minus **2** in `_tests_main` → **15 production**. The
-whole `hostReady.store(` census is RAW 21, of which 3 are tests → 18 production. The predecessor said
+(`grep -rn 'hostReady' apps/ | grep 'store(false'`) → minus **2** in `_tests_main` → **15 production**. The
+whole census is RAW 21 (`grep -rn 'hostReady' apps/ | grep 'store('`) → minus 3 in `_tests_main` → **18 production**. The predecessor said
 "minus 3" here: it applied the test count of the TOTAL population (21) to the FALSE subset (17), which
 is a count borrowed from one population and spent in another. *Producer-loop exits* — 12 `continue;`. Command:
-`sed -n '134,373p' apps/engine_producer_thread.cpp | grep -c 'continue;'`.
+`sed -n '134,373p' apps/engine_producer_thread.cpp | grep -c 'continue;'` returns 12.
 
 **Floor.** The `hostReady` write census is exact at 21 total (4 true / 17 false) with zero non-literal
 arguments, and the ratchet also asserts no `exchange`/`compare_exchange` form exists — because a
@@ -736,11 +744,12 @@ consumer reads that output before an acquire-load of that acknowledgement. The p
 input immutability and ack identity but omitted this ordering, which is what makes the output half
 sound rather than merely acknowledged.
 
-**Population.** *Dispatch sites* — 3 production, 8 test, 6 non-calls; command `grep -rn sendProcessBlock`
-over the pinned root returns 17, every hit classified. *Out-plane readers* — RAW **27**
-(`grep -rn -e audioOutOffset -e safeAudioOutPtr -e audioOutChannelPtr -e auxOutputPlaneOffset apps/`) → minus 3 in
-`_tests_main`, minus declarations and non-reads → **7 production**. The predecessor said the command
-returns 28; it returns 27, and the reviewer's count is the correct one. *Input-plane writers in engine production code* — exactly 2; command
+**Population.** *Dispatch sites* — 3 production, 8 test, 6 non-calls; the command
+`grep -rn --exclude-dir=target --exclude-dir=build --exclude-dir=.git sendProcessBlock .` returns 17
+over the pinned root, every hit classified. *Out-plane readers* — RAW **27**
+(`grep -rn -e audioOutOffset -e safeAudioOutPtr -e audioOutChannelPtr -e auxOutputPlaneOffset apps/`)
+→ minus 20 (three in `_tests_main`, the remainder declarations and non-reads) → **7 production**. The
+predecessor said the command returns 28; it returns 27, and the reviewer's count is the correct one. *Input-plane writers in engine production code* — exactly 2; command
 `grep -rn -e audioInOffset -e safeAudioInPtr -e audioInChannelPtr apps/` returns 13, all classified.
 
 **Floor.** Dispatch sites floor 3: `rg` finds every syntactic call but is blind to a dispatch through
@@ -800,6 +809,16 @@ the predecessor's control could not run.
    multiplier.
 10. Sidechain carve-out preserved: with track A pinned at b−2, track B's key channels carry A's b−2
     sentinel. *REFUTED BY* the key carrying b's value.
+11. **Output equality in the BYTES — the mirror of 4, and the bullet whose absence let a stale-slot
+    read satisfy this whole gate.** Every consumer's BEFORE_OUTPUT_READ snapshot equals what the
+    host's `write_output` recorded for the SAME quadruple, and differs from the lap primed by 8.
+    Conditions 3, 5 and 8 are each satisfied by a read of stale content: 3 decides ORDERING (an
+    acquire happened), 5 decides IDENTITY (the four fields are right), and 8 decides only that the
+    priming is distinguishable — it establishes the precondition for catching failure model (2) and
+    never asserts the failure is absent. Failure model (2) is a byte-level claim and needs a
+    byte-level bullet. *REFUTED BY* one differing byte, by a snapshot equal to the primed lap, and —
+    the vacuity guard — by a fixture in which the fresh and primed payloads compare equal, which
+    would make this pass for the reason 8 exists to prevent.
 
 **Static checks.** Ack-after-process in the host: the per-segment acknowledgement is stored AFTER the
 last `slot.instance->process(...)` (`apps/juce_host_process_main.cpp:987`). Both dispatch branches:
@@ -847,7 +866,7 @@ carrying one cannot be decided by any implementation.
 10. **G1-B** — Two extraction recipes do not reproduce their lists.
 11. **G1-B** — **BLOCKING.** The reader population has no derivation. The hand selection of six was irreproducible; the predicate proposed to replace it yields two, not six, and is withdrawn. This gate cannot be decided until a population exists, as G3 cannot until N exists.
 12. **G2-A** — Layer-1 fixture arithmetic: eleven journal lines, not six, and ids legitimately repeat, so a correct implementation fails the gate's only runnable integration assertion.
-13. **G2-A** — The fifty-one correlator sites are carried from the exact review with attribution — 4 `await_clip_outcome` + 6 `report_outcome_from` + 17 `report_refusal_outcome` + 24 `refused_or` — and must be re-derived by a printed command before any gate is decided on them.
+13. **G2-A** — CLOSED at this SHA. The fifty-one correlator sites are no longer carried on attribution: the G2-A population states the command, its raw count and the subtraction, and reaches the exact review's 4 + 6 + 17 + 24. The count is written once, there, so this entry does not restate it. Re-deriving it is also what refuted my own competing figure — that one counted mentions rather than call sites, so the disagreement was my predicate and not the reviewer's arithmetic.
 14. **G2-A** — The BATCH note branch: `resolve_base` keeps the counter crossing on the path a browser transpose takes, and the static check as written is satisfied by fixing the chord branch alone.
 15. **G2-B** — The self-deadlock: the admitted fix class requires `applyHostBypassStates` to stop taking `controllerMutex`.
 16. **G2-B** — The swap trap rests on an unratcheted guard at `apps/daw_engine_main.cpp:1107-1109`.
@@ -859,13 +878,54 @@ carrying one cannot be decided by any implementation.
 22. **G4** — The fixture definitions added here (F0-F6, S1-S8) and the corrected ack-census counts have not been run against anything; the reviewer should confirm them against the fixture rather than against this packet.
 23. **all** — `read_clip_window` is named by the exact review as a request/answer reader G1-B omits. It cannot be placed until item 11 gives the gate a population.
 
+# A.0 — the gate this packet is decided by
+
+`tools/p12_selfcheck.py` at this SHA. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
+product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
+its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run. Every refusal exits
+**2**, so a broken gate can never be read as a passing one. Invocation and expected output:
+
+    AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 23 open items · 11 RAW + 12 commanded claims, all executed
+    PASS
+
+**What it decides.** Open-item header against body, contiguity, and orphaned numbers. Every
+`open item N (Gx)` cross-reference resolving AND naming the gate that item belongs to — three
+references in the predecessor pointed at real items belonging to other gates, and every one of them
+"resolved", so resolution alone was never the property at risk. Every PASS bullet carrying a
+`REFUTED BY` or an explicit withdrawal. No withdrawn bullet described elsewhere as covered. Every RAW
+claim carrying a runnable command that reproduces its figure, and every `RAW n → minus k → m`
+satisfying `n − k == m`. Every runnable command in the document — not only the RAW-form ones —
+stating what it returns and returning it; the predecessor's instrument decided one shape and left a
+dozen exact claims written in the other shape unexecuted. No command written in `rg`.
+
+**What it does NOT decide, stated because a gate silent about its limits reads as total coverage.**
+Whether a RULE's subtraction is *justified* — it checks the arithmetic, not that the excluded lines
+deserved excluding. Whether a population's predicate is the right one: three figures in this packet
+were re-derived against a predicate of the author's that was wrong (mentions for call sites, `apps/`
+for the whole root, a forwarding lambda for an emit site), and in all three the packet was right and
+the recheck was wrong. Whether the member counts of open item 5 (G0-B) are correct — they have no command.
+And nothing about the product beyond what a text search can see.
+
+**Controls.** Thirteen, each naming the tag it must provoke; a control that mutates the file without
+provoking its own tag reports `BLIND` and fails. Run them with `--negative <name>`, list with
+`--list`: `dangling-ref`, `drop-refutation`, `open-count`, `orphan-number`, `raw-without-cmd`,
+`rg-command`, `rule-arithmetic`, `ungated-ref`, `unstated-return`, `withdrawn-claim`,
+`wrong-command`, `wrong-gate-ref`, `wrong-raw`. Two of them were themselves defective when first
+written and are recorded here rather than quietly fixed: `raw-without-cmd` changed a claim's NUMBER
+and so provoked a different check entirely, and the landing assertion demanded the anchor count DROP,
+which an insertion control can never do — it reported a landed mutation as unlanded. The named-tag
+requirement is what exposed both.
+
 # Provenance of this packet's own numbers
 
 Every count is stated as RAW → RULE → IN SCOPE, so that the command reproduces the raw figure and the
 rule reproduces the rest; and every count is a floor where a runtime value defeats the extraction.
-**Two populations are NOT command-derived and are labelled as such rather than covered by this
+**ONE population is NOT command-derived and is labelled as such rather than covered by this
 sentence**: G0-B's member counts (66 C++ / 65 Rust) were obtained by reading both declarations, and
-G2-A's 51 correlator sites are carried from the exact review with attribution, not re-derived here.
+open item 5 (G0-B) holds it. G2-A's 51 correlator sites were the second such population and are no
+longer: they are derived here by a printed command, which is also what refuted the author's competing
+figure of 56 — that one counted mentions where the claim is call sites.
 The predecessor's version of this paragraph said every count was command-produced while two of its own
 populations said "counted by reading" and "selected by hand" — a universal claim contradicted inside
 its own document, which is the third instance of that shape in this lineage and the reason the
