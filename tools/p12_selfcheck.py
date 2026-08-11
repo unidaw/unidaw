@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '63f8c595c06061fb0e2b590058422798b9a80361'
+PREV_TIP     = 'b5f23d6fd9ca8bb4ec44475397287e1021e58f65'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -963,8 +963,9 @@ elif WORDNUM.get(_said.group(1).upper()) != len(_prod):
 # of their two proposals is an explicit SUBSET the packet may use, with everything outside REJECTED
 # rather than approximated — which turns "we keep finding constructs" into "these are the only
 # constructs permitted", a finite claim someone can check.
-# Measured before writing: SEVEN line shapes cover all 2,188 lines of the packet with zero
-# exceptions. That is what makes this affordable, and it is why it is a rule rather than a wish.
+# Measured before writing: NINE line shapes cover all 2,188 lines of the packet. The comment said
+# SEVEN for two SHAs after the list grew to nine — a stale count inside the check whose subject
+# is stale counts, found by codex-worker-2 comparing the sentence to the list beneath it.
 # MY FIRST VERSION OF THIS LIST WAS VACUOUS: its last shape was `\S`, a catch-all that permits any
 # line beginning with a non-space, so "seven shapes cover all 2,188 lines with zero exceptions" was
 # true because one shape covered everything. A blockquote — outside the subset by intent — passed.
@@ -1810,10 +1811,18 @@ if '--prove-blanking' in sys.argv:
     print(f'baseline {_base} · differential {"holds" if _ok else "BROKEN"}')
     sys.exit(0 if _ok else 1)
 if '--prove-emit-identity' in sys.argv:
-    before = hashlib.sha1(open(MANIFEST, 'rb').read()).hexdigest() if os.path.exists(MANIFEST) else None
+    # THE ARTIFACT MUST EXIST, or the proof is vacuous: with no file, before == after == None and
+    # the check reports "manifest unchanged" about a manifest that is not there. codex-worker-2 ran
+    # it against an absent artifact and got a green. **A proof that an artifact was not rewritten
+    # needs an artifact** — `None == None` is the identity of nothing.
+    if not os.path.exists(MANIFEST):
+        print(f'REFUSED to prove identity: {MANIFEST} does not exist'); sys.exit(1)
+    before = hashlib.sha1(open(MANIFEST, 'rb').read()).hexdigest()
     env = {**os.environ, 'AE_P12_INJECT_FAIL': '1'}
     r = subprocess.run([sys.executable, __file__, '--manifest'], capture_output=True, text=True, env=env)
     after = hashlib.sha1(open(MANIFEST, 'rb').read()).hexdigest() if os.path.exists(MANIFEST) else None
+    if after is None:
+        print('REFUSED: the manifest was DELETED by the refused run'); sys.exit(1)
     ok = r.returncode == 2 and before == after
     print(f'refused rc={r.returncode}, manifest {"unchanged" if before == after else "REWRITTEN"}')
     sys.exit(0 if ok else 1)
