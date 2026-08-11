@@ -708,6 +708,12 @@ two-space malformed markers and the stale ten-versus-eleven opening text is
 fixed; 99 controls pass. Exact review is pending. G3 N/Watchdog/item37 oracle,
 M1, G0-A/B, and G4 remain open.
 
+Exact review of `3bec2ed` is **BLOCKED**. The post-run guard catches the named
+unclosed/two-space probes but is bounded: stray closers pass, malformed markers
+after the 200-character head window pass, and balanced delimiters in link
+destinations falsely fail because `_unhidden` retains URLs. Opening ten/eleven,
+WORD[100], and G0/G4/G2-B/G3 blockers remain.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
