@@ -18,7 +18,7 @@ never written is the same error's fingerprint.
 
 The blockers from the exact review are reconciled here, and the count is deliberately not restated: it moved between rounds and a fixed number here would be a twin of the item list, which is the authority:
 
-1. **ONE OF THE EIGHT GATES CANNOT BE DECIDED AT THIS SHA.** They were briefly authored and the authorings are RETRACTED — see items 11, 26, 27 and the retraction note in each gate.** All three withdrawn populations — G1-B's readers, G2-A's scope, G4's out-plane — are AUTHORED under R1 with rules, members and drift detectors. No gate is acceptance-decidable: five items still block (18, 19, 23, 24, 29) and every one needs product work, not packet work.** G2-A was the third until its scope was AUTHORED under R1 at this SHA; authoring a withdrawn population is how a gate leaves this list, and it is packet work rather than product work. Six gates additionally carry a blocking item and so are not ACCEPTANCE-decidable; the manifest publishes both senses as `decidable_for_planning` and `decidable_for_acceptance`, and G3 is the case that shows why one boolean will not do: R3 makes it plannable and it is not acceptance-decidable until the N ticket lands.  Every gate carries the record's SHAPE — population slot,
+1. **TWO OF THE EIGHT GATES CANNOT BE DECIDED AT THIS SHA.** They were briefly authored and the authorings are RETRACTED — see items 11, 26, 27 and the retraction note in each gate.** All three withdrawn populations — G1-B's readers, G2-A's scope, G4's out-plane — are AUTHORED under R1 with rules, members and drift detectors. No gate is acceptance-decidable: five items still block (18, 19, 23, 24, 29) and every one needs product work, not packet work.** G2-A was the third until its scope was AUTHORED under R1 at this SHA; authoring a withdrawn population is how a gate leaves this list, and it is packet work rather than product work. Six gates additionally carry a blocking item and so are not ACCEPTANCE-decidable; the manifest publishes both senses as `decidable_for_planning` and `decidable_for_acceptance`, and G3 is the case that shows why one boolean will not do: R3 makes it plannable and it is not acceptance-decidable until the N ticket lands.  Every gate carries the record's SHAPE — population slot,
    failure model, deterministic test, PASS conditions each naming their refutation, static checks,
    review register — and for those three the population slot reads "withdrawn", which satisfies the
    shape and decides nothing. **No universal claim about populations is made anywhere in this
@@ -1296,7 +1296,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `72935e20ee4e5ab85dcde445e8f8d8329d6962a0`, A.0 SCRIPT BLOB `a55be84449f5ea1c828cfd77a9cfc75e63f58b49`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `66a7ca351dff3c6ae2ed9ef610e75c269f2c1147`, A.0 SCRIPT BLOB `8bac45fa0ba9d9323fa6f3059e30d7850b772f56`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1304,7 +1304,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 32 items, 23 open · 13 RAW (12 hand-ruled) + 21 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 32 items, 24 open · 13 RAW (12 hand-ruled) + 21 commanded claims, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1503,9 +1503,9 @@ make the items IMPLEMENTABLE, and each item stays open until the work it names e
 verified by someone other than me. A ruling recorded as a closure would be the same error as a
 census recorded as a proof, which this packet has already made once at item 7.
 
-# Open items — 32 atomic, 9 CLOSED at this SHA, 23 open
+# Open items — 32 atomic, 8 CLOSED at this SHA, 24 open
 
-One per line, numbered in document order, so the count is checkable. FOUR are BLOCKING — 18, 19, 24 and 27. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
+One per line, numbered in document order, so the count is checkable. FIVE are BLOCKING — 18, 19, 24, 26 and 27. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
 
 1. **G0-B** — The generated header breaks the documented `-DDAW_BUILD_PATCHER_RUST=OFF` build for six unconditional targets, with no stated path, include directory or target-ordering edge.
@@ -1606,7 +1606,21 @@ carrying one cannot be decided by any implementation.
     marker and this item; a sixth appearing without one fails the gate. Deriving them needs a
     predicate nobody has proposed, so this is open, not closed.
 
-26. **G4** — **CLOSED at this SHA.** The population is measured from the MAPPED BASE with aliases
+26. **G4** — **BLOCKING. REOPENED: the census covers ONE OF THE TWO PLANES, and not the one the
+    invariant names first.** This gate's invariant is about "the bytes of that host's INPUT plane
+    slot ... owned by the host from dispatch until that exact segment acknowledges consumption", and
+    failure model (1) is "Input overwritten under the host". Everything enumerated so far — seven
+    readers, eight writers, the completeness argument, R5/R8/R9 — is the OUTPUT relation. The INPUT
+    relation is the mirror and is unenumerated: the ENGINE writes the input plane and the HOST reads
+    it (codex-worker-1 names host `inputPtrs` at `:643-647`, aux copy `:681-687`, passthrough
+    `:714-721`, metering `:913-947`/`:971-985`, plugin handover `:862-882`/`:987-995`), and output
+    writer sites overlap input readers.
+    **This is the third incompleteness in this population and the first that is not a selector
+    defect.** The four-spelling census missed a spelling; the mapped-base census missed
+    helper-mediated readers; this one missed HALF THE SUBJECT, because I enumerated what the
+    discussion was about instead of what the invariant says. No better selector would have caught
+    it — only reading the sentence the gate is built on. Previously: the population is measured from
+    the MAPPED BASE with aliases
     followed and roles assigned by USE at the dereference: 7 cross-agent readers + 8 host writers
     (7 direct, 1 indirect) in scope per R8(c), with 2 same-agent readbacks excluded by argument, 6
     establishing sites and 16 non-sites accounted — 23 role-bearing, arithmetic closing. The

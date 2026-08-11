@@ -58,12 +58,12 @@
   "wrong-raw"
  ],
  "counts": {
-  "blocking": 4,
-  "closed": 9,
+  "blocking": 5,
+  "closed": 8,
   "controls": 34,
   "hand_ruled": 12,
   "items": 32,
-  "open": 23,
+  "open": 24,
   "raw_claims": 13
  },
  "failure_models": [
@@ -266,9 +266,11 @@
    "reason_if_not_planning": null
   },
   {
-   "blocking_items": [],
+   "blocking_items": [
+    26
+   ],
    "cross_cutting_blocking": [],
-   "decidable_for_acceptance": true,
+   "decidable_for_acceptance": false,
    "decidable_for_planning": true,
    "dependencies": [
     "G0-A",
@@ -283,7 +285,7 @@
    "end_line": 1284,
    "id": "G4",
    "line": 971,
-   "reason_if_not_acceptance": null,
+   "reason_if_not_acceptance": "blocked by items [26]",
    "reason_if_not_planning": null
   }
  ],
@@ -489,18 +491,18 @@
    "title": "**RULED (R1): authored with drift detectors.** The SIX HAND-CLASSIFIED populations"
   },
   {
-   "blocking": false,
-   "closed": true,
+   "blocking": true,
+   "closed": false,
    "gate": "G4",
    "line": 1609,
    "n": 26,
-   "title": "**CLOSED at this SHA.** The population is measured from the MAPPED BASE with aliases"
+   "title": "**BLOCKING. REOPENED: the census covers ONE OF THE TWO PLANES, and not the one the"
   },
   {
    "blocking": true,
    "closed": false,
    "gate": "G2-A",
-   "line": 1621,
+   "line": 1635,
    "n": 27,
    "title": "**BLOCKING. Authoring RETRACTED at this SHA** — the arbitrated path emits"
   },
@@ -508,7 +510,7 @@
    "blocking": false,
    "closed": false,
    "gate": "G2-A",
-   "line": 1651,
+   "line": 1665,
    "n": 28,
    "title": "The requirement that was S3, split out of item 27 because they are separately"
   },
@@ -516,7 +518,7 @@
    "blocking": false,
    "closed": false,
    "gate": "G2-A",
-   "line": 1656,
+   "line": 1670,
    "n": 29,
    "title": "The `SetRowOps` refusal is malformed for the channel it rides, measured at the"
   },
@@ -524,7 +526,7 @@
    "blocking": false,
    "closed": false,
    "gate": "G2-A",
-   "line": 1669,
+   "line": 1683,
    "n": 30,
    "title": "**RULED (R10): the wiring is DEAD, the hazard is REAL, and they are separate work.**"
   },
@@ -532,7 +534,7 @@
    "blocking": false,
    "closed": false,
    "gate": "all",
-   "line": 1684,
+   "line": 1698,
    "n": 31,
    "title": "**The pointer-helper RATCHET, and it must pin the GENERAL population, not G4's"
   },
@@ -540,7 +542,7 @@
    "blocking": false,
    "closed": false,
    "gate": "G2-A",
-   "line": 1697,
+   "line": 1711,
    "n": 32,
    "title": "**RULED (R11).** `commandMutatesDocument(Undo)` returns FALSE with the comment \"no"
   }
