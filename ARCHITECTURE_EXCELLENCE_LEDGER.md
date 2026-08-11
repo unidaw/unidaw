@@ -714,6 +714,13 @@ after the 200-character head window pass, and balanced delimiters in link
 destinations falsely fail because `_unhidden` retains URLs. Opening ten/eleven,
 WORD[100], and G0/G4/G2-B/G3 blockers remain.
 
+Exact review of `83b4edc` is **BLOCKED**. Opening eleven and item18’s two-halves
+prose pass, but item18 retains propagation ambiguity. Parser boundaries remain
+bounded (stray closers, post-200-character malformed markers, and false link-
+destination delimiters). G4 still says four versus ten dependency blockers;
+G0-A/B planning is falsely green; R15/M1/item36/item37 oracle and G3 N/Watchdog
+remain blocked.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
