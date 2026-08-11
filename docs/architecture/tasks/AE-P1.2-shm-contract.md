@@ -488,8 +488,23 @@ returns 7.
                                     which publishes into the DIFF RING; its answer is consumed by
                                     `drain_ui_out`, not by any `read_*`.
 
-**Six.** The seventh is excluded because its answer is not a region at all, and naming it is what
-shows the rule doing work rather than counting to a target.
+**Six, and one EXCLUDED MEMBER — not an absence.** `RequestChainSnapshot` is a member of the
+request set that this rule excludes, with a reason, exactly as "there is no S3" is a requirement
+rather than a gap: `emitChainSnapshot` (`engine_chain_host.cpp:10`) binds `getRingUiOut()` and
+writes the UI-OUT RING, and `control.rs` has ZERO hits for `read_chain`/`chain_snapshot`, so no
+region reader exists to be in the population. A rule that admitted it would be counting requests
+rather than finding readers.
+
+**THE SECOND SIGNAL IS OF A DIFFERENT KIND, which is the only sort that counts here.** The seven
+`Request*` members are mirrored in `ui/daw-bridge/src/layout.rs` with identical names and identical
+values, and the two declarations are checked by two different compilers. That is not a second grep
+over the same text — it is the same population expressed twice in a form the build enforces. Every
+predicate that failed on this population failed as a text pattern; this one is anchored to a
+declaration that cannot be missing or misspelt, because its absence is a build error.
+**The general form, which is narrower and more useful than "use the enum": enumerate from the
+artifact that CANNOT BE ABSENT.** A correlation token can be missing — that absence is the defect.
+A helper function can be missing — `RequestDeviceParams` has none. A label can be spelt `S-1` where
+every sibling writes `S1`. An enum member is present or the program does not build.
 
 **WHY TWO EARLIER PREDICATES FAILED, recorded because the failures are the argument for this one.**
 A rule selecting on a CORRELATION TOKEN (`requestSeq`) is circular — it cannot see a request/answer
@@ -1107,7 +1122,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `04602822929a2177f4ccc0c7acb2e1d9d0ceb525`, A.0 SCRIPT BLOB `c4059b66cfe85740c82397696a6cea23be9a3115`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `33f6d96368be9db5fe5cd9b4832725e6a55ee2e7`, A.0 SCRIPT BLOB `ab7d1e3ef6dd7d3f491b46961915412b57c56fec`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
