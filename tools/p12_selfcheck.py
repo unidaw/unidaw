@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '6dde12e2f5fbac8470592aedd6adb189f6a50956'
+PREV_TIP     = 'eb973ea3767543e5259aa60514d823f4bf070860'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -1923,6 +1923,52 @@ if os.environ.get('AE_P12_INJECT_FAIL'):
 # mutation that did not land gives 14 > 14 — all false. Arm A IS the landing assertion, so the
 # separate one this harness needs elsewhere is not needed here. YOU CANNOT PROVE AN ABSENCE, BUT YOU
 # CAN PROVE A DIFFERENCE, AND A DIFFERENCE IS WHAT A HIDING PLACE ACTUALLY IS.
+# THE RATCHET'S OWN PROOF, committed rather than hand-run. codex-worker-2 has objected twice that a
+# check verified by me at a shell prompt is evidence for me and nobody else, and been right twice.
+# The control harness mutates the PACKET and this ratchet reads the SCRIPT, so it cannot be a
+# control — it can be an executable proof, which is the same thing minus the harness. Four reader
+# shapes are injected into a COPY of the source in memory and the classifier is re-run over each:
+# three must raise the count and the fourth, the local alias, must NOT — the floor stated in the
+# code, asserted rather than described.
+if '--prove-extractor-ratchet' in sys.argv:
+    def _classify(src_text):
+        n = 0
+        for nd in ast.walk(ast.parse(src_text)):
+            if not isinstance(nd, ast.Call) or not isinstance(nd.func, ast.Attribute): continue
+            rv = nd.func.value
+            isre = isinstance(rv, ast.Name) and rv.id == 're'
+            isc = isinstance(rv, ast.Name) and rv.id.isupper() and len(rv.id) > 1
+            if not (isre or isc): continue
+            kw = {k.arg: k.value for k in nd.keywords}
+            if isc:
+                for t in ([nd.args[0]] if nd.args else []) + ([kw['string']] if 'string' in kw else []):
+                    if isinstance(t, ast.Name) and t.id in ('pkt', 'body', 'head'): n += 1
+                continue
+            args = list(nd.args) + ([kw['string']] if 'string' in kw else [])
+            idx = {'sub': 2, 'subn': 2}.get(nd.func.attr, 1)
+            if len(args) <= idx: continue
+            lits = [x.value for x in ast.walk(args[0])
+                    if isinstance(x, ast.Constant) and isinstance(x.value, str)]
+            t = args[idx]
+            if lits and not any('`' in l for l in lits) and isinstance(t, ast.Name) \
+               and t.id in ('pkt', 'body', 'head'): n += 1
+        return n
+    _self = open(__file__).read()
+    _n0 = _classify(_self)
+    _shapes = [("_z1 = None if True else re.search(r'X', pkt)", True, 'positional'),
+               ("_z2 = None if True else re.search(r'X', string=pkt)", True, 'keyword'),
+               ("RXZ = re.compile(r'X')\n_z3 = None if True else RXZ.finditer(pkt)", True, 'compiled'),
+               ("_zt = pkt\n_z4 = None if True else re.search(r'X', _zt)", False, 'local alias')]
+    _all_ok = True
+    for _code, _should, _label in _shapes:
+        _n1 = _classify(_self + '\n' + _code + '\n')
+        _rose = _n1 > _n0
+        _ok = (_rose == _should)
+        print(f'  {_label:<12} {_n0} -> {_n1}  expected {"rise" if _should else "no rise"}  '
+              f'{"PASS" if _ok else "FAIL"}')
+        _all_ok = _all_ok and _ok
+    print(f'ratchet floor {_n0} · {"holds" if _all_ok else "BROKEN"}')
+    sys.exit(0 if _all_ok else 1)
 if '--prove-blanking' in sys.argv:
     FAKE = '**R99 — item 11 (G1-B): injected.**'
     def _count(doc):
