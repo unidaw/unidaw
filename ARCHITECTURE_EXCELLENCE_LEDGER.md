@@ -430,6 +430,11 @@ away exact-SHA review or shared-hotspot ownership to improve throughput.
 - `7985aca`: owner PASS/89 controls; R17 closes item21 as a census-vs-constraint
   clarification. G3 N derivation and Watchdog fate remain owner decisions;
   exact review pending.
+- Exact review of `7985aca` is **BLOCKED**: R17 is narrow-PASS, but the live
+  register still demands the contradiction decision, R17 overclaims a continue
+  count, item-body ruling binding is fail-open, and R16/item37 is unsupported
+  under the frozen hostReady exclusion/relaunch protocol. G3 and G2/G0/G4
+  decisions remain open.
 - Exact review of `2699a2c` is **BLOCKED**: the extractor proof duplicates rather
   than binds the production classifier/floor, blanking proof is narrow, hidden
   link destinations still become dependencies, identity proves bytes only, and
