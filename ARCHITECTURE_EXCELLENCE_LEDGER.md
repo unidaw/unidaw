@@ -417,6 +417,10 @@ away exact-SHA review or shared-hotspot ownership to improve throughput.
 - `8052160`: owner PASS/89 controls; R15 defines G3 M1, item36 adds a product
   blocker for the post-marker stall interpretation, and five semantic decisions
   remain. Exact independent review pending.
+- Exact review of `8052160` is **BLOCKED**: mechanics and robust 89/89 sweep
+  pass, but R15/M1 lacks host identity/progress binding, stopped-state proof,
+  anti-SKIP handling, and safe log-marker lifecycle; R15/item36 text conflicts
+  and item36 contains unrelated copy-paste. G3 remains blocked.
 - Exact review of `2699a2c` is **BLOCKED**: the extractor proof duplicates rather
   than binds the production classifier/floor, blanking proof is narrow, hidden
   link destinations still become dependencies, identity proves bytes only, and
