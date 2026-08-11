@@ -410,8 +410,15 @@ region types (`UiDeviceParamsRegion`, `UiWaveformRegion`), so the intersection p
 and the FAIL clause that predicate shipped with fires at the SHA it was published at. It is withdrawn
 rather than replaced by a third guess. **This gate has no derivable population and cannot be decided
 until one exists** — open item 11 (G1-B), and it blocks G1-B the way the missing N blocks G3. *Call sites of
-those six* — 16 production, 2 test, obtained per name and discarding definitions and three doc
-comments.
+those six* — **WITHDRAWN, inheriting the withdrawal above.** The figure was 16 production and 2 test,
+obtained per name and discarding definitions and three doc comments, and the arithmetic is sound;
+what it counts is call sites OF A POPULATION THAT NO LONGER STANDS. A count over a withdrawn set is
+not a smaller claim than the set — it is the same claim wearing a number, so withdrawing the six and
+keeping their call-site census would have left the hand selection in the packet under a different
+name. It returns with the population, under open item 11 (G1-B). Open items 8, 9 and 10 all close on
+this one withdrawal, which is the evidence that they were symptoms: three separately-filed defects
+— an inconsistent count, a scope/population contradiction, and two recipes that did not reproduce
+their lists — were one hand-selected population being described three times.
 
 **Floor.** Four blind spots, each with its count: `seq.store` == 8 at pin, and a whole-header memcpy
 or a helper taking the region by reference is invisible to it; `pub fn read_` == 21; the call-site
@@ -449,8 +456,12 @@ halves with barrier-paused writers.
 6. Fixtures 2c and 2f are refused; 2b and 2d accepted. *REFUTED BY* `read_device_params` returning a
    populated view for 2f — the image carrying `trackId`/`deviceId` from
    `apps/engine_request_commands.cpp:122-123` beside a stale `paramCount`.
-7. No reader loads a peer-written word through a plain non-atomic load. **Two of the six fail today
-   and the bullet names both**: `ui/daw-bridge/src/control.rs:944-949`. *REFUTED BY* either remaining.
+7. No reader loads a peer-written word through a plain non-atomic load. Two named sites fail today
+   and the bullet names both: `ui/daw-bridge/src/control.rs:944-949`. Quantified over THOSE TWO
+   SITES, not over "the six" — the six are withdrawn, and a bullet phrased "two of the six" would
+   have been undecidable for the same reason the population is. Whether two is the whole set of
+   offending sites is open item 11 (G1-B); that these two offend is decidable at this SHA and is
+   what the bullet asserts. *REFUTED BY* either remaining.
 8. An abandoned publication is distinguishable from an unanswered one within a bounded number of
    observations, and the reader reports which it saw. *REFUTED BY* a reader that returns the same
    value for both. This replaces a predecessor bullet requiring only that the condition be
@@ -902,7 +913,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, A.0 SCRIPT BLOB `e80f933a1a0ac24092ad4f0c32ca620e01f58ffe`
+`tools/p12_selfcheck.py` at this SHA, A.0 SCRIPT BLOB `dd886fb351720c752d2635910fe3fd13625f05d9`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -910,7 +921,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 25 items, 22 open · 11 RAW + 19 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 25 items, 19 open · 11 RAW + 19 commanded claims, all executed
     PASS
 
 **What it decides.** Open-item header against body, contiguity, and orphaned numbers. Every
@@ -945,7 +956,7 @@ and so provoked a different check entirely, and the landing assertion demanded t
 which an insertion control can never do — it reported a landed mutation as unlanded. The named-tag
 requirement is what exposed both.
 
-# Open items — 25 atomic, 3 CLOSED at this SHA, 22 open
+# Open items — 25 atomic, 6 CLOSED at this SHA, 19 open
 
 One per line, numbered in document order, so the count is checkable. Three are BLOCKING: a gate
 carrying one cannot be decided by any implementation.
@@ -957,9 +968,23 @@ carrying one cannot be decided by any implementation.
 5. **G0-B** — CLOSED at this SHA. Both member counts are produced by a printed command over the pinned tree, the C++ one spanning the three headers the eight types are actually declared in. The per-type breakdown puts the entire 66-vs-65 difference in `EventEntry` (7 vs 6), which corroborates the one-sided-member claim rather than restating it.
 6. **G1-A** — CLOSED at this SHA. The entry-address extraction's rule ships inside the printed command: the data-statement and index-site pipelines each carry their own exclusions and return 4 (3 production) and 12. Closing it is also what exposed the classification error the arithmetic had been hiding — the rule as prose said "four non-data operations" where the ready-flag operations are five, so the in-scope figure was 5 and is 4.
 7. **G1-A** — The `ui_out` producer census is not established, and the disarm is safe only under a single-consumer contract that is asserted rather than proven.
-8. **G1-B** — The send-site count is stated as 16, as "the sixteen", and as a list of fifteen.
-9. **G1-B** — A region the scope omits is called by the population one of "the only two" that rewrite in place.
-10. **G1-B** — Two extraction recipes do not reproduce their lists.
+8. **G1-B** — CLOSED at this SHA, by withdrawal rather than by reconciliation. The three
+   inconsistent statements of the send-site count all quantified over the hand-selected six, which
+   this packet withdraws; the census is withdrawn with it rather than being made self-consistent,
+   because a count over a withdrawn population re-admits the population under a different name. PASS
+   7 is re-quantified over the two sites it names. Both return under open item 11 (G1-B).
+9. **G1-B** — CLOSED at this SHA as a defect, SUBSUMED by open item 11 (G1-B) as subject matter.
+   The contradiction was between a scope that omitted a region and a population that called that
+   region one of "the only two" rewriting in place. The population making that claim is withdrawn,
+   so the contradiction has no second side; the phrase appears nowhere in this packet. It returns
+   the moment a derivable population does, and it returns as a REQUIREMENT on that population — any
+   successor's population must be checked against the scope before it is published, which is the
+   check whose absence produced this item.
+10. **G1-B** — CLOSED at this SHA as a defect, SUBSUMED by open item 11 (G1-B). Both recipes now
+    state what they actually return rather than a list they do not produce: `pub fn read_` returns
+    21 candidates and is explicitly NOT a population, and the `Region*` intersection returns 2 and
+    is published as WRONG with the FAIL clause it shipped with. A recipe that names its true output
+    cannot fail to reproduce its list, because it no longer claims one.
 11. **G1-B** — **BLOCKING.** The reader population has no derivation. The hand selection of six was irreproducible; the predicate proposed to replace it yields two, not six, and is withdrawn. This gate cannot be decided until a population exists, as G3 cannot until N exists.
 12. **G2-A** — Layer-1 fixture arithmetic: eleven journal lines, not six, and ids legitimately repeat, so a correct implementation fails the gate's only runnable integration assertion.
 13. **G2-A** — CLOSED at this SHA. The fifty-one correlator sites are no longer carried on attribution: the G2-A population states the command, its raw count and the subtraction, and reaches the exact review's 4 + 6 + 17 + 24. The count is written once, there, so this entry does not restate it. Re-deriving it is also what refuted my own competing figure — that one counted mentions rather than call sites, so the disagreement was my predicate and not the reviewer's arithmetic.
