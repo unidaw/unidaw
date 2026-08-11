@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '05a58dac43c818ed257f9a77b8f13af14f570fa3'
+PREV_TIP     = '36c6df0941ca44fc64b3b7bcb1765a7baf9b9a67'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -377,7 +377,7 @@ else:
 # not a better adjective: each exception carries a marker naming the item that tracks it, the
 # markers are counted, and the count is asserted against what the provenance paragraph claims.
 MARK = '[HAND-CLASSIFIED — open item 25 (all)]'
-starts = [m.start() for m in re.finditer(r'\*[A-Z][^*\n]{4,70}\* — ', pkt)]
+starts = [m.start() for m in re.finditer(r'\*[`A-Z][^*\n]{4,70}\* — ', pkt)]
 handmade = 0
 # A marker binds to the heading whose OWN bullet it sits in — from the heading to the end of that
 # bullet — not merely somewhere in a 600-char span. Span attribution was fail-open: regress a
@@ -470,9 +470,9 @@ for gid, gbody in zip(parts[0::2], parts[1::2]):
                              'refuted_by': (re.search(r'\*REFUTED BY\* (.*)$', txt).group(1)
                                             if re.search(r'\*REFUTED BY\* ', txt) else None),
                              'text': txt})
-pop_headings = [{'name': m.group(0).strip('* '), 'line': line_of(m.start()),
+pop_headings = [{'name': re.sub(r'^\*|\*\s*—\s*$', '', m.group(0)).strip(), 'line': line_of(m.start()),
                  'hand_classified': MARK in own_bullet(m.start())}
-                for m in re.finditer(r'\*[A-Z][^*\n]{4,70}\* — ', pkt)]
+                for m in re.finditer(r'\*[`A-Z][^*\n]{4,70}\* — ', pkt)]
 # gates[]: EVERY gate heading, including one that owns no open item. Deriving gates from
 # items[].gate made G0-A invisible — a gate is not a property of the items that happen to cite it.
 gates = []
@@ -503,10 +503,20 @@ for g in gate_hdr:
                   'decidable_for_acceptance': not blk,
                   'reason_if_not_acceptance': ('blocked by items %s' % blk) if blk else None,
                   'reason_if_not_planning': 'own population withdrawn' if withdrawn_pop else None})
-rulings = [{'id': m.group(1), 'applied': 'PROPAGATED at this SHA' in m.group(0)
-                                          or 'is PROPAGATED' in m.group(0),
-            'line': line_of(m.start())}
-           for m in re.finditer(r'\*\*(R[1-4]) — .*?(?=\n\n\*\*R[1-4] — |\*\*What these rulings do NOT)', pkt, re.S)]
+rulings = []
+for m in re.finditer(r'\*\*(R[1-4]) — .*?(?=\n\n\*\*R[1-4] — |\*\*What these rulings do NOT)', pkt, re.S):
+    blk = m.group(0)
+    head = re.match(r'\*\*(R[1-4]) — ([^*]{0,160}?)(?:\.\*\*|\*\*)', blk)
+    rulings.append({
+        'id': m.group(1),
+        'line': line_of(m.start()),
+        'applied': 'PROPAGATED at this SHA' in blk or 'is PROPAGATED' in blk,
+        'items': sorted({int(x) for x in re.findall(r'item[s]? (\d+)', blk)}),
+        # the decision's own words and every integer it fixes: a manifest that does not change when
+        # N goes 3 -> 4 is not carrying the decision, only a flag about it
+        'decision': re.sub(r'\s+', ' ', head.group(2)).strip() if head else None,
+        'decision_values': sorted({int(v) for v in re.findall(r'N = (\d+)', blk)}),
+        'text': re.sub(r'\s+', ' ', blk)[:600]})
 # constraints[]: the four non-negotiables. Constraint 1 -- atomics and the checked LayoutSpec land
 # FIRST -- survived only as free text inside G1-B's dependencies_text, and G1-B is RESOLUTION-ONLY,
 # so a planner walking the plannable gates would never have read the rule that orders every
@@ -525,7 +535,9 @@ VERSION_COUNTERS = ['kShmVersion', 'kControlVersion', 'kPatcherAbiVersion']
 # by silence, that every gate is fully decidable. That is A.0's own rule inverted: a source silent
 # about its limits reads as total coverage. These three sections carry the residue.
 def section(gbody, label, gid, gstart):
-    m = re.search(r'\*\*%s\*\*(.*?)(?=\n\*\*[A-Z]|\n# |\Z)' % label, gbody, re.S)
+    NEXT = (r'\n\*\*(?:Severity|Dependencies|Scope|Invariant|Population|Floor|Failure model|'
+            r'Deterministic test|PASS conditions|Static checks|Review register)')
+    m = re.search(r'\*\*%s\*\*(.*?)(?=%s|\n# |\n---|\Z)' % (label, NEXT), gbody, re.S)
     if not m: return None
     return {'gate': gid, 'line': line_of(gstart + m.start()),
             'text': re.sub(r'\s+', ' ', m.group(1)).strip()}
@@ -545,10 +557,11 @@ for gid, gbody in zip(parts[0::2], parts[1::2]):
         # an empty list means the section states its checks in PROSE, not that it has none —
         # G0-B, G3 and G4 do exactly that, and an empty array would read as "no static checks"
         sc['labelled'] = bool(seen_lab)
-        for miss in re.findall(r'[Tt]here is no S-?(\d+)', sc['text']):
+        withdrawn_lab = re.findall(r'S-?(\d+)\s*\n?\s*\*\*WITHDRAWN', sc['text'])
+        for miss in re.findall(r'[Tt]here is no S-?(\d+)', sc['text']) + withdrawn_lab:
             sc['labels'] = [l for l in sc['labels'] if l['label'] != miss]
             sc['labels'].append({'label': miss, 'present': False,
-                                 'note': 'named hole; carried by an open item'})
+                                 'note': 'withdrawn or named hole; carried by an open item'})
         sc['labels'].sort(key=lambda l: int(l['label']))
         static_checks.append(sc)
     rr = section(gbody, r'Review register\.', gid, gstart)

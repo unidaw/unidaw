@@ -1113,112 +1113,127 @@
   {
    "hand_classified": true,
    "line": 115,
-   "name": "Regions the engine addresses* —"
+   "name": "Regions the engine addresses"
   },
   {
    "hand_classified": false,
    "line": 123,
-   "name": "Raw region derivations outside any validator* —"
+   "name": "Raw region derivations outside any validator"
   },
   {
    "hand_classified": true,
    "line": 130,
-   "name": "Bounds checks anchored on the child's number* —"
+   "name": "Bounds checks anchored on the child's number"
   },
   {
    "hand_classified": true,
    "line": 131,
-   "name": "Ring constructions over a host-created mapping* —"
+   "name": "Ring constructions over a host-created mapping"
   },
   {
    "hand_classified": false,
    "line": 240,
-   "name": "ABI types* —"
+   "name": "ABI types"
   },
   {
    "hand_classified": false,
    "line": 245,
-   "name": "Members* —"
+   "name": "Members"
   },
   {
    "hand_classified": true,
    "line": 270,
-   "name": "One-sided members* —"
+   "name": "One-sided members"
   },
   {
    "hand_classified": false,
    "line": 343,
-   "name": "Rings* —"
+   "name": "Rings"
   },
   {
    "hand_classified": false,
    "line": 345,
-   "name": "Statements interpreting an entry's bytes as data* —"
+   "name": "Statements interpreting an entry's bytes as data"
   },
   {
    "hand_classified": false,
    "line": 367,
-   "name": "Read-cursor stores* —"
+   "name": "Read-cursor stores"
   },
   {
    "hand_classified": false,
    "line": 369,
-   "name": "Plugin-cache index sites, which are NOT ring sites* —"
+   "name": "Plugin-cache index sites, which are NOT ring sites"
   },
   {
    "hand_classified": true,
    "line": 379,
-   "name": "RING index sites, the population PASS 7 and S4 actually range over* —"
+   "name": "RING index sites, the population PASS 7 and S4 actually range over"
   },
   {
    "hand_classified": false,
    "line": 472,
-   "name": "Seqlock opens and closes* —"
+   "name": "Seqlock opens and closes"
   },
   {
    "hand_classified": false,
    "line": 472,
-   "name": "Request/answer readers* —"
+   "name": "Request/answer readers"
   },
   {
    "hand_classified": false,
    "line": 636,
-   "name": "Terminal refusal records* —"
+   "name": "Terminal refusal records"
   },
   {
    "hand_classified": false,
    "line": 638,
-   "name": "Correlator call sites* —"
+   "name": "Correlator call sites"
+  },
+  {
+   "hand_classified": false,
+   "line": 748,
+   "name": "`hostReady` publish sites"
+  },
+  {
+   "hand_classified": false,
+   "line": 751,
+   "name": "`controllerMutex` acquisitions in product code"
+  },
+  {
+   "hand_classified": false,
+   "line": 753,
+   "name": "`hostReady` read sites in product code"
   },
   {
    "hand_classified": true,
    "line": 846,
-   "name": "Tracks whose production must continue* —"
+   "name": "Tracks whose production must continue"
   },
   {
    "hand_classified": false,
    "line": 847,
-   "name": "Writes that remove a host from the gate population* —"
+   "name": "Writes that remove a host from the gate population"
   },
   {
    "hand_classified": false,
    "line": 857,
-   "name": "Producer-loop exits* —"
+   "name": "Producer-loop exits"
   },
   {
    "hand_classified": false,
    "line": 972,
-   "name": "Dispatch sites* —"
+   "name": "Dispatch sites"
   },
   {
    "hand_classified": false,
    "line": 975,
-   "name": "Out-plane readers* —"
+   "name": "Out-plane readers"
   },
   {
    "hand_classified": false,
    "line": 1005,
-   "name": "Input-plane writers in engine production code* —"
+   "name": "Input-plane writers in engine production code"
   }
  ],
  "product": {
@@ -1385,64 +1400,92 @@
   {
    "gate": "G0-A",
    "line": 205,
-   "text": "The reviewer SHALL confirm: the owner's ruling on post-attach shrink, which no validation closes because the child keeps its fd; the expected verdict for a valid object under a name the engine did not choose; refuse-versus-degrade for a bad ring offset; that `mmap` past the object succeeds on this platform, nothing here having been executed; that the fixture asserts `offsetof` rather than trusting a hand-computed byte 96; that the enumerations were RE-DERIVED at the delivering SHA; that all **seven live** mailbox readers take their pointer from the validated layout; whether `shmHeader()` can be null at `apps/daw_engine_main.cpp:955`; that the Rust UI attach gap has been allocated to a named gate; and that the unbounded test harnesses are brought onto the validator or removed, so they do not stand as the pattern to copy. ---"
+   "text": "The reviewer SHALL confirm: the owner's ruling on post-attach shrink, which no validation closes because the child keeps its fd; the expected verdict for a valid object under a name the engine did not choose; refuse-versus-degrade for a bad ring offset; that `mmap` past the object succeeds on this platform, nothing here having been executed; that the fixture asserts `offsetof` rather than trusting a hand-computed byte 96; that the enumerations were RE-DERIVED at the delivering SHA; that all **seven live** mailbox readers take their pointer from the validated layout; whether `shmHeader()` can be null at `apps/daw_engine_main.cpp:955`; that the Rust UI attach gap has been allocated to a named gate; and that the unbounded test harnesses are brought onto the validator or removed, so they do not stand as the pattern to copy."
   },
   {
    "gate": "G0-B",
    "line": 320,
-   "text": "The reviewer SHALL confirm: that libclang's layout for the eight types equals that of the compiler building `engine_core`, since the C++ numbers come from bindgen and the product comes from the host compiler; whether Rust's whole-struct store `*slot = entry` (`lib.rs:157-158`) writes `EventEntry` bytes [60,64), the C++ `ready` member; the ruling on the `PatcherSliceSelectConfig` name collision, the gate being RED until one side renames; and that no ABI type is passed through `node_config` while declared outside `apps/patcher_abi.h`, which the file closure cannot see. ---"
+   "text": "The reviewer SHALL confirm: that libclang's layout for the eight types equals that of the compiler building `engine_core`, since the C++ numbers come from bindgen and the product comes from the host compiler; whether Rust's whole-struct store `*slot = entry` (`lib.rs:157-158`) writes `EventEntry` bytes [60,64), the C++ `ready` member; the ruling on the `PatcherSliceSelectConfig` name collision, the gate being RED until one side renames; and that no ABI type is passed through `node_config` while declared outside `apps/patcher_abi.h`, which the file closure cannot see."
   },
   {
    "gate": "G1-A",
    "line": 450,
-   "text": "The reviewer SHALL decide whether a producer publishing into a slot it no longer owns after the 2-second grace is in scope; SHALL establish or explicitly decline the producer census on `ui_out`; SHALL confirm no second consumer of `ui_out` exists, since the disarm is safe only under the single-consumer contract; and SHALL confirm Fixture A compiles, nothing in the pin having been built."
+   "text": "The reviewer SHALL decide whether a producer publishing into a slot it no longer owns after the 2-second grace is in scope; SHALL establish or explicitly decline the producer census on `ui_out`; SHALL confirm no second consumer of `ui_out` exists, since the disarm is safe only under the single-consumer contract; and SHALL confirm Fixture A compiles, nothing in the pin having been built. **Correction carried.** The claim of \"uninitialised `EventEntry` / indeterminate flags\" is withdrawn: `EventEntry` has an NSDMI."
   },
   {
    "gate": "G1-B",
    "line": 576,
-   "text": "The reviewer SHALL rule on how device-params acquires a request identity — a new field on `UiDeviceParamsRegion` implies a `kShmVersion` bump; SHALL confirm whether the plain snapshot copy at `control.rs:644-646` bracketed by the `ui_version` double check is acceptable; SHALL state which thread owns each region's publication and confirm the device-params region and the audio clip table are INTENDED to be single-writer; and SHALL decide what abandonment this gate defends against — process death, an exception inside the body, or neither — since there is no early return between any open and its close. ---"
+   "text": "The reviewer SHALL rule on how device-params acquires a request identity — a new field on `UiDeviceParamsRegion` implies a `kShmVersion` bump; SHALL confirm whether the plain snapshot copy at `control.rs:644-646` bracketed by the `ui_version` double check is acceptable; SHALL state which thread owns each region's publication and confirm the device-params region and the audio clip table are INTENDED to be single-writer; and SHALL decide what abandonment this gate defends against — process death, an exception inside the body, or neither — since there is no early return between any open and its close."
   },
   {
    "gate": "G2-A",
    "line": 705,
-   "text": "The reviewer SHALL re-derive the command and correlator populations at the reviewed SHA and fail the gate if any extraction returns fewer than its floor; SHALL run `tools/version_arbiter_check.sh` on the live tree and confirm whether its clip extraction returns 5 against its floor of 7, i.e. whether the shipped check is already blind; SHALL confirm no consumer other than `apps/engine_rt_helpers.cpp:387` reads `EventEntry.flags` on a `UiCommand` entry before any design commits to those 4 bytes; and SHALL decide whether `WriteHarmony`/`DeleteHarmony` get a refusal record at all, since at this SHA a refused harmony write publishes only a scope-free `ResyncNeeded`. ---"
+   "text": "The reviewer SHALL re-derive the command and correlator populations at the reviewed SHA and fail the gate if any extraction returns fewer than its floor; SHALL run `tools/version_arbiter_check.sh` on the live tree and confirm whether its clip extraction returns 5 against its floor of 7, i.e. whether the shipped check is already blind; SHALL confirm no consumer other than `apps/engine_rt_helpers.cpp:387` reads `EventEntry.flags` on a `UiCommand` entry before any design commits to those 4 bytes; and SHALL decide whether `WriteHarmony`/`DeleteHarmony` get a refusal record at all, since at this SHA a refused harmony write publishes only a scope-free `ResyncNeeded`."
   },
   {
    "gate": "G2-B",
    "line": 806,
-   "text": "The recovery CONTENT is not mechanically decidable at this SHA: the reviewer SHALL confirm by reading `apps/daw_engine_main.cpp:1106-1125` that the recovery issues exactly one `SetBypass` per slot. The reviewer SHALL confirm no artifact describing the fix says \"the authored bypass value\" without qualifying it as the copy at `:1113`. The reviewer SHALL confirm, when the fix lands, that mechanism substitution has not voided the gate. The reviewer SHALL classify any NEW `hostReady` publish site, which S1 can detect but not judge. **The mirror-ack circularity is RULED (R2: two-level readiness) and the reviewer SHALL confirm the propagation rather than choose**, which this paragraph asked for before the ruling existed: the ack arrives only during a `ProcessBlock`, which `processTrack` refuses while `hostReady` is false. **R2 CHOSE: readiness is staged in two levels** (`mapped-and-bypassed` versus `mirror-complete`) with dispatch permitted at the lower one. The alternative — a recovery-only priming exemption — is REJECTED and named here so it is not re-proposed as though the question were open. This paragraph previously said the packet \"deliberately does not choose\", which was true before R2 and false after it; the option list is retained as the record of what was decided against, not as a live choice. **The reviewer SHALL also rule on the self-deadlock**: the fix class this gate admits requires `applyHostBypassStates` to stop taking `controllerMutex` at `:1116`, i.e. a caller-holds contract or a lock-passing signature — which the predecessor did not state and which is a design decision, not a detail. ---"
+   "text": "The recovery CONTENT is not mechanically decidable at this SHA: the reviewer SHALL confirm by reading `apps/daw_engine_main.cpp:1106-1125` that the recovery issues exactly one `SetBypass` per slot. The reviewer SHALL confirm no artifact describing the fix says \"the authored bypass value\" without qualifying it as the copy at `:1113`. The reviewer SHALL confirm, when the fix lands, that mechanism substitution has not voided the gate. The reviewer SHALL classify any NEW `hostReady` publish site, which S1 can detect but not judge. **The mirror-ack circularity is RULED (R2: two-level readiness) and the reviewer SHALL confirm the propagation rather than choose**, which this paragraph asked for before the ruling existed: the ack arrives only during a `ProcessBlock`, which `processTrack` refuses while `hostReady` is false. **R2 CHOSE: readiness is staged in two levels** (`mapped-and-bypassed` versus `mirror-complete`) with dispatch permitted at the lower one. The alternative — a recovery-only priming exemption — is REJECTED and named here so it is not re-proposed as though the question were open. This paragraph previously said the packet \"deliberately does not choose\", which was true before R2 and false after it; the option list is retained as the record of what was decided against, not as a live choice. **The reviewer SHALL also rule on the self-deadlock**: the fix class this gate admits requires `applyHostBypassStates` to stop taking `controllerMutex` at `:1116`, i.e. a caller-holds contract or a lock-passing signature — which the predecessor did not state and which is a design decision, not a detail."
   },
   {
    "gate": "G3",
    "line": 914,
-   "text": "The reviewer SHALL obtain an owner ruling for N and record its derivation: nothing in the tree sources one, all three production `Watchdog`s using `hardTimeoutBlocks = 500`. The reviewer SHALL rule on which of two contradictory statements is stale after M1 runs, and record the ruling next to BOTH — `tools/host_stall_check.sh:16-19` and the producer comment. The reviewer SHALL confirm that evicting a host which still owes dispatched blocks cannot corrupt what a RESUMED host reads or publishes. The reviewer SHALL decide `daw::Watchdog`'s fate — deletion or re-specification — since the gate accepts either with equal force and deliberately cannot choose."
+   "text": "The reviewer SHALL obtain an owner ruling for N and record its derivation: nothing in the tree sources one, all three production `Watchdog`s using `hardTimeoutBlocks = 500`. The reviewer SHALL rule on which of two contradictory statements is stale after M1 runs, and record the ruling next to BOTH — `tools/host_stall_check.sh:16-19` and the producer comment. The reviewer SHALL confirm that evicting a host which still owes dispatched blocks cannot corrupt what a RESUMED host reads or publishes. The reviewer SHALL decide `daw::Watchdog`'s fate — deletion or re-specification — since the gate accepts either with equal force and deliberately cannot choose. **The reviewer SHALL resolve the static-check contradiction**: one check places the eviction inside `apps/engine_producer_thread.cpp:225-252`, whose natural implementation adds a `continue` and moves the exit count off 12, which a sibling check forbids. One of the two must yield, and the packet does not choose."
   },
   {
    "gate": "G4",
    "line": 1086,
-   "text": "The reviewer SHALL confirm by reading `apps/juce_host_process_main.cpp:606-1096` that the SHIPPING host stores the acknowledgement after the last `process`. The reviewer SHALL confirm G3 has passed and that the adopted wait carries an independent per-host deadline whose expiry FAILS the render with a diagnostic rather than proceeding. The reviewer SHALL confirm the new wait cannot re-enter either deadlock door documented at `apps/engine_rt_helpers.h:200-234`. The reviewer SHALL confirm where the acknowledgement lands and accept the consequences: inside `BlockMailbox`'s `reserved[11]` (`apps/shared_memory.h:499`) nothing moves; growing the mailbox is a `kShmVersion` bump. ---"
+   "text": "The reviewer SHALL confirm by reading `apps/juce_host_process_main.cpp:606-1096` that the SHIPPING host stores the acknowledgement after the last `process`. The reviewer SHALL confirm G3 has passed and that the adopted wait carries an independent per-host deadline whose expiry FAILS the render with a diagnostic rather than proceeding. The reviewer SHALL confirm the new wait cannot re-enter either deadlock door documented at `apps/engine_rt_helpers.h:200-234`. The reviewer SHALL confirm where the acknowledgement lands and accept the consequences: inside `BlockMailbox`'s `reserved[11]` (`apps/shared_memory.h:499`) nothing moves; growing the mailbox is a `kShmVersion` bump."
   }
  ],
  "rulings": [
   {
    "applied": false,
+   "decision": "item 11 (G1-B) and item 25 (all): AUTHORED POPULATIONS, with drift detectors",
+   "decision_values": [],
    "id": "R1",
-   "line": 1182
+   "items": [
+    11,
+    25
+   ],
+   "line": 1182,
+   "text": "**R1 — item 11 (G1-B) and item 25 (all): AUTHORED POPULATIONS, with drift detectors.** No predicate distinguishes a request/answer reader from any other `read_` function, and none distinguishes a REGION from the offset fields addressing it. Three attempts at a predicate produced 6 by hand, then 2 by intersection, then a withdrawal. The ruling is that these populations are **authored, not derived**: each authored population must carry an EXPLICIT MEMBER LIST and a DRIFT DETECTOR — a command whose figure is pinned, so that a change in the surrounding code invalidates the authored list instead of"
   },
   {
    "applied": true,
+   "decision": "item 18 (G2-B): TWO-LEVEL READINESS, not a recovery-only exemption",
+   "decision_values": [],
    "id": "R2",
-   "line": 1203
+   "items": [
+    18
+   ],
+   "line": 1203,
+   "text": "**R2 — item 18 (G2-B): TWO-LEVEL READINESS, not a recovery-only exemption.** Readiness is staged — `mapped-and-bypassed` and `mirror-complete` — and dispatch is permitted at the lower level. The exemption was the smaller change and is the worse one: it creates a dispatch path that exists only during recovery, which is the least-exercised state in the system and the one that runs when something has already gone wrong. A LEVEL is a value that every dispatch can carry and every assertion can read; an EXEMPTION is a rule that lives in whichever branch remembered it, which is this repo's documented"
   },
   {
    "applied": false,
+   "decision": "item 19 (G3): N IS AUTHORED AT 3, and the packet says authored, not derived",
+   "decision_values": [
+    3,
+    9
+   ],
    "id": "R3",
-   "line": 1218
+   "items": [
+    19
+   ],
+   "line": 1218,
+   "text": "**R3 — item 19 (G3): N IS AUTHORED AT 3, and the packet says authored, not derived.** Nothing in the tree sources an observation count; `hardTimeoutBlocks = 500` is a block count and converting it would be inventing a rate. So N is a design constant: **a host must fail to advance across 3 consecutive observations before eviction, and 3N = 9 observations of absence**. The constraint the value must satisfy is stated so a successor can rule differently on evidence: N observations must be long enough to survive ordinary scheduling jitter and strictly shorter in wall-clock than the existing hard ti"
   },
   {
    "applied": false,
+   "decision": "item 24 (G0-B): THE RUST SIDE RENAMES",
+   "decision_values": [],
    "id": "R4",
-   "line": 1241
+   "items": [
+    24
+   ],
+   "line": 1241,
+   "text": "**R4 — item 24 (G0-B): THE RUST SIDE RENAMES.** `patcher_abi.h:75` keeps `reserved`; `patcher_rust/src/lib.rs:86` changes `_pad0` to `reserved`. The C++ header is the ABI AUTHORITY — renaming the authority to match its mirror inverts which document defines the contract. **Correction to my own reasoning as published:** I wrote that bindgen consumes the header through an `allowlist_file` closure. It does not — there is no `build.rs` under `patcher_rust/` and no `allowlist_file` in the tree. The ruling stands on the weaker and true premise that `patcher_abi.h` is where the C++ side of the ABI is "
   }
  ],
  "schema": "ae-p1.2-manifest/2",
@@ -1541,11 +1584,12 @@
     },
     {
      "label": "4",
-     "present": true
+     "note": "withdrawn or named hole; carried by an open item",
+     "present": false
     }
    ],
    "line": 566,
-   "text": "S1 fence between open and first payload store — statement ORDER is invisible from any return value, since a clean image proves nothing about the fence. S2 write order inside the device-params body: identity words first (`:122-123`), `paramCount` last (`:169`), which is what makes the stale answer readable as complete. S3 minting expressions, naming the two collapsing forms. S4"
+   "text": "S1 fence between open and first payload store — statement ORDER is invisible from any return value, since a clean image proves nothing about the fence. S2 write order inside the device-params body: identity words first (`:122-123`), `paramCount` last (`:169`), which is what makes the stale answer readable as complete. S3 minting expressions, naming the two collapsing forms. S4 **WITHDRAWN WITH THE POPULATION** — it required drift detectors asserting \"the three counts\", which were counts over the hand-selected six this packet withdraws. A drift detector over a withdrawn population detects drift in nothing. It returns with open item 11 (G1-B), and the requirement it encodes — that whatever population replaces the six must have detectors pinning its size — is carried there rather than left as an unrooted static check here."
   },
   {
    "gate": "G2-A",
@@ -1561,7 +1605,7 @@
     },
     {
      "label": "3",
-     "note": "named hole; carried by an open item",
+     "note": "withdrawn or named hole; carried by an open item",
      "present": false
     },
     {
