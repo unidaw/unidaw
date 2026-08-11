@@ -656,6 +656,11 @@ accepted by prefix splitting, and an empty `⟦⟧` marker after the leading run
 silently ignored. These compound the body-derived PRODUCT divergence and
 malformed `BLOCKED-ON` discard.
 
+Owner successor `152a539` claims the second `_prod` derivation was removed,
+malformed `BLOCKED-ON` is rejected, move control is real, item26 is `[PACKET]`,
+item35's self-contradictory remedy was deleted, and the sweep reaches 95
+controls. Exact review is pending; M1/G3 and carried gate decisions remain.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
