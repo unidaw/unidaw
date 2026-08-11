@@ -538,6 +538,14 @@ unsound. Item37 still omits awaitAny/awaitAll readers, leaves its oracle
 unwritten, misstates packet-vs-product work, and omits the no-spawn cleanup race.
 G3/G2/G0/G4 blockers remain.
 
+Exact review of `b7aa09c` is **BLOCKED**. The four-reader census, namespace
+warning, R16 history label, and withdrawal arithmetic are genuine. Mixed
+packet/product work is still lost in the typed manifest (item37 remains
+PRODUCT-only); its oracle and publication taxonomy are not written, and its
+withdrawn tail remains normative-looking. R15 still contradicts the real
+host-drop/relaunch path and retains the permanent-gating claim. G2-A/B, G3
+N/Watchdog, G0-A/B, G4, and malformed-bracket sweep/doc drift remain.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
