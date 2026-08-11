@@ -44,13 +44,18 @@ The blockers from the exact review are reconciled here, and the count is deliber
    **The derivation is only as good as the marking, and the marking is mine** — this check can catch
    a marker missing from a blocker, and cannot catch a blocker marked wrongly; item 27 was marked
    ⟦PRODUCT⟧ for one SHA when its scope is authored and its blocker is item 29's defect. **A classification cannot be read out of prose that was not written
-   to carry it.** TWO blockers are packet edits as well as product fixes — item 37, whose
-   acceptance oracle is unwritten, and item 36, whose Layer 0, PASS 1 and register text all need
-   rewriting alongside the telemetry it waits on. Both carry ⟦PACKET⟧ beside ⟦PRODUCT⟧ so the
+   to carry it.** THREE blockers are packet edits as well as product fixes — item 37, whose
+   acceptance oracle is unwritten; item 36, whose Layer 0, PASS 1 and register text all need
+   rewriting alongside the telemetry it waits on; and item 18, where G2-B's PASS 4 is withdrawn with
+   no replacement, so no PASS condition accepts the two-level implementation that exists and writing
+   one is packet work. Both carry ⟦PACKET⟧ beside ⟦PRODUCT⟧ so the
    manifest can say so; until `kind` became an array that fact was unrepresentable and the record
-   said PRODUCT. An earlier version of this sentence named only item 37. **⟦PACKET⟧ MARKS (36, 37)**, derived from the item heads and compared against this restatement, because representing a
-   kind is not binding it: deleting the marker, moving it to a nonblocking item and misspelling it
-   all passed until this check existed. A control performs each mutation. That list is derived from the items themselves and every
+   said PRODUCT. An earlier version of this sentence named only item 37. **⟦PACKET⟧ MARKS (18, 36, 37)**, derived from the item heads and compared against this restatement, because representing a
+   kind is not binding it: deleting the marker, moving it to a nonblocking item, DUPLICATING it and
+   misspelling it all passed until these checks existed, and a marker parked later in a head
+   validated as present while emitting as absent because the validator and the emitter read the
+   head differently. There is now ONE derivation of a kind, parsing the LEADING marker run, and both
+   sides read it. A control performs each mutation. That list is derived from the items themselves and every
    restatement of it anywhere in this document is compared against the derivation
    (`BLOCKER-SET-RESTATED`) — this paragraph carried (18, 19, 23, 24, 29) for several SHAs, three
    members wrong on the packet's first screen, because the check knew about the open-items header
@@ -1411,7 +1416,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `c600336428f4f25c6664a8e722ad6ecc81ca1cdb`, A.0 SCRIPT BLOB `6819adba8c0c3eafd2e530bed0e5f0808589a0ea`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `99903728006c20625986c1a4b020bde07c71a23d`, A.0 SCRIPT BLOB `5c1282518fb53e32e628102b5d13f67dd80bfd98`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1490,7 +1495,7 @@ extractor count at its floor. `--prove-sweep-predicate` classifies a crafted-lin
 every spoof a reviewer has landed on the sweep's success test — a bare `OK (+` prefix, an unanchored
 tail, a wrong tag, a count the emitter cannot print, and a tag line with no separator.
 
-**Controls.** Ninety-two, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Ninety-four, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1511,7 +1516,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `packet-marker-gone`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `packet-marker-gone`, `packet-marker-move`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
@@ -2233,7 +2238,7 @@ carrying one cannot be decided by any implementation.
 15. **G2-B** — The self-deadlock: the admitted fix class requires `applyHostBypassStates` to stop taking `controllerMutex`.
 16. **G2-B** — The swap trap rests on an unratcheted guard at `apps/daw_engine_main.cpp:1107-1109`.
 17. **G2-B** — Probe ordering: without forbidding the offline probe from acquiring before the RT probe reports, the PASS token is producible by the packet's own fixture.
-18. **G2-B** — ⟦PRODUCT⟧ **BLOCKING, RULED (R2) and PROPAGATED into the gates at this SHA; open for the
+18. **G2-B** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING, RULED (R2) and PROPAGATED into the gates at this SHA; open for the
     product implementation only.** The circularity is dissolved in the specification: dispatch is
     permitted at `mapped-and-bypassed`, so the ack that establishes `mirror-complete` arrives during
     a `ProcessBlock` the gate now allows. What remains is building the two levels. Original

@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'd6d64df5a65b421aee44d30fdb2bc7832c2257f9'
+PREV_TIP     = '165e21be11a2d87ca92c10ff0856550418b57890'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -284,7 +284,7 @@ CONTROLS = {
                       'CONSTRAINTS-COUNT'),
  'opening-gates':    ('**EVERY GATE IS PLANNABLE AT THIS SHA**',
                       '**FOUR OF THE EIGHT GATES CANNOT BE DECIDED**', 1, 'OPENING-GATE-COUNT'),
- 'manifest-stale':   ('18. **G2-B** — ⟦PRODUCT⟧ **BLOCKING', '18. **G2-B** — ⟦PRODUCT⟧ **blocking', 1,
+ 'manifest-stale':   ('18. **G2-B** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING', '18. **G2-B** — ⟦PRODUCT⟧ ⟦PACKET⟧ **blocking', 1,
                       'MANIFEST-STALE'),
  'unresolved-tail':  ('master-track stores (`engine_master_render.cpp:121` and `:132`) → **13 IN\nSCOPE**.',
                       'master-track stores (`engine_master_render.cpp:121` and `:132`).', 1,
@@ -462,6 +462,10 @@ CONTROLS = {
  'blocker-kind':     ('35. **G0-B** — ⟦PRODUCT⟧ ', '35. **G0-B** — ', 1, 'BLOCKER-KIND'),
  'packet-marker-gone': ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ', '37. **G3** — ⟦PRODUCT⟧ ', 1,
                       'PACKET-SET-RESTATED'),
+ 'packet-marker-move': ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
+                      '37. **G3** — ⟦PRODUCT⟧ ', 1, 'PACKET-SET-RESTATED'),
+ 'packet-marker-dupe': ('36. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
+                      '36. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ⟦PACKET⟧ ', 1, 'KIND-MARKER-UNKNOWN'),
  'packet-marker-typo': ('36. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ', '36. **G3** — ⟦PRODUCT⟧ ⟦PAKCET⟧ ', 1,
                       'KIND-MARKER-UNKNOWN'),
  'writer-path-numeric': ('juce:989/994', '9/juce:989/994', 1, 'OUT-MEMBERS'),
@@ -907,17 +911,42 @@ _bodies = {int(m.group(1)): m.group(0) for m in
 # populations elsewhere in this packet.
 _prod = sorted(n for n in _derived_blk if '⟦PRODUCT⟧' in _bodies.get(n, ''))
 # every blocker states a KIND; a dependency marker is additional, never a substitute
-# the item HEADS, built here because `_head_of` is defined later beside the emission; marker
-# checks must read the head for the same reason `blocking` does — validation and emission have to
-# look at the same text or a marker parked in the body passes one and feeds the other.
+# ONE KIND DERIVATION, read by validation here and by the emitter below. The previous pair
+# DIVERGED IN THEIR VIEW OF THE SAME TEXT: validation searched the whole 200-character head by
+# substring while the emitter consumed only the LEADING MARKER RUN, so a ⟦PACKET⟧ parked later in a
+# head validated as present and emitted as absent — codex-worker-1 marked nonblocking item 1 that
+# way, restated the set to match, and got a clean PASS with item 1 emitting kind []. Every previous
+# emitter/validator divergence in this packet was fixed by deleting the second copy, and this is
+# that fix: `_KINDS` is the only place a kind is decided.
+#
+# Parsing the LEADING RUN is what makes position meaningful — a marker is a classification of the
+# item, not a word that appears somewhere in its first paragraph.
+_MARKER_RUN = re.compile(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ((?:⟦[^⟧\n]+⟧ ?)*)')
+_KIND_TOKENS = {'PRODUCT', 'PACKET'}
+_KINDS, _MARKER_ERR = {}, []
+for _m in _MARKER_RUN.finditer(_unhidden(body)):
+    _n, _seq = int(_m.group(1)), re.findall(r'⟦([^⟧]+)⟧', _m.group(2))
+    _kinds = []
+    for _tok in _seq:
+        _name = _tok.split(':')[0].strip()
+        if _name == 'BLOCKED-ON':
+            continue
+        if _name not in _KIND_TOKENS:
+            _MARKER_ERR.append(f'item {_n} carries ⟦{_name}⟧, which is not a kind')
+        elif _name in _kinds:
+            _MARKER_ERR.append(f'item {_n} repeats ⟦{_name}⟧; a duplicate collapses on emission')
+        else:
+            _kinds.append(_name)
+    _KINDS[_n] = _kinds
+for _e in _MARKER_ERR:
+    bad('KIND-MARKER-UNKNOWN', _e)
 _HEADS = {int(m.group(1)): m.group(2) for m in
           re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — (.{0,200})', _unhidden(body))}
-_pkt_kind = sorted(n for n in nums if '⟦PACKET⟧' in _HEADS.get(n, ''))
+_pkt_kind = sorted(n for n in nums if 'PACKET' in _KINDS.get(n, []))
 # A KIND IS AT LEAST ONE MARKER, not specifically PRODUCT. Requiring ⟦PRODUCT⟧ made a packet-only
 # blocker unrepresentable — the model could not say "this is blocked on work in this document",
 # which is a category the packet has produced twice.
-_kindless = [n for n in _derived_blk
-             if '⟦PRODUCT⟧' not in _HEADS.get(n, '') and '⟦PACKET⟧' not in _HEADS.get(n, '')]
+_kindless = [n for n in _derived_blk if not _KINDS.get(n)]
 if _kindless: bad('BLOCKER-KIND', f'blockers with no kind marker: {_kindless}')
 # REPRESENTED IS NOT BOUND. /5 could emit kind ["PRODUCT","PACKET"] while nothing checked the
 # marker existed, so deleting item 37's ⟦PACKET⟧, moving it to a nonblocking item, or typing
@@ -932,15 +961,13 @@ else:
     if _claimed != _pkt_kind:
         bad('PACKET-SET-RESTATED', f'{_pkt_said.group(1)!r} vs derived {_pkt_kind}')
 # an ENUM over item-head markers, so a typo is a failure rather than a silent absence
-_known = {'PRODUCT', 'PACKET'}
-for _n in nums:
-    for _m in re.finditer(r'⟦([A-Z][A-Z-]*)(?::[^⟧]*)?⟧', _HEADS.get(_n, '')):
-        if _m.group(1) not in _known and _m.group(1) != 'BLOCKED-ON':
-            bad('KIND-MARKER-UNKNOWN', f'item {_n} carries ⟦{_m.group(1)}⟧, which is not a kind')
-_marked = sorted(int(m.group(1)) for m in
-                 re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ⟦PRODUCT⟧', body))
+# (the enum lives in the single derivation above)
+# WAS: every blocker must OPEN with ⟦PRODUCT⟧ — which forbade a packet-only blocker and any
+# order but one, in the same commit that introduced an array to allow both. The rule is that
+# marked items and blockers are the same SET, whatever kinds they carry and in whatever order.
+_marked = sorted(n for n in _KINDS if _KINDS[n])
 if _marked != sorted(_derived_blk):
-    bad('BLOCKER-KIND', f'⟦PRODUCT⟧ markers on {_marked}, blockers are {sorted(_derived_blk)}')
+    bad('BLOCKER-KIND', f'kind markers on {_marked}, blockers are {sorted(_derived_blk)}')
 # the phrase wraps across a line in the packet, so the whitespace between its words is not a
 # space — matching a literal ' ' would have made this check silently unable to find its own
 # subject, which is how a check comes to report a missing claim instead of a wrong one.
@@ -1125,7 +1152,7 @@ def classify_raw_prose(src_text):
     return out
 
 _decor_raw = classify_raw_prose(open(__file__).read())
-_DECOR_FLOOR = 43
+_DECOR_FLOOR = 42   # 43 -> 42 when the duplicate kind-marker enum was deleted, not relaxed
 # THE FLOOR MUST EQUAL TODAY'S COUNT, not merely bound it. As a `>` test the floor could be raised
 # to 999 and the ratchet would pass forever while asserting nothing — codex-worker-2 demonstrated
 # exactly that, and the executable proof stayed green because it tested the CLASSIFIER and never the
@@ -1868,7 +1895,7 @@ man = {
             # is unwritten), and while `kind` was a single string that fact was unrepresentable, so
             # the manifest said PRODUCT and the packet edit existed only in prose. A structure that
             # cannot represent something reports its absence as absence. codex-worker-1 named it.
-            'kind': [k for k in ('PRODUCT', 'PACKET') if f'⟦{k}⟧' in _head_of(n)],
+            'kind': _KINDS.get(n, []),
             # an ARRAY: an item can wait on more than one, and a scalar would have to be widened
             # by a schema change the day that happens. Empty when it waits on nothing.
             'blocked_on': sorted(int(x) for x in re.findall(r'⟦BLOCKED-ON: (\d+)⟧', _head_of(n))),
