@@ -568,6 +568,12 @@ scalar PRODUCT-only. The active-open “delta” is not a real delta, and sweep
 matching has a concrete early-`)` fail-open on an overlong detail plus comment
 grammar drift. G2/G3/G0/G4 blockers remain.
 
+Owner successor `b6a9e22` claims mixed work is now machine-readable via a kind
+array and schema `/5` (`item37 = [PRODUCT, PACKET]`), with opening and
+publication-taxonomy/history wording corrected. Exact review is pending;
+R15/M1 propagation, the sweep early-`)` fail-open, and carried gate blockers
+remain under review.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
