@@ -1061,6 +1061,50 @@ nothing is currently wrong.
 (`grep -rn -e audioInOffset -e safeAudioInPtr -e audioInChannelPtr apps/`) → minus 11 (tests,
 declarations and reads) → **2**. ⟂
 
+**THE PLANE-OFFSET DATAFLOW, derived interprocedurally — this is what a name census cannot see.**
+There is ONE origin. `juce_host_process_main.cpp:487-505` walks a running accumulator and both
+planes fall out of it:
+
+    offset = alignUp(sizeof(ShmHeader), 64)
+    header.audioInOffset  = offset ;  offset += alignUp(inBlockBytes,  64)
+    header.audioOutOffset = offset ;  offset += alignUp(outBlockBytes, 64)   <- MAIN, published
+    state.audioAuxOutOffset = offset ; offset += alignUp(auxBlockBytes, 64)  <- AUX, host-private
+    header.ringStdOffset  = offset
+
+The aux offset is therefore **published nowhere**: the host keeps it in a private member and the
+engine RE-DERIVES it — `auxOutputPlaneOffset(header) = header.audioOutOffset +
+alignUp(outBlockBytes * numBlocks, 64)` (`shared_memory.cpp:52-57`). Two expressions, one address.
+**They agree at this SHA and the reason is a trap worth naming:** `outBlockBytes` DENOTES DIFFERENT
+QUANTITIES in the two files — the host's includes `numBlocks` (`:491-493`), the engine's does not
+(`shared_memory.cpp:54`) — and the values match only because each multiplies by `numBlocks` at a
+different point. A future edit that simplifies either expression by trusting the identifier will
+diverge them silently.
+
+A third carrier crosses into the callback: `TrackInfo::planeByteOffset`, set from
+`header->audioOutOffset` at `engine_consumer.cpp:670` for a normal track and from
+`auxOutputPlaneOffset(*parent)` at `:730` for an aux child, then read as `planeBase` at
+`engine_audio_callback.h:385`. **A reader reached through this field names no offset symbol at
+all**, which is exactly why the four-term census could not see reader 7.
+
+**THE SEVEN BYTE-CONSUMING READERS, with the route each takes to the bytes:**
+
+    #  site                              plane  route
+    1  engine_produce_block.cpp:923      main   sh->audioOutOffset + srcBlock*blockBytes, direct
+                                                (sidechain, indexed by the COMPLETED id)
+    2  engine_produce_block.cpp:1030     main   safeAudioOutPtr() -> memcpy SOURCE
+    3  engine_produce_block.cpp:1112     main   safeAudioOutPtr() -> outputPtrs -> currentInput
+                                                -> patcher node          (helper-mediated)
+    4  engine_produce_block.cpp:1150     main   safeAudioOutPtr() -> routePtrs -> routeChannels
+                                                -> enqueueInboundAudio   (deref in the CALLEE)
+    5  engine_master_render.cpp:100      main   header->audioOutOffset + ..., direct (master mix)
+    6  engine_consumer.cpp:766           aux    auxOutputPlaneOffset(*h) -> peak scan
+    7  engine_audio_callback.h:448,:463  either track.planeByteOffset -> track.shmBase + offset
+                                                -> trackChannel[i]       (NAMES NO OFFSET SYMBOL)
+
+Four of the seven reach the plane through a helper, a struct field or a callee. **That is why every
+name-based census of this population has been wrong**, and why the in-scope selection stays open at
+item 26 until the mapped-base census replaces the four-term grep.
+
 **Floor.** Dispatch sites floor 3: `rg` finds every syntactic call but is blind to a dispatch through
 a function pointer. The WRITER census is a floor of 2 for the same reason plus helper indirection. There is no
 reader floor: the reader selection is withdrawn (open item 26 (G4)), and quoting a floor of 7 for a
@@ -1166,7 +1210,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `92b577734c3044e1aa2f25726d61f8af9aa46402`, A.0 SCRIPT BLOB `be74bec7e1c516822a8127a256f19305deaf3308`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `225bf8deb7de4b3c60f66cae1248b2c3e742f514`, A.0 SCRIPT BLOB `2943df29bcb93fe699510d2c04e9d9df90a15f08`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1315,7 +1359,14 @@ other way (`_pad0` is idiomatic Rust) and loses to that: a binding may be unidio
 may not be derived from its binding. **Cost:** one unidiomatic name in the Rust file, and PASS 9
 goes from RED to decidable the moment the rename lands.
 
-**R5 — item 26 (G4): THE IN-SCOPE POPULATION IS BYTE-CONSUMING READS.** G4's invariant is about a
+**R5 — item 26 (G4): THE IN-SCOPE POPULATION IS BYTE-CONSUMING READS — all seven of them.** With
+the reader table above derived, this ruling now selects a named set rather than a category: readers
+1-7, main plane and aux, direct and helper-mediated and callee-deref alike. A reader does not leave
+the population by reaching the bytes through a helper; the invariant is about consuming bytes
+another agent wrote, and the route is irrelevant to that. **This resolves the R5/R7 relationship
+codex-worker-1 asked about:** R5 selects the ROLE (byte-consuming reads), R7 fixes the SCOPE (the
+host is an agent within it), and they are orthogonal — R7 widens which agents count, R5 narrows
+which sites within them do. G4's invariant is about a
 consumer reading bytes another agent WROTE, so the population the gate ranges over is the sites that
 dereference the out-plane for sample data. Plane-ESTABLISHING sites (compute an address, consume
 nothing) and byte-PRODUCING writes are OUT of scope for the invariant and must still appear in the
