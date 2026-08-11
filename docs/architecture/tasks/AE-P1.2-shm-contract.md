@@ -662,7 +662,11 @@ foreign record; Layer 3 asserts process exit code and stdout, not internal verdi
 
 **Static checks.** S1 the mark is sampled before the send — no `handle` method call inside any
 `await_clip_outcome(` argument. S2 the echo is a copy, not a computation, at each of the three emit
-sites. There is no S3: the check that stood here ranged over an extraction with no predicate and is carried by open item 27 (G2-A).
+sites. There is no S3: the check that stood here ranged over an extraction with no predicate and is
+carried by open item 28 (G2-A). **S4 the BATCH's two counter reads resolve to one accessor** —
+restored here after the edit that removed S3 deleted S4 with it, while PASS 9 and open item 14 (G2-A)
+still depend on the property S4 asserts. Removing a list entry by deleting the text around it is
+how a gate loses a check without anyone editing that check.
 
 **Review register.** The reviewer SHALL re-derive the command and correlator populations at the
 reviewed SHA and fail the gate if any extraction returns fewer than its floor; SHALL run
@@ -1049,7 +1053,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `409ca35878a6d7e06a9108dc705406f6c631913e`, A.0 SCRIPT BLOB `cf3130c02df54ab367e6dd0243ec193243300226`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `93ce2926dc8d4eeb9b4ecffa896124d43b8f0934`, A.0 SCRIPT BLOB `b40031504cc511ab73b66ea5255e9f4aeb20811b`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1281,8 +1285,24 @@ carrying one cannot be decided by any implementation.
     distinguishing `engine_consumer.cpp:670` from `:730`, which assign the same field for a normal
     track and an aux child. A predicate must separate "establishes where the out-plane is read from"
     into the cases this gate governs, or the gate must range over all 27.
-27. **G2-A** — **BLOCKING.** The arbitrated-command SCOPE is falsified and unreplaced (exhibit
-    below), so G2-A governs an undefined set. The arbitrated-command SCOPE is FALSIFIED and unreplaced, so G2-A
+27. **G2-A** — **BLOCKING.** The arbitrated-command SCOPE is falsified and unreplaced, so G2-A
+    governs an undefined set. **The two populations are NOT NESTED**, which is the finding that
+    settles the shape of the fix: "commands arbitrated against a version counter" and "commands that
+    emit an adoptable refusal" are different sets, and `SetRowOps` is in the second and not the
+    first. Any control here must say WHICH population it ranges over.
+    **Measured at the frozen product by claude-worker-1, and it is worse than "outside the nine":**
+    `UiSetRowOpsPayload` has NO `baseVersion` field, so `SetRowOps` cannot be arbitrated even in
+    principle, yet `engine_rowops_commands.cpp:49` emits an adoptable `ClipRejected` with
+    `/*sentBase=*/0, /*currentBase=*/0` — constants, where the other three emit sites pass real
+    values and the payload's own comment calls `currentBase` "the value to retry with". There is
+    nothing to retry with. **And zero is a live value**: `clipVersion` initialises to 0
+    (`shared_memory.h:1376`, `daw_engine_main.cpp:675`), so a consumer cannot tell these zeros from a
+    genuine base of 0 on a fresh track — the one value that should mean "nothing to say" already
+    means something on this wire. The consequence is wired: `ui/daw-cli/src/main.rs:1179` correlates
+    on `(track, command_type, sentBase)`, so for `SetRowOps` the third key is INERT and two
+    concurrent refusals on one track are indistinguishable, which is the bug that function's own
+    doc-comment records having hit once. Acceptance is unaffected — `applySetRowOps` bumps the clip
+    version at `engine_clip_edit.cpp:439` — so this is a refusal-path defect only. The arbitrated-command SCOPE is FALSIFIED and unreplaced, so G2-A
     governs an undefined set. Falsified by exhibit: `engine_rowops_commands.cpp:49`
     emits an adoptable refusal for `SetRowOps`, outside the nine. The 51 correlators also span
     chain, sampler, mod-link and journal refusals. Either the nine becomes ten-or-more by
