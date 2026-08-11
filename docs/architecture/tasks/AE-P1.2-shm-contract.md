@@ -18,8 +18,7 @@ never written is the same error's fingerprint.
 
 The blockers from the exact review are reconciled here, and the count is deliberately not restated: it moved between rounds and a fixed number here would be a twin of the item list, which is the authority:
 
-1. **TWO OF THE EIGHT GATES CANNOT BE DECIDED AT THIS SHA — meaning they are NOT PLANNABLE, because their own population is withdrawn.** G2-A was the third until its scope was AUTHORED under R1 at this SHA; authoring a withdrawn population is how a gate leaves this list, and it is packet work rather than product work. Six gates additionally carry a blocking item and so are not ACCEPTANCE-decidable; the manifest publishes both senses as `decidable_for_planning` and `decidable_for_acceptance`, and G3 is the case that shows why one boolean will not do: R3 makes it plannable and it is not acceptance-decidable until the N ticket lands. G1-B declares no reader population
-   (item 11) and G4's out-plane selection is withdrawn (item 26). Every gate carries the record's SHAPE — population slot,
+1. **EVERY GATE IS PLANNABLE AT THIS SHA.** All three withdrawn populations — G1-B's readers, G2-A's scope, G4's out-plane — are AUTHORED under R1 with rules, members and drift detectors. No gate is acceptance-decidable: five items still block (18, 19, 23, 24, 29) and every one needs product work, not packet work.** G2-A was the third until its scope was AUTHORED under R1 at this SHA; authoring a withdrawn population is how a gate leaves this list, and it is packet work rather than product work. Six gates additionally carry a blocking item and so are not ACCEPTANCE-decidable; the manifest publishes both senses as `decidable_for_planning` and `decidable_for_acceptance`, and G3 is the case that shows why one boolean will not do: R3 makes it plannable and it is not acceptance-decidable until the N ticket lands.  Every gate carries the record's SHAPE — population slot,
    failure model, deterministic test, PASS conditions each naming their refutation, static checks,
    review register — and for those three the population slot reads "withdrawn", which satisfies the
    shape and decides nothing. **No universal claim about populations is made anywhere in this
@@ -470,23 +469,36 @@ engine — not by the engine's version counter, not by non-emptiness, and not by
 the address the client asked about; and (ii) a complete image of exactly one execution of the writer,
 never fields from publication N+1 beside fields from N.
 
-**Population.** *Seqlock opens and closes* — 4 + 4. Command: `grep -rn 'seq\.store' apps` returns 8, cross-checked per file with grep's count mode. *Request/answer readers* — the command `grep -rn 'pub fn read_' ui/daw-bridge/src/control.rs` returns 21 candidates; this gate declares NO population, so no RAW claim is made and none may be inferred. RULE: **NONE THAT WORKS — WITHDRAWN.** The
-predecessor selected six BY HAND, which made the number honest and the population irreproducible. This
-packet proposed a predicate — intersect the reader's region symbol with the regions an engine REQUEST
-handler writes — and it is WRONG: `grep -rn 'Region\*' apps/engine_request_commands.cpp` returns 2, two
-region types (`UiDeviceParamsRegion`, `UiWaveformRegion`), so the intersection produces **2**, not 6,
-and the FAIL clause that predicate shipped with fires at the SHA it was published at. It is withdrawn
-rather than replaced by a third guess. **This gate has no derivable population and cannot be decided
-until one exists** — open item 11 (G1-B), and it blocks G1-B the way the missing N blocks G3. *Call sites of
-those six* — **WITHDRAWN, inheriting the withdrawal above.** The figure was 16 production and 2 test,
-obtained per name and discarding definitions and three doc comments, and the arithmetic is sound;
-what it counts is call sites OF A POPULATION THAT NO LONGER STANDS. A count over a withdrawn set is
-not a smaller claim than the set — it is the same claim wearing a number, so withdrawing the six and
-keeping their call-site census would have left the hand selection in the packet under a different
-name. It returns with the population, under open item 11 (G1-B). Open items 8, 9 and 10 all close on
-this one withdrawal, which is the evidence that they were symptoms: three separately-filed defects
-— an inconsistent count, a scope/population contradiction, and two recipes that did not reproduce
-their lists — were one hand-selected population being described three times.
+**Population.** *Seqlock opens and closes* — 4 + 4. Command: `grep -rn 'seq\.store' apps` returns 8, cross-checked per file with grep's count mode. *Request/answer readers* — **AUTHORED under R1: 6, with a rule and the evidence per member.**
+The rule: a reader whose body names one of the TWO regions an engine request handler writes, or
+whose return type is an `*Answer`. Both halves are measured, not asserted —
+`grep -oE 'Ui[A-Za-z]+Region' apps/engine_request_commands.cpp | sort -u` returns 2:
+`UiDeviceParamsRegion` and `UiWaveformRegion`.
+
+    read_device_params           names DeviceParams / device_params
+    read_scales                  names DeviceParams
+    read_waveform_slot           names Waveform / waveform
+    read_audio_sources           names Waveform / waveform
+    read_automation_slot         returns AutomationLaneAnswer
+    read_sampler_envelope_slot   returns SamplerEnvelopeAnswer
+
+**What the rule EXCLUDES and why, because a population is defined by its complement too:**
+`read_arrange_summary`, `read_clip_extents` and `read_automation_lanes` carry a `generation` and are
+SNAPSHOT readers — a generation counter is a staleness check on a continuously published region, not
+an answer to a request. The other twelve name neither.
+
+**The disagreement this surfaces, recorded rather than resolved in my favour.** Open item 23 says
+the exact review named `read_clip_window` as a request/answer reader this gate omits. Under the rule
+above it is NOT one: its body carries only `ui_version`, the snapshot double-check, and names no
+request region. Either the rule is too narrow or the review's classification was, and I will not
+settle that by choosing the answer that keeps my own population intact — it is open item 23 (all)'s to
+decide, and this authoring is what makes the question answerable at all.
+
+**Drift detectors:** `grep -c 'pub fn read_' ui/daw-bridge/src/control.rs` returns 21, and the
+request-region command above returns 2; either changing invalidates this authored list until re-authored.
+The predecessor selected six BY HAND with no rule, which made the number honest and the population
+irreproducible; this is also six, and the difference is that the rule is stated and its complement
+is named.
 
 **Floor.** Four blind spots, each with its count: `seq.store` == 8 at pin, and a whole-header memcpy
 or a helper taking the region by reference is invisible to it; `pub fn read_` == 21; the call-site
@@ -954,15 +966,25 @@ mains, 6 non-calls: a design doc, a tools script, a log line, a declaration, a c
 definition) → **3 production**. ⟂ The predecessor stated the split beside the command instead of as a
 subtraction, which put it outside the arithmetic the gate checks. *Out-plane readers* — RAW **27**
 (`grep -rn -e audioOutOffset -e safeAudioOutPtr -e audioOutChannelPtr -e auxOutputPlaneOffset apps/`)
-⟂ → **SELECTION WITHDRAWN.** The figure was 7 production after subtracting twenty, and that
-subtraction has no coherent rule: `engine_consumer.cpp:670` sets `info.planeByteOffset` from
-`audioOutOffset` for a normal track, `:730` sets `child.planeByteOffset` from `auxOutputPlaneOffset`
-for an aux child, both assign THE SAME FIELD consumed by the same callback byte read, and one was
-excluded while the other was counted. No rule in what I wrote separates them, so the seven is not
-reproducible. Withdrawn rather than re-guessed — this packet has already published three successive
-guesses at one predicate and a fourth would not be better. The raw figure above stands (the
-predecessor said 28).
-The in-scope selection is open item 26 (G4). *Input-plane writers in engine production code* — RAW 13
+⟂ → **AUTHORED under R1: 3 byte-consuming reads.** The subtraction that was withdrawn had no rule
+because it partitioned by NAME; the 27 partition by what each site DOES, and the three roles are
+disjoint:
+**PLANE-ESTABLISHING** (compute where the plane is, consume no samples) —
+`engine_consumer.cpp:670` (normal track, from `audioOutOffset`), `:730` (aux child, from
+`auxOutputPlaneOffset`), `:766`, and the `safeAudioOutPtr` helper at `engine_produce_block.cpp:861`
+with its address computation at `:866`. **This is the pair the withdrawal was forced by**: `:670`
+and `:730` assign the same field for a normal track and an aux child, and any rule that keeps one
+and drops the other is arbitrary. Both are in, together, because they play the same role.
+**BYTE-PRODUCING WRITES** — `engine_produce_block.cpp:1030` and `:1112`, plugin output targets.
+**BYTE-CONSUMING READS — the population this gate ranges over, 3:**
+`engine_produce_block.cpp:923` (sidechain, indexed by the COMPLETED id), `:1150` (track-to-track
+routing), `engine_master_render.cpp:100` (master mix). G4's invariant is about a consumer reading
+bytes another agent wrote; a site that computes an address reads nothing, and a site that writes is
+the producer.
+**Drift detector:** the command above returns 27; any change invalidates this authored list until
+it is re-authored. The remaining 17 are declarations, tests and non-engine mappings and are named by
+exclusion rather than individually, which is the weaker half of this authoring and is stated as
+such. *Input-plane writers in engine production code* — RAW 13
 (`grep -rn -e audioInOffset -e safeAudioInPtr -e audioInChannelPtr apps/`) → minus 11 (tests,
 declarations and reads) → **2**. ⟂
 
@@ -1067,7 +1089,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `e4e8b354519a3a52d960852a610808b3b008e3f4`, A.0 SCRIPT BLOB `255b09906c7dd11c55d0476c89039f4dcff247eb`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `6e4e798e7ff0f09579848bc487c0e7327335f09c`, A.0 SCRIPT BLOB `4550b2c7d467f119a3058f24e225c326a86c2237`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1075,7 +1097,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 29 items, 22 open · 13 RAW (12 hand-ruled) + 21 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 29 items, 20 open · 13 RAW (12 hand-ruled) + 21 commanded claims, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1215,7 +1237,7 @@ make the items IMPLEMENTABLE, and each item stays open until the work it names e
 verified by someone other than me. A ruling recorded as a closure would be the same error as a
 census recorded as a proof, which this packet has already made once at item 7.
 
-# Open items — 29 atomic, 7 CLOSED at this SHA, 22 open
+# Open items — 29 atomic, 9 CLOSED at this SHA, 20 open
 
 One per line, numbered in document order, so the count is checkable. SIX are BLOCKING — 11, 18, 19, 24, 26 and 27. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
@@ -1267,7 +1289,10 @@ carrying one cannot be decided by any implementation.
     21 candidates and is explicitly NOT a population, and the `Region*` intersection returns 2 and
     is published as WRONG with the FAIL clause it shipped with. A recipe that names its true output
     cannot fail to reproduce its list, because it no longer claims one.
-11. **G1-B** — **BLOCKING, RULED (R1), not closed.** The reader population has no derivation. The hand selection of six was irreproducible; the predicate proposed to replace it yields two, not six, and is withdrawn. This gate cannot be decided until a population exists, as G3 cannot until N exists.
+11. **G1-B** — **CLOSED at this SHA by AUTHORING under R1.** The reader population is 6, by the
+    rule "names a region an engine request handler writes, or returns an `*Answer`", with the
+    evidence per member, the excluded snapshot readers named, and drift detectors on both halves.
+    The `read_clip_window` disagreement it surfaces is open item 23 (all), not resolved here. The hand selection of six was irreproducible; the predicate proposed to replace it yields two, not six, and is withdrawn. This gate cannot be decided until a population exists, as G3 cannot until N exists.
 12. **G2-A** — Layer-1 fixture arithmetic: eleven journal lines, not six, and ids legitimately repeat, so a correct implementation fails the gate's only runnable integration assertion.
 13. **G2-A** — CLOSED at this SHA. The fifty-one correlator sites are no longer carried on attribution: the G2-A population states the command, its raw count and the subtraction, and reaches the exact review's 4 + 6 + 17 + 24. The count is written once, there, so this entry does not restate it. Re-deriving it is also what refuted my own competing figure — that one counted mentions rather than call sites, so the disagreement was my predicate and not the reviewer's arithmetic.
 14. **G2-A** — The BATCH note branch: `resolve_base` keeps the counter crossing on the path a browser transpose takes, and the static check as written is satisfied by fixing the chord branch alone.
@@ -1303,11 +1328,13 @@ carrying one cannot be decided by any implementation.
     marker and this item; a sixth appearing without one fails the gate. Deriving them needs a
     predicate nobody has proposed, so this is open, not closed.
 
-26. **G4** — **BLOCKING.** The out-plane in-scope selection is UNDEFINED after the withdrawal, so
-    G4 has no population to range over. The raw figure stands; the subtraction to 7 had no rule
-    distinguishing `engine_consumer.cpp:670` from `:730`, which assign the same field for a normal
-    track and an aux child. A predicate must separate "establishes where the out-plane is read from"
-    into the cases this gate governs, or the gate must range over all 27.
+26. **G4** — **CLOSED at this SHA by AUTHORING under R1.** The out-plane population is the 3
+    BYTE-CONSUMING READS (`engine_produce_block.cpp:923`, `:1150`, `engine_master_render.cpp:100`),
+    separated from plane-establishing sites and byte-producing writes by ROLE rather than by name.
+    The `:670`/`:730` pair that forced the withdrawal is resolved by putting both in the same role:
+    they establish a plane and consume nothing, so no rule has to prefer one. Drift detector on the
+    out-plane command's raw figure, which is stated once in the population and not restated here.
+
 27. **G2-A** — **CLOSED at this SHA by AUTHORING under R1.** The scope is two populations related
     by containment: A (arbitrated against a version counter, 9 call sites) and B (emits an adoptable
     `ClipRejected`), with **B = A ∪ {SetRowOps}** determined from the three production emit sites

@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'c507dea4c4b1ca9580d398dd557f15d1c644f89e'
+PREV_TIP     = 'b977b25798298a99c5b4569f4608cd66e51e9e7a'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -93,9 +93,9 @@ for i, a in enumerate(sys.argv):
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
  'open-count':       ('# Open items — 29 atomic', '# Open items — 30 atomic', 1, 'OPEN-COUNT'),
- 'closed-count':     ('7 CLOSED at this SHA, 22 open', '6 CLOSED at this SHA, 23 open', 1,
+ 'closed-count':     ('9 CLOSED at this SHA, 20 open', '8 CLOSED at this SHA, 21 open', 1,
                       'OPEN-CLOSED-COUNT'),
- 'open-arithmetic':  ('7 CLOSED at this SHA, 22 open', '7 CLOSED at this SHA, 17 open', 1,
+ 'open-arithmetic':  ('9 CLOSED at this SHA, 20 open', '9 CLOSED at this SHA, 17 open', 1,
                       'OPEN-ARITHMETIC'),
  # anchored on the tree hash, not on a count: the previous anchor was '11 RAW +', which the
  # document outgrew, leaving the control unable to land while the gate still reported PASS
@@ -114,9 +114,9 @@ CONTROLS = {
                       'MANIFEST-STALE'),
  'constraint-lost':  ('1. Production atomic **size/alignment', '1x. Production atomic **size/alignment', 1,
                       'CONSTRAINTS-COUNT'),
- 'opening-gates':    ('**TWO OF THE EIGHT GATES CANNOT BE DECIDED',
-                      '**FOUR OF THE EIGHT GATES CANNOT BE DECIDED', 1, 'OPENING-GATE-COUNT'),
- 'manifest-stale':   ('26. **G4** — **BLOCKING.**', '26. **G4** — **blocking.**', 1,
+ 'opening-gates':    ('**EVERY GATE IS PLANNABLE AT THIS SHA.**',
+                      '**FOUR OF THE EIGHT GATES CANNOT BE DECIDED.**', 1, 'OPENING-GATE-COUNT'),
+ 'manifest-stale':   ('18. **G2-B** — **BLOCKING', '18. **G2-B** — **blocking', 1,
                       'MANIFEST-STALE'),
  'unresolved-tail':  ('master-track stores (`engine_master_render.cpp:121` and `:132`) → **13 IN\nSCOPE**.',
                       'master-track stores (`engine_master_render.cpp:121` and `:132`).', 1,
@@ -617,13 +617,21 @@ for vc in VERSION_COUNTERS:
         bad('VERSION-COUNTER-ABSENT', f'{vc} is named in the manifest and not in the packet')
 notplan = [g['id'] for g in man['gates'] if not g['decidable_for_planning']]
 WORDNUM = {'ONE': 1, 'TWO': 2, 'THREE': 3, 'FOUR': 4, 'FIVE': 5, 'SIX': 6, 'SEVEN': 7, 'EIGHT': 8}
+# the zero case is a DIFFERENT sentence, not a missing one: when nothing is unplannable the
+# document must say so positively, and the check has to accept both forms or it fails the moment
+# the work succeeds.
 opening = re.search(r'\*\*(ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT) OF THE EIGHT GATES CANNOT BE '
                     r'DECIDED', pkt)
-if not opening:
-    bad('OPENING-GATE-COUNT-MISSING', 'no "<N> OF THE EIGHT GATES CANNOT BE DECIDED" sentence')
-elif WORDNUM[opening.group(1)] != len(notplan):
+allplan = 'EVERY GATE IS PLANNABLE AT THIS SHA' in pkt
+if not opening and not allplan:
+    bad('OPENING-GATE-COUNT-MISSING', 'neither "<N> OF THE EIGHT GATES CANNOT BE DECIDED" nor '
+                                      '"EVERY GATE IS PLANNABLE AT THIS SHA"')
+elif opening and WORDNUM[opening.group(1)] != len(notplan):
     bad('OPENING-GATE-COUNT', f'opening says {opening.group(1)}, manifest derives '
                               f'{len(notplan)} ({", ".join(notplan)})')
+elif allplan and notplan:
+    bad('OPENING-GATE-COUNT', f'opening says every gate is plannable, manifest derives '
+                              f'{len(notplan)} that are not ({", ".join(notplan)})')
 try:
     if open(MANIFEST).read() != emitted:
         bad('MANIFEST-STALE', 'the committed manifest is not what this packet emits')
