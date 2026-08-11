@@ -7,15 +7,15 @@ ledger records current orchestration state.
 ## Global state
 
 ```text
-Program:       ACTIVE -- AE-P0.1 and AE-P0.2 Lane 0 corrective integrated; AE-P1.1 frozen; AE-P1.2 active
+Program:       ACTIVE -- see the Ticket state table below; it is the single authority for phase status
 Reason:        execution baseline selected at current main; old evidence remains historical
 Target repo:   /Users/jak/src/daw-backend
 Baseline SHA:  7710401d72029482c8f3d15869d58dce7e246def
 Historical evidence SHA: 5bef283798b59c2c4f5720292554c7ab8c265be6
 Worktrees:     AE-P0.1 integration landed in /Users/jak/src/daw at 71758c0; review worktree preserved at /Users/jak/src/daw-ae-p0-followup
-Active tasks:  AE-P1.2 SHM contract packet and independent semantic review; preserve frozen AE-P1.1 evidence and track implementation-blocking owner calls
+Active tasks:  See the Ticket state table below; do not duplicate phase status or ownership in this summary
 File locks:    protocol hotspots frozen; root CMake reserved narrowly for AE-P0.1
-Integration:   AE-P0.1 COMPLETE; AE-P0.2 Lane 0 COMPLETE -- product main at 75c6f06, based on amended Undo baseline 7710401d; exact candidate ddb05bd independently approved by Claude and Codex red-team plus residual identity/fixture/path audit
+Integration:   AE-P0.1 and AE-P0.2 evidence is recorded in the Ticket state table and historical activation record
 ```
 
 No worker may edit, build, test, create a branch/worktree, commit, or self-assign
