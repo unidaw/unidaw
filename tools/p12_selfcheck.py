@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '68fae6becef2627b49baf899446076a12c2e37e6'
+PREV_TIP     = 'f7495b68e8a2ded1684fb13375b95dd6b53fd616'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -530,7 +530,7 @@ def _unhidden(t):
 unhid = _unhidden(pkt)
 
 # ---- 1. open items: header == body, contiguous, no orphan markers ---------------------------
-body = re.search(r'# Open items.*?(?=\n# |\Z)', pkt, re.S).group(0)
+body = re.search(r'# Open items.*?(?=\n# |\Z)', unhid, re.S).group(0)
 hdr  = re.search(r'# Open items — (\d+) atomic, (\d+) CLOSED at this SHA, (\d+) open', pkt)
 cand = [int(n) for n in re.findall(r'(?m)^(\d{1,2})\. ', body)]
 nums, nxt = [], 1
@@ -555,7 +555,7 @@ for v in set(re.findall(r'open list is (\d+) atomic', pkt)):
 # resolution alone is worthless: three references pointed at real items belonging to other gates
 # (10 for 11, 12 for 13, 22 for 18), and every one of them "resolved".
 entry = {}
-for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*([^*]+)\*\* —', body):
+for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*([^*]+)\*\* —', _unhidden(body)):
     entry[int(m.group(1))] = m.group(2).strip()
 # reads the UNHIDDEN view: a citation a reader cannot see is not a citation
 for m in re.finditer(r'open item (\d+)(?: \((' + GATE_ID + r'|all)\))?', unhid):
@@ -1003,6 +1003,32 @@ if _outside:
     bad('MD-SUBSET', f'{len(_outside)} line(s) outside the permitted Markdown subset, first at '
                      f'{_outside[0]} — the visible view approximates a grammar, so the document is '
                      f'restricted to the shapes that approximation is known to handle')
+
+# ---- 2e7. THE INSTRUMENT'S OWN RATCHET — claude-worker-1's discriminator ----------------------
+# They answered "is a code span data or decoration here?" mechanically for all 45 raw sites: A REGEX
+# THAT QUOTES A BACKTICK IS READING CODE-SPAN CONTENT AS DATA; one that does not is reading prose and
+# has no business seeing into a hiding place. 10 DATA, 35 DECORATION. The rule is a property of each
+# pattern rather than of anyone's intent, which makes it checkable — and checkable BY THIS CHECKER,
+# over its own source, in the spirit of the A.0 blob pin.
+# It is a FLOOR, not a gate: 35 sites are unconverted and the number must not grow. A ratchet that
+# demanded zero today would be a wish; one that pins the current count makes every new extractor
+# declare which text it reads.
+_src = open(__file__).read()
+_calls = re.findall(r're\.(?:finditer|search|findall|match|sub)\(\s*(r?["\'][^\n]*?["\'])\s*,\s*'
+                    r'([A-Za-z_][A-Za-z0-9_]*)', _src)
+_decor_raw = [(pat[:38], txt) for pat, txt in _calls
+              if '`' not in pat and txt in ('pkt', 'body') ]
+# 38, MEASURED HERE — claude-worker-1 counted 35 with their own scan. TWO MEASUREMENTS OF ONE
+# POPULATION DISAGREEING BY THREE is the shape this packet has hit six times, and the resolution is
+# the same each time: the predicates differ, not the arithmetic. Mine includes `re.sub` and patterns
+# reading `body`; theirs may not. The floor is MY count because this check is the one enforcing it,
+# and the discrepancy is recorded rather than averaged away — whichever of us is right, the number
+# may only go DOWN from here.
+_DECOR_FLOOR = 38
+if len(_decor_raw) > _DECOR_FLOOR:
+    bad('EXTRACTOR-TEXT', f'{len(_decor_raw)} prose extractors read raw text, floor is '
+                          f'{_DECOR_FLOOR} — a pattern that quotes no backtick reads prose and must '
+                          f'use the unhidden view; first: {_decor_raw[0][0]!r}')
 
 # ---- 2f. a ruling names an item, and that mapping was unbound in both directions --------------
 # codex-worker-1 changed R10's "item 30" to "item 29" and it passed. The OPEN-REF checks match
