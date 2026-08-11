@@ -216,12 +216,24 @@ because offset+size+name are together blind to `float sample_rate` becoming `uin
 **Population.** *ABI types* — 8. Command: `grep -n '#\[repr(C' patcher_rust/src/lib.rs` returns 8 (lines 23, 40,
 55, 68, 82, 89, 97, 107), cross-checked against bindgen's `allowlist_file` closure over
 `apps/patcher_abi.h`. *Members* — 66 C++ / 65 Rust, each produced by a command rather than by reading, which is what
-open item 5 (G0-B) required. C++: `awk '/^struct (alignas\([0-9]+\) )?(HarmonyEvent|MusicalLogicPayload|PatcherEuclideanConfig|PatcherSliceSelectConfig|PatcherRandomDegreeConfig|PatcherLfoConfig|PatcherContext|EventEntry) \{/{inb=1;next} inb&&/^};/{inb=0;next} inb{l=$0;sub(/\/\/.*/,"",l); if(l~/;/ && l!~/static_assert|static constexpr|typedef|using |\(/) c++} END{print c}' apps/harmony_timeline.h apps/patcher_abi.h apps/shared_memory.h` returns 66. Rust: `awk '/^#\[repr\(C/{r=1;next} r&&/^pub struct/{inb=1;r=0;next} inb&&/^}/{inb=0;next} inb&&/^[ \t]+(pub )?[A-Za-z_][A-Za-z0-9_]*[ \t]*:/{c++} END{print c}' patcher_rust/src/lib.rs` returns 65. Per type the two sides
-are 4/4 `HarmonyEvent`, 9/9 `MusicalLogicPayload`, 9/9 `PatcherEuclideanConfig`, 3/3
-`PatcherSliceSelectConfig`, 4/4 `PatcherRandomDegreeConfig`, 4/4 `PatcherLfoConfig`, 26/26
-`PatcherContext` (`patcher_abi.h:114-152` / `lib.rs:109-143`), and 7/6 `EventEntry` — so the whole
-66-vs-65 difference isolates to ONE type, and the commands corroborate the one-sided member below
-instead of merely agreeing with it. The eight C++ declarations live in three headers
+open item 5 (G0-B) required. C++: `awk '/^struct (alignas\([0-9]+\) )?(HarmonyEvent|MusicalLogicPayload|PatcherEuclideanConfig|PatcherSliceSelectConfig|PatcherRandomDegreeConfig|PatcherLfoConfig|PatcherContext|EventEntry) \{/{inb=1;next} inb&&/^};/{inb=0;next} inb{l=$0;sub(/\/\/.*/,"",l); if(l~/;/ && l!~/static_assert|static constexpr|typedef|using |\(/) c++} END{print c}' apps/harmony_timeline.h apps/patcher_abi.h apps/shared_memory.h` returns 66. Rust: `awk '/^#\[repr\(C/{r=1;next} r&&/^pub struct/{inb=1;r=0;next} inb&&/^}/{inb=0;next} inb&&/^[ \t]+(pub )?[A-Za-z_][A-Za-z0-9_]*[ \t]*:/{c++} END{print c}' patcher_rust/src/lib.rs` returns 65. The PER-TYPE breakdown is commanded too, because a total that
+agrees says nothing about where a difference sits: C++ `awk '/^struct (alignas\([0-9]+\) )?(HarmonyEvent|MusicalLogicPayload|PatcherEuclideanConfig|PatcherSliceSelectConfig|PatcherRandomDegreeConfig|PatcherLfoConfig|PatcherContext|EventEntry) \{/{n=$NF=="{"?$(NF-1):$NF;inb=1;c=0;next} inb&&/^};/{print n,c;inb=0;next} inb{l=$0;sub(/\/\/.*/,"",l); if(l~/;/ && l!~/static_assert|static constexpr|typedef|using |\(/) c++}' apps/harmony_timeline.h apps/patcher_abi.h apps/shared_memory.h` returns 8, Rust `awk '/^#\[repr\(C/{r=1;next} r&&/^pub struct/{n=$3;inb=1;c=0;r=0;next} inb&&/^}/{print n,c;inb=0;next} inb&&/^[ \t]+(pub )?[A-Za-z_][A-Za-z0-9_]*[ \t]*:/{c++}' patcher_rust/src/lib.rs` returns 8, and
+the two outputs are the block below. A total is a sum; the claim that the difference is one type is
+about the summands, so the summands carry the commands.
+
+    MEMBERS PER TYPE (cpp/rust)
+    EventEntry 7/6
+    HarmonyEvent 4/4
+    MusicalLogicPayload 9/9
+    PatcherContext 26/26
+    PatcherEuclideanConfig 9/9
+    PatcherLfoConfig 4/4
+    PatcherRandomDegreeConfig 4/4
+    PatcherSliceSelectConfig 3/3
+
+`PatcherContext` is `patcher_abi.h:114-152` / `lib.rs:109-143`. The whole 66-vs-65 difference
+isolates to ONE type, and the commands corroborate the one-sided member below instead of merely
+agreeing with it. The eight C++ declarations live in three headers
 (`harmony_timeline.h`, `patcher_abi.h`, `shared_memory.h`), which is why a single-file recipe could
 not have reproduced this. *One-sided members* — exactly 1: C++ `EventEntry::ready`, offset 60, size 4
 (`apps/shared_memory.h:450`, offset pinned at `:463`).
@@ -922,7 +934,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 24 items, 21 open · 11 RAW + 16 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 24 items, 21 open · 11 RAW + 18 commanded claims, all executed
     PASS
 
 **What it decides.** Open-item header against body, contiguity, and orphaned numbers. Every
@@ -940,7 +952,8 @@ Whether a RULE's subtraction is *justified* — it checks the arithmetic, not th
 deserved excluding. Whether a population's predicate is the right one: three figures in this packet
 were re-derived against a predicate of the author's that was wrong (mentions for call sites, `apps/`
 for the whole root, a forwarding lambda for an emit site), and in all three the packet was right and
-the recheck was wrong. Whether the member counts of open item 5 (G0-B) are correct — they have no command.
+the recheck was wrong. Whether a rename is the right resolution for open item 24 (G0-B) — the gate can see the two
+names differ and cannot choose which side moves.
 And nothing about the product beyond what a text search can see.
 
 **Controls.** Thirteen, each naming the tag it must provoke; a control that mutates the file without

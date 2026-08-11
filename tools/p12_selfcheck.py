@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'bca9f365d45698014e004a6e0fd9a09cc7be4152'
+PREV_TIP     = 'd53c741f6937496dcca674a5972cd71ee146fdec'
 
 fail = []
 def bad(tag, detail): fail.append(f'[{tag}] {detail}')
@@ -74,6 +74,8 @@ CONTROLS = {
  'open-arithmetic':  ('3 CLOSED at this SHA, 21 open', '3 CLOSED at this SHA, 19 open', 1,
                       'OPEN-ARITHMETIC'),
  'stale-a0-sample':  ('· 11 RAW + ', '· 12 RAW + ', 1, 'A0-SAMPLE-STALE'),
+ 'member-per-type':  ('EventEntry 7/6', 'EventEntry 7/7', 1, 'MEMBER-RUST'),
+ 'member-dropped':   ('    HarmonyEvent 4/4\n', '', 1, 'MEMBER-UNLISTED'),
  'drop-refutation':  ('*REFUTED BY*', 'see above', 'LAST', 'NO-REFUTATION'),
  'wrong-raw':        ('RAW **27**', 'RAW **28**', 1, 'RAW-MISMATCH'),
  'wrong-command':    ('` returns 28.', '` returns 26.', 1, 'COMMAND-MISMATCH'),
@@ -212,6 +214,29 @@ for m in re.finditer(r'`([^`]+)`', pkt, re.S):
     got = int(out[0]) if len(out) == 1 and re.fullmatch(r'\d+', out[0].strip()) else len(out)
     if got != int(st.group(1)):
         bad('COMMAND-MISMATCH', f'states {st.group(1)}, returns {got} :: {c[:50]}')
+
+# ---- 5c. the per-type member block is checked against BOTH commands, value by value ---------
+# A total that agrees says nothing about where a difference sits. The claim "the whole 66-vs-65
+# difference is EventEntry" is about the summands, so the summands are what gets verified.
+blk = re.search(r'MEMBERS PER TYPE \(cpp/rust\)\n((?:\s{4}\w+ \d+/\d+\n)+)', pkt)
+if not blk:
+    bad('MEMBERS-BLOCK-MISSING', 'no "MEMBERS PER TYPE (cpp/rust)" block')
+else:
+    stated = {m[0]: (int(m[1]), int(m[2]))
+              for m in re.findall(r'(\w+) (\d+)/(\d+)', blk.group(1))}
+    def per_type(cmd):
+        pr = subprocess.run(cmd, shell=True, cwd=pin, capture_output=True, text=True, timeout=TIMEOUT)
+        return {l.split()[0]: int(l.split()[1]) for l in pr.stdout.splitlines() if len(l.split()) == 2}
+    cmds = re.findall(r'`(awk [^`]*print n,c[^`]*)`', pkt)
+    if len(cmds) != 2:
+        bad('MEMBERS-COMMANDS', f'{len(cmds)} per-type commands, need 2')
+    else:
+        cpp, rust = per_type(cmds[0]), per_type(cmds[1])
+        for t, (c, r) in sorted(stated.items()):
+            if cpp.get(t) != c: bad('MEMBER-CPP', f'{t}: block {c}, command {cpp.get(t)}')
+            if rust.get(t) != r: bad('MEMBER-RUST', f'{t}: block {r}, command {rust.get(t)}')
+        for t in sorted(set(cpp) | set(rust)):
+            if t not in stated: bad('MEMBER-UNLISTED', f'{t} returned by a command, absent from the block')
 
 # ---- 6. RULE arithmetic: RAW n → minus k → m must satisfy n - k == m ------------------------
 for n, k, m in re.findall(r'RAW \*{0,2}(\d+)\*{0,2}.{0,200}?minus \*{0,2}(\d+)\*{0,2}[^→]{0,60}→ \*{0,2}(\d+)\*{0,2}', pkt, re.S):
