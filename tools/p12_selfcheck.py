@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'b5f23d6fd9ca8bb4ec44475397287e1021e58f65'
+PREV_TIP     = '68fae6becef2627b49baf899446076a12c2e37e6'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -507,6 +507,27 @@ if NEG:
         print(f'[A0-CONTROL-DID-NOT-LAND] {NEG}'); sys.exit(2)
 
 vis = _visible(pkt)
+# `_visible` CONFLATES TWO THINGS, and the one-axis refactor claude-worker-1 recommended exposed it
+# by breaking 43 checks: it blanks HTML comments and reference definitions — text a reader CANNOT
+# SEE — and also inline code spans, which a reader CAN see and which this packet uses as DATA (every
+# census row's command is a backticked span). Routing every extractor through it made the census
+# read blanks. So the axis splits in two:
+#
+#   hidden   comments, reference definitions, fenced blocks   a reader sees NOTHING
+#   code     inline and double-backtick spans                 a reader sees it, styled
+#
+# `_unhidden` blanks only the first kind, and the extractors where hiding actually matters — item
+# citations and gate tokens, which claude-worker-1 measured reading RAW — use it. The census keeps
+# raw because a command in a code span is its content, not a hiding place.
+def _unhidden(t):
+    out = list(t)
+    for pat in (r'(?ms)^ {0,3}(?P<f>```+|~~~+).*?^ {0,3}(?P=f)', r'<!--.*?-->',
+                r'(?m)^ {0,3}\[[^\]\n]+\]:.*$'):
+        for m in re.finditer(pat, t, re.S):
+            for i in range(m.start(), m.end()):
+                if out[i] != '\n': out[i] = ' '
+    return ''.join(out)
+unhid = _unhidden(pkt)
 
 # ---- 1. open items: header == body, contiguous, no orphan markers ---------------------------
 body = re.search(r'# Open items.*?(?=\n# |\Z)', pkt, re.S).group(0)
@@ -536,7 +557,8 @@ for v in set(re.findall(r'open list is (\d+) atomic', pkt)):
 entry = {}
 for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*([^*]+)\*\* —', body):
     entry[int(m.group(1))] = m.group(2).strip()
-for m in re.finditer(r'open item (\d+)(?: \((' + GATE_ID + r'|all)\))?', pkt):
+# reads the UNHIDDEN view: a citation a reader cannot see is not a citation
+for m in re.finditer(r'open item (\d+)(?: \((' + GATE_ID + r'|all)\))?', unhid):
     r, gate = int(m.group(1)), m.group(2)
     if r not in nums: bad('OPEN-REF-DANGLING', f'open item {r}'); continue
     if not gate: bad('OPEN-REF-UNGATED', f'open item {r} names no gate'); continue
