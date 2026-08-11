@@ -631,6 +631,12 @@ positions; emission yields `kind: []`, duplicates normalize, `PACKET2` evades
 the enum, no move control exists, and PRODUCT-first legacy logic remains. M1,
 R15/item36, G2-A/B, G3, G0-A/B, G4, and the semantic PACKET set remain open.
 
+Owner successor `43edccd` claims PACKET binding is closed by a single leading
+marker-run `_KINDS` derivation shared by validation and emission, with duplicate,
+enum, and move-to-nonblocker controls; item18 is now explicitly `[PACKET]`, and
+the sweep totals 94 controls. Items26/28/35 remain intentionally unclassified
+pending explicit packet-text evidence. Exact review is pending.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
