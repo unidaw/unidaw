@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '362c3740ecd2def064f84f6ac12c0ad3053d6b22'
+PREV_TIP     = '8e72e28460e649929332db5843a11fa8d36d590c'
 
 fail = []
 def bad(tag, detail): fail.append(f'[{tag}] {detail}')
@@ -88,7 +88,9 @@ CONTROLS = {
                       'OPEN-CLOSED-COUNT'),
  'open-arithmetic':  ('7 CLOSED at this SHA, 18 open', '7 CLOSED at this SHA, 16 open', 1,
                       'OPEN-ARITHMETIC'),
- 'stale-a0-sample':  ('· 11 RAW + ', '· 12 RAW + ', 1, 'A0-SAMPLE-STALE'),
+ # anchored on the tree hash, not on a count: the previous anchor was '11 RAW +', which the
+ # document outgrew, leaving the control unable to land while the gate still reported PASS
+ 'stale-a0-sample':  ('tree 699abfe8 · 25 items', 'tree 699abfe9 · 25 items', 1, 'A0-SAMPLE-STALE'),
  'member-per-type':  ('EventEntry 7/6', 'EventEntry 7/7', 1, 'MEMBER-RUST'),
  'member-dropped':   ('    HarmonyEvent 4/4\n', '', 1, 'MEMBER-UNLISTED'),
  'root-wide-grep':   ('`git grep -n sendProcessBlock`', '`grep -rn sendProcessBlock .`', 1,
