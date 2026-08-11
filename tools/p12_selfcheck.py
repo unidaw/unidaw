@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '117d2f9678a44e834d78327624f65d1f99ee140e'
+PREV_TIP     = '49b80fb59afa2c4dbbb10f369a98387d2a3b0205'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -205,6 +205,13 @@ CONTROLS = {
  'census-cmd-swap':  ("`git grep -n -E 'const_cast<daw::ShmHeader\\*>\\(header\\)\\) \\+ off' apps/engine_master_render.cpp | wc -l` returns 1.",
                       "`git grep -n 'inputPtrs = outputPtrs;' apps/juce_host_process_main.cpp | wc -l` returns 1.", 1,
                       'CENSUS-SITES'),
+ # the exact mutation codex-worker-1 ran on R5, in the notation R5 actually uses: a WORD, after the
+ # role rather than before it. The digit-only, one-order rule could not see it.
+ 'restate-r5-word':  ('THE IN-SCOPE POPULATION IS BYTE-CONSUMING READS, the whole census row',
+                      'THE IN-SCOPE POPULATION IS BYTE-CONSUMING READS — all seven of them, the whole census row',
+                      1, 'CENSUS-RESTATED'),
+ # the ruling->item edge, unbound in both directions until now
+ 'ruling-item-swap': ('**R10 — item 30 (G2-A)', '**R10 — item 29 (G2-A)', 1, 'RULING-ITEM-BIND'),
  'accept-prose':     ('GATES ARE ACCEPTANCE-DECIDABLE — G0-A, G1-A and G1-B',
                       'GATES ARE ACCEPTANCE-DECIDABLE — G0-A, G1-A and G3', 1, 'GATE-ACCEPT-PROSE'),
  'restate-census-i': ('sized by the two OUT census rows', 'sized at 7 cross-agent reads', 1,
@@ -356,29 +363,61 @@ else:
 # is a second statement of the same fact, and backend proved the consequence: `7/8` became `70/80`
 # in R8 and the gate passed, because no check compares a ruling's digits to anything. Forbidding
 # the digit is stronger than comparing it — a fact stated once cannot drift.
-ROLE = (r'(cross-agent (?:byte-consuming )?read|host (?:byte-producing )?write|in-plane|out-plane|'
-        r'addressing site|alias hop)')
-for m in list(re.finditer(r'(?m)^\*\*R\d+ — .*?(?=\n\n\*\*R\d+ — |\*\*What these rulings do NOT)',
+# the role must be a CENSUS role, not any phrase containing "out-plane": the first version fired on
+# "the two out-plane HELPERS", which is a count of helpers and not of a census population. A checked
+# rule that cries wolf gets relaxed, and the relaxation is where the real restatement comes back.
+ROLE = (r'(cross-agent (?:byte-consuming )?reads?|host (?:byte-producing )?writes?|'
+        r'(?:in|out)-plane (?:byte[- ])?(?:reads?|writes?|loads?)|addressing sites?|alias hops?|'
+        r'byte[- ]consuming reads?|byte loads?|plane-address acquisitions?)')
+# codex-worker-1 changed R5's "all SEVEN of them" to "all 70 of them" and it passed: the check
+# matched DIGITS, and R5 spells its count as a word. A notation the rule does not cover is a hole in
+# the rule, not an exception to it.
+NUM = r'(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen)'
+for m in list(re.finditer(r'(?m)^\*\*R\d+ — .*?(?=\n\n\*\*R\d+ — |\n# |\*\*What these rulings do NOT)',
                           pkt, re.S)) + list(re.finditer(r'(?m)^\d{1,2}\. \*\*.*?(?=\n\d{1,2}\. \*\*|\n# |\Z)',
                           body, re.S)):
-    for d in re.finditer(r'(\d+)\s+\w{0,12}\s?' + ROLE, m.group(0)):
-        bad('CENSUS-RESTATED', f'{m.group(0)[:14].strip()} restates a census count: {d.group(0)[:44]!r}')
+    # BOTH orders. R5 writes "THE IN-SCOPE POPULATION IS BYTE-CONSUMING READS — all seven of them",
+    # so the number follows the role; a rule that only reads number-then-role could never see it,
+    # and that is the exact mutation (seven -> 70) that passed.
+    for pat in (NUM + r'\s+\w{0,12}\s?' + ROLE, ROLE + r'[^.\n]{0,24}?(?<![:\w])' + NUM + r'\b'):
+        for d in re.finditer(pat, m.group(0), re.I):
+            bad('CENSUS-RESTATED',
+                f'{m.group(0)[:14].strip()} restates a census count: {re.sub(chr(92)+"s+", " ", d.group(0))[:52]!r}')
 
 # ---- 2e. EVERY restatement of the blocking set, not just the one the header owns --------------
 # `BLOCKER-SET` checked the open-items header and passed while the OPENING PARAGRAPH carried a
 # second list — (18, 19, 23, 24, 29) against a real set of {18, 19, 24, 26, 27}: three wrong members
-# in the packet's first screen, surviving every gate because the check knew about one site. A rule
-# stated twice needs a check that ranges over the statements, not over the one you remembered.
-derived_blk = sorted(int(m.group(1)) for m in
-                     re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — [^\n]{0,120}BLOCKING', body))
+# in the packet's first screen. A rule stated twice needs a check that ranges over the statements.
+# This block was DELETED once by my own edit — a replacement span that reached from the check above
+# it to the section below — and only the control sweep noticed, because a deleted check is silent by
+# construction. That is the argument for controls that run every time rather than when suspicion is
+# aroused.
+_derived_blk = sorted(int(m.group(1)) for m in
+                      re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — [^\n]{0,120}BLOCKING', body))
 for m in re.finditer(r'(?:items?|block)[^.\n]{0,40}?\((\d{1,2}(?:, \d{1,2}){2,}(?:,? and \d{1,2})?)\)', pkt):
     got = sorted(int(x) for x in re.findall(r'\d+', m.group(1)))
-    if got != derived_blk:
-        bad('BLOCKER-SET-RESTATED', f'{m.group(1)!r} vs derived {derived_blk}')
-for m in re.finditer(r'BLOCKING — (\d{1,2}(?:, \d{1,2})*(?:,? and \d{1,2})?)', pkt):
-    got = sorted(int(x) for x in re.findall(r'\d+', m.group(1)))
-    if got != derived_blk:
-        bad('BLOCKER-SET', f'{m.group(1)!r} vs derived {derived_blk}')
+    if got != _derived_blk:
+        bad('BLOCKER-SET-RESTATED', f'{m.group(1)!r} vs derived {_derived_blk}')
+
+# ---- 2f. a ruling names an item, and that mapping was unbound in both directions --------------
+# codex-worker-1 changed R10's "item 30" to "item 29" and it passed. The OPEN-REF checks match
+# "open item N (Gx)"; a ruling heading writes "item N (Gx)" without the word, so every ruling->item
+# edge in the document was outside every check. Both directions are needed: forward catches a
+# ruling pointing at the wrong item, backward catches an item claiming a ruling that does not name
+# it — and only the pair catches a swap between two items of the same gate.
+ruling_items = {}
+for m in re.finditer(r'(?m)^\*\*(R\d+) — (.*?):', pkt):
+    for im in re.finditer(r'item (\d+) \((G[0-9A-B-]+|all)\)', m.group(2)):
+        n, g = int(im.group(1)), im.group(2)
+        ruling_items.setdefault(m.group(1), set()).add(n)
+        if n not in nums:
+            bad('RULING-ITEM-BIND', f'{m.group(1)} names item {n}, which does not exist')
+        elif entry.get(n) != g:
+            bad('RULING-ITEM-BIND', f'{m.group(1)} names item {n} as {g}, the list says {entry.get(n)!r}')
+for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — [^\n]{0,80}RULED \((R\d+)\)', body):
+    n, r = int(m.group(1)), m.group(2)
+    if n not in ruling_items.get(r, set()):
+        bad('RULING-ITEM-BIND', f'item {n} claims {r}; {r} names {sorted(ruling_items.get(r, []))}')
 
 # ---- 3. a withdrawn bullet may not be described as covered ----------------------------------
 if 'WITHDRAWN AS CIRCULAR' in pkt:
@@ -596,6 +635,7 @@ WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twen
         25: 'Twenty-five', 26: 'Twenty-six', 27: 'Twenty-seven', 28: 'Twenty-eight',
         29: 'Twenty-nine', 30: 'Thirty', 31: 'Thirty-one', 32: 'Thirty-two',
         41: 'Forty-one', 42: 'Forty-two', 43: 'Forty-three', 44: 'Forty-four',
+        45: 'Forty-five', 46: 'Forty-six', 47: 'Forty-seven', 48: 'Forty-eight',
         33: 'Thirty-three', 34: 'Thirty-four', 35: 'Thirty-five', 36: 'Thirty-six',
         37: 'Thirty-seven', 38: 'Thirty-eight', 39: 'Thirty-nine', 40: 'Forty'}
 if not listed:
@@ -712,7 +752,7 @@ rulings = []
 # absent from the manifest, and their text attributed to R9. `R[1-4]` did exactly this to R5/R6
 # earlier. The digits are now unbounded and the boundary is a negative lookahead, so R10..R99 are
 # separated by the same rule that separates R1..R9.
-for m in re.finditer(r'\*\*(R\d+) — .*?(?=\n\n\*\*R\d+ — |\*\*What these rulings do NOT)', pkt, re.S):
+for m in re.finditer(r'\*\*(R\d+) — .*?(?=\n\n\*\*R\d+ — |\n# |\*\*What these rulings do NOT)', pkt, re.S):
     blk = m.group(0)
     head = re.match(r'\*\*(R\d+) — ([^*]{0,160}?)(?:\.\*\*|\*\*)', blk)
     rulings.append({
