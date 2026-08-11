@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'ff721ad672158ed8b0243ac298530237eecb925a'
+PREV_TIP     = '0047af3b879acceff6ece62fc3abb2e6ec8ad057'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -389,6 +389,11 @@ CONTROLS = {
  # the NUMERIC prefix, which walked past both the label scan and the tokenizer
  # the blocker KIND classification, now marked in place and derived from the markers
  # a label detached from its colon by a space, riding the sticky path
+ # the wrapper family, closed by the visible view rather than by another regex: the whole citation
+ # hidden in a comment loses a member, and a label separated from its colon by hidden syntax
+ # becomes a detached label once the wrapper is blanked to spaces.
+ 'writer-in-comment': ('juce:989/994', '<!--juce:989/994-->', 1, 'OUT-MEMBERS'),
+ 'writer-wrapped-sep': ('juce:989/994', 'fake<!--x-->:989/994', 1, 'OUT-MEMBERS'),
  'writer-detached':  ('juce:989/994', 'fake :989/994', 1, 'OUT-MEMBERS'),
  'blocker-kind':     ('35. **G0-B** — ⟦PRODUCT⟧ ', '35. **G0-B** — ', 1, 'BLOCKER-KIND'),
  'writer-path-numeric': ('juce:989/994', '9/juce:989/994', 1, 'OUT-MEMBERS'),
@@ -1420,8 +1425,14 @@ man = {
             # the KIND marker, emitted rather than left in prose: a consumer planning the
             # blockers needs to know which are product work and which wait on another item,
             # and that was readable only by eye until now.
-            'kind': (re.search(r'⟦(PRODUCT|BLOCKED-ON: \d+)⟧', item_body.get(n, '')).group(1)
-                     if re.search(r'⟦(PRODUCT|BLOCKED-ON: \d+)⟧', item_body.get(n, '')) else None),
+            # TYPED, not a string. `kind: "BLOCKED-ON: 29"` made a consumer parse prose out of a
+            # field that exists so it does not have to; the dependency is an edge and is emitted as
+            # one, so a planner can walk it without knowing the marker's spelling.
+            'kind': ('PRODUCT' if '⟦PRODUCT⟧' in item_body.get(n, '')
+                     else 'BLOCKED-ON' if '⟦BLOCKED-ON:' in item_body.get(n, '') else None),
+            'blocked_on': (int(re.search(r'⟦BLOCKED-ON: (\d+)⟧', item_body[n]).group(1))
+                           if n in item_body and re.search(r'⟦BLOCKED-ON: (\d+)⟧', item_body[n])
+                           else None),
             'closed': n in closed_set} for n in nums],
  'raw_claims': [{'raw': int(re.match(r'RAW \*{0,2}(\d+)', pkt[a:b]).group(1)),
                  'command': (re.search(r'\(`([^`]+)`\)', pkt[a:b]).group(1)
