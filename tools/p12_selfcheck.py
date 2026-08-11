@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '8e72e28460e649929332db5843a11fa8d36d590c'
+PREV_TIP     = 'e9fe17584ff5e66a718208bcf5c619ca7a7b1010'
 
 fail = []
 def bad(tag, detail): fail.append(f'[{tag}] {detail}')
@@ -99,6 +99,8 @@ CONTROLS = {
                       'POPULATION-UNCOMMANDED'),
  'handmade-count':   ('**5 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
                       'HANDMADE-COUNT'),
+ 'byhand-count':     ('12 of them apply their RULE BY HAND', '11 of them apply their RULE BY HAND', 1,
+                      'BYHAND-COUNT'),
  'control-unlisted': ('`wrong-raw`.', '`wrong-ray`.', 1, 'CONTROL-UNLISTED'),
  'drop-refutation':  ('*REFUTED BY*', 'see above', 'LAST', 'NO-REFUTATION'),
  'wrong-raw':        ('RAW **27**', 'RAW **28**', 1, 'RAW-MISMATCH'),
@@ -180,6 +182,17 @@ for gid, gbody in zip(parts[0::2], parts[1::2]):
 
 # ---- 5. EVERY RAW claim carries a command, and the command reproduces it --------------------
 tokens = re.findall(r'RAW \*{0,2}(\d+)\*{0,2}', pkt)
+# a RULE applied by hand is one the command does not carry: the command returns the RAW figure and
+# a stated subtraction reaches the in-scope one. A.0 checks that subtraction's ARITHMETIC and not
+# its justification, so the number of such rules is the size of what the gate cannot decide, and it
+# is stated in the document rather than left to be discovered by a reviewer counting them.
+byhand = len(re.findall(r'RAW \*{0,2}\d+\*{0,2}.{0,220}?minus \*{0,2}\d+', pkt, re.S))
+# \b: without it the control's 'BY HANDS' still matched as a prefix and the check read as blind
+declared_byhand = re.search(r'(\d+) of them apply their RULE BY HAND\b', pkt)
+if not declared_byhand:
+    bad('BYHAND-COUNT-MISSING', 'no "<N> of them apply their RULE BY HAND" statement')
+elif int(declared_byhand.group(1)) != byhand:
+    bad('BYHAND-COUNT', f'document says {declared_byhand.group(1)}, {byhand} RAW claims subtract')
 # the command may wrap to the next line: forbidding newlines here made a commanded claim look
 # uncommanded, which is the instrument reporting its own regex as a packet defect
 withcmd = re.findall(r'RAW \*{0,2}(\d+)\*{0,2}[^(]{0,80}?\(`([^`]+)`\)', pkt, re.S)
@@ -303,18 +316,20 @@ for n, k, m in re.findall(r'RAW \*{0,2}(\d+)\*{0,2}.{0,200}?minus \*{0,2}(\d+)\*
         bad('RULE-ARITHMETIC', f'RAW {n} minus {k} stated as {m}, not {int(n)-int(k)}')
 
 sample = re.search(r'packet blob <oid> · product (\S+) tree (\S+) · (\d+) items, (\d+) open · '
-                   r'(\d+) RAW \+ (\d+) commanded claims', pkt)
+                   r'(\d+) RAW \((\d+) hand-ruled\) \+ (\d+) commanded claims', pkt)
 if not sample:
     bad('A0-SAMPLE-MISSING', 'A.0 prints no expected-output line to check')
 else:
     want = (PRODUCT_SHA[:8], PRODUCT_TREE[:8], str(len(nums)), str(len(nums)-closed),
-            str(len(tokens)), str(cmd_claims))
+            str(len(tokens)), str(byhand), str(cmd_claims))
     got  = tuple(sample.groups())
     if want != got:
         bad('A0-SAMPLE-STALE', f'A.0 shows {got}, this run is {want}')
 
+
 print(f'packet blob {oid[:12]} · product {PRODUCT_SHA[:12]} tree {PRODUCT_TREE[:12]} · '
-      f'{len(nums)} items, {len(nums)-closed} open · {len(tokens)} RAW + {cmd_claims} commanded claims, all executed')
+      f'{len(nums)} items, {len(nums)-closed} open · {len(tokens)} RAW ({byhand} hand-ruled) + '
+      f'{cmd_claims} commanded claims, all executed')
 if NEG_TAG:
     hit = [f for f in fail if f.startswith(f'[{NEG_TAG}]')]
     for f in fail[:30]: print('  ' + f)

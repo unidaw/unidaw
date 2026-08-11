@@ -466,8 +466,12 @@ halves with barrier-paused writers.
    observations, and the reader reports which it saw. *REFUTED BY* a reader that returns the same
    value for both. This replaces a predecessor bullet requiring only that the condition be
    "observable", which any implementation satisfies.
-9. A mechanical echo ratchet exists over the send sites and fails under a named mutation. *REFUTED BY*
-   the ratchet passing when one site's echo check is deleted.
+9. **WITHDRAWN WITH THE POPULATION.** The bullet required a mechanical echo ratchet over "the send
+   sites" and a ratchet needs a set to range over; this packet withdraws that set, so the bullet
+   ranged over nothing. It is withdrawn for the same reason PASS 7 was re-quantified rather than
+   deleted — the requirement is real and returns with open item 11 (G1-B), which must deliver a
+   population before any ratchet over it can be specified. Leaving it standing would have been a
+   PASS condition satisfiable by ratcheting the empty set.
 
 **Static checks.** S1 fence between open and first payload store — statement ORDER is invisible from
 any return value, since a clean image proves nothing about the fence. S2 write order inside the
@@ -791,7 +795,7 @@ at this SHA, because FOUR of its dependencies carry BLOCKING items: 11 (G1-B) ha
 population, 18 (G2-B) has the mirror-ack circularity, 19 (G3) has no source for N, and 24 (G0-B)
 holds the rename PASS 9 is RED without — G4 depends on G0-B, so a count of three was wrong the
 moment 24 was registered. G4 is written
-in full so the work is specified, but no PASS verdict on it may be recorded until those three are
+in full so the work is specified, but no PASS verdict on it may be recorded until those FOUR are
 ruled; a final gate that reports green over blocked dependencies is the exact shape of a check that
 passes with the defect present.
 
@@ -806,13 +810,15 @@ consumer reads that output before an acquire-load of that acknowledgement. The p
 input immutability and ack identity but omitted this ordering, which is what makes the output half
 sound rather than merely acknowledged.
 
-**Population.** *Dispatch sites* — 3 production, 8 test, 6 non-calls; the command
-`git grep -n sendProcessBlock` returns 17
-over the pinned root, every hit classified. *Out-plane readers* — RAW **27**
+**Population.** *Dispatch sites* — RAW 17 (`git grep -n sendProcessBlock`) → minus 14 (8 in test
+mains, 6 non-calls: a design doc, a tools script, a log line, a declaration, a comment and the
+definition) → **3 production**. The predecessor stated the split beside the command instead of as a
+subtraction, which put it outside the arithmetic the gate checks. *Out-plane readers* — RAW **27**
 (`grep -rn -e audioOutOffset -e safeAudioOutPtr -e audioOutChannelPtr -e auxOutputPlaneOffset apps/`)
 → minus 20 (three in `_tests_main`, the remainder declarations and non-reads) → **7 production**. The
-predecessor said the command returns 28; it returns 27, and the reviewer's count is the correct one. *Input-plane writers in engine production code* — exactly 2; command
-`grep -rn -e audioInOffset -e safeAudioInPtr -e audioInChannelPtr apps/` returns 13, all classified.
+predecessor said the command returns 28; it returns 27, and the reviewer's count is the correct one. *Input-plane writers in engine production code* — RAW 13
+(`grep -rn -e audioInOffset -e safeAudioInPtr -e audioInChannelPtr apps/`) → minus 11 (tests,
+declarations and reads) → **2**.
 
 **Floor.** Dispatch sites floor 3: `rg` finds every syntactic call but is blind to a dispatch through
 a function pointer. Reader and writer censuses are floors of 7 and 2 for the same reason plus helper
@@ -913,7 +919,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, A.0 SCRIPT BLOB `e47df033f85aa4f086b0b0143376a639494eb81c`
+`tools/p12_selfcheck.py` at this SHA, A.0 SCRIPT BLOB `b1e61d654cecea703bee285150139a59fde490ee`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -921,7 +927,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 25 items, 18 open · 12 RAW + 22 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 25 items, 18 open · 14 RAW (12 hand-ruled) + 20 commanded claims, all executed
     PASS
 
 **What it decides.** Open-item header against body, contiguity, and orphaned numbers. Every
@@ -943,13 +949,13 @@ the recheck was wrong. Whether a rename is the right resolution for open item 24
 names differ and cannot choose which side moves.
 And nothing about the product beyond what a text search can see.
 
-**Controls.** Twenty-two, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Twenty-three, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
-`control-unlisted`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
+`byhand-count`, `control-unlisted`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
 `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`. Two of them were themselves defective when first
 written and are recorded here rather than quietly fixed: `raw-without-cmd` changed a claim's NUMBER
 and so provoked a different check entirely, and the landing assertion demanded the anchor count DROP,
@@ -1035,7 +1041,15 @@ carrying one cannot be decided by any implementation.
 Every count is stated as RAW → RULE → IN SCOPE, so that the command reproduces the raw figure and the
 rule reproduces the rest; and every count is a floor where a runtime value defeats the extraction.
 **5 populations are HAND-CLASSIFIED and exempt from that sentence**, each carrying a marker and
-open item 25 (all). The previous version of this paragraph said no population was exempt, which was
+open item 25 (all). **And of the 14 RAW claims, 12 of them apply their RULE BY HAND** — the command
+returns the raw figure and a stated subtraction reaches the in-scope one — while 2 carry the rule
+inside the command and need no subtraction at all. That 12 is the honest size of what this gate
+cannot decide: it checks every subtraction's arithmetic and none of their justifications, and the
+one time a justification was wrong (G1-A's five ready-flag operations counted as four) the
+arithmetic was perfect. The exact review reached this by noticing G4's dispatch split was
+hand-classified while the provenance paragraph claimed only five exceptions; the general form is
+that a claim can be COMMANDED at the raw level and hand-made at the split, and counting only fully
+uncommanded populations misses every one of those. The previous version of this paragraph said no population was exempt, which was
 false when written: the exact review named G0-A's and G4's semantic groupings while I was quoting
 that sentence back at reviewers as the packet's strongest claim. The repair is not a softer
 adjective — the exceptions are marked in place, counted, and the count is checked against this
