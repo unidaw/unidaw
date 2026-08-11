@@ -258,11 +258,11 @@ action. It supersedes stale ticket rows above where they conflict.
   `699abfe8f72e597cfd1b6fb3da93ee7f35aa7fef`).
 - Governance worktree: `/Users/jak/src/daw-backend`.
 - Current packet owner: `claude-worker-2`; current latest packet reported:
-  `2699a2cf204fb0ed4e21ad9ea8e74b5ee8ab5f49`.
+  `6f0584621c71083e790ca47fe6706875a549f0c1`.
 - Latest packet status: mechanical PASS, 89 controls plus three executable
-  proofs (blanking, emission identity, extractor ratchet). The extractor proof
-  exercises positional/keyword/compiled shapes (43->44) and local alias (43->43).
-  Exact independent review pending.
+  proofs; classifier now discovers compiled patterns from `re.compile` bindings
+  rather than receiver capitalization. Remaining under-inclusions are named;
+  one final bounded independent review is pending.
 
 ### Required review protocol
 
@@ -335,7 +335,8 @@ action. It supersedes stale ticket rows above where they conflict.
 
 ### Immediate next actions
 
-1. Obtain the exact independent review of `2699a2c`; do not treat it as settled
+1. Obtain the final bounded independent review of `6f05846`; do not expand parser
+   hunting beyond the claimed classifier/proof binding.
    while the comma shield and gate decisions remain.
 2. Consolidate the six owner decisions into one decision record: G2-B oracle,
    G2-A universe/item 28, G3 M1/watchdog/static, G0-A A13/A15, G0-B items 1–4,
@@ -379,6 +380,10 @@ action. It supersedes stale ticket rows above where they conflict.
   keyword, and compiled receivers; local-alias dataflow remains explicitly open.
 - `2699a2c`: owner PASS/89 controls plus three executable proofs; extractor
   ratchet proof is now committed and four-arm behavior is measured.
+- `6f05846`: owner PASS/89 controls plus three executable proofs; definition-based
+  compiled-pattern discovery replaces capitalization heuristics. This is the
+  planned final instrumentation review before pivoting to the six semantic
+  decision records.
 - Exact review of `2699a2c` is **BLOCKED**: the extractor proof duplicates rather
   than binds the production classifier/floor, blanking proof is narrow, hidden
   link destinations still become dependencies, identity proves bytes only, and
