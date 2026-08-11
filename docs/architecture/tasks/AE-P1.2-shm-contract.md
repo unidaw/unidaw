@@ -1384,7 +1384,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `f894e3cc5197156bdca44c0545ebb7f8a7af29ed`, A.0 SCRIPT BLOB `817cb9a5771f1ee4ff3ceec9ef3046b642f76fdb`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `81284d945d2be4cea89e307b068e4ab43edf80df`, A.0 SCRIPT BLOB `f93f85908e1b35cac7ae3dd65d617ae0ab0602c2`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1840,12 +1840,24 @@ sharper question than the register asked.** G3's Deterministic-test block names 
 Layer 2 and never defines an M1; PASS 1 and the register then both refer to one, borrowing G0-B's
 M-label convention (`:335`) across a gate boundary that does not carry it. **M1 is hereby Layer 0's
 mechanism**: run `tools/host_stall_check.sh` against the pinned tree with `DAW_ENGINE_DEBUG_STALL`
-set, and record, WITHIN the SIGSTOP window the script opens at `:85` and closes at `:92`, both (a)
-`kill -0 $FROZEN` and (b) the armed stall log's `next=`, `minCompleted=` and per-host `hosts=[…]`
-vector, for the frozen host's index. (a) establishes the host is alive-but-stopped, so no liveness
-drop can be credited for what follows; (b) is the discriminator. PASS 1's refutation clause is
-exactly right about the window and needs no change — after `kill -CONT` at `:92` the host is running
-normally and `kill -0` answers a question nobody asked.
+set, and observe, WITHIN the SIGSTOP window the script opens at `:85` and closes at `:92`, whether
+the frozen host still owes dispatched blocks and whether the producer is gated on it. PASS 1's
+refutation clause is right about the window — after `kill -CONT` at `:92` the host is running
+normally — and it stays.
+
+**M1 CANNOT BE BUILT FROM THE INSTRUMENTS I FIRST NAMED, and the register's demand for it therefore
+survives this ruling.** I defined M1 as recording (a) `kill -0 $FROZEN` and (b) the armed stall log's
+per-host `hosts=[…]` vector. Neither carries the needed fact. `kill -0` proves a process EXISTS; a
+SIGSTOPped process and a running one answer it identically, so it cannot establish the
+alive-but-stopped state I claimed for it. And the per-host vector is positional and thin: `:262-266`
+emits `active` as a two-way separator and `completedBlockId`, with **no track or PID identity and no
+`lastDispatchedBlockId`** — so it cannot evaluate the owes-nothing predicate at
+`apps/engine_rt_helpers.cpp:502`, which is the entire question, and it cannot even say which entry
+is the frozen host. codex-worker-1 caught both. **I specified an oracle by confirming a log exists
+and never reading what it emits**, which is the same shape as a guard that is present but watches the
+wrong moment. A usable M1 needs a channel that carries `lastDispatchedBlockId` and host identity, and
+building one is PRODUCT work that this packet does not authorise. Item 36 is therefore blocked on an
+instrument that does not yet exist, and says so.
 
 **The two statements.** The check says the producer does not stay gated
 (`tools/host_stall_check.sh:16-19`), names the mechanism at `:101-104` — "Frozen host + fix = the
@@ -1860,25 +1872,56 @@ gate shut is the correct answer."
 (`:493`), `completedBlockId == 0` (`:496`), and owes-nothing —
 `lastDispatchedBlockId > 0 && completedBlockId >= lastDispatchedBlockId` (`:502`).
 A SIGSTOPped host that had been producing
-satisfies none: `active` is a latch over "has this track ever produced"
-(`apps/engine_rt_helpers.h:236`), its completed id is non-zero, and its dispatched blocks are
-precisely what it has stopped finishing. It is counted at `:509-510`, holds `lowest` at its frozen
-id, and `apps/engine_producer_thread.cpp:282-283` gates. **The state is absorbing**: once gated the
-producer dispatches nothing, so neither id can move again. Nor is there a liveness drop to appeal
-to — `.active = false` is written only at `apps/engine_ui_thread.cpp:57` and `:77`, both UI watches,
-and no `kill(pid, 0)`/`ESRCH` test exists under `apps/` outside test mains and teardown. **"The host
-is dropped" names nothing in this tree.** On the register's question, the check is the stale side.
+satisfies none: its completed id is non-zero, and its dispatched blocks are precisely what it has
+stopped finishing. It is counted at `:509-510`, holds `lowest` at its frozen id, and
+`apps/engine_producer_thread.cpp:282-283` gates. **The state is absorbing**: once gated the producer
+dispatches nothing, so neither id can move again. The first exclusion never participates at all —
+the engine's only caller builds every entry as `hostProgress.push_back({true, completed, …})`
+(`apps/engine_producer_thread.cpp:249-251`), so `active` is hardcoded and `!active` is unreachable
+from production; the `":inactive@"` branch in the same function's log (`:265`) prints for a state
+that cannot occur. Nor is there a liveness drop to appeal to: no `kill(pid, 0)`/`ESRCH` test exists
+under `apps/` outside test mains and teardown. **"The host is dropped" names nothing in this tree.**
+On the register's question, the check is the stale side.
 
-**What that does NOT settle, and it is the part worth having.** The check's other half is not prose,
-it is an assertion — and if the producer comment is right, that assertion should be failing. Three
-readings survive the pin and `kill -0` alone separates none of them, because the host is alive in all
-three: the check does not run; the check runs and freezes a host the gate was never going to count,
-which exclusion `:496` makes concrete for any host that has completed nothing; or something outside
-`completedMinimum` intervenes. **The second is the one to fear**, because `:82-83` selects the victim
-by `pgrep`, preferring `_0.sock` and otherwise taking whichever host comes first — a selection blind
-to whether that host is in the counted set. A check that passes because it froze the wrong host is a
-check that passes with its subject absent, which is this packet's oldest recurring shape and the
-reason M1 must read the per-host vector and not a liveness bit.
+**A CORRECTION TO THIS RULING'S OWN EVIDENCE, and it is the same error twice in one day.** The
+sentence above first cited `apps/engine_ui_thread.cpp:57` and `:77` as the only writes of
+`.active = false`, offered as proof that no host is ever dropped. Those two lines belong to
+`struct StallWatch` (`apps/engine_ui_thread.cpp:51`), a UI ring-recovery type with no relation to
+`HostProgress`. codex-worker-1 caught it. I had grepped a MEMBER NAME across a directory and taken
+the hits without reading their type — the identical mistake as answering a question about
+`patcher_rust/src/lib.rs` by measuring `ui/daw-bridge/src/layout.rs`, which is recorded three items
+above this one. **A grep for `.active` is a grep for a word, not for a field**, and the conclusion it
+supported happened to be true, which is exactly why it survived a re-read. The claim now rests on the
+construction site, where the value is visible.
+
+**What that does NOT settle.** The check's other half is not prose, it is an assertion — and if the
+producer comment is right, that assertion should be failing. **I gave three readings and said no
+static reading could decide between them. codex-worker-1 supplied a fourth and a fifth, and both are
+decidable at the pin**, which also refutes the "no static reading can" claim I attached to item 36:
+
+1. the check does not run;
+2. it freezes a host the gate was never going to count — `:82-83` picks by `pgrep`, preferring
+   `_0.sock` and otherwise the first match, with no test of membership in the counted set, and
+   exclusion `:496` makes this concrete for any host that has completed nothing;
+3. something outside `completedMinimum` intervenes;
+4. **the marker is overwritten before `awk` can see it.** The engine's output is
+   `>"$TMP/eng.log"` inside a subshell (`:65`) — one open file description the engine holds for its
+   lifetime — while `froze-host-marker` is appended through a SEPARATE description at `:89`. The
+   engine's offset does not advance when another descriptor appends, so its next write lands at its
+   own offset and can overwrite the marker. `:105` then never sets `seen`, `n` stays 0, and
+   `STALLS_AFTER=0` passes;
+5. **the gate holds but says nothing.** `cli do play --force … || true` (`:77`) discards a failed
+   play, and at `apps/engine_producer_thread.cpp:283-289` only the `logStall` call is wrapped in
+   `if (isPlaying)` — the `continue` at `:289` is OUTSIDE it. **So a non-playing producer stays
+   gated exactly as before and emits no `inFlight` line at all.** The check counts log lines, so it
+   reads a permanently gated producer as zero stalls.
+
+Readings 4 and 5 are two independent channels by which the check returns 0 while the producer is
+gated forever, and neither needs a bypass in the engine. **That dissolves the contradiction rather
+than deferring it**: `apps/engine_rt_helpers.h:232-234` is consistent with the implementation, the
+check's mechanism comment names nothing, and the check's green is explainable without any of it
+being true. What remains unobserved is which channel actually operates in a given run — a debugging
+question, not an acceptance one.
 
 **Recorded next to both, as the register requires.** The two addresses are
 `tools/host_stall_check.sh:16-19`, with `:101-104` carrying the mechanism claim that fails, and
@@ -2207,24 +2250,32 @@ carrying one cannot be decided by any implementation.
     Give the
     Rust struct an explicit `ready: u32` so the layouts match member-for-member, or make `push_event`
     assign field-wise so the flag's bytes are never touched. PRODUCT work.
+    **How this got missed:** the register asked the right question and I answered it by reading
+    `ui/daw-bridge/src/layout.rs`, a DIFFERENT Rust endpoint that does declare `ready`, then marked
+    it resolved. See the G0-B register entry, which now records the substitution.
 36. **G3** — ⟦PRODUCT⟧ **BLOCKING. `tools/host_stall_check.sh` asserts a producer behaviour the
     shipped back-pressure rule contradicts, so one of the two is wrong in PRODUCT.** The check's pass
     predicate (`:105-109`: at most three post-marker `producer stall (inFlight)` lines) requires a
     SIGSTOPped host to stop holding the minimum, and its comment names the mechanism — "the host is
     dropped" (`:101-104`). `completedMinimum` (`apps/engine_rt_helpers.cpp:492-511`) counts exactly
     such a host: its three exclusions are `!active`, `completedBlockId == 0` and owes-nothing, and a
-    frozen producing host meets none. The gate at `apps/engine_producer_thread.cpp:282-283` is then
+    frozen producing host meets none (and the `!active` exclusion is unreachable in production —
+    `:249-251` hardcodes it). The gate at `apps/engine_producer_thread.cpp:282-283` is then
     ABSORBING, because a gated producer dispatches nothing and neither id can move again. No liveness
-    drop exists to appeal to. So either the check passes for a reason unrelated to its subject —
-    `:82-83` picks its victim by `pgrep`, with no test that the chosen host is in the counted set —
-    or a bypass exists that `apps/engine_rt_helpers.h:232-234` does not describe. **R15 settles the
-    mechanism claim against the check and deliberately does not guess which of the three readings
-    holds**; M1 as defined in R15 separates them by reading the per-host vector, and no static
-    reading can. The product-side correction is whichever of the check or the comment M1 refutes, and
-    the answer is not knowable from the tree alone. PRODUCT work.
-    **How this got missed:** the register asked the right question and I answered it by reading
-    `ui/daw-bridge/src/layout.rs`, a DIFFERENT Rust endpoint that does declare `ready`, then marked
-    it resolved. See the G0-B register entry, which now records the substitution.
+    drop exists to appeal to. **R15 settles the mechanism claim against the check.** What makes this
+    PRODUCT work is that the check has at least two identified ways to report zero stalls while the
+    producer is gated forever, both found by codex-worker-1 and both decidable at the pin: its
+    `froze-host-marker` is appended through a second file description and can be overwritten by the
+    engine's own next write (`:65` vs `:89`), and `if (isPlaying)` at
+    `apps/engine_producer_thread.cpp:284` wraps only the `logStall` call while the `continue` at
+    `:289` sits outside it, so a producer that never started playing — `cli do play … || true` at
+    `:77` discards the failure — stays gated and silent. **A check counting log lines cannot see a
+    gate that does not log.** Fixing the check means making its oracle the gate rather than the
+    logging of the gate; fixing the comment at `:101-104` means deleting a mechanism that does not
+    exist. Both are PRODUCT edits. The register's M1 also remains owed and cannot be built from
+    today's telemetry: the per-host vector carries no host identity and no `lastDispatchedBlockId`,
+    so nothing currently emitted can evaluate the owes-nothing predicate at
+    `apps/engine_rt_helpers.cpp:502`. PRODUCT work.
 
 # Provenance of this packet's own numbers
 
