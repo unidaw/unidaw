@@ -379,6 +379,10 @@ action. It supersedes stale ticket rows above where they conflict.
   keyword, and compiled receivers; local-alias dataflow remains explicitly open.
 - `2699a2c`: owner PASS/89 controls plus three executable proofs; extractor
   ratchet proof is now committed and four-arm behavior is measured.
+- Exact review of `2699a2c` is **BLOCKED**: the extractor proof duplicates rather
+  than binds the production classifier/floor, blanking proof is narrow, hidden
+  link destinations still become dependencies, identity proves bytes only, and
+  comma/Markdown plus six semantic blockers remain.
 - `f7495b6`: BLOCKED; hidden/code split exposed raw-site and dependency
   extraction gaps.
 - `68fae6b`: BLOCKED; absent-artifact identity fix passes, but Markdown,
