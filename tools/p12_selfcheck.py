@@ -20,7 +20,8 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'e9fe17584ff5e66a718208bcf5c619ca7a7b1010'
+PREV_TIP     = '0c403469e1ac5a34153f7c31dcd9fea9891edc7f'
+PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
 def bad(tag, detail): fail.append(f'[{tag}] {detail}')
@@ -55,6 +56,14 @@ if not os.environ.get('AE_P12_DRAFT'):
     if rc or parent != PREV_TIP:
         print(f'[A0-CHAIN-BROKEN] HEAD^ is {parent[:12] or "?"}, PREV_TIP pins {PREV_TIP[:12]}')
         sys.exit(2)
+    # pin the parent's CONTENT too: PREV_TIP alone accepts a parent whose packet was rewritten
+    rc, pblob = git('.', 'rev-parse', f'{PREV_TIP}:{PACKET_PATH}')
+    exp = re.search(r'PREV PACKET BLOB `([0-9a-f]{40})`', open(PACKET_PATH).read())
+    if not exp:
+        print('[A0-PREVBLOB-UNPINNED] the packet records no "PREV PACKET BLOB <oid>"'); sys.exit(2)
+    if rc or pblob != exp.group(1):
+        print(f'[A0-PREVBLOB-MISMATCH] parent packet is {pblob[:12] or "?"}, '
+              f'the packet pins {exp.group(1)[:12]}'); sys.exit(2)
 def blob_oid(b): return hashlib.sha1(b'blob %d\x00' % len(b) + b).hexdigest()
 
 raw = open(PACKET_PATH, 'rb').read()
@@ -84,9 +93,9 @@ for i, a in enumerate(sys.argv):
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
  'open-count':       ('# Open items — 25 atomic', '# Open items — 26 atomic', 1, 'OPEN-COUNT'),
- 'closed-count':     ('7 CLOSED at this SHA, 18 open', '6 CLOSED at this SHA, 19 open', 1,
+ 'closed-count':     ('6 CLOSED at this SHA, 19 open', '5 CLOSED at this SHA, 20 open', 1,
                       'OPEN-CLOSED-COUNT'),
- 'open-arithmetic':  ('7 CLOSED at this SHA, 18 open', '7 CLOSED at this SHA, 16 open', 1,
+ 'open-arithmetic':  ('6 CLOSED at this SHA, 19 open', '6 CLOSED at this SHA, 17 open', 1,
                       'OPEN-ARITHMETIC'),
  # anchored on the tree hash, not on a count: the previous anchor was '11 RAW +', which the
  # document outgrew, leaving the control unable to land while the gate still reported PASS
@@ -99,7 +108,7 @@ CONTROLS = {
                       'POPULATION-UNCOMMANDED'),
  'handmade-count':   ('**5 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
                       'HANDMADE-COUNT'),
- 'byhand-count':     ('12 of them apply their RULE BY HAND', '11 of them apply their RULE BY HAND', 1,
+ 'byhand-count':     ('11 of them apply their RULE BY HAND', '10 of them apply their RULE BY HAND', 1,
                       'BYHAND-COUNT'),
  'control-unlisted': ('`wrong-raw`.', '`wrong-ray`.', 1, 'CONTROL-UNLISTED'),
  'drop-refutation':  ('*REFUTED BY*', 'see above', 'LAST', 'NO-REFUTATION'),
@@ -326,6 +335,10 @@ else:
     if want != got:
         bad('A0-SAMPLE-STALE', f'A.0 shows {got}, this run is {want}')
 
+
+for cname, (canchor, _, _, _) in sorted(CONTROLS.items()):
+    if pkt.count(canchor) < 1:
+        bad('CONTROL-ANCHOR-DEAD', f'{cname} cannot land: {canchor[:44]!r}')
 
 print(f'packet blob {oid[:12]} · product {PRODUCT_SHA[:12]} tree {PRODUCT_TREE[:12]} · '
       f'{len(nums)} items, {len(nums)-closed} open · {len(tokens)} RAW ({byhand} hand-ruled) + '
