@@ -1,8 +1,31 @@
 {
+ "constraints": [
+  {
+   "line": 1044,
+   "n": 1,
+   "text": "Production atomic **size/alignment/`is_always_lock_free` assertions** and the canonical checked `LayoutSpec` land FIRST, before any gate's fix."
+  },
+  {
+   "line": 1046,
+   "n": 2,
+   "text": "**One coordinated `kShmVersion` bump** for layout/snapshot/ring changes; `kControlVersion` if the host ring or Hello changes; `kPatcherAbiVersion` separately, carrying `{magic, version, struct_size, status}`."
+  },
+  {
+   "line": 1049,
+   "n": 3,
+   "text": "`SHM_LAYOUT.md` and the C++↔Rust generated parity are updated in the **same changeset**."
+  },
+  {
+   "line": 1050,
+   "n": 4,
+   "text": "Barrier fixtures run on **macOS arm64 AND Windows x64**. A timing or stress result is not accepted in place of a deterministic transition test. This project has a documented history of \"zero underruns, therefore correct\" conclusions that were wrong, so the rule is stated, not assumed."
+  }
+ ],
  "controls": [
   "borrowed-cmd",
   "byhand-count",
   "closed-count",
+  "constraint-lost",
   "control-unlisted",
   "dangling-ref",
   "drop-refutation",
@@ -35,7 +58,7 @@
  "counts": {
   "blocking": 6,
   "closed": 6,
-  "controls": 31,
+  "controls": 32,
   "hand_ruled": 12,
   "items": 28,
   "open": 22,
@@ -1037,6 +1060,10 @@
    "withdrawn": false
   }
  ],
+ "platforms": [
+  "macOS arm64",
+  "Windows x64"
+ ],
  "population_headings": [
   {
    "hand_classified": true,
@@ -1336,5 +1363,10 @@
    "line": 1187
   }
  ],
- "schema": "ae-p1.2-manifest/2"
+ "schema": "ae-p1.2-manifest/2",
+ "version_counters": [
+  "kShmVersion",
+  "kControlVersion",
+  "kPatcherAbiVersion"
+ ]
 }

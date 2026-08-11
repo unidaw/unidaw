@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '0a61856ee32030ded909ddd0ce9d05ca507fa121'
+PREV_TIP     = '4bdb681866910bfb2cf861de7a9c843f9de08734'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -108,6 +108,8 @@ CONTROLS = {
                       'POPULATION-UNCOMMANDED'),
  'handmade-count':   ('**6 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
                       'HANDMADE-COUNT'),
+ 'constraint-lost':  ('1. Production atomic **size/alignment', '1x. Production atomic **size/alignment', 1,
+                      'CONSTRAINTS-COUNT'),
  'opening-gates':    ('**THREE OF THE EIGHT GATES CANNOT BE DECIDED',
                       '**FOUR OF THE EIGHT GATES CANNOT BE DECIDED', 1, 'OPENING-GATE-COUNT'),
  'manifest-stale':   ('26. **G4** — **BLOCKING.**', '26. **G4** — **blocking.**', 1,
@@ -402,7 +404,12 @@ elif int(claimed.group(1)) != handmade:
 
 # ---- 5e. the prose control list must equal the harness ------------------------------------
 listed = re.search(r'\*\*Controls\.\*\* ([\w-]+), each naming', pkt)  # 'Twenty-two' is not \w+
-names = set(re.findall(r'`([a-z0-9-]+)`', pkt[pkt.find('**Controls.**'):pkt.find('**Controls.**') + 900]))
+# bounded by the PARAGRAPH, not by 900 characters: adding control names pushed the last one out of
+# the window and the check reported it unlisted. A character window standing in for a boundary,
+# inside the check whose job is to police exactly that.
+_cs = pkt.find('**Controls.**')
+_ce = pkt.find('\n\n', _cs)
+names = set(re.findall(r'`([a-z0-9-]+)`', pkt[_cs:_ce if _ce != -1 else _cs + 2000]))
 WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twenty',
         21: 'Twenty-one', 22: 'Twenty-two', 23: 'Twenty-three', 24: 'Twenty-four',
         25: 'Twenty-five', 26: 'Twenty-six', 27: 'Twenty-seven', 28: 'Twenty-eight',
@@ -496,8 +503,24 @@ rulings = [{'id': m.group(1), 'applied': 'PROPAGATED at this SHA' in m.group(0)
                                           or 'is PROPAGATED' in m.group(0),
             'line': line_of(m.start())}
            for m in re.finditer(r'\*\*(R[1-4]) — .*?(?=\n\n\*\*R[1-4] — |\*\*What these rulings do NOT)', pkt, re.S)]
+# constraints[]: the four non-negotiables. Constraint 1 -- atomics and the checked LayoutSpec land
+# FIRST -- survived only as free text inside G1-B's dependencies_text, and G1-B is RESOLUTION-ONLY,
+# so a planner walking the plannable gates would never have read the rule that orders every
+# implementation ticket. A rule reachable only through the one gate that emits no tickets is a rule
+# in a place its consumer has no reason to look.
+cblock = re.search(r'# Implementation constraints[^\n]*\n(.*?)(?=\n# )', pkt, re.S)
+constraints = []
+if cblock:
+    base = pkt.find(cblock.group(1))
+    for cm in re.finditer(r'(?m)^(\d+)\. (.*?)(?=\n\d+\. |\Z)', cblock.group(1), re.S):
+        constraints.append({'n': int(cm.group(1)), 'line': line_of(base + cm.start()),
+                            'text': re.sub(r'\s+', ' ', cm.group(2)).strip()})
+VERSION_COUNTERS = ['kShmVersion', 'kControlVersion', 'kPatcherAbiVersion']
 man = {
  'schema': 'ae-p1.2-manifest/2',
+ 'constraints': constraints,
+ 'version_counters': VERSION_COUNTERS,
+ 'platforms': ['macOS arm64', 'Windows x64'],
  'gates': gates,
  'rulings': rulings,
  'product': {'sha': PRODUCT_SHA, 'tree': PRODUCT_TREE},
@@ -541,6 +564,11 @@ if described:
 # key whose CONTENT disagrees with the prose. The opening sentence counts the gates that cannot be
 # decided; the manifest derives the same set. They must agree, or the sentence is the next third
 # statement.
+if len(constraints) != 4:
+    bad('CONSTRAINTS-COUNT', f'{len(constraints)} implementation constraints extracted, expected 4')
+for vc in VERSION_COUNTERS:
+    if vc not in pkt:
+        bad('VERSION-COUNTER-ABSENT', f'{vc} is named in the manifest and not in the packet')
 notplan = [g['id'] for g in man['gates'] if not g['decidable_for_planning']]
 WORDNUM = {'ONE': 1, 'TWO': 2, 'THREE': 3, 'FOUR': 4, 'FIVE': 5, 'SIX': 6, 'SEVEN': 7, 'EIGHT': 8}
 opening = re.search(r'\*\*(ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT) OF THE EIGHT GATES CANNOT BE '
