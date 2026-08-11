@@ -1416,7 +1416,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `99903728006c20625986c1a4b020bde07c71a23d`, A.0 SCRIPT BLOB `5c1282518fb53e32e628102b5d13f67dd80bfd98`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `74b99aa1202620351af87322d8d055c0f834bdca`, A.0 SCRIPT BLOB `37452f08f2e423389d56e0f75fc53b1eb25f03ac`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -2479,8 +2479,13 @@ carrying one cannot be decided by any implementation.
     **How this got missed:** the register asked the right question and I answered it by reading
     `ui/daw-bridge/src/layout.rs`, a DIFFERENT Rust endpoint that does declare `ready`, then marked
     it resolved. See the G0-B register entry, which now records the substitution.
-36. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING. `tools/host_stall_check.sh` asserts a producer behaviour the
-    shipped back-pressure rule contradicts, so one of the two is wrong in PRODUCT.** The check's pass
+36. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING. `tools/host_stall_check.sh` CANNOT DISTINGUISH THE
+    OUTCOMES IT IS ASKED TO DECIDE, and no measurement that could exists.** An earlier headline said
+    the check contradicts the shipped rule so one of the two must be wrong — which this item's own
+    body then conceded is false, since the failed-send drop the check's comment names is real
+    (`apps/engine_produce_block.cpp:1096-1100`). The defect is not a contradiction; it is that the
+    check counts log lines and therefore reads a gated producer, a dropped host and a run that never
+    played as the same zero. The check's pass
     predicate (`:105-109`: at most three post-marker `producer stall (inFlight)` lines) PASSES only
     when few such lines are logged, which the check reads as a SIGSTOPped host having stopped holding
     the minimum — an inference, not an observation, and the two come apart below. Its comment names
