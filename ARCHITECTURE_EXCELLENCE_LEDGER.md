@@ -619,6 +619,12 @@ assertive edit, empty sweep detail rejected and covered, and the proof comment
 now matches arithmetic length enforcement. Exact review is pending; M1/G3
 N/Watchdog and carried G2/G0/G4 decisions remain open.
 
+Exact audit of `d6d64df` is **BLOCKED**: PACKET binding still fails open across
+checker/emitter views. A PACKET marker added to nonblocking item1 plus a changed
+restatement regenerates clean while emitted item1 has `kind: []`; no move control
+exists, legacy `_marked` requires PRODUCT-first, duplicate markers collapse,
+`PACKET2` is accepted, and the semantic PACKET set omits item28/18/26/35.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
