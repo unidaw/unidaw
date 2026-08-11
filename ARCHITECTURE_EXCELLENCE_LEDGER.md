@@ -258,10 +258,12 @@ action. It supersedes stale ticket rows above where they conflict.
   `699abfe8f72e597cfd1b6fb3da93ee7f35aa7fef`).
 - Governance worktree: `/Users/jak/src/daw-backend`.
 - Current packet owner: `claude-worker-2`; current latest packet reported:
-  `b20d5d61ad8be812f21a0462b3366a38c551a4f1`.
+  `8052160`.
 - Latest packet status: mechanical PASS, 89 controls plus three executable
-  proofs; classifier/proof logic is claimed deduplicated into one live function
-  and sabotage probes now fail the proof. Exact independent review pending.
+  proofs; R15 defines G3 M1 and adds blocking item 36 for the unresolved
+  post-marker stall interpretation. The owner also corrected the prior shell
+  sweep evidence (bash 89/89, not the misleading zsh one-shot). Exact review
+  pending.
 
 ### Required review protocol
 
@@ -352,7 +354,7 @@ away exact-SHA review or shared-hotspot ownership to improve throughput.
 
 ### Immediate next actions
 
-1. Obtain the exact independent review of `b20d5d6`; do not expand parser
+1. Obtain the exact independent review of `8052160`; do not expand parser
    hunting beyond the claimed live-ratchet binding.
    while the comma shield and gate decisions remain.
 2. Consolidate the six owner decisions into one decision record: G2-B oracle,
@@ -412,6 +414,9 @@ away exact-SHA review or shared-hotspot ownership to improve throughput.
   slice/helper dataflow remains intentionally invisible, comma writer spoof and
   hidden link dependency remain, inode identity can change under byte-identical
   replacement, and the six semantic blockers remain unchanged.
+- `8052160`: owner PASS/89 controls; R15 defines G3 M1, item36 adds a product
+  blocker for the post-marker stall interpretation, and five semantic decisions
+  remain. Exact independent review pending.
 - Exact review of `2699a2c` is **BLOCKED**: the extractor proof duplicates rather
   than binds the production classifier/floor, blanking proof is narrow, hidden
   link destinations still become dependencies, identity proves bytes only, and
