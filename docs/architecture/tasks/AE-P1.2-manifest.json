@@ -14,6 +14,7 @@
   "no-terminator",
   "open-arithmetic",
   "open-count",
+  "opening-gates",
   "orphan-marker",
   "orphan-number",
   "raw-without-cmd",
@@ -34,7 +35,7 @@
  "counts": {
   "blocking": 6,
   "closed": 6,
-  "controls": 30,
+  "controls": 31,
   "hand_ruled": 12,
   "items": 28,
   "open": 22,
@@ -85,97 +86,127 @@
  "gates": [
   {
    "blocking_items": [],
-   "decidable": true,
+   "cross_cutting_blocking": [],
+   "decidable_for_acceptance": true,
+   "decidable_for_planning": true,
    "dependencies": [],
+   "dependencies_text": "none; first gate",
    "end_line": 218,
    "id": "G0-A",
    "line": 83,
-   "reason_if_not": null
+   "reason_if_not_acceptance": null,
+   "reason_if_not_planning": null
   },
   {
    "blocking_items": [
     24
    ],
-   "decidable": false,
+   "cross_cutting_blocking": [],
+   "decidable_for_acceptance": false,
+   "decidable_for_planning": true,
    "dependencies": [],
+   "dependencies_text": "none",
    "end_line": 331,
    "id": "G0-B",
    "line": 219,
-   "reason_if_not": "blocked by items [24]"
+   "reason_if_not_acceptance": "blocked by items [24]",
+   "reason_if_not_planning": null
   },
   {
    "blocking_items": [],
-   "decidable": true,
+   "cross_cutting_blocking": [],
+   "decidable_for_acceptance": true,
+   "decidable_for_planning": true,
    "dependencies": [
     "G0-A"
    ],
+   "dependencies_text": "G0-A",
    "end_line": 462,
    "id": "G1-A",
    "line": 332,
-   "reason_if_not": null
+   "reason_if_not_acceptance": null,
+   "reason_if_not_planning": null
   },
   {
    "blocking_items": [
     11
    ],
-   "decidable": false,
+   "cross_cutting_blocking": [],
+   "decidable_for_acceptance": false,
+   "decidable_for_planning": false,
    "dependencies": [
     "G0-A",
     "G1-A"
    ],
+   "dependencies_text": "G0-A, G1-A, and the production atomic size/alignment assertions",
    "end_line": 566,
    "id": "G1-B",
    "line": 463,
-   "reason_if_not": "blocked by items [11]"
+   "reason_if_not_acceptance": "blocked by items [11]",
+   "reason_if_not_planning": "own population withdrawn"
   },
   {
    "blocking_items": [
     27
    ],
-   "decidable": false,
+   "cross_cutting_blocking": [],
+   "decidable_for_acceptance": false,
+   "decidable_for_planning": false,
    "dependencies": [
     "G1-A",
     "G1-B"
    ],
+   "dependencies_text": "G1-A, G1-B",
    "end_line": 680,
    "id": "G2-A",
    "line": 567,
-   "reason_if_not": "blocked by items [27]"
+   "reason_if_not_acceptance": "blocked by items [27]",
+   "reason_if_not_planning": "own population withdrawn"
   },
   {
    "blocking_items": [
     18
    ],
-   "decidable": false,
+   "cross_cutting_blocking": [],
+   "decidable_for_acceptance": false,
+   "decidable_for_planning": true,
    "dependencies": [
     "G0-A",
     "G1-A",
     "G1-B",
     "G2-A"
    ],
+   "dependencies_text": "G0-A, G1-A, G1-B, G2-A",
    "end_line": 789,
    "id": "G2-B",
    "line": 681,
-   "reason_if_not": "blocked by items [18]"
+   "reason_if_not_acceptance": "blocked by items [18]",
+   "reason_if_not_planning": null
   },
   {
    "blocking_items": [
     19
    ],
-   "decidable": false,
+   "cross_cutting_blocking": [],
+   "decidable_for_acceptance": false,
+   "decidable_for_planning": true,
    "dependencies": [
     "G2-B"
    ],
+   "dependencies_text": "an owner ruling on N, then G2-B **of this packet** — the gate as received named a document that does not exist in the pinned tree, and the reference is resolved here rather than left dangling",
    "end_line": 893,
    "id": "G3",
    "line": 790,
-   "reason_if_not": "blocked by items [19]"
+   "reason_if_not_acceptance": "blocked by items [19]",
+   "reason_if_not_planning": null
   },
   {
    "blocking_items": [
     26
    ],
-   "decidable": false,
+   "cross_cutting_blocking": [],
+   "decidable_for_acceptance": false,
+   "decidable_for_planning": false,
    "dependencies": [
     "G0-A",
     "G0-B",
@@ -185,10 +216,12 @@
     "G2-B",
     "G3"
    ],
+   "dependencies_text": "G0-A, G0-B, G1-A, G1-B, G2-A, G2-B, G3",
    "end_line": 1041,
    "id": "G4",
    "line": 894,
-   "reason_if_not": "blocked by items [26]"
+   "reason_if_not_acceptance": "blocked by items [26]",
+   "reason_if_not_planning": "own population withdrawn"
   }
  ],
  "items": [

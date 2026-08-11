@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'fc23820a8ad9a0839c9295d337507fbeaea40d31'
+PREV_TIP     = '0a61856ee32030ded909ddd0ce9d05ca507fa121'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -108,6 +108,8 @@ CONTROLS = {
                       'POPULATION-UNCOMMANDED'),
  'handmade-count':   ('**6 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
                       'HANDMADE-COUNT'),
+ 'opening-gates':    ('**THREE OF THE EIGHT GATES CANNOT BE DECIDED',
+                      '**FOUR OF THE EIGHT GATES CANNOT BE DECIDED', 1, 'OPENING-GATE-COUNT'),
  'manifest-stale':   ('26. **G4** — **BLOCKING.**', '26. **G4** — **blocking.**', 1,
                       'MANIFEST-STALE'),
  'unresolved-tail':  ('master-track stores (`engine_master_render.cpp:121` and `:132`) → **13 IN\nSCOPE**.',
@@ -404,7 +406,8 @@ names = set(re.findall(r'`([a-z0-9-]+)`', pkt[pkt.find('**Controls.**'):pkt.find
 WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twenty',
         21: 'Twenty-one', 22: 'Twenty-two', 23: 'Twenty-three', 24: 'Twenty-four',
         25: 'Twenty-five', 26: 'Twenty-six', 27: 'Twenty-seven', 28: 'Twenty-eight',
-        29: 'Twenty-nine', 30: 'Thirty'}
+        29: 'Twenty-nine', 30: 'Thirty', 31: 'Thirty-one', 32: 'Thirty-two',
+        33: 'Thirty-three'}
 if not listed:
     bad('CONTROL-PROSE-MISSING', 'no "**Controls.** <N>, each naming" sentence')
 elif listed.group(1) != WORD.get(len(CONTROLS), '?'):
@@ -465,16 +468,30 @@ gates = []
 for g in gate_hdr:
     seg = pkt[pkt.find('\n# %s — ' % g['gate']):]
     seg = seg[:seg.find('\n# ', 3) if seg.find('\n# ', 3) != -1 else len(seg)]
-    dep = re.search(r'\*\*Dependencies\*\* ([^.\n]{0,120})', seg)
-    deps = sorted(set(re.findall(r'G[0-9]-?[AB]?', dep.group(1)))) if dep else []
+    dep = re.search(r'\*\*Dependencies\*\* ([^.]{0,200})', seg)
+    dep_text = re.sub(r'\s+', ' ', dep.group(1)).strip() if dep else ''
+    deps = sorted(set(re.findall(r'G[0-9]-?[AB]?', dep_text)))
     blk = sorted(i for i in nums
                                            if entry.get(i) == g['gate'] and i not in closed_set
                                            and re.search(r'(?m)^%d\. \*\*[^*]+\*\* — [^\n]{0,120}BLOCKING' % i, body))
+    # `all`-tagged items are cross-cutting: a blocking one belongs to EVERY gate, and building
+    # blocking_items per gate tag alone made that population invisible while it happens to be empty.
+    xcut = sorted(i for i in nums if entry.get(i) == 'all' and i not in closed_set
+                  and re.search(r'(?m)^%d\. \*\*[^*]+\*\* — [^\n]{0,120}BLOCKING' % i, body))
+    blk = sorted(set(blk) | set(xcut))
+    # TWO decidabilities, because the packet makes the distinction deliberately and one boolean
+    # collapsed it toward less work: G3 is plannable (R3 authored N) and not acceptance-decidable.
+    withdrawn_pop = bool(re.search(r'(SELECTION WITHDRAWN|SCOPE FALSIFIED|no derivable population|'
+                                   r'declares NO population)', seg))
     gates.append({'id': g['gate'], 'line': g['line'], 'end_line': g['end_line'],
                   'dependencies': [d for d in deps if d != g['gate']],
+                  'dependencies_text': dep_text,
                   'blocking_items': blk,
-                  'decidable': not blk,
-                  'reason_if_not': ('blocked by items %s' % blk) if blk else None})
+                  'cross_cutting_blocking': xcut,
+                  'decidable_for_planning': not withdrawn_pop,
+                  'decidable_for_acceptance': not blk,
+                  'reason_if_not_acceptance': ('blocked by items %s' % blk) if blk else None,
+                  'reason_if_not_planning': 'own population withdrawn' if withdrawn_pop else None})
 rulings = [{'id': m.group(1), 'applied': 'PROPAGATED at this SHA' in m.group(0)
                                           or 'is PROPAGATED' in m.group(0),
             'line': line_of(m.start())}
@@ -520,6 +537,19 @@ if described:
                       ('raw_claims', 'RAW claim'), ('controls', 'control'), ('counts', 'count')]:
         if word in described.group(1) and key not in man:
             bad('MANIFEST-OVERPROMISED', f'A.0 says the manifest carries {word}; no {key} key')
+# The VALUES half. MANIFEST-OVERPROMISED compares described KEYS to emitted keys and cannot reach a
+# key whose CONTENT disagrees with the prose. The opening sentence counts the gates that cannot be
+# decided; the manifest derives the same set. They must agree, or the sentence is the next third
+# statement.
+notplan = [g['id'] for g in man['gates'] if not g['decidable_for_planning']]
+WORDNUM = {'ONE': 1, 'TWO': 2, 'THREE': 3, 'FOUR': 4, 'FIVE': 5, 'SIX': 6, 'SEVEN': 7, 'EIGHT': 8}
+opening = re.search(r'\*\*(ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT) OF THE EIGHT GATES CANNOT BE '
+                    r'DECIDED', pkt)
+if not opening:
+    bad('OPENING-GATE-COUNT-MISSING', 'no "<N> OF THE EIGHT GATES CANNOT BE DECIDED" sentence')
+elif WORDNUM[opening.group(1)] != len(notplan):
+    bad('OPENING-GATE-COUNT', f'opening says {opening.group(1)}, manifest derives '
+                              f'{len(notplan)} ({", ".join(notplan)})')
 try:
     if open(MANIFEST).read() != emitted:
         bad('MANIFEST-STALE', 'the committed manifest is not what this packet emits')
