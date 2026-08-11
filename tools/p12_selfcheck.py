@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '7a77833aec1b95b57a1ffefdd339838159ff3e54'
+PREV_TIP     = 'b973f2606879709f8bd6340b07866050512f372d'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -393,6 +393,8 @@ CONTROLS = {
  # hidden in a comment loses a member, and a label separated from its colon by hidden syntax
  # becomes a detached label once the wrapper is blanked to spaces.
  # codex-worker-2's numeric wrapper, which a letter-initial deny-list could not see
+ # the digit-SUFFIX variant, which the last-character allow-list could not see
+ 'writer-num-suffix': ('juce:989/994', 'fake9 :989/994', 1, 'OUT-MEMBERS'),
  'writer-num-prefix': ('juce:989/994', '9/ :989/994', 1, 'OUT-MEMBERS'),
  'writer-in-comment': ('juce:989/994', '<!--juce:989/994-->', 1, 'OUT-MEMBERS'),
  'writer-wrapped-sep': ('juce:989/994', 'fake<!--x-->:989/994', 1, 'OUT-MEMBERS'),
@@ -727,9 +729,14 @@ else:
     # covers the shapes its author thought of, which is the fourth time this field has taught me
     # that. A bare `:NNN` may follow a separator (`·`, `,`), the end of a previous citation (a
     # digit), or the segment start. Anything else is a label wearing a space.
+    # THE WHOLE TOKEN, not its last character. Allow-listing the final character let `fake9 :989`
+    # through — a heuristic about a boundary rather than a grammar for one, which is the same error
+    # as every anchor this field has already taught me. The preceding token must BE a separator or
+    # BE a citation, matched in full.
+    _SEP_OR_CITE = re.compile(r'[·,]|(?:[A-Za-z_]\w*:)?\d{3,4}(?:[-/]\d{3,4})?[,·]?')
     for _w in re.finditer(r'(\S+)\s+:\d{3,4}', wseg.group(0)):
         _prev = _w.group(1)
-        if _prev[-1] not in '·,0123456789':
+        if not _SEP_OR_CITE.fullmatch(_prev):
             bad('OUT-MEMBERS', f'writer citation has a detached prefix {_prev!r} before a bare '
                                f'`:NNN` — a path is declared with a colon or not at all')
     _rest = wseg.group(0)
@@ -1606,10 +1613,13 @@ if NEG_TAG:
 # nothing exercised the refusal BRANCH. `--prove-emit-refuses` runs the branch's condition against a
 # synthetic failure and reports whether it would have written, so the claim "emission is refused on
 # any failure" is executable instead of asserted.
-if '--prove-emit-refuses' in sys.argv:
-    would_write = not (fail + ['[SYNTHETIC] injected failure'])
-    print(f'with one injected failure, emission would write: {would_write}')
-    sys.exit(0 if not would_write else 1)
+# CAUSAL, not tautological. The previous version computed `not (fail + ['injected'])`, which is
+# False by construction and proves only that a non-empty list is non-empty — codex-worker-2 named it
+# and was right. AE_P12_INJECT_FAIL puts a real failure into the real list, so the real emit branch
+# below decides, and the caller checks the artifact on disk is untouched. A probe that cannot fail
+# is not a probe.
+if os.environ.get('AE_P12_INJECT_FAIL'):
+    bad('INJECTED-FAILURE', 'synthetic failure for the emit-refusal proof')
 if '--emit-manifest' in sys.argv or '--manifest' in sys.argv:
     if fail or NEG:
         for f in fail[:30]: print('  ' + f)
