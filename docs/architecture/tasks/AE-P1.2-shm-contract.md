@@ -292,13 +292,30 @@ reproducible, and four populations in the predecessor were exactly that.
 - *Rings* — RAW 17 (`grep -rnF '>capacity' apps/ | grep '=' | grep -v '=='`) → minus 9 non-ring and
   test-fixture assignments → **8**.
 - *Statements interpreting an entry's bytes as data* — RAW 21 (`grep -rnF 'entries[' apps/`) → minus
-  16 (twelve plugin-cache reads and four non-data operations) → **5**. The rule is ONE subtraction
-  because two written as one is how the predecessor produced arithmetic that does not hold.
+  17 (twelve plugin-cache index sites, which are a DIFFERENT `entries` array, and five ready-flag
+  operations, which touch a synchronisation field rather than the entry's data) → **4**:
+  `event_ring.cpp:95` (`entries[write] = staged`), `:116` and `:163` (`entry = entries[read]`), and
+  `device_chain_ui_live_tests_main.cpp:112`, which is a test — so **3 production**. The five excluded
+  flag operations are `:96`, `:109`, `:126`, `:138`, `:149`, all `storeReady`/`loadReady` on
+  `.ready`. Previously stated as 5 against a rule of "minus 16 (twelve plugin-cache reads and four
+  non-data operations)"; the twelve are right and spread over six files, the non-data operations are
+  five and not four, and the in-scope figure is 4. The self-check verified 21 − 16 == 5 and could not
+  see it, which is why A.0 says in terms that it decides a RULE's arithmetic and not its
+  justification. The members are named here so the classification is auditable without re-running the
+  grep — and the rule now also ships INSIDE a command, which is what open item 6 (G1-A) asked for:
+  `grep -rnF 'entries[' apps/ | grep -v -e pluginCache -e cache.entries | grep -v -e storeReady -e loadReady`
+  returns 4, and appending `| grep -v _tests_main` returns 3. A rule stated beside a command is a
+  claim about a classification; a rule stated inside one is the classification.
   → minus 12 plugin-cache reads, minus 4 test-only → **5**. The ring filter is in the rule, not
   implied: without it this population measures the wrong set.
 - *Read-cursor stores* — RAW **14** (`grep -rn -e readIndex.store -e read_index.store apps/ ui/`) → minus 10 non-ring and test stores → **4**. The predecessor printed this command beside the figure 4, which
   the command does not produce.
-- *Index sites* — RAW 21 (`grep -rnF 'entries[' apps/`) → minus 9 non-indexing matches → **12**.
+- *Index sites* — RAW 21 (`grep -rnF 'entries[' apps/`) → minus 9 event-ring statements → **12**,
+  being exactly the plugin-cache reads subtracted above: `plugin_cache.cpp:388/:460/:469/:478/:492`,
+  `engine_chain_commands.cpp:81`, `engine_save_project.cpp:265/:362`, `daw_engine_main.cpp:291/:1078`,
+  and two in `_tests_main` files. The two populations partition the same 21 and are stated so the
+  partition is visible: 12 + 9 = 21, and the 9 split 4 data / 5 flag. Inside a command:
+  `grep -rnF 'entries[' apps/ | grep -e pluginCache -e cache.entries` returns 12.
 
 **Floor.** All four are token greps and blind in the same four ways: a cursor mutated through a
 whole-`RingHeader` memcpy, a `reinterpret_cast`, a helper that takes the header by reference, or a
@@ -859,7 +876,7 @@ carrying one cannot be decided by any implementation.
 3. **G0-B** — The mutation floor ">= 600" is asserted with no derivation and counts near 551 over the real 131 members, so the battery would fail its own floor permanently.
 4. **G0-B** — 600 is a fifth pinned integer with no owner.
 5. **G0-B** — The member counts (66 C++ / 65 Rust) were obtained by reading, not by a command, and no command is proposed that would reproduce them.
-6. **G1-A** — The entry-address extraction's rule must ship inside the printed command, not beside it.
+6. **G1-A** — CLOSED at this SHA. The entry-address extraction's rule ships inside the printed command: the data-statement and index-site pipelines each carry their own exclusions and return 4 (3 production) and 12. Closing it is also what exposed the classification error the arithmetic had been hiding — the rule as prose said "four non-data operations" where the ready-flag operations are five, so the in-scope figure was 5 and is 4.
 7. **G1-A** — The `ui_out` producer census is not established, and the disarm is safe only under a single-consumer contract that is asserted rather than proven.
 8. **G1-B** — The send-site count is stated as 16, as "the sixteen", and as a list of fifteen.
 9. **G1-B** — A region the scope omits is called by the population one of "the only two" that rewrite in place.
