@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '66bf20d74d23212a9b9413d2226e1e52c1efa3a4'
+PREV_TIP     = '0a796fe921ee85402d620ab536fa7415985b9baf'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -1041,19 +1041,33 @@ for _node in ast.walk(ast.parse(open(__file__).read())):
     # could not represent**, which is the defect this ratchet exists to catch, committed inside the
     # parse written to end the regex version of it. Every string constant anywhere in the pattern
     # expression is collected instead.
-    _pat, _txt = _node.args[0], _node.args[-1]
+    # THE TEXT ARGUMENT BY SIGNATURE, not by position. `args[-1]` is the text for `re.search` and
+    # `re.finditer` but NOT for `re.sub` (pattern, repl, string) and not when flags are passed
+    # positionally — so a `re.sub` was read as if its `string` were its `repl`, and a flagged call
+    # was read as if its flags were its text. codex-worker-2's signature-aware walk found DATA 8 /
+    # PROSE 43 against my 7 / 35; the difference is entirely this. Position is a proxy for the
+    # parameter, and the proxy fails on exactly the calls whose shape differs.
+    _TEXT_ARG = {'sub': 2, 'subn': 2}
+    _idx = _TEXT_ARG.get(_node.func.attr, 1)
+    if len(_node.args) <= _idx: continue
+    _pat, _txt = _node.args[0], _node.args[_idx]
     _lits = [x.value for x in ast.walk(_pat)
              if isinstance(x, ast.Constant) and isinstance(x.value, str)]
     _tname = _txt.id if isinstance(_txt, ast.Name) else None
     if _lits and not any('`' in _l for _l in _lits) and _tname in ('pkt', 'body', 'head'):
         _decor_raw.append((_lits[0][:38], _tname))
-# 38, MEASURED HERE — claude-worker-1 counted 35 with their own scan. TWO MEASUREMENTS OF ONE
-# POPULATION DISAGREEING BY THREE is the shape this packet has hit six times, and the resolution is
-# the same each time: the predicates differ, not the arithmetic. Mine includes `re.sub` and patterns
-# reading `body`; theirs may not. The floor is MY count because this check is the one enforcing it,
-# and the discrepancy is recorded rather than averaged away — whichever of us is right, the number
-# may only go DOWN from here.
-_DECOR_FLOOR = 35
+# 43. THIS POPULATION HAS NOW BEEN COUNTED FOUR TIMES AND ONLY THE LAST ONE IS SOUND:
+#
+#   35   my line regex          blind to 11 calls whose arguments wrap
+#   35   claude-worker-1's      same blindness, same integer, DIFFERENT population — a coincidence
+#                               they caught only by re-running and getting 29
+#   35   my AST walk            positional `args[-1]`, so `re.sub`'s repl was read as its text
+#   43   signature-aware        codex-worker-2's number, reproduced here exactly
+#
+# The three agreements were all worthless: two shared a failure mode, and the third agreed with them
+# by a second, unrelated defect. **A number that keeps coming out the same is not thereby right; it
+# may be the same wrong instrument, or two of them.** The floor is 43 and monotone down.
+_DECOR_FLOOR = 43
 if len(_decor_raw) > _DECOR_FLOOR:
     bad('EXTRACTOR-TEXT', f'{len(_decor_raw)} prose extractors read raw text, floor is '
                           f'{_DECOR_FLOOR} — a pattern that quotes no backtick reads prose and must '
@@ -1374,7 +1388,13 @@ def line_of(off): return pkt.count('\n', 0, off) + 1     # offsets are useless t
 def _head_of(n):
     m = re.search(r'(?m)^%d\. \*\*[^*]+\*\* — ((?:⟦[^⟧]+⟧ ?)*)' % n, body)
     return m.group(1) if m else ''
-item_line = {int(m.group(1)): line_of(pkt.find(body) + m.start())
+# OFFSET AGAINST THE TEXT `body` CAME FROM. `body` is sliced from `unhid`; this searched `pkt`, and
+# the two are identical ONLY because the packet contains no hidden construct today. The first comment
+# or reference definition anywhere above the open-items section makes `pkt.find(body)` return -1 and
+# every item line number becomes garbage — a latent corruption that passes now and breaks silently
+# later, which codex-worker-2 found by reading rather than by running.
+_body_off = unhid.find(body)
+item_line = {int(m.group(1)): line_of(_body_off + m.start())
              for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*', body)}
 item_body = {int(m.group(1)): m.group(0) for m in
              re.finditer(r'(?m)^(\d{1,2})\. \*\*.*?(?=\n\d{1,2}\. \*\*|\n# |\Z)', body, re.S)}
