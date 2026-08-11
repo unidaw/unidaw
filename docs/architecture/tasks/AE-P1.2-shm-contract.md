@@ -1155,6 +1155,13 @@ ways a plane address can arise:
     C  the return of `safeAudioOutPtr` (`engine_produce_block.cpp:861-866`)
                                                             callers: :1030, :1112, :1150
 
+**The two helpers are G4's, and the FILE has four.** `audio_shm.cpp:5` / `:17` and
+`engine_produce_block.cpp:861` / `:848` are two symmetric pairs, one per plane —
+`audioOutChannelPtr`/`audioInChannelPtr` and `safeAudioOutPtr`/`safeAudioInPtr`. G4's argument is
+unaffected because its population is the OUT plane and the two out-plane helpers are the two named;
+but "exactly two pointer-returning helpers" is a claim about the FILE and is false about it, and
+claude-worker-1 tested their own premise and said so before it hardened into one.
+
 **The argument:** a site can only touch plane bytes by holding a plane pointer; a plane pointer can
 only be obtained by casting the mapped base or by calling one of the two functions that return one;
 all three sets are enumerated. That is an argument from the code's STRUCTURE rather than from a
@@ -1289,7 +1296,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `fb0d98f67b5373969c8ac62c8b37c5546ebb34df`, A.0 SCRIPT BLOB `cb582b9d6347cac7d142c54f66c357bf0a19f933`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `72935e20ee4e5ab85dcde445e8f8d8329d6962a0`, A.0 SCRIPT BLOB `a55be84449f5ea1c828cfd77a9cfc75e63f58b49`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1674,12 +1681,18 @@ carrying one cannot be decided by any implementation.
     item 27's scope cannot close until it is: the arbitrated set is 9 by call and 9-or-11 by intent
     depending on the answer.
 
-31. **G4** — The completeness argument for the out-plane population rests on there being EXACTLY
-    TWO functions that return a plane pointer (`audioOutChannelPtr`, `safeAudioOutPtr`). That is a
-    census supporting an argument, and it needs a RATCHET: a static check that fails if a third
-    pointer-returning helper appears, since the argument's falsifiability is its whole value and a
-    silent third helper would leave it reading as sound. claude-worker-1 named this against their
-    own measurement rather than letting the argument stand on their word.
+31. **all** — **The pointer-helper RATCHET, and it must pin the GENERAL population, not G4's
+    subset.** The completeness argument rests on a closed set of functions returning a plane
+    pointer. A ratchet pinned at "two OUT-PLANE helpers" would have to decide which plane a NEW
+    helper serves, and the only thing available to decide that is its NAME — the selector defect
+    reappearing inside the guard built against it; a `safeAudioAuxPtr` would be classified by
+    spelling. **Pin instead: every `float*`-returning function or lambda in non-test `apps/` that
+    reaches a segment base — exactly FOUR at this SHA** (`audio_shm.cpp:5`, `:17`,
+    `engine_produce_block.cpp:861`, `:848`). That predicate needs no judgement about planes, so a
+    fifth of ANY name or plane turns it red and a person decides. Negative control: add a fifth and
+    it must fire; RENAME an existing one and it must NOT, because the count is over structure.
+    **It belongs with the LayoutSpec work in constraint 1, not inside either gate**, because G1-A's
+    input-plane writers and G4's out-plane readers share this ratchet without sharing a population.
 
 32. **G2-A** — **RULED (R11).** `commandMutatesDocument(Undo)` returns FALSE with the comment "no
     document state" (`engine_command_mutates.h:58`) while `handleUndo` calls `applyDocument` and
