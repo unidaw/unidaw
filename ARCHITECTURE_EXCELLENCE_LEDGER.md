@@ -7,13 +7,13 @@ ledger records current orchestration state.
 ## Global state
 
 ```text
-Program:       ACTIVE -- AE-P0.1 and AE-P0.2 Lane 0 corrective integrated; P1.1 remains pending
+Program:       ACTIVE -- AE-P0.1 and AE-P0.2 Lane 0 corrective integrated; AE-P1.1 frozen; AE-P1.2 active
 Reason:        execution baseline selected at current main; old evidence remains historical
 Target repo:   /Users/jak/src/daw-backend
 Baseline SHA:  7710401d72029482c8f3d15869d58dce7e246def
 Historical evidence SHA: 5bef283798b59c2c4f5720292554c7ab8c265be6
 Worktrees:     AE-P0.1 integration landed in /Users/jak/src/daw at 71758c0; review worktree preserved at /Users/jak/src/daw-ae-p0-followup
-Active tasks:  P1.1 non-adversarial harness packet required under AE-P0.2 threat-model boundary; preserve AE-P0.1/AE-P0.2 evidence and track F1-F3 follow-ups
+Active tasks:  AE-P1.2 SHM contract packet and independent semantic review; preserve frozen AE-P1.1 evidence and track implementation-blocking owner calls
 File locks:    protocol hotspots frozen; root CMake reserved narrowly for AE-P0.1
 Integration:   AE-P0.1 COMPLETE; AE-P0.2 Lane 0 COMPLETE -- product main at 75c6f06, based on amended Undo baseline 7710401d; exact candidate ddb05bd independently approved by Claude and Codex red-team plus residual identity/fixture/path audit
 ```
@@ -90,10 +90,10 @@ watcher:  none (required for Codex)
 | `AE-P0.1` | `COMPLETE` | packet `258f423` + independent review | `codex-worker-1` | `claude-worker-1` | `/Users/jak/src/daw-ae-p0-followup` | product main `71758c0`; final chain ends `3b53a29` |
 | `AE-P0.2 discovery` | `ESCALATED_TO_ADR` | frozen baseline + packet | `claude-worker-2` | `codex-worker-2` | read-only root | four rejected designs; evidence complete |
 | `AE-P0.2 ADR` | `APPROVED` | current-main inventory + exact review | `backend` | `codex-worker-2` | root | exact SHA `7dff997`; approval received |
-| `AE-P0.2 implementation` | `ACTIVE_LANE0` | packet `6287ffd` approved + AE-P0.1 integration | codex-worker-2 | claude-worker-2 | `/Users/jak/src/daw-ae-p0-2-lane0` | additive 25-path implementation; no existing edits |
+| `AE-P0.2 implementation` | `COMPLETE` | packet `6287ffd` approved + AE-P0.1 integration | codex-worker-2 | claude-worker-2 | `/Users/jak/src/daw-ae-p0-2-lane0` | product main `75c6f06`; final corrective candidate independently approved |
 | `AE-P0.3` | `BLOCKED` | AE-P0.1 review + frontend ownership release | unassigned | unassigned | none | packet ready |
-| `AE-P1.1` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
-| `AE-P1.2` | `BLOCKED` | `AE-P1.1` | unassigned | unassigned | none | none |
+| `AE-P1.1` | `FROZEN` | `AE-P0` | claude-worker-2 | codex-worker-1 | `/Users/jak/src/daw-ae-p1-1-packet` | `ba88bcb4657b62bdfc752d338d877e139e212ca6`; independent PASS; successor-only |
+| `AE-P1.2` | `ACTIVE` | `AE-P1.1` | claude-worker-2 | codex-worker-1 | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; 19 open items; G4 not decidable |
 | `AE-P1.3` | `BLOCKED` | `AE-P1.2` | unassigned | unassigned | none | none |
 | `AE-P1.4` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P1.5` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |

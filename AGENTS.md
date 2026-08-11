@@ -79,6 +79,15 @@ with `node /tmp/dawagents/send.mjs backend <to> <subject> <body>`, and always
 name an agent's exact absolute worktree because worker shells may start in a
 different checkout.
 
+**Verifier workflow (read-only, exact-SHA).** For archaeology-heavy reviews,
+create one disposable checkout pinned to the exact target SHA, verify `HEAD` and
+the tree OID once, then build a bounded file inventory. Read the pinned files
+locally with `rg`, `nl`, and `sed`; cache immutable excerpts/hashes and
+parallelize independent scans where safe. Do not repeatedly invoke `git show`
+for individual fragments. Do not build, run product code, or edit the pinned
+checkout. Report paths/lines from that checkout and retain exact-SHA/read-only
+evidence.
+
 **SHM contract.** `apps/shared_memory.h` ↔ `ui/daw-bridge/src/layout.rs` are
 lockstep (C++ `static_assert`s / Rust `offset_of!` asserts), `kShmVersion` = 37.
 Any header/struct change bumps the version in BOTH + updates the offset asserts.
