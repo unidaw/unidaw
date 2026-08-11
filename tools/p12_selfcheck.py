@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '5a432aa0f16e5f77556a1aedaf6d23ee3edc284d'
+PREV_TIP     = 'f30d64db6b884c60aede09af9f401b98a1c2e896'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -108,6 +108,12 @@ CONTROLS = {
                       'POPULATION-UNCOMMANDED'),
  'handmade-count':   ('**6 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
                       'HANDMADE-COUNT'),
+ 'two-markers':      ('— 8, exact. [HAND-CLASSIFIED — open item 25 (all)]',
+                      '— 8, exact. [HAND-CLASSIFIED — open item 25 (all)] [HAND-CLASSIFIED — open item 25 (all)]',
+                      1, 'MARKER-NOT-BIJECTIVE'),
+ 'heading-regress':  ('- *RING index sites, the population PASS 7 and S4 actually range over* —',
+                      '- ***RING* index sites, the population PASS 7 and S4 actually range over** —',
+                      1, 'HANDMADE-COUNT'),
  'orphan-marker':    ('\n# Provenance of this packet',
                       '\n[HAND-CLASSIFIED — open item 25 (all)]\n\n# Provenance of this packet', 1,
                       'MARKER-ORPHANED'),
@@ -355,14 +361,22 @@ else:
 MARK = '[HAND-CLASSIFIED — open item 25 (all)]'
 starts = [m.start() for m in re.finditer(r'\*[A-Z][^*\n]{4,70}\* — ', pkt)]
 handmade = 0
+# A marker binds to the heading whose OWN bullet it sits in — from the heading to the end of that
+# bullet — not merely somewhere in a 600-char span. Span attribution was fail-open: regress a
+# heading's shape and its marker silently attributes to the PRECEDING population while the counts
+# still balance.
+def own_bullet(q):
+    nxt = [pkt.find('\n- ', q + 1), pkt.find('\n\n', q + 1)]
+    nxt = [x for x in nxt if x != -1]
+    return pkt[q:min(nxt)] if nxt else pkt[q:q + 600]
 seen_marks = 0
 for i, q in enumerate(starts):
-    seg = pkt[q:starts[i + 1] if i + 1 < len(starts) else q + 600]
+    seg = own_bullet(q)
     k = seg.count(MARK)
     seen_marks += k
     if k > 1:
-        bad('MARKER-NOT-BIJECTIVE', f'{k} markers in one population: {re.sub(chr(92)+"s+"," ",seg)[:60]}')
-    if k == 1: handmade += 1; continue
+        bad('MARKER-NOT-BIJECTIVE', f'{k} markers on one heading: {re.sub(chr(92)+"s+"," ",seg)[:56]}')
+    if k >= 1: handmade += 1; continue
     if re.search(r'`(git grep|grep|awk|sed)\s', seg): continue
     bad('POPULATION-UNCOMMANDED', re.sub(r'\s+', ' ', seg)[:70])
 if seen_marks != pkt.count(MARK):
@@ -379,7 +393,8 @@ listed = re.search(r'\*\*Controls\.\*\* ([\w-]+), each naming', pkt)  # 'Twenty-
 names = set(re.findall(r'`([a-z0-9-]+)`', pkt[pkt.find('**Controls.**'):pkt.find('**Controls.**') + 900]))
 WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twenty',
         21: 'Twenty-one', 22: 'Twenty-two', 23: 'Twenty-three', 24: 'Twenty-four',
-        25: 'Twenty-five', 26: 'Twenty-six', 27: 'Twenty-seven'}
+        25: 'Twenty-five', 26: 'Twenty-six', 27: 'Twenty-seven', 28: 'Twenty-eight',
+        29: 'Twenty-nine', 30: 'Thirty'}
 if not listed:
     bad('CONTROL-PROSE-MISSING', 'no "**Controls.** <N>, each naming" sentence')
 elif listed.group(1) != WORD.get(len(CONTROLS), '?'):
