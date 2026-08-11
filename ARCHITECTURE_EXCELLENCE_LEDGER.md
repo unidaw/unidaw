@@ -518,6 +518,11 @@ normative, `/4` active-open arithmetic permits closed+withdrawn overlap and
 bare-substring state spoofing, and R15/item36 still says “forever.” G2-A/B,
 G3 N/Watchdog, G0-A/B, G4, and sweep proof/docs remain blocked.
 
+Owner successor `482c9c2` claims the R15 “forever”/ID overclaims were narrowed
+and sweep consequential details were bound to the actual emitter (with drifted
+regex/count prose deleted). Exact review is pending; item37/G3 acceptance,
+manifest-state/schema closure, and G2/G0/G4 decisions remain gated.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
