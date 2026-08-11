@@ -141,6 +141,7 @@
   "orphan-number",
   "out-member-stale",
   "out-writer-moved",
+  "ratchet-count",
   "raw-without-cmd",
   "restate-blockers",
   "restate-census",
@@ -166,7 +167,7 @@
  "counts": {
   "blocking": 5,
   "closed": 8,
-  "controls": 57,
+  "controls": 58,
   "hand_ruled": 13,
   "items": 32,
   "open": 24,
@@ -737,7 +738,7 @@
   },
   {
    "blocking": false,
-   "body": "30. **G2-A** — **RULED (R10): the wiring is DEAD, the hazard is REAL, and they are separate work.** Remove the unused `requireMatchingClipVersion` member from `UndoCommandDeps`; separately, undo replaces the whole document via `applyDocument`, so an edit made between a user's view and their undo is silently reverted, and covering that needs a DOCUMENT-level version which does not exist. Deleting the wiring must not read as dismissing the risk. Originally: the undo path holds an arbiter it never calls, measured by claude-worker-1 at the frozen product with TYPE-LEVEL evidence rather than a call-site census, which is the only kind that can see it: `engine_undo_commands.h:38` declares the clip arbiter as a `std::function` member and `engine_undo_commands.cpp` contains ZERO occurrences of the name. Undo and Redo mutate clips and are wired to receive the per-track optimistic-concurrency gate without consulting it. **The absence IS the finding**, so no census over call sites can produce it. Whether this is dead wiring or missing arbitration is an owner call I have NOT made, and item 27's scope cannot close until it is: the arbitrated set is 9 by call and 9-or-11 by intent depending on the answer.",
+   "body": "30. **G2-A** — **RULED (R10): the wiring is DEAD, the hazard is REAL, and they are separate work.** Remove the unused `requireMatchingClipVersion` member from `UndoCommandDeps`; separately, undo replaces the whole document via `applyDocument`, so an edit made between a user's view and their undo is silently reverted, and covering that needs a DOCUMENT-level version which does not exist. Deleting the wiring must not read as dismissing the risk. Originally: the undo path holds an arbiter it never calls, measured by claude-worker-1 at the frozen product with TYPE-LEVEL evidence rather than a call-site census, which is the only kind that can see it: `engine_undo_commands.h:38` declares the clip arbiter as a `std::function` member and `engine_undo_commands.cpp` contains ZERO occurrences of the name. Undo and Redo mutate clips and are wired to receive the per-track optimistic-concurrency gate without consulting it. **The absence IS the finding**, so no census over call sites can produce it. **That tail is SUPERSEDED TWICE and is kept as history.** It said the dead-wiring question was an owner call I had not made and that item 27's scope could not close until it was — R10 made the call (dead wiring, removed separately from the hazard) and R12 authored item 27's scope without reference to the arbitrated set at all, because the gate ranges over the EMIT sites. So the sentence describing what blocks item 27 outlived both the ruling that answered it and the ruling that made it irrelevant. **A dependency between items is a claim like any other and goes stale like any other**, and this one survived two rulings because nothing re-reads a sentence that merely says what is blocked on what.",
    "closed": false,
    "gate": "G2-A",
    "line": 1893,
@@ -746,10 +747,10 @@
   },
   {
    "blocking": false,
-   "body": "31. **all** — **The pointer-helper RATCHET, and it must pin the GENERAL population, not G4's subset.** The completeness argument rests on a closed set of functions returning a plane pointer. A ratchet pinned at \"two OUT-PLANE helpers\" would have to decide which plane a NEW helper serves, and the only thing available to decide that is its NAME — the selector defect reappearing inside the guard built against it; a `safeAudioAuxPtr` would be classified by spelling. **Pin instead: every `float*`-returning function or lambda in non-test `apps/` that reaches a segment base — exactly FOUR at this SHA** (`audio_shm.cpp:5`, `:17`, `engine_produce_block.cpp:861`, `:848`). That predicate needs no judgement about planes, so a fifth of ANY name or plane turns it red and a person decides. Negative control: add a fifth and it must fire; RENAME an existing one and it must NOT, because the count is over structure. **It belongs with the LayoutSpec work in constraint 1, not inside either gate**, because G1-A's input-plane writers and G4's out-plane readers share this ratchet without sharing a population.",
+   "body": "31. **all** — **The pointer-helper RATCHET, and it must pin the GENERAL population, not G4's subset.** The completeness argument rests on a closed set of functions returning a plane pointer. A ratchet pinned at \"two OUT-PLANE helpers\" would have to decide which plane a NEW helper serves, and the only thing available to decide that is its NAME — the selector defect reappearing inside the guard built against it; a `safeAudioAuxPtr` would be classified by spelling. **Pin instead: every `float*`-returning function or lambda in non-test `apps/*.cpp` that reaches a segment base.** The ratchet holds at **four** at this SHA (`audio_shm.cpp:5`, `:17`, `engine_produce_block.cpp:848`, `:861`) and is now EXECUTED rather than described (`RATCHET-DRIFT`): A.0 runs the predicate against the pinned tree, compares the sites AND the fingerprint of each line, and compares the count against the word in this sentence. It was prose in every SHA before this one — a ratchet that is only written down is a ratchet that has never been pulled. The `.h` declarations are excluded because a declaration returns no pointer; the predicate is over definitions. That predicate needs no judgement about planes, so a fifth of ANY name or plane turns it red and a person decides. Negative control: add a fifth and it must fire; RENAME an existing one and it must NOT, because the count is over structure. **It belongs with the LayoutSpec work in constraint 1, not inside either gate**, because G1-A's input-plane writers and G4's out-plane readers share this ratchet without sharing a population.",
    "closed": false,
    "gate": "all",
-   "line": 1908,
+   "line": 1913,
    "n": 31,
    "title": "**The pointer-helper RATCHET, and it must pin the GENERAL population, not G4's"
   },
@@ -758,7 +759,7 @@
    "body": "32. **G2-A** — **RULED (R11).** `commandMutatesDocument(Undo)` returns FALSE with the comment \"no document state\" (`engine_command_mutates.h:58`) while `handleUndo` calls `applyDocument` and replaces the entire `ProjectDocument`. The classifier answers \"does this command CARRY document state in its payload\"; its NAME asks \"does it MUTATE the document\"; and G2-A's arbitrated population is derived from it. A predicate this gate depends on is inconsistent with the behaviour it names, which is a defect in the predicate and not in its wording.",
    "closed": false,
    "gate": "G2-A",
-   "line": 1921,
+   "line": 1931,
    "n": 32,
    "title": "**RULED (R11).** `commandMutatesDocument(Undo)` returns FALSE with the comment \"no"
   }

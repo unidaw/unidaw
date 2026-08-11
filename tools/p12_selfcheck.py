@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'b256a3a55b8a876dafeda3bb6ef8ce9dd0148cea'
+PREV_TIP     = '698bc14f50fe93f8a8210f80756ce5d8723cfd13'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -124,6 +124,21 @@ OUT_WRITERS = [
       ('apps/juce_host_process_main.cpp', 956, '8f93a108b7'),
       ('apps/juce_host_process_main.cpp', 989, '099d86a863'),
 ]
+
+# Item 31's ratchet, which was prose in every previous SHA. The population is every float*-returning
+# function or lambda in non-test apps/*.cpp that reaches a segment base — a predicate needing no
+# judgement about WHICH plane a helper serves, which is the point: a ratchet pinned at "two out-plane
+# helpers" would have to classify a new `safeAudioAuxPtr` by its NAME, the selector defect
+# reappearing inside the guard built against it. A fifth of any name or plane turns this red.
+RATCHET_MEMBERS = [
+      ('apps/audio_shm.cpp', 5, '6ec2e4e656'),
+      ('apps/audio_shm.cpp', 17, 'f0edf0b76f'),
+      ('apps/engine_produce_block.cpp', 848, '8e2f057898'),
+      ('apps/engine_produce_block.cpp', 861, '8234dc3008'),
+]
+
+WORDNUM = {'ONE': 1, 'TWO': 2, 'THREE': 3, 'FOUR': 4, 'FIVE': 5, 'SIX': 6, 'SEVEN': 7,
+           'EIGHT': 8}
 
 fail = []
 def bad(tag, detail): fail.append(f'[{tag}] {detail}')
@@ -323,6 +338,10 @@ CONTROLS = {
                       ' heading is deliberately written past any fixed character cap a parser might apply'
                       ' to it, so that a truncating extractor emits a null decision here.**', 1,
                       'MANIFEST-STALE'),
+ # item 31's ratchet, which was prose in every SHA before this one. Its whole purpose is to fire
+ # when a FIFTH pointer-returning helper appears, so the control states the count wrong instead.
+ 'ratchet-count':    ('ratchet holds at **four** at this SHA', 'ratchet holds at **five** at this SHA', 1,
+                      'RATCHET-DRIFT'),
  'dep-self':         ('**Dependencies** G0-A, G0-B', '**Dependencies** G0-A, G0-B, G4', 1,
                       'GATE-DEP-CYCLE'),
  # the spoof: a command that reads NOTHING and prints a triple the roster expects
@@ -600,6 +619,28 @@ else:
     stray = [c for c in cited if c not in pinned and c - 1 not in pinned and c + 5 not in pinned]
     if stray:
         bad('OUT-MEMBERS', f'writer citations name {stray}, which the roster does not pin')
+
+# ---- 2e3. the pointer-helper ratchet: executed, not described ---------------------------------
+RATCHET_CMD = ["git", "grep", "-n", "-E", r'^float\* [a-zA-Z_]+\(|-> float\* \{$', "--", "apps/*.cpp"]
+_rc = subprocess.run(RATCHET_CMD, cwd=pin, capture_output=True, text=True)
+_got = sorted((m.group(1), int(m.group(2)))
+              for m in re.finditer(r'(?m)^([^:\n]+):(\d+):', _rc.stdout))
+_want = sorted((p_, l) for p_, l, _ in RATCHET_MEMBERS)
+if _got != _want:
+    bad('RATCHET-DRIFT', f'pointer-returning helpers are {_got}, the packet pins {_want} — a fifth '
+                         f'of any name or plane extends the completeness argument and must be ruled on')
+for path, line, fp in RATCHET_MEMBERS:
+    try:
+        txt = open(os.path.join(pin, path)).read().splitlines()[line - 1].strip()
+    except (IOError, IndexError):
+        bad('RATCHET-DRIFT', f'{path}:{line} does not exist at the pin'); continue
+    if hashlib.sha1(txt.encode()).hexdigest()[:10] != fp:
+        bad('RATCHET-DRIFT', f'{path}:{line} has drifted: {txt[:44]!r}')
+_declared = re.search(r'ratchet holds at \*\*(\w+)\*\* at this SHA', pkt)
+if not _declared:
+    bad('RATCHET-DRIFT', 'item 31 states no ratchet count to check')
+elif WORDNUM.get(_declared.group(1).upper()) != len(RATCHET_MEMBERS):
+    bad('RATCHET-DRIFT', f'item 31 says {_declared.group(1)}, the roster pins {len(RATCHET_MEMBERS)}')
 
 # ---- 2f. a ruling names an item, and that mapping was unbound in both directions --------------
 # codex-worker-1 changed R10's "item 30" to "item 29" and it passed. The OPEN-REF checks match
@@ -1153,7 +1194,6 @@ if len(constraints) != 4:
 for vc in VERSION_COUNTERS:
     if vc not in pkt:
         bad('VERSION-COUNTER-ABSENT', f'{vc} is named in the manifest and not in the packet')
-WORDNUM = {'ONE': 1, 'TWO': 2, 'THREE': 3, 'FOUR': 4, 'FIVE': 5, 'SIX': 6, 'SEVEN': 7, 'EIGHT': 8}
 # the prose names the blocking items; the manifest derives them. A count agreeing while the SET
 # differs is the failure this catches — my last commit message said 8 where the derivation says 6.
 prose_blk = re.search(r'(\w+) are BLOCKING — ([0-9, and]+)\.', pkt)

@@ -1438,7 +1438,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `1263d00d72c4754632bfb3463ab4790eccd18325`, A.0 SCRIPT BLOB `9b3e43952c77925c7f1bc5510c06be56ffcdc891`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `0714a2fba6b35df11557056de78b54e48aed3f6b`, A.0 SCRIPT BLOB `bca4b2aca88daf11c575c2787758ed5c65261f85`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1496,14 +1496,14 @@ back to: A.0's "what it does not decide" list is the exact place where a stale s
 what has been settled.)
 And nothing about the product beyond what a text search can see.
 
-**Controls.** Fifty-seven, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Fifty-eight, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
-`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`. The last twenty-three exist because
+`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`, `ratchet-count`. The last twenty-four exist because
 **codex-worker-1** MUTATED THIS PACKET AND THE GATE STILL SAID PASS (the finding reached me relayed
 by backend, and two commit messages in this lineage credit the relay rather than the author —
 `e26f91f` and `c332c03`, immutable and wrong on this point): deleting the item's reopening sentence,
@@ -1901,18 +1901,28 @@ carrying one cannot be decided by any implementation.
     `std::function` member and `engine_undo_commands.cpp` contains ZERO occurrences of the name.
     Undo and Redo mutate clips and are wired to receive the per-track optimistic-concurrency gate
     without consulting it. **The absence IS the finding**, so no census over call sites can produce
-    it. Whether this is dead wiring or missing arbitration is an owner call I have NOT made, and
-    item 27's scope cannot close until it is: the arbitrated set is 9 by call and 9-or-11 by intent
-    depending on the answer.
+    it. **That tail is SUPERSEDED TWICE and is kept as history.** It said the dead-wiring question was an
+    owner call I had not made and that item 27's scope could not close until it was — R10 made the
+    call (dead wiring, removed separately from the hazard) and R12 authored item 27's scope without
+    reference to the arbitrated set at all, because the gate ranges over the EMIT sites. So the
+    sentence describing what blocks item 27 outlived both the ruling that answered it and the ruling
+    that made it irrelevant. **A dependency between items is a claim like any other and goes stale
+    like any other**, and this one survived two rulings because nothing re-reads a sentence that
+    merely says what is blocked on what.
 
 31. **all** — **The pointer-helper RATCHET, and it must pin the GENERAL population, not G4's
     subset.** The completeness argument rests on a closed set of functions returning a plane
     pointer. A ratchet pinned at "two OUT-PLANE helpers" would have to decide which plane a NEW
     helper serves, and the only thing available to decide that is its NAME — the selector defect
     reappearing inside the guard built against it; a `safeAudioAuxPtr` would be classified by
-    spelling. **Pin instead: every `float*`-returning function or lambda in non-test `apps/` that
-    reaches a segment base — exactly FOUR at this SHA** (`audio_shm.cpp:5`, `:17`,
-    `engine_produce_block.cpp:861`, `:848`). That predicate needs no judgement about planes, so a
+    spelling. **Pin instead: every `float*`-returning function or lambda in non-test `apps/*.cpp` that
+    reaches a segment base.** The ratchet holds at **four** at this SHA (`audio_shm.cpp:5`, `:17`,
+    `engine_produce_block.cpp:848`, `:861`) and is now EXECUTED rather than described
+    (`RATCHET-DRIFT`): A.0 runs the predicate against the pinned tree, compares the sites AND the
+    fingerprint of each line, and compares the count against the word in this sentence. It was prose
+    in every SHA before this one — a ratchet that is only written down is a ratchet that has never
+    been pulled. The `.h` declarations are excluded because a declaration returns no pointer; the
+    predicate is over definitions. That predicate needs no judgement about planes, so a
     fifth of ANY name or plane turns it red and a person decides. Negative control: add a fifth and
     it must fire; RENAME an existing one and it must NOT, because the count is over structure.
     **It belongs with the LayoutSpec work in constraint 1, not inside either gate**, because G1-A's
