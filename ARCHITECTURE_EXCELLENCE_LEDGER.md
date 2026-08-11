@@ -546,6 +546,13 @@ withdrawn tail remains normative-looking. R15 still contradicts the real
 host-drop/relaunch path and retains the permanent-gating claim. G2-A/B, G3
 N/Watchdog, G0-A/B, G4, and malformed-bracket sweep/doc drift remain.
 
+Owner successor `0c65b54` retracts R15's false absence claim after confirming
+the real send-failure drop/restart path, restores M1 (or equivalent) as owed,
+and marks G3 blocked on instrumentation. It also claims strict emitter-shaped
+sweep matching, set-derived `active_open`, stale-docstring removal, and removal
+of the permanent-gating phrase. Exact review is pending; mixed item37
+packet/product representation and carried gate decisions remain gated.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
