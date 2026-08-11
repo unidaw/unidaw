@@ -16,7 +16,7 @@ the PROMISE about the content was left standing. Abridging is legitimate; abridg
 claim is not, and the two must move in the same edit. A dangling reference to a "gate table" that was
 never written is the same error's fingerprint.
 
-Six blockers from the exact review are reconciled here:
+The blockers from the exact review are reconciled here, and the count is deliberately not restated: it moved between rounds and a fixed number here would be a twin of the item list, which is the authority:
 
 1. **The per-gate record contract is met in FORM for all eight gates, and three gates have no
    POPULATION to put in it.** G1-B declares none (item 11), G2-A's scope is falsified and unreplaced
@@ -123,7 +123,7 @@ observable from a return value, so (d) is decided statically.
 - *Raw region derivations outside any validator* — RAW 13 (`grep -rn -e '>audioInOffset' -e '>audioOutOffset' -e '>ringStdOffset' -e '>ringCtrlOffset' -e '>mailboxOffset' -e auxOutputPlaneOffset -e hostKeyRingOffset apps/ | grep -v _tests_main | grep -v juce_host_process_main | grep -v engine_ui_shm | grep -v audio_shm | grep -v shared_memory | grep -v uiShm`) returns 13 with the exclusions carried INSIDE the
   pipeline (the predecessor said 12, and stated the exclusions in prose beside a command that did
   not apply them) → minus 1, `apps/ipc_protocol.h:46`, which is a COMMENT naming `hostKeyRingOffset`
-  and not a derivation → **12 executable derivations**. A grep over source text cannot tell a
+  and not a derivation → **12 executable derivations**. ⟂ A grep over source text cannot tell a
   mention in a comment from the code it describes, and comments are where the warnings about the
   code live, so a text census will always over-count in exactly the place the code is most carefully
   documented.
@@ -339,13 +339,13 @@ CONFORMS to obligation (b) while committing the defect.
 → IN SCOPE, because a bare figure that is a hand-classified subset of its own command is not
 reproducible, and four populations in the predecessor were exactly that.
 - *Rings* — RAW 17 (`grep -rnF '>capacity' apps/ | grep '=' | grep -v '=='`) → minus 9 non-ring and
-  test-fixture assignments → **8**.
+  test-fixture assignments → **8**. ⟂
 - *Statements interpreting an entry's bytes as data* — RAW 23 EXPRESSIONS
   (`grep -roF 'entries[' apps/`). The line census `grep -rnF` returns 21 because
   `plugin_cache.cpp:460` and `:492` each carry TWO accesses, and this population is named in
   STATEMENTS, so the unit is the expression and not the line.
   → minus 19 (fourteen plugin-cache index sites, which are a DIFFERENT `entries` array, and five ready-flag
-  operations, which touch a synchronisation field rather than the entry's data) → **4**:
+  operations, which touch a synchronisation field rather than the entry's data) → **4** ⟂:
   `event_ring.cpp:95` (`entries[write] = staged`), `:116` and `:163` (`entry = entries[read]`), and
   `device_chain_ui_live_tests_main.cpp:112`, which is a test — so **3 production**. The five excluded
   flag operations are `:96`, `:109`, `:126`, `:138`, `:149`, all `storeReady`/`loadReady` on
@@ -362,10 +362,10 @@ reproducible, and four populations in the predecessor were exactly that.
   returns 4, and appending `| grep -v _tests_main` returns 3. A rule stated beside a command is a
   claim about a classification; a rule stated inside one is the classification.
   The ring filter is in the rule, not implied: without it this population measures the wrong set.
-- *Read-cursor stores* — RAW **14** (`grep -rn -e readIndex.store -e read_index.store apps/ ui/`) → minus 10 non-ring and test stores → **4**. The predecessor printed this command beside the figure 4, which
+- *Read-cursor stores* — RAW **14** (`grep -rn -e readIndex.store -e read_index.store apps/ ui/`) → minus 10 non-ring and test stores → **4**. ⟂ The predecessor printed this command beside the figure 4, which
   the command does not produce.
 - *Plugin-cache index sites, which are NOT ring sites* — RAW 23 (`grep -roF 'entries[' apps/`)
-  → minus 9 event-ring statements → **14 expressions across 12 lines**. These twelve are the
+  → minus 9 event-ring statements → **14 expressions across 12 lines**. ⟂ These twelve are the
   plugin-cache reads and are NOT the population PASS 7 and S4 range over; the RING index sites are
   the separate authored population below. The twelve are: `plugin_cache.cpp:388/:460/:469/:478/:492`,
   `engine_chain_commands.cpp:81`, `engine_save_project.cpp:265/:362`, `daw_engine_main.cpp:291/:1078`,
@@ -582,7 +582,7 @@ The nine were: `WriteNote`, `DeleteNote`, `WriteChord`, `DeleteChord`, `RevertPl
 `SetAutomationTarget`, `SetClipText`, `WriteHarmony`, `DeleteHarmony`. RAW 17
 (`grep -rn -e 'requireMatchingClipVersion(' -e 'requireMatchingHarmonyVersion(' apps | grep -v tests_main`)
 → minus 8 (three definitions, three declarations, and the two `daw_engine_main.cpp` lambda forwarders
-at `:1739` and `:1744`) → **9 call sites**. The predecessor described this command in prose instead of
+at `:1739` and `:1744`) → **9 call sites**. ⟂ The predecessor described this command in prose instead of
 printing one, so its 9 could not be re-run. The nine COMMANDS map onto the nine sites non-bijectively
 — the chord site carries both `WriteChord` and `DeleteChord` through a runtime-computed type — so the
 correspondence is established by the Floor paragraph below, not by this arithmetic.
@@ -597,7 +597,7 @@ require inventing emit sites the code says do not exist. *Terminal refusal recor
 returns 3) plus 2 refusal journal lines. *Correlator call sites* — RAW 56 mentions
 (`grep -rn -e await_clip_outcome -e report_outcome_from -e report_refusal_outcome -e refused_or ui/daw-cli/src ui/daw-agent/src`)
 → minus 5 (four `fn` definitions, and the doc comment at `ui/daw-cli/src/main.rs:1262` that names
-`await_clip_outcome` in prose) → **51 call sites**, which is 4 + 6 + 17 + 24 exactly as the exact
+`await_clip_outcome` in prose) → **51 call sites** ⟂, which is 4 + 6 + 17 + 24 exactly as the exact
 review stated. This gate no longer carries that number on attribution: the command above reproduces
 it, and re-deriving it is what showed my own competing figure of 56 to be a MENTION count — the
 predicate was mine, not an arithmetic error of the reviewer's. The predecessor said 40; my 40 was a subtraction
@@ -700,7 +700,7 @@ copy is the only referent that exists, because the guard is released at `:1114` 
 loop runs at `:1116-1124` under `controllerMutex` alone, so the chain can change across the gap.
 MECHANISM: `hostReady` is release-published only after all three are staged and acknowledged.
 
-**Population.** *`hostReady` publish sites* — RAW 4 (`grep -rn 'hostReady' apps | grep 'store(true'`) → minus 1 in `_tests_main` → **3 production**: `engine_restart_worker.cpp:87` (the site under gate),
+**Population.** *`hostReady` publish sites* — RAW 4 (`grep -rn 'hostReady' apps | grep 'store(true'`) → minus 1 in `_tests_main` → **3 production** ⟂: `engine_restart_worker.cpp:87` (the site under gate),
 `engine_track_setup.cpp:62` and `engine_track_setup.cpp:403`. All three are named because the
 predecessor's "and one other" left a member of an exact population unidentified. The predecessor also
 said "exactly 4", counting `engine_track_setup_tests_main.cpp:52`. *`controllerMutex` acquisitions in product code* — 28.
@@ -765,11 +765,12 @@ bypass value" without qualifying it as the copy at `:1113`. The reviewer SHALL c
 lands, that mechanism substitution has not voided the gate. The reviewer SHALL classify any NEW
 `hostReady` publish site, which S1 can detect but not judge. **The mirror-ack circularity is RULED (R2: two-level readiness) and the reviewer SHALL confirm the
 propagation rather than choose**, which this paragraph asked for before the ruling existed: the ack arrives only during a
-`ProcessBlock`, which `processTrack` refuses while `hostReady` is false. Either recovery gets a
-priming path that dispatches under an explicit recovery-only exemption, or readiness is staged in two
-levels (mapped-and-bypassed versus mirror-complete) with dispatch permitted at the lower one. Both are
-design decisions with consequences for G4's dispatch identity, and this packet deliberately does not
-choose. **The reviewer SHALL also rule on the self-deadlock**: the fix class this gate admits requires `applyHostBypassStates` to stop taking
+`ProcessBlock`, which `processTrack` refuses while `hostReady` is false. **R2 CHOSE: readiness is staged in two levels**
+(`mapped-and-bypassed` versus `mirror-complete`) with dispatch permitted at the lower one. The
+alternative — a recovery-only priming exemption — is REJECTED and named here so it is not re-proposed
+as though the question were open. This paragraph previously said the packet "deliberately does not
+choose", which was true before R2 and false after it; the option list is retained as the record of
+what was decided against, not as a live choice. **The reviewer SHALL also rule on the self-deadlock**: the fix class this gate admits requires `applyHostBypassStates` to stop taking
 `controllerMutex` at `:1116`, i.e. a caller-holds contract or a lock-passing signature — which the
 predecessor did not state and which is a design decision, not a detail.
 
@@ -801,11 +802,11 @@ engine path, and block production for the remaining tracks must continue.
 `apps/daw_engine_main.cpp:962-969`. *Writes that remove a host from the gate population* — RAW 17
 (`grep -rn 'hostReady' apps/ | grep 'store(false'`) → minus **2** in `_tests_main` → **15
 production** → minus 2 master-track stores (`engine_master_render.cpp:121` and `:132`) → **13 IN
-SCOPE**. This gate's invariant excludes the master bus, so the fifteen came from a wider scope than
+SCOPE**. ⟂ This gate's invariant excludes the master bus, so the fifteen came from a wider scope than
 the gate governs and two of its members are exactly the case the invariant does not cover. Either
 the scope widens or the population is 13; the packet takes 13, because widening a scope is a design
 change and correcting a count is not. The
-whole census is RAW 21 (`grep -rn 'hostReady' apps/ | grep 'store('`) → minus 3 in `_tests_main` → **18 production**. The predecessor subtracted
+whole census is RAW 21 (`grep -rn 'hostReady' apps/ | grep 'store('`) → minus 3 in `_tests_main` → **18 production**. ⟂ The predecessor subtracted
 the same three from the FALSE subset of seventeen, applying the test count of the total population to
 a subset — a count borrowed from one population and spent in another. Its figure is described, not
 restated, for the reason given at the entry-statement population above. *Producer-loop exits* — 12 `continue;`. Command:
@@ -912,10 +913,10 @@ sound rather than merely acknowledged.
 
 **Population.** *Dispatch sites* — RAW 17 (`git grep -n sendProcessBlock`) → minus 14 (8 in test
 mains, 6 non-calls: a design doc, a tools script, a log line, a declaration, a comment and the
-definition) → **3 production**. The predecessor stated the split beside the command instead of as a
+definition) → **3 production**. ⟂ The predecessor stated the split beside the command instead of as a
 subtraction, which put it outside the arithmetic the gate checks. *Out-plane readers* — RAW **27**
 (`grep -rn -e audioOutOffset -e safeAudioOutPtr -e audioOutChannelPtr -e auxOutputPlaneOffset apps/`)
-→ **SELECTION WITHDRAWN.** The figure was 7 production after subtracting twenty, and that
+⟂ → **SELECTION WITHDRAWN.** The figure was 7 production after subtracting twenty, and that
 subtraction has no coherent rule: `engine_consumer.cpp:670` sets `info.planeByteOffset` from
 `audioOutOffset` for a normal track, `:730` sets `child.planeByteOffset` from `auxOutputPlaneOffset`
 for an aux child, both assign THE SAME FIELD consumed by the same callback byte read, and one was
@@ -925,7 +926,7 @@ guesses at one predicate and a fourth would not be better. The raw figure above 
 predecessor said 28).
 The in-scope selection is open item 26 (G4). *Input-plane writers in engine production code* — RAW 13
 (`grep -rn -e audioInOffset -e safeAudioInPtr -e audioInChannelPtr apps/`) → minus 11 (tests,
-declarations and reads) → **2**.
+declarations and reads) → **2**. ⟂
 
 **Floor.** Dispatch sites floor 3: `rg` finds every syntactic call but is blind to a dispatch through
 a function pointer. The WRITER census is a floor of 2 for the same reason plus helper indirection. There is no
@@ -1027,7 +1028,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `43c3755bc9a65c86f0e6cd5479dff8db713f5014`, A.0 SCRIPT BLOB `acddb28eb170e017a7669e339287ff6347595c38`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `712715f2bc1c37700dc49938e1b8d86eae88cb02`, A.0 SCRIPT BLOB `dfcacc261a060389520e2e294b56683862537ffc`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1067,13 +1068,13 @@ there, not from the document. Whether a rename is the right resolution for open 
 names differ and cannot choose which side moves.
 And nothing about the product beyond what a text search can see.
 
-**Controls.** Twenty-three, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Twenty-four, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
-`byhand-count`, `control-unlisted`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
+`byhand-count`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
 `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`. Two of them were themselves defective when first
 written and are recorded here rather than quietly fixed: `raw-without-cmd` changed a claim's NUMBER
 and so provoked a different check entirely, and the landing assertion demanded the anchor count DROP,
@@ -1097,10 +1098,10 @@ invalidates the authored list instead of silently outdating it. For G1-B that de
 `grep -rn 'pub fn read_' ui/daw-bridge/src/control.rs` returns 21; if it ever returns anything else,
 the authored list is stale by construction and the gate fails until it is re-authored.
 This is weaker than a derivation and stronger than what preceded it, which was a hand selection
-presented as a population. It also matches what the packet already does for the five
+presented as a population. It also matches what the packet already does for the
 hand-classified populations, so the two items resolve on one mechanism rather than two.
 **NOT YET APPLIED, and the ruling does not pretend otherwise.** G1-B still declares NO population
-and item 25's five categories carry no member lists and no detectors — the ruling states the
+and item 25's categories carry no member lists and no detectors — the ruling states the
 mechanism, and writing the lists is work that has not been done at this SHA. The reviewer found
 this by reading R1 against the gates rather than against itself, which is the right test and one I
 did not run: I wrote "the packet lists the members explicitly" in the same commit in which it did
@@ -1129,8 +1130,10 @@ would be inventing a rate. So N is a design constant: **a host must fail to adva
 consecutive observations before eviction, and 3N = 9 observations of absence**. The constraint the
 value must satisfy is stated so a successor can rule differently on evidence: N observations must
 be long enough to survive ordinary scheduling jitter and strictly shorter in wall-clock than the
-existing hard timeout, so containment happens before the blunt instrument fires. A static check
-pins the literal, so changing N is a visible edit rather than a drift. **Per backend's direction at
+existing hard timeout, so containment happens before the blunt instrument fires. **No static check pins the literal at this SHA**, and one is
+required: without it N = 3 lives only in this prose and a change to the implementation would not be
+visible to any gate. That check is part of item 19's ticket, and the packet says the check is absent
+rather than describing it as though it exists. **Per backend's direction at
 this SHA**, R3 makes G3 decidable FOR IMPLEMENTATION PLANNING in the same way R1 does for the
 authored populations: N = 3 is an authored parameter, not a derived fact, and the work it implies is
 a ticket — pin N with its units and semantics, instrument the production watchdogs, define drift and

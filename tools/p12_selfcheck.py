@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '5f9521af8cd3ae8b7d8b44c2fc13a5b14b954306'
+PREV_TIP     = '265c720344f2d47e530e2586100e398dad5786bd'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -108,6 +108,8 @@ CONTROLS = {
                       'POPULATION-UNCOMMANDED'),
  'handmade-count':   ('**6 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
                       'HANDMADE-COUNT'),
+ 'no-terminator':    ('→ **12 executable derivations**. \u27c2', '→ **12 executable derivations**.', 1,
+                      'RAW-NO-TERMINATOR'),
  'byhand-count':     ('12 of them apply their RULE BY HAND', '10 of them apply their RULE BY HAND', 1,
                       'BYHAND-COUNT'),
  'control-unlisted': ('`wrong-raw`.', '`wrong-ray`.', 1, 'CONTROL-UNLISTED'),
@@ -200,16 +202,25 @@ raw_pos = [m.start() for m in re.finditer(r'RAW \*{0,2}\d+', pkt)]
 # Token-to-next-token spans ran for hundreds of lines, so a `minus` and a `→` from unrelated prose
 # could satisfy a claim that states neither — a span that large is as much a proxy as the window
 # it replaced.
-def claim_end(a, hard):
-    ends = [pkt.find('\n\n', a), pkt.find('\n- ', a + 1), pkt.find('\n* ', a + 1)]
-    ends = [e for e in ends if e != -1] + [hard]
-    return min(hard, min(ends))
-spans = [(raw_pos[i], claim_end(raw_pos[i], raw_pos[i + 1] if i + 1 < len(raw_pos) else len(pkt)))
-         for i in range(len(raw_pos))]
+# EXPLICIT TERMINATORS, not a heuristic. Three successive bounds were wrong in three different
+# directions (220-char window, token-to-token, bullet-bounded), each moving the error rather than
+# removing it. A claim now declares where it ends with U+27C2 and a claim without one FAILS: a
+# parser that has to guess where prose stops will keep being wrong in a new way.
+spans = []
+for i, a in enumerate(raw_pos):
+    hard = raw_pos[i + 1] if i + 1 < len(raw_pos) else len(pkt)
+    t = pkt.find('\u27c2', a)
+    if t == -1 or t > hard:
+        bad('RAW-NO-TERMINATOR', re.sub(r'\s+', ' ', pkt[a:a + 60]))
+        spans.append((a, a))            # empty span: it cannot satisfy anything
+    else:
+        spans.append((a, t))
 byhand, checked = 0, 0
 for a, b in spans:
     seg = pkt[a:b]
-    n = int(re.match(r'RAW \*{0,2}(\d+)', seg).group(1))
+    head = re.match(r'RAW \*{0,2}(\d+)', seg)
+    if not head: continue          # empty span: RAW-NO-TERMINATOR already fired for it
+    n = int(head.group(1))
     minus = [int(x) for x in re.findall(r'minus \*{0,2}(\d+)', seg)]
     if not minus: continue
     byhand += 1
