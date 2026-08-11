@@ -1193,6 +1193,16 @@ not throughout the segment.
       cross-agent byte-consuming reads   claims 7 — floor, name-reachable addressing only — `git grep -n -E 'safeAudioOutPtr\(blockIndex|audioOutChannelPtr\(' apps/engine_produce_block.cpp apps/juce_host_process_main.cpp apps/engine_master_render.cpp | wc -l` returns 4.
       host byte-producing writes         claims 8 — SUPERSET, includes addressing, zero-fills and the `:834` self-read — `git grep -n -E 'outputPtrs\[ch\]|auxOutputPtrs\[ch\]' apps/juce_host_process_main.cpp | wc -l` returns 13.
 
+**THE TWO HAND-CLASSIFIED ROWS ARE PINNED BY MEMBER, not by selector.** No command derives the
+seven readers or the eight writers — that is what makes them hand-classified — but each member is
+CITED in this document, and a citation can be pinned even where a selector cannot. A.0 holds both
+lists as (path, line, fingerprint of that line) and checks them against the product, and requires
+the reader table above to cite exactly the seven. So a citation that goes stale against the pin
+FAILS rather than ageing quietly into decoration, and the table and the roster cannot drift apart
+the way the prose and the census did. What is still not checkable is whether the seven are the RIGHT
+seven; that is the judgement the HAND-CLASSIFIED marker declares, and no amount of pinning converts
+a judgement into a derivation.
+
 **EVERY ROW IS BOUND TWICE, and neither binding lives in this file.** A.0 holds a roster of
 (relation, role) → (member line numbers, claimed count) and requires the parsed rows to equal it
 exactly: no row missing, none extra, none duplicated, no claim altered, and **each row's command
@@ -1418,7 +1428,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `c6058cc124e07713e18aed7814847f92f4581dce`, A.0 SCRIPT BLOB `9677c41ff163353e869667b4908f96a00684eb0c`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `a53601d673da1ca013db3a2e08bc22875c43a042`, A.0 SCRIPT BLOB `8a60d8cfb13d6f678bc512f6fa69238d85123b4b`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1476,14 +1486,14 @@ back to: A.0's "what it does not decide" list is the exact place where a stale s
 what has been settled.)
 And nothing about the product beyond what a text search can see.
 
-**Controls.** Forty-eight, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Forty-nine, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
-`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`. The last fourteen exist because
+`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`. The last fifteen exist because
 **codex-worker-1** MUTATED THIS PACKET AND THE GATE STILL SAID PASS (the finding reached me relayed
 by backend, and two commit messages in this lineage credit the relay rather than the author —
 `e26f91f` and `c332c03`, immutable and wrong on this point): deleting the item's reopening sentence,

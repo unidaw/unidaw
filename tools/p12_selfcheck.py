@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'e5f9b4c6fb4744b7bb1d028baa4a2e6b830c44f4'
+PREV_TIP     = 'e84a1f7e1913b2a9f33dddbc87538608615c9ec9'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -99,6 +99,31 @@ CENSUS_ROSTER = {
       ('apps/juce_host_process_main.cpp', 1015, 'f2d0b8495a'),
   ]),
 }
+
+# The two OUT rows are hand-classified, so no command derives their members — but the members are
+# CITED in the packet's own tables, and a citation can be pinned even when a selector cannot.
+# codex-worker-1: "OUT roster pins proxy selector matches, not actual 7/8 members". Correct. These
+# are the actual members, with the fingerprint of the line each names, so a citation that goes stale
+# against the product fails instead of aging quietly into decoration.
+OUT_READERS = [
+      ('apps/engine_produce_block.cpp', 923, '1e4f86c7f1'),
+      ('apps/engine_produce_block.cpp', 1030, 'f0bfb74eb2'),
+      ('apps/engine_produce_block.cpp', 1112, '6c42a8d7a5'),
+      ('apps/engine_produce_block.cpp', 1150, 'bf2344301e'),
+      ('apps/engine_master_render.cpp', 100, '4991667fa0'),
+      ('apps/engine_consumer.cpp', 766, 'b9cc84f346'),
+      ('apps/engine_audio_callback.h', 448, '9186a80c34'),
+]
+OUT_WRITERS = [
+      ('apps/juce_host_process_main.cpp', 664, '372911ff1e'),
+      ('apps/juce_host_process_main.cpp', 686, 'b0d8bdd2f3'),
+      ('apps/juce_host_process_main.cpp', 719, 'fdbf815b7c'),
+      ('apps/juce_host_process_main.cpp', 725, 'cf65d84dd4'),
+      ('apps/juce_host_process_main.cpp', 925, 'be1ff5e934'),
+      ('apps/juce_host_process_main.cpp', 952, '8f93a108b7'),
+      ('apps/juce_host_process_main.cpp', 956, '8f93a108b7'),
+      ('apps/juce_host_process_main.cpp', 989, '099d86a863'),
+]
 
 fail = []
 def bad(tag, detail): fail.append(f'[{tag}] {detail}')
@@ -269,6 +294,10 @@ CONTROLS = {
  'ruling-item-swap': ('**R10 — item 30 (G2-A)', '**R10 — item 29 (G2-A)', 1, 'RULING-ITEM-BIND'),
  # codex-worker-1's graph mutations: an unknown gate id and a cycle, both of which propagated
  # nothing and read as a satisfied closure.
+ # the hand-classified half: a member citation that goes stale against the product, and a reader
+ # table that disagrees with the pinned members. codex-worker-1 asked for exactly these two.
+ 'out-member-stale': ('    6  engine_consumer.cpp:766', '    6  engine_consumer.cpp:767', 1,
+                      'OUT-MEMBERS'),
  'dep-unknown':      ('**Dependencies** G0-A, G0-B', '**Dependencies** G0-A, G9-A', 1,
                       'GATE-DEP-UNKNOWN'),
  # binds the roster to CONTENT, not to an address: this points the row at a different file whose
@@ -467,6 +496,27 @@ for m in re.finditer(r'(?:items?|block)[^.\n]{0,40}?\((\d{1,2}(?:, \d{1,2}){2,}(
     got = sorted(int(x) for x in re.findall(r'\d+', m.group(1)))
     if got != _derived_blk:
         bad('BLOCKER-SET-RESTATED', f'{m.group(1)!r} vs derived {_derived_blk}')
+
+# ---- 2e2. the hand-classified OUT members: pinned to the product, and to the packet's own table --
+for label, members, n in [('readers', OUT_READERS, 7), ('writers', OUT_WRITERS, 8)]:
+    if len(members) != n:
+        bad('OUT-MEMBERS', f'{label} roster holds {len(members)}, the row claims {n}')
+    for path, line, fp in members:
+        try:
+            txt = open(os.path.join(pin, path)).read().splitlines()[line - 1].strip()
+        except (IOError, IndexError):
+            bad('OUT-MEMBERS', f'{path}:{line} does not exist at the pin'); continue
+        if hashlib.sha1(txt.encode()).hexdigest()[:10] != fp:
+            bad('OUT-MEMBERS', f'{path}:{line} has drifted: {txt[:44]!r}')
+# and the packet's reader table must cite exactly those seven, so the table and the roster cannot
+# disagree the way the prose and the census did
+tbl = sorted((m.group(2), int(m.group(3))) for m in
+             re.finditer(r'(?m)^    ([1-7])  (\S+?):(\d+)', pkt))
+want = sorted((os.path.basename(p_), l) for p_, l, _ in OUT_READERS)
+if tbl and tbl != want:
+    bad('OUT-MEMBERS', f'reader table cites {tbl}, roster pins {want}')
+elif not tbl:
+    bad('OUT-MEMBERS', 'no reader table rows parsed — an extraction returning nothing is not a table')
 
 # ---- 2f. a ruling names an item, and that mapping was unbound in both directions --------------
 # codex-worker-1 changed R10's "item 30" to "item 29" and it passed. The OPEN-REF checks match
@@ -705,6 +755,7 @@ WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twen
         29: 'Twenty-nine', 30: 'Thirty', 31: 'Thirty-one', 32: 'Thirty-two',
         41: 'Forty-one', 42: 'Forty-two', 43: 'Forty-three', 44: 'Forty-four',
         45: 'Forty-five', 46: 'Forty-six', 47: 'Forty-seven', 48: 'Forty-eight',
+        49: 'Forty-nine', 50: 'Fifty', 51: 'Fifty-one', 52: 'Fifty-two',
         33: 'Thirty-three', 34: 'Thirty-four', 35: 'Thirty-five', 36: 'Thirty-six',
         37: 'Thirty-seven', 38: 'Thirty-eight', 39: 'Thirty-nine', 40: 'Forty'}
 if not listed:
