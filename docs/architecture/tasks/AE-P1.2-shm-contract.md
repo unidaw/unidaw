@@ -25,7 +25,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    packet**: a sentence of the form "each population carries its extraction command" is false at
    this SHA by construction, and this paragraph previously ended with one while opening with the
    disqualification, because I patched its head across three rounds and left its tail alone.
-2. **The open list is 30 atomic items, not 15 categories.** The four that compression swallowed are
+2. **The open list is 31 atomic items, not 15 categories.** The four that compression swallowed are
    restored: G0-B's unowned mutation floor, G2-A's BATCH blindness, G2-B's probe-order false-green,
    and G3's debug-env requirement plus its self-contradicting static check.
 3. **G0-A's mailbox census was wrong twice and is corrected with its method.** See G0-A.
@@ -1144,6 +1144,40 @@ the acknowledgement" is a relation between a write and a read, and a gate enumer
 can never observe the pair. This corrects R5 rather than extending it: R5 said "the in-scope
 population is byte-consuming reads", and that was half a population for a two-sided invariant.
 
+**THE COMPLETENESS ARGUMENT, which is what this population actually needed and what NEITHER census
+gave alone.** A mapped-base census is not total either, for the mirror of the reason a name census
+is not: four of the seven readers never cast a base themselves — they take a pointer from a helper,
+and the census collapses them into the helper unless callers are followed. There are exactly THREE
+ways a plane address can arise:
+
+    A  a direct cast of the mapped base                     5 sites
+    B  the return of `audioOutChannelPtr` (`audio_shm.cpp:5-12`)      caller: juce:638
+    C  the return of `safeAudioOutPtr` (`engine_produce_block.cpp:861-866`)
+                                                            callers: :1030, :1112, :1150
+
+**The argument:** a site can only touch plane bytes by holding a plane pointer; a plane pointer can
+only be obtained by casting the mapped base or by calling one of the two functions that return one;
+all three sets are enumerated. That is an argument from the code's STRUCTURE rather than from a
+grep's recall, and it is FALSIFIABLE — add a third pointer-returning helper and it must be extended.
+The offset-returning helpers (`auxOutputPlaneOffset`, `audioChannelOffset`) feed route A and are
+already counted there.
+
+**R9 — item 26 (G4): THE POPULATION COUNTS ADDRESSING SITES, and consumption sites are named
+separately.** `engine_audio_callback.h` contains exactly ONE segment-base dereference, at `:404`;
+`:448` and `:463` are the two places `trackChannel[i]` is CONSUMED — the PDC fast path and the PDC
+delay path. Both descriptions are correct and they count different things, which is why the packet
+must say which: on addressing sites reader 7 is one, on consumption sites it is two, and the total
+is seven or eight accordingly. **The gate counts ADDRESSING sites, because the invariant is about
+acquiring a plane address and reading through it before an acknowledgement.** But the two
+consumption sites are named, because **a fixture that exercises only the fast path never touches the
+delay branch** — which reads through a ring one block behind, and that is precisely the shape a
+barrier test should target. A population that hid the delay path behind its addressing site would
+have made the fixture look complete while missing the harder case.
+
+**THE RATCHET THIS ARGUMENT REQUIRES, and item 31 carries it:** the completeness argument rests on
+"exactly two pointer-returning helpers", which is itself a census and deserves a check rather than
+anyone's word.
+
 **Floor.** Dispatch sites floor 3: `rg` finds every syntactic call but is blind to a dispatch through
 a function pointer. The WRITER census is a floor of 2 for the same reason plus helper indirection. There is no
 reader floor: the reader selection is withdrawn (open item 26 (G4)), and quoting a floor of 7 for a
@@ -1249,7 +1283,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `847f04a72987bbf1c0f4582146ad1dd5ffa1b288`, A.0 SCRIPT BLOB `2f55f78b3fadaa6ba6c5e8dc288777cdad811413`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `078f62e4e019e66d7e2fcd9b16a7e65e24be6885`, A.0 SCRIPT BLOB `6a1c45bfc2991e5c20a6b447674e482202fca169`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1257,7 +1291,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 30 items, 21 open · 13 RAW (12 hand-ruled) + 21 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 31 items, 22 open · 13 RAW (12 hand-ruled) + 21 commanded claims, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1435,7 +1469,7 @@ make the items IMPLEMENTABLE, and each item stays open until the work it names e
 verified by someone other than me. A ruling recorded as a closure would be the same error as a
 census recorded as a proof, which this packet has already made once at item 7.
 
-# Open items — 30 atomic, 9 CLOSED at this SHA, 21 open
+# Open items — 31 atomic, 9 CLOSED at this SHA, 22 open
 
 One per line, numbered in document order, so the count is checkable. FOUR are BLOCKING — 18, 19, 24 and 27. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
@@ -1607,6 +1641,13 @@ carrying one cannot be decided by any implementation.
     it. Whether this is dead wiring or missing arbitration is an owner call I have NOT made, and
     item 27's scope cannot close until it is: the arbitrated set is 9 by call and 9-or-11 by intent
     depending on the answer.
+
+31. **G4** — The completeness argument for the out-plane population rests on there being EXACTLY
+    TWO functions that return a plane pointer (`audioOutChannelPtr`, `safeAudioOutPtr`). That is a
+    census supporting an argument, and it needs a RATCHET: a static check that fails if a third
+    pointer-returning helper appears, since the argument's falsifiability is its whole value and a
+    silent third helper would leave it reading as sound. claude-worker-1 named this against their
+    own measurement rather than letting the argument stand on their word.
 
 # Provenance of this packet's own numbers
 
