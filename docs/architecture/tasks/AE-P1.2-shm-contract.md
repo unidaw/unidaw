@@ -18,15 +18,15 @@ never written is the same error's fingerprint.
 
 The blockers from the exact review are reconciled here, and the count is deliberately not restated: it moved between rounds and a fixed number here would be a twin of the item list, which is the authority:
 
-1. **THREE OF THE EIGHT GATES CANNOT BE DECIDED, and the per-gate record contract is met only in
-   FORM.** Leading with the form was the wrong order: a reader meets a completeness claim first and
-   the disqualification second, and takes away the first.** G1-B declares none (item 11), G2-A's scope is falsified and unreplaced
-   (item 27) and G4's out-plane selection is withdrawn (item 26). A record whose population slot
-   reads "withdrawn" satisfies the contract and decides nothing. **No universal claim about
-   populations is made anywhere in this packet**, because three of them do not exist: any sentence
-   of the form "each population is ..." is false at this SHA by construction. Each carries population with its
-   extraction command and floor, failure model, deterministic test, PASS conditions each naming their
-   refutation, static checks, and review register. Nothing points at a table that does not exist.
+1. **THREE OF THE EIGHT GATES CANNOT BE DECIDED AT THIS SHA.** G1-B declares no reader population
+   (item 11), G2-A's arbitrated scope is falsified and unreplaced (item 27), and G4's out-plane
+   selection is withdrawn (item 26). Every gate carries the record's SHAPE — population slot,
+   failure model, deterministic test, PASS conditions each naming their refutation, static checks,
+   review register — and for those three the population slot reads "withdrawn", which satisfies the
+   shape and decides nothing. **No universal claim about populations is made anywhere in this
+   packet**: a sentence of the form "each population carries its extraction command" is false at
+   this SHA by construction, and this paragraph previously ended with one while opening with the
+   disqualification, because I patched its head across three rounds and left its tail alone.
 2. **The open list is 27 atomic items, not 15 categories.** The four that compression swallowed are
    restored: G0-B's unowned mutation floor, G2-A's BATCH blindness, G2-B's probe-order false-green,
    and G3's debug-env requirement plus its self-contradicting static check.
@@ -662,13 +662,7 @@ foreign record; Layer 3 asserts process exit code and stdout, not internal verdi
 
 **Static checks.** S1 the mark is sampled before the send — no `handle` method call inside any
 `await_clip_outcome(` argument. S2 the echo is a copy, not a computation, at each of the three emit
-sites. S3 is REMOVED from this list (see open item 27 (G2-A)): it is carried
-under open item 27 (G2-A) with the withdrawn thirteen, because a static check over an unspecified
-extraction is a sentence, not a check — the figure THIRTEEN is WITHDRAWN. It was stated with no predicate, no command and no
-member list, so it could not be reproduced or refuted; the independent evidence run records it as
-`UNREPRODUCIBLE_NO_PREDICATE` and that is correct. The static check stands over whatever set the
-extraction yields, and the count returns when a predicate does, under open item 27 (G2-A). S4 the BATCH's two
-counter reads resolve to one accessor.
+sites. There is no S3: the check that stood here ranged over an extraction with no predicate and is carried by open item 27 (G2-A).
 
 **Review register.** The reviewer SHALL re-derive the command and correlator populations at the
 reviewed SHA and fail the gate if any extraction returns fewer than its floor; SHALL run
@@ -1010,7 +1004,7 @@ the predecessor's control could not run.
     sentinel. *REFUTED BY* the key carrying b's value.
 11. **Output equality in the BYTES — the mirror of 4, and the bullet whose absence let a stale-slot
     read satisfy this whole gate.** Every consumer's BEFORE_OUTPUT_READ snapshot equals what the
-    host's `write_output` recorded for the SAME quadruple, and differs from the lap primed by 8.
+    host's `write_output` recorded for the SAME quintuple, and differs from the lap primed by 8.
     Conditions 3, 5 and 8 are each satisfied by a read of stale content: 3 decides ORDERING (an
     acquire happened), 5 decides IDENTITY (the four fields are right), and 8 decides only that the
     priming is distinguishable — it establishes the precondition for catching failure model (2) and
@@ -1050,7 +1044,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `1f92346647bc0bdb47f3d87136f4afbe658dbefc`, A.0 SCRIPT BLOB `79daabc1242d5f0384106d460efd85c2a2f31564`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `59d6c2de13cf37fff7f6e5a137263cb40fc37ac1`, A.0 SCRIPT BLOB `5f531f1fa7e6e8ddb06cf9344c97ff13880718d6`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1141,13 +1135,13 @@ during recovery, which is the least-exercised state in the system and the one th
 something has already gone wrong. A LEVEL is a value that every dispatch can carry and every
 assertion can read; an EXEMPTION is a rule that lives in whichever branch remembered it, which is
 this repo's documented failure shape. **Cost, stated because it is real, and NOT YET PROPAGATED:**
-G4's dispatch identity must carry the readiness level, so the quadruple becomes a quintuple or the
-acknowledgement must name the level it was minted under, and G4's PASS 5 full-identity comparison
-changes with it. At this SHA G4 still specifies a quadruple, G2-B's invariant still forbids any
-pre-mirror `ProcessBlock`, and PASS 4 and the review register still say the choice is unmade. A
-ruling that contradicts the gates it governs is worse than an open question, because a reader can
-satisfy the gates and violate the ruling. Item 18 stays open FOR THE PROPAGATION, not only for the
-decision, and the gates are the authority until it lands.
+G4's dispatch identity carries the readiness level: the identity is a
+QUINTUPLE and PASS 5 compares five components. G2-B's invariant permits dispatch at
+`mapped-and-bypassed` and requires `mirror-complete` only for processing that depends on mirrored
+parameters. **That propagation is DONE at this SHA** — it was described here as pending for three
+SHAs while I wrote notes about it, and a ruling that contradicts the gates it governs is worse than
+an open question, because a reader can satisfy the gates and violate the ruling. Item 18 stays open
+for the IMPLEMENTATION of the two levels in the product, which no packet edit can deliver.
 
 **R3 — item 19 (G3): N IS AUTHORED AT 3, and the packet says authored, not derived.** Nothing in
 the tree sources an observation count; `hardTimeoutBlocks = 500` is a block count and converting it
@@ -1248,7 +1242,11 @@ carrying one cannot be decided by any implementation.
 15. **G2-B** — The self-deadlock: the admitted fix class requires `applyHostBypassStates` to stop taking `controllerMutex`.
 16. **G2-B** — The swap trap rests on an unratcheted guard at `apps/daw_engine_main.cpp:1107-1109`.
 17. **G2-B** — Probe ordering: without forbidding the offline probe from acquiring before the RT probe reports, the PASS token is producible by the packet's own fixture.
-18. **G2-B** — **BLOCKING, RULED (R2), not closed.** The mirror-ack circularity. The ack arrives only during a `ProcessBlock` that `processTrack` refuses while `hostReady` is false. A PASS bullet was withdrawn rather than reworded, and the owner HAS ruled (R2: two-level readiness) and the mirror half is unspecified until that ruling is PROPAGATED into this gate and G4 — the item is open for the propagation, not for the decision.
+18. **G2-B** — **BLOCKING, RULED (R2) and PROPAGATED into the gates at this SHA; open for the
+    product implementation only.** The circularity is dissolved in the specification: dispatch is
+    permitted at `mapped-and-bypassed`, so the ack that establishes `mirror-complete` arrives during
+    a `ProcessBlock` the gate now allows. What remains is building the two levels. Original
+    statement of the circularity. The ack arrives only during a `ProcessBlock` that `processTrack` refuses while `hostReady` is false. A PASS bullet was withdrawn rather than reworded, and the owner HAS ruled (R2: two-level readiness) and the mirror half is unspecified until that ruling is PROPAGATED into this gate and G4 — the item is open for the propagation, not for the decision.
 19. **G3** — **BLOCKING, not closed. The ruling is MADE (R3: N = 3, authored) and no further ruling is required.** N has no source in the tree; R3 supplies it as an authored constant. What remains is implementation, not decision (R3: N = 3, authored), which makes the gate decidable for PLANNING; it is not decidable for ACCEPTANCE until the ticket lands — N pinned with units and semantics, a static check on the literal, watchdog instrumentation, drift acceptance and independent validation.
 20. **G3** — `DAW_ENGINE_DEBUG_STALL` must be set by the Layer-2 fixture or the channel a PASS bullet reads does not exist.
 21. **G3** — The static-check contradiction: one check places the eviction where its natural implementation changes an exit count another check pins.
