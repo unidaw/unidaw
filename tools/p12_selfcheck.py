@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '6e9b862356a6adef38b2058bc32502e5c7ef3fe9'
+PREV_TIP     = 'ce6de7b3e47055d1e9703b6564a327ae150178d9'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -779,6 +779,13 @@ else:
     # `1234 :989/994` through — I had written the grammar from what a citation's TAIL looks like
     # rather than from the two documented forms, `juce:NNN` and `:NNN`. A number on its own is prose.
     _SEP_OR_CITE = re.compile(r'[·,]|(?:[A-Za-z_]\w*)?:\d{3,4}(?:[-/]\d{3,4})?[,·]?')
+    # STATED LIMIT, not a silent one. codex-worker-2 showed `fake , :989/994` hides the invalid
+    # token BEHIND a legal comma — this shield reads the IMMEDIATE predecessor only. Widening it to
+    # every token back to the previous citation is wrong for this document: the rows legitimately
+    # read `:925 dst · :952`, so `dst`, `fill` and `memcpy` sit between citations and a
+    # separators-only rule rejects the packet. The right frame is a segment-level one (declare the
+    # path once, forbid any other path-shaped token in the row) and it is NOT built here. Recorded
+    # as a floor rather than papered over with a widening that fails the honest document.
     for _w in re.finditer(r'(\S+)\s+:\d{3,4}', wseg.group(0)):
         _prev = _w.group(1)
         if not _SEP_OR_CITE.fullmatch(_prev):

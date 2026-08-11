@@ -1384,7 +1384,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `c1834179e2b5d9ffe9a28f7b694e7753ad5a714b`, A.0 SCRIPT BLOB `9da77154b9233035dc6ad2b34d53cad281ffa8ea`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `fa29c24f3823bfe281e68a1534541365c9ed6364`, A.0 SCRIPT BLOB `32de90108ba14bef7b03ce1675e1df5b2eae723b`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1769,9 +1769,13 @@ refusals of the SAME command type on one track at the same base are indistinguis
 member of the population, not just for the one that zeroes its bases. rowops:49 is additionally
 worse, not uniquely wrong.
 
-**A population all of whose members fail is the right population.** Open item 29 (G2-A) is the
-product defect; a population defined to exclude its own failing members would be a population chosen
-to pass, and one narrowed to a single failing member would have understated the work by two thirds.
+**A population all of whose members fail is the right population.** That class-wide defect is open
+item 27 (G2-A)'s OWN — item 29 (G2-A) is only the narrower `SetRowOps` constant-base case, and this
+sentence attributed the broad defect to it for four SHAs after codex-worker-2 ruled otherwise and
+after the edge was removed from the item. **Correcting the item and leaving the ruling is the same
+half-fix as correcting the ruling and leaving the item**, which this packet did in the opposite
+direction three SHAs ago. A population defined to exclude its own failing members would be a
+population chosen to pass, and one narrowed to a single failing member would have understated the work by two thirds.
 
 **R13 — item 34 (G2-B): RETRACTED. I inferred a guard's purpose from its NAME and both halves of
 the ruling are false.** R13 claimed `mirrorOnly` was a consumption boundary keyed one event too
