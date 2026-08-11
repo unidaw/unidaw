@@ -44,8 +44,9 @@ The blockers from the exact review are reconciled here, and the count is deliber
    **The derivation is only as good as the marking, and the marking is mine** — this check can catch
    a marker missing from a blocker, and cannot catch a blocker marked wrongly; item 27 was marked
    ⟦PRODUCT⟧ for one SHA when its scope is authored and its blocker is item 29's defect. **A classification cannot be read out of prose that was not written
-   to carry it.** The packet's own work is done to the point where nothing on the blocker list is a
-   packet edit. That list is derived from the items themselves and every
+   to carry it.** One blocker IS a packet edit as well as a product fix — item 37, whose acceptance
+   oracle is unwritten — and it now carries ⟦PACKET⟧ beside ⟦PRODUCT⟧ so the manifest can say so;
+   until `kind` became an array that fact was unrepresentable and the record said PRODUCT. That list is derived from the items themselves and every
    restatement of it anywhere in this document is compared against the derivation
    (`BLOCKER-SET-RESTATED`) — this paragraph carried (18, 19, 23, 24, 29) for several SHAs, three
    members wrong on the packet's first screen, because the check knew about the open-items header
@@ -1402,7 +1403,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `33b695d0f46c398ff712b56b946dcb3109562a64`, A.0 SCRIPT BLOB `19b1f9ad5d3f07d37699bb121e0755ba18901d0c`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `0ef9d9a01193454794b4e58f6b34852358791299`, A.0 SCRIPT BLOB `3163833fba3cd930cb8927726c6f8d541868e7f9`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -2496,7 +2497,7 @@ carrying one cannot be decided by any implementation.
     from today's telemetry: the per-host vector carries no host identity and no `lastDispatchedBlockId`, so
     nothing currently emitted can evaluate the owes-nothing predicate at
     `apps/engine_rt_helpers.cpp:502`. PRODUCT work.
-37. **G3** — ⟦PRODUCT⟧ **BLOCKING, and the reason has MOVED: readiness and the mapping it authorises
+37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING, and the reason has MOVED: readiness and the mapping it authorises
     are not published together.** `EngineAudioCallback::TrackInfo` holds `shmView`/`shmBase`/`header`
     as a SNAPSHOT and only `hostReady`/`active` as raw pointers to live runtime atomics
     (`apps/engine_audio_callback.h:34-40`; `apps/engine_consumer.cpp:655-657`). `completedBlockId`
@@ -2520,9 +2521,13 @@ carrying one cannot be decided by any implementation.
     `awaitAnyReadyTrack` (`:772`), `awaitAllReadyTracks` (`:861`) and `awaitNextBlock` (`:912`). The
     two `await*ReadyTrack*` gates are production OFFLINE paths, called from
     `apps/engine_offline_render.cpp:123` and `:149`, and omitting them would have left the render
-    path uncovered. The aux snapshots (`apps/engine_consumer.cpp:692-735`) and the manual
-    `restartTrackHost` (`apps/engine_track_setup.cpp:367-403`) are PUBLICATION surfaces that must be
-    exercised to create the hazard, not readers that must reject it. The supported `--no-spawn` path needs an explicit external-host policy besides:
+    path uncovered. The publication surface is `updateTracks`
+    (`apps/engine_consumer.cpp:737`); `:692-735` CONSTRUCTS the ordinary and aux `TrackInfo` records
+    it publishes, and `restartTrackHost` (`apps/engine_track_setup.cpp:367-403`) and the restart
+    worker are mapping/readiness MUTATORS rather than publishers. An earlier draft called all three
+    "publication surfaces", blurring three roles into one; the oracle must exercise construction,
+    publication and both relaunch paths distinctly, and none of them is a reader that must reject a
+    stale generation. The supported `--no-spawn` path needs an explicit external-host policy besides:
     connect records no owned PID and relaunch kills only `pid > 0`
     (`apps/host_controller.cpp:197-202`, `apps/engine_track_setup.cpp:37-44`), so a stopped external
     host can survive a relaunch and still hold the old mapping — and the policy must cover the
@@ -2531,7 +2536,9 @@ carrying one cannot be decided by any implementation.
     `apps/juce_host_process_main.cpp:441-447`, `:1139-1150`). codex-worker-1 enumerated all of it.
     **THIS ITEM IS NOT PRODUCT-ONLY**: writing the oracle into G3's deterministic test, PASS
     conditions and static checks is PACKET work, and the opening's claim that every blocker needs
-    product work does not hold for it. **The item's ORIGINAL claim is withdrawn** — it read eviction
+    product work does not hold for it. **WHAT FOLLOWS IS RETAINED HISTORY, NOT A CURRENT
+    CLAIM.** The item's ORIGINAL claim is withdrawn and every sentence after this one describes that
+    theory rather than the live defect above — it read eviction
     as removal from the producer's minimum, which
     PASS 7 names as its own refutation, and the Invariant at `:961-965` requires `hostReady` stored
     false instead. At the pin that excludes the host from the producer loop

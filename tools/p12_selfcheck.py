@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'b7aa09cc1eb9e798713a2ed5ace92dfaf53ad683'
+PREV_TIP     = '0c65b542355249b7be4ad4737aac0ff188fbd953'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -1789,7 +1789,7 @@ man = {
  # says to version the moment a shape changes twice; codex-worker-2 had to point out that I had not.
  # A version that does not move is worse than no version: it is a promise of stability that was not
  # kept, and a consumer trusts it.
- 'schema': 'ae-p1.2-manifest/4',   # /4 adds items[].withdrawn and counts.active_open
+ 'schema': 'ae-p1.2-manifest/5',   # /4 added withdrawn+active_open; /5 makes kind an ARRAY
  'static_checks': static_checks,
  'review_register': review_register,
  'failure_models': failure_models,
@@ -1830,7 +1830,13 @@ man = {
             # FROM THE HEAD, because that is where validation reads them. Emitting from the whole
             # body while validating the head let a marker added anywhere in a NONBLOCKING item's
             # prose produce a typed record nothing had checked.
-            'kind': 'PRODUCT' if '⟦PRODUCT⟧' in _head_of(n) else None,
+            # AN ARRAY, for the reason `blocked_on` is one: an item can need more than one kind
+            # of work, and a scalar has to be widened by a schema change the day that happens —
+            # which happened. Item 37 needs a product fix AND a packet edit (its acceptance oracle
+            # is unwritten), and while `kind` was a single string that fact was unrepresentable, so
+            # the manifest said PRODUCT and the packet edit existed only in prose. A structure that
+            # cannot represent something reports its absence as absence. codex-worker-1 named it.
+            'kind': [k for k in ('PRODUCT', 'PACKET') if f'⟦{k}⟧' in _head_of(n)],
             # an ARRAY: an item can wait on more than one, and a scalar would have to be widened
             # by a schema change the day that happens. Empty when it waits on nothing.
             'blocked_on': sorted(int(x) for x in re.findall(r'⟦BLOCKED-ON: (\d+)⟧', _head_of(n))),
