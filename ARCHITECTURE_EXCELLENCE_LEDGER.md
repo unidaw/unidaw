@@ -685,6 +685,11 @@ grammar now matches the emitter with an edge-nospace control. Qualified/empty
 marker fixes are inherited from `56dd20e`. Exact review is pending; item18
 prose, G3 N/Watchdog/item37 oracle, G0/G4, and M1 remain open.
 
+Owner successor `3bec2ed` claims unclosed marker openers are rejected by a
+post-run stray-opener check and the misnamed move control is now honestly
+`packet-marker-added`; 99 controls pass. Exact review is pending. Item18 prose,
+G3 N/Watchdog/item37 oracle, G0/G4, and M1 remain open.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
