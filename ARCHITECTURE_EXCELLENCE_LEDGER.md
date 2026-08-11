@@ -523,6 +523,21 @@ and sweep consequential details were bound to the actual emitter (with drifted
 regex/count prose deleted). Exact review is pending; item37/G3 acceptance,
 manifest-state/schema closure, and G2/G0/G4 decisions remain gated.
 
+Owner successor `b7aa09c` claims item37 now lists all four acquireTracks
+readers, adds the external-host namespace race, classifies its oracle as packet
+work, marks R16 retained text as retracted rationale, and fixes anchored
+withdrawal plus `active_open` overlap arithmetic. Exact review is pending;
+carried G3/G2/G0/G4 decisions remain gated.
+
+Exact review of `482c9c2` is **BLOCKED**. Narrow R15 ID semantics and named
+sweep examples pass, but contradictory “permanently gated” wording and a false
+“no host-drop path” remain; actual send failure can trigger restart. Sweep
+grammar still accepts malformed bracket details and the wrong regex remains in
+comment prose. `/4` active-open arithmetic and withdrawal parsing/prose remain
+unsound. Item37 still omits awaitAny/awaitAll readers, leaves its oracle
+unwritten, misstates packet-vs-product work, and omits the no-spawn cleanup race.
+G3/G2/G0/G4 blockers remain.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
