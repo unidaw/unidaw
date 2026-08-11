@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '0a796fe921ee85402d620ab536fa7415985b9baf'
+PREV_TIP     = 'd9e636ea90622815e6ec69a7a34af7aa94fa176a'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -1428,7 +1428,12 @@ pop_headings = [{'name': re.sub(r'^\*|\*\s*—\s*$', '', m.group(0)).strip(), 'l
 # items[].gate made G0-A invisible — a gate is not a property of the items that happen to cite it.
 gates = []
 for g in gate_hdr:
-    seg = pkt[pkt.find('\n# %s — ' % g['gate']):]
+    # THE GATE SECTION FROM THE UNHIDDEN VIEW. It was sliced from raw, so a dependency written
+    # inside an HTML comment — invisible to every reader — still produced a typed edge in the
+    # manifest and a satisfied closure. codex-worker-2 named it twice; the token PARSE had moved to
+    # `unhid` and the SECTION SLICE had not, which is the third instance today of a view adopted by
+    # one consumer and not its neighbour.
+    seg = unhid[unhid.find('\n# %s — ' % g['gate']):]
     seg = seg[:seg.find('\n# ', 3) if seg.find('\n# ', 3) != -1 else len(seg)]
     # three defects in two lines, all found by mutation: renaming the heading dropped every edge and
     # PASSED (a missing section read as no dependencies); the 200-char window truncated long tails so
