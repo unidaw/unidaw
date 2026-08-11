@@ -1007,7 +1007,8 @@ mains, 6 non-calls: a design doc, a tools script, a log line, a declaration, a c
 definition) → **3 production**. ⟂ The predecessor stated the split beside the command instead of as a
 subtraction, which put it outside the arithmetic the gate checks. *Out-plane readers* — RAW **27**
 (`grep -rn -e audioOutOffset -e safeAudioOutPtr -e audioOutChannelPtr -e auxOutputPlaneOffset apps/`)
-⟂ → **THIS SELECTOR IS RETIRED. The population is rebuilt below from the mapped base; what follows
+⟂ → **AUTHORING RETRACTED: this population covers the OUTPUT relation only, and G4's invariant is
+about the INPUT plane — see open item 26 (G4). THIS SELECTOR IS RETIRED. The population is rebuilt below from the mapped base; what follows
 records why the selector had to go, because a retired selector with no reason invites its own
 return.** The four RAW terms are four SPELLINGS, and the host uses a fifth: `grep -rn audioAuxOutOffset apps/`
 returns 5 sites and ZERO of them match any RAW term. The engine spells the aux plane
@@ -1296,7 +1297,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `66a7ca351dff3c6ae2ed9ef610e75c269f2c1147`, A.0 SCRIPT BLOB `8bac45fa0ba9d9323fa6f3059e30d7850b772f56`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `ac4d24d6527e6115dadd7f053f30cc2cf1c01775`, A.0 SCRIPT BLOB `ced78dcbf94d09ae4383f79416dea7a532749ab4`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
