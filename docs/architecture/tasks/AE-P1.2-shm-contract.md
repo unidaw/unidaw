@@ -1093,10 +1093,14 @@ correctly gated by the mechanism this gate generalises. `apps/engine_audio_callb
 proving omission rather than design, and they bound the blast radius to three shapes: chains
 interleaving VST and non-VST devices, a patcher audio node after a plugin, and track-to-track routing
 from a plugin-bearing track. **Dependencies** G0-A, G0-B, G1-A, G1-B, G2-A, G2-B, G3. Final gate — and therefore NOT DECIDABLE at
-this SHA, on FOUR dependency blockers plus one of its own.
-**The four**, carried by gates G4 depends on: 18 (G2-B) the mirror-ack circularity, 19 (G3) no
-source for N, 24 (G0-B) the rename PASS 9 is RED without, and 27 (G2-A) the undefined arbitrated
-scope — G2-A is one of G4's dependencies, so its undefined scope blocks G4 exactly as a missing
+this SHA, on TEN dependency blockers plus one of its own.
+**The ten**, carried by gates G4 depends on, are every blocker except its own 26: 18 (G2-B) the
+mirror-ack circularity, 19 (G3) no source for N, 24 (G0-B) the rename PASS 9 is RED without, 27
+(G2-A) the undefined arbitrated scope, and 28, 29, 33, 35, 36 and 37 — **an earlier version of this
+sentence said FOUR and named only the first four**, a figure that stopped tracking the blocker list
+as items were added and promoted. It is a count over that list, not a hand-kept subset: G4 depends
+on every gate, so every blocker on another gate blocks it. The four named above remain the ones
+whose SHAPE was analysed here; the rest block by the same rule without a separate argument — G2-A is one of G4's dependencies, so its undefined scope blocks G4 exactly as a missing
 population would. Item 11 was a fifth until it CLOSED; leaving a closed item in a blocker list is
 how a gate acquires a permanent-looking obstacle that no longer exists.
 **The one of its own** is 26, G4's out-plane population, whose selector is proven partial.
@@ -1422,7 +1426,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `c8aa45cfa2b1495cc733af28ac10c2b221569ced`, A.0 SCRIPT BLOB `367829eaa727aad46164742fa18bf35ebce99d88`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `f78c633ef767ba3f7ab57d5c7b5e5e4ac5e97697`, A.0 SCRIPT BLOB `ea4ae60be622cc7fb1d87bde79196a8b3fb8a6ea`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -2250,8 +2254,11 @@ carrying one cannot be decided by any implementation.
     a `ProcessBlock` the gate now allows. What remains in PRODUCT is building the two levels. **What
     remains in this PACKET is that G2-B's PASS 4 is still withdrawn with no replacement, so no PASS
     condition accepts the two-level design R2 ruled** — an earlier version of this line said "open
-    for the product implementation only", which the item's own kind marker then contradicted. Original
-    statement of the circularity. The ack arrives only during a `ProcessBlock` that `processTrack` refuses while `hostReady` is false. A PASS bullet was withdrawn rather than reworded, and the owner HAS ruled (R2: two-level readiness) and the mirror half is unspecified until that ruling is PROPAGATED into this gate and G4 — the item is open for the propagation, not for the decision.
+    for the product implementation only", which the item's own kind marker then contradicted. **WHAT FOLLOWS IS RETAINED HISTORY, NOT A CURRENT
+    CLAIM** — the original statement of the circularity, kept because R2's ruling is only legible
+    against it, and superseded by the two paragraphs above. It was introduced as "Original statement
+    of the circularity", which is a label rather than a boundary, so its "unspecified until" and
+    "open for the propagation" read as live status to anything consuming the whole paragraph. The ack arrives only during a `ProcessBlock` that `processTrack` refuses while `hostReady` is false. A PASS bullet was withdrawn rather than reworded, and the owner HAS ruled (R2: two-level readiness) and the mirror half is unspecified until that ruling is PROPAGATED into this gate and G4 — the item is open for the propagation, not for the decision.
 19. **G3** — ⟦PRODUCT⟧ **BLOCKING, not closed. The ruling is MADE (R3: N = 3, authored) and no further ruling is required.** N has no source in the tree; R3 supplies it as an authored constant. What remains is implementation, not decision (R3: N = 3, authored), which makes the gate decidable for PLANNING; it is not decidable for ACCEPTANCE until the ticket lands — N pinned with units and semantics, a static check on the literal, watchdog instrumentation, drift acceptance and independent validation.
 20. **G3** — `DAW_ENGINE_DEBUG_STALL` must be set by the Layer-2 fixture or the channel a PASS bullet reads does not exist.
 21. **G3** — **CLOSED at this SHA.** The static-check contradiction was not one. R17 shows there is no sibling check to conflict with — G3's four static checks never mention the exit count — and that the 12 is a census row pinned to `PRODUCT_SHA`, checked for equality against a frozen tree the implementation will not be on, and already declared a FLOOR ("a `return` or a `break` out of a nested scope is not a `continue`"). An implementation inside `:225-252` need not add a `continue` at all, and if it does, a floor permits the increase — either way nothing here binds it. Nothing for an implementer to choose between; a packet decision with no product work in it.
