@@ -18,7 +18,7 @@ never written is the same error's fingerprint.
 
 The blockers from the exact review are reconciled here, and the count is deliberately not restated: it moved between rounds and a fixed number here would be a twin of the item list, which is the authority:
 
-1. **THREE OF THE EIGHT GATES CANNOT BE DECIDED AT THIS SHA.** They were briefly authored and the authorings are RETRACTED — see items 11, 26, 27 and the retraction note in each gate.** All three withdrawn populations — G1-B's readers, G2-A's scope, G4's out-plane — are AUTHORED under R1 with rules, members and drift detectors. No gate is acceptance-decidable: five items still block (18, 19, 23, 24, 29) and every one needs product work, not packet work.** G2-A was the third until its scope was AUTHORED under R1 at this SHA; authoring a withdrawn population is how a gate leaves this list, and it is packet work rather than product work. Six gates additionally carry a blocking item and so are not ACCEPTANCE-decidable; the manifest publishes both senses as `decidable_for_planning` and `decidable_for_acceptance`, and G3 is the case that shows why one boolean will not do: R3 makes it plannable and it is not acceptance-decidable until the N ticket lands.  Every gate carries the record's SHAPE — population slot,
+1. **TWO OF THE EIGHT GATES CANNOT BE DECIDED AT THIS SHA.** They were briefly authored and the authorings are RETRACTED — see items 11, 26, 27 and the retraction note in each gate.** All three withdrawn populations — G1-B's readers, G2-A's scope, G4's out-plane — are AUTHORED under R1 with rules, members and drift detectors. No gate is acceptance-decidable: five items still block (18, 19, 23, 24, 29) and every one needs product work, not packet work.** G2-A was the third until its scope was AUTHORED under R1 at this SHA; authoring a withdrawn population is how a gate leaves this list, and it is packet work rather than product work. Six gates additionally carry a blocking item and so are not ACCEPTANCE-decidable; the manifest publishes both senses as `decidable_for_planning` and `decidable_for_acceptance`, and G3 is the case that shows why one boolean will not do: R3 makes it plannable and it is not acceptance-decidable until the N ticket lands.  Every gate carries the record's SHAPE — population slot,
    failure model, deterministic test, PASS conditions each naming their refutation, static checks,
    review register — and for those three the population slot reads "withdrawn", which satisfies the
    shape and decides nothing. **No universal claim about populations is made anywhere in this
@@ -469,25 +469,54 @@ engine — not by the engine's version counter, not by non-emptiness, and not by
 the address the client asked about; and (ii) a complete image of exactly one execution of the writer,
 never fields from publication N+1 beside fields from N.
 
-**Population.** *Seqlock opens and closes* — 4 + 4. Command: `grep -rn 'seq\.store' apps` returns 8, cross-checked per file with grep's count mode. *Request/answer readers* — [HAND-CLASSIFIED — open item 25 (all)] **AUTHORING RETRACTED AGAIN. Open item 11 (G1-B) is BLOCKING.** The
-predicate — a reader is request/answer iff the value carries `requestSeq` — is CIRCULAR in exactly
-the way that matters, and codex-worker-1 named it: a rule that selects on the PRESENCE of a
-correlation token cannot see a request/answer reader that LACKS one, and a reader answering a
-request without a correlation token is the defect this gate exists to find. Measured:
-`read_device_params` (`:937-938`) reads `ui_device_params_offset` with no `requestSeq` at all while
-being request-driven — this gate's own failure model says daw-agent's `device_params` "reads the
-region before waiting at all". My rule excluded the single member the gate is most about.
-`read_clip_window` is the same shape from the other side: it carries a `requestId` and is guarded by
-the GLOBAL `ui_version`, so a per-slot-`seq` marker cannot see it either.
-**And the partition was not total, only arithmetically consistent.** `read_clip_extents` is a
-global-seqlock snapshot whose body carries no marker, so 4/10/7 summing to 21 proved the classes
-were disjoint and exhaustive over the CANDIDATES, not that any member was correctly placed. A sum
-that adds up is not a partition that is right — which is the same error as the G4 residue whose
-terms summed to 20 while I asserted 27, inverted: there the arithmetic was wrong, here it was right
-and told me nothing.
-The evidence-backed six stand as codex-worker-1 states them and I am not authoring against them
-without a NON-CIRCULAR predicate, which neither I nor claude-worker-1 has produced. Item 11 is open,
-and R1 requires an explicit member list rather than a rule plus arithmetic.
+**Population.** *Seqlock opens and closes* — 4 + 4. Command: `grep -rn 'seq\.store' apps` returns 8, cross-checked per file with grep's count mode. *Request/answer readers* — **AUTHORED under R1: 6, by a predicate enumerated from the REQUEST.**
+Both earlier attempts enumerated from the wrong side and each missed a member for a structural
+reason, so the rule is stated as the correction of that: **the authoritative request set is the
+`Request*` values of the `UiCommandType` enum** — numbered members, which a spelling or a helper
+convention cannot hide — and a reader is a REQUEST/ANSWER reader iff it reads the REGION one of
+those commands publishes. Census: `grep -cE '^\s+Request[A-Za-z]+\s*=' apps/event_payloads.h`
+returns 7.
+
+    RequestClipWindow      = 30  →  read_clip_window
+    RequestDeviceParams    = 40  →  read_device_params
+    RequestWaveform        = 44  →  read_waveform_slot
+    RequestAutomationLane  = 62  →  read_automation_slot
+    RequestSamplerKit      = 75  →  read_sampler_kit_slot
+    RequestSamplerEnvelope = 97  →  read_sampler_envelope_slot
+    RequestChainSnapshot   = 37  →  NO REGION READER — `handleRequestChainSnapshot`
+                                    (`engine_request_commands.cpp:16-42`) calls `emitChainSnapshot`,
+                                    which publishes into the DIFF RING; its answer is consumed by
+                                    `drain_ui_out`, not by any `read_*`.
+
+**Six.** The seventh is excluded because its answer is not a region at all, and naming it is what
+shows the rule doing work rather than counting to a target.
+
+**WHY TWO EARLIER PREDICATES FAILED, recorded because the failures are the argument for this one.**
+A rule selecting on a CORRELATION TOKEN (`requestSeq`) is circular — it cannot see a request/answer
+reader that LACKS one, and the absent token is the defect this gate exists to find; it missed
+`read_device_params` and `read_clip_window`. A rule selecting on a HELPER FUNCTION NAME
+(`send_*_request`, 5 of them) missed `read_device_params`, whose request is a COMMAND on the ring
+with no helper. Both enumerated from the ANSWER side or the CALLER side. The request is an enum
+value; enumerating from there cannot lose a member for lacking a token or a helper.
+
+**THE GATE-RELEVANT PARTITION, measured by claude-worker-1 and verified independently here — total
+over all 21 candidates, over a property this gate is about:** does the reader guard against a torn
+read at all? **17** seqlock-guarded (loop, `v0 == v1`, Acquire fence) · **1** forwarder
+(`read_clip_extents`, whose guard is in the callee `read_clip_extents_with_truncation`) · **3** with
+NO GUARD: `read_scales`, `read_device_params`, `read_device_meters`.
+`read_device_params` is in BOTH the request/answer six and the unguarded three, which is exactly the
+intersection the failure model names — daw-agent "reads the region before waiting at all", and it is
+unguarded on top. The other two unguarded readers are reported with it rather than dropped, because
+handing over only the member that fits the story is how a population becomes an argument.
+
+**Drift detectors:** the `Request*` enum census returns 7 and
+`grep -c 'pub fn read_' ui/daw-bridge/src/control.rs` returns 21; either changing invalidates this
+authored list until re-authored.
+
+**Item 23 (all) is RESOLVED BY THIS RULE, not by it excluding the question:** `read_clip_window` IS a
+request/answer reader — `RequestClipWindow` is command 30 — and the exact review's classification was
+right. It lacks a per-slot correlation token and is guarded by the global `ui_version`, which is why
+a token-based rule could not see it.
 
 **Floor.** Four blind spots, each with its count: `seq.store` == 8 at pin, and a whole-header memcpy
 or a helper taking the region by reference is invisible to it; `pub fn read_` == 21; the call-site
@@ -1078,7 +1107,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `f4d49e3a285a631ae223619b3fdd43db913882e4`, A.0 SCRIPT BLOB `e4eaf3e38a44837693af6b2344828369ac6b5f16`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `04602822929a2177f4ccc0c7acb2e1d9d0ceb525`, A.0 SCRIPT BLOB `c4059b66cfe85740c82397696a6cea23be9a3115`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1086,7 +1115,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 30 items, 24 open · 13 RAW (12 hand-ruled) + 18 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 30 items, 22 open · 13 RAW (12 hand-ruled) + 20 commanded claims, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1242,9 +1271,9 @@ make the items IMPLEMENTABLE, and each item stays open until the work it names e
 verified by someone other than me. A ruling recorded as a closure would be the same error as a
 census recorded as a proof, which this packet has already made once at item 7.
 
-# Open items — 30 atomic, 6 CLOSED at this SHA, 24 open
+# Open items — 30 atomic, 8 CLOSED at this SHA, 22 open
 
-One per line, numbered in document order, so the count is checkable. SIX are BLOCKING — 11, 18, 19, 24, 26 and 27. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
+One per line, numbered in document order, so the count is checkable. FIVE are BLOCKING — 18, 19, 24, 26 and 27. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
 
 1. **G0-B** — The generated header breaks the documented `-DDAW_BUILD_PATCHER_RUST=OFF` build for six unconditional targets, with no stated path, include directory or target-ordering edge.
@@ -1294,7 +1323,11 @@ carrying one cannot be decided by any implementation.
     21 candidates and is explicitly NOT a population, and the `Region*` intersection returns 2 and
     is published as WRONG with the FAIL clause it shipped with. A recipe that names its true output
     cannot fail to reproduce its list, because it no longer claims one.
-11. **G1-B** — **BLOCKING. Authoring RETRACTED a second time.** The `requestSeq` predicate is
+11. **G1-B** — **CLOSED at this SHA by AUTHORING under R1, on a request-side predicate.** The
+    request set is the `Request*` UiCommandType enum values (7); a reader is request/answer iff it
+    reads the REGION one publishes; `RequestChainSnapshot` answers into the ring and has no region
+    reader, so the population is 6 — the evidence-backed six, now with a rule that produces them.
+    Previously: The `requestSeq` predicate is
     CIRCULAR: it cannot see a request/answer reader that lacks a correlation token, which is the
     defect the gate exists to find. `read_device_params` is request-driven with no `requestSeq`;
     `read_clip_window` carries a `requestId` under the global seqlock. Previously: A reader is
@@ -1318,7 +1351,10 @@ carrying one cannot be decided by any implementation.
 20. **G3** — `DAW_ENGINE_DEBUG_STALL` must be set by the Layer-2 fixture or the channel a PASS bullet reads does not exist.
 21. **G3** — The static-check contradiction: one check places the eviction where its natural implementation changes an exit count another check pins.
 22. **G4** — The fixture definitions added here (F0-F6, S1-S8) and the corrected ack-census counts have not been run against anything; the reviewer should confirm them against the fixture rather than against this packet.
-23. **all** — `read_clip_window` is named by the exact review as a request/answer reader G1-B omits. It cannot be placed until item 11 gives the gate a population.
+23. **all** — **CLOSED at this SHA.** `read_clip_window` IS a request/answer reader:
+    `RequestClipWindow` is command 30 and it reads that command's region. The exact review was right;
+    it was invisible to two earlier predicates because it carries no per-slot token and is guarded by
+    the global `ui_version`. Originally: It cannot be placed until item 11 gives the gate a population.
 
 24. **G0-B** — BLOCKING for G0-B only. **RULED (R4): the Rust side renames.** The pure name join requires one rename: `patcher_abi.h:75`
     declares `uint8_t reserved[4]{}` where `patcher_rust/src/lib.rs:86` declares `pub _pad0: [u8; 4]`,
@@ -1409,7 +1445,7 @@ carrying one cannot be decided by any implementation.
 
 Every count is stated as RAW → RULE → IN SCOPE, so that the command reproduces the raw figure and the
 rule reproduces the rest; and every count is a floor where a runtime value defeats the extraction.
-**8 populations are HAND-CLASSIFIED and exempt from that sentence**, each carrying a marker and
+**6 populations are HAND-CLASSIFIED and exempt from that sentence**, each carrying a marker and
 open item 25 (all). **And of the 13 RAW claims, 12 of them apply their RULE BY HAND** — the command
 returns the raw figure and a stated subtraction reaches the in-scope one — while none now carries its rule inside the command without also subtracting. That 12 is the honest size of what this gate
 cannot decide: it checks every subtraction's arithmetic and none of their justifications, and the
