@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '2868efd2ecd2b71c68648357b60e4da1ab5aab2b'
+PREV_TIP     = '482c9c2dd0c85a5fb11be581e27610687528e4ca'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -1817,7 +1817,7 @@ man = {
             # canonical consumer from live nonblocking work, which is exactly the audience the
             # manifest exists for. codex-worker-1 named it while item 37 carried that shape.
             # Read from the HEAD for the same reason `blocking` is: that is where it is validated.
-            'withdrawn': 'WITHDRAWN' in _ITEM_HEAD_U.get(n, ''),
+            'withdrawn': bool(re.match(r'\*\*WITHDRAWN\b', _ITEM_HEAD_U.get(n, '').lstrip())),
             # the KIND marker, emitted rather than left in prose: a consumer planning the
             # blockers needs to know which are product work and which wait on another item,
             # and that was readable only by eye until now.
@@ -1854,8 +1854,14 @@ man = {
  # `active_open` is what a planner actually has to do. Both are emitted rather than one being
  # silently redefined, because a consumer pinned to `open` should not change meaning underneath it.
  'counts': {'items': len(nums), 'open': len(nums) - closed, 'closed': closed,
+            # subtract WITHDRAWN-AND-NOT-CLOSED only: an item that is both would be counted twice
+            # and `active_open` could fall below the truth. And the test is anchored, not a bare
+            # substring — `WITHDRAWN` must open a bolded state clause, so a head that merely
+            # discusses withdrawal does not become withdrawn.
             'active_open': len(nums) - closed - sum(
-                1 for n in nums if 'WITHDRAWN' in _ITEM_HEAD_U.get(n, '')),
+                1 for n in nums
+                if re.match(r'\*\*WITHDRAWN\b', _ITEM_HEAD_U.get(n, '').lstrip())
+                and n not in closed_set),
             'blocking': blocking_n, 'raw_claims': len(tokens), 'hand_ruled': byhand,
             'controls': len(CONTROLS), 'commanded_claims': cmd_claims,
             'census_rows': len(census_rows), 'rulings': len(rulings)},

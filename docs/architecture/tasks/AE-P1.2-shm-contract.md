@@ -29,7 +29,10 @@ The blockers from the exact review are reconciled here, and the count is deliber
    a missing one, so the check cannot pass by the claim disappearing. G1-B's readers were withdrawn and are AUTHORED again under R1
    with rules, members and drift detectors; G2-A's scope and G4's out-plane are not. **TWO GATES ARE ACCEPTANCE-DECIDABLE — G0-A and G1-A —
    and ten items block (18, 19, 24, 26, 27, 29, 33, 35, 36 and 37)** and ALL TEN need product
-   work, none of them currently waiting on another item — **classification and state are orthogonal
+   work. **Item 37 needs a PACKET EDIT BESIDES**, and the opening used to imply otherwise: G3's
+   acceptance surface cannot see the defect that item names, so writing its oracle into the
+   deterministic test, PASS conditions and static checks is packet work. None of the ten is
+   currently waiting on another item — **classification and state are orthogonal
    and the markers no longer pretend otherwise**: ⟦PRODUCT⟧ says what KIND of work closes an item,
    ⟦BLOCKED-ON: n⟧ says what it WAITS ON, and an item may carry both. Item 27 carried an edge to
    item 29 for three SHAs and it was WRONG: codex-worker-2 ruled that item 29 is only the narrow
@@ -1399,7 +1402,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `76daf3d3a3a0a3e907f043675ba49e5356ce74c3`, A.0 SCRIPT BLOB `9d9292b71c7e3c06371eb43416d03cd7d7328e81`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `90ba6c1cc29b498cf802d63fa2cd9e433b20283a`, A.0 SCRIPT BLOB `a3f9979ce0db8e35720dc2436b1b95ef404218e5`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -2030,8 +2033,9 @@ re-opened, and the two contradicted each other in the same SHA.**
 **How this got missed.** I read "eviction" as the word means in general — dropping a member from a
 set — and derived consequences from that, inside a gate that defines the term four paragraphs above
 the register sentence I was answering. **A gate's vocabulary is not the ambient one**, and PASS 7
-exists precisely to forbid my reading. The retracted argument follows, unchanged, because it is the
-rationale:  The register directs the reviewer to confirm that evicting
+exists precisely to forbid my reading. **WHAT FOLLOWS IS RETAINED HISTORY, NOT A CURRENT CLAIM** — it is the retracted argument, kept
+verbatim because it is PASS 7's rationale, and every sentence in it should be read as describing the
+producer-vector eviction that PASS 7 forbids rather than the shipped design:  The register directs the reviewer to confirm that evicting
 a host which still owes dispatched blocks cannot corrupt what a RESUMED host reads or publishes. It
 cannot be confirmed, and the opposite is derivable at the pin. The demand should be re-read as a
 design requirement rather than a check.
@@ -2482,14 +2486,24 @@ carrying one cannot be decided by any implementation.
     WHAT IT MUST COVER**, because G3's deterministic test, PASS conditions and static checks are
     unchanged and none of them can see this: acquire a generation-old `TrackInfo`, barrier before its
     live gate read, relaunch and publish, then prove every callback path REJECTS the old generation
-    and accepts the new one, with a negative control. The paths are live mixing, the offline
-    `awaitNextBlock` (which retains one `TrackInfo` while re-reading live gates,
-    `apps/engine_audio_callback.h:910-951`), the aux snapshots (`apps/engine_consumer.cpp:692-735`)
-    and the manual `restartTrackHost` (`apps/engine_track_setup.cpp:367-403`) — not the restart
-    worker alone. The supported `--no-spawn` path needs an explicit external-host policy besides:
+    and accepts the new one, with a negative control. **The readers are the four `acquireTracks` consumers**, and an earlier draft
+    named two of them while listing two PRODUCER surfaces as if they were readers — a list wrong in
+    KIND as well as in count. They are `process()` (`apps/engine_audio_callback.h:232`),
+    `awaitAnyReadyTrack` (`:772`), `awaitAllReadyTracks` (`:861`) and `awaitNextBlock` (`:912`). The
+    two `await*ReadyTrack*` gates are production OFFLINE paths, called from
+    `apps/engine_offline_render.cpp:123` and `:149`, and omitting them would have left the render
+    path uncovered. The aux snapshots (`apps/engine_consumer.cpp:692-735`) and the manual
+    `restartTrackHost` (`apps/engine_track_setup.cpp:367-403`) are PUBLICATION surfaces that must be
+    exercised to create the hazard, not readers that must reject it. The supported `--no-spawn` path needs an explicit external-host policy besides:
     connect records no owned PID and relaunch kills only `pid > 0`
     (`apps/host_controller.cpp:197-202`, `apps/engine_track_setup.cpp:37-44`), so a stopped external
-    host can survive a relaunch and still hold the old mapping. codex-worker-1 enumerated all of it. **The item's ORIGINAL claim is withdrawn** — it read eviction
+    host can survive a relaunch and still hold the old mapping — and the policy must cover the
+    NAMESPACE race that follows: `launch` reuses the socket and SHM names, so a resumed old host's
+    cleanup can unlink the NEW host's namespace (`apps/host_controller.cpp:156-159`, `:216-267`;
+    `apps/juce_host_process_main.cpp:441-447`, `:1139-1150`). codex-worker-1 enumerated all of it.
+    **THIS ITEM IS NOT PRODUCT-ONLY**: writing the oracle into G3's deterministic test, PASS
+    conditions and static checks is PACKET work, and the opening's claim that every blocker needs
+    product work does not hold for it. **The item's ORIGINAL claim is withdrawn** — it read eviction
     as removal from the producer's minimum, which
     PASS 7 names as its own refutation, and the Invariant at `:961-965` requires `hostReady` stored
     false instead. At the pin that excludes the host from the producer loop
