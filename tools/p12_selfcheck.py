@@ -17,8 +17,10 @@ PACKET_PATH  = 'docs/architecture/tasks/AE-P1.2-shm-contract.md'
 PRODUCT_SHA  = '75c6f0646417828641e43287c260bea3d38b5a6f'
 PRODUCT_TREE = '699abfe8f72e597cfd1b6fb3da93ee7f35aa7fef'
 PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_SHA
-EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=.git']
-TIMEOUT      = 45
+EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
+                '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
+TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
+PREV_TIP     = 'bca9f365d45698014e004a6e0fd9a09cc7be4152'
 
 fail = []
 def bad(tag, detail): fail.append(f'[{tag}] {detail}')
@@ -42,9 +44,17 @@ if rc or dirty:
     print(f'[A0-PIN-DIRTY] the pinned checkout has {len(dirty.splitlines())} modified paths'); sys.exit(2)
 
 rc, staged = git('.', 'diff', 'HEAD', '--', PACKET_PATH)
+if rc:
+    print('[A0-GIT-FAILED] git diff could not run; a silent failure here reads as a clean tree')
+    sys.exit(2)
 if staged and not os.environ.get('AE_P12_DRAFT'):
     print(f'[A0-PACKET-UNCOMMITTED] {PACKET_PATH} differs from HEAD; a verdict is about a committed '
           f'blob. Commit it, or set AE_P12_DRAFT=1 for an unpublishable draft run.'); sys.exit(2)
+if not os.environ.get('AE_P12_DRAFT'):
+    rc, parent = git('.', 'rev-parse', 'HEAD^')
+    if rc or parent != PREV_TIP:
+        print(f'[A0-CHAIN-BROKEN] HEAD^ is {parent[:12] or "?"}, PREV_TIP pins {PREV_TIP[:12]}')
+        sys.exit(2)
 raw = open(PACKET_PATH, 'rb').read()
 pkt = raw.decode()
 oid = hashlib.sha1(b'blob %d\x00' % len(raw) + raw).hexdigest()
@@ -58,7 +68,12 @@ for i, a in enumerate(sys.argv):
 # merely makes the run FAIL proves nothing — the fifth way a negative control lies is landing in
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
- 'open-count':       ('# Open items — 23, atomic', '# Open items — 22, atomic', 1, 'OPEN-COUNT'),
+ 'open-count':       ('# Open items — 24 atomic', '# Open items — 25 atomic', 1, 'OPEN-COUNT'),
+ 'closed-count':     ('3 CLOSED at this SHA, 21 open', '2 CLOSED at this SHA, 22 open', 1,
+                      'OPEN-CLOSED-COUNT'),
+ 'open-arithmetic':  ('3 CLOSED at this SHA, 21 open', '3 CLOSED at this SHA, 19 open', 1,
+                      'OPEN-ARITHMETIC'),
+ 'stale-a0-sample':  ('· 11 RAW + ', '· 12 RAW + ', 1, 'A0-SAMPLE-STALE'),
  'drop-refutation':  ('*REFUTED BY*', 'see above', 'LAST', 'NO-REFUTATION'),
  'wrong-raw':        ('RAW **27**', 'RAW **28**', 1, 'RAW-MISMATCH'),
  'wrong-command':    ('` returns 28.', '` returns 26.', 1, 'COMMAND-MISMATCH'),
@@ -94,13 +109,19 @@ if NEG:
 
 # ---- 1. open items: header == body, contiguous, no orphan markers ---------------------------
 body = re.search(r'# Open items.*?(?=# Provenance)', pkt, re.S).group(0)
-hdr  = re.search(r'# Open items — (\d+), atomic', pkt)
+hdr  = re.search(r'# Open items — (\d+) atomic, (\d+) CLOSED at this SHA, (\d+) open', pkt)
 cand = [int(n) for n in re.findall(r'(?m)^(\d{1,2})\. ', body)]
 nums, nxt = [], 1
 for c in cand:
     if c == nxt: nums.append(c); nxt += 1
-if not hdr: bad('OPEN-HEADER-MISSING', 'no "# Open items — N, atomic"')
-elif int(hdr.group(1)) != len(nums): bad('OPEN-COUNT', f'header {hdr.group(1)}, body {len(nums)}')
+closed = len(re.findall(r'(?m)^\d{1,2}\. \*\*[^*]+\*\* — CLOSED at this SHA', body))
+if not hdr:
+    bad('OPEN-HEADER-MISSING', 'no "# Open items — N atomic, K CLOSED at this SHA, M open"')
+else:
+    tot, cl, op = (int(g) for g in hdr.groups())
+    if tot != len(nums): bad('OPEN-COUNT', f'header {tot}, body {len(nums)}')
+    if cl != closed:     bad('OPEN-CLOSED-COUNT', f'header says {cl} CLOSED, body marks {closed}')
+    if tot - cl != op:   bad('OPEN-ARITHMETIC', f'{tot} - {cl} is {tot-cl}, header says {op}')
 for c in [c for c in cand if c not in nums]: bad('OPEN-ORPHAN-NUMBER', str(c))
 for v in set(re.findall(r'open list is (\d+) atomic', pkt)):
     if hdr and v != hdr.group(1): bad('OPEN-COUNT-RESTATED', f'{v} vs header {hdr.group(1)}')
@@ -197,8 +218,19 @@ for n, k, m in re.findall(r'RAW \*{0,2}(\d+)\*{0,2}.{0,200}?minus \*{0,2}(\d+)\*
     if int(n) - int(k) != int(m):
         bad('RULE-ARITHMETIC', f'RAW {n} minus {k} stated as {m}, not {int(n)-int(k)}')
 
+sample = re.search(r'packet blob <oid> · product (\S+) tree (\S+) · (\d+) items, (\d+) open · '
+                   r'(\d+) RAW \+ (\d+) commanded claims', pkt)
+if not sample:
+    bad('A0-SAMPLE-MISSING', 'A.0 prints no expected-output line to check')
+else:
+    want = (PRODUCT_SHA[:8], PRODUCT_TREE[:8], str(len(nums)), str(len(nums)-closed),
+            str(len(tokens)), str(cmd_claims))
+    got  = tuple(sample.groups())
+    if want != got:
+        bad('A0-SAMPLE-STALE', f'A.0 shows {got}, this run is {want}')
+
 print(f'packet blob {oid[:12]} · product {PRODUCT_SHA[:12]} tree {PRODUCT_TREE[:12]} · '
-      f'{len(nums)} open items · {len(tokens)} RAW + {cmd_claims} commanded claims, all executed')
+      f'{len(nums)} items, {len(nums)-closed} open · {len(tokens)} RAW + {cmd_claims} commanded claims, all executed')
 if NEG_TAG:
     hit = [f for f in fail if f.startswith(f'[{NEG_TAG}]')]
     for f in fail[:30]: print('  ' + f)

@@ -21,7 +21,7 @@ Six blockers from the exact review are reconciled here:
 1. **The per-gate record contract is now met for all eight gates.** Each carries population with its
    extraction command and floor, failure model, deterministic test, PASS conditions each naming their
    refutation, static checks, and review register. Nothing points at a table that does not exist.
-2. **The open list is 23 atomic items, not 15 categories.** The four that compression swallowed are
+2. **The open list is 24 atomic items, not 15 categories.** The four that compression swallowed are
    restored: G0-B's unowned mutation floor, G2-A's BATCH blindness, G2-B's probe-order false-green,
    and G3's debug-env requirement plus its self-contradicting static check.
 3. **G0-A's mailbox census was wrong twice and is corrected with its method.** See G0-A.
@@ -263,8 +263,9 @@ BOTH the cargo leg and the cmake leg. A mutation battery drives single-sided edi
    *REFUTED BY* a deletion and a padding-resident insertion in the same commit cancelling — which a
    single global integer permits, and which the predecessor's version permitted.
 9. Names join under a pure rule with no alias table, and the gate is RED at this SHA until a rename
-   lands. *REFUTED BY* the check exiting 0 with `patcher_abi.h:75 reserved` and `lib.rs:86 _pad0` both
-   unchanged.
+   lands — the rename itself is open item 24 (G0-B), because a gate that declares itself RED and
+   registers no work to clear it reads as a permanent condition rather than a task. *REFUTED BY* the
+   check exiting 0 with `patcher_abi.h:75 reserved` and `lib.rs:86 _pad0` both unchanged.
 
 **Static checks.** S-1 the generated table's include sits above the first export at `patcher_rust/src/lib.rs:5` (`pub const PATCHER_ABI_VERSION`); the predecessor anchored this to `lib.rs:893`, which is the `#[cfg(test)]` line 892 lines BELOW that export, so the check it stated would have passed for an include placed under every export in the file. A
 position invisible from any run's output. S-2 the check's non-generated sources contain no literal
@@ -312,8 +313,7 @@ reproducible, and four populations in the predecessor were exactly that.
   `grep -rnF 'entries[' apps/ | grep -v -e pluginCache -e cache.entries | grep -v -e storeReady -e loadReady`
   returns 4, and appending `| grep -v _tests_main` returns 3. A rule stated beside a command is a
   claim about a classification; a rule stated inside one is the classification.
-  → minus 12 plugin-cache reads, minus 4 test-only → **5**. The ring filter is in the rule, not
-  implied: without it this population measures the wrong set.
+  The ring filter is in the rule, not implied: without it this population measures the wrong set.
 - *Read-cursor stores* — RAW **14** (`grep -rn -e readIndex.store -e read_index.store apps/ ui/`) → minus 10 non-ring and test stores → **4**. The predecessor printed this command beside the figure 4, which
   the command does not produce.
 - *Index sites* — RAW 21 (`grep -rnF 'entries[' apps/`) → minus 9 event-ring statements → **12**,
@@ -573,9 +573,17 @@ circular (see PASS 4), so the mirror half is specified by the register and open 
 condition. The predecessor asserted the mirror half was in scope while its bullet was unsatisfiable, which is
 worse than the gap it was closing.
 
-**Invariant.** OBSERVABLE: no `ProcessBlock` is dispatched to a host whose per-slot bypass differs
-from the authored chain, whose parameter mirror has not been replayed and acknowledged for the same
-`host_generation`, or for which a `sendSetBypass` failed without the readiness being withdrawn.
+**Invariant, stated in full, with the clause this gate cannot decide marked as such.** OBSERVABLE:
+no `ProcessBlock` is dispatched to a host whose per-slot bypass differs from the authored chain,
+**[NOT DECIDED HERE — open item 18 (G2-B)]** whose parameter mirror has not been replayed and
+acknowledged for the same `host_generation`, or for which a `sendSetBypass` failed without the
+readiness being withdrawn. The middle clause is a property of the SYSTEM and belongs in the
+invariant; it is not a property this gate can decide at this SHA, because the acknowledgement it
+would test for arrives only during a `ProcessBlock` that `processTrack` refuses while `hostReady` is
+false. Scope excluding the mirror while the invariant required it was a real contradiction and is
+resolved by marking the clause rather than by deleting it — deleting it would make the gate
+self-consistent by forgetting the requirement, which is how the predecessor's version came to assert
+the mirror half was in scope with an unsatisfiable bullet behind it.
 "Authored" means the vector as copied at `apps/daw_engine_main.cpp:1113` under `trackMutex` — that
 copy is the only referent that exists, because the guard is released at `:1114` while the `SetBypass`
 loop runs at `:1116-1124` under `controllerMutex` alone, so the chain can change across the gap.
@@ -754,7 +762,12 @@ correctly gated by the mechanism this gate generalises. `apps/engine_audio_callb
 `apps/engine_produce_block.cpp:907-919` indexes by the COMPLETED id. Those are counter-examples
 proving omission rather than design, and they bound the blast radius to three shapes: chains
 interleaving VST and non-VST devices, a patcher audio node after a plugin, and track-to-track routing
-from a plugin-bearing track. **Dependencies** G0-A, G0-B, G1-A, G1-B, G2-A, G2-B, G3. Final gate.
+from a plugin-bearing track. **Dependencies** G0-A, G0-B, G1-A, G1-B, G2-A, G2-B, G3. Final gate — and therefore NOT DECIDABLE
+at this SHA, because three of its dependencies carry BLOCKING items: 11 (G1-B) has no reader
+population, 18 (G2-B) has the mirror-ack circularity, and 19 (G3) has no source for N. G4 is written
+in full so the work is specified, but no PASS verdict on it may be recorded until those three are
+ruled; a final gate that reports green over blocked dependencies is the exact shape of a check that
+passes with the defect present.
 
 **Invariant.** For every dispatch, identified by the quadruple (host generation `g`, `blockId b`,
 `segmentStart s0`, `segmentLength sl`) — not by the loop ordinal, because segmentation is recomputed
@@ -768,7 +781,7 @@ input immutability and ack identity but omitted this ordering, which is what mak
 sound rather than merely acknowledged.
 
 **Population.** *Dispatch sites* — 3 production, 8 test, 6 non-calls; the command
-`grep -rn --exclude-dir=target --exclude-dir=build --exclude-dir=.git sendProcessBlock .` returns 17
+`grep -rn --exclude-dir=target --exclude-dir=build --exclude-dir=node_modules --exclude-dir=.git sendProcessBlock .` returns 17
 over the pinned root, every hit classified. *Out-plane readers* — RAW **27**
 (`grep -rn -e audioOutOffset -e safeAudioOutPtr -e audioOutChannelPtr -e auxOutputPlaneOffset apps/`)
 → minus 20 (three in `_tests_main`, the remainder declarations and non-reads) → **7 production**. The
@@ -872,7 +885,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
    in place of a deterministic transition test. This project has a documented history of "zero
    underruns, therefore correct" conclusions that were wrong, so the rule is stated, not assumed.
 
-# Open items — 23, atomic
+# Open items — 24 atomic, 3 CLOSED at this SHA, 21 open
 
 One per line, numbered in document order, so the count is checkable. Three are BLOCKING: a gate
 carrying one cannot be decided by any implementation.
@@ -909,7 +922,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 23 open items · 11 RAW + 12 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 24 items, 21 open · 11 RAW + 16 commanded claims, all executed
     PASS
 
 **What it decides.** Open-item header against body, contiguity, and orphaned numbers. Every
@@ -939,6 +952,12 @@ written and are recorded here rather than quietly fixed: `raw-without-cmd` chang
 and so provoked a different check entirely, and the landing assertion demanded the anchor count DROP,
 which an insertion control can never do — it reported a landed mutation as unlanded. The named-tag
 requirement is what exposed both.
+24. **G0-B** — BLOCKING for G0-B only. The pure name join requires one rename: `patcher_abi.h:75`
+    declares `uint8_t reserved[4]{}` where `patcher_rust/src/lib.rs:86` declares `pub _pad0: [u8; 4]`,
+    so the two sides of a byte-identical member disagree by NAME and no rule that forbids an alias
+    table can join them. PASS 9 is RED until this lands and states so. Which side renames is an owner
+    call, not a derivation: `reserved` is the C++ convention used elsewhere in that header and `_pad0`
+    is the Rust convention, so the choice trades one file's internal consistency against the other's.
 
 # Provenance of this packet's own numbers
 
