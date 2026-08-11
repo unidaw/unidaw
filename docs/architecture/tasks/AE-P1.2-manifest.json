@@ -127,6 +127,7 @@
   "drop-gate-block",
   "drop-item-block",
   "drop-refutation",
+  "emit-fail-open",
   "handmade-count",
   "heading-regress",
   "label-spelling",
@@ -143,6 +144,7 @@
   "out-writer-moved",
   "ratchet-count",
   "raw-without-cmd",
+  "reader-row-moved",
   "restate-blockers",
   "restate-census",
   "restate-census-i",
@@ -160,18 +162,22 @@
   "unresolved-tail",
   "unstated-return",
   "withdrawn-claim",
+  "writer-extra",
   "wrong-command",
   "wrong-gate-ref",
   "wrong-raw"
  ],
  "counts": {
   "blocking": 5,
+  "census_rows": 9,
   "closed": 8,
-  "controls": 58,
+  "commanded_claims": 31,
+  "controls": 61,
   "hand_ruled": 13,
   "items": 32,
   "open": 24,
-  "raw_claims": 14
+  "raw_claims": 14,
+  "rulings": 12
  },
  "failure_models": [
   {
@@ -1714,8 +1720,7 @@
    "decision_values": [],
    "id": "R9",
    "items": [
-    26,
-    31
+    26
    ],
    "line": 1271,
    "text": "**R9 — item 26 (G4): THE POPULATION COUNTS ADDRESSING SITES, and consumption sites are named separately.** `engine_audio_callback.h` contains exactly ONE segment-base dereference, at `:404`; `:448` and `:463` are the two places `trackChannel[i]` is CONSUMED — the PDC fast path and the PDC delay path. Both descriptions are correct and they count different things, which is why the packet must say which: the reader that `engine_audio_callback.h` contributes is a single member on addressing sites and a pair on consumption sites, and the row total moves with the unit chosen. **The gate counts ADDRE"
@@ -1828,8 +1833,7 @@
    "decision_values": [],
    "id": "R12",
    "items": [
-    27,
-    29
+    27
    ],
    "line": 1664,
    "text": "**R12 — item 27 (G2-A): THE GATE RANGES OVER THE ADOPTABLE-REFUSAL EMIT SITES, and the reason the old scope kept falsifying is that THERE ARE THREE REFUSAL CHANNELS, not one.** The population is the production `emitClipReject` sites — RAW 4 (`git grep -n -E '^ +emitClipReject\\(' apps`) → minus 1 (`engine_ui_publish_tests_main.cpp:198`, a test main) → **3 IN SCOPE**: `engine_clip_edit.cpp:965` (UnknownTrack), `:986` (StaleBase) and `engine_rowops_commands.cpp:49` (SetRowOps). ⟂ **The three channels, each with a different adoptability.** ClipRejected, adoptable requireMatchingClipVersion (the DE"

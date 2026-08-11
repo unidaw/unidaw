@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '698bc14f50fe93f8a8210f80756ce5d8723cfd13'
+PREV_TIP     = 'f0f3b6bbe83a8e2e9b395b77bf78dbc23a73c4aa'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -340,6 +340,13 @@ CONTROLS = {
                       'MANIFEST-STALE'),
  # item 31's ratchet, which was prose in every SHA before this one. Its whole purpose is to fire
  # when a FIFTH pointer-returning helper appears, so the control states the count wrong instead.
+ # codex-worker-1's exact holes: an extra writer citation the +5 tolerance accepted, and a reader
+ # row moved out of the table and re-appended at end of file.
+ 'writer-extra':     (':925 dst', ':920, :925 dst', 1, 'OUT-MEMBERS'),
+ 'reader-row-moved': ('    6  engine_consumer.cpp:766',
+                      '    x  engine_consumer.cpp:766', 1, 'OUT-MEMBERS'),
+ # a manifest must never be published from a packet that failed its own gate
+ 'emit-fail-open':   ('# Open items — 32 atomic', '# Open items — 33 atomic', 1, 'OPEN-COUNT'),
  'ratchet-count':    ('ratchet holds at **four** at this SHA', 'ratchet holds at **five** at this SHA', 1,
                       'RATCHET-DRIFT'),
  'dep-self':         ('**Dependencies** G0-A, G0-B', '**Dependencies** G0-A, G0-B, G4', 1,
@@ -594,31 +601,39 @@ for label, members, n in [('readers', OUT_READERS, 7), ('writers', OUT_WRITERS, 
             bad('OUT-MEMBERS', f'{path}:{line} does not exist at the pin'); continue
         if hashlib.sha1(txt.encode()).hexdigest()[:10] != fp:
             bad('OUT-MEMBERS', f'{path}:{line} has drifted: {txt[:44]!r}')
-# and the packet's OWN tables must cite exactly those members. The first version parsed the reader
-# table only, and only its FIRST path:line per row — so reader 7's second consumption site and every
-# one of the eight writer citations were unbound, and moving a writer from :925 to :999 passed.
-# A binding that covers one of two tables is the coverage-of-one-shape defect again.
-tbl = sorted((m.group(2), int(m.group(3))) for m in
-             re.finditer(r'(?m)^    ([1-7])  (\S+?):(\d+)', pkt))
-want = sorted((os.path.basename(p_), l) for p_, l, _ in OUT_READERS)
-if tbl and tbl != want:
-    bad('OUT-MEMBERS', f'reader table cites {tbl}, roster pins {want}')
-elif not tbl:
-    bad('OUT-MEMBERS', 'no reader table rows parsed — an extraction returning nothing is not a table')
-# the writer rows of the role census: every `juce:NNN` and bare `:NNN` in the two writer lines
+# and the packet's OWN tables must cite exactly those members. Three defects in the first version,
+# all found by mutation: the reader-table regex was GLOBAL, so moving a row out and appending an
+# identical one at end-of-file passed; the writer citations were matched by a `:NNN` sweep with a
+# `c + 5 in pinned` tolerance invented to tolerate ranges, which accepted an arbitrary `:920`
+# because 925 is pinned; and the composite forms (`:664-665`, `:989/994`) were never parsed, only
+# tolerated. A TOLERANCE IS NOT A GRAMMAR — it accepts everything within reach of something valid.
+_tblseg = re.search(r'THE SEVEN BYTE-CONSUMING READERS.*?(?=\n\*\*)', pkt, re.S)
+if not _tblseg:
+    bad('OUT-MEMBERS', 'no reader-table section found to bound the extraction')
+else:
+    tbl = sorted((m.group(2), int(m.group(3))) for m in
+                 re.finditer(r'(?m)^    ([1-7])  (\S+?):(\d+)', _tblseg.group(0)))
+    want = sorted((os.path.basename(p_), l) for p_, l, _ in OUT_READERS)
+    if tbl != want:
+        bad('OUT-MEMBERS', f'reader table cites {tbl}, roster pins {want}')
+# the writer rows: parse the composite syntax EXACTLY — `juce:NNN`, `:NNN`, ranges `:NNN-NNN` and
+# pairs `:NNN/NNN` — and require the resulting set to equal the roster's members plus the
+# continuation lines the ranges name. Nothing is tolerated; every cited number is accounted.
 wseg = re.search(r'host byte WRITERS.*?(?=\n    \d+  same-agent)', pkt, re.S)
 if not wseg:
     bad('OUT-MEMBERS', 'no host-writer rows found in the role census')
 else:
-    cited = sorted({int(x) for x in re.findall(r':(\d{3,4})', wseg.group(0))})
-    pinned = sorted({l for _, l, _ in OUT_WRITERS})
-    # the citations spell multi-line fills as ranges (:664-665, :725-726) and the indirect writer as
-    # a pair (:989/994), so the pinned set must be a SUBSET and every pin must appear
-    if not set(pinned) <= set(cited):
-        bad('OUT-MEMBERS', f'writer citations {cited} do not cover pinned {pinned}')
-    stray = [c for c in cited if c not in pinned and c - 1 not in pinned and c + 5 not in pinned]
-    if stray:
-        bad('OUT-MEMBERS', f'writer citations name {stray}, which the roster does not pin')
+    cited = set()
+    for m in re.finditer(r':(\d{3,4})(?:\s*[-/]\s*(\d{3,4}))?', wseg.group(0)):
+        cited.add(int(m.group(1)))
+        if m.group(2): cited.add(int(m.group(2)))
+    # the roster pins the FIRST line of each site; the citations additionally name the continuation
+    # of each multi-line fill and the second line of the indirect pair, and those are enumerated
+    # here rather than allowed by arithmetic
+    CONTINUATIONS = {665, 726, 994}
+    expect = {l for _, l, _ in OUT_WRITERS} | CONTINUATIONS
+    if cited != expect:
+        bad('OUT-MEMBERS', f'writer citations {sorted(cited)} != pinned+continuations {sorted(expect)}')
 
 # ---- 2e3. the pointer-helper ratchet: executed, not described ---------------------------------
 RATCHET_CMD = ["git", "grep", "-n", "-E", r'^float\* [a-zA-Z_]+\(|-> float\* \{$', "--", "apps/*.cpp"]
@@ -891,6 +906,13 @@ elif listed.group(1) != WORD.get(len(CONTROLS), '?'):
     bad('CONTROL-COUNT-PROSE', f'prose says {listed.group(1)}, harness has {len(CONTROLS)}')
 missing = set(CONTROLS) - names
 if missing: bad('CONTROL-UNLISTED', ', '.join(sorted(missing)))
+# the other direction, which was never checked: a name in the prose that no control implements
+# reads as coverage that does not exist, and the arity check cannot see it because the count came
+# from the harness. One-sided equality is not equality.
+# `--list` is a flag named in the same sentence, not a control; the predicate is 'looks like a
+# control name', so the one token that is a flag is excluded by shape rather than by name.
+extra = {n for n in names if n not in CONTROLS and '-' in n and not n.startswith('--')}
+if extra: bad('CONTROL-PHANTOM', 'listed but not implemented: ' + ', '.join(sorted(extra)))
 
 # ---- 6. RULE arithmetic is decided in the span pass above, not by a proximity regex ----------
 
@@ -1045,7 +1067,11 @@ for m in re.finditer(r'(?m)^\*\*(R\d+) — .*?(?=\n\n\*\*R\d+ — |\n# |\*\*What
         'line': line_of(m.start()),
         'applied': ('PROPAGATED at this SHA' in blk or 'is PROPAGATED' in blk
                     or 'RULES THE HOST IN SCOPE' in pkt.upper() and m.group(1) == 'R7'),
-        'items': sorted({int(x) for x in re.findall(r'item[s]? (\d+)', blk)}),
+        # from the HEADING only. Deriving from the whole block made R9 claim items [26, 31]
+        # because its body MENTIONS item 31 — a mention became an ownership claim, and a
+        # planner reading the manifest would have seen item 31 owned by two rulings.
+        'items': sorted({int(x) for x in re.findall(r'item[s]? (\d+)',
+                                                    blk[:blk.find(':')] if ':' in blk[:200] else '')}),
         # the decision's own words and every integer it fixes: a manifest that does not change when
         # N goes 3 -> 4 is not carrying the decision, only a flag about it
         'decision': re.sub(r'\s+', ' ', head.group(2)).strip() if head else None,
@@ -1157,10 +1183,18 @@ man = {
  'controls': sorted(CONTROLS),
  'counts': {'items': len(nums), 'open': len(nums) - closed, 'closed': closed,
             'blocking': blocking_n, 'raw_claims': len(tokens), 'hand_ruled': byhand,
-            'controls': len(CONTROLS)},
+            'controls': len(CONTROLS), 'commanded_claims': cmd_claims,
+            'census_rows': len(census_rows), 'rulings': len(rulings)},
 }
 emitted = json.dumps(man, indent=1, ensure_ascii=False, sort_keys=True) + '\n'
 if '--emit-manifest' in sys.argv or '--manifest' in sys.argv:
+    # FAIL CLOSED. This exited 0 and wrote the file before any accumulated failure was read, so a
+    # packet that fails its own gate could still publish a manifest — and the manifest is what a
+    # planner consumes. A writer that ignores the verdict of the checker it lives inside is the
+    # `probe writes go nowhere` shape: the artifact is produced regardless of whether it is true.
+    if fail:
+        print('\n'.join('  ' + f for f in fail))
+        print(f'REFUSED to write {MANIFEST}: {len(fail)} check(s) failed'); sys.exit(2)
     open(MANIFEST, 'w').write(emitted); print(f'wrote {MANIFEST}'); sys.exit(0)
 # A.0 describes what the manifest carries. That sentence is a THIRD statement — the emitter and the
 # committed file agree with each other and neither is compared to the prose, which is how the
