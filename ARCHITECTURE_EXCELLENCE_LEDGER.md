@@ -763,6 +763,11 @@ are now derived from the gate graph with `g4-dep-count`, and item18’s stale la
 was corrected using typed `N (Gx)` extraction; 101 controls pass. Exact review
 is pending. The raw-byte hidden-comment issue and G3/G0/M1/item37 blockers remain.
 
+Owner successor `b953b64` claims marker checks now consume a `body_raw` section
+sliced directly from packet bytes, with marker-in-comment control and extractor
+floor 45; 102 controls pass. Exact review is pending. G3/G0/M1/item37 remain
+gated.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
