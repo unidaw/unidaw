@@ -651,6 +651,11 @@ PACKET but remain PRODUCT-only or contradictory, item28 lacks S3 extraction,
 and item36/G3 still conflicts over contradiction versus nondiscriminating
 defect. G0/G3/G4 status blockers remain.
 
+Follow-up exact probes add two kind-grammar fail-opens: `PACKET: extra` is
+accepted by prefix splitting, and an empty `⟦⟧` marker after the leading run is
+silently ignored. These compound the body-derived PRODUCT divergence and
+malformed `BLOCKED-ON` discard.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
