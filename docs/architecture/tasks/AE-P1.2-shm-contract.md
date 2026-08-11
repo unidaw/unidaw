@@ -104,8 +104,14 @@ no derived pointer is published before every gate passes. At pin both are violat
 observable from a return value, so (d) is decided statically.
 
 **Population.**
-- *Regions the engine addresses* — 8, exact. [HAND-CLASSIFIED — open item 25 (all)] Every `ShmHeader` offset field read off a
-  controller-derived header plus the two derived functions.
+- *Regions the engine addresses* — 8, exact. [HAND-CLASSIFIED — open item 25 (all)] The rule as
+  previously written — "every `ShmHeader` offset field read off a controller-derived header plus the
+  two derived functions" — yields SEVEN and the population is eight: it omitted the mapping/header
+  base itself, which is a region the engine addresses and is not an offset field. The members are
+  the mapping/header base, `audioIn`, `audioOut`, `ringStd`, `ringCtrl`, `mailbox`, `auxOutput` and
+  `hostKeyRing`. A hand-classified population whose stated rule does not reach its own member count
+  is the worst case of the category, because it reads as derived and is not — the members are listed
+  here so the gap is visible rather than arithmetic.
 - *Raw region derivations outside any validator* — RAW 13 (`grep -rn -e '>audioInOffset' -e '>audioOutOffset' -e '>ringStdOffset' -e '>ringCtrlOffset' -e '>mailboxOffset' -e auxOutputPlaneOffset -e hostKeyRingOffset apps/ | grep -v _tests_main | grep -v juce_host_process_main | grep -v engine_ui_shm | grep -v audio_shm | grep -v shared_memory | grep -v uiShm`) returns 13 with the exclusions carried INSIDE the
   pipeline (the predecessor said 12, and stated the exclusions in prose beside a command that did
   not apply them) → minus 1, `apps/ipc_protocol.h:46`, which is a COMMENT naming `hostKeyRingOffset`
@@ -246,7 +252,12 @@ about the summands, so the summands carry the commands.
 isolates to ONE type, and the commands corroborate the one-sided member below instead of merely
 agreeing with it. The eight C++ declarations live in three headers
 (`harmony_timeline.h`, `patcher_abi.h`, `shared_memory.h`), which is why a single-file recipe could
-not have reproduced this. *One-sided members* — exactly 1 [HAND-CLASSIFIED — open item 25 (all)], corroborated independently by the per-type block above, whose only row with unequal sides is `EventEntry 7/6`: C++ `EventEntry::ready`, offset 60, size 4
+not have reproduced this. **Floor, and it is a real one:** both commands count field-like
+DECLARATIONS by line shape, so they are format-sensitive — two members declared on one line, or one
+wrapped across two, changes the count without changing the ABI. The independent evidence run records
+this as `PASS_AT_PIN_FORMAT_SENSITIVE`. The figures hold at this pin and are not robust to
+reformatting, which is the difference between a command that reproduces a number and a command that
+would survive an edit to the source. *One-sided members* — exactly 1 [HAND-CLASSIFIED — open item 25 (all)], corroborated independently by the per-type block above, whose only row with unequal sides is `EventEntry 7/6`: C++ `EventEntry::ready`, offset 60, size 4
 (`apps/shared_memory.h:450`, offset pinned at `:463`).
 
 **Floor.** Four floors. The type population is blind if either method's count moves without the other:
@@ -617,7 +628,11 @@ foreign record; Layer 3 asserts process exit code and stdout, not internal verdi
 
 **Static checks.** S1 the mark is sampled before the send — no `handle` method call inside any
 `await_clip_outcome(` argument. S2 the echo is a copy, not a computation, at each of the three emit
-sites. S3 the thirteen counter-only decisions are extracted and each replaced. S4 the BATCH's two
+sites. S3 the counter-only decisions are extracted and each
+replaced — the figure THIRTEEN is WITHDRAWN. It was stated with no predicate, no command and no
+member list, so it could not be reproduced or refuted; the independent evidence run records it as
+`UNREPRODUCIBLE_NO_PREDICATE` and that is correct. The static check stands over whatever set the
+extraction yields, and the count returns when a predicate does, under open item 27 (G2-A). S4 the BATCH's two
 counter reads resolve to one accessor.
 
 **Review register.** The reviewer SHALL re-derive the command and correlator populations at the
@@ -975,7 +990,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `b7e9b4c3d785c99c6e05e2bda89b7676ba2802a7`, A.0 SCRIPT BLOB `443741c665440067d595b59ede407c40bb14445c`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `11720fc33a3ffbace9fa01bf8b17f44c15d95ef7`, A.0 SCRIPT BLOB `da24fe14c0f727c9b8d1d1706485234e4a4f68a0`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
