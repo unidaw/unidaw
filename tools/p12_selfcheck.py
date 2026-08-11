@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'bfed299a77281817723f33ad84fc2efd64cb7e7d'
+PREV_TIP     = '3a7ec6bfeb9158891f576d5285fab7a5fe8b2377'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -218,8 +218,8 @@ CONTROLS = {
                       'FIVE are BLOCKING — 18, 19, 24, 26 and 28', 1, 'BLOCKER-SET'),
  'constraint-lost':  ('1. Production atomic **size/alignment', '1x. Production atomic **size/alignment', 1,
                       'CONSTRAINTS-COUNT'),
- 'opening-gates':    ('**ONE OF THE EIGHT GATES CANNOT BE DECIDED',
-                      '**FOUR OF THE EIGHT GATES CANNOT BE DECIDED', 1, 'OPENING-GATE-COUNT'),
+ 'opening-gates':    ('**EVERY GATE IS PLANNABLE AT THIS SHA**',
+                      '**FOUR OF THE EIGHT GATES CANNOT BE DECIDED**', 1, 'OPENING-GATE-COUNT'),
  'manifest-stale':   ('18. **G2-B** — **BLOCKING', '18. **G2-B** — **blocking', 1,
                       'MANIFEST-STALE'),
  'unresolved-tail':  ('master-track stores (`engine_master_render.cpp:121` and `:132`) → **13 IN\nSCOPE**.',
@@ -238,7 +238,7 @@ CONTROLS = {
                       'RAW-WITHOUT-COMMAND'),
  'no-terminator':    ('→ **12 executable derivations**. \u27c2', '→ **12 executable derivations**.', 1,
                       'RAW-NO-TERMINATOR'),
- 'byhand-count':     ('12 of them apply their RULE BY HAND', '10 of them apply their RULE BY HAND', 1,
+ 'byhand-count':     ('13 of them apply their RULE BY HAND', '10 of them apply their RULE BY HAND', 1,
                       'BYHAND-COUNT'),
  'control-unlisted': ('`wrong-raw`,', '`wrong-ray`,', 1, 'CONTROL-UNLISTED'),
  'drop-refutation':  ('*REFUTED BY*', 'see above', 'LAST', 'NO-REFUTATION'),
@@ -260,13 +260,15 @@ CONTROLS = {
                       '→ minus 97 (fourteen plugin-cache index sites', 1, 'RULE-ARITHMETIC'),
  # both directions of the two-sided declaration. Backend deleted the item-side sentence and the run
  # still passed on the gate-side one; these two controls are the reason that cannot happen again.
- 'drop-item-block':  ('**BLOCKING. Authoring RETRACTED at this SHA**', '**BLOCKING.**', 1,
+ # INSERTION controls now: no gate declares its population dead at this SHA, so there is nothing to
+ # delete. Each adds the declaration to ONE side and requires the asymmetry to be caught — which
+ # tests the same rule from the opposite direction and cannot go dead when the packet is healthy.
+ 'drop-item-block':  ('27. **G2-A** — **BLOCKING,', '27. **G2-A** — **BLOCKING. AUTHORING RETRACTED.', 1,
                       'PLANNING-BLOCK-ASYMMETRIC'),
  # re-anchored onto G2-A: G4's retraction was LIFTED when its population was completed, and a
  # control anchored on retired text is a control that cannot land — the failure mode that let
  # 'stale-a0-sample' sit dead for two SHAs while the gate reported PASS.
- 'drop-gate-block':  ('**Population.** **AUTHORING RETRACTED. Open item 27 (G2-A) is BLOCKING again',
-                      '**Population.** **Open item 27 (G2-A) is BLOCKING again', 1,
+ 'drop-gate-block':  ('**Population.** **AUTHORED under R12', '**Population.** **SCOPE FALSIFIED. AUTHORED under R12', 1,
                       'PLANNING-BLOCK-ASYMMETRIC'),
  # proves the ruling parser reaches TWO-DIGIT ids: while it was `R[1-9]`, R10 and R11 were invisible
  # and mutating this heading changed nothing the manifest could see.

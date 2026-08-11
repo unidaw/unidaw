@@ -18,12 +18,15 @@ never written is the same error's fingerprint.
 
 The blockers from the exact review are reconciled here, and the count is deliberately not restated: it moved between rounds and a fixed number here would be a twin of the item list, which is the authority:
 
-1. **ONE OF THE EIGHT GATES CANNOT BE DECIDED AT THIS SHA** — G2-A, whose authoring is RETRACTED;
-   see item 27 and the retraction note in that gate, which must agree or
-   `PLANNING-BLOCK-ASYMMETRIC` fires. It said TWO until this SHA: G4 left the list when its
-   population was completed across BOTH halves of its invariant, and it stays blocking for
-   acceptance for a different reason — its tests cover one half — which is item 26's and not a
-   population defect at all. G1-B's readers were withdrawn and are AUTHORED again under R1
+1. **EVERY GATE IS PLANNABLE AT THIS SHA** — the first time in this lineage, and it is a small
+   claim: it means every gate names a population it can range over, not that any gate can be
+   decided. This sentence read TWO, then ONE, then this, across three SHAs. G4 left when its
+   population was completed across BOTH halves of its invariant; G2-A left when R12 authored its
+   scope as the adoptable-refusal EMIT sites, every earlier attempt having selected on the
+   arbitration while the gate is about the answer. Both remain BLOCKING for acceptance, for defects
+   in their TESTS and in the PRODUCT respectively — **a plannable gate is not a decidable one**, and
+   the manifest keeps the two apart deliberately. The zero case is a different sentence rather than
+   a missing one, so the check cannot pass by the claim disappearing. G1-B's readers were withdrawn and are AUTHORED again under R1
    with rules, members and drift detectors; G2-A's scope and G4's out-plane are not. **THREE GATES ARE ACCEPTANCE-DECIDABLE — G0-A, G1-A and G1-B —
    and five items block (18, 19, 24, 26 and 27)** and three of them need product
    work rather than packet work. That list is derived from the items themselves and every
@@ -659,9 +662,10 @@ that one command instance and the engine copied through unchanged. The mechanism
 engine-side discriminator cannot empty the clause: a correlator presented with a record whose every
 content field equals its own command, but whose identity it did not mint, must return not-mine.
 
-**Population.** **AUTHORING RETRACTED. Open item 27 (G2-A) is BLOCKING again, and my error
-overwrote a correct finding.** I claimed B = A ∪ {SetRowOps}. **The retraction stands; its first stated reason did
-not, and the corrected mechanism is this.** THERE ARE TWO FUNCTIONS NAMED
+**Population.** **AUTHORED under R12 — the three production adoptable-refusal emit sites; see the
+ruling for the derivation and for why the arbitration sites are ROUTES rather than members.** The
+earlier retraction is lifted. My claim that B = A ∪ {SetRowOps} was wrong, and its first stated
+reason was wrong too; the corrected mechanism is this.** THERE ARE TWO FUNCTIONS NAMED
 `requireMatchingClipVersion`: the free one at `clip_edit.cpp:5-15`, which sets
 `UiDiffType::ResyncNeeded` and nothing else, and the engine one at `engine_clip_edit.cpp:932-997`,
 which emits **BOTH** — `emitUiDiff(diffPayload)` at `:982` carrying ResyncNeeded AND
@@ -1434,7 +1438,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `30f81eb3d18629223c11e40783c11bfde7ae9140`, A.0 SCRIPT BLOB `5b293ff4710694ebbe01ac949c68cdca3300547a`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `020263aa72f4a772b3ee4fc8b2728eca7c1ed36d`, A.0 SCRIPT BLOB `fc971107c78812074544729483dde124dc937dde`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1442,7 +1446,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 32 items, 24 open · 13 RAW (12 hand-ruled) + 30 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 32 items, 24 open · 14 RAW (13 hand-ruled) + 31 commanded claims, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1653,7 +1657,40 @@ arbitrated population is derived from that classifier. A command that replaces t
 while classified as not mutating it is a live inconsistency in the predicate this gate depends on,
 not merely a misleading name.
 
-**What these rulings do NOT do.** None of them closes its item — R1 through R11 are decisions that
+**R12 — item 27 (G2-A): THE GATE RANGES OVER THE ADOPTABLE-REFUSAL EMIT SITES, and the reason the
+old scope kept falsifying is that THERE ARE THREE REFUSAL CHANNELS, not one.** The population is the
+production `emitClipReject` sites — RAW 4 (`git grep -n -E '^ +emitClipReject\(' apps`) → minus 1 (`engine_ui_publish_tests_main.cpp:198`, a test main) → **3 IN SCOPE**:
+`engine_clip_edit.cpp:965` (UnknownTrack), `:986` (StaleBase) and `engine_rowops_commands.cpp:49`
+(SetRowOps). ⟂
+
+**The three channels, each with a different adoptability.**
+
+    ClipRejected, adoptable      requireMatchingClipVersion (the DEPS one) -> emitClipReject
+                                 reached from 6 arbitration call sites
+                                 (`git grep -n -E 'requireMatchingClipVersion\((auto|chord|diff|h|p|payload)' apps | wc -l` returns 6)
+    UiDiffType::ResyncNeeded     daw::requireMatchingClipVersion (the FREE one, `clip_edit.cpp:12`)
+                                 fills a diff; no retry value, nothing to adopt
+    UiHarmonyDiffType::           HarmonyTimeline::requireMatchingHarmonyVersion
+      ResyncNeeded               (`engine_harmony_timeline.cpp:119`), reached from
+                                 `engine_note_commands.cpp:93` and `:112` — WriteHarmony and
+                                 DeleteHarmony, which never reach either clip arbiter
+
+**WHY THE EMIT SITES AND NOT THE ARBITRATED COMMANDS.** G2-A's invariant is that a refused command
+tells the UI what to retry with. That is a property of the EMIT, not of the check. Selecting on
+arbitration includes commands whose refusal the gate cannot test — the two ResyncNeeded channels
+carry no retry value — and EXCLUDES a site that fails the invariant, because `SetRowOps` emits an
+adoptable refusal while being arbitrated by nothing: `UiSetRowOpsPayload` has no `baseVersion` field
+at all. **Every previous scope here was falsified by the same move: it selected on the check and the
+gate is about the answer.** The containment claim B = A ∪ {SetRowOps} failed for the same reason —
+the two sets are not nested because they are indexed on different things.
+
+**One member fails the invariant at this SHA, and that is a finding rather than a reason to exclude
+it.** `engine_rowops_commands.cpp:49` passes `/*sentBase=*/0, /*currentBase=*/0` — constants — where
+the other two pass real values, and zero is a live `clipVersion`. The gate ranging over three sites
+of which one cannot satisfy it is the correct state: open item 29 (G2-A) is that product defect, and
+a population defined to exclude its own failing member would be a population chosen to pass.
+
+**What these rulings do NOT do.** None of them closes its item — R1 through R12 are decisions that
 make the items IMPLEMENTABLE, and each item stays open until the work it names exists and is
 verified by someone other than me. That range is checked against the rulings actually parsed
 (`RULING-SET`), because it read "R1 through R4" for as long as there were eleven: the sentence was
@@ -1795,9 +1832,15 @@ carrying one cannot be decided by any implementation.
     they establish a plane and consume nothing, so no rule has to prefer one. Drift detector on the
     out-plane command's raw figure, which is stated once in the population and not restated here.
 
-27. **G2-A** — **BLOCKING. Authoring RETRACTED at this SHA** — the arbitrated path emits
-    ResyncNeeded, not ClipRejected, so containment is false and the two are different channels.
-    Previously: The scope is two populations related
+27. **G2-A** — **BLOCKING, and the scope is AUTHORED under R12: the gate ranges over the three
+    production adoptable-refusal emit sites.** The retraction is lifted. Every earlier scope here was
+    falsified by the same move — it selected on the ARBITRATION and the gate is about the ANSWER, so
+    it kept including commands whose refusal carries no retry value and excluding `SetRowOps`, which
+    emits an adoptable refusal while being arbitrated by nothing. There are THREE refusal channels
+    (adoptable `ClipRejected`, `UiDiffType::ResyncNeeded`, `UiHarmonyDiffType::ResyncNeeded`) and
+    treating them as one is what made every containment claim false. **This item stays BLOCKING for
+    the PRODUCT defect, not for its scope:** one of the three members cannot satisfy the invariant
+    at this SHA, which is open item 29 (G2-A). Previously: The scope is two populations related
     by containment: A (arbitrated against a version counter, 9 call sites) and B (emits an adoptable
     `ClipRejected`), with **B = A ∪ {SetRowOps}** determined from the three production emit sites
     rather than from a name list, and a drift detector on that site count. Every control must name
@@ -1883,7 +1926,7 @@ carrying one cannot be decided by any implementation.
 Every count is stated as RAW → RULE → IN SCOPE, so that the command reproduces the raw figure and the
 rule reproduces the rest; and every count is a floor where a runtime value defeats the extraction.
 **6 populations are HAND-CLASSIFIED and exempt from that sentence**, each carrying a marker and
-open item 25 (all). **And of the 13 RAW claims, 12 of them apply their RULE BY HAND** — the command
+open item 25 (all). **And of the 14 RAW claims, 13 of them apply their RULE BY HAND** — the command
 returns the raw figure and a stated subtraction reaches the in-scope one — while none now carries its rule inside the command without also subtracting. That 12 is the honest size of what this gate
 cannot decide: it checks every subtraction's arithmetic and none of their justifications, and the
 one time a justification was wrong (G1-A's five ready-flag operations counted as four) the
