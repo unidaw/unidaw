@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '33b7c27ae8e5a0af4cb984b46a474a12b021d865'
+PREV_TIP     = 'ba7e007c2899858e008fbf30cd1b12f50ad1ae87'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -284,7 +284,7 @@ CONTROLS = {
  # INSERTION controls now: no gate declares its population dead at this SHA, so there is nothing to
  # delete. Each adds the declaration to ONE side and requires the asymmetry to be caught — which
  # tests the same rule from the opposite direction and cannot go dead when the packet is healthy.
- 'drop-item-block':  ('27. **G2-A** — ⟦PRODUCT⟧ **BLOCKING,', '27. **G2-A** — ⟦PRODUCT⟧ **BLOCKING. AUTHORING RETRACTED.', 1,
+ 'drop-item-block':  ('27. **G2-A** — ⟦BLOCKED-ON: 29⟧ **BLOCKING,', '27. **G2-A** — ⟦BLOCKED-ON: 29⟧ **BLOCKING. AUTHORING RETRACTED.', 1,
                       'PLANNING-BLOCK-ASYMMETRIC'),
  # re-anchored onto G2-A: G4's retraction was LIFTED when its population was completed, and a
  # control anchored on retired text is a control that cannot land — the failure mode that let
@@ -749,13 +749,18 @@ _bodies = {int(m.group(1)): m.group(0) for m in
 # not kind. Marking in place and counting the markers is the same repair as the hand-classified
 # populations elsewhere in this packet.
 _prod = sorted(n for n in _derived_blk if '⟦PRODUCT⟧' in _bodies.get(n, ''))
-_marked = sorted(int(m.group(1)) for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ⟦PRODUCT⟧', body))
+_marked = sorted(int(m.group(1)) for m in
+                 re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ⟦(?:PRODUCT|BLOCKED-ON: \d+)⟧', body))
 if _marked != sorted(_derived_blk):
     bad('BLOCKER-KIND', f'⟦PRODUCT⟧ markers on {_marked}, blockers are {sorted(_derived_blk)}')
 # the phrase wraps across a line in the packet, so the whitespace between its words is not a
 # space — matching a literal ' ' would have made this check silently unable to find its own
 # subject, which is how a check comes to report a missing claim instead of a wrong one.
 _said = re.search(r'and (?:ALL )?(\w+)(?: of them)? need\s+product\s+work', pkt)
+# a ⟦BLOCKED-ON: n⟧ blocker must name a real blocking item, or the delegation points at air
+for _b in re.finditer(r'⟦BLOCKED-ON: (\d+)⟧', pkt):
+    if int(_b.group(1)) not in _derived_blk:
+        bad('BLOCKER-KIND', f'item is BLOCKED-ON {_b.group(1)}, which is not a blocking item')
 if not _said:
     bad('BLOCKER-KIND', 'the opening states no product-work count to check')
 elif WORDNUM.get(_said.group(1).upper()) != len(_prod):
