@@ -438,6 +438,10 @@ away exact-SHA review or shared-hotspot ownership to improve throughput.
 - `895223f`: owner PASS/90 controls; R16/item37 retracted/withdrawn, R17
   narrowed and register discharged, ruling-body-swap control added. Exact review
   pending; G3 N/Watchdog and G2/G0 decisions remain.
+- Exact review of `895223f` is **BLOCKED**: R17 has a stale citation; R16/item37
+  only partially closes safety because readiness/mapping publication is not
+  generation-bound; withdrawn status is untyped; body binding is narrow; and
+  R15/M1, N/Watchdog, G2/G0/G4 and summary contradictions remain.
 - `93618fb`: owner PASS/89 controls; sweep fullmatch tightened and R15/R17
   superseded phrasings propagated. Exact review pending; N derivation and
   Watchdog fate remain owner decisions.
