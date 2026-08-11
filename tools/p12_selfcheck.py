@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '88a063f9f35377f84fdbd907ec652a46520d84e7'
+PREV_TIP     = '0bd4126aa435bad9040c1ab61076578577e733bc'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -356,6 +356,8 @@ CONTROLS = {
  # both items are G2-A, so the forward gate check agrees and only the backward one can catch it
  'ruling-item-swap2': ('**R12 — item 27 (G2-A)', '**R12 — item 28 (G2-A)', 1, 'RULING-ITEM-BIND'),
  # the diagram has contradicted the text twice; it is checked now, so make sure the check fires
+ # an unhyphenated phantom in the list: the shape filter that used to guard this admitted it
+ 'control-phantom':  ('`wrong-raw`,', '`wrongraw`, `wrong-raw`,', 1, 'CONTROL-PHANTOM'),
  'diagram-edge':     ('    G0-B → G4', '    G0-B → G1-A', 1, 'DIAGRAM-EDGE'),
  'ratchet-count':    ('ratchet holds at **four** at this SHA', 'ratchet holds at **five** at this SHA', 1,
                       'RATCHET-DRIFT'),
@@ -553,7 +555,10 @@ else:
     if sorted(rids) != list(range(1, max(rids) + 1)):
         bad('RULING-SET', f'ruling ids are not contiguous 1..{max(rids)}: {sorted(rids)}')
     emitted = [r['id'] for r in rulings] if 'rulings' in dir() else []
-    rng = re.search(r'R1 through R(\d+) are decisions', pkt)
+    # the sentence was reworded to distinguish packet-decision items from product-work items, and
+    # the check was pinned to its old phrasing — a range check that only recognises one way of
+    # writing the range is a check on the wording, not on the range.
+    rng = re.search(r'R1 through R(\d+)\b', pkt)
     if not rng:
         bad('RULING-SET', 'no "R1 through Rn are decisions" range sentence to check')
     elif int(rng.group(1)) != max(rids):
@@ -901,9 +906,17 @@ listed = re.search(r'\*\*Controls\.\*\* ([\w-]+), each naming', pkt)  # 'Twenty-
 # bounded by the PARAGRAPH, not by 900 characters: adding control names pushed the last one out of
 # the window and the check reported it unlisted. A character window standing in for a boundary,
 # inside the check whose job is to police exactly that.
-_cs = pkt.find('**Controls.**')
-_ce = pkt.find('\n\n', _cs)
-names = set(re.findall(r'`([a-z0-9-]+)`', pkt[_cs:_ce if _ce != -1 else _cs + 2000]))
+# the LIST, parsed as a list — not every backticked token in the paragraph. Sweeping the paragraph
+# forced a shape filter to keep out `--list`, and any shape filter loose enough to admit an
+# unhyphenated control name also admits the SHA hashes cited two sentences later. The list has a
+# syntax: it runs from "list with `--list`:" to the first sentence end, and every backticked token
+# inside it is a control name, whatever it looks like.
+_cs = pkt.find('list with `--list`:')
+_ce = pkt.find('. ', _cs)
+if _cs == -1:
+    bad('CONTROL-PROSE-MISSING', 'no "list with `--list`:" list to parse')
+names = set(re.findall(r'`([^`]+)`', pkt[_cs + len('list with `--list`:'):
+                                         _ce if _ce != -1 else _cs + 2000]))
 WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twenty',
         21: 'Twenty-one', 22: 'Twenty-two', 23: 'Twenty-three', 24: 'Twenty-four',
         25: 'Twenty-five', 26: 'Twenty-six', 27: 'Twenty-seven', 28: 'Twenty-eight',
@@ -925,9 +938,13 @@ if missing: bad('CONTROL-UNLISTED', ', '.join(sorted(missing)))
 # the other direction, which was never checked: a name in the prose that no control implements
 # reads as coverage that does not exist, and the arity check cannot see it because the count came
 # from the harness. One-sided equality is not equality.
-# `--list` is a flag named in the same sentence, not a control; the predicate is 'looks like a
-# control name', so the one token that is a flag is excluded by shape rather than by name.
-extra = {n for n in names if n not in CONTROLS and '-' in n and not n.startswith('--')}
+# EXACT set equality over an explicitly-shaped token, not "looks hyphenated". Filtering extras to
+# hyphenated names accepted an unhyphenated backticked phantom — a name listed as a control that no
+# control implements, which reads as coverage that does not exist. The control-name shape is now
+# declared (lowercase words joined by single hyphens) and everything of that shape in the sentence
+# must be a real control; `--list` is excluded as a FLAG by its leading dashes, which is a different
+# shape rather than an exception.
+extra = {n for n in names if n not in CONTROLS}
 if extra: bad('CONTROL-PHANTOM', 'listed but not implemented: ' + ', '.join(sorted(extra)))
 
 # ---- 6. RULE arithmetic is decided in the span pass above, not by a proximity regex ----------

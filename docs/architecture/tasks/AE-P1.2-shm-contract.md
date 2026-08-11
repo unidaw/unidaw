@@ -621,9 +621,11 @@ halves with barrier-paused writers.
    universal form ("no reader ...") is still NOT used, but the reason has CHANGED and this sentence
    outlived the change: it said the universal quantifies over a WITHDRAWN population, and R1
    authored that population — item 11 (G1-B) is CLOSED. The universal remains unused now only
-   because the authored population is seven members and this bullet is about two of them; a bullet
-   naming its two sites is decidable where "no reader" would require re-deciding all seven at every
-   run. Both named sites fail today
+   because the authored population is SIX READERS — seven `Request*` enum members, six of which map
+   to a `read_*`; I wrote "seven members" here last SHA by taking the enum census as the reader
+   count, which is the unit error this gate exists to prevent — and this bullet is about two of
+   them; a bullet naming its two sites is decidable where "no reader" would require re-deciding all
+   six at every run. Both named sites fail today
    and the bullet names both: `ui/daw-bridge/src/control.rs:944-949`. Quantified over THOSE TWO
    SITES, and the phrase "two of the six" would have been wrong twice over: the hand-selected six
    were withdrawn, and what replaced them under R1 is seven. A bullet naming its sites survives a
@@ -637,9 +639,13 @@ halves with barrier-paused writers.
 9. **RESTORED — the population it waited for exists.** This bullet was withdrawn because a
    mechanical echo ratchet needs a set to range over and the set was withdrawn; R1 authored it and
    item 11 (G1-B) is CLOSED, so the condition it was waiting on is met and the withdrawal outlived
-   it. The requirement is a ratchet over the seven authored send sites, and it is stated here as
-   OPEN WORK rather than as satisfied: no such ratchet exists yet, which is a gap in the gate's
-   tests and not in its population. *REFUTED BY* adding an eighth send site to the authored
+   it. **The requirement is a ratchet over the SEND SITES, and that population has never been
+   authored** — what R1 authored is the request kinds (seven, from the enum) and their readers
+   (six); the sites that SEND a request are a third population and nobody has enumerated them. So
+   this bullet is blocked on a missing POPULATION and not merely on an unwritten test, which is a
+   different and larger gap than the one I recorded last SHA when I wrote "the seven authored send
+   sites" — a phrase that took a count from one population and a unit from another. Carried by open
+   item 33 (G1-B). *REFUTED BY* adding an eighth send site to the authored
    population and observing the ratchet stay green — which is what it does today, there being no
    ratchet, so this bullet is refuted at this SHA and says so rather than reading as met. Leaving it standing would have been a
    PASS condition satisfiable by ratcheting the empty set.
@@ -653,8 +659,8 @@ three counts", which were counts over the hand-selected six the packet withdrew;
 over a withdrawn population detects drift in nothing. R1 authored the replacement and item 11 (G1-B)
 is CLOSED, so the detectors now have a set to pin. **They are not written yet**, which makes this an
 open test rather than a withdrawn one — the distinction the whole gate turns on. It returns with open item 11 (G1-B), and the requirement it
-encodes — that whatever population replaces the six must have detectors pinning its size — is
-carried there rather than left as an unrooted static check here.
+encodes — that the authored population must have detectors pinning its size — is
+carried by open item 33 (G1-B) rather than left as an unrooted static check here.
 
 **Review register.** The reviewer SHALL rule on how device-params acquires a request identity — a new
 field on `UiDeviceParamsRegion` implies a `kShmVersion` bump; SHALL confirm whether the plain snapshot
@@ -1460,7 +1466,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `51477caf404676dabd6daf1926735e0661730ae9`, A.0 SCRIPT BLOB `c5f9349c69fdb06ef2baa06ab1a41ca322c1aee8`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `1ede6af65479eed6374ef3f2271ac8ae592fbe97`, A.0 SCRIPT BLOB `5236e3c21431f13b830463cff97f872c0727dad1`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1526,14 +1532,14 @@ check, staged and atomically replaced, and `MANIFEST-STALE` is suppressed on an 
 a check that forbids its own remedy is a deadlock rather than a guard — that deadlock appeared the
 moment the write moved, and is recorded here because it is the predictable cost of the fix.
 
-**Controls.** Sixty-three, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Sixty-four, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
-`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`, `ratchet-count`, `writer-extra`, `reader-row-moved`, `emit-fail-open`, `ruling-item-swap2`, `diagram-edge`. The last twenty-nine exist because
+`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`, `ratchet-count`, `writer-extra`, `reader-row-moved`, `emit-fail-open`, `ruling-item-swap2`, `diagram-edge`, `control-phantom`. The last thirty exist because
 **codex-worker-1** MUTATED THIS PACKET AND THE GATE STILL SAID PASS (the finding reached me relayed
 by backend, and two commit messages in this lineage credit the relay rather than the author —
 `e26f91f` and `c332c03`, immutable and wrong on this point): deleting the item's reopening sentence,
@@ -1746,9 +1752,12 @@ worse, not uniquely wrong.
 product defect; a population defined to exclude its own failing members would be a population chosen
 to pass, and one narrowed to a single failing member would have understated the work by two thirds.
 
-**What these rulings do NOT do.** None of them closes its item — R1 through R12 are decisions that
-make the items IMPLEMENTABLE, and each item stays open until the work it names exists and is
-verified by someone other than me. That range is checked against the rulings actually parsed
+**What these rulings do NOT do.** None of them closes an item that names PRODUCT work — R1 through
+R12 make such items implementable, and each stays open until the work exists and is verified by
+someone other than me. **A ruling CAN close an item whose whole content was a packet decision**, and
+item 11 is the case: it asked for an authored population, R1 authored one, and there was nothing
+left in it. That distinction was missing and the rule read as universal, which contradicted item
+11's own CLOSED marker three SHAs running. That range — "R1 through R12" above — is checked against the rulings actually parsed
 (`RULING-SET`), because it read "R1 through R4" for as long as there were eleven: the sentence was
 written when four was the whole set and no later ruling was an edit to it. The manifest's parser
 had the matching defect from the other side — `R[1-9]` could not match `**R10 — `, so R9's block ran
@@ -1986,8 +1995,16 @@ carrying one cannot be decided by any implementation.
     in every SHA before this one — a ratchet that is only written down is a ratchet that has never
     been pulled. The `.h` declarations are excluded because a declaration returns no pointer; the
     predicate is over definitions. That predicate needs no judgement about planes, so a
-    fifth of ANY name or plane turns it red and a person decides. Negative control: add a fifth and
-    it must fire; RENAME an existing one and it must NOT, because the count is over structure.
+    fifth of ANY name or plane turns it red and a person decides. **The rename-invariance claim is WITHDRAWN and the reason is worth keeping.** This item said:
+    "add a fifth and it must fire; RENAME an existing one and it must NOT, because the count is over
+    structure." The implemented ratchet pins each member as (path, line, fingerprint of that LINE),
+    and a line contains the function's name — so a rename DOES fire, and the stated invariant is
+    false about the check that enforces it. **The count is over structure; the FINGERPRINT is not**,
+    and I wrote the invariant before the mechanism existed and never re-read it against what got
+    built. A rename firing is arguably the safer failure — a renamed helper deserves a look — but it
+    is not what the packet promised, and a guard whose documented behaviour differs from its actual
+    behaviour is the thing this packet exists to prevent. What survives: add a fifth of any name or
+    plane and it fires, which is the property the completeness argument actually needs.
     **It belongs with the LayoutSpec work in constraint 1, not inside either gate**, because G1-A's
     input-plane writers and G4's out-plane readers share this ratchet without sharing a population.
 
