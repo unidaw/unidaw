@@ -168,7 +168,7 @@ for m in re.finditer(r'`(rg\s[^`]*)`', pkt):
 
 def runnable(c):
     c = c.strip()
-    return re.match(r'^(grep|rg|sed)\s', c) and len(c.split()) > 2
+    return re.match(r'^(grep|rg|sed|awk)\s', c) and len(c.split()) > 2
 cmd_claims = 0
 for m in re.finditer(r'`([^`]+)`', pkt, re.S):
     c = m.group(1)

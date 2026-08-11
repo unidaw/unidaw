@@ -215,9 +215,15 @@ because offset+size+name are together blind to `float sample_rate` becoming `uin
 
 **Population.** *ABI types* — 8. Command: `grep -n '#\[repr(C' patcher_rust/src/lib.rs` returns 8 (lines 23, 40,
 55, 68, 82, 89, 97, 107), cross-checked against bindgen's `allowlist_file` closure over
-`apps/patcher_abi.h`. *Members* — 66 C++ / 65 Rust, counted by reading both declarations:
-`PatcherContext` 26/26 (`patcher_abi.h:114-152` / `lib.rs:109-143`), `MusicalLogicPayload` 9/9, and
-six further types. *One-sided members* — exactly 1: C++ `EventEntry::ready`, offset 60, size 4
+`apps/patcher_abi.h`. *Members* — 66 C++ / 65 Rust, each produced by a command rather than by reading, which is what
+open item 5 (G0-B) required. C++: `awk '/^struct (alignas\([0-9]+\) )?(HarmonyEvent|MusicalLogicPayload|PatcherEuclideanConfig|PatcherSliceSelectConfig|PatcherRandomDegreeConfig|PatcherLfoConfig|PatcherContext|EventEntry) \{/{inb=1;next} inb&&/^};/{inb=0;next} inb{l=$0;sub(/\/\/.*/,"",l); if(l~/;/ && l!~/static_assert|static constexpr|typedef|using |\(/) c++} END{print c}' apps/harmony_timeline.h apps/patcher_abi.h apps/shared_memory.h` returns 66. Rust: `awk '/^#\[repr\(C/{r=1;next} r&&/^pub struct/{inb=1;r=0;next} inb&&/^}/{inb=0;next} inb&&/^[ \t]+(pub )?[A-Za-z_][A-Za-z0-9_]*[ \t]*:/{c++} END{print c}' patcher_rust/src/lib.rs` returns 65. Per type the two sides
+are 4/4 `HarmonyEvent`, 9/9 `MusicalLogicPayload`, 9/9 `PatcherEuclideanConfig`, 3/3
+`PatcherSliceSelectConfig`, 4/4 `PatcherRandomDegreeConfig`, 4/4 `PatcherLfoConfig`, 26/26
+`PatcherContext` (`patcher_abi.h:114-152` / `lib.rs:109-143`), and 7/6 `EventEntry` — so the whole
+66-vs-65 difference isolates to ONE type, and the commands corroborate the one-sided member below
+instead of merely agreeing with it. The eight C++ declarations live in three headers
+(`harmony_timeline.h`, `patcher_abi.h`, `shared_memory.h`), which is why a single-file recipe could
+not have reproduced this. *One-sided members* — exactly 1: C++ `EventEntry::ready`, offset 60, size 4
 (`apps/shared_memory.h:450`, offset pinned at `:463`).
 
 **Floor.** Four floors. The type population is blind if either method's count moves without the other:
@@ -875,7 +881,7 @@ carrying one cannot be decided by any implementation.
 2. **G0-B** — The declaring macro invalidates the `#[repr(C` grep this gate's population floor depends on.
 3. **G0-B** — The mutation floor ">= 600" is asserted with no derivation and counts near 551 over the real 131 members, so the battery would fail its own floor permanently.
 4. **G0-B** — 600 is a fifth pinned integer with no owner.
-5. **G0-B** — The member counts (66 C++ / 65 Rust) were obtained by reading, not by a command, and no command is proposed that would reproduce them.
+5. **G0-B** — CLOSED at this SHA. Both member counts are produced by a printed command over the pinned tree, the C++ one spanning the three headers the eight types are actually declared in. The per-type breakdown puts the entire 66-vs-65 difference in `EventEntry` (7 vs 6), which corroborates the one-sided-member claim rather than restating it.
 6. **G1-A** — CLOSED at this SHA. The entry-address extraction's rule ships inside the printed command: the data-statement and index-site pipelines each carry their own exclusions and return 4 (3 production) and 12. Closing it is also what exposed the classification error the arithmetic had been hiding — the rule as prose said "four non-data operations" where the ready-flag operations are five, so the in-scope figure was 5 and is 4.
 7. **G1-A** — The `ui_out` producer census is not established, and the disarm is safe only under a single-consumer contract that is asserted rather than proven.
 8. **G1-B** — The send-site count is stated as 16, as "the sixteen", and as a list of fifteen.
@@ -938,11 +944,12 @@ requirement is what exposed both.
 
 Every count is stated as RAW → RULE → IN SCOPE, so that the command reproduces the raw figure and the
 rule reproduces the rest; and every count is a floor where a runtime value defeats the extraction.
-**ONE population is NOT command-derived and is labelled as such rather than covered by this
-sentence**: G0-B's member counts (66 C++ / 65 Rust) were obtained by reading both declarations, and
-open item 5 (G0-B) holds it. G2-A's 51 correlator sites were the second such population and are no
-longer: they are derived here by a printed command, which is also what refuted the author's competing
-figure of 56 — that one counted mentions where the claim is call sites.
+**No population is exempt from that sentence at this SHA**, which is the first time it has been
+true in this lineage. Two were: G0-B's member counts, obtained by reading both declarations, and
+G2-A's 51 correlator sites, carried from the exact review on attribution. Both are now derived by
+printed commands, and deriving them paid twice — the member commands localise the whole 66-vs-65
+difference to `EventEntry`, and the correlator command refuted the author's competing figure of 56,
+which had counted mentions where the claim is call sites.
 The predecessor's version of this paragraph said every count was command-produced while two of its own
 populations said "counted by reading" and "selected by hand" — a universal claim contradicted inside
 its own document, which is the third instance of that shape in this lineage and the reason the
