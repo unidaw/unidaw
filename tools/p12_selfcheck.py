@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'b843cc70e4d567daf5ade270f95ff6b0166c5fe6'
+PREV_TIP     = '8dcc0cd2505c8b66db781727cb0573df9d910fb2'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -1139,8 +1139,12 @@ for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — [^\n]{0,120}?'
 # rather than per-item inside the emission because a regex per item over raw prose is what the
 # extractor ratchet is counting, and because a state field should not be able to see a WITHDRAWN
 # that lives inside a fence or a comment.
+# _visible, not _unhidden. `_unhidden` keeps link destinations, so a head carrying
+# `[note](WITHDRAWN)` emitted withdrawn:true off text no reader sees — the same hiding place that
+# spoofed the ruling-body ratchet one commit earlier, found again in the field added to fix a
+# DIFFERENT reviewer finding. The view, not the pattern, is what decides what a check can see.
 _ITEM_HEAD_U = {int(m.group(1)): m.group(2) for m in
-                re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — (.{0,200})', _unhidden(body))}
+                re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — (.{0,200})', _visible(body))}
 
 # ---- 2c. the binding RATCHET, because both directions above read only the item HEADLINE ---------
 # codex-worker-1 mutated item 21's body from "R17 shows" to "R16 shows", regenerated, and the gate
@@ -1785,7 +1789,7 @@ man = {
  # says to version the moment a shape changes twice; codex-worker-2 had to point out that I had not.
  # A version that does not move is worse than no version: it is a promise of stability that was not
  # kept, and a consumer trusts it.
- 'schema': 'ae-p1.2-manifest/3',
+ 'schema': 'ae-p1.2-manifest/4',   # /4 adds items[].withdrawn and counts.active_open
  'static_checks': static_checks,
  'review_register': review_register,
  'failure_models': failure_models,
@@ -1846,7 +1850,12 @@ man = {
  # so a consumer can tell the five reproducible rows from the two that are judgement.
  'census': census_rows,
  'controls': sorted(CONTROLS),
+ # `open` is items minus closed and therefore COUNTS WITHDRAWN ITEMS, which are not work.
+ # `active_open` is what a planner actually has to do. Both are emitted rather than one being
+ # silently redefined, because a consumer pinned to `open` should not change meaning underneath it.
  'counts': {'items': len(nums), 'open': len(nums) - closed, 'closed': closed,
+            'active_open': len(nums) - closed - sum(
+                1 for n in nums if 'WITHDRAWN' in _ITEM_HEAD_U.get(n, '')),
             'blocking': blocking_n, 'raw_claims': len(tokens), 'hand_ruled': byhand,
             'controls': len(CONTROLS), 'commanded_claims': cmd_claims,
             'census_rows': len(census_rows), 'rulings': len(rulings)},

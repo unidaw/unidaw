@@ -1399,7 +1399,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `b6111362f30cc4fbef8280b511e17596f2b0be98`, A.0 SCRIPT BLOB `e3655c8a5134af39c1ddf5479087b90bd9d0e07a`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `7e21bf4f552454eb9a92f580a818bfaa1f715855`, A.0 SCRIPT BLOB `d6547ca674c12d1b88889f38da9685412d9e65ed`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1996,9 +1996,14 @@ stopped process back into the counted set. codex-worker-1 established all of it.
 relaunch "closes all three doors", which is not established, and codex-worker-1 named the gap on the
 next pass. `EngineAudioCallback::TrackInfo` holds the MAPPING as a snapshot —
 `std::shared_ptr<const daw::SharedMemoryView> shmView` with `shmBase` and `header` beside it
-(`apps/engine_audio_callback.h:34-40`) — while `hostReady`, `active` and `completedBlockId` are RAW
-POINTERS to live runtime atomics in the same struct. **Readiness is read live; the mapping is read
-from a snapshot.** Relaunch makes a NEW mapping (`apps/host_controller.cpp:286`, `:294`), and
+(`apps/engine_audio_callback.h:34-40`) — while `hostReady` and `active` are RAW POINTERS to live
+runtime atomics. **Readiness is read live; the mapping is read from a snapshot.** `completedBlockId`
+belongs with the MAPPING and not with readiness: `apps/engine_consumer.cpp:655` copies
+`shmView->completedBlockId`, a field of `SharedMemoryView` (`apps/host_controller.h:43`), while only
+`:656` and `:657` take the address of a runtime member. An earlier draft grouped it with the live
+pointers; codex-worker-1 corrected it, and the correction SHARPENS the hazard — a stale `TrackInfo`
+reads the old mapping's completion counter, so its mapping and its progress agree with each other
+and only readiness comes from anywhere else. Relaunch makes a NEW mapping (`apps/host_controller.cpp:286`, `:294`), and
 `apps/engine_restart_worker.cpp` republishes readiness without republishing the callback's track
 list. So a callback still holding the pre-relaunch `TrackInfo` can observe `hostReady == true`
 against the OLD `shmView`. Whether anything republishes that list before the callback next runs is
@@ -2010,7 +2015,11 @@ preference; R16's analysis is the reason it is a SAFETY requirement. Producer-ve
 removes exactly the back-pressure invariant that makes a slot address unambiguous, while
 `hostReady = false` additionally gates the input write and the mix, so the slot cannot be lapped for
 that track at all. **The bullet was already right; what it lacked was the consequence of violating
-it.** That is recorded here instead of as a defect, and item 37 is WITHDRAWN.
+it.** That is recorded here instead of as a defect. **ITEM 37's ORIGINAL THEORY is withdrawn — the
+producer-vector reading — but the item itself is LIVE, PRODUCT and BLOCKING on a different and
+narrower gap that this retraction does not touch: readiness and mapping are not published together.
+An earlier draft of this sentence said the item was withdrawn outright while the item was already
+re-opened, and the two contradicted each other in the same SHA.**
 
 **How this got missed.** I read "eviction" as the word means in general — dropping a member from a
 set — and derived consequences from that, inside a gate that defines the term four paragraphs above
@@ -2450,8 +2459,11 @@ carrying one cannot be decided by any implementation.
     `apps/engine_rt_helpers.cpp:502`. PRODUCT work.
 37. **G3** — ⟦PRODUCT⟧ **BLOCKING, and the reason has MOVED: readiness and the mapping it authorises
     are not published together.** `EngineAudioCallback::TrackInfo` holds `shmView`/`shmBase`/`header`
-    as a SNAPSHOT and `hostReady`/`active`/`completedBlockId` as raw pointers to live runtime atomics
-    (`apps/engine_audio_callback.h:34-40`). Relaunch installs a new mapping
+    as a SNAPSHOT and only `hostReady`/`active` as raw pointers to live runtime atomics
+    (`apps/engine_audio_callback.h:34-40`; `apps/engine_consumer.cpp:655-657`). `completedBlockId`
+    travels WITH the mapping — it is a `SharedMemoryView` field (`apps/host_controller.h:43`) — so a
+    stale `TrackInfo`'s mapping and progress counter agree with each other and readiness alone comes
+    from elsewhere. Relaunch installs a new mapping
     (`apps/host_controller.cpp:286`, `:294`) and `apps/engine_restart_worker.cpp:87` publishes
     readiness without republishing the callback's track list, so a callback holding the pre-relaunch
     `TrackInfo` can see `hostReady == true` against the OLD `shmView`. G3's eviction rests on
@@ -2459,7 +2471,18 @@ carrying one cannot be decided by any implementation.
     MIXER is not. Whether some other path republishes the list first is not established, which is
     the state a gate stays blocked on — the same standard item 35 is held to. What closes this is a
     generation binding: readiness and mapping published as one, or a mapping generation the callback
-    can test. codex-worker-1 found this. **The item's ORIGINAL claim is withdrawn** — it read eviction
+    can test. codex-worker-1 found this. **THE ACCEPTANCE ORACLE IS NOT WRITTEN AND THIS ITEM NAMES
+    WHAT IT MUST COVER**, because G3's deterministic test, PASS conditions and static checks are
+    unchanged and none of them can see this: acquire a generation-old `TrackInfo`, barrier before its
+    live gate read, relaunch and publish, then prove every callback path REJECTS the old generation
+    and accepts the new one, with a negative control. The paths are live mixing, the offline
+    `awaitNextBlock` (which retains one `TrackInfo` while re-reading live gates,
+    `apps/engine_audio_callback.h:910-951`), the aux snapshots (`apps/engine_consumer.cpp:692-735`)
+    and the manual `restartTrackHost` (`apps/engine_track_setup.cpp:367-403`) — not the restart
+    worker alone. The supported `--no-spawn` path needs an explicit external-host policy besides:
+    connect records no owned PID and relaunch kills only `pid > 0`
+    (`apps/host_controller.cpp:197-202`, `apps/engine_track_setup.cpp:37-44`), so a stopped external
+    host can survive a relaunch and still hold the old mapping. codex-worker-1 enumerated all of it. **The item's ORIGINAL claim is withdrawn** — it read eviction
     as removal from the producer's minimum, which
     PASS 7 names as its own refutation, and the Invariant at `:961-965` requires `hostReady` stored
     false instead. At the pin that excludes the host from the producer loop
