@@ -31,6 +31,7 @@
   "drop-refutation",
   "handmade-count",
   "heading-regress",
+  "label-spelling",
   "manifest-stale",
   "member-dropped",
   "member-per-type",
@@ -58,7 +59,7 @@
  "counts": {
   "blocking": 6,
   "closed": 6,
-  "controls": 32,
+  "controls": 33,
   "hand_ruled": 12,
   "items": 28,
   "open": 22,
@@ -1479,8 +1480,25 @@
   },
   {
    "gate": "G0-B",
-   "labelled": false,
-   "labels": [],
+   "labelled": true,
+   "labels": [
+    {
+     "label": "1",
+     "present": true
+    },
+    {
+     "label": "2",
+     "present": true
+    },
+    {
+     "label": "3",
+     "present": true
+    },
+    {
+     "label": "4",
+     "present": true
+    }
+   ],
    "line": 316,
    "text": "S-1 the generated table's include sits above the first export at `patcher_rust/src/lib.rs:5` (`pub const PATCHER_ABI_VERSION`); the predecessor anchored this to `lib.rs:893`, which is the `#[cfg(test)]` line 892 lines BELOW that export, so the check it stated would have passed for an include placed under every export in the file. A position invisible from any run's output. S-2 the check's non-generated sources contain no literal list of the eight type names. S-3 the one-sided admission is a byte-range disjointness predicate, with no member name used as an admission key. S-4 name normalisation is a pure function of the input string — no map or table literal keyed by a member name."
   },

@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '3426ffb13765e95c889971045a0ee330da28d862'
+PREV_TIP     = 'acd3e65ff37e16e150e3fe1c4149752d8859443b'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -108,6 +108,10 @@ CONTROLS = {
                       'POPULATION-UNCOMMANDED'),
  'handmade-count':   ('**6 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
                       'HANDMADE-COUNT'),
+ # rewrite a labelled block into the OTHER spelling and require the labels to survive: without
+ # this, the next gate that writes S.1 or "Static 1" disappears exactly as G0-B did.
+ 'label-spelling':   ('**Static checks.** S1 the ready-clear', '**Static checks.** S-1 the ready-clear', 1,
+                      'MANIFEST-STALE'),
  'constraint-lost':  ('1. Production atomic **size/alignment', '1x. Production atomic **size/alignment', 1,
                       'CONSTRAINTS-COUNT'),
  'opening-gates':    ('**THREE OF THE EIGHT GATES CANNOT BE DECIDED',
@@ -535,13 +539,13 @@ for gid, gbody in zip(parts[0::2], parts[1::2]):
         # dedupe: ranges like "S1-S3" and re-mentions ("S4 each of S1-S3") repeat a label, and a
         # repeated label is one check mentioned twice, not two checks.
         seen_lab = []
-        for lab in re.findall(r'\bS(\d+)\b', sc['text']):
+        for lab in re.findall(r'\bS-?(\d+)\b', sc['text']):
             if lab not in seen_lab: seen_lab.append(lab)
         sc['labels'] = [{'label': lab, 'present': True} for lab in seen_lab]
         # an empty list means the section states its checks in PROSE, not that it has none —
         # G0-B, G3 and G4 do exactly that, and an empty array would read as "no static checks"
         sc['labelled'] = bool(seen_lab)
-        for miss in re.findall(r'[Tt]here is no S(\d+)', sc['text']):
+        for miss in re.findall(r'[Tt]here is no S-?(\d+)', sc['text']):
             sc['labels'] = [l for l in sc['labels'] if l['label'] != miss]
             sc['labels'].append({'label': miss, 'present': False,
                                  'note': 'named hole; carried by an open item'})
