@@ -510,6 +510,14 @@ are corrected: narrowed original-theory withdrawal, mapping-owned
 `active_open` plus visible-view withdrawal extraction. Exact review is
 pending; carried G3/G2/G0/G4 decisions remain explicitly unclaimed.
 
+Exact review of `2868efd` is **BLOCKED**. The /4 migration, hidden-link fix,
+`completedBlockId` ownership, and live item37 status pass. G3 acceptance is
+still not canonical (omits awaitAny/awaitAll and external namespace cleanup),
+the opening falsely says no packet work remains, withdrawn R16 history is still
+normative, `/4` active-open arithmetic permits closed+withdrawn overlap and
+bare-substring state spoofing, and R15/item36 still says “forever.” G2-A/B,
+G3 N/Watchdog, G0-A/B, G4, and sweep proof/docs remain blocked.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
