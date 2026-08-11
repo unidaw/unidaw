@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '56dd20ee29861711cecb35ae6f6af302d5b4158c'
+PREV_TIP     = '016da51cebcae98bffa001d33bd5aca47d9c0bff'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -462,12 +462,15 @@ CONTROLS = {
  'blocker-kind':     ('35. **G0-B** — ⟦PRODUCT⟧ ', '35. **G0-B** — ', 1, 'BLOCKER-KIND'),
  'packet-marker-gone': ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ', '37. **G3** — ⟦PRODUCT⟧ ', 1,
                       'PACKET-SET-RESTATED'),
- # AN ACTUAL MOVE, which this was not: it was byte-for-byte the deletion above, so the packet
- # advertised three distinct mutations and shipped two. A control named for a behaviour it does not
- # perform is worse than a missing one, because the prose counts it.
- 'packet-marker-move': ('1. **G0-B** — The generated header breaks',
+ # NAMED FOR WHAT IT DOES. It was byte-for-byte the deletion above; I then made it add a marker to
+ # a nonblocking item and called it a move, which it still is not — a two-site move is not
+ # expressible in this single-anchor control format, and claiming one was the same defect a second
+ # time. It ADDS, the name says ADDS, and the deletion half is covered by packet-marker-gone.
+ 'packet-marker-added': ('1. **G0-B** — The generated header breaks',
                       '1. **G0-B** — ⟦PACKET⟧ The generated header breaks', 1,
                       'PACKET-SET-RESTATED'),
+ 'marker-unclosed':  ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
+                      '37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ⟦BROKEN ', 1, 'KIND-MARKER-UNKNOWN'),
  'marker-qualified': ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
                       '37. **G3** — ⟦PRODUCT⟧ ⟦PACKET: extra⟧ ', 1, 'KIND-MARKER-UNKNOWN'),
  'marker-empty':     ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
@@ -944,6 +947,8 @@ _bodies = {int(m.group(1)): m.group(0) for m in
 # reject — anything it cannot represent it reports as absent, which is this packet's oldest shape.
 _MARKER_RUN = re.compile(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ((?:⟦[^⟧\n]*⟧ ?)*)')
 _KIND_TOKENS = {'PRODUCT', 'PACKET'}
+_HEAD_TEXT = {int(m.group(1)): m.group(2) for m in
+              re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — (.{0,200})', _unhidden(body))}
 _KINDS, _MARKER_ERR = {}, []
 for _m in _MARKER_RUN.finditer(_unhidden(body)):
     # `*` here too. Widening the RUN grammar to admit ⟦⟧ and leaving this extractor at `+` meant the
@@ -981,6 +986,14 @@ for _m in _MARKER_RUN.finditer(_unhidden(body)):
             _MARKER_ERR.append(f'item {_n} repeats ⟦{_name}⟧; a duplicate collapses on emission')
         else:
             _kinds.append(_name)
+    # AN UNCLOSED ⟦ STOPS THE RUN AND IS SKIPPED. The grammar requires a closing ⟧, so `⟦BROKEN`
+    # is not matched, the run ends before it, and the token is invisible — the third layer of
+    # "a grammar cannot reject what it cannot match", after the empty marker and the qualifier.
+    # Checked against the text FOLLOWING the run rather than inside it, because that is where an
+    # unmatched opener necessarily lands.
+    _tail = _HEAD_TEXT.get(_n, '')[len(_m.group(2)):]
+    if '⟦' in _tail:
+        _MARKER_ERR.append(f'item {_n} has an unclosed or out-of-run ⟦ in its head')
     _KINDS[_n] = _kinds
 for _e in _MARKER_ERR:
     bad('KIND-MARKER-UNKNOWN', _e)

@@ -56,8 +56,9 @@ The blockers from the exact review are reconciled here, and the count is deliber
    one is packet work. Each carries ⟦PACKET⟧ beside ⟦PRODUCT⟧ so the
    manifest can say so; until `kind` became an array that fact was unrepresentable and the record
    said PRODUCT. An earlier version of this sentence named only item 37. **⟦PACKET⟧ MARKS (18, 26, 28, 36, 37)**, derived from the item heads and compared against this restatement, because representing a
-   kind is not binding it: deleting the marker, moving it to a nonblocking item, DUPLICATING it and
-   misspelling it all passed until these checks existed, and a marker parked later in a head
+   kind is not binding it: deleting the marker, ADDING one to a nonblocking item, DUPLICATING it and
+   misspelling it all passed until these checks existed — and a two-site MOVE is not expressible in
+   the single-anchor control format, so no control claims to perform one, and a marker parked later in a head
    validated as present while emitting as absent because the validator and the emitter read the
    head differently. There is now ONE derivation of a kind, parsing the LEADING marker run, and both
    sides read it. A control performs each mutation. That list is derived from the items themselves and every
@@ -1421,7 +1422,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `12f59413d9f2bd9581e7e9ac7bc5c0d18ac4c1fd`, A.0 SCRIPT BLOB `ccbbc03ee77decb6d3a1e7f07cd3b4e247a5ce3f`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `d5961288ac94e747e16b0f020dd945bd9eb53edf`, A.0 SCRIPT BLOB `29573686de863f470caf77b0f7a8805499bcb273`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1500,7 +1501,7 @@ extractor count at its floor. `--prove-sweep-predicate` classifies a crafted-lin
 every spoof a reviewer has landed on the sweep's success test — a bare `OK (+` prefix, an unanchored
 tail, a wrong tag, a count the emitter cannot print, and a tag line with no separator.
 
-**Controls.** Ninety-eight, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Ninety-nine, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1521,7 +1522,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-move`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
