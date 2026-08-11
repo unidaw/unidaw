@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'e84a1f7e1913b2a9f33dddbc87538608615c9ec9'
+PREV_TIP     = '1be98a6913fca6db01b055974862438d30bfc758'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -218,7 +218,7 @@ CONTROLS = {
                       'FIVE are BLOCKING — 18, 19, 24, 26 and 28', 1, 'BLOCKER-SET'),
  'constraint-lost':  ('1. Production atomic **size/alignment', '1x. Production atomic **size/alignment', 1,
                       'CONSTRAINTS-COUNT'),
- 'opening-gates':    ('**TWO OF THE EIGHT GATES CANNOT BE DECIDED',
+ 'opening-gates':    ('**ONE OF THE EIGHT GATES CANNOT BE DECIDED',
                       '**FOUR OF THE EIGHT GATES CANNOT BE DECIDED', 1, 'OPENING-GATE-COUNT'),
  'manifest-stale':   ('18. **G2-B** — **BLOCKING', '18. **G2-B** — **blocking', 1,
                       'MANIFEST-STALE'),
@@ -262,8 +262,11 @@ CONTROLS = {
  # still passed on the gate-side one; these two controls are the reason that cannot happen again.
  'drop-item-block':  ('**BLOCKING. Authoring RETRACTED at this SHA**', '**BLOCKING.**', 1,
                       'PLANNING-BLOCK-ASYMMETRIC'),
- 'drop-gate-block':  ('AUTHORING RETRACTED: this population covers the OUTPUT relation only',
-                      'This population covers the OUTPUT relation only', 1,
+ # re-anchored onto G2-A: G4's retraction was LIFTED when its population was completed, and a
+ # control anchored on retired text is a control that cannot land — the failure mode that let
+ # 'stale-a0-sample' sit dead for two SHAs while the gate reported PASS.
+ 'drop-gate-block':  ('**Population.** **AUTHORING RETRACTED. Open item 27 (G2-A) is BLOCKING again',
+                      '**Population.** **Open item 27 (G2-A) is BLOCKING again', 1,
                       'PLANNING-BLOCK-ASYMMETRIC'),
  # proves the ruling parser reaches TWO-DIGIT ids: while it was `R[1-9]`, R10 and R11 were invisible
  # and mutating this heading changed nothing the manifest could see.

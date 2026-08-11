@@ -18,9 +18,12 @@ never written is the same error's fingerprint.
 
 The blockers from the exact review are reconciled here, and the count is deliberately not restated: it moved between rounds and a fixed number here would be a twin of the item list, which is the authority:
 
-1. **TWO OF THE EIGHT GATES CANNOT BE DECIDED AT THIS SHA** — G2-A and G4, whose authorings are
-   RETRACTED; see items 26, 27 and the retraction note in each gate, which must agree or
-   `PLANNING-BLOCK-ASYMMETRIC` fires. G1-B's readers were withdrawn and are AUTHORED again under R1
+1. **ONE OF THE EIGHT GATES CANNOT BE DECIDED AT THIS SHA** — G2-A, whose authoring is RETRACTED;
+   see item 27 and the retraction note in that gate, which must agree or
+   `PLANNING-BLOCK-ASYMMETRIC` fires. It said TWO until this SHA: G4 left the list when its
+   population was completed across BOTH halves of its invariant, and it stays blocking for
+   acceptance for a different reason — its tests cover one half — which is item 26's and not a
+   population defect at all. G1-B's readers were withdrawn and are AUTHORED again under R1
    with rules, members and drift detectors; G2-A's scope and G4's out-plane are not. **THREE GATES ARE ACCEPTANCE-DECIDABLE — G0-A, G1-A and G1-B —
    and five items block (18, 19, 24, 26 and 27)** and three of them need product
    work rather than packet work. That list is derived from the items themselves and every
@@ -1031,8 +1034,11 @@ mains, 6 non-calls: a design doc, a tools script, a log line, a declaration, a c
 definition) → **3 production**. ⟂ The predecessor stated the split beside the command instead of as a
 subtraction, which put it outside the arithmetic the gate checks. *Out-plane readers* — RAW **27**
 (`grep -rn -e audioOutOffset -e safeAudioOutPtr -e audioOutChannelPtr -e auxOutputPlaneOffset apps/`)
-⟂ → **AUTHORING RETRACTED: this population covers the OUTPUT relation only, and G4's invariant is
-about the INPUT plane — see open item 26 (G4). THIS SELECTOR IS RETIRED. The population is rebuilt below from the mapped base; what follows
+⟂ → **THIS SELECTOR IS RETIRED and its population is SUPERSEDED, not withdrawn.** It covered the
+OUTPUT relation only while G4's invariant has two halves; the census block now carries both, seven
+derived IN rows and two hand-classified OUT rows with every member pinned. **The gate remains
+undecidable for a different reason, which open item 26 (G4) now states: the POPULATION covers both
+halves and the gate's PASS conditions, deterministic test and static checks still cover one.** The population is rebuilt below from the mapped base; what follows
 records why the selector had to go, because a retired selector with no reason invites its own
 return.** The four RAW terms are four SPELLINGS, and the host uses a fifth: `grep -rn audioAuxOutOffset apps/`
 returns 5 sites and ZERO of them match any RAW term. The engine spells the aux plane
@@ -1428,7 +1434,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `a53601d673da1ca013db3a2e08bc22875c43a042`, A.0 SCRIPT BLOB `8a60d8cfb13d6f678bc512f6fa69238d85123b4b`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `074e9acc576d8ce0fe9d12ca759f39de1263c4f4`, A.0 SCRIPT BLOB `fb0802f31e88c0453af6fb883117e9fde53b9238`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1752,25 +1758,26 @@ carrying one cannot be decided by any implementation.
     marker and this item; a sixth appearing without one fails the gate. Deriving them needs a
     predicate nobody has proposed, so this is open, not closed.
 
-26. **G4** — **BLOCKING. REOPENED: the census covers ONE OF THE TWO PLANES, and not the one the
-    invariant names first.** This gate's invariant is about "the bytes of that host's INPUT plane
-    slot ... owned by the host from dispatch until that exact segment acknowledges consumption", and
-    failure model (1) is "Input overwritten under the host". Everything enumerated so far — seven
-    readers, eight writers, the completeness argument, R5/R8/R9 — is the OUTPUT relation. The INPUT
-    relation is the mirror and is unenumerated: the ENGINE writes the input plane and the HOST reads
-    it (codex-worker-1 names host `inputPtrs` at `:643-647`, aux copy `:681-687`, passthrough
-    `:714-721`, metering `:913-947`/`:971-985`, plugin handover `:862-882`/`:987-995`), and output
-    writer sites overlap input readers.
-    **This is the third incompleteness in this population and the first that is not a selector
-    defect.** The four-spelling census missed a spelling; the mapped-base census missed
-    helper-mediated readers; this one missed HALF THE SUBJECT, because I enumerated what the
+26. **G4** — **BLOCKING, and the reason has MOVED: the population now covers both planes and the
+    GATE'S TESTS still cover one.** The input relation is enumerated — seven derived census rows,
+    every member pinned by path, line and content — so the incompleteness that reopened this item is
+    closed. What is not closed is that G4's PASS conditions, its deterministic test and its static
+    checks were all written against the OUTPUT relation, and a gate whose population covers both
+    halves of its invariant while its tests cover one half is not decidable by any implementation of
+    those tests. **A population is not a gate.** Two specifics no existing PASS condition expresses:
+    failure model (1) "input overwritten under the host" has no test at all, and the positional rule
+    at `:1061` means the host's ownership of the input plane spans ONE PLUGIN rather than the
+    segment — a fixture that dispatches a single-plugin segment can never distinguish the two.
+    **The incompleteness that reopened this item was the third in this population and the first that
+    was not a selector defect.** The four-spelling census missed a spelling; the mapped-base census
+    missed helper-mediated readers; that one missed HALF THE SUBJECT, because I enumerated what the
     discussion was about instead of what the invariant says. No better selector would have caught
     it — only reading the sentence the gate is built on. Previously: the population is measured from
     the MAPPED BASE with aliases
     followed and roles assigned by USE at the dereference, sized by the two OUT census rows and
     split direct/indirect per R8(c), with two same-agent readbacks excluded by argument and the
     establishing and non-site sets accounted so the arithmetic closes. Those figures are CITED, not
-    restated here: a count written twice is the surface backend mutated, and this paragraph is
+    restated here: a count written twice is the surface codex-worker-1 mutated, and this paragraph is
     history, which is the worst place for a live number to hide. The
     four-spelling selector is RETIRED with its blindness quantified: it saw 6 of 7 readers and none
     of the aux writes. Previously: the out-plane population was the byte-consuming reads at
