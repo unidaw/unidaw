@@ -258,10 +258,10 @@ action. It supersedes stale ticket rows above where they conflict.
   `699abfe8f72e597cfd1b6fb3da93ee7f35aa7fef`).
 - Governance worktree: `/Users/jak/src/daw-backend`.
 - Current packet owner: `claude-worker-2`; current latest packet reported:
-  `6dde12e2f5fbac8470592aedd6adb189f6a50956`.
-- Latest packet status: mechanical PASS, 89 controls; hidden dependency section
-  now uses the unhidden view and the EXTRACTOR-TEXT negative probe fires (44 vs
-  floor 43). Exact independent review is pending.
+  `eb973ea3767543e5259aa60514d823f4bf070860`.
+- Latest packet status: mechanical PASS, 89 controls; positional, keyword, and
+  compiled-regex extractor shapes are probed and caught at floor 44. Local
+  aliases remain a documented dataflow floor. Exact independent review pending.
 
 ### Required review protocol
 
@@ -334,7 +334,7 @@ action. It supersedes stale ticket rows above where they conflict.
 
 ### Immediate next actions
 
-1. Obtain the exact independent review of `6dde12e`; do not treat it as settled
+1. Obtain the exact independent review of `eb973ea`; do not treat it as settled
    while the comma shield and gate decisions remain.
 2. Consolidate the six owner decisions into one decision record: G2-B oracle,
    G2-A universe/item 28, G3 M1/watchdog/static, G0-A A13/A15, G0-B items 1–4,
@@ -374,6 +374,8 @@ action. It supersedes stale ticket rows above where they conflict.
   negative control; hidden dependency comments still reach canonical edges.
 - `6dde12e`: owner PASS/89 controls; hidden dependency section moved to unhidden
   view and extractor negative probe fires; independent review pending.
+- `eb973ea`: owner PASS/89 controls; extractor floor expanded to positional,
+  keyword, and compiled receivers; local-alias dataflow remains explicitly open.
 - `f7495b6`: BLOCKED; hidden/code split exposed raw-site and dependency
   extraction gaps.
 - `68fae6b`: BLOCKED; absent-artifact identity fix passes, but Markdown,
