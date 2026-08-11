@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '6f0584621c71083e790ca47fe6706875a549f0c1'
+PREV_TIP     = 'b91034320fe5d513354c175aacb73840c5cd29b4'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -1039,83 +1039,57 @@ _decor_raw = []
 # (`t = pkt; re.search(x, t)`) or read by a HELPER FUNCTION is invisible to it, and catching those
 # needs dataflow rather than a syntax walk. The number is a floor on raw readers, not a census of
 # them, and it is written here rather than implied by a passing run.
-_re_calls = []
-_self_tree = ast.parse(open(__file__).read())
-# names bound from re.compile(...), with the literals of the pattern they were compiled from
-_COMPILED = {}
-for _a in ast.walk(_self_tree):
-    if (isinstance(_a, ast.Assign) and len(_a.targets) == 1 and isinstance(_a.targets[0], ast.Name)
-            and isinstance(_a.value, ast.Call) and isinstance(_a.value.func, ast.Attribute)
-            and _a.value.func.attr == 'compile' and isinstance(_a.value.func.value, ast.Name)
-            and _a.value.func.value.id == 're' and _a.value.args):
-        _COMPILED[_a.targets[0].id] = [x.value for x in ast.walk(_a.value.args[0])
-                                       if isinstance(x, ast.Constant) and isinstance(x.value, str)]
-for _node in ast.walk(_self_tree):
-    if not isinstance(_node, ast.Call) or not isinstance(_node.func, ast.Attribute):
-        continue
-    _recv = _node.func.value
-    _is_re = isinstance(_recv, ast.Name) and _recv.id == 're'
-    # BY DEFINITION, not by capitalisation. `_recv.id.isupper()` treated CONTROLS.items, WORD.get,
-    # WORDNUM.get and _TEXT_ARG.get — four dicts — as compiled patterns; they escaped being counted
-    # only because their first argument happens not to be a bare `pkt`, which is luck rather than
-    # correctness, and codex-worker-2 called it an over-inclusion before it cost anything. A
-    # compiled pattern is a name BOUND FROM `re.compile(...)`, and that is discoverable in the same
-    # tree. The compile site's own literals also decide DATA-vs-PROSE, which the capitalisation
-    # heuristic could not do at all.
-    _is_compiled = isinstance(_recv, ast.Name) and _recv.id in _COMPILED
-    if not (_is_re or _is_compiled):
-        continue
-    # a compiled pattern's first positional arg IS the text; `re.f`'s is the pattern
-    _kw = {k.arg: k.value for k in _node.keywords}
-    if _is_compiled:
-        _txts = ([_node.args[0]] if _node.args else []) + ([_kw['string']] if 'string' in _kw else [])
-        _clits = _COMPILED.get(_recv.id, [])
-        if any('`' in _l for _l in _clits):
-            continue                                   # DATA: the compiled pattern quotes a backtick
-        for _t in _txts:
-            if isinstance(_t, ast.Name) and _t.id in ('pkt', 'body', 'head'):
-                _re_calls.append((f'<{_recv.id}>', _t.id))
-        continue
-    if len(_node.args) < 1:
-        continue
-    if 'string' in _kw:
-        _node = ast.Call(func=_node.func, args=list(_node.args) + [_kw['string']],
-                         keywords=[])
-    if len(_node.args) < 2:
-        continue
-    # a pattern BUILT BY CONCATENATION is still a pattern. Restricting to `ast.Constant` dropped
-    # every `r'...' + GATE_ID + r'...'` call — eleven of them — so my parsed count came out 24 while
-    # claude-worker-1's came out 35 with the same DATA count of 7. **My predicate excluded what it
-    # could not represent**, which is the defect this ratchet exists to catch, committed inside the
-    # parse written to end the regex version of it. Every string constant anywhere in the pattern
-    # expression is collected instead.
-    # THE TEXT ARGUMENT BY SIGNATURE, not by position. `args[-1]` is the text for `re.search` and
-    # `re.finditer` but NOT for `re.sub` (pattern, repl, string) and not when flags are passed
-    # positionally — so a `re.sub` was read as if its `string` were its `repl`, and a flagged call
-    # was read as if its flags were its text. codex-worker-2's signature-aware walk found DATA 8 /
-    # PROSE 43 against my 7 / 35; the difference is entirely this. Position is a proxy for the
-    # parameter, and the proxy fails on exactly the calls whose shape differs.
-    _TEXT_ARG = {'sub': 2, 'subn': 2}
-    _idx = _TEXT_ARG.get(_node.func.attr, 1)
-    if len(_node.args) <= _idx: continue
-    _pat, _txt = _node.args[0], _node.args[_idx]
-    _lits = [x.value for x in ast.walk(_pat)
-             if isinstance(x, ast.Constant) and isinstance(x.value, str)]
-    _tname = _txt.id if isinstance(_txt, ast.Name) else None
-    if _lits and not any('`' in _l for _l in _lits) and _tname in ('pkt', 'body', 'head'):
-        _decor_raw.append((_lits[0][:38], _tname))
-_decor_raw += [(p_, t_) for p_, t_ in _re_calls]
-# 43. THIS POPULATION HAS NOW BEEN COUNTED FOUR TIMES AND ONLY THE LAST ONE IS SOUND:
-#
-#   35   my line regex          blind to 11 calls whose arguments wrap
-#   35   claude-worker-1's      same blindness, same integer, DIFFERENT population — a coincidence
-#                               they caught only by re-running and getting 29
-#   35   my AST walk            positional `args[-1]`, so `re.sub`'s repl was read as its text
-#   43   signature-aware        codex-worker-2's number, reproduced here exactly
-#
-# The three agreements were all worthless: two shared a failure mode, and the third agreed with them
-# by a second, unrelated defect. **A number that keeps coming out the same is not thereby right; it
-# may be the same wrong instrument, or two of them.** The floor is 43 and monotone down.
+# ONE FUNCTION, used by the check AND by its proof. Both carried their own copy of this logic, so
+# mutating the production `_is_compiled` left the proof green — the proof verified a paraphrase.
+# That is the FIFTH emitter/validator divergence today and the second inside this very proof, and
+# copying logic to a second site is the only thing that has ever caused it. There is one site now.
+def classify_raw_prose(src_text):
+    """Every re.* call in src_text whose pattern quotes no backtick and whose TEXT argument is a raw
+    document name. Returns the list; its length is the ratchet's population.
+
+    FLOOR, NOT CENSUS: a text reaching a call through a local alias, a slice, or a helper function is
+    invisible to a syntax walk and needs dataflow. Asserted, not merely described, by the fourth arm
+    of --prove-extractor-ratchet."""
+    tree = ast.parse(src_text)
+    compiled = {}
+    for a_ in ast.walk(tree):
+        if (isinstance(a_, ast.Assign) and len(a_.targets) == 1
+                and isinstance(a_.targets[0], ast.Name) and isinstance(a_.value, ast.Call)
+                and isinstance(a_.value.func, ast.Attribute) and a_.value.func.attr == 'compile'
+                and isinstance(a_.value.func.value, ast.Name) and a_.value.func.value.id == 're'
+                and a_.value.args):
+            compiled[a_.targets[0].id] = [x.value for x in ast.walk(a_.value.args[0])
+                                          if isinstance(x, ast.Constant) and isinstance(x.value, str)]
+    RAW = ('pkt', 'body', 'head')
+    out = []
+    for nd in ast.walk(tree):
+        if not isinstance(nd, ast.Call) or not isinstance(nd.func, ast.Attribute):
+            continue
+        recv = nd.func.value
+        is_re = isinstance(recv, ast.Name) and recv.id == 're'
+        is_compiled = isinstance(recv, ast.Name) and recv.id in compiled
+        if not (is_re or is_compiled):
+            continue
+        kw = {k.arg: k.value for k in nd.keywords}
+        if is_compiled:
+            if any('`' in l for l in compiled.get(recv.id, [])):
+                continue
+            for t in ([nd.args[0]] if nd.args else []) + ([kw['string']] if 'string' in kw else []):
+                if isinstance(t, ast.Name) and t.id in RAW:
+                    out.append((f'<{recv.id}>', t.id))
+            continue
+        args = list(nd.args) + ([kw['string']] if 'string' in kw else [])
+        idx = {'sub': 2, 'subn': 2}.get(nd.func.attr, 1)
+        if len(args) <= idx or not args:
+            continue
+        lits = [x.value for x in ast.walk(args[0])
+                if isinstance(x, ast.Constant) and isinstance(x.value, str)]
+        t = args[idx]
+        if lits and not any('`' in l for l in lits) and isinstance(t, ast.Name) and t.id in RAW:
+            out.append((lits[0][:38], t.id))
+    return out
+
+_decor_raw = classify_raw_prose(open(__file__).read())
 _DECOR_FLOOR = 43
 # THE FLOOR MUST EQUAL TODAY'S COUNT, not merely bound it. As a `>` test the floor could be raised
 # to 999 and the ratchet would pass forever while asserting nothing — codex-worker-2 demonstrated
@@ -1961,47 +1935,9 @@ if os.environ.get('AE_P12_INJECT_FAIL'):
 # three must raise the count and the fourth, the local alias, must NOT — the floor stated in the
 # code, asserted rather than described.
 if '--prove-extractor-ratchet' in sys.argv:
-    def _classify(src_text):
-        n = 0
-        for nd in ast.walk(ast.parse(src_text)):
-            if not isinstance(nd, ast.Call) or not isinstance(nd.func, ast.Attribute): continue
-            rv = nd.func.value
-            isre = isinstance(rv, ast.Name) and rv.id == 're'
-            # THE SAME DEFINITION-BASED RULE THE CHECK USES. This proof carried its own copy of the
-            # capitalisation heuristic after the check moved to `re.compile` bindings — so for one
-            # commit the proof verified a classifier that was no longer the one enforcing anything.
-            # FOURTH emitter/validator divergence today, and the first inside a proof: a proof of a
-            # check must run the check, not a paraphrase of it.
-            comp = {}
-            for a2 in ast.walk(ast.parse(src_text)):
-                if (isinstance(a2, ast.Assign) and len(a2.targets) == 1
-                        and isinstance(a2.targets[0], ast.Name) and isinstance(a2.value, ast.Call)
-                        and isinstance(a2.value.func, ast.Attribute)
-                        and a2.value.func.attr == 'compile'
-                        and isinstance(a2.value.func.value, ast.Name)
-                        and a2.value.func.value.id == 're' and a2.value.args):
-                    comp[a2.targets[0].id] = [x.value for x in ast.walk(a2.value.args[0])
-                                              if isinstance(x, ast.Constant)
-                                              and isinstance(x.value, str)]
-            isc = isinstance(rv, ast.Name) and rv.id in comp
-            if not (isre or isc): continue
-            kw = {k.arg: k.value for k in nd.keywords}
-            if isc:
-                if any('`' in l for l in comp.get(rv.id, [])): continue
-                for t in ([nd.args[0]] if nd.args else []) + ([kw['string']] if 'string' in kw else []):
-                    if isinstance(t, ast.Name) and t.id in ('pkt', 'body', 'head'): n += 1
-                continue
-            args = list(nd.args) + ([kw['string']] if 'string' in kw else [])
-            idx = {'sub': 2, 'subn': 2}.get(nd.func.attr, 1)
-            if len(args) <= idx: continue
-            lits = [x.value for x in ast.walk(args[0])
-                    if isinstance(x, ast.Constant) and isinstance(x.value, str)]
-            t = args[idx]
-            if lits and not any('`' in l for l in lits) and isinstance(t, ast.Name) \
-               and t.id in ('pkt', 'body', 'head'): n += 1
-        return n
+    _classify = classify_raw_prose   # the SAME function the check uses, not a copy
     _self = open(__file__).read()
-    _n0 = _classify(_self)
+    _n0 = len(_classify(_self))
     # BOUND TO PRODUCTION. The proof used to verify its own copy of the classifier and never touch
     # the live floor, so raising `_DECOR_FLOOR` to 999 left it green. It now asserts the classifier
     # agrees with the production count AND that the floor equals it — the two facts the ratchet's
@@ -2018,7 +1954,7 @@ if '--prove-extractor-ratchet' in sys.argv:
                ("_zt = pkt\n_z4 = None if True else re.search(r'X', _zt)", False, 'local alias')]
     _all_ok = True
     for _code, _should, _label in _shapes:
-        _n1 = _classify(_self + '\n' + _code + '\n')
+        _n1 = len(_classify(_self + '\n' + _code + '\n'))
         _rose = _n1 > _n0
         _ok = (_rose == _should)
         print(f'  {_label:<12} {_n0} -> {_n1}  expected {"rise" if _should else "no rise"}  '
