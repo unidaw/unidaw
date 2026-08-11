@@ -690,6 +690,14 @@ post-run stray-opener check and the misnamed move control is now honestly
 `packet-marker-added`; 99 controls pass. Exact review is pending. Item18 prose,
 G3 N/Watchdog/item37 oracle, G0/G4, and M1 remain open.
 
+Exact review of `016da51` is **BLOCKED**. Item28 and edge parity pass, but the
+marker lexer stops early: extra spaces or malformed/unclosed markers later in a
+headline are ignored and clean-pass after regeneration. G2-A planning remains
+true despite missing population enumeration; opening says eleven then ten, and
+G4 still says four versus ten dependency blockers. Item18 prose, G3 M1/item37
+oracle/N/Watchdog, G0, fake move control, and unreachable 100-word mapping
+remain.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
