@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '9322d43530dafe2315f0864c1e5126acdde4e9e3'
+PREV_TIP     = 'ff721ad672158ed8b0243ac298530237eecb925a'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -214,12 +214,16 @@ if not os.environ.get('AE_P12_DRAFT'):
 # the file — normalising by deletion would have shifted them and broken every citation.
 def _visible(t):
     out = list(t)
-    for m in re.finditer(r'<!--.*?-->', t, re.S):
-        for i in range(m.start(), m.end()):
+    def blank(a, b):
+        for i in range(a, b):
             if out[i] != '\n': out[i] = ' '
-    for m in re.finditer(r'`[^`\n]*`', t):
-        for i in range(m.start(), m.end()):
-            out[i] = ' '
+    # ORDER MATTERS, and the first version had it backwards. Inline-code blanking runs the pattern
+    # `[^`\n]*` — which matches the FIRST TWO BACKTICKS of a ``` fence as an empty span, corrupting
+    # the fence marker before the fence pass could see it. So a ruling hidden in a fenced block was
+    # still counted, and the "fix" reported PASS. Fences first, then comments, then inline code.
+    for m in re.finditer(r'(?ms)^```.*?(?:^```|\Z)', t): blank(m.start(), m.end())
+    for m in re.finditer(r'<!--.*?-->', t, re.S):         blank(m.start(), m.end())
+    for m in re.finditer(r'`[^`\n]*`', ''.join(out)):     blank(m.start(), m.end())
     return ''.join(out)
 
 NEG = None
@@ -669,7 +673,7 @@ for label, members, n in [('readers', OUT_READERS, 7), ('writers', OUT_WRITERS, 
 # `c + 5 in pinned` tolerance invented to tolerate ranges, which accepted an arbitrary `:920`
 # because 925 is pinned; and the composite forms (`:664-665`, `:989/994`) were never parsed, only
 # tolerated. A TOLERANCE IS NOT A GRAMMAR — it accepts everything within reach of something valid.
-_tblseg = re.search(r'THE SEVEN BYTE-CONSUMING READERS.*?(?=\n\*\*)', pkt, re.S)
+_tblseg = re.search(r'THE SEVEN BYTE-CONSUMING READERS.*?(?=\n\*\*)', vis, re.S)
 if not _tblseg:
     bad('OUT-MEMBERS', 'no reader-table section found to bound the extraction')
 else:
@@ -681,7 +685,7 @@ else:
 # the writer rows: parse the composite syntax EXACTLY — `juce:NNN`, `:NNN`, ranges `:NNN-NNN` and
 # pairs `:NNN/NNN` — and require the resulting set to equal the roster's members plus the
 # continuation lines the ranges name. Nothing is tolerated; every cited number is accounted.
-wseg = re.search(r'host byte WRITERS.*?(?=\n    \d+  same-agent)', pkt, re.S)
+wseg = re.search(r'host byte WRITERS.*?(?=\n    \d+  same-agent)', vis, re.S)
 if not wseg:
     bad('OUT-MEMBERS', 'no host-writer rows found in the role census')
 else:
@@ -1240,7 +1244,10 @@ rulings = []
 # validator counted eleven. Two regexes over one population, one anchored and one not, is the
 # same defect as two statements of one fact — and MANIFEST-STALE preserved the bad extraction
 # faithfully, because equality to the emitter is not correctness of the emitter.
-for m in re.finditer(r'(?m)^\*\*(R\d+) — .*?(?=\n\n\*\*R\d+ — |\n# |\*\*What these rulings do NOT)', pkt, re.S):
+# the EMITTER reads the visible view too. Anchoring alone left this divergence: the validator
+# excluded a fenced ruling and the emitter still made a record of it, so RULING-SET caught the
+# disagreement instead of the hidden text being absent from both. Same population, same view.
+for m in re.finditer(r'(?m)^\*\*(R\d+) — .*?(?=\n\n\*\*R\d+ — |\n# |\*\*What these rulings do NOT)', vis, re.S):
     blk = m.group(0)
     # the 160-char cap silently emitted `decision: null` for R5, whose heading grew past it when
     # the supersession was written into it — so the manifest lost the very sentence that
