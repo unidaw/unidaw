@@ -381,3 +381,23 @@ action. It supersedes stale ticket rows above where they conflict.
 
 Never claim “settled” from an owner packet alone. The durable truth is the
 latest exact independent verdict recorded here.
+
+### Provisional implementation ticket handoff
+
+`claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
+`P12-27-01` (sender-minted command identity on all refusal channels), based on
+product `75c6f064`. It is planning input, not implementation authorization.
+
+- Scope covers the three adoptable channels: `ClipRejected`, clip
+  `ResyncNeeded`, and harmony `ResyncNeeded`.
+- The ticket identifies the missing sender-minted instance identity, the
+  byte-identical same-track refusal fixture, static C++/Rust/SHM assertions,
+  and a coordinated `kShmVersion` bump.
+- Open design decision: unify this correlation scheme with P12-18’s
+  per-segment acknowledgment or deliberately specify why two schemes are
+  preferable. Do not implement either ticket until this is decided.
+- Proposed ordering: atomics-first; P12-24 and P12-19 may proceed independently;
+  P12-27 follows the correlation/version decision; P12-18 lands last with the
+  coordinated version bump.
+- Item 29 remains separate (narrow SetRowOps zero-base defect); no ticket exists
+  for it yet.
