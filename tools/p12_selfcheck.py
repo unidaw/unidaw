@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '78a1394eb2bd5c46b3ca064331bb91a67c294d96'
+PREV_TIP     = '2c9d3ad5c69c4ce863a027118a5071a1d815697c'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -196,7 +196,15 @@ tokens = re.findall(r'RAW \*{0,2}(\d+)\*{0,2}', pkt)
 # 220-character window saw 11 of 12 subtraction clauses and the arithmetic regex verified 7, under
 # a sentence claiming every subtraction was checked.
 raw_pos = [m.start() for m in re.finditer(r'RAW \*{0,2}\d+', pkt)]
-spans = [(raw_pos[i], raw_pos[i + 1] if i + 1 < len(raw_pos) else len(pkt)) for i in range(len(raw_pos))]
+# Bounded at the next RAW token OR the end of the claim's own paragraph, whichever comes first.
+# Token-to-next-token spans ran for hundreds of lines, so a `minus` and a `→` from unrelated prose
+# could satisfy a claim that states neither — a span that large is as much a proxy as the window
+# it replaced.
+def claim_end(a, hard):
+    para = pkt.find('\n\n', a)
+    return min(hard, para if para != -1 else hard)
+spans = [(raw_pos[i], claim_end(raw_pos[i], raw_pos[i + 1] if i + 1 < len(raw_pos) else len(pkt)))
+         for i in range(len(raw_pos))]
 byhand, checked = 0, 0
 for a, b in spans:
     seg = pkt[a:b]
@@ -349,8 +357,9 @@ else:
         bad('A0-SAMPLE-STALE', f'A.0 shows {got}, this run is {want}')
 
 
+pristine = before_pkt if NEG else pkt
 for cname, (canchor, _, _, _) in sorted(CONTROLS.items()):
-    if pkt.count(canchor) < 1:
+    if pristine.count(canchor) < 1:
         bad('CONTROL-ANCHOR-DEAD', f'{cname} cannot land: {canchor[:44]!r}')
 
 print(f'packet blob {oid[:12]} · product {PRODUCT_SHA[:12]} tree {PRODUCT_TREE[:12]} · '
@@ -361,6 +370,16 @@ if NEG_TAG:
     for f in fail[:30]: print('  ' + f)
     if not hit:
         print(f'CONTROL {NEG} BLIND — mutation landed, [{NEG_TAG}] did not fire'); sys.exit(1)
+    # a control run must be CLEAN apart from its own tag: accepting unrelated failures let a dead
+    # anchor elsewhere ride along inside a green control report
+    dead = [f for f in fail if f.startswith('[CONTROL-ANCHOR-DEAD]')]
+    if dead:
+        print(f'CONTROL {NEG} UNCLEAN — a control anchor is dead in the PRISTINE document: '
+              f'{dead[0]}'); sys.exit(1)
+    other = [f for f in fail if not f.startswith(f'[{NEG_TAG}]')]
+    if other:
+        print(f'CONTROL {NEG} OK (+{len(other)} consequential: {other[0][:60]})')
+        sys.exit(0)
     print(f'CONTROL {NEG} OK — [{NEG_TAG}] fired ({len(hit)})'); sys.exit(0)
 if fail:
     for f in fail[:30]: print('  ' + f)

@@ -949,7 +949,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `84c131c812567e1fdf149263eba4af2bb2095131`, A.0 SCRIPT BLOB `d7b957f3cf755c10560a111e9dac3a8b5a845f2a`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `bbbca766bfa1b4e9427cbeea62ba196236bf1561`, A.0 SCRIPT BLOB `9e5e7700781483311549df5ee682e7467c0e1e7a`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1007,7 +1007,7 @@ produced it.
 distinguishes a request/answer reader from any other `read_` function, and none distinguishes a
 REGION from the offset fields addressing it. Three attempts at a predicate produced 6 by hand, then
 2 by intersection, then a withdrawal. The ruling is that these populations are **authored, not
-derived**: the packet lists the members explicitly and says so, and each authored list carries a
+derived**: each authored population must carry an EXPLICIT MEMBER LIST and a
 DRIFT DETECTOR — a command whose figure is pinned, so that a change in the surrounding code
 invalidates the authored list instead of silently outdating it. For G1-B that detector is
 `grep -rn 'pub fn read_' ui/daw-bridge/src/control.rs` returns 21; if it ever returns anything else,
@@ -1015,8 +1015,14 @@ the authored list is stale by construction and the gate fails until it is re-aut
 This is weaker than a derivation and stronger than what preceded it, which was a hand selection
 presented as a population. It also matches what the packet already does for the five
 hand-classified populations, so the two items resolve on one mechanism rather than two.
-**Cost:** a reviewer must read the list, not re-run a command. The detector bounds the staleness,
-not the correctness.
+**NOT YET APPLIED, and the ruling does not pretend otherwise.** G1-B still declares NO population
+and item 25's five categories carry no member lists and no detectors — the ruling states the
+mechanism, and writing the lists is work that has not been done at this SHA. The reviewer found
+this by reading R1 against the gates rather than against itself, which is the right test and one I
+did not run: I wrote "the packet lists the members explicitly" in the same commit in which it did
+not. **Cost:** a reviewer must read the lists, not re-run a command; the detector bounds staleness,
+not correctness. Item 11 and item 25 stay open FOR THIS WORK, which is now named rather than
+implied.
 
 **R2 — item 18 (G2-B): TWO-LEVEL READINESS, not a recovery-only exemption.** Readiness is staged —
 `mapped-and-bypassed` and `mirror-complete` — and dispatch is permitted at the lower level. The
@@ -1024,10 +1030,14 @@ exemption was the smaller change and is the worse one: it creates a dispatch pat
 during recovery, which is the least-exercised state in the system and the one that runs when
 something has already gone wrong. A LEVEL is a value that every dispatch can carry and every
 assertion can read; an EXEMPTION is a rule that lives in whichever branch remembered it, which is
-this repo's documented failure shape. **Cost, stated because it is real:** G4's dispatch identity
-must carry the readiness level, so the quadruple becomes a quintuple or the acknowledgement must
-name the level it was minted under. G4's PASS 5 full-identity comparison changes with it. This
-ruling therefore reaches into G4 and is not free.
+this repo's documented failure shape. **Cost, stated because it is real, and NOT YET PROPAGATED:**
+G4's dispatch identity must carry the readiness level, so the quadruple becomes a quintuple or the
+acknowledgement must name the level it was minted under, and G4's PASS 5 full-identity comparison
+changes with it. At this SHA G4 still specifies a quadruple, G2-B's invariant still forbids any
+pre-mirror `ProcessBlock`, and PASS 4 and the review register still say the choice is unmade. A
+ruling that contradicts the gates it governs is worse than an open question, because a reader can
+satisfy the gates and violate the ruling. Item 18 stays open FOR THE PROPAGATION, not only for the
+decision, and the gates are the authority until it lands.
 
 **R3 — item 19 (G3): N IS AUTHORED AT 3, and the packet says authored, not derived.** Nothing in
 the tree sources an observation count; `hardTimeoutBlocks = 500` is a block count and converting it
@@ -1036,9 +1046,19 @@ consecutive observations before eviction, and 3N = 9 observations of absence**. 
 value must satisfy is stated so a successor can rule differently on evidence: N observations must
 be long enough to survive ordinary scheduling jitter and strictly shorter in wall-clock than the
 existing hard timeout, so containment happens before the blunt instrument fires. A static check
-pins the literal, so changing N is a visible edit rather than a drift. **Cost:** 3 is not measured.
-It is the smallest value that is not 1 — 1 evicts on a single unlucky sweep — and it is offered as
-a starting point that measurement should overturn.
+pins the literal, so changing N is a visible edit rather than a drift. **Per backend's direction at
+this SHA**, R3 makes G3 decidable FOR IMPLEMENTATION PLANNING in the same way R1 does for the
+authored populations: N = 3 is an authored parameter, not a derived fact, and the work it implies is
+a ticket — pin N with its units and semantics, instrument the production watchdogs, define drift and
+measurement acceptance, and have it independently validated. Item 19 stays OPEN until that passes.
+G3 is NOT permanently resolution-blocked and must not be classified as such. **Cost, and a correction to this ruling's
+own reasoning:** I first justified 3 as "the smallest value that is not 1". Two is. The reviewer
+caught it and the justification is replaced rather than patched: 1 evicts on a single unlucky
+sweep, and 2 evicts on any two adjacent sweeps, which one scheduling hiccup spanning a sweep
+boundary produces — 3 is the smallest bound that requires a host to miss a sweep it had a full
+interval to make. That is an argument, not a measurement, and it is offered as a starting point
+measurement should overturn. A ruling whose stated reason contains an arithmetic error is worth
+less than the number it defends, so the error is recorded here rather than silently corrected.
 
 **R4 — item 24 (G0-B): THE RUST SIDE RENAMES.** `patcher_abi.h:75` keeps `reserved`;
 `patcher_rust/src/lib.rs:86` changes `_pad0` to `reserved`. The C++ header is the ABI AUTHORITY —
@@ -1078,8 +1098,12 @@ carrying one cannot be decided by any implementation.
     The consumer half was worse, and wrong even lexically. `git grep -n 'ringPop(ringUiOut' -- apps` returns 1, and that 1 is
     the whole problem: a second site passes the same ring under a RENAMED PARAMETER —
     `device_chain_ui_live_tests_main.cpp:57` calls `daw::ringPop(ringOut, entry)`. And the Rust side
-    has a whole second reader I did not look for: `peek_ui_diffs` (`control.rs:444`) with 7 call
-    sites in `ui/daw-cli/src/main.rs`. My claim of "one drain function, one caller, no second
+    has a second READER I did not look for: `peek_ui_diffs`
+    (`control.rs:444`) with **8** call sites in `ui/daw-cli/src/main.rs` — I first wrote 7, and 8 is
+    what the frozen product has. It is a READER, not a second consumer: it walks `read` to `write`
+    and never advances `read_index` (`control.rs:448-452`), so it does not compete for entries with
+    the drain. That distinction matters and I collapsed it — a non-consuming reader breaks a
+    single-READER claim and leaves a single-CONSUMER claim standing, and the item needs both. My claim of "one drain function, one caller, no second
     consumer in either language" was false in both languages. Multiple sidecar processes or
     `EngineHandle` instances can also drain concurrently, which no source census can see at all.
     **What a real closure needs**, recorded so the next attempt does not repeat this one: a
