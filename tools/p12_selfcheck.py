@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '163788d2d59e7a08ac191684450ff8212a1b2248'
+PREV_TIP     = 'e2ab4adfeaa7aaead541f496ef0fbf7994ed0115'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -435,16 +435,43 @@ for cname, (canchor, _, _, _) in sorted(CONTROLS.items()):
 # cannot become a second hand-maintained copy of the packet -- which is the defect this document
 # has produced in every other form today.
 MANIFEST = 'docs/architecture/tasks/AE-P1.2-manifest.json'
+def line_of(off): return pkt.count('\n', 0, off) + 1     # offsets are useless to a planner
+item_line = {int(m.group(1)): line_of(pkt.find(body) + m.start())
+             for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*', body)}
+body_off = pkt.find(body)
+gate_hdr = [{'gate': m.group(1), 'line': line_of(m.start()),
+             'end_line': line_of(pkt.find('\n# ', m.end()) if pkt.find('\n# ', m.end()) != -1 else len(pkt) - 1)}
+            for m in re.finditer(r'(?m)^# (G[0-9]+-?[AB]?) — ', pkt)]
+pass_bullets = []
+for gid, gbody in zip(parts[0::2], parts[1::2]):
+    mm = re.search(r'\*\*PASS conditions\.\*\*(.*?)\*\*Static checks', gbody, re.S)
+    if not mm: continue
+    base = pkt.find(mm.group(1))
+    for i, b in enumerate(re.findall(r'(?m)^(\d+)\. (.{0,90})', mm.group(1)), 1):
+        pass_bullets.append({'gate': gid, 'n': int(b[0]),
+                             'withdrawn': 'WITHDRAWN' in b[1],
+                             'text': re.sub(r'\s+', ' ', b[1]).strip()})
+pop_headings = [{'name': m.group(0).strip('* '), 'line': line_of(m.start()),
+                 'hand_classified': MARK in own_bullet(m.start())}
+                for m in re.finditer(r'\*[A-Z][^*\n]{4,70}\* — ', pkt)]
 man = {
  'schema': 'ae-p1.2-manifest/1',
  'product': {'sha': PRODUCT_SHA, 'tree': PRODUCT_TREE},
- 'items': [{'n': n, 'gate': entry.get(n, '?'),
+ 'packet_path': PACKET_PATH,
+ 'gate_sections': gate_hdr,
+ 'pass_bullets': pass_bullets,
+ 'population_headings': pop_headings,
+ 'items': [{'n': n, 'gate': entry.get(n, '?'), 'line': item_line.get(n),
+            'title': re.sub(r'\s+', ' ',
+                            (re.search(r'(?m)^%d\. \*\*[^*]+\*\* — (.{0,110})' % n, body).group(1)
+                             if re.search(r'(?m)^%d\. ' % n, body) else '')),
             'blocking': 'BLOCKING' in (re.search(r'(?m)^%d\. \*\*[^*]+\*\* — (.{0,200})' % n, body).group(1)
                                        if re.search(r'(?m)^%d\. ' % n, body) else ''),
             'closed': n in closed_set} for n in nums],
  'raw_claims': [{'raw': int(re.match(r'RAW \*{0,2}(\d+)', pkt[a:b]).group(1)),
                  'command': (re.search(r'\(`([^`]+)`\)', pkt[a:b]).group(1)
                              if re.search(r'\(`([^`]+)`\)', pkt[a:b]) else None),
+                 'line': line_of(a),
                  'minus': [int(x) for x in re.findall(r'minus \*{0,2}(\d+)', pkt[a:b])],
                  'results': [int(x) for x in re.findall(r'→ \*{0,2}(\d+)', pkt[a:b])]}
                 for a, b in spans if b > a],
@@ -454,7 +481,7 @@ man = {
             'controls': len(CONTROLS)},
 }
 emitted = json.dumps(man, indent=1, ensure_ascii=False, sort_keys=True) + '\n'
-if '--emit-manifest' in sys.argv:
+if '--emit-manifest' in sys.argv or '--manifest' in sys.argv:
     open(MANIFEST, 'w').write(emitted); print(f'wrote {MANIFEST}'); sys.exit(0)
 try:
     if open(MANIFEST).read() != emitted:

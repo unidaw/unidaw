@@ -1053,7 +1053,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `30a3d255c901c51da48070226a78efd8fe218a2e`, A.0 SCRIPT BLOB `50dde1d4b9326087ca182040ef6c90e5b21a4be7`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `e341eda636c08b56ced8c5aaa5c98d56c5c398c7`, A.0 SCRIPT BLOB `4f253185584026ba70a6d56a0dd78d304a06ab1a`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
