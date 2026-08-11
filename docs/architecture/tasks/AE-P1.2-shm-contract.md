@@ -1466,7 +1466,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `1ede6af65479eed6374ef3f2271ac8ae592fbe97`, A.0 SCRIPT BLOB `5236e3c21431f13b830463cff97f872c0727dad1`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `0ccd584a183360508cc1a1f7a3a24e948cc6168a`, A.0 SCRIPT BLOB `494dfc1850b547010b6a845fa3c9b0988fa1ab72`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1532,14 +1532,14 @@ check, staged and atomically replaced, and `MANIFEST-STALE` is suppressed on an 
 a check that forbids its own remedy is a deadlock rather than a guard — that deadlock appeared the
 moment the write moved, and is recorded here because it is the predictable cost of the fix.
 
-**Controls.** Sixty-four, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Sixty-five, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
-`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`, `ratchet-count`, `writer-extra`, `reader-row-moved`, `emit-fail-open`, `ruling-item-swap2`, `diagram-edge`, `control-phantom`. The last thirty exist because
+`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`, `ratchet-count`, `writer-extra`, `reader-row-moved`, `emit-fail-open`, `ruling-item-swap2`, `diagram-edge`, `control-phantom`, `writer-regroup`. The last thirty-one exist because
 **codex-worker-1** MUTATED THIS PACKET AND THE GATE STILL SAID PASS (the finding reached me relayed
 by backend, and two commit messages in this lineage credit the relay rather than the author —
 `e26f91f` and `c332c03`, immutable and wrong on this point): deleting the item's reopening sentence,

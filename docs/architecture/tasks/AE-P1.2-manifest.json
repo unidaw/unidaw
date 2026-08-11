@@ -166,6 +166,7 @@
   "unstated-return",
   "withdrawn-claim",
   "writer-extra",
+  "writer-regroup",
   "wrong-command",
   "wrong-gate-ref",
   "wrong-raw"
@@ -175,7 +176,7 @@
   "census_rows": 9,
   "closed": 8,
   "commanded_claims": 31,
-  "controls": 64,
+  "controls": 65,
   "hand_ruled": 13,
   "items": 33,
   "open": 25,

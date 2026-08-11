@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '0bd4126aa435bad9040c1ab61076578577e733bc'
+PREV_TIP     = 'dfdae8736d3718db23b366115ee2c91a55e9051d'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -357,6 +357,9 @@ CONTROLS = {
  'ruling-item-swap2': ('**R12 — item 27 (G2-A)', '**R12 — item 28 (G2-A)', 1, 'RULING-ITEM-BIND'),
  # the diagram has contradicted the text twice; it is checked now, so make sure the check fires
  # an unhyphenated phantom in the list: the shape filter that used to guard this admitted it
+ # codex-worker-1's regrouping: same line numbers, different arity — one handover member spanning
+ # two lines rewritten as two members. A line-set comparison cannot see it.
+ 'writer-regroup':   ('juce:989/994', 'juce:989, :994', 1, 'OUT-MEMBERS'),
  'control-phantom':  ('`wrong-raw`,', '`wrongraw`, `wrong-raw`,', 1, 'CONTROL-PHANTOM'),
  'diagram-edge':     ('    G0-B → G4', '    G0-B → G1-A', 1, 'DIAGRAM-EDGE'),
  'ratchet-count':    ('ratchet holds at **four** at this SHA', 'ratchet holds at **five** at this SHA', 1,
@@ -638,17 +641,21 @@ wseg = re.search(r'host byte WRITERS.*?(?=\n    \d+  same-agent)', pkt, re.S)
 if not wseg:
     bad('OUT-MEMBERS', 'no host-writer rows found in the role census')
 else:
-    cited = set()
-    for m in re.finditer(r':(\d{3,4})(?:\s*[-/]\s*(\d{3,4}))?', wseg.group(0)):
-        cited.add(int(m.group(1)))
-        if m.group(2): cited.add(int(m.group(2)))
-    # the roster pins the FIRST line of each site; the citations additionally name the continuation
-    # of each multi-line fill and the second line of the indirect pair, and those are enumerated
-    # here rather than allowed by arithmetic
-    CONTINUATIONS = {665, 726, 994}
-    expect = {l for _, l, _ in OUT_WRITERS} | CONTINUATIONS
-    if cited != expect:
-        bad('OUT-MEMBERS', f'writer citations {sorted(cited)} != pinned+continuations {sorted(expect)}')
+    # GROUPING is part of the citation, not decoration. Flattening `:989/994` into two line numbers
+    # made `:989, :994` — two separate members — indistinguishable from one handover member spanning
+    # two lines, so the arity of the population was unbound while its line set was pinned. Each
+    # citation is now a GROUP: a single line, a range `a-b`, or a slash pair `a/b`, and the expected
+    # groups are declared with their form.
+    cited = []
+    for m in re.finditer(r':(\d{3,4})(?:\s*([-/])\s*:?(\d{3,4}))?', wseg.group(0)):
+        cited.append((int(m.group(1)), m.group(2) or '', int(m.group(3)) if m.group(3) else None))
+    EXPECT_GROUPS = [(664, '-', 665), (686, '', None), (719, '', None), (725, '-', 726),
+                     (925, '', None), (952, '', None), (956, '', None), (989, '/', 994)]
+    if sorted(cited) != sorted(EXPECT_GROUPS):
+        bad('OUT-MEMBERS', f'writer citations {sorted(cited)} != expected groups '
+                           f'{sorted(EXPECT_GROUPS)} — grouping and arity, not only line numbers')
+    if len(cited) != len(OUT_WRITERS):
+        bad('OUT-MEMBERS', f'{len(cited)} writer citations for {len(OUT_WRITERS)} pinned members')
 
 # ---- 2e3. the pointer-helper ratchet: executed, not described ---------------------------------
 RATCHET_CMD = ["git", "grep", "-n", "-E", r'^float\* [a-zA-Z_]+\(|-> float\* \{$', "--", "apps/*.cpp"]
@@ -927,6 +934,8 @@ WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twen
         53: 'Fifty-three', 54: 'Fifty-four', 55: 'Fifty-five', 56: 'Fifty-six',
         57: 'Fifty-seven', 58: 'Fifty-eight', 59: 'Fifty-nine', 60: 'Sixty',
         61: 'Sixty-one', 62: 'Sixty-two', 63: 'Sixty-three', 64: 'Sixty-four',
+        65: 'Sixty-five', 66: 'Sixty-six', 67: 'Sixty-seven', 68: 'Sixty-eight',
+        69: 'Sixty-nine', 70: 'Seventy', 71: 'Seventy-one', 72: 'Seventy-two',
         33: 'Thirty-three', 34: 'Thirty-four', 35: 'Thirty-five', 36: 'Thirty-six',
         37: 'Thirty-seven', 38: 'Thirty-eight', 39: 'Thirty-nine', 40: 'Forty'}
 if not listed:
