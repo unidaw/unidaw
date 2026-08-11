@@ -727,6 +727,11 @@ marker and stray checks; 100 controls pass and the prose-count regex was widened
 for “One hundred.” Exact review is pending; G3/G0/G4/M1 and item18 propagation
 remain gated.
 
+Owner successor `a2de738` claims G4 now derives and states ten dependency
+blockers with its rule, and item18’s retained circularity is explicitly bounded
+as history rather than current status. Exact review is pending; G3/G0/M1/item37
+oracle remain gated.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
