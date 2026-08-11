@@ -28,7 +28,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    the manifest keeps the two apart deliberately. The zero case is a different sentence rather than
    a missing one, so the check cannot pass by the claim disappearing. G1-B's readers were withdrawn and are AUTHORED again under R1
    with rules, members and drift detectors; G2-A's scope and G4's out-plane are not. **TWO GATES ARE ACCEPTANCE-DECIDABLE — G0-A and G1-A —
-   and nine items block (18, 19, 24, 26, 27, 29, 33, 35 and 36)** and ALL NINE need product
+   and ten items block (18, 19, 24, 26, 27, 29, 33, 35, 36 and 37)** and ALL TEN need product
    work, none of them currently waiting on another item — **classification and state are orthogonal
    and the markers no longer pretend otherwise**: ⟦PRODUCT⟧ says what KIND of work closes an item,
    ⟦BLOCKED-ON: n⟧ says what it WAITS ON, and an item may carry both. Item 27 carried an edge to
@@ -1045,7 +1045,11 @@ and without M1: the mechanism claim is decidable at the pin and the check is the
 this sentence originally deferred to M1 no longer waits on it, and what remains — which false-green
 channel operates in a given run — needs telemetry that does not exist, per item 36. The reviewer
 SHALL confirm that evicting a host which still owes dispatched blocks cannot corrupt what a RESUMED
-host reads or publishes. The reviewer SHALL decide `daw::Watchdog`'s fate — deletion or
+host reads or publishes. **R16 DISCHARGES THIS ONLY FOR THE PRODUCER-VECTOR READING**, which PASS 7
+forbids anyway: under `hostReady = false` the producer, the input/output write and the mixer all
+skip the host, and SIGCONT cannot readmit the stopped process. It does NOT discharge the mixer's
+snapshot path, where readiness is live and the mapping is not — item 37. The demand stands for
+that half. The reviewer SHALL decide `daw::Watchdog`'s fate — deletion or
 re-specification — since the gate accepts either with equal force and deliberately cannot choose.
 **The reviewer SHALL resolve the static-check contradiction**: one check places the eviction inside
 `apps/engine_producer_thread.cpp:225-252`, whose natural implementation was said to move the exit
@@ -1395,7 +1399,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `8ee72fad5cb48013148fed09b42119c302b3b31f`, A.0 SCRIPT BLOB `df9d7dbe8d5a1766038ed55a3a2c7575daac2f83`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `7f1f88e39f430fa8939d0a81b7054dc2863e0116`, A.0 SCRIPT BLOB `e7f7728a79719f4e6905380257dbe3624887c0ad`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1984,10 +1988,23 @@ at `apps/engine_producer_thread.cpp:226-227`, before it can enter `hostProgress`
 hold the minimum. `processTrack` returns at `apps/engine_produce_block.cpp:362-363` before any newer
 input or output is written to that track's planes, so a resumed host reads its OWN block's input. The
 mixer skips the track at `apps/engine_audio_callback.h:305-306`, so a late write cannot be played.
-And readiness is never restored in place: the production `hostReady.store(true)` that follows an
-eviction is `apps/engine_restart_worker.cpp:87`, immediately after `runtime->controller.launch(…)`
-(`:70`) — a RELAUNCH with a new child and a new mapping. SIGCONT alone cannot readmit the frozen
-host. codex-worker-1 established all of it.
+And the frozen host is never readmitted in place: the production `hostReady.store(true)` that
+follows an eviction is `apps/engine_restart_worker.cpp:87`, immediately after
+`runtime->controller.launch(…)` (`:70`) — a RELAUNCH with a new child. SIGCONT alone cannot bring the
+stopped process back into the counted set. codex-worker-1 established all of it.
+
+**THE RETRACTION GOES THIS FAR AND NO FURTHER, and an earlier draft of it overreached.** I wrote that
+relaunch "closes all three doors", which is not established, and codex-worker-1 named the gap on the
+next pass. `EngineAudioCallback::TrackInfo` holds the MAPPING as a snapshot —
+`std::shared_ptr<const daw::SharedMemoryView> shmView` with `shmBase` and `header` beside it
+(`apps/engine_audio_callback.h:34-40`) — while `hostReady`, `active` and `completedBlockId` are RAW
+POINTERS to live runtime atomics in the same struct. **Readiness is read live; the mapping is read
+from a snapshot.** Relaunch makes a NEW mapping (`apps/host_controller.cpp:286`, `:294`), and
+`apps/engine_restart_worker.cpp` republishes readiness without republishing the callback's track
+list. So a callback still holding the pre-relaunch `TrackInfo` can observe `hostReady == true`
+against the OLD `shmView`. Whether anything republishes that list before the callback next runs is
+NOT established here, and establishing it is what item 37 now asks for. **Retracting a wrong
+mechanism is not the same as proving the right one safe**, and I conflated the two.
 
 **What survives is PASS 7's rationale, which the packet never stated.** PASS 7 reads as a placement
 preference; R16's analysis is the reason it is a SAFETY requirement. Producer-vector-only eviction
@@ -2053,7 +2070,9 @@ containment event emitted on a TRANSITION and appearing exactly once under `apps
 
 **The 12 is a census row, and a census row is a fact about a FROZEN tree.**
 `sed -n '134,373p' apps/engine_producer_thread.cpp | grep -c 'continue;'` returns 12, and A.0 checks
-every such row for equality (`tools/p12_selfcheck.py:1276`) against the pinned product SHA. It
+every such row for equality against the pinned product SHA — the `COMMAND-MISMATCH` comparison in
+`tools/p12_selfcheck.py`, cited by TAG because an earlier draft cited it by LINE and the line moved
+under it when the script grew, landing on `COMMAND-NEEDS-RG`. It
 asserts what that command returns at that SHA and nothing else. An implementation lands on a
 different SHA and is measured by that SHA's successor packet. **A pinned figure cannot forbid a
 future edit — being unable to move is what pinning means.**
@@ -2078,7 +2097,7 @@ describes, and that question is not visible in the sentence that uses it. Item 2
 whole content was a packet decision and there is nothing left for an implementer to choose between.
 
 **What these rulings do NOT do.** None of them closes an item that names PRODUCT work — R1 through
-R17 make such items implementable, R13 and R16 are RETRACTED rather than applied,, and R13 is RETRACTED rather than applied, and each stays open until the work exists and is verified by
+R17 make such items implementable, R13 and R16 are RETRACTED rather than applied, and each stays open until the work exists and is verified by
 someone other than me. **A ruling CAN close an item whose whole content was a packet decision**, and
 item 11 is the case: it asked for an authored population, R1 authored one, and there was nothing
 left in it. That distinction was missing and the rule read as universal, which contradicted item
@@ -2092,7 +2111,7 @@ census recorded as a proof, which this packet has already made once at item 7.
 
 # Open items — 37 atomic, 9 CLOSED at this SHA, 28 open
 
-One per line, numbered in document order, so the count is checkable. NINE are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 35 and 36. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
+One per line, numbered in document order, so the count is checkable. TEN are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 35, 36 and 37. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
 
 1. **G0-B** — The generated header breaks the documented `-DDAW_BUILD_PATCHER_RUST=OFF` build for six unconditional targets, with no stated path, include directory or target-ordering edge.
@@ -2427,8 +2446,19 @@ carrying one cannot be decided by any implementation.
     telemetry anyway: the per-host vector carries no host identity and no `lastDispatchedBlockId`, so
     nothing currently emitted can evaluate the owes-nothing predicate at
     `apps/engine_rt_helpers.cpp:502`. PRODUCT work.
-37. **G3** — **WITHDRAWN at this SHA. Filed on a mechanism G3 forbids, and retracted the same day.**
-    R16 is RETRACTED in full: this item read eviction as removal from the producer's minimum, which
+37. **G3** — ⟦PRODUCT⟧ **BLOCKING, and the reason has MOVED: readiness and the mapping it authorises
+    are not published together.** `EngineAudioCallback::TrackInfo` holds `shmView`/`shmBase`/`header`
+    as a SNAPSHOT and `hostReady`/`active`/`completedBlockId` as raw pointers to live runtime atomics
+    (`apps/engine_audio_callback.h:34-40`). Relaunch installs a new mapping
+    (`apps/host_controller.cpp:286`, `:294`) and `apps/engine_restart_worker.cpp:87` publishes
+    readiness without republishing the callback's track list, so a callback holding the pre-relaunch
+    `TrackInfo` can see `hostReady == true` against the OLD `shmView`. G3's eviction rests on
+    `hostReady = false` excluding a host at three points; two of them are snapshot-free, and the
+    MIXER is not. Whether some other path republishes the list first is not established, which is
+    the state a gate stays blocked on — the same standard item 35 is held to. What closes this is a
+    generation binding: readiness and mapping published as one, or a mapping generation the callback
+    can test. codex-worker-1 found this. **The item's ORIGINAL claim is withdrawn** — it read eviction
+    as removal from the producer's minimum, which
     PASS 7 names as its own refutation, and the Invariant at `:961-965` requires `hostReady` stored
     false instead. At the pin that excludes the host from the producer loop
     (`apps/engine_producer_thread.cpp:226-227`), from any newer input or output write

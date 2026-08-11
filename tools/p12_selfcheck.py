@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '895223fc34fac14453182b8784d66fcd2f84ddab'
+PREV_TIP     = '90462e1ccac9a82fa8d50c2ddf977bc81f3eb0ba'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -278,8 +278,8 @@ CONTROLS = {
  # this, the next gate that writes S.1 or "Static 1" disappears exactly as G0-B did.
  'label-spelling':   ('**Static checks.** S1 the ready-clear', '**Static checks.** S-1 the ready-clear', 1,
                       'MANIFEST-STALE'),
- 'blocker-set':      ('NINE are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 35 and 36',
-                      'NINE are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 35 and 28', 1, 'BLOCKER-SET'),
+ 'blocker-set':      ('TEN are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 35, 36 and 37',
+                      'TEN are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 35, 36 and 28', 1, 'BLOCKER-SET'),
  'constraint-lost':  ('1. Production atomic **size/alignment', '1x. Production atomic **size/alignment', 1,
                       'CONSTRAINTS-COUNT'),
  'opening-gates':    ('**EVERY GATE IS PLANNABLE AT THIS SHA**',
@@ -343,7 +343,7 @@ CONTROLS = {
  'ruling-body-swap': ('CLOSED at this SHA.** The static-check contradiction was not one. R17 shows',
                       'CLOSED at this SHA.** The static-check contradiction was not one. R16 shows', 1,
                       'RULING-BODY-BIND'),
- 'restate-blockers': ('block (18, 19, 24, 26, 27, 29, 33, 35 and 36)', 'block (18, 19, 24, 26, 27, 29, 33, 35 and 28)', 1,
+ 'restate-blockers': ('block (18, 19, 24, 26, 27, 29, 33, 35, 36 and 37)', 'block (18, 19, 24, 26, 27, 29, 33, 35, 36 and 28)', 1,
                       'BLOCKER-SET-RESTATED'),
  # the item half of the same check: item 26's history is where the digits went when R8 lost them,
  # and a check that ranged only over rulings would have watched them move.
@@ -1135,6 +1135,13 @@ for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — [^\n]{0,120}?'
     if n not in ruling_items.get(r, set()):
         bad('RULING-ITEM-BIND', f'item {n} claims {r}; {r} names {sorted(ruling_items.get(r, []))}')
 
+# ITEM HEADS, once, from the UNHIDDEN view — read by the manifest's `withdrawn` field. Built here
+# rather than per-item inside the emission because a regex per item over raw prose is what the
+# extractor ratchet is counting, and because a state field should not be able to see a WITHDRAWN
+# that lives inside a fence or a comment.
+_ITEM_HEAD_U = {int(m.group(1)): m.group(2) for m in
+                re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — (.{0,200})', _unhidden(body))}
+
 # ---- 2c. the binding RATCHET, because both directions above read only the item HEADLINE ---------
 # codex-worker-1 mutated item 21's body from "R17 shows" to "R16 shows", regenerated, and the gate
 # passed: R17.items stayed [21] from its own heading while the item pointed somewhere else, and the
@@ -1149,10 +1156,17 @@ for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — [^\n]{0,120}?'
 # So it is a ratchet on the unrecorded set instead: these four may stay, a fifth may not. That fails
 # the R17->R16 mutation (it makes (R17, 21) unrecorded) without asserting anything false about the
 # four, and it puts the gaps in the open where a reader can close them deliberately.
-# read through the UNHIDDEN view: a mention of `R17` inside a fence or an HTML comment is not the
-# item recording its ruling, and the extractor ratchet is what insisted on this.
+# read through the VISIBLE view, not the unhidden one. `_unhidden` blanks only truly-hidden
+# constructs and KEEPS link destinations, so codex-worker-1 spoofed the first version by changing
+# item 21's operative text to R16 while parking `R17` in an invisible inline-link destination: the
+# item said R16 to every reader and the ratchet was satisfied. `_visible` blanks fences, comments,
+# code spans AND link destinations, so only text a reader actually sees can record a binding.
+#
+# This remains a MENTION ratchet, not semantic attribution — history, negation or an unrelated
+# sentence naming the ruling still satisfies it. It is scoped to catch the substitution it was built
+# for and the packet says so rather than implying more.
 _ITEM_BODIES = {}
-_parts = re.split(r'(?m)^(\d{1,2})\. ', _unhidden(body))
+_parts = re.split(r'(?m)^(\d{1,2})\. ', _visible(body))
 for _i in range(1, len(_parts) - 1, 2):
     _ITEM_BODIES[int(_parts[_i])] = _parts[_i + 1]
 _BIND_RATCHET = {('R5', 26), ('R6', 27), ('R7', 26), ('R9', 26)}
@@ -1794,6 +1808,12 @@ man = {
             'body': re.sub(r'\s+', ' ', item_body.get(n, '')).strip(),
             'blocking': 'BLOCKING' in (re.search(r'(?m)^%d\. \*\*[^*]+\*\* — (.{0,200})' % n, body).group(1)
                                        if re.search(r'(?m)^%d\. ' % n, body) else ''),
+            # WITHDRAWN IS A STATE AND WAS NOT TYPED. A withdrawn item emitted closed=false,
+            # blocking=false, kind=null and sat among the open ones — indistinguishable to a
+            # canonical consumer from live nonblocking work, which is exactly the audience the
+            # manifest exists for. codex-worker-1 named it while item 37 carried that shape.
+            # Read from the HEAD for the same reason `blocking` is: that is where it is validated.
+            'withdrawn': 'WITHDRAWN' in _ITEM_HEAD_U.get(n, ''),
             # the KIND marker, emitted rather than left in prose: a consumer planning the
             # blockers needs to know which are product work and which wait on another item,
             # and that was readable only by eye until now.
