@@ -38,7 +38,7 @@ The owner-authorized activation trigger has been satisfied:
 
 | Handle | Kind | Initial pairing | State |
 |---|---|---|---|
-| `backend` | Codex | Orchestrator/integrator | `ACTIVE: AE-P0` |
+| `backend` | Codex | Orchestrator/integrator; current lane per Ticket state table | `ACTIVE` |
 | `codex-worker-1` | Codex | Lane A implementation owner first | `COMPLETE: final repair chain delivered; original lane clean at 2f7aa93` |
 | `claude-worker-1` | Claude | Lane A independent reviewer first | `APPROVED: e4e08de exact; wrapper-only successor 0f48f69 documented` |
 | `claude-worker-2` | Claude | Lane B discovery owner first | `HOLD: evidence and current-main delta delivered` |
