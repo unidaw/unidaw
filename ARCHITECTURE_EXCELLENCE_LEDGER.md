@@ -258,10 +258,10 @@ action. It supersedes stale ticket rows above where they conflict.
   `699abfe8f72e597cfd1b6fb3da93ee7f35aa7fef`).
 - Governance worktree: `/Users/jak/src/daw-backend`.
 - Current packet owner: `claude-worker-2`; current latest packet reported:
-  `0a796fe921ee85402d620ab536fa7415985b9baf`.
-- Latest packet status: mechanical PASS, 89 controls, AST-based EXTRACTOR-TEXT
-  ratchet floor 35; `_unhidden` reference-definition overblank is claimed fixed;
-  exact independent review is pending.
+  `d9e636ea90622815e6ec69a7a34af7aa94fa176a`.
+- Latest packet status: mechanical PASS, 89 controls, signature-aware
+  EXTRACTOR-TEXT ratchet floor 43; item-line offsets now derive from their
+  source view. Exact independent review is pending.
 
 ### Required review protocol
 
@@ -334,7 +334,7 @@ action. It supersedes stale ticket rows above where they conflict.
 
 ### Immediate next actions
 
-1. Obtain the exact independent review of `0a796fe`; do not treat it as settled
+1. Obtain the exact independent review of `d9e636e`; do not treat it as settled
    while the comma shield and gate decisions remain.
 2. Consolidate the six owner decisions into one decision record: G2-B oracle,
    G2-A universe/item 28, G3 M1/watchdog/static, G0-A A13/A15, G0-B items 1–4,
@@ -367,6 +367,8 @@ action. It supersedes stale ticket rows above where they conflict.
   untrusted until a signature-aware inventory is independently verified.
 - `0a796fe`: owner PASS/89 controls; `_unhidden` reference-definition overblank
   claimed fixed; independent review pending.
+- `d9e636e`: owner PASS/89 controls; signature-aware EXTRACTOR-TEXT floor 43 and
+  source-view item offsets claimed; independent review pending.
 - `f7495b6`: BLOCKED; hidden/code split exposed raw-site and dependency
   extraction gaps.
 - `68fae6b`: BLOCKED; absent-artifact identity fix passes, but Markdown,
