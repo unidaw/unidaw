@@ -625,6 +625,12 @@ restatement regenerates clean while emitted item1 has `kind: []`; no move contro
 exists, legacy `_marked` requires PRODUCT-first, duplicate markers collapse,
 `PACKET2` is accepted, and the semantic PACKET set omits item28/18/26/35.
 
+Exact review of `165e21b` is **BLOCKED**. Its narrow fixes pass, but PACKET
+binding still clean-passes when markers are moved to nonblocking or hidden-link
+positions; emission yields `kind: []`, duplicates normalize, `PACKET2` evades
+the enum, no move control exists, and PRODUCT-first legacy logic remains. M1,
+R15/item36, G2-A/B, G3, G0-A/B, G4, and the semantic PACKET set remain open.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
