@@ -574,13 +574,23 @@ engine-side discriminator cannot empty the clause: a correlator presented with a
 content field equals its own command, but whose identity it did not mint, must return not-mine.
 
 **Population.** **AUTHORING RETRACTED. Open item 27 (G2-A) is BLOCKING again, and my error
-overwrote a correct finding.** I claimed B = A ∪ {SetRowOps}. It is false at the root: the two
-mechanisms are DIFFERENT CHANNELS, not nested populations. `requireMatchingClipVersion`
-(`clip_edit.cpp:5-15`) sets `UiDiffType::ResyncNeeded` and `requireMatchingHarmonyVersion`
-(`engine_harmony_timeline.cpp:111-128`) emits a harmony diff with
-`UiHarmonyDiffType::ResyncNeeded` — **the arbitrated path emits ResyncNeeded, not ClipRejected**.
-`emitClipReject` is a separate mechanism reached from separate sites. The exact review's structure is
-B = (A − {WriteHarmony, DeleteHarmony}) ∪ {SetRowOps}, which is neither containment nor equality.
+overwrote a correct finding.** I claimed B = A ∪ {SetRowOps}. **The retraction stands; its first stated reason did
+not, and the corrected mechanism is this.** THERE ARE TWO FUNCTIONS NAMED
+`requireMatchingClipVersion`: the free one at `clip_edit.cpp:5-15`, which sets
+`UiDiffType::ResyncNeeded` and nothing else, and the engine one at `engine_clip_edit.cpp:932-997`,
+which emits **BOTH** — `emitUiDiff(diffPayload)` at `:982` carrying ResyncNeeded AND
+`emitClipReject` at `:965` (UnknownTrack) and `:986` (StaleBase). I read the first and wrote that
+the arbitrated path emits ResyncNeeded and not ClipRejected. `event_payloads.h:1469-1473` states the
+design in the product's own words: "ResyncNeeded (4) is still emitted alongside, unchanged... This
+is strictly additive."
+**The two reviewers' findings reconcile once the harmony arbiter is separated from the clip one.**
+`requireMatchingHarmonyVersion` (`engine_harmony_timeline.cpp:111-128`) emits a harmony diff ONLY —
+no ClipRejected. So CLIP-arbitrated commands emit both refusals, HARMONY-arbitrated commands emit
+only ResyncNeeded, and `SetRowOps` emits ClipRejected while being unarbitrated. That gives
+B = (A − {WriteHarmony, DeleteHarmony}) ∪ {SetRowOps}: neither set contains the other, which is
+claude-worker-1's original NOT-NESTED, reached by codex-worker-1's route.
+**A control built on "ClipRejected means unarbitrated" would classify every StaleBase refusal — the
+arbitrated ones — as unarbitrated**, which is the retracted containment error mirrored.
 claude-worker-1 told me these populations were NOT NESTED and I replaced that with a containment
 claim I had not verified — a correct finding overwritten by a tidier wrong one, which is worse than
 never having had it. The review also reports that the subtraction reaching 9 gives 8 command-facing
@@ -1063,7 +1073,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `c192f51376a2d0615ccdd39aff7d21456b9c7de0`, A.0 SCRIPT BLOB `219ee4c40929b432bcf14951e04f5ef6771785a9`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `51bbcce5430c4a4aa5f8e37bad08a1c88e051a52`, A.0 SCRIPT BLOB `5a0b2a120d4cd99925db7afcc139c27ddb9467a0`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
