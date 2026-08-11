@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '482c9c2dd0c85a5fb11be581e27610687528e4ca'
+PREV_TIP     = 'b7aa09cc1eb9e798713a2ed5ace92dfaf53ad683'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -1858,10 +1858,12 @@ man = {
             # and `active_open` could fall below the truth. And the test is anchored, not a bare
             # substring — `WITHDRAWN` must open a bolded state clause, so a head that merely
             # discusses withdrawal does not become withdrawn.
-            'active_open': len(nums) - closed - sum(
-                1 for n in nums
-                if re.match(r'\*\*WITHDRAWN\b', _ITEM_HEAD_U.get(n, '').lstrip())
-                and n not in closed_set),
+            # A SET COUNT, not arithmetic. `items - closed - withdrawn` double-subtracts an item
+            # that is both, and a probe marking item 21 closed AND withdrawn drove it to 26 while
+            # the true active work was 27. States overlap; subtraction assumes they do not.
+            'active_open': len([n for n in nums if n not in closed_set
+                                and not re.match(r'\*\*WITHDRAWN\b',
+                                                 _ITEM_HEAD_U.get(n, '').lstrip())]),
             'blocking': blocking_n, 'raw_claims': len(tokens), 'hand_ruled': byhand,
             'controls': len(CONTROLS), 'commanded_claims': cmd_claims,
             'census_rows': len(census_rows), 'rulings': len(rulings)},
@@ -2075,17 +2077,17 @@ if '--emit-manifest' in sys.argv or '--manifest' in sys.argv:
     open(tmp, 'w').write(emitted); os.replace(tmp, MANIFEST)
     print(f'wrote {MANIFEST}'); sys.exit(0)
 def _sweep_patterns(name, tag):
-    """The two lines the --negative success path can print, and the tag line that must accompany
-    them. ONE definition, used by --sweep and by --prove-sweep-predicate: the last time this logic
-    existed twice the proof drifted from the check it certified, twice in one day.
+    """The two lines the --negative success path can print, and the tag line that must
+    accompany them. ONE definition, used by --sweep and by --prove-sweep-predicate: the last
+    time this logic existed twice, the proof drifted from the check it certified.
 
-    The counts are `[1-9]\\d*`, not `\\d+`. `\\d+` admitted `fired (0)`, `fired (01)` and
-    `(+0 consequential: …)` — none of which the emitter can produce, since both lines print
-    `len(...)` of a list it has already tested non-empty (`:1877`, `:1887`). A grammar wider than
-    its emitter is not the exact match this claims to be; codex-worker-2 named the gap.
-
-    The tag line is `[TAG] ` with the space, not a bare prefix: `  [TAG]garbage` matched before,
-    which is the same prefix-acceptance defect one layer down from the one it was fixing."""
+    This docstring deliberately does NOT restate the grammar. It did, it drifted, and the
+    commit that claimed to delete the restatement only ADDED a second one below while leaving
+    part of the first in place — the claim was false about its own landing until a reviewer
+    diffed it, and my own assertion then caught that the reviewer had it half right too (the
+    digit-class sentence was already gone; the tag-form one was not). The patterns are the
+    grammar; the comment beneath them records only WHY each narrowing exists.
+    """
     nm, tg = re.escape(name), re.escape(tag)
     # THE GRAMMAR IS DESCRIBED ONLY BY THE PATTERNS BELOW, deliberately: an earlier version of this
     # docstring spelled out the digit class and the tag form, and drifted from the code within one
@@ -2099,7 +2101,8 @@ def _sweep_patterns(name, tag):
     # `[TAG] `; and a tag line that must carry a non-space after the separator.
     return (re.compile(rf'^CONTROL {nm} OK'
                        rf'(?: — \[{tg}\] fired \([1-9][0-9]*\)|'
-                       rf' \(\+[1-9][0-9]* consequential: \[[^\n]{{0,59}}\))$'),
+                       rf' \(\+[1-9][0-9]* consequential: (?=[^\n]{{1,60}}\))'
+                       rf'\[[A-Z][A-Z0-9-]*\] [^\n]+\))$'),
             re.compile(rf'^ {{2}}\[{tg}\] \S'))
 
 if '--prove-sweep-predicate' in sys.argv:
@@ -2116,6 +2119,10 @@ if '--prove-sweep-predicate' in sys.argv:
         ('CONTROL open-count OK — [OPEN-COUNT] fired (12)',             True,  'form 1, two digits'),
         ('CONTROL open-count OK (+2 consequential: [X] y)',             True,  'form 2'),
         ('CONTROL open-count OK (+2 consequential: z)',                 False, 'detail not from bad()'),
+        ('CONTROL open-count OK (+2 consequential: [)',                 False, 'bare bracket'),
+        ('CONTROL open-count OK (+2 consequential: [X)',                False, 'unclosed tag'),
+        ('CONTROL open-count OK (+2 consequential: [])',                False, 'empty tag'),
+        ('CONTROL open-count OK (+2 consequential: [X])',               False, 'tag with no message'),
         ('CONTROL open-count OK (+2 consequential:    )',               False, 'whitespace-only detail'),
         ('CONTROL open-count OK (+2 consequential: [X] ' + 'y'*70 + ')', False, 'detail past the 60-char truncation'),
         ('CONTROL open-count OK (+1 consequential: [T] z)',             True,  'form 2, single'),

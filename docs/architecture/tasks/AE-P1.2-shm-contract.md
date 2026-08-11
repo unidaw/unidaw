@@ -1402,7 +1402,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `90ba6c1cc29b498cf802d63fa2cd9e433b20283a`, A.0 SCRIPT BLOB `a3f9979ce0db8e35720dc2436b1b95ef404218e5`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `33b695d0f46c398ff712b56b946dcb3109562a64`, A.0 SCRIPT BLOB `19b1f9ad5d3f07d37699bb121e0755ba18901d0c`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1897,10 +1897,14 @@ building one is PRODUCT work that this packet does not authorise.
 three.** R15 said the register's demand for M1 "survives", item 36 said it "remains owed", and the
 register records R15 as having discharged the decision — while R15 itself calls the remaining
 question debugging rather than acceptance. codex-worker-1 named the incoherence. The single status
-is: **M1 IS NOT ACCEPTANCE EVIDENCE FOR G3 AND IS NOT OWED.** The contradiction the register raised
-it for is settled without it, statically. What M1 would answer — which false-green channel operates
-in a given run — is DIAGNOSTIC, needed to fix item 36's check but not to decide this gate, and the
-telemetry it would need does not exist. No PASS bullet may depend on it.
+is: **M1 OR AN EQUIVALENT MEASUREMENT IS OWED, AND CANNOT BE BUILT FROM TODAY'S TELEMETRY.** An
+earlier version of this paragraph said it was neither owed nor acceptance evidence, on the strength
+of the static settlement retracted above; with a real drop path in the tree, nothing static
+distinguishes "gated and stayed gated" from "gated, dispatched, send failed, host dropped". That
+distinction is the register's question. The instrument needs host identity and
+`lastDispatchedBlockId`, which nothing currently emits, so G3 is blocked on an INSTRUMENT rather than
+a decision — and no PASS bullet may depend on M1 until one exists, since a bullet resting on an
+unbuildable instrument makes the gate undecidable by construction.
 
 **The two statements.** The check says the producer does not stay gated
 (`tools/host_stall_check.sh:16-19`), names the mechanism at `:101-104` — "Frozen host + fix = the
@@ -1930,8 +1934,27 @@ the engine's only caller builds every entry as `hostProgress.push_back({true, co
 (`apps/engine_producer_thread.cpp:249-251`), so `active` is hardcoded and `!active` is unreachable
 from production; the `":inactive@"` branch in the same function's log (`:265`) prints for a state
 that cannot occur. Nor is there a liveness drop to appeal to: no `kill(pid, 0)`/`ESRCH` test exists
-under `apps/` outside test mains and teardown. **"The host is dropped" names nothing in this tree.**
-On the register's question, the check is the stale side.
+under `apps/` outside test mains and teardown.
+
+**AND THAT CONCLUSION IS WRONG, WHICH RETRACTS THIS RULING'S CENTRAL CLAIM.** An earlier draft said
+"the host is dropped names nothing in this tree" and ruled the check the stale side. **A drop path
+does exist**: `apps/engine_produce_block.cpp:1096-1100` stores `hostReady = false`, `active = false`
+and `needsRestart = true` when a send fails, and `apps/engine_consumer.cpp:840-841` schedules the
+restart. It is not a liveness probe — which is why looking for `kill(pid, 0)` found nothing and I
+took absence of the mechanism I EXPECTED for absence of any mechanism. It is reached by a failed
+dispatch, and the try_lock/mailbox omissions above are exactly what can let a dispatch be attempted
+while the host is stopped. So an owing host can gate first and be dropped afterwards, which is a
+coherent reading of the check's comment rather than a fiction. codex-worker-1 found it.
+
+**This ruling's own document already carried the evidence.** G3's failure model cites
+`apps/engine_produce_block.cpp:1096-1101` by line as the per-track detector that "clears `hostReady`
+on `!sentOk`". I wrote a categorical absence claim two screens below a sentence naming the thing I
+said was absent.
+
+**What survives.** Readings 4 and 5 still hold: the check cannot OBSERVE whether the producer was
+gated, so it is non-discriminating whichever mechanism operates. What does NOT survive is that the
+register's question is settled statically — it is not, and M1 or an equivalent measurement IS owed
+after all. The single status recorded below is corrected accordingly.
 
 **A CORRECTION TO THIS RULING'S OWN EVIDENCE, and it is the same error twice in one day.** The
 sentence above first cited `apps/engine_ui_thread.cpp:57` and `:77` as the only writes of
@@ -1964,7 +1987,7 @@ decidable at the pin**, which also refutes the "no static reading can" claim I a
    play, and at `apps/engine_producer_thread.cpp:283-289` only the `logStall` call is wrapped in
    `if (isPlaying)` — the `continue` at `:289` is OUTSIDE it. **So a non-playing producer stays
    gated exactly as before and emits no `inFlight` line at all.** The check counts log lines, so it
-   reads a permanently gated producer as zero stalls.
+   reads a gated producer as zero stalls, whether or not the gate is still held.
 
 Readings 4 and 5 are two independent channels by which the check returns 0 WITHOUT OBSERVING whether
 the producer is gated, and neither needs a bypass in the engine. **They show the check is
@@ -2445,7 +2468,10 @@ carrying one cannot be decided by any implementation.
     when few such lines are logged, which the check reads as a SIGSTOPped host having stopped holding
     the minimum — an inference, not an observation, and the two come apart below. Its comment names
     the mechanism it believes in: "the host is dropped" (`:101-104`). `completedMinimum` (`apps/engine_rt_helpers.cpp:492-511`) counts exactly
-    such a host: its three exclusions are `!active`, `completedBlockId == 0` and owes-nothing, and a
+    such a host WHILE THE GATE HOLDS — its comment's "the host is dropped" is NOT a fiction, since a
+    failed send drops one (`apps/engine_produce_block.cpp:1096-1100`,
+    `apps/engine_consumer.cpp:840-841`); what the check cannot do is tell the two apart. Its three
+    exclusions are `!active`, `completedBlockId == 0` and owes-nothing, and a
     frozen producing host meets none (and the `!active` exclusion is unreachable in production —
     `:249-251` hardcodes it). The gate at `apps/engine_producer_thread.cpp:282-283` then closes and
     the frozen host's completed id cannot advance on its own — its `lastDispatchedBlockId` still
@@ -2463,9 +2489,11 @@ carrying one cannot be decided by any implementation.
     `:77` discards the failure — stays gated and silent. **A check counting log lines cannot see a
     gate that does not log.** Fixing the check means making its oracle the gate rather than the
     logging of the gate; fixing the comment at `:101-104` means deleting a mechanism that does not
-    exist. Both are PRODUCT edits. M1 is DIAGNOSTIC for this item and is not owed as
-    acceptance evidence — R15 gives the single status — and it cannot be built from today's
-    telemetry anyway: the per-host vector carries no host identity and no `lastDispatchedBlockId`, so
+    exist. Both are PRODUCT edits. M1 or an equivalent measurement IS owed — R15 gives the
+    single status, and retracts the static settlement that had made it dispensable, because a real
+    drop path exists at `apps/engine_produce_block.cpp:1096-1100` and nothing static separates
+    "gated and stayed gated" from "gated, dispatched, send failed, host dropped". It cannot be built
+    from today's telemetry: the per-host vector carries no host identity and no `lastDispatchedBlockId`, so
     nothing currently emitted can evaluate the owes-nothing predicate at
     `apps/engine_rt_helpers.cpp:502`. PRODUCT work.
 37. **G3** — ⟦PRODUCT⟧ **BLOCKING, and the reason has MOVED: readiness and the mapping it authorises
