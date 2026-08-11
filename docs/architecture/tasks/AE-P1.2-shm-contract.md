@@ -18,11 +18,11 @@ never written is the same error's fingerprint.
 
 The blockers from the exact review are reconciled here, and the count is deliberately not restated: it moved between rounds and a fixed number here would be a twin of the item list, which is the authority:
 
-1. **The per-gate record contract is met in FORM for all eight gates, and three gates have no
-   POPULATION to put in it.** G1-B declares none (item 11), G2-A's scope is falsified and unreplaced
+1. **THREE OF THE EIGHT GATES CANNOT BE DECIDED, and the per-gate record contract is met only in
+   FORM.** Leading with the form was the wrong order: a reader meets a completeness claim first and
+   the disqualification second, and takes away the first.** G1-B declares none (item 11), G2-A's scope is falsified and unreplaced
    (item 27) and G4's out-plane selection is withdrawn (item 26). A record whose population slot
-   reads "withdrawn" satisfies the contract and decides nothing, so the completeness claim is about
-   the form and is stated that way rather than left to imply the gates are ready. Each carries population with its
+   reads "withdrawn" satisfies the contract and decides nothing. Each carries population with its
    extraction command and floor, failure model, deterministic test, PASS conditions each naming their
    refutation, static checks, and review register. Nothing points at a table that does not exist.
 2. **The open list is 27 atomic items, not 15 categories.** The four that compression swallowed are
@@ -365,7 +365,7 @@ reproducible, and four populations in the predecessor were exactly that.
 - *Read-cursor stores* — RAW **14** (`grep -rn -e readIndex.store -e read_index.store apps/ ui/`) → minus 10 non-ring and test stores → **4**. ⟂ The predecessor printed this command beside the figure 4, which
   the command does not produce.
 - *Plugin-cache index sites, which are NOT ring sites* — RAW 23 (`grep -roF 'entries[' apps/`)
-  → minus 9 event-ring statements → **14 expressions across 12 lines**. ⟂ These twelve are the
+  → minus 9 event-ring statements → **14 expressions across 12 lines**. ⟂ These fourteen accesses, which fall on twelve lines, are the
   plugin-cache reads and are NOT the population PASS 7 and S4 range over; the RING index sites are
   the separate authored population below. The twelve are: `plugin_cache.cpp:388/:460/:469/:478/:492`,
   `engine_chain_commands.cpp:81`, `engine_save_project.cpp:265/:362`, `daw_engine_main.cpp:291/:1078`,
@@ -373,8 +373,8 @@ reproducible, and four populations in the predecessor were exactly that.
   stated so the partition is visible: 14 + 9 = 23, and the 9 split 4 data / 5 flag. The line census
   said 12 + 9 = 21 and was a partition of LINES, which is a different set from the sites the gate
   governs — `grep` counts lines, and two of these lines carry two accesses each.
-- ***RING* index sites — the population PASS 7 and S4 actually range over — AUTHORED under R1, and
-  CROSS-LANGUAGE.** [HAND-CLASSIFIED — open item 25 (all)] An authored population IS a hand-classified one; creating it and leaving
+- *RING index sites, the population PASS 7 and S4 actually range over* — AUTHORED under R1, and
+  **CROSS-LANGUAGE**. [HAND-CLASSIFIED — open item 25 (all)] An authored population IS a hand-classified one; creating it and leaving
   the exception count at five would have hidden the sixth inside the fix for the fifth. This gate governs a ring that both sides of the SHM boundary index, and every
   earlier version of this population searched `apps/` only, so the Rust half was not omitted by a
   rule — it was never in view. **C++ production (8):** `event_ring.cpp:95`, `:96`, `:109`, `:116`,
@@ -655,8 +655,11 @@ foreign record; Layer 3 asserts process exit code and stdout, not internal verdi
 
 **Static checks.** S1 the mark is sampled before the send — no `handle` method call inside any
 `await_clip_outcome(` argument. S2 the echo is a copy, not a computation, at each of the three emit
-sites. S3 the counter-only decisions are extracted and each replaced — **and the EXTRACTION itself has no
-predicate, no command and no member list at this SHA, so this check cannot be run**; it is carried
+sites. S3 **IS NOT A CHECK AT THIS SHA AND IS WITHDRAWN AS ONE.** It read "the counter-only decisions are
+extracted and each replaced", and the extraction has no predicate, no command and no member list, so
+there is nothing to run and nothing to fail. Carrying it in the static-check list made the list
+longer than the set of things that can actually be executed, which is the same defect as a
+population with no members. It is recorded as a REQUIREMENT on item 27 instead: it is carried
 under open item 27 (G2-A) with the withdrawn thirteen, because a static check over an unspecified
 extraction is a sentence, not a check — the figure THIRTEEN is WITHDRAWN. It was stated with no predicate, no command and no
 member list, so it could not be reproduced or refuted; the independent evidence run records it as
@@ -686,7 +689,7 @@ worse than the gap it was closing.
 
 **Invariant, stated in full, with the clause this gate cannot decide marked as such.** OBSERVABLE:
 no `ProcessBlock` is dispatched to a host whose per-slot bypass differs from the authored chain,
-**[NOT DECIDED HERE — open item 18 (G2-B)]** whose parameter mirror has not been replayed and
+**[RULED BY R2 (two-level readiness), NOT YET PROPAGATED — open item 18 (G2-B)]** whose parameter mirror has not been replayed and
 acknowledged for the same `host_generation`, or for which a `sendSetBypass` failed without the
 readiness being withdrawn. The middle clause is a property of the SYSTEM and belongs in the
 invariant; it is not a property this gate can decide at this SHA, because the acknowledgement it
@@ -741,7 +744,7 @@ false-green the predecessor's open list dropped.
    acknowledged before `hostReady` is published. The acknowledgement can only arrive during a
    `ProcessBlock`, and `processTrack` refuses to dispatch while `hostReady` is false, so the condition
    is unsatisfiable by construction: it demands an ack that the state it gates makes impossible. No
-   bullet replaces it until the owner rules on a recovery-only priming protocol; a PASS condition
+   bullet replaces it until R2's two-level readiness is PROPAGATED into this gate — the owner has ruled and the recovery-only priming protocol is the REJECTED alternative; a PASS condition
    that cannot be met by any implementation is worse than an absent one, because it reads as covered.
 5. **A `sendSetBypass` failure withdraws readiness.** *REFUTED BY* `hostReady` remaining true after a
    forced send failure.
@@ -889,7 +892,7 @@ correctly gated by the mechanism this gate generalises. `apps/engine_audio_callb
 proving omission rather than design, and they bound the blast radius to three shapes: chains
 interleaving VST and non-VST devices, a patcher audio node after a plugin, and track-to-track routing
 from a plugin-bearing track. **Dependencies** G0-A, G0-B, G1-A, G1-B, G2-A, G2-B, G3. Final gate — and therefore NOT DECIDABLE
-at this SHA, because its dependencies carry SIX BLOCKING items: 11 (G1-B) has no reader
+at this SHA, because its dependencies carry FOUR BLOCKING items: 11 (G1-B) has no reader
 population, 18 (G2-B) has the mirror-ack circularity, 19 (G3) has no source for N, and 24 (G0-B) holds
 the rename PASS 9 is RED without. Items 26 and 27 are NOT dependency blockers: 26 is G4's own
 withdrawn population and 27 is G2-A's, and they are listed separately for that reason.
@@ -1033,7 +1036,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `e6a018a724e67481bb9eb0a3ef61a9169067ffa6`, A.0 SCRIPT BLOB `2e41f644c5d3b6e8de945b44605a6ef9e93f8bb7`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `06860857f553688da97d23a9a353772acf680cc2`, A.0 SCRIPT BLOB `179c5482496d68672ae638b21991a9669f36d47d`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1238,9 +1241,10 @@ carrying one cannot be decided by any implementation.
 24. **G0-B** — BLOCKING for G0-B only. **RULED (R4): the Rust side renames.** The pure name join requires one rename: `patcher_abi.h:75`
     declares `uint8_t reserved[4]{}` where `patcher_rust/src/lib.rs:86` declares `pub _pad0: [u8; 4]`,
     so the two sides of a byte-identical member disagree by NAME and no rule that forbids an alias
-    table can join them. PASS 9 is RED until this lands and states so. Which side renames is an owner
-    call, not a derivation: `reserved` is the C++ convention used elsewhere in that header and `_pad0`
-    is the Rust convention, so the choice trades one file's internal consistency against the other's.
+    table can join them. PASS 9 is RED until this lands and states so. **RULED (R4): the RUST
+    side renames**, `_pad0` becomes `reserved`. The convention argument — `_pad0` is idiomatic Rust —
+    was weighed and lost: a binding may be unidiomatic, an authority may not be derived from its
+    binding. This item is open for the RENAME, not for the choice, which is made.
 25. **all** — **RULED (R1): authored with drift detectors.** The SIX HAND-CLASSIFIED populations
     — five semantic groupings plus G1-A's authored cross-language RING index population, which
     became the sixth when the R1 mechanism was applied to it, tracked rather than claimed away. `Regions the
