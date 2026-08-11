@@ -1377,7 +1377,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `7aa5b88a0e16b61dca827de6138a9336d882127e`, A.0 SCRIPT BLOB `6907bafd7ef066d432a1dbc8d3423ce07bdf543f`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `0a77754eb11ed23f6fce61734083ce624b2e8a69`, A.0 SCRIPT BLOB `36ce29f7823645f62b7fadf453b559e1f654f628`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1390,7 +1390,8 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 
 **The MANIFEST is the canonical machine-readable source.**
 `docs/architecture/tasks/AE-P1.2-manifest.json` carries the gates and their decidability, the
-rulings and whether each is APPLIED, every item with its gate and blocking/closed state, every RAW
+rulings with `named_at` — every place the packet names each one, with line and context; there
+is no `applied` field, because a ruling is applied TO ITEMS and its items can disagree — every item with its gate and blocking/closed state, every RAW
 claim with its command and arithmetic, the control names, and the counts. It is EMITTED by this
 checker from the same extraction the checks run on (`--emit-manifest`) and the checker FAILS if the
 committed copy differs, so it is canonical without being a second hand-maintained document — which
@@ -1443,14 +1444,14 @@ check, staged and atomically replaced, and `MANIFEST-STALE` is suppressed on an 
 a check that forbids its own remedy is a deadlock rather than a guard — that deadlock appeared the
 moment the write moved, and is recorded here because it is the predictable cost of the fix.
 
-**Controls.** Seventy-one, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Seventy-two, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
-`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`, `ratchet-count`, `writer-extra`, `reader-row-moved`, `emit-fail-open`, `ruling-item-swap2`, `diagram-edge`, `control-phantom`, `writer-regroup`, `gate-multidigit`, `withdrawn-status`, `census-row-moved`, `writer-wrong-path`, `writer-path-prefix`, `control-dupe`. The last thirty-seven exist because
+`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`, `ratchet-count`, `writer-extra`, `reader-row-moved`, `emit-fail-open`, `ruling-item-swap2`, `diagram-edge`, `control-phantom`, `writer-regroup`, `gate-multidigit`, `withdrawn-status`, `census-row-moved`, `writer-wrong-path`, `writer-path-prefix`, `writer-path-numeric`, `control-dupe`. The last thirty-eight exist because
 **codex-worker-1** MUTATED THIS PACKET AND THE GATE STILL SAID PASS (the finding reached me relayed
 by backend, and two commit messages in this lineage credit the relay rather than the author —
 `e26f91f` and `c332c03`, immutable and wrong on this point): deleting the item's reopening sentence,
@@ -2101,9 +2102,17 @@ carrying one cannot be decided by any implementation.
     (`patcher_rust/src/lib.rs:158`) writes `*slot = entry` for the whole 64-byte object. Rust does
     not guarantee that padding bytes are written and does not guarantee they are not — a
     `size_of`-wide copy may include them — so this is UNPROVEN SAFE rather than proven broken, which
-    is precisely the state a gate must stay blocked on. **The consequence if it does write: a
-    patcher-emitted event clears a slot's `ready` and the engine refuses to read a command that was
-    fully written.** Two fixes are available and this item does not choose between them: give the
+    is precisely the state a gate must stay blocked on. **THE CONSEQUENCE I GAVE WAS FALSE AND IS WITHDRAWN.** I wrote that a
+    patcher-emitted event clears a slot's `ready` so the engine refuses a fully-written command. It
+    cannot: `ctx.event_buffer` points at `buffer.events` (`apps/engine_run_patcher_node.cpp:82`),
+    which is `std::array<daw::EventEntry, kPatcherNodeCapacity>` (`apps/engine_types.h:86`) —
+    ENGINE-LOCAL memory consumed by count, not the SHM command ring — and the later ringStd path
+    stages a copy and forces `ready = 0` before publishing. codex-worker-1 caught it. **What remains
+    is an ABI CONFORMANCE defect rather than a runtime hazard:** G0-B's population declares these
+    two structs one ABI and they disagree member-for-member. `sizeof` agrees only because the Rust
+    side's missing field is covered by padding, so every layout assertion over the pair passes for a
+    reason that is not layout equality — and the first use of that struct against shared memory, or
+    the first member added to either side, breaks silently. That is what the gate stays blocked on. Two fixes are available and this item does not choose between them: give the
     Rust struct an explicit `ready: u32` so the layouts match member-for-member, or make `push_event`
     assign field-wise so the flag's bytes are never touched. PRODUCT work.
     **How this got missed:** the register asked the right question and I answered it by reading

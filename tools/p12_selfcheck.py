@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '980d2edc5ecf8e07684b469ee9efe935ba1ae183'
+PREV_TIP     = 'bdb53c8fb21e1c2783d15925d2c98092c80c44a9'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -366,6 +366,8 @@ CONTROLS = {
  'writer-wrong-path': ('juce:989/994', 'fake:989/994', 1, 'OUT-MEMBERS'),
  # the PREFIXED variant: anchoring alone left the label unparsed and the sticky path absorbed it
  'writer-path-prefix': ('juce:989/994', 'fake/juce:989/994', 1, 'OUT-MEMBERS'),
+ # the NUMERIC prefix, which walked past both the label scan and the tokenizer
+ 'writer-path-numeric': ('juce:989/994', '9/juce:989/994', 1, 'OUT-MEMBERS'),
  'control-dupe':     ('`member-per-type`,', '`member-per-type`, `member-per-type`,', 1,
                       'CONTROL-DUPLICATE'),
  'gate-multidigit':  ('**Dependencies** G0-A, G0-B', '**Dependencies** G0-A, G10-B', 1,
@@ -675,13 +677,30 @@ else:
     # the spoofed `fake/juce:989` unparseable, and an unparsed label left `_path` STICKY from the
     # previous citation — so the spoof rode in on the last good path. Rejecting an unknown token is
     # not the same as failing to recognise it: silence must not inherit.
-    for _lab in re.finditer(r'(?m)([A-Za-z_][\w/.]*):\d{3,4}', wseg.group(0)):
-        if _lab.group(1) not in ('juce',):
-            bad('OUT-MEMBERS', f'writer citation names an unknown path label {_lab.group(1)!r}')
+    # TOKENIZE, do not pattern-hunt. The label scan started at `[A-Za-z_]`, so `9/juce:989` had no
+    # recognisable label, the parser skipped it, and the sticky `_path` absorbed the citation — the
+    # third spoof through this one field, each defeating a slightly better regex. The segment is now
+    # consumed atom by atom from a delimiter, and ANY non-whitespace run that is not a recognised
+    # atom is an error. A tokenizer that must account for every byte cannot be walked past.
+    _ATOM = re.compile(r'`[^`]*`|juce:\d{3,4}|:\d{3,4}|[-/]|,|·|—|\d{1,4}|[A-Za-z()\[\]\'"*.;=%><_+&|{}#!?@^~$\\]+')
+    _rest = wseg.group(0)
+    _pos = 0
+    while _pos < len(_rest):
+        if _rest[_pos].isspace(): _pos += 1; continue
+        _m = _ATOM.match(_rest, _pos)
+        if not _m:
+            bad('OUT-MEMBERS', f'unparsed token in the writer census at {_rest[_pos:_pos+24]!r}')
+            break
+        _pos = _m.end()
     cited = []
     _path = None
-    for m in re.finditer(r'(?:(?<![\w/])([A-Za-z_][\w]*):)?(\d{3,4})(?:\s*([-/])\s*:?(\d{3,4}))?',
-                         wseg.group(0)):
+    # A CITATION MUST BEGIN AT A DELIMITER. Tokenizing accounted for every byte and still admitted
+    # `fake/juce:989` and `9/juce:989`, because "juce:989" is a perfectly good atom wherever it
+    # appears — the tokenizer proved nothing was unparsed, not that the citation started where a
+    # citation may start. The count check then does the work: a citation that fails to begin at a
+    # delimiter is not extracted, so the arity falls short of the roster's eight and the row fails.
+    for m in re.finditer(r'(?:(?<=\s)|(?<=·)|^)(?:([A-Za-z_][\w]*):|:)(\d{3,4})'
+                         r'(?:\s*([-/])\s*:?(\d{3,4}))?', wseg.group(0)):
         if m.group(1): _path = m.group(1)
         cited.append((_path, int(m.group(2)), m.group(3) or '',
                       int(m.group(4)) if m.group(4) else None))
