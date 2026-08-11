@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '8dcc0cd2505c8b66db781727cb0573df9d910fb2'
+PREV_TIP     = '2868efd2ecd2b71c68648357b60e4da1ab5aab2b'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -2081,15 +2081,19 @@ def _sweep_patterns(name, tag):
     The tag line is `[TAG] ` with the space, not a bare prefix: `  [TAG]garbage` matched before,
     which is the same prefix-acceptance defect one layer down from the one it was fixing."""
     nm, tg = re.escape(name), re.escape(tag)
-    # ASCII digit classes, not `\d`: Python's `\d` matches every Unicode decimal, so `fired (١)`
-    # was accepted from an emitter that prints `str(len(...))`. And the detail is `.+`, not `.*` —
-    # `other[0]` is an element of a list already tested non-empty, so an empty detail is impossible
-    # too. Same for the tag line, which required only `[TAG] ` and so accepted a bare separator.
-    # Every one of these is the SAME defect as the prefix arm before it: a grammar wider than the
-    # emitter it claims to match exactly. codex-worker-2 found this set.
+    # THE GRAMMAR IS DESCRIBED ONLY BY THE PATTERNS BELOW, deliberately: an earlier version of this
+    # docstring spelled out the digit class and the tag form, and drifted from the code within one
+    # commit. A comment restating a regex is a copy that cannot be checked.
+    #
+    # What the patterns encode, and why each was narrowed after a reviewer found it wider than the
+    # emitter: ASCII-only digits, because Python's `\d` matches every Unicode decimal while the
+    # emitter prints `str(len(...))`; counts starting at 1, because both lines print `len()` of a
+    # list already tested non-empty; a consequential detail that starts with `[` and runs at most 60
+    # characters, because it is `other[0][:60]` and every `fail` entry `bad()` builds begins with
+    # `[TAG] `; and a tag line that must carry a non-space after the separator.
     return (re.compile(rf'^CONTROL {nm} OK'
                        rf'(?: — \[{tg}\] fired \([1-9][0-9]*\)|'
-                       rf' \(\+[1-9][0-9]* consequential: .+\))$'),
+                       rf' \(\+[1-9][0-9]* consequential: \[[^\n]{{0,59}}\))$'),
             re.compile(rf'^ {{2}}\[{tg}\] \S'))
 
 if '--prove-sweep-predicate' in sys.argv:
@@ -2105,7 +2109,10 @@ if '--prove-sweep-predicate' in sys.argv:
         ('CONTROL open-count OK — [OPEN-COUNT] fired (2)',              True,  'form 1, count > 1'),
         ('CONTROL open-count OK — [OPEN-COUNT] fired (12)',             True,  'form 1, two digits'),
         ('CONTROL open-count OK (+2 consequential: [X] y)',             True,  'form 2'),
-        ('CONTROL open-count OK (+1 consequential: z)',                 True,  'form 2, single'),
+        ('CONTROL open-count OK (+2 consequential: z)',                 False, 'detail not from bad()'),
+        ('CONTROL open-count OK (+2 consequential:    )',               False, 'whitespace-only detail'),
+        ('CONTROL open-count OK (+2 consequential: [X] ' + 'y'*70 + ')', False, 'detail past the 60-char truncation'),
+        ('CONTROL open-count OK (+1 consequential: [T] z)',             True,  'form 2, single'),
         ('CONTROL open-count OK — [WRONG-TAG] fired (1)',               False, 'wrong tag'),
         ('CONTROL open-count OK (+ suffix I made up',                   False, 'prefix-only spoof'),
         ('CONTROL open-count OK (+1 consequential: x) trailing junk',   False, 'unanchored tail'),

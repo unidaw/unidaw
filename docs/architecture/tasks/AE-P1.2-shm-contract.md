@@ -1399,7 +1399,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `7e21bf4f552454eb9a92f580a818bfaa1f715855`, A.0 SCRIPT BLOB `d6547ca674c12d1b88889f38da9685412d9e65ed`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `76daf3d3a3a0a3e907f043675ba49e5356ce74c3`, A.0 SCRIPT BLOB `9d9292b71c7e3c06371eb43416d03cd7d7328e81`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1474,7 +1474,7 @@ not, so the blanking is shown to be doing work rather than merely agreeing with 
 document. `--prove-emit-identity` drives a real failure into a real run and requires the committed
 manifest to be byte-identical afterwards — it REFUSES when the artifact is absent, because
 `None == None` proved nothing the first time. `--prove-extractor-ratchet` holds the raw-prose
-extractor count at its floor. `--prove-sweep-predicate` classifies twelve crafted lines, including
+extractor count at its floor. `--prove-sweep-predicate` classifies a crafted-line corpus covering
 every spoof a reviewer has landed on the sweep's success test — a bare `OK (+` prefix, an unanchored
 tail, a wrong tag, a count the emitter cannot print, and a tag line with no separator.
 
@@ -1914,8 +1914,11 @@ gate shut is the correct answer."
 A SIGSTOPped host that had been producing
 satisfies none: its completed id is non-zero, and its dispatched blocks are precisely what it has
 stopped finishing. It is counted at `:509-510`, holds `lowest` at its frozen id, and
-`apps/engine_producer_thread.cpp:282-283` gates. Once gated the producer dispatches nothing, so
-neither of that host's ids can move again. **An earlier draft called the state ABSORBING and that is
+`apps/engine_producer_thread.cpp:282-283` gates. While gated the producer dispatches nothing, so the
+frozen host's completed id cannot advance — it is stopped, and nothing else writes it. Its
+`lastDispatchedBlockId` is NOT equally frozen: a later dispatch can update it
+(`apps/engine_produce_block.cpp:1072-1108`), so "neither id can move again", which an earlier draft
+said, is wrong in the second half. **An earlier draft called the state ABSORBING and that is
 not statically established** — codex-worker-1 pointed at `:232-233` and `:236-237`, where a failed
 `controllerMutex` try_lock or an absent mailbox `continue`s past a host, so WHICH hosts are counted
 varies between iterations and the observed minimum can change with no block id moving at all. The
@@ -1960,8 +1963,11 @@ decidable at the pin**, which also refutes the "no static reading can" claim I a
    gated exactly as before and emits no `inFlight` line at all.** The check counts log lines, so it
    reads a permanently gated producer as zero stalls.
 
-Readings 4 and 5 are two independent channels by which the check returns 0 while the producer is
-gated forever, and neither needs a bypass in the engine. **That dissolves the contradiction rather
+Readings 4 and 5 are two independent channels by which the check returns 0 WITHOUT OBSERVING whether
+the producer is gated, and neither needs a bypass in the engine. **They show the check is
+non-discriminating, not that the gate is held forever** — an earlier draft said "gated forever",
+which claims a perpetual population membership nothing here establishes and which R15's own
+try_lock/mailbox paragraph contradicts. **That dissolves the contradiction rather
 than deferring it**: `apps/engine_rt_helpers.h:232-234` is consistent with the implementation, the
 check's mechanism comment names nothing, and the check's green is explainable without any of it
 being true. What remains unobserved is which channel actually operates in a given run — a debugging
@@ -2438,13 +2444,14 @@ carrying one cannot be decided by any implementation.
     such a host: its three exclusions are `!active`, `completedBlockId == 0` and owes-nothing, and a
     frozen producing host meets none (and the `!active` exclusion is unreachable in production —
     `:249-251` hardcodes it). The gate at `apps/engine_producer_thread.cpp:282-283` then closes and
-    that host cannot advance on its own. R15 narrows the stronger claim this item used to
+    the frozen host's completed id cannot advance on its own — its `lastDispatchedBlockId` still
+    can, on a later dispatch (`apps/engine_produce_block.cpp:1072-1108`). R15 narrows the stronger claim this item used to
     carry: the state is NOT statically absorbing, because `:232-233` and `:236-237` skip a host
     on a failed try_lock or an absent mailbox, so the counted population varies between
     iterations. No liveness
     drop exists to appeal to. **R15 settles the mechanism claim against the check.** What makes this
     PRODUCT work is that the check has at least two identified ways to report zero stalls while the
-    producer is gated forever, both found by codex-worker-1 and both decidable at the pin: its
+    producer's gate is never observed, both found by codex-worker-1 and both decidable at the pin: its
     `froze-host-marker` is appended through a second file description and can be overwritten by the
     engine's own next write (`:65` vs `:89`), and `if (isPlaying)` at
     `apps/engine_producer_thread.cpp:284` wraps only the `logStall` call while the `continue` at
