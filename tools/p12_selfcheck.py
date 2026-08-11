@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '8400cbdbf84cd8dcd5e6839b365df10eaa8a25ff'
+PREV_TIP     = '5150b5cf9b2bd18402114ff632dc7cf649f053fe'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -259,9 +259,9 @@ for i, a in enumerate(sys.argv):
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
  'open-count':       ('# Open items — 37 atomic', '# Open items — 38 atomic', 1, 'OPEN-COUNT'),
- 'closed-count':     ('8 CLOSED at this SHA, 29 open', '7 CLOSED at this SHA, 30 open', 1,
+ 'closed-count':     ('9 CLOSED at this SHA, 28 open', '8 CLOSED at this SHA, 29 open', 1,
                       'OPEN-CLOSED-COUNT'),
- 'open-arithmetic':  ('8 CLOSED at this SHA, 29 open', '8 CLOSED at this SHA, 19 open', 1,
+ 'open-arithmetic':  ('9 CLOSED at this SHA, 28 open', '9 CLOSED at this SHA, 18 open', 1,
                       'OPEN-ARITHMETIC'),
  # anchored on the tree hash, not on a count: the previous anchor was '11 RAW +', which the
  # document outgrew, leaving the control unable to land while the gate still reported PASS

@@ -1384,7 +1384,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `443cc949e2796f30d75bf135e39a7345d8cc905b`, A.0 SCRIPT BLOB `019ffcb2b54931c686d8869e5e01c245e984044c`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `9ccc614049ff13dc1ea555ea31c2b9def86c60f6`, A.0 SCRIPT BLOB `a420556a592351b0643f8d2a22e90d9e29ece025`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1392,7 +1392,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 37 items, 29 open · 14 RAW (13 hand-ruled) + 31 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 37 items, 28 open · 14 RAW (13 hand-ruled) + 32 commanded claims, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1969,12 +1969,45 @@ host performs, a monotonic clamp on the reader, a re-baseline on resume, or a bl
 slot is an OWNER choice and this ruling deliberately does not make it. What is ruled out is the
 option the gate currently accepts by silence: no protocol at all.
 
+**R17 — item 21 (G3): THE CONTRADICTION DOES NOT EXIST, AND WHAT MANUFACTURED IT WAS READING A
+PINNED PROVENANCE FIGURE AS A FORWARD CONSTRAINT.** The register asks the reviewer to resolve a
+conflict between the check that places eviction lexically inside
+`apps/engine_producer_thread.cpp:225-252` and "a sibling check" that pins the producer-exit count at
+12, saying one of the two must yield. Neither has to.
+
+**There is no sibling check.** G3's Static-checks paragraph names four: lexical containment in the
+collection loop, no `chrono`/`steady_clock`/`system_clock`/`time(` token in the eviction span, a
+containment event emitted on a TRANSITION and appearing exactly once under `apps/`, and the
+`hostReady` write-form ratchet. None of them mentions the exit count.
+
+**The 12 is a census row, and a census row is a fact about a FROZEN tree.**
+`sed -n '134,373p' apps/engine_producer_thread.cpp | grep -c 'continue;'` returns 12, and A.0 checks
+every such row for equality (`tools/p12_selfcheck.py:1276`) against the pinned product SHA. It
+asserts what that command returns at that SHA and nothing else. An implementation lands on a
+different SHA and is measured by that SHA's successor packet. **A pinned figure cannot forbid a
+future edit — being unable to move is what pinning means.**
+
+**And the packet already declares this number an inequality**: "The producer-exit count is a floor of
+12: a `return` or a `break` out of a nested scope is not a `continue`." A floor says 12 UNDERCOUNTS
+the real exits. Eviction inside the collection loop adds a `continue` and takes the count to 13,
+which is the direction a floor permits. So both readings of "sibling check" fail, in opposite
+directions: as an acceptance check it does not exist, and as a census row it is pinned to a tree the
+implementation will not be on, carrying an explicit floor besides.
+
+**What is worth keeping is how the false conflict was manufactured.** A number stated with a
+reproducing command reads as a rule, because that is what a reproducing command usually accompanies.
+This packet's convention is the opposite — every census figure is a fact about `PRODUCT_SHA` — and
+the register wrote a sentence that spends one as a budget. **A pinned measurement and a forward
+constraint are indistinguishable in prose**; they are told apart only by asking which tree the number
+describes, and that question is not visible in the sentence that uses it. Item 21 is CLOSED: its
+whole content was a packet decision and there is nothing left for an implementer to choose between.
+
 **What these rulings do NOT do.** None of them closes an item that names PRODUCT work — R1 through
-R16 make such items implementable, and R13 is RETRACTED rather than applied, and each stays open until the work exists and is verified by
+R17 make such items implementable, and R13 is RETRACTED rather than applied, and each stays open until the work exists and is verified by
 someone other than me. **A ruling CAN close an item whose whole content was a packet decision**, and
 item 11 is the case: it asked for an authored population, R1 authored one, and there was nothing
 left in it. That distinction was missing and the rule read as universal, which contradicted item
-11's own CLOSED marker three SHAs running. That range — "R1 through R16" above — is checked against the rulings actually parsed
+11's own CLOSED marker three SHAs running. That range — "R1 through R17" above — is checked against the rulings actually parsed
 (`RULING-SET`), because it read "R1 through R4" for as long as there were eleven: the sentence was
 written when four was the whole set and no later ruling was an edit to it. The manifest's parser
 had the matching defect from the other side — `R[1-9]` could not match `**R10 — `, so R9's block ran
@@ -1982,7 +2015,7 @@ to the end and swallowed R10 and R11 into R9's text. **A hardcoded range and a s
 the same failure in two notations, and this packet has now shipped both.** A ruling recorded as a closure would be the same error as a
 census recorded as a proof, which this packet has already made once at item 7.
 
-# Open items — 37 atomic, 8 CLOSED at this SHA, 29 open
+# Open items — 37 atomic, 9 CLOSED at this SHA, 28 open
 
 One per line, numbered in document order, so the count is checkable. TEN are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 35, 36 and 37. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
@@ -2060,7 +2093,7 @@ carrying one cannot be decided by any implementation.
     statement of the circularity. The ack arrives only during a `ProcessBlock` that `processTrack` refuses while `hostReady` is false. A PASS bullet was withdrawn rather than reworded, and the owner HAS ruled (R2: two-level readiness) and the mirror half is unspecified until that ruling is PROPAGATED into this gate and G4 — the item is open for the propagation, not for the decision.
 19. **G3** — ⟦PRODUCT⟧ **BLOCKING, not closed. The ruling is MADE (R3: N = 3, authored) and no further ruling is required.** N has no source in the tree; R3 supplies it as an authored constant. What remains is implementation, not decision (R3: N = 3, authored), which makes the gate decidable for PLANNING; it is not decidable for ACCEPTANCE until the ticket lands — N pinned with units and semantics, a static check on the literal, watchdog instrumentation, drift acceptance and independent validation.
 20. **G3** — `DAW_ENGINE_DEBUG_STALL` must be set by the Layer-2 fixture or the channel a PASS bullet reads does not exist.
-21. **G3** — The static-check contradiction: one check places the eviction where its natural implementation changes an exit count another check pins.
+21. **G3** — **CLOSED at this SHA.** The static-check contradiction was not one. R17 shows there is no sibling check to conflict with — G3's four static checks never mention the exit count — and that the 12 is a census row pinned to `PRODUCT_SHA`, checked for equality against a frozen tree the implementation will not be on, and already declared a FLOOR ("a `return` or a `break` out of a nested scope is not a `continue`"). Eviction inside the collection loop takes the count to 13, which is the direction a floor permits. Nothing for an implementer to choose between; a packet decision with no product work in it.
 22. **G4** — The fixture definitions added here (F0-F6, S1-S8) and the corrected ack-census counts have not been run against anything; the reviewer should confirm them against the fixture rather than against this packet.
 23. **all** — **CLOSED at this SHA.** `read_clip_window` IS a request/answer reader:
     `RequestClipWindow` is command 30 and it reads that command's region. The exact review was right;
