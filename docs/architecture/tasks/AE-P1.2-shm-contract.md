@@ -28,10 +28,13 @@ The blockers from the exact review are reconciled here, and the count is deliber
    the manifest keeps the two apart deliberately. The zero case is a different sentence rather than
    a missing one, so the check cannot pass by the claim disappearing. G1-B's readers were withdrawn and are AUTHORED again under R1
    with rules, members and drift detectors; G2-A's scope and G4's out-plane are not. **TWO GATES ARE ACCEPTANCE-DECIDABLE — G0-A and G1-A —
-   and eight items block (18, 19, 24, 26, 27, 29, 33 and 35)** and SEVEN need product
-   work while one (item 27) is BLOCKED ON ANOTHER ITEM rather than on work of its own — each carries
-   ⟦PRODUCT⟧ or ⟦BLOCKED-ON: n⟧ at its head and the counts are derived from those markers
-   (`BLOCKER-KIND`). The previous figure was three, and a lexical scan for the words "product work"
+   and eight items block (18, 19, 24, 26, 27, 29, 33 and 35)** and ALL EIGHT need product
+   work, one of them (item 27) ALSO waiting on another item — **classification and state are
+   orthogonal and the markers no longer pretend otherwise**: ⟦PRODUCT⟧ says what KIND of work
+   closes an item, ⟦BLOCKED-ON: n⟧ says what it WAITS ON, and item 27 carries both because it is
+   product work that cannot start until item 29 lands. Encoding them as alternatives was a category
+   error that made the count wrong in one direction for a SHA and in the other direction for the SHA
+   before it. The counts are derived from the markers (`BLOCKER-KIND`). The previous figure was three, and a lexical scan for the words "product work"
    finds only two, because items 19, 24 and 26 need product work and say so in other words entirely.
    **The derivation is only as good as the marking, and the marking is mine** — this check can catch
    a marker missing from a blocker, and cannot catch a blocker marked wrongly; item 27 was marked
@@ -1379,7 +1382,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `7d5fbee76d0472d6bd006f2f7d4df365bf7853bf`, A.0 SCRIPT BLOB `6978970d190197868e7c432aaabfea825ca5602b`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `c49d312c2087908d091e5be39ba942b309299c32`, A.0 SCRIPT BLOB `93e9fe0dfd4553a8afaed82c444bdd19c1fcda84`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1962,7 +1965,7 @@ carrying one cannot be decided by any implementation.
     they establish a plane and consume nothing, so no rule has to prefer one. Drift detector on the
     out-plane command's raw figure, which is stated once in the population and not restated here.
 
-27. **G2-A** — ⟦BLOCKED-ON: 29⟧ **BLOCKING, and the scope is AUTHORED under R12: the gate ranges over the three
+27. **G2-A** — ⟦PRODUCT⟧ ⟦BLOCKED-ON: 29⟧ **BLOCKING, and the scope is AUTHORED under R12: the gate ranges over the three
     production adoptable-refusal emit sites.** The retraction is lifted. Every earlier scope here was
     falsified by the same move — it selected on the ARBITRATION and the gate is about the ANSWER, so
     it kept including commands whose refusal is TERMINAL AND UNADDRESSED — the ResyncNeeded

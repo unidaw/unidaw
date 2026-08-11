@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'd9f74b067b90907431b6acb064f474275409eb6c'
+PREV_TIP     = '7a77833aec1b95b57a1ffefdd339838159ff3e54'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -304,7 +304,7 @@ CONTROLS = {
  # INSERTION controls now: no gate declares its population dead at this SHA, so there is nothing to
  # delete. Each adds the declaration to ONE side and requires the asymmetry to be caught — which
  # tests the same rule from the opposite direction and cannot go dead when the packet is healthy.
- 'drop-item-block':  ('27. **G2-A** — ⟦BLOCKED-ON: 29⟧ **BLOCKING,', '27. **G2-A** — ⟦BLOCKED-ON: 29⟧ **BLOCKING. AUTHORING RETRACTED.', 1,
+ 'drop-item-block':  ('27. **G2-A** — ⟦PRODUCT⟧ ⟦BLOCKED-ON: 29⟧ **BLOCKING,', '27. **G2-A** — ⟦PRODUCT⟧ ⟦BLOCKED-ON: 29⟧ **BLOCKING. AUTHORING RETRACTED.', 1,
                       'PLANNING-BLOCK-ASYMMETRIC'),
  # re-anchored onto G2-A: G4's retraction was LIFTED when its population was completed, and a
  # control anchored on retired text is a control that cannot land — the failure mode that let
@@ -796,8 +796,11 @@ _bodies = {int(m.group(1)): m.group(0) for m in
 # not kind. Marking in place and counting the markers is the same repair as the hand-classified
 # populations elsewhere in this packet.
 _prod = sorted(n for n in _derived_blk if '⟦PRODUCT⟧' in _bodies.get(n, ''))
+# every blocker states a KIND; a dependency marker is additional, never a substitute
+_kindless = [n for n in _derived_blk if '⟦PRODUCT⟧' not in _bodies.get(n, '')]
+if _kindless: bad('BLOCKER-KIND', f'blockers with no ⟦PRODUCT⟧ kind marker: {_kindless}')
 _marked = sorted(int(m.group(1)) for m in
-                 re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ⟦(?:PRODUCT|BLOCKED-ON: \d+)⟧', body))
+                 re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ⟦PRODUCT⟧', body))
 if _marked != sorted(_derived_blk):
     bad('BLOCKER-KIND', f'⟦PRODUCT⟧ markers on {_marked}, blockers are {sorted(_derived_blk)}')
 # the phrase wraps across a line in the packet, so the whitespace between its words is not a
@@ -805,7 +808,7 @@ if _marked != sorted(_derived_blk):
 # subject, which is how a check comes to report a missing claim instead of a wrong one.
 _said = re.search(r'and (?:ALL )?(\w+)(?: of them)? need\s+product\s+work', pkt)
 # a ⟦BLOCKED-ON: n⟧ blocker must name a real blocking item, or the delegation points at air
-for _b in re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ⟦BLOCKED-ON: (\d+)⟧', body):
+for _b in re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — (?:⟦PRODUCT⟧ )?⟦BLOCKED-ON: (\d+)⟧', body):
     _src, _dst = int(_b.group(1)), int(_b.group(2))
     if _dst not in _derived_blk:
         bad('BLOCKER-KIND', f'item {_src} is BLOCKED-ON {_dst}, which is not a blocking item')
@@ -823,10 +826,18 @@ for _b in re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ⟦BLOCKED-ON: (\d+)�
 # once fenced blocks are out of the way. Counting the delimiter is the condition; matching text
 # between delimiters was a guess at it.
 _nofence = re.sub(r'(?ms)^```.*?(?:^```|\Z)', lambda m: re.sub(r'[^\n]', ' ', m.group(0)), pkt)
+# A RUNNING TOGGLE, not per-line parity. Parity per line reports the line where a span OPENS and the
+# line where it CLOSES, and says nothing about the lines BETWEEN — so a span crossing three lines was
+# counted as two independent oddities and a chain of them could balance out to look clean. The state
+# is cumulative across the document: a line that BEGINS inside a span is a crossing, whatever its own
+# backtick count.
+_open = False
 for _i, _ln in enumerate(_nofence.splitlines(), 1):
+    if _open:
+        bad('VISIBLE-FLOOR', f'line {_i} begins inside an inline code span — the visible view cannot '
+                             f'see into one, so a span crossing a line break is not permitted here')
     if _ln.count('`') % 2:
-        bad('VISIBLE-FLOOR', f'line {_i} leaves an inline code span open across a line break — the '
-                             f'visible view cannot see into one, so it is not permitted here')
+        _open = not _open
 if not _said:
     bad('BLOCKER-KIND', 'the opening states no product-work count to check')
 elif WORDNUM.get(_said.group(1).upper()) != len(_prod):
@@ -1281,7 +1292,12 @@ rulings = []
 # excluded a fenced ruling and the emitter still made a record of it, so RULING-SET caught the
 # disagreement instead of the hidden text being absent from both. Same population, same view.
 for m in re.finditer(r'(?m)^\*\*(R\d+) — .*?(?=\n\n\*\*R\d+ — |\n# |\*\*What these rulings do NOT)', vis, re.S):
-    blk = m.group(0)
+    # THE SPAN comes from the visible view so a hidden ruling is never found; THE CONTENT comes from
+    # the raw file at the same offsets, because the visible view blanks code spans and R14's
+    # decision text is `EventEntry` — a decision reduced to what survives blanking is not the
+    # decision. The view is length-preserving precisely so these two can be different reads of one
+    # region. Evidence answers WHERE, content answers WHAT, and they need different views.
+    blk = pkt[m.start():m.end()]
     # the 160-char cap silently emitted `decision: null` for R5, whose heading grew past it when
     # the supersession was written into it — so the manifest lost the very sentence that
     # resolves R5 against R8(c), and A0 checked ids only. A cap is a truncation wearing a
@@ -1456,8 +1472,10 @@ man = {
             # TYPED, not a string. `kind: "BLOCKED-ON: 29"` made a consumer parse prose out of a
             # field that exists so it does not have to; the dependency is an edge and is emitted as
             # one, so a planner can walk it without knowing the marker's spelling.
-            'kind': ('PRODUCT' if '⟦PRODUCT⟧' in item_body.get(n, '')
-                     else 'BLOCKED-ON' if '⟦BLOCKED-ON:' in item_body.get(n, '') else None),
+            # KIND and STATE are orthogonal: `kind` is what closes the item, `blocked_on` is what
+            # it waits on, and an item can be both. Encoding them as alternatives made item 27 lose
+            # its PRODUCT classification the moment it gained a dependency.
+            'kind': 'PRODUCT' if '⟦PRODUCT⟧' in item_body.get(n, '') else None,
             # an ARRAY: an item can wait on more than one, and a scalar would have to be widened
             # by a schema change the day that happens. Empty when it waits on nothing.
             'blocked_on': sorted(int(x) for x in
