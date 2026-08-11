@@ -438,6 +438,9 @@ away exact-SHA review or shared-hotspot ownership to improve throughput.
 - `93618fb`: owner PASS/89 controls; sweep fullmatch tightened and R15/R17
   superseded phrasings propagated. Exact review pending; N derivation and
   Watchdog fate remain owner decisions.
+- Exact review of `93618fb` is **BLOCKED**: strict sweep is only narrow-PASS;
+  R15/M1 and R17/item21 propagation remain contradictory, item-side ruling
+  binding is unenforced, and R16/item37 plus G3/G2/G0 decisions remain open.
 - Exact review of `2699a2c` is **BLOCKED**: the extractor proof duplicates rather
   than binds the production classifier/floor, blanking proof is narrow, hidden
   link destinations still become dependencies, identity proves bytes only, and
