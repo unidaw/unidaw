@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'dfdae8736d3718db23b366115ee2c91a55e9051d'
+PREV_TIP     = '548755a9fe14900a9a4c35385fe7c15b769b0b16'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -359,6 +359,11 @@ CONTROLS = {
  # an unhyphenated phantom in the list: the shape filter that used to guard this admitted it
  # codex-worker-1's regrouping: same line numbers, different arity — one handover member spanning
  # two lines rewritten as two members. A line-set comparison cannot see it.
+ # a multi-digit gate id must be seen by every parser, not only the heading one
+ 'gate-multidigit':  ('**Dependencies** G0-A, G0-B', '**Dependencies** G0-A, G10-B', 1,
+                      'GATE-DEP-UNKNOWN'),
+ # a bullet describing a FORMER withdrawal must not be reported as withdrawn
+ 'withdrawn-status': ('4. **WITHDRAWN', '4. **Withdrawn-but-live', 1, 'MANIFEST-STALE'),
  'writer-regroup':   ('juce:989/994', 'juce:989, :994', 1, 'OUT-MEMBERS'),
  'control-phantom':  ('`wrong-raw`,', '`wrongraw`, `wrong-raw`,', 1, 'CONTROL-PHANTOM'),
  'diagram-edge':     ('    G0-B → G4', '    G0-B → G1-A', 1, 'DIAGRAM-EDGE'),
@@ -429,7 +434,7 @@ for v in set(re.findall(r'open list is (\d+) atomic', pkt)):
 entry = {}
 for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*([^*]+)\*\* —', body):
     entry[int(m.group(1))] = m.group(2).strip()
-for m in re.finditer(r'open item (\d+)(?: \((G[0-9A-B-]+|all)\))?', pkt):
+for m in re.finditer(r'open item (\d+)(?: \((' + GATE_ID + r'|all)\))?', pkt):
     r, gate = int(m.group(1)), m.group(2)
     if r not in nums: bad('OPEN-REF-DANGLING', f'open item {r}'); continue
     if not gate: bad('OPEN-REF-UNGATED', f'open item {r} names no gate'); continue
@@ -452,7 +457,7 @@ gate_side, item_side = set(), set()
 for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*([^*]+)\*\* —(.*?)(?=\n\d{1,2}\. \*\*|\n# |\Z)', body, re.S):
     if int(m.group(1)) in closed_set: continue
     if re.search(POP_DEAD, m.group(3), re.I): item_side.add((int(m.group(1)), m.group(2).strip()))
-for m in re.finditer(r'\n# (G[0-9A-B-]+) — ', pkt):
+for m in re.finditer(r'\n# (' + GATE_ID + r') — ', pkt):
     gseg = pkt[m.start():]
     nxt = gseg.find('\n# ', 3)
     if re.search(POP_DEAD, gseg[:nxt if nxt != -1 else len(gseg)], re.I): gate_side.add(m.group(1))
@@ -687,7 +692,7 @@ elif WORDNUM.get(_declared.group(1).upper()) != len(RATCHET_MEMBERS):
 # it — and only the pair catches a swap between two items of the same gate.
 ruling_items = {}
 for m in re.finditer(r'(?m)^\*\*(R\d+) — (.*?):', pkt):
-    for im in re.finditer(r'item (\d+) \((G[0-9A-B-]+|all)\)', m.group(2)):
+    for im in re.finditer(r'item (\d+) \((' + GATE_ID + r'|all)\)', m.group(2)):
         n, g = int(im.group(1)), im.group(2)
         ruling_items.setdefault(m.group(1), set()).add(n)
         if n not in nums:
@@ -711,7 +716,7 @@ if 'WITHDRAWN AS CIRCULAR' in pkt:
         if ph in pkt: bad('WITHDRAWN-STILL-CLAIMED', ph)
 
 # ---- 4. every PASS bullet refutable or explicitly withdrawn ---------------------------------
-parts = re.split(r'\n# (G[0-9A-B-]+) — ', pkt)[1:]
+parts = re.split(r'\n# (' + GATE_ID + r') — ', pkt)[1:]
 for gid, gbody in zip(parts[0::2], parts[1::2]):
     mm = re.search(r'\*\*PASS conditions\.\*\*(.*?)\*\*Static checks', gbody, re.S)
     if not mm: bad('NO-PASS-BLOCK', gid); continue
@@ -987,7 +992,7 @@ item_body = {int(m.group(1)): m.group(0) for m in
 body_off = pkt.find(body)
 gate_hdr = [{'gate': m.group(1), 'line': line_of(m.start()),
              'end_line': line_of(pkt.find('\n# ', m.end()) if pkt.find('\n# ', m.end()) != -1 else len(pkt) - 1)}
-            for m in re.finditer(r'(?m)^# (G[0-9]+-?[AB]?) — ', pkt)]
+            for m in re.finditer(r'(?m)^# (' + GATE_ID + r') — ', pkt)]
 pass_bullets = []
 for gid, gbody in zip(parts[0::2], parts[1::2]):
     mm = re.search(r'\*\*PASS conditions\.\*\*(.*?)\*\*Static checks', gbody, re.S)
@@ -998,7 +1003,12 @@ for gid, gbody in zip(parts[0::2], parts[1::2]):
         txt = re.sub(r'\s+', ' ', bm.group(2)).strip()
         pass_bullets.append({'gate': gid, 'n': int(bm.group(1)),
                              'line': line_of(base + bm.start()),
-                             'withdrawn': 'WITHDRAWN' in txt,
+                             # STATUS, not a substring. `'WITHDRAWN' in txt` marked PASS 7
+                             # withdrawn because its live text explains why a FORMER withdrawal
+                             # shaped its quantifier — a bullet describing its own history was
+                             # reported as having that history's status. A status is a leading
+                             # marker; prose about the past is prose.
+                             'withdrawn': bool(re.match(r'\s*\*\*(WITHDRAWN|RETRACTED)', txt)),
                              'refuted_by': (re.search(r'\*REFUTED BY\* (.*)$', txt).group(1)
                                             if re.search(r'\*REFUTED BY\* ', txt) else None),
                              'text': txt})
@@ -1126,10 +1136,17 @@ for m in re.finditer(r'(?m)^\*\*(R\d+) — .*?(?=\n\n\*\*R\d+ — |\n# |\*\*What
         # and `R12.applied = false` while item 27 says AUTHORED under R12 — a flag about a ruling
         # disagreeing with the item the ruling names. A ruling is applied iff an item or gate says
         # it applied it; the ruling's own prose is the last place to ask.
-        # the window is the CLAUSE, not an exact phrase: the packet writes "AUTHORED under R12",
-        # "AUTHORED again under R1" and "RULED (R10)", and an exact-phrase match saw only the third.
-        'applied': bool(re.search(r'(?:AUTHORED|RULED|authored)[^.\n]{0,50}\b%s\b' % m.group(1), pkt)
-                        or 'PROPAGATED at this SHA' in blk or 'is PROPAGATED' in blk),
+        # `applied` WAS A BOOLEAN SNIFFED FROM PROSE and it was wrong in both directions: true for
+        # R1, whose own text says NOT YET APPLIED and whose items 11 and 25 differ in status; false
+        # for R5, R7, R8 and R9, which the packet uses operatively throughout G4. A ruling is not
+        # applied or unapplied as a whole — it is applied TO ITEMS, and the items disagree. So the
+        # boolean is gone and the EVIDENCE is emitted instead: every place the packet names this
+        # ruling, with the citing line, for a consumer to judge. A flag that cannot represent
+        # "applied to one of its two items" should not be a flag.
+        'named_at': [{'line': line_of(mm.start()),
+                      'context': re.sub(r'\s+', ' ', pkt[max(0, mm.start() - 60):mm.end() + 40])}
+                     for mm in re.finditer(r'\b%s\b' % m.group(1), pkt)
+                     if not pkt[mm.start() - 2:mm.start()] == '**'][:12],
         # from the HEADING only. Deriving from the whole block made R9 claim items [26, 31]
         # because its body MENTIONS item 31 — a mention became an ownership claim, and a
         # planner reading the manifest would have seen item 31 owned by two rulings.
@@ -1159,11 +1176,23 @@ else:
         if _a not in _by[_b2]['dependencies']:
             bad('DIAGRAM-EDGE', f'diagram draws {_a} -> {_b2}; {_b2} depends on '
                                 f'{_by[_b2]["dependencies"]}')
+    # REACHABILITY, computed — not "some edge touches one of the endpoints". The `any((d,m) or
+    # (m,g))` fallback passed a REMOVED G0-B -> G4 because an unrelated G3 -> G4 exists, which is
+    # not a weaker check but a different one: it asks whether either node appears anywhere.
+    _adj = {}
+    for _a, _b2 in _edges: _adj.setdefault(_a, set()).add(_b2)
+    def _reaches(src, dst, seen=None):
+        seen = seen or set()
+        for _n in _adj.get(src, ()):
+            if _n == dst: return True
+            if _n in seen: continue
+            seen.add(_n)
+            if _reaches(_n, dst, seen): return True
+        return False
     for _g in gates:
         for _d in _g['dependencies']:
-            if (_d, _g['id']) not in _edges and not any(
-                    (_d, _m) in _edges or (_m, _g['id']) in _edges for _m in _by):
-                bad('DIAGRAM-EDGE', f'{_d} -> {_g["id"]} is in the text and not reachable in the diagram')
+            if not _reaches(_d, _g['id']):
+                bad('DIAGRAM-EDGE', f'{_d} -> {_g["id"]} is in the text and unreachable in the diagram')
 
 # emitted ruling ids reconciled against the validated headings, and unique
 _rid_emitted = [r['id'] for r in rulings]
@@ -1294,7 +1323,7 @@ said = re.search(r'GATES ARE ACCEPTANCE-DECIDABLE — ([^—]{0,60}?) —\n', pk
 if not said:
     bad('GATE-ACCEPT-PROSE', 'the opening names no acceptance-decidable set to check')
 else:
-    named = sorted(re.findall(r'G[0-9]-?[AB]?', said.group(1)))
+    named = sorted(re.findall(GATE_ID, said.group(1)))
     if named != sorted(acceptable):
         bad('GATE-ACCEPT-PROSE', f'opening names {named}, derived set is {sorted(acceptable)}')
 
@@ -1341,12 +1370,16 @@ elif allplan and notplan:
 # emitting run is about to fix, so on `--manifest` it is not a failure but the reason for the run.
 # Moving emission after every check (correct) created this bootstrap: the stale manifest blocked the
 # regeneration that would clear it. A check that forbids its own remedy is a deadlock, not a guard.
+_emitting = '--emit-manifest' in sys.argv or '--manifest' in sys.argv
 try:
-    if open(MANIFEST).read() != emitted and not ('--emit-manifest' in sys.argv
-                                                 or '--manifest' in sys.argv):
+    if open(MANIFEST).read() != emitted and not _emitting:
         bad('MANIFEST-STALE', 'the committed manifest is not what this packet emits')
 except FileNotFoundError:
-    bad('MANIFEST-MISSING', MANIFEST)
+    # an emitting run is how a missing manifest gets created; refusing to emit because it is
+    # missing is the same deadlock as refusing because it is stale, in the one case where the
+    # artifact does not exist at all.
+    if not _emitting:
+        bad('MANIFEST-MISSING', MANIFEST)
 
 print(f'packet blob {oid[:12]} · product {PRODUCT_SHA[:12]} tree {PRODUCT_TREE[:12]} · '
       f'{len(nums)} items, {len(nums)-closed} open · {len(tokens)} RAW ({byhand} hand-ruled) + '

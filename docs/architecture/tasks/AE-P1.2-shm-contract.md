@@ -507,7 +507,7 @@ engine — not by the engine's version counter, not by non-emptiness, and not by
 the address the client asked about; and (ii) a complete image of exactly one execution of the writer,
 never fields from publication N+1 beside fields from N.
 
-**Population.** *Seqlock opens and closes* — 4 + 4. Command: `grep -rn 'seq\.store' apps` returns 8, cross-checked per file with grep's count mode. *Request/answer readers* — **AUTHORED under R1: 6, by a predicate enumerated from the REQUEST.**
+**Population.** *Seqlock opens and closes* — 4 + 4. Command: `grep -rn 'seq\.store' apps` returns 8, cross-checked per file with grep's count mode. *Request/answer readers* — **AUTHORED under R1: 7, by a predicate enumerated from the REQUEST.**
 Both earlier attempts enumerated from the wrong side and each missed a member for a structural
 reason, so the rule is stated as the correction of that: **the authoritative request set is the
 `Request*` values of the `UiCommandType` enum** — numbered members, which a spelling or a helper
@@ -567,7 +567,7 @@ over all 21 candidates, over a property this gate is about:** does the reader gu
 read at all? **17** seqlock-guarded (loop, `v0 == v1`, Acquire fence) · **1** forwarder
 (`read_clip_extents`, whose guard is in the callee `read_clip_extents_with_truncation`) · **3** with
 NO GUARD: `read_scales`, `read_device_params`, `read_device_meters`.
-`read_device_params` is in BOTH the request/answer six and the unguarded three, which is exactly the
+`read_device_params` is in BOTH the request/answer seven and the unguarded three, which is exactly the
 intersection the failure model names — daw-agent "reads the region before waiting at all", and it is
 unguarded on top. The other two unguarded readers are reported with it rather than dropped, because
 handing over only the member that fits the story is how a population becomes an argument.
@@ -621,11 +621,14 @@ halves with barrier-paused writers.
    universal form ("no reader ...") is still NOT used, but the reason has CHANGED and this sentence
    outlived the change: it said the universal quantifies over a WITHDRAWN population, and R1
    authored that population — item 11 (G1-B) is CLOSED. The universal remains unused now only
-   because the authored population is SIX READERS — seven `Request*` enum members, six of which map
-   to a `read_*`; I wrote "seven members" here last SHA by taking the enum census as the reader
-   count, which is the unit error this gate exists to prevent — and this bullet is about two of
-   them; a bullet naming its two sites is decidable where "no reader" would require re-deciding all
-   six at every run. Both named sites fail today
+   because the authored population is SEVEN and this bullet is about two of them; a bullet naming
+   its two sites is decidable where "no reader" would require re-deciding all seven at every run.
+   **This sentence has now been wrong in both directions.** It said "seven members" when the section
+   heading said six; I resolved that by trusting the HEADING and wrote six — and the heading was the
+   stale one. The body states seven and gives the argument: `RequestChainSnapshot` is IN the
+   population, answered by `drain_ui_out` with no request identity, and it is the WORST CASE rather
+   than an exclusion. **Resolving a contradiction by picking the shorter statement is not resolving
+   it**; the heading is now seven, which is what the reasoning under it always said. Both named sites fail today
    and the bullet names both: `ui/daw-bridge/src/control.rs:944-949`. Quantified over THOSE TWO
    SITES, and the phrase "two of the six" would have been wrong twice over: the hand-selected six
    were withdrawn, and what replaced them under R1 is seven. A bullet naming its sites survives a
@@ -1250,108 +1253,6 @@ relabelling IN as OUT, duplicating a row, substituting a command, altering a mem
 all five passed while A.0 checked only the counts. A roster written into this document would have
 been one more statement in the file being mutated; it is in the script, which this packet blob-pins.
 
-**R8 — item 26 (G4): THE THREE ROLE RULINGS claude-worker-1 correctly refused to make.**
-**(a) SAME-AGENT READBACK IS OUT OF THE POPULATION, and named rather than dropped.** `juce:834` and
-`:1015` are the writer reading bytes it wrote itself. G4's invariant is a consumer reading bytes
-ANOTHER AGENT wrote; a self-read has no cross-agent ordering hazard because there is no
-acknowledgement to wait on. They are byte reads of the plane, so they are listed as EXCLUDED
-MEMBERS with this reason — an exclusion by argument, not by the selector failing to see them.
-**(b) THE INDIRECT WRITER IS ONE SITE, AND IT IS THE HOST'S.** `juce:989/994` hands `outputPtrs`
-and `auxOutputPtrs` to the plugin, which writes them. The plugin is third-party code this packet
-does not govern; the host is accountable for what it hands over, so the site is the handover.
-Attributing it to the plugin would put a member of G4's population outside anything the packet can
-require.
-**(c) THE GATE RANGES OVER BOTH SIDES: the CENSUS rows *out-plane cross-agent byte-consuming reads*
-AND *out-plane host byte-producing writes*.** This ruling carries NO DIGITS, by rule and by check
-(`CENSUS-RESTATED`): backend changed a `7/8` written here to `70/80` and the gate passed, because a
-number restated in a ruling is a second statement of a fact the census already owns and nothing
-compares them. The fix is not a comparison — it is that there is nothing here to mutate. R5 named
-the readers, and a reader set alone cannot check an ORDERING invariant — "no consumer reads before
-the acknowledgement" is a relation between a write and a read, and a gate enumerating only one end
-can never observe the pair. This corrects R5 rather than extending it: R5 said "the in-scope
-population is byte-consuming reads", and that was half a population for a two-sided invariant.
-
-**THE COMPLETENESS ARGUMENT, which is what this population actually needed and what NEITHER census
-gave alone.** A mapped-base census is not total either, for the mirror of the reason a name census
-is not: four of the seven readers never cast a base themselves — they take a pointer from a helper,
-and the census collapses them into the helper unless callers are followed. There are exactly THREE
-ways a plane address can arise:
-
-    A  a direct cast of the mapped base                     5 sites
-    B  the return of `audioOutChannelPtr` (`audio_shm.cpp:5-12`)      caller: juce:638
-    C  the return of `safeAudioOutPtr` (`engine_produce_block.cpp:861-866`)
-                                                            callers: :1030, :1112, :1150
-
-**The two helpers are G4's, and the FILE has four.** `audio_shm.cpp:5` / `:17` and
-`engine_produce_block.cpp:861` / `:848` are two symmetric pairs, one per plane —
-`audioOutChannelPtr`/`audioInChannelPtr` and `safeAudioOutPtr`/`safeAudioInPtr`. G4's argument is
-unaffected because its population is the OUT plane and the two out-plane helpers are the two named;
-but "exactly two pointer-returning helpers" is a claim about the FILE and is false about it, and
-claude-worker-1 tested their own premise and said so before it hardened into one.
-
-**The argument:** a site can only touch plane bytes by holding a plane pointer; a plane pointer can
-only be obtained by casting the mapped base or by calling one of the two functions that return one;
-all three sets are enumerated. That is an argument from the code's STRUCTURE rather than from a
-grep's recall, and it is FALSIFIABLE — add a third pointer-returning helper and it must be extended.
-The offset-returning helpers (`auxOutputPlaneOffset`, `audioChannelOffset`) feed route A and are
-already counted there.
-
-**R9 — item 26 (G4): THE POPULATION COUNTS ADDRESSING SITES, and consumption sites are named
-separately.** `engine_audio_callback.h` contains exactly ONE segment-base dereference, at `:404`;
-`:448` and `:463` are the two places `trackChannel[i]` is CONSUMED — the PDC fast path and the PDC
-delay path. Both descriptions are correct and they count different things, which is why the packet
-must say which: the reader that `engine_audio_callback.h` contributes is a single member on
-addressing sites and a pair on consumption sites, and the row total moves with the unit chosen. **The gate counts ADDRESSING sites, because the invariant is about
-acquiring a plane address and reading through it before an acknowledgement.** But the two
-consumption sites are named, because **a fixture that exercises only the fast path never touches the
-delay branch** — which reads through a ring one block behind, and that is precisely the shape a
-barrier test should target. A population that hid the delay path behind its addressing site would
-have made the fixture look complete while missing the harder case.
-
-**THE RATCHET THIS ARGUMENT REQUIRES, and item 31 carries it:** the completeness argument rests on
-"exactly two pointer-returning helpers", which is itself a census and deserves a check rather than
-anyone's word.
-
-**A THIRD FRAGILITY, named by claude-worker-1 and not by any check here.** `engine_produce_block.cpp`
-has THREE bindings spelled `input` — `:535` and `:817` are `const float*` aimed at other buffers, and
-only `:945` is the plane. The engine-write row greps the FILE for the name and returns exactly the
-eleven that belong to `:945`'s scope, so it is right at this pin and right for the wrong reason: it
-would absorb a write through either other binding the moment one stopped being const. A row bounded
-by a name inside a file with three same-named bindings is a floor, and the row that stated the
-binding as its rule is the one that found the eleven.
-
-**The two OUT rows are the ones a reader should distrust**, and stating 4 against a claim of seven
-and 13 against a claim of eight is the point: the gap IS the hand classification, and a row that
-quoted a pattern returning exactly the claimed number would be a pattern reverse-engineered from the
-answer. The SEVEN IN rows have no such gap because the roles there are separable by shape —
-seven, not the five this sentence said after the unit split added two, which is the same stale-count
-shape the checks below exist for and which no check reaches inside a prose paragraph.
-
-**THE ALIAS CHAIN IS THE FINDING, and it is the same defect this population has now made four
-times.** The host reaches the input plane through TWO hops: `state.inputPtrs` → `inputPtrs`
-(`:862`) → `pluginInputPtrs` (`:880`). Five of the byte reads dereference the SECOND alias
-(`:924`/`:927`/`:930` the level-matched bypass copy, `:939`/`:942` the bypass meter, `:975`/`:980`
-the input meter) and a census over the member name `state.inputPtrs` returns FOUR sites and sees
-none of them. claude-worker-1's input census reported five engine writes in this file; the file holds
-ELEVEN, because the window started at the visible branch (`:1016`) while the binding that governs
-every write is `float* input = safeAudioInPtr(blockIndex, ch)` at `:945` — the sampler-stem,
-sidechain and sampler-audio branches at `:967`–`:1017` write the same plane through the same
-pointer. Eleven here plus the master summed-mix write is twelve engine writes in all, and those are
-TWO census rows rather than one figure: writing "twelve writes through two addressing routes" as a
-single number, as this paragraph did, is the conflation the rows exist to prevent. **A census
-is bounded by the BINDING, never by the branch you were reading.**
-
-**`engine_produce_block.cpp:1032` IS A MEMBER OF BOTH RELATIONS AT ONCE.** `std::memcpy(input,
-output, ...)` is an out-plane byte read and an in-plane byte write in a single statement. Any partition
-into "the readers" and "the writers" either double-counts it or drops it, and two controls ranging
-over the two lists would each claim it. It is named once here, in both roles, deliberately.
-
-**HOST ROLES, and one is INDIRECT.** `:686` (aux copy) and `:720` (passthrough) read through
-`state.inputPtrs` directly; `:685` is a null-and-size guard and reads no bytes; `:644` establishes
-the address. `:987` hands `pluginInputPtrs` to the plugin, which reads it — the same treatment R8(b)
-gives the indirect WRITER, and for the same reason: the plugin is third-party code this packet does
-not govern, so the host's handover is the accountable site.
-
 **Floor.** Dispatch sites floor 3: `rg` finds every syntactic call but is blind to a dispatch through
 a function pointer. The WRITER census is a floor of 2 for the same reason plus helper indirection.
 The IN-plane rows are floors for a third reason on top of both: an alias hop is a syntactic form, so
@@ -1466,7 +1367,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `0ccd584a183360508cc1a1f7a3a24e948cc6168a`, A.0 SCRIPT BLOB `494dfc1850b547010b6a845fa3c9b0988fa1ab72`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `0ff6d1ae9d36a2048bd0d21280ebe1c9bc2eb7a4`, A.0 SCRIPT BLOB `72b9cea9417a1d45bc7bb451cfce9534cecc59e3`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1532,14 +1433,14 @@ check, staged and atomically replaced, and `MANIFEST-STALE` is suppressed on an 
 a check that forbids its own remedy is a deadlock rather than a guard — that deadlock appeared the
 moment the write moved, and is recorded here because it is the predictable cost of the fix.
 
-**Controls.** Sixty-five, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Sixty-seven, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
-`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`, `ratchet-count`, `writer-extra`, `reader-row-moved`, `emit-fail-open`, `ruling-item-swap2`, `diagram-edge`, `control-phantom`, `writer-regroup`. The last thirty-one exist because
+`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`, `ratchet-count`, `writer-extra`, `reader-row-moved`, `emit-fail-open`, `ruling-item-swap2`, `diagram-edge`, `control-phantom`, `writer-regroup`, `gate-multidigit`, `withdrawn-status`. The last thirty-three exist because
 **codex-worker-1** MUTATED THIS PACKET AND THE GATE STILL SAID PASS (the finding reached me relayed
 by backend, and two commit messages in this lineage credit the relay rather than the author —
 `e26f91f` and `c332c03`, immutable and wrong on this point): deleting the item's reopening sentence,
@@ -1675,6 +1576,108 @@ G1-A, whose RAW deliberately excludes `juce_host_process_main` because that gate
 engine's own ring; a per-gate scope is not a packet-wide one. **Cost:** the population must be
 rebuilt by derivation from `ShmHeader::audioOutOffset` rather than by matching spellings, which is a
 harder census than a grep and is why item 26 stays open rather than closing on a corrected number.
+
+**R8 — item 26 (G4): THE THREE ROLE RULINGS claude-worker-1 correctly refused to make.**
+**(a) SAME-AGENT READBACK IS OUT OF THE POPULATION, and named rather than dropped.** `juce:834` and
+`:1015` are the writer reading bytes it wrote itself. G4's invariant is a consumer reading bytes
+ANOTHER AGENT wrote; a self-read has no cross-agent ordering hazard because there is no
+acknowledgement to wait on. They are byte reads of the plane, so they are listed as EXCLUDED
+MEMBERS with this reason — an exclusion by argument, not by the selector failing to see them.
+**(b) THE INDIRECT WRITER IS ONE SITE, AND IT IS THE HOST'S.** `juce:989/994` hands `outputPtrs`
+and `auxOutputPtrs` to the plugin, which writes them. The plugin is third-party code this packet
+does not govern; the host is accountable for what it hands over, so the site is the handover.
+Attributing it to the plugin would put a member of G4's population outside anything the packet can
+require.
+**(c) THE GATE RANGES OVER BOTH SIDES: the CENSUS rows *out-plane cross-agent byte-consuming reads*
+AND *out-plane host byte-producing writes*.** This ruling carries NO DIGITS, by rule and by check
+(`CENSUS-RESTATED`): backend changed a `7/8` written here to `70/80` and the gate passed, because a
+number restated in a ruling is a second statement of a fact the census already owns and nothing
+compares them. The fix is not a comparison — it is that there is nothing here to mutate. R5 named
+the readers, and a reader set alone cannot check an ORDERING invariant — "no consumer reads before
+the acknowledgement" is a relation between a write and a read, and a gate enumerating only one end
+can never observe the pair. This corrects R5 rather than extending it: R5 said "the in-scope
+population is byte-consuming reads", and that was half a population for a two-sided invariant.
+
+**THE COMPLETENESS ARGUMENT, which is what this population actually needed and what NEITHER census
+gave alone.** A mapped-base census is not total either, for the mirror of the reason a name census
+is not: four of the seven readers never cast a base themselves — they take a pointer from a helper,
+and the census collapses them into the helper unless callers are followed. There are exactly THREE
+ways a plane address can arise:
+
+    A  a direct cast of the mapped base                     5 sites
+    B  the return of `audioOutChannelPtr` (`audio_shm.cpp:5-12`)      caller: juce:638
+    C  the return of `safeAudioOutPtr` (`engine_produce_block.cpp:861-866`)
+                                                            callers: :1030, :1112, :1150
+
+**The two helpers are G4's, and the FILE has four.** `audio_shm.cpp:5` / `:17` and
+`engine_produce_block.cpp:861` / `:848` are two symmetric pairs, one per plane —
+`audioOutChannelPtr`/`audioInChannelPtr` and `safeAudioOutPtr`/`safeAudioInPtr`. G4's argument is
+unaffected because its population is the OUT plane and the two out-plane helpers are the two named;
+but "exactly two pointer-returning helpers" is a claim about the FILE and is false about it, and
+claude-worker-1 tested their own premise and said so before it hardened into one.
+
+**The argument:** a site can only touch plane bytes by holding a plane pointer; a plane pointer can
+only be obtained by casting the mapped base or by calling one of the two functions that return one;
+all three sets are enumerated. That is an argument from the code's STRUCTURE rather than from a
+grep's recall, and it is FALSIFIABLE — add a third pointer-returning helper and it must be extended.
+The offset-returning helpers (`auxOutputPlaneOffset`, `audioChannelOffset`) feed route A and are
+already counted there.
+
+**R9 — item 26 (G4): THE POPULATION COUNTS ADDRESSING SITES, and consumption sites are named
+separately.** `engine_audio_callback.h` contains exactly ONE segment-base dereference, at `:404`;
+`:448` and `:463` are the two places `trackChannel[i]` is CONSUMED — the PDC fast path and the PDC
+delay path. Both descriptions are correct and they count different things, which is why the packet
+must say which: the reader that `engine_audio_callback.h` contributes is a single member on
+addressing sites and a pair on consumption sites, and the row total moves with the unit chosen. **The gate counts ADDRESSING sites, because the invariant is about
+acquiring a plane address and reading through it before an acknowledgement.** But the two
+consumption sites are named, because **a fixture that exercises only the fast path never touches the
+delay branch** — which reads through a ring one block behind, and that is precisely the shape a
+barrier test should target. A population that hid the delay path behind its addressing site would
+have made the fixture look complete while missing the harder case.
+
+**THE RATCHET THIS ARGUMENT REQUIRES, and item 31 carries it:** the completeness argument rests on
+"exactly two pointer-returning helpers", which is itself a census and deserves a check rather than
+anyone's word.
+
+**A THIRD FRAGILITY, named by claude-worker-1 and not by any check here.** `engine_produce_block.cpp`
+has THREE bindings spelled `input` — `:535` and `:817` are `const float*` aimed at other buffers, and
+only `:945` is the plane. The engine-write row greps the FILE for the name and returns exactly the
+eleven that belong to `:945`'s scope, so it is right at this pin and right for the wrong reason: it
+would absorb a write through either other binding the moment one stopped being const. A row bounded
+by a name inside a file with three same-named bindings is a floor, and the row that stated the
+binding as its rule is the one that found the eleven.
+
+**The two OUT rows are the ones a reader should distrust**, and stating 4 against a claim of seven
+and 13 against a claim of eight is the point: the gap IS the hand classification, and a row that
+quoted a pattern returning exactly the claimed number would be a pattern reverse-engineered from the
+answer. The SEVEN IN rows have no such gap because the roles there are separable by shape —
+seven, not the five this sentence said after the unit split added two, which is the same stale-count
+shape the checks below exist for and which no check reaches inside a prose paragraph.
+
+**THE ALIAS CHAIN IS THE FINDING, and it is the same defect this population has now made four
+times.** The host reaches the input plane through TWO hops: `state.inputPtrs` → `inputPtrs`
+(`:862`) → `pluginInputPtrs` (`:880`). Five of the byte reads dereference the SECOND alias
+(`:924`/`:927`/`:930` the level-matched bypass copy, `:939`/`:942` the bypass meter, `:975`/`:980`
+the input meter) and a census over the member name `state.inputPtrs` returns FOUR sites and sees
+none of them. claude-worker-1's input census reported five engine writes in this file; the file holds
+ELEVEN, because the window started at the visible branch (`:1016`) while the binding that governs
+every write is `float* input = safeAudioInPtr(blockIndex, ch)` at `:945` — the sampler-stem,
+sidechain and sampler-audio branches at `:967`–`:1017` write the same plane through the same
+pointer. Eleven here plus the master summed-mix write is twelve engine writes in all, and those are
+TWO census rows rather than one figure: writing "twelve writes through two addressing routes" as a
+single number, as this paragraph did, is the conflation the rows exist to prevent. **A census
+is bounded by the BINDING, never by the branch you were reading.**
+
+**`engine_produce_block.cpp:1032` IS A MEMBER OF BOTH RELATIONS AT ONCE.** `std::memcpy(input,
+output, ...)` is an out-plane byte read and an in-plane byte write in a single statement. Any partition
+into "the readers" and "the writers" either double-counts it or drops it, and two controls ranging
+over the two lists would each claim it. It is named once here, in both roles, deliberately.
+
+**HOST ROLES, and one is INDIRECT.** `:686` (aux copy) and `:720` (passthrough) read through
+`state.inputPtrs` directly; `:685` is a null-and-size guard and reads no bytes; `:644` establishes
+the address. `:987` hands `pluginInputPtrs` to the plugin, which reads it — the same treatment R8(b)
+gives the indirect WRITER, and for the same reason: the plugin is third-party code this packet does
+not govern, so the host's handover is the accountable site.
 
 **R10 — item 30 (G2-A): THE UNDO ARBITER IS DEAD WIRING, THE HAZARD IS REAL, AND THE INSTRUMENT IS
 WRONG FOR IT.** Measured before ruling. `handleUndo` (`engine_undo_commands.cpp:46-72`) calls
@@ -2017,8 +2020,12 @@ carrying one cannot be decided by any implementation.
 
 33. **G1-B** — **BLOCKING. The tests PASS 9 and S4 name do not exist.** Restoring them from
     "withdrawn with the population" to live conditions made the gap visible: PASS 9 requires a
-    mechanical echo ratchet over the seven authored send sites and S4 requires drift detectors
-    pinning the population's size, and NEITHER IS WRITTEN. While they read "withdrawn", G1-B's
+    mechanical echo ratchet over the SEND SITES — a population nobody has enumerated, so that bullet
+    is blocked on a missing population and not only on an unwritten test — and S4 requires drift
+    detectors pinning the authored population's size. NEITHER IS WRITTEN. This item repeated "the
+    seven authored send sites" when it was filed, taking a count from the request/answer population
+    and a unit from a population that does not exist; PASS 9 states it correctly and this item now
+    matches it. While they read "withdrawn", G1-B's
     acceptance flag was true and nothing contradicted it, because a withdrawn condition is not a
     failing one — **the withdrawal was carrying the gate's acceptance**. This is the same shape as
     item 26 (G4): a gate whose population is authored and whose tests are absent, and in both cases
