@@ -1411,7 +1411,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `333e02cec2523f7f61c23eee92c7163af4b24f05`, A.0 SCRIPT BLOB `61e2b0d48d26d43962db4c9065a96db54659045b`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `c600336428f4f25c6664a8e722ad6ecc81ca1cdb`, A.0 SCRIPT BLOB `6819adba8c0c3eafd2e530bed0e5f0808589a0ea`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1912,8 +1912,10 @@ of the static settlement retracted above; with a real drop path in the tree, not
 distinguishes "gated and stayed gated" from "gated, dispatched, send failed, host dropped". That
 distinction is the register's question. The instrument needs host identity and
 `lastDispatchedBlockId`, which nothing currently emits, so G3 is blocked on an INSTRUMENT rather than
-a decision — and no PASS bullet may depend on M1 until one exists, since a bullet resting on an
-unbuildable instrument makes the gate undecidable by construction.
+a decision. **An earlier draft added "and no PASS bullet may depend on M1 until one exists", which
+G3's PASS 1 contradicts directly and which is wrong**: Layer 0's question genuinely needs a
+measurement, so its bullet must name one. What follows from an unbuildable instrument is that the
+GATE cannot be ACCEPTED, not that its bullets must pretend to need nothing.
 
 **The two statements.** The check says the producer does not stay gated
 (`tools/host_stall_check.sh:16-19`), names the mechanism at `:101-104` — "Frozen host + fix = the
@@ -2490,7 +2492,7 @@ carrying one cannot be decided by any implementation.
     on a failed try_lock or an absent mailbox, so the counted population varies between
     iterations. No LIVENESS drop exists, but a
     failed-send drop does (`apps/engine_produce_block.cpp:1096-1100`), so the check's comment is not
-    a fiction and R15's mechanism ruling against it is RETRACTED. **R15 settles the mechanism claim against the check.** What makes this
+    a fiction and R15's mechanism ruling against it is RETRACTED. What makes this
     PRODUCT work is that the check has at least two identified ways to report zero stalls while the
     producer's gate is never observed, both found by codex-worker-1 and both decidable at the pin: its
     `froze-host-marker` is appended through a second file description and can be overwritten by the

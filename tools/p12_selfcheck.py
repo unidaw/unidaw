@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'e67ba006bcd1476a9780bb2cfb4b965dd5bae62a'
+PREV_TIP     = 'd6d64df5a65b421aee44d30fdb2bc7832c2257f9'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -2143,7 +2143,7 @@ def _sweep_patterns(name, tag):
     # the right one, and it cannot be tricked by the contents.
     fired = re.compile(rf'^CONTROL {nm} OK — \[{tg}\] fired \([1-9][0-9]*\)$')
     conseq = re.compile(rf'^CONTROL {nm} OK \(\+[1-9][0-9]* consequential: '
-                        rf'(\[[A-Z][A-Z0-9-]*\] [^\n]*)\)$')
+                        rf'(\[[A-Z][A-Z0-9-]*\] [^\n]+)\)$')
 
     def okline(ln):
         if fired.fullmatch(ln):
@@ -2171,11 +2171,14 @@ if '--prove-sweep-predicate' in sys.argv:
         ('CONTROL open-count OK (+2 consequential: [X)',                False, 'unclosed tag'),
         ('CONTROL open-count OK (+2 consequential: [])',                False, 'empty tag'),
         ('CONTROL open-count OK (+2 consequential: [X])',               False, 'tag with no message'),
+        ('CONTROL open-count OK (+1 consequential: [X] )',              False, 'separator, empty message'),
         ('CONTROL open-count OK (+2 consequential:    )',               False, 'whitespace-only detail'),
         ('CONTROL open-count OK (+2 consequential: [X] ' + 'y'*70 + ')', False, 'detail past the 60-char truncation'),
         # THE LOOKAHEAD COULD STOP AT AN EARLY ')' while the consuming tail ran on to the outer
         # one, so a 128-character detail satisfied a bound of 60. codex-worker-1 built the line.
-        # Excluding ')' from both the lookahead and the tail is what actually bounds it.
+        # Excluding ')' was my first repair and it broke two real controls whose messages contain
+        # one; `len()` on the captured detail is what bounds it now, and ')' is permitted. This
+        # comment said otherwise for a commit — a comment describing a repair that was replaced.
         ('CONTROL open-count OK (+1 consequential: [X] a)' + 'y'*80 + ')', False, 'early paren beats the length bound'),
         ('CONTROL open-count OK (+1 consequential: [T] z)',             True,  'form 2, single'),
         ('CONTROL open-count OK — [WRONG-TAG] fired (1)',               False, 'wrong tag'),
