@@ -637,6 +637,12 @@ enum, and move-to-nonblocker controls; item18 is now explicitly `[PACKET]`, and
 the sweep totals 94 controls. Items26/28/35 remain intentionally unclassified
 pending explicit packet-text evidence. Exact review is pending.
 
+Owner successor `3ac0544` claims the hidden-link PACKET variant is now closed by
+the leading-run `_KINDS` derivation and item36's headline was corrected to the
+actual nondiscriminating-log defect. M1 specification is deliberately deferred
+to the telemetry implementer. Exact review is pending; G2/G3/G0/G4 decisions
+remain gated.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
