@@ -241,3 +241,134 @@ sibling checkout:
 - The objective capture created and metrically accepted an all-zero WAV. That
   passes the expected-silence content assertion but does not prove positive tap
   liveness; seven underruns separately leave realtime stability red.
+
+## Durable lead handoff — 2026-08-11
+
+This section is the context-compaction handoff. Read it before taking any
+action. It supersedes stale ticket rows above where they conflict.
+
+### Current phase and authority
+
+- Active phase: **AE-P1.2 SHM/protocol contract packet review**.
+- Product implementation has **not** started for P1.2. Do not edit product
+  protocol/SHM files until the packet receives independent semantic and evidence
+  PASS plus explicit decisions for the remaining gates.
+- Product baseline under review: `/Users/jak/src/daw`, frozen at
+  `75c6f0646417828641e43287c260bea3d38b5a6f` (tree
+  `699abfe8f72e597cfd1b6fb3da93ee7f35aa7fef`).
+- Governance worktree: `/Users/jak/src/daw-backend`.
+- Current packet owner: `claude-worker-2`; current latest packet reported:
+  `d709770cb8774660f4d19c9317c27006602e2242`.
+- Latest packet status: mechanical PASS, 89 controls, but overall **BLOCKED**
+  by independent review and unresolved design decisions.
+
+### Required review protocol
+
+1. Review the exact packet SHA named in the handoff; never review a stale
+   predecessor as the current verdict.
+2. Codex-worker-1 is the semantic adversarial reviewer. Codex-worker-2 is the
+   evidence/checker reviewer when available. Claude-worker-1 is available for
+   focused semantic/parser or planning work. The lead dispatches disjoint
+   tasks and records exact verdicts here.
+3. No implementation authorization follows an owner “PASS” alone. Require
+   independent semantic PASS and evidence PASS against the same immutable SHA.
+4. Reviewers must avoid slow `git show` archaeology unless essential: use the
+   exact packet/current files and reproducible mutation probes first. Do not run
+   product builds/runtime during packet review.
+5. Never use `watch-next.mjs` on Codex. Poll the bus with
+   `node /tmp/dawagents/poll.mjs backend` at turn start and before ending when
+   the guard requests it.
+
+### Current known blockers (do not lose these)
+
+- **Writer citation binding:** comma-shield variants such as `fake , :989/994`
+  remain an acknowledged but mechanically live bypass. The correct direction
+  is segment-level path declaration and rejection of any additional
+  path-shaped token, while preserving legitimate rows such as `:925 dst ·
+  :952`.
+- **Extractor contract:** 38 raw-text extractors remain in the EXTRACTOR-TEXT
+  ratchet. The differential blanking proof is not a full construct × extractor
+  matrix; raw item/gate/dependency consumers must be classified and covered.
+- **Artifact identity:** `--prove-emit-identity` now handles missing artifacts,
+  but must become default/registered and bind expected artifact identity and
+  provenance; opt-in proof alone is insufficient.
+- **Markdown subset:** the finite subset and hidden-vs-code split are improving,
+  but remaining CommonMark/parser boundaries must be explicitly governed rather
+  than inferred from a small ruling-extractor proof.
+- **R14/G0-B:** exact EventEntry member parity is the ruling. Remove all stale
+  one-sided/field-wise alternatives and stale register/summary text; do not
+  claim byte-disjoint exception for EventEntry.
+- **G0-A:** A13 expected verdict and A15 post-attach mutation/truncation fixture
+  are undecided; current acceptance/planning status is false-green.
+- **G0-B:** items 1–4 still contain generated-header, Rust-off build, population,
+  and mutation-floor planning gaps; current planning status is false-green.
+- **G2-A:** R12’s three ClipReject emitters do not yet define PASS3’s broader
+  adopted-verdict/correlator universe; item 28 lacks predicate, command, and
+  member list. R12 retry-value prose must be made internally consistent.
+- **G2-B:** PASS4 is withdrawn with no replacement while R2 says propagation is
+  done; item 18 has contradictory propagated/open-for-propagation text. Define
+  one executable acceptance oracle before product work.
+- **G3:** undefined M1, watchdog fate, and static continue-count/placement
+  choices remain unresolved; planning cannot be green until decided.
+- **Dependency ownership:** item 27 owns the all-three-emitter sender-instance
+  identity defect; item 29 is only the narrower SetRowOps constant-base defect.
+  Do not restore a `27 -> 29` dependency unless a new class-wide item and
+  canonical edge semantics are authored.
+
+### Lead implementation mode (new operating agreement)
+
+- The lead (`backend`) will implement and integrate product slices once their
+  governing decision is explicitly recorded and the slice has a bounded,
+  reviewable packet. The lead also maintains this ledger and the implementation
+  log; context loss must not erase decisions, SHAs, tests, or blockers.
+- Workers remain reviewers/planners unless an exact implementation packet is
+  assigned. No worker self-assigns product work.
+- Every implementation entry must record: packet SHA, product base SHA, owner,
+  files/scope, invariant being changed, tests run, reviewer SHA/verdict, and
+  rollback commit.
+- First implementation slice should be selected only after the remaining gate
+  decisions are recorded. Prefer a disjoint new module/file slice; reserve
+  merge hotspots (`shared_memory.h`, `event_payloads.h`, `layout.rs`,
+  `control.rs`, engine ring files) to one integration owner.
+
+### Immediate next actions
+
+1. Obtain the exact independent review of the latest packet successor; do not
+   treat `d709770` as settled while the comma shield and gate decisions remain.
+2. Consolidate the six owner decisions into one decision record: G2-B oracle,
+   G2-A universe/item 28, G3 M1/watchdog/static, G0-A A13/A15, G0-B items 1–4,
+   and writer/extractor/identity acceptance criteria.
+3. Have `claude-worker-2` issue one successor packet containing those decisions
+   and corrected operative text; then run semantic and evidence reviews in
+   parallel against that exact SHA.
+4. Only after dual PASS, create an implementation ticket and record the first
+   lead-owned product slice here before editing product code.
+
+### Worker/bus state at handoff
+
+| Handle | Current role | State | Rule |
+|---|---|---|---|
+| `backend` | lead/integrator | ACTIVE | owns ledger, decisions, integration |
+| `claude-worker-2` | packet owner | ACTIVE | successor packet only; no freeze authority |
+| `codex-worker-1` | semantic reviewer | ACTIVE | exact-SHA review; no edits |
+| `codex-worker-2` | evidence reviewer | AVAILABLE | assign only disjoint exact-SHA evidence task |
+| `claude-worker-1` | focused semantic/planning reviewer | AVAILABLE | assign bounded review/planning task |
+
+### Latest review trail (newest first)
+
+- `d709770`: owner PASS/89 controls; EXTRACTOR-TEXT ratchet, 38 raw sites;
+  independent review pending.
+- `f7495b6`: BLOCKED; hidden/code split exposed raw-site and dependency
+  extraction gaps.
+- `68fae6b`: BLOCKED; absent-artifact identity fix passes, but Markdown,
+  comma-shield, and semantic gate blockers remain.
+- `63f8c59`: BLOCKED; schema `/3`, edge-source and present-file identity pass,
+  but absent identity, Markdown subset, comma shield, and G0/G2/G3 remain.
+- `ca799db`: BLOCKED; comma shield explicitly acknowledged unfixed; R12
+  ownership corrected.
+- `6e9b862`: BLOCKED; numeric citations and 27→29 removal pass, but visibility,
+  edge source/cardinality, gate wrappers, ownership prose, and emit docs failed.
+- `716c72b`: BLOCKED; six parser/proof regressions found.
+
+Never claim “settled” from an owner packet alone. The durable truth is the
+latest exact independent verdict recorded here.
