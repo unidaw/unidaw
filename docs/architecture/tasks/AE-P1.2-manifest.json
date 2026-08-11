@@ -132,6 +132,7 @@
   "drop-gate-block",
   "drop-item-block",
   "drop-refutation",
+  "edge-bad-source",
   "edge-bad-target",
   "edge-second",
   "emit-fail-open",
@@ -199,7 +200,7 @@
   "census_rows": 9,
   "closed": 8,
   "commanded_claims": 31,
-  "controls": 88,
+  "controls": 89,
   "hand_ruled": 13,
   "items": 35,
   "open": 27,
@@ -2359,7 +2360,7 @@
    "text": "**R14 — item 35 (G0-B): EXACT MEMBER PARITY IS REQUIRED FOR `EventEntry`, and PASS 8's byte-disjointness exception does not reach it.** G0-B's invariant demands per-member parity between the C++ and Rust declarations of a shared type; PASS 8 permits a one-sided member where the bytes are provably disjoint. Those two are not in conflict in general — a member one side never touches is genuinely harmless — but they cannot BOTH be satisfied by this pair, and item 35 named the mismatch without saying which rule wins. **Ruling: parity.** The exception is about bytes NEITHER side treats as live data. `ready` is written and read as the multi-producer publication flag on the C++ side, so disjointness would require the Rust side never to write [60,64) — and `*slot = entry` is a whole-object store whose width is `size_of`, which includes the padding. **A byte-disjointness argument that depends on a compiler's discretion about padding is not a disjointness argument.** Whatever fixes item 35 must make the two declarations agree member-for-member: declare `ready` on the Rust side, or give the patcher path a distinct transfer type that is not claimed to be the same ABI. A field-wise copy alone does NOT satisfy this — it would leave 7 members against 6 and the invariant unmet, which is the trap codex-worker-1 named. "
   }
  ],
- "schema": "ae-p1.2-manifest/2",
+ "schema": "ae-p1.2-manifest/3",
  "static_checks": [
   {
    "gate": "G0-A",

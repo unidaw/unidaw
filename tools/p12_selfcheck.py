@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'ca799db2cc576ca925c11fa76e93f7a38f82ec52'
+PREV_TIP     = '0bd43312707b9a955de71bcc07a6fdfa178bc138'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -425,6 +425,8 @@ CONTROLS = {
  # one was BLIND because it demanded a tag the fix exists to prevent. Verified by direct probe
  # instead: the ruling in a reference definition produces no ruling record, and the indented fence
  # is caught by OPEN-REF-DANGLING reading raw text, which is a different check doing the work.
+ # the SOURCE half of the edge rule: a non-blocker cannot carry an edge on the blocker graph
+ 'edge-bad-source':  ('1. **G0-B** — ', '1. **G0-B** — ⟦BLOCKED-ON: 29⟧ ', 1, 'BLOCKER-KIND'),
  'md-outside-subset': ('# Provenance of this packet', '> a blockquote\n\n# Provenance of this packet',
                       1, 'MD-SUBSET'),
  'fence-unclosed':   ('# Provenance of this packet', '```\n\n# Provenance of this packet', 1,
@@ -896,6 +898,9 @@ for _n in nums:
             bad('BLOCKER-KIND', f'item {_n} is BLOCKED-ON itself')
     if len(_dsts) != len(set(_dsts)):
         bad('BLOCKER-KIND', f'item {_n} repeats a BLOCKED-ON target: {_dsts}')
+    if _dsts and _n not in _derived_blk:
+        bad('BLOCKER-KIND', f'item {_n} declares BLOCKED-ON but is not itself a blocking item — the '
+                            f'edge lives on the blocker graph and a non-member cannot carry one')
     if _dsts: _edges_i[_n] = _dsts
 def _cyc(a, seen):
     for b in _edges_i.get(a, []):
@@ -1242,6 +1247,8 @@ WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twen
         77: 'Seventy-seven', 78: 'Seventy-eight', 79: 'Seventy-nine', 80: 'Eighty',
         81: 'Eighty-one', 82: 'Eighty-two', 83: 'Eighty-three', 84: 'Eighty-four',
         85: 'Eighty-five', 86: 'Eighty-six', 87: 'Eighty-seven', 88: 'Eighty-eight',
+        89: 'Eighty-nine', 90: 'Ninety', 91: 'Ninety-one', 92: 'Ninety-two',
+        93: 'Ninety-three', 94: 'Ninety-four', 95: 'Ninety-five', 96: 'Ninety-six',
         33: 'Thirty-three', 34: 'Thirty-four', 35: 'Thirty-five', 36: 'Thirty-six',
         37: 'Thirty-seven', 38: 'Thirty-eight', 39: 'Thirty-nine', 40: 'Forty'}
 if not listed:
@@ -1587,7 +1594,13 @@ for gid, gbody in zip(parts[0::2], parts[1::2]):
     fm = section(gbody, r'Failure model\.', gid, gstart)
     if fm: failure_models.append(fm)
 man = {
- 'schema': 'ae-p1.2-manifest/2',
+ # /3. The shape changed FIVE times under /2 — census rows, non_gate_prerequisites, named_at
+ # replacing the applied boolean, kind, and blocked_on going scalar-then-array — and the version
+ # never moved, so a consumer holding "/2" could not tell which of six shapes it had. My own note
+ # says to version the moment a shape changes twice; codex-worker-2 had to point out that I had not.
+ # A version that does not move is worse than no version: it is a promise of stability that was not
+ # kept, and a consumer trusts it.
+ 'schema': 'ae-p1.2-manifest/3',
  'static_checks': static_checks,
  'review_register': review_register,
  'failure_models': failure_models,
@@ -1759,6 +1772,20 @@ if NEG_TAG:
 # is not a probe.
 if os.environ.get('AE_P12_INJECT_FAIL'):
     bad('INJECTED-FAILURE', 'synthetic failure for the emit-refusal proof')
+# THE ARTIFACT-IDENTITY CHECK, committed rather than performed by hand. The emit branch refuses on
+# failure and I verified the file was untouched by running it and comparing hashes myself — a
+# verification that lives in my shell history and in nobody's repository. `--prove-emit-identity`
+# records the manifest's digest, runs the real branch under an injected failure in a subprocess, and
+# fails unless the digest is unchanged. codex-worker-2 asked for exactly this and was right that a
+# hand-probe is not a control.
+if '--prove-emit-identity' in sys.argv:
+    before = hashlib.sha1(open(MANIFEST, 'rb').read()).hexdigest() if os.path.exists(MANIFEST) else None
+    env = {**os.environ, 'AE_P12_INJECT_FAIL': '1'}
+    r = subprocess.run([sys.executable, __file__, '--manifest'], capture_output=True, text=True, env=env)
+    after = hashlib.sha1(open(MANIFEST, 'rb').read()).hexdigest() if os.path.exists(MANIFEST) else None
+    ok = r.returncode == 2 and before == after
+    print(f'refused rc={r.returncode}, manifest {"unchanged" if before == after else "REWRITTEN"}')
+    sys.exit(0 if ok else 1)
 if '--emit-manifest' in sys.argv or '--manifest' in sys.argv:
     if fail or NEG:
         for f in fail[:30]: print('  ' + f)
