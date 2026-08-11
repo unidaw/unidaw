@@ -21,7 +21,7 @@ Six blockers from the exact review are reconciled here:
 1. **The per-gate record contract is now met for all eight gates.** Each carries population with its
    extraction command and floor, failure model, deterministic test, PASS conditions each naming their
    refutation, static checks, and review register. Nothing points at a table that does not exist.
-2. **The open list is 25 atomic items, not 15 categories.** The four that compression swallowed are
+2. **The open list is 27 atomic items, not 15 categories.** The four that compression swallowed are
    restored: G0-B's unowned mutation floor, G2-A's BATCH blindness, G2-B's probe-order false-green,
    and G3's debug-env requirement plus its self-contradicting static check.
 3. **G0-A's mailbox census was wrong twice and is corrected with its method.** See G0-A.
@@ -529,8 +529,14 @@ that one command instance and the engine copied through unchanged. The mechanism
 engine-side discriminator cannot empty the clause: a correlator presented with a record whose every
 content field equals its own command, but whose identity it did not mint, must return not-mine.
 
-**Population.** *Arbitrated commands* — **9**, being the only commands that can produce an adoptable
-refusal: `WriteNote`, `DeleteNote`, `WriteChord`, `DeleteChord`, `RevertPlacementOverrides`,
+**Population.** *Arbitrated commands* — **SCOPE FALSIFIED BY EXHIBIT; see open item 27 (G2-A).**
+`engine_rowops_commands.cpp:49` emits `emitClipReject(..., daw::UiCommandType::SetRowOps)` from a
+true-mutating arm, and `SetRowOps` is not among the nine, so "the only commands that can produce an
+adoptable refusal" is false as written. The 51 correlator call sites compound it: they correlate
+chain, sampler, mod-link and journal refusals too, so the correlator population and the
+arbitrated-command scope are different sets that this gate treated as one. The figures below are
+retained as COUNTS and neither may be read as a scope until item 27 settles what the gate governs.
+The nine were: `WriteNote`, `DeleteNote`, `WriteChord`, `DeleteChord`, `RevertPlacementOverrides`,
 `SetAutomationTarget`, `SetClipText`, `WriteHarmony`, `DeleteHarmony`. RAW 17
 (`grep -rn -e 'requireMatchingClipVersion(' -e 'requireMatchingHarmonyVersion(' apps | grep -v tests_main`)
 → minus 8 (three definitions, three declarations, and the two `daw_engine_main.cpp` lambda forwarders
@@ -741,7 +747,12 @@ engine path, and block production for the remaining tracks must continue.
 
 **Population.** *Tracks whose production must continue* — [HAND-CLASSIFIED — open item 25 (all)] the `tracks` vector, read at
 `apps/daw_engine_main.cpp:962-969`. *Writes that remove a host from the gate population* — RAW 17
-(`grep -rn 'hostReady' apps/ | grep 'store(false'`) → minus **2** in `_tests_main` → **15 production**. The
+(`grep -rn 'hostReady' apps/ | grep 'store(false'`) → minus **2** in `_tests_main` → **15
+production** → minus 2 master-track stores (`engine_master_render.cpp:121` and `:132`) → **13 IN
+SCOPE**. This gate's invariant excludes the master bus, so the fifteen came from a wider scope than
+the gate governs and two of its members are exactly the case the invariant does not cover. Either
+the scope widens or the population is 13; the packet takes 13, because widening a scope is a design
+change and correcting a count is not. The
 whole census is RAW 21 (`grep -rn 'hostReady' apps/ | grep 'store('`) → minus 3 in `_tests_main` → **18 production**. The predecessor subtracted
 the same three from the FALSE subset of seventeen, applying the test count of the total population to
 a subset — a count borrowed from one population and spent in another. Its figure is described, not
@@ -757,8 +768,12 @@ of a nested scope is not a `continue`.
 inline on the thread that reads its control socket, so SIGSTOP is a faithful constructor. (2) **The
 only per-track detector is unreachable when the gate is shut**: `apps/engine_produce_block.cpp:1096-1101`
 clears `hostReady` on `!sentOk`, but is not reached once production is blocked. (3) The producer's
-three stall reasons are not three: `logStall` is called with `minCompleted` (`:275`), `inFlight`
-(`:285`) and `ahead` (`:328`), but the local `minCompleted` is overwritten between them.
+three stall reasons are three distinct call sites — `logStall` with `minCompleted` (`:275`),
+`inFlight` (`:285`) and `ahead` (`:328`) — and the claim that the local `minCompleted` is
+OVERWRITTEN between them is FALSE and withdrawn. It is assigned once, at `:271`
+(`minCompleted = progress.minCompleted`), and only read at `:275`, `:282`, `:285`, `:302`, `:306`
+and `:328`. I asserted a data-flow hazard without reading the assignments, inside a failure model
+whose entire subject is data flow.
 
 **Deterministic test.** Three layers, no layer's verdict a duration. Layer 0 settles a contradiction
 the packet must not carry into a verdict. Layer 1 decides the rule with no process and no clock. Layer
@@ -845,8 +860,15 @@ mains, 6 non-calls: a design doc, a tools script, a log line, a declaration, a c
 definition) → **3 production**. The predecessor stated the split beside the command instead of as a
 subtraction, which put it outside the arithmetic the gate checks. *Out-plane readers* — RAW **27**
 (`grep -rn -e audioOutOffset -e safeAudioOutPtr -e audioOutChannelPtr -e auxOutputPlaneOffset apps/`)
-→ minus 20 (three in `_tests_main`, the remainder declarations and non-reads) → **7 production**. The
-predecessor said the command returns 28; it returns 27, and the reviewer's count is the correct one. *Input-plane writers in engine production code* — RAW 13
+→ **SELECTION WITHDRAWN.** The figure was 7 production after subtracting twenty, and that
+subtraction has no coherent rule: `engine_consumer.cpp:670` sets `info.planeByteOffset` from
+`audioOutOffset` for a normal track, `:730` sets `child.planeByteOffset` from `auxOutputPlaneOffset`
+for an aux child, both assign THE SAME FIELD consumed by the same callback byte read, and one was
+excluded while the other was counted. No rule in what I wrote separates them, so the seven is not
+reproducible. Withdrawn rather than re-guessed — this packet has already published three successive
+guesses at one predicate and a fourth would not be better. The raw figure above stands (the
+predecessor said 28).
+The in-scope selection is open item 26 (G4). *Input-plane writers in engine production code* — RAW 13
 (`grep -rn -e audioInOffset -e safeAudioInPtr -e audioInChannelPtr apps/`) → minus 11 (tests,
 declarations and reads) → **2**.
 
@@ -949,7 +971,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `bbbca766bfa1b4e9427cbeea62ba196236bf1561`, A.0 SCRIPT BLOB `9e5e7700781483311549df5ee682e7467c0e1e7a`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `81961f2afa953a64cc1b5440e5a7b1386c0dc941`, A.0 SCRIPT BLOB `e6dabc81338a47d2f6466951fd54c0992de9d73c`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -957,7 +979,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 25 items, 19 open · 13 RAW (13 hand-ruled) + 20 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 27 items, 21 open · 13 RAW (12 hand-ruled) + 20 commanded claims, all executed
     PASS
 
 **What it decides.** Open-item header against body, contiguity, and orphaned numbers. Every
@@ -1077,7 +1099,7 @@ make the items IMPLEMENTABLE, and each item stays open until the work it names e
 verified by someone other than me. A ruling recorded as a closure would be the same error as a
 census recorded as a proof, which this packet has already made once at item 7.
 
-# Open items — 25 atomic, 6 CLOSED at this SHA, 19 open
+# Open items — 27 atomic, 6 CLOSED at this SHA, 21 open
 
 One per line, numbered in document order, so the count is checkable. FOUR are BLOCKING — 11, 18, 19 and 24, matching the four G4 names as its undecidability: a gate
 carrying one cannot be decided by any implementation.
@@ -1158,12 +1180,22 @@ carrying one cannot be decided by any implementation.
     marker and this item; a sixth appearing without one fails the gate. Deriving them needs a
     predicate nobody has proposed, so this is open, not closed.
 
+26. **G4** — The out-plane in-scope selection. The raw figure stands; the subtraction to 7 had no rule
+    distinguishing `engine_consumer.cpp:670` from `:730`, which assign the same field for a normal
+    track and an aux child. A predicate must separate "establishes where the out-plane is read from"
+    into the cases this gate governs, or the gate must range over all 27.
+27. **G2-A** — The arbitrated-command SCOPE, falsified by exhibit: `engine_rowops_commands.cpp:49`
+    emits an adoptable refusal for `SetRowOps`, outside the nine. The 51 correlators also span
+    chain, sampler, mod-link and journal refusals. Either the nine becomes ten-or-more by
+    enumeration, or the gate states which refusals it governs and why the rest are out — and the two
+    populations must stop being treated as one set.
+
 # Provenance of this packet's own numbers
 
 Every count is stated as RAW → RULE → IN SCOPE, so that the command reproduces the raw figure and the
 rule reproduces the rest; and every count is a floor where a runtime value defeats the extraction.
 **5 populations are HAND-CLASSIFIED and exempt from that sentence**, each carrying a marker and
-open item 25 (all). **And of the 13 RAW claims, 13 of them apply their RULE BY HAND** — the command
+open item 25 (all). **And of the 13 RAW claims, 12 of them apply their RULE BY HAND** — the command
 returns the raw figure and a stated subtraction reaches the in-scope one — while none now carries its rule inside the command without also subtracting. That 12 is the honest size of what this gate
 cannot decide: it checks every subtraction's arithmetic and none of their justifications, and the
 one time a justification was wrong (G1-A's five ready-flag operations counted as four) the

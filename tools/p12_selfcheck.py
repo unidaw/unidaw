@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '2c9d3ad5c69c4ce863a027118a5071a1d815697c'
+PREV_TIP     = '2d6a42d9fd89b24ca2efff648307f228a1980b37'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -92,14 +92,14 @@ for i, a in enumerate(sys.argv):
 # merely makes the run FAIL proves nothing — the fifth way a negative control lies is landing in
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
- 'open-count':       ('# Open items — 25 atomic', '# Open items — 26 atomic', 1, 'OPEN-COUNT'),
- 'closed-count':     ('6 CLOSED at this SHA, 19 open', '5 CLOSED at this SHA, 20 open', 1,
+ 'open-count':       ('# Open items — 27 atomic', '# Open items — 28 atomic', 1, 'OPEN-COUNT'),
+ 'closed-count':     ('6 CLOSED at this SHA, 21 open', '5 CLOSED at this SHA, 22 open', 1,
                       'OPEN-CLOSED-COUNT'),
- 'open-arithmetic':  ('6 CLOSED at this SHA, 19 open', '6 CLOSED at this SHA, 17 open', 1,
+ 'open-arithmetic':  ('6 CLOSED at this SHA, 21 open', '6 CLOSED at this SHA, 17 open', 1,
                       'OPEN-ARITHMETIC'),
  # anchored on the tree hash, not on a count: the previous anchor was '11 RAW +', which the
  # document outgrew, leaving the control unable to land while the gate still reported PASS
- 'stale-a0-sample':  ('tree 699abfe8 · 25 items', 'tree 699abfe9 · 25 items', 1, 'A0-SAMPLE-STALE'),
+ 'stale-a0-sample':  ('product 75c6f064 tree 699abfe8', 'product 75c6f064 tree 699abfe9', 1, 'A0-SAMPLE-STALE'),
  'member-per-type':  ('EventEntry 7/6', 'EventEntry 7/7', 1, 'MEMBER-RUST'),
  'member-dropped':   ('    HarmonyEvent 4/4\n', '', 1, 'MEMBER-UNLISTED'),
  'root-wide-grep':   ('`git grep -n sendProcessBlock`', '`grep -rn sendProcessBlock .`', 1,
@@ -108,7 +108,7 @@ CONTROLS = {
                       'POPULATION-UNCOMMANDED'),
  'handmade-count':   ('**5 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
                       'HANDMADE-COUNT'),
- 'byhand-count':     ('13 of them apply their RULE BY HAND', '10 of them apply their RULE BY HAND', 1,
+ 'byhand-count':     ('12 of them apply their RULE BY HAND', '10 of them apply their RULE BY HAND', 1,
                       'BYHAND-COUNT'),
  'control-unlisted': ('`wrong-raw`.', '`wrong-ray`.', 1, 'CONTROL-UNLISTED'),
  'drop-refutation':  ('*REFUTED BY*', 'see above', 'LAST', 'NO-REFUTATION'),
@@ -126,8 +126,8 @@ CONTROLS = {
                       'RAW 13, and the command that produces it appears only after this deliberately '
                       'long interposed clause, which is what a claim with no reachable command looks '
                       'like in practice (`grep', 1, 'RAW-WITHOUT-COMMAND'),
- 'rule-arithmetic':  ('minus **2** in `_tests_main` → **15 production**',
-                      'minus **2** in `_tests_main` → **95 production**', 1, 'RULE-ARITHMETIC'),
+ 'rule-arithmetic':  ('→ minus 17 (twelve plugin-cache index sites',
+                      '→ minus 97 (twelve plugin-cache index sites', 1, 'RULE-ARITHMETIC'),
 }
 if len(sys.argv) > 1 and sys.argv[1] == '--list':
     print('\n'.join(sorted(CONTROLS))); sys.exit(0)
