@@ -913,7 +913,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, A.0 SCRIPT BLOB `dd886fb351720c752d2635910fe3fd13625f05d9`
+`tools/p12_selfcheck.py` at this SHA, A.0 SCRIPT BLOB `2e1d883086766ef35fcec7031b46467acc4fcaab`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -921,7 +921,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 25 items, 19 open · 11 RAW + 19 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 25 items, 18 open · 12 RAW + 22 commanded claims, all executed
     PASS
 
 **What it decides.** Open-item header against body, contiguity, and orphaned numbers. Every
@@ -956,7 +956,7 @@ and so provoked a different check entirely, and the landing assertion demanded t
 which an insertion control can never do — it reported a landed mutation as unlanded. The named-tag
 requirement is what exposed both.
 
-# Open items — 25 atomic, 6 CLOSED at this SHA, 19 open
+# Open items — 25 atomic, 7 CLOSED at this SHA, 18 open
 
 One per line, numbered in document order, so the count is checkable. Three are BLOCKING: a gate
 carrying one cannot be decided by any implementation.
@@ -967,7 +967,23 @@ carrying one cannot be decided by any implementation.
 4. **G0-B** — 600 is a fifth pinned integer with no owner.
 5. **G0-B** — CLOSED at this SHA. Both member counts are produced by a printed command over the pinned tree, the C++ one spanning the three headers the eight types are actually declared in. The per-type breakdown puts the entire 66-vs-65 difference in `EventEntry` (7 vs 6), which corroborates the one-sided-member claim rather than restating it.
 6. **G1-A** — CLOSED at this SHA. The entry-address extraction's rule ships inside the printed command: the data-statement and index-site pipelines each carry their own exclusions and return 4 (3 production) and 12. Closing it is also what exposed the classification error the arithmetic had been hiding — the rule as prose said "four non-data operations" where the ready-flag operations are five, so the in-scope figure was 5 and is 4.
-7. **G1-A** — The `ui_out` producer census is not established, and the disarm is safe only under a single-consumer contract that is asserted rather than proven.
+7. **G1-A** — CLOSED at this SHA. Both halves are now census, not assertion.
+    **Producers.** RAW 17 (`git grep -n 'sendUiDiff(' -- apps | grep -v -e 'inline void sendUiDiff' -e _tests_main -e 'auto sendUiDiff'`)
+    → minus 1, the forwarding lambda at `daw_engine_main.cpp:901` that calls `daw::engine::sendUiDiff`
+    with the deps bound → **16 production producers** (3 `engine_chain_host.cpp`, 11
+    `engine_ui_publish.cpp`, 2 `daw_engine_main.cpp`). They are not 16 independent writers: every one
+    reaches the ring through a SINGLE write site, `git grep -n 'ringWrite(ringUiOut' -- apps` returns
+    1 (`engine_ui_publish.h:110`, inside `sendUiDiff`). A census of producers that stopped at 16 would
+    have described 16 places where a ring discipline could be got wrong; there is one.
+    **Consumers.** `git grep -n 'ringPop(ringUiOut' -- apps` returns 1, and it is
+    `device_chain_ui_tests_main.cpp:404` — there is NO production C++ consumer. On the Rust side
+    `git grep -n 'drain_ui_out(' -- ui | grep -v 'pub fn drain_ui_out'` returns 1, the sole call at
+    `ui/daw-sidecar/src/main.rs:6835` against the sole drain at `control.rs:1459`. So the
+    single-consumer contract the disarm depends on is proven by enumeration at this SHA rather than
+    asserted: one drain function, one caller, no second consumer in either language.
+    **What this does NOT establish**, because the floor is the same as every other grep census here:
+    a producer reaching `ringWrite` through a function pointer, or a consumer added in a language
+    neither command searches, is invisible. The claim is a floor of 16/1/1, not a proof of absence.
 8. **G1-B** — CLOSED at this SHA, by withdrawal rather than by reconciliation. The three
    inconsistent statements of the send-site count all quantified over the hand-selected six, which
    this packet withdraws; the census is withdrawn with it rather than being made self-consistent,

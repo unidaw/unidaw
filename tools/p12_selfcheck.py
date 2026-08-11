@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'cb3382e411444159514e02684ea1295450a5c61e'
+PREV_TIP     = '362c3740ecd2def064f84f6ac12c0ad3053d6b22'
 
 fail = []
 def bad(tag, detail): fail.append(f'[{tag}] {detail}')
@@ -84,9 +84,9 @@ for i, a in enumerate(sys.argv):
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
  'open-count':       ('# Open items — 25 atomic', '# Open items — 26 atomic', 1, 'OPEN-COUNT'),
- 'closed-count':     ('6 CLOSED at this SHA, 19 open', '5 CLOSED at this SHA, 20 open', 1,
+ 'closed-count':     ('7 CLOSED at this SHA, 18 open', '6 CLOSED at this SHA, 19 open', 1,
                       'OPEN-CLOSED-COUNT'),
- 'open-arithmetic':  ('6 CLOSED at this SHA, 19 open', '6 CLOSED at this SHA, 17 open', 1,
+ 'open-arithmetic':  ('7 CLOSED at this SHA, 18 open', '7 CLOSED at this SHA, 16 open', 1,
                       'OPEN-ARITHMETIC'),
  'stale-a0-sample':  ('· 11 RAW + ', '· 12 RAW + ', 1, 'A0-SAMPLE-STALE'),
  'member-per-type':  ('EventEntry 7/6', 'EventEntry 7/7', 1, 'MEMBER-RUST'),
