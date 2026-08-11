@@ -28,7 +28,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    the manifest keeps the two apart deliberately. The zero case is a different sentence rather than
    a missing one, so the check cannot pass by the claim disappearing. G1-B's readers were withdrawn and are AUTHORED again under R1
    with rules, members and drift detectors; G2-A's scope and G4's out-plane are not. **TWO GATES ARE ACCEPTANCE-DECIDABLE — G0-A and G1-A —
-   and nine items block (18, 19, 24, 26, 27, 29, 33, 35 and 36)** and ALL NINE need product
+   and ten items block (18, 19, 24, 26, 27, 29, 33, 35, 36 and 37)** and ALL TEN need product
    work, none of them currently waiting on another item — **classification and state are orthogonal
    and the markers no longer pretend otherwise**: ⟦PRODUCT⟧ says what KIND of work closes an item,
    ⟦BLOCKED-ON: n⟧ says what it WAITS ON, and an item may carry both. Item 27 carried an edge to
@@ -71,7 +71,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    packet**: a sentence of the form "each population carries its extraction command" is false at
    this SHA by construction, and this paragraph previously ended with one while opening with the
    disqualification, because I patched its head across three rounds and left its tail alone.
-2. **The open list is 36 atomic items, not 15 categories.** The four that compression swallowed are
+2. **The open list is 37 atomic items, not 15 categories.** The four that compression swallowed are
    restored: G0-B's unowned mutation floor, G2-A's BATCH blindness, G2-B's probe-order false-green,
    and G3's debug-env requirement plus its self-contradicting static check.
 3. **G0-A's mailbox census was wrong twice and is corrected with its method.** See G0-A.
@@ -1384,7 +1384,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `81284d945d2be4cea89e307b068e4ab43edf80df`, A.0 SCRIPT BLOB `f93f85908e1b35cac7ae3dd65d617ae0ab0602c2`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `443cc949e2796f30d75bf135e39a7345d8cc905b`, A.0 SCRIPT BLOB `019ffcb2b54931c686d8869e5e01c245e984044c`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1392,7 +1392,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 36 items, 28 open · 14 RAW (13 hand-ruled) + 31 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 37 items, 29 open · 14 RAW (13 hand-ruled) + 31 commanded claims, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1928,12 +1928,53 @@ question, not an acceptance one.
 `apps/engine_rt_helpers.h:232-234`. Both sit in PRODUCT, which I do not edit; the ruling is recorded
 here against both addresses and item 36 carries the product-side correction.
 
+**R16 — item 37 (G3): THE REGISTER ASKS FOR A CONFIRMATION THAT CANNOT BE GIVEN, BECAUSE
+BACK-PRESSURE IS ITSELF THE SLOT-REUSE GUARD.** The register directs the reviewer to confirm that evicting
+a host which still owes dispatched blocks cannot corrupt what a RESUMED host reads or publishes. It
+cannot be confirmed, and the opposite is derivable at the pin. The demand should be re-read as a
+design requirement rather than a check.
+
+Audio slots are addressed `blockId % numBlocks` on every side — engine
+(`apps/engine_produce_block.cpp:724`), host (`apps/juce_host_process_main.cpp:635`), master
+(`apps/engine_master_render.cpp:58`) and the audio callback (`apps/engine_audio_callback.h:363`).
+Nothing stamps a slot with the block it holds; `apps/engine_audio_callback.h:362` states the mapping
+as a COMMENT and reads on that basis. **The invariant that makes `blockId % numBlocks` unambiguous is
+exactly `inFlight < numBlocks`** — the back-pressure gate at `apps/engine_producer_thread.cpp:282-283`.
+Evicting a host from the minimum while it still owes dispatched blocks is, by construction, the
+removal of that invariant for that host.
+
+Three consequences follow, each a read of the pinned tree rather than a prediction:
+
+1. **Corrupt read.** The resumed host binds input pointers from its OLD request —
+   `blockIndex = request.blockId % numBlocks` (`:635`), then `audioInChannelPtr(…)` (`:643-648`) —
+   with no test that the request is still current. The producer has since written a newer block's
+   input into that slot.
+2. **Corrupt publish.** It writes its output into the same lapped slot, and
+   `apps/engine_audio_callback.h:363` reads that slot for the newer block with no identity check, so
+   mismatched audio is PLAYED rather than dropped.
+3. **The deadlock returns.** It stores its stale id — `completedBlockId.store(request.blockId)`
+   (`:1085`), unconditional — and the producer reads it at `apps/engine_producer_thread.cpp:239` with
+   NO monotonic clamp. `completedMinimum` then counts a host whose completed id has gone BACKWARDS
+   and the gate closes again. **The eviction designed to open the gate re-closes it through the
+   resumed host.**
+
+`completedSampleTime` is not an escape. The host publishes it at `:1083` and its only consumer under
+`apps/` is a test main (`apps/device_chain_ui_live_tests_main.cpp:170`); no production code reads it.
+
+**What this means for G3.** Eviction cannot land as a producer-side rule alone — it needs a RESUME
+protocol, and the packet must say so before any implementation is attempted. The requirement is
+statable without designing it: a resumed host must be prevented from writing a lapped slot, and a
+stale `completedBlockId` must not be able to lower the minimum. Whether that is a currency test the
+host performs, a monotonic clamp on the reader, a re-baseline on resume, or a block-id stamp per
+slot is an OWNER choice and this ruling deliberately does not make it. What is ruled out is the
+option the gate currently accepts by silence: no protocol at all.
+
 **What these rulings do NOT do.** None of them closes an item that names PRODUCT work — R1 through
-R15 make such items implementable, and R13 is RETRACTED rather than applied, and each stays open until the work exists and is verified by
+R16 make such items implementable, and R13 is RETRACTED rather than applied, and each stays open until the work exists and is verified by
 someone other than me. **A ruling CAN close an item whose whole content was a packet decision**, and
 item 11 is the case: it asked for an authored population, R1 authored one, and there was nothing
 left in it. That distinction was missing and the rule read as universal, which contradicted item
-11's own CLOSED marker three SHAs running. That range — "R1 through R15" above — is checked against the rulings actually parsed
+11's own CLOSED marker three SHAs running. That range — "R1 through R16" above — is checked against the rulings actually parsed
 (`RULING-SET`), because it read "R1 through R4" for as long as there were eleven: the sentence was
 written when four was the whole set and no later ruling was an edit to it. The manifest's parser
 had the matching defect from the other side — `R[1-9]` could not match `**R10 — `, so R9's block ran
@@ -1941,9 +1982,9 @@ to the end and swallowed R10 and R11 into R9's text. **A hardcoded range and a s
 the same failure in two notations, and this packet has now shipped both.** A ruling recorded as a closure would be the same error as a
 census recorded as a proof, which this packet has already made once at item 7.
 
-# Open items — 36 atomic, 8 CLOSED at this SHA, 28 open
+# Open items — 37 atomic, 8 CLOSED at this SHA, 29 open
 
-One per line, numbered in document order, so the count is checkable. NINE are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 35 and 36. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
+One per line, numbered in document order, so the count is checkable. TEN are BLOCKING — 18, 19, 24, 26, 27, 29, 33, 35, 36 and 37. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
 
 1. **G0-B** — The generated header breaks the documented `-DDAW_BUILD_PATCHER_RUST=OFF` build for six unconditional targets, with no stated path, include directory or target-ordering edge.
@@ -2276,6 +2317,24 @@ carrying one cannot be decided by any implementation.
     today's telemetry: the per-host vector carries no host identity and no `lastDispatchedBlockId`,
     so nothing currently emitted can evaluate the owes-nothing predicate at
     `apps/engine_rt_helpers.cpp:502`. PRODUCT work.
+37. **G3** — ⟦PRODUCT⟧ **BLOCKING. Eviction has no resume protocol, and back-pressure is the only
+    thing that makes a slot address unambiguous.** Every side addresses an audio slot as
+    `blockId % numBlocks` — `apps/engine_produce_block.cpp:724`,
+    `apps/juce_host_process_main.cpp:635`, `apps/engine_master_render.cpp:58`,
+    `apps/engine_audio_callback.h:363` — and no slot carries the id of the block it holds, so the
+    mapping is unambiguous only while `inFlight < numBlocks` holds. G3's eviction removes exactly
+    that for the evicted host. A resumed host then binds its pointers from a stale
+    `request.blockId` with no currency test (`:635`, `:643-648`), writes a lapped slot the audio
+    callback reads without an identity check, and stores its old id unconditionally at `:1085`,
+    which the producer consumes at `apps/engine_producer_thread.cpp:239` with no monotonic clamp —
+    lowering the minimum and re-closing the gate the eviction existed to open.
+    `completedSampleTime` cannot serve as the guard: its only consumer under `apps/` is a test main
+    (`apps/device_chain_ui_live_tests_main.cpp:170`). **R16 rules that the register's
+    confirmation cannot be given and states the requirement instead**: a resumed host must not write
+    a lapped slot, and a stale `completedBlockId` must not lower the minimum. Which mechanism
+    delivers that — a host-side currency test, a reader-side monotonic clamp, a re-baseline on
+    resume, or a per-slot block stamp — is an owner choice R16 deliberately leaves open. PRODUCT
+    work.
 
 # Provenance of this packet's own numbers
 
