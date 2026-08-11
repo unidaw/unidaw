@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '925629afcfab6d10639aeedb79af938fc63b9f3f'
+PREV_TIP     = '78c56707b0f8ab88489d67982fe148a78805fffd'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -138,7 +138,7 @@ CONTROLS = {
                       'RAW-NO-TERMINATOR'),
  'byhand-count':     ('12 of them apply their RULE BY HAND', '10 of them apply their RULE BY HAND', 1,
                       'BYHAND-COUNT'),
- 'control-unlisted': ('`wrong-raw`.', '`wrong-ray`.', 1, 'CONTROL-UNLISTED'),
+ 'control-unlisted': ('`wrong-raw`,', '`wrong-ray`,', 1, 'CONTROL-UNLISTED'),
  'drop-refutation':  ('*REFUTED BY*', 'see above', 'LAST', 'NO-REFUTATION'),
  'wrong-raw':        ('RAW **27**', 'RAW **28**', 1, 'RAW-MISMATCH'),
  'wrong-command':    ('` returns 28.', '` returns 26.', 1, 'COMMAND-MISMATCH'),
@@ -156,6 +156,23 @@ CONTROLS = {
                       'like in practice (`grep', 1, 'RAW-WITHOUT-COMMAND'),
  'rule-arithmetic':  ('→ minus 19 (fourteen plugin-cache index sites',
                       '→ minus 97 (fourteen plugin-cache index sites', 1, 'RULE-ARITHMETIC'),
+ # both directions of the two-sided declaration. Backend deleted the item-side sentence and the run
+ # still passed on the gate-side one; these two controls are the reason that cannot happen again.
+ 'drop-item-block':  ('**BLOCKING. Authoring RETRACTED at this SHA**', '**BLOCKING.**', 1,
+                      'PLANNING-BLOCK-ASYMMETRIC'),
+ 'drop-gate-block':  ('AUTHORING RETRACTED: this population covers the OUTPUT relation only',
+                      'This population covers the OUTPUT relation only', 1,
+                      'PLANNING-BLOCK-ASYMMETRIC'),
+ # proves the ruling parser reaches TWO-DIGIT ids: while it was `R[1-9]`, R10 and R11 were invisible
+ # and mutating this heading changed nothing the manifest could see.
+ 'ruling-swallowed': ('**R11 — item 32 (G2-A)', '**R11x — item 32 (G2-A)', 1, 'RULING-SET'),
+ # the mutation backend actually ran, now expressible only as an INSERTION because R8 carries
+ # no digits: proving the number cannot come back rather than that this one instance is right.
+ # proves the second-site check is not vacuous: the opening's list, not the header's.
+ 'restate-blockers': ('block (18, 19, 24, 26 and 27)', 'block (18, 19, 24, 26 and 28)', 1,
+                      'BLOCKER-SET-RESTATED'),
+ 'restate-census':   ('R5 named\nthe readers,', 'the 7 cross-agent reads. R5 named\nthe readers,', 1,
+                      'CENSUS-RESTATED'),
 }
 if len(sys.argv) > 1 and sys.argv[1] == '--list':
     print('\n'.join(sorted(CONTROLS))); sys.exit(0)
@@ -206,6 +223,78 @@ for m in re.finditer(r'open item (\d+)(?: \((G[0-9A-B-]+|all)\))?', pkt):
     if not gate: bad('OPEN-REF-UNGATED', f'open item {r} names no gate'); continue
     if entry.get(r) != gate:
         bad('OPEN-REF-WRONG-GATE', f'open item {r} cited as {gate}, list says {entry.get(r)!r}')
+
+# ---- 2b. a planning block must be declared in BOTH places, and they must name the same gates --
+# The gate-side phrase scan alone was NOMINAL: backend mutated the packet to delete the item's
+# REOPENED sentence, and the run still passed because the gate section still carried its own
+# retraction — and the mirror mutation passed for the mirror reason. Neither statement is the
+# authority; the AGREEMENT of the two is. Deleting either side now fails, which is what makes this
+# a check rather than a pair of sentences that happen to say the same thing.
+# case-INSENSITIVE, and that is the point: the first run of this check fired on G2-A because
+# item 27 writes 'Authoring RETRACTED' where the gate writes 'AUTHORING RETRACTED'. A
+# case-sensitive marker scan skipped two entries in AE-P1.1 for the same reason; a marker whose
+# meaning depends on its capitalisation is a marker that disappears under ordinary editing.
+POP_DEAD = (r'(SELECTION WITHDRAWN|SCOPE FALSIFIED|no derivable population|declares NO population|'
+            r'AUTHORING RETRACTED|POPULATION IS INCOMPLETE|REOPENED: the census covers)')
+gate_side, item_side = set(), set()
+for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*([^*]+)\*\* —(.*?)(?=\n\d{1,2}\. \*\*|\n# |\Z)', body, re.S):
+    if int(m.group(1)) in closed_set: continue
+    if re.search(POP_DEAD, m.group(3), re.I): item_side.add((int(m.group(1)), m.group(2).strip()))
+for m in re.finditer(r'\n# (G[0-9A-B-]+) — ', pkt):
+    gseg = pkt[m.start():]
+    nxt = gseg.find('\n# ', 3)
+    if re.search(POP_DEAD, gseg[:nxt if nxt != -1 else len(gseg)], re.I): gate_side.add(m.group(1))
+only_item = {g for _, g in item_side} - gate_side - {'all'}
+only_gate = gate_side - {g for _, g in item_side}
+if only_item:
+    bad('PLANNING-BLOCK-ASYMMETRIC', f'item declares the population dead for {sorted(only_item)}, '
+                                     f'the gate section does not')
+if only_gate:
+    bad('PLANNING-BLOCK-ASYMMETRIC', f'gate section declares its population dead for '
+                                     f'{sorted(only_gate)}, no open item does')
+
+# ---- 2c. the ruling set is contiguous and the prose range names its last member ---------------
+# `R[1-9]` swallowed R10/R11 for two SHAs and nothing noticed, because no check ever asked how many
+# rulings there are. A parser that cannot see a member and a sentence that stops counting are the
+# same defect; this check is what makes either one visible.
+rids = [int(x) for x in re.findall(r'(?m)^\*\*R(\d+) — ', pkt)]
+if not rids:
+    bad('RULING-SET', 'no "**Rn — " ruling headings parsed at all')
+else:
+    if sorted(rids) != list(range(1, max(rids) + 1)):
+        bad('RULING-SET', f'ruling ids are not contiguous 1..{max(rids)}: {sorted(rids)}')
+    rng = re.search(r'R1 through R(\d+) are decisions', pkt)
+    if not rng:
+        bad('RULING-SET', 'no "R1 through Rn are decisions" range sentence to check')
+    elif int(rng.group(1)) != max(rids):
+        bad('RULING-SET', f'prose says R1 through R{rng.group(1)}, document defines R1..R{max(rids)}')
+
+# ---- 2d. a ruling may not restate a census count -------------------------------------------
+# The census block owns every role count and every row is a command. A ruling that ALSO states one
+# is a second statement of the same fact, and backend proved the consequence: `7/8` became `70/80`
+# in R8 and the gate passed, because no check compares a ruling's digits to anything. Forbidding
+# the digit is stronger than comparing it — a fact stated once cannot drift.
+ROLE = (r'(cross-agent (?:byte-consuming )?read|host (?:byte-producing )?write|in-plane|out-plane|'
+        r'addressing site|alias hop)')
+for m in re.finditer(r'(?m)^\*\*R\d+ — .*?(?=\n\n\*\*R\d+ — |\*\*What these rulings do NOT)', pkt, re.S):
+    for d in re.finditer(r'(\d+)\s+\w{0,12}\s?' + ROLE, m.group(0)):
+        bad('CENSUS-RESTATED', f'{m.group(0)[:14].strip()} restates a census count: {d.group(0)[:44]!r}')
+
+# ---- 2e. EVERY restatement of the blocking set, not just the one the header owns --------------
+# `BLOCKER-SET` checked the open-items header and passed while the OPENING PARAGRAPH carried a
+# second list — (18, 19, 23, 24, 29) against a real set of {18, 19, 24, 26, 27}: three wrong members
+# in the packet's first screen, surviving every gate because the check knew about one site. A rule
+# stated twice needs a check that ranges over the statements, not over the one you remembered.
+derived_blk = sorted(int(m.group(1)) for m in
+                     re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — [^\n]{0,120}BLOCKING', body))
+for m in re.finditer(r'(?:items?|block)[^.\n]{0,40}?\((\d{1,2}(?:, \d{1,2}){2,}(?:,? and \d{1,2})?)\)', pkt):
+    got = sorted(int(x) for x in re.findall(r'\d+', m.group(1)))
+    if got != derived_blk:
+        bad('BLOCKER-SET-RESTATED', f'{m.group(1)!r} vs derived {derived_blk}')
+for m in re.finditer(r'BLOCKING — (\d{1,2}(?:, \d{1,2})*(?:,? and \d{1,2})?)', pkt):
+    got = sorted(int(x) for x in re.findall(r'\d+', m.group(1)))
+    if got != derived_blk:
+        bad('BLOCKER-SET', f'{m.group(1)!r} vs derived {derived_blk}')
 
 # ---- 3. a withdrawn bullet may not be described as covered ----------------------------------
 if 'WITHDRAWN AS CIRCULAR' in pkt:
@@ -422,7 +511,8 @@ WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twen
         21: 'Twenty-one', 22: 'Twenty-two', 23: 'Twenty-three', 24: 'Twenty-four',
         25: 'Twenty-five', 26: 'Twenty-six', 27: 'Twenty-seven', 28: 'Twenty-eight',
         29: 'Twenty-nine', 30: 'Thirty', 31: 'Thirty-one', 32: 'Thirty-two',
-        33: 'Thirty-three', 34: 'Thirty-four', 35: 'Thirty-five'}
+        33: 'Thirty-three', 34: 'Thirty-four', 35: 'Thirty-five', 36: 'Thirty-six',
+        37: 'Thirty-seven', 38: 'Thirty-eight', 39: 'Thirty-nine', 40: 'Forty'}
 if not listed:
     bad('CONTROL-PROSE-MISSING', 'no "**Controls.** <N>, each naming" sentence')
 elif listed.group(1) != WORD.get(len(CONTROLS), '?'):
@@ -496,8 +586,7 @@ for g in gate_hdr:
     blk = sorted(set(blk) | set(xcut))
     # TWO decidabilities, because the packet makes the distinction deliberately and one boolean
     # collapsed it toward less work: G3 is plannable (R3 authored N) and not acceptance-decidable.
-    withdrawn_pop = bool(re.search(r'(SELECTION WITHDRAWN|SCOPE FALSIFIED|no derivable population|'
-                                   r'declares NO population|AUTHORING RETRACTED|POPULATION IS INCOMPLETE|REOPENED: the census covers)', seg))
+    withdrawn_pop = bool(re.search(POP_DEAD, seg, re.I))
     gates.append({'id': g['gate'], 'line': g['line'], 'end_line': g['end_line'],
                   'dependencies': [d for d in deps if d != g['gate']],
                   'dependencies_text': dep_text,
@@ -508,9 +597,15 @@ for g in gate_hdr:
                   'reason_if_not_acceptance': ('blocked by items %s' % blk) if blk else None,
                   'reason_if_not_planning': 'own population withdrawn' if withdrawn_pop else None})
 rulings = []
-for m in re.finditer(r'\*\*(R[1-9]) — .*?(?=\n\n\*\*R[1-9] — |\*\*What these rulings do NOT)', pkt, re.S):
+# `R[1-9]` — the third hardcoded range in this file to be outgrown by its own population. It
+# matched the "R1" inside "**R10 — ", and the lookahead `\n\n\*\*R[1-9] — ` could never match
+# "**R10 — ", so R9's block ran to the end of the section and SWALLOWED R10 and R11: two rulings
+# absent from the manifest, and their text attributed to R9. `R[1-4]` did exactly this to R5/R6
+# earlier. The digits are now unbounded and the boundary is a negative lookahead, so R10..R99 are
+# separated by the same rule that separates R1..R9.
+for m in re.finditer(r'\*\*(R\d+) — .*?(?=\n\n\*\*R\d+ — |\*\*What these rulings do NOT)', pkt, re.S):
     blk = m.group(0)
-    head = re.match(r'\*\*(R[1-9]) — ([^*]{0,160}?)(?:\.\*\*|\*\*)', blk)
+    head = re.match(r'\*\*(R\d+) — ([^*]{0,160}?)(?:\.\*\*|\*\*)', blk)
     rulings.append({
         'id': m.group(1),
         'line': line_of(m.start()),

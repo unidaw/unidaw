@@ -18,7 +18,21 @@ never written is the same error's fingerprint.
 
 The blockers from the exact review are reconciled here, and the count is deliberately not restated: it moved between rounds and a fixed number here would be a twin of the item list, which is the authority:
 
-1. **TWO OF THE EIGHT GATES CANNOT BE DECIDED AT THIS SHA.** They were briefly authored and the authorings are RETRACTED — see items 11, 26, 27 and the retraction note in each gate.** All three withdrawn populations — G1-B's readers, G2-A's scope, G4's out-plane — are AUTHORED under R1 with rules, members and drift detectors. No gate is acceptance-decidable: five items still block (18, 19, 23, 24, 29) and every one needs product work, not packet work.** G2-A was the third until its scope was AUTHORED under R1 at this SHA; authoring a withdrawn population is how a gate leaves this list, and it is packet work rather than product work. Six gates additionally carry a blocking item and so are not ACCEPTANCE-decidable; the manifest publishes both senses as `decidable_for_planning` and `decidable_for_acceptance`, and G3 is the case that shows why one boolean will not do: R3 makes it plannable and it is not acceptance-decidable until the N ticket lands.  Every gate carries the record's SHAPE — population slot,
+1. **TWO OF THE EIGHT GATES CANNOT BE DECIDED AT THIS SHA** — G2-A and G4, whose authorings are
+   RETRACTED; see items 26, 27 and the retraction note in each gate, which must agree or
+   `PLANNING-BLOCK-ASYMMETRIC` fires. G1-B's readers were withdrawn and are AUTHORED again under R1
+   with rules, members and drift detectors; G2-A's scope and G4's out-plane are not. **No gate is
+   acceptance-decidable: five items block (18, 19, 24, 26 and 27)** and three of them need product
+   work rather than packet work. That list is derived from the items themselves and every
+   restatement of it anywhere in this document is compared against the derivation
+   (`BLOCKER-SET-RESTATED`) — this paragraph carried (18, 19, 23, 24, 29) for several SHAs, three
+   members wrong on the packet's first screen, because the check knew about the open-items header
+   and not about the sentence that repeats it. The manifest publishes both senses as
+   `decidable_for_planning` and `decidable_for_acceptance`, and G3 shows why one boolean will not
+   do: R3 makes it plannable and it is not acceptance-decidable until the N ticket lands.
+   **This paragraph is where every stale claim in the packet has accumulated**, because it is
+   written once and thereafter read as framing rather than as claims; it now states no number that
+   is not derived elsewhere and checked here.  Every gate carries the record's SHAPE — population slot,
    failure model, deterministic test, PASS conditions each naming their refutation, static checks,
    review register — and for those three the population slot reads "withdrawn", which satisfies the
    shape and decides nothing. **No universal claim about populations is made anywhere in this
@@ -1139,7 +1153,11 @@ and `auxOutputPtrs` to the plugin, which writes them. The plugin is third-party 
 does not govern; the host is accountable for what it hands over, so the site is the handover.
 Attributing it to the plugin would put a member of G4's population outside anything the packet can
 require.
-**(c) THE GATE RANGES OVER BOTH SIDES: the 7 cross-agent readers AND the 8 host writers.** R5 named
+**(c) THE GATE RANGES OVER BOTH SIDES: the CENSUS rows *out-plane cross-agent byte-consuming reads*
+AND *out-plane host byte-producing writes*.** This ruling carries NO DIGITS, by rule and by check
+(`CENSUS-RESTATED`): backend changed a `7/8` written here to `70/80` and the gate passed, because a
+number restated in a ruling is a second statement of a fact the census already owns and nothing
+compares them. The fix is not a comparison — it is that there is nothing here to mutate. R5 named
 the readers, and a reader set alone cannot check an ORDERING invariant — "no consumer reads before
 the acknowledgement" is a relation between a write and a read, and a gate enumerating only one end
 can never observe the pair. This corrects R5 rather than extending it: R5 said "the in-scope
@@ -1186,8 +1204,60 @@ have made the fixture look complete while missing the harder case.
 "exactly two pointer-returning helpers", which is itself a census and deserves a check rather than
 anyone's word.
 
+**THE CENSUS BLOCK — every role count stated ONCE, as a command that returns it.** Backend changed
+R8's `7/8` to `70/80` and R9's `one` to `two` in the packet text and the gate still passed, because
+those numbers lived in PROSE and nothing re-derived them. Each row below is executed by A.0 against
+the pinned tree, so the same mutation now fails as `COMMAND-MISMATCH`. Rulings and items CITE a row
+by role name; **no ruling restates a count**, which is also the fix for the drift that had R5
+excluding writes while R8 included them.
+
+    IN plane — the ownership half, and the half open item 26 (G4) found missing. Every row DERIVED.
+      engine addressing sites            `git grep -n -E 'safeAudioInPtr\(blockIndex|header->audioInOffset \+' apps/engine_produce_block.cpp apps/engine_master_render.cpp | wc -l` returns 2.
+      engine byte-producing writes       `git grep -n -E 'std::(memcpy|fill)\(input' apps/engine_produce_block.cpp | wc -l` returns 11.
+      master summed-mix write            `git grep -n -E 'const_cast<daw::ShmHeader\*>\(header\)\) \+ off' apps/engine_master_render.cpp | wc -l` returns 1.
+      host addressing + alias hops       `git grep -n -E 'audioInChannelPtr\(state.shmBase|const float\* const\* (plugin)?[iI]nputPtrs' apps/juce_host_process_main.cpp | wc -l` returns 3.
+      host byte-consuming reads          `git grep -n -E 'state\.inputPtrs\[(src|ch)\],|= pluginInputPtrs\[ch\]' apps/juce_host_process_main.cpp | wc -l` returns 5.
+
+    OUT plane — the ordering half (`write_output → release-ack → acquire-wait → read_output`).
+    BOTH ROWS ARE THE HAND-CLASSIFIED ROLE CENSUS OF THE POPULATION BULLET ABOVE — they carry no
+    marker of their own because they are not a second population, and a marker here would inflate
+    the hand-classified count by restating one. No single pattern reproduces either row.
+    What the patterns DO return is stated, so the distance is visible rather than implied:
+      cross-agent byte-consuming reads   floor, name-reachable addressing only — `git grep -n -E 'safeAudioOutPtr\(blockIndex|audioOutChannelPtr\(' apps/engine_produce_block.cpp apps/juce_host_process_main.cpp apps/engine_master_render.cpp | wc -l` returns 4.
+      host byte-producing writes         SUPERSET, includes addressing, zero-fills and the `:834` self-read — `git grep -n -E 'outputPtrs\[ch\]|auxOutputPtrs\[ch\]' apps/juce_host_process_main.cpp | wc -l` returns 13.
+
+**The two OUT rows are the ones a reader should distrust**, and stating 4 against a claim of seven
+and 13 against a claim of eight is the point: the gap IS the hand classification, and a row that
+quoted a pattern returning exactly the claimed number would be a pattern reverse-engineered from the
+answer. The five IN rows have no such gap because the roles there are separable by shape.
+
+**THE ALIAS CHAIN IS THE FINDING, and it is the same defect this population has now made four
+times.** The host reaches the input plane through TWO hops: `state.inputPtrs` → `inputPtrs`
+(`:862`) → `pluginInputPtrs` (`:880`). Five of the byte reads dereference the SECOND alias
+(`:924`/`:927`/`:930` the level-matched bypass copy, `:939`/`:942` the bypass meter, `:975`/`:980`
+the input meter) and a census over the member name `state.inputPtrs` returns FOUR sites and sees
+none of them. claude-worker-1's input census reported five engine writes; the engine writes twelve,
+because the window started at the visible branch (`:1016`) while the binding that governs every
+write is `float* input = safeAudioInPtr(blockIndex, ch)` at `:945` — the sampler-stem, sidechain and
+sampler-audio branches at `:967`–`:1017` write the same plane through the same pointer. **A census
+is bounded by the BINDING, never by the branch you were reading.**
+
+**`engine_produce_block.cpp:1032` IS A MEMBER OF BOTH RELATIONS AT ONCE.** `std::memcpy(input,
+output, ...)` is an out-plane byte read and an in-plane byte write in one statement. Any partition
+into "the readers" and "the writers" either double-counts it or drops it, and two controls ranging
+over the two lists would each claim it. It is named once here, in both roles, deliberately.
+
+**HOST ROLES, and one is INDIRECT.** `:686` (aux copy) and `:720` (passthrough) read through
+`state.inputPtrs` directly; `:685` is a null-and-size guard and reads no bytes; `:644` establishes
+the address. `:987` hands `pluginInputPtrs` to the plugin, which reads it — the same treatment R8(b)
+gives the indirect WRITER, and for the same reason: the plugin is third-party code this packet does
+not govern, so the host's handover is the accountable site.
+
 **Floor.** Dispatch sites floor 3: `rg` finds every syntactic call but is blind to a dispatch through
-a function pointer. The WRITER census is a floor of 2 for the same reason plus helper indirection. There is no
+a function pointer. The WRITER census is a floor of 2 for the same reason plus helper indirection.
+The IN-plane rows are floors for a third reason on top of both: an alias hop is a syntactic form, so
+a THIRD hop — or a plane pointer stored in a struct field, which no row above would match — extends
+every count. There is no
 reader floor: the reader selection is withdrawn (open item 26 (G4)), and quoting a floor of 7 for a
 withdrawn population would restate the very number the withdrawal removed.
 
@@ -1297,7 +1367,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `ac4d24d6527e6115dadd7f053f30cc2cf1c01775`, A.0 SCRIPT BLOB `ced78dcbf94d09ae4383f79416dea7a532749ab4`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `ab598a723fd14050abc5a21e3b702e4d051cc1b0`, A.0 SCRIPT BLOB `8aa432b788d75f65198c30a2a3078a5877d8e9c2`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1305,7 +1375,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 32 items, 24 open · 13 RAW (12 hand-ruled) + 21 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 32 items, 24 open · 13 RAW (12 hand-ruled) + 28 commanded claims, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1355,14 +1425,20 @@ back to: A.0's "what it does not decide" list is the exact place where a stale s
 what has been settled.)
 And nothing about the product beyond what a text search can see.
 
-**Controls.** Thirty-four, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Thirty-nine, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
-`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`. Two of them were themselves defective when first
+`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-blockers`. The last five exist because
+backend MUTATED THIS PACKET AND THE GATE STILL SAID PASS: deleting the item's reopening sentence,
+inverting input for output, changing R8's 7/8 to 70/80, R9's one to two and item 31's four to five —
+every one of them survived. **Thirty-four controls were checking status ARITHMETIC and no control
+was checking a substantive claim**, which is the difference between a gate and a gate's appearance.
+`drop-item-block` and `drop-gate-block` close the first; the census block closes the numeric ones
+by making them commands, and `restate-census` keeps a digit from reappearing in a ruling. Two of the controls were themselves defective when first
 written and are recorded here rather than quietly fixed: `raw-without-cmd` changed a claim's NUMBER
 and so provoked a different check entirely, and the landing assertion demanded the anchor count DROP,
 which an insertion control can never do — it reported a landed mutation as unlanded. The named-tag
@@ -1499,9 +1575,14 @@ arbitrated population is derived from that classifier. A command that replaces t
 while classified as not mutating it is a live inconsistency in the predicate this gate depends on,
 not merely a misleading name.
 
-**What these rulings do NOT do.** None of them closes its item — R1 through R4 are decisions that
+**What these rulings do NOT do.** None of them closes its item — R1 through R11 are decisions that
 make the items IMPLEMENTABLE, and each item stays open until the work it names exists and is
-verified by someone other than me. A ruling recorded as a closure would be the same error as a
+verified by someone other than me. That range is checked against the rulings actually parsed
+(`RULING-SET`), because it read "R1 through R4" for as long as there were eleven: the sentence was
+written when four was the whole set and no later ruling was an edit to it. The manifest's parser
+had the matching defect from the other side — `R[1-9]` could not match `**R10 — `, so R9's block ran
+to the end and swallowed R10 and R11 into R9's text. **A hardcoded range and a summary sentence are
+the same failure in two notations, and this packet has now shipped both.** A ruling recorded as a closure would be the same error as a
 census recorded as a proof, which this packet has already made once at item 7.
 
 # Open items — 32 atomic, 8 CLOSED at this SHA, 24 open
