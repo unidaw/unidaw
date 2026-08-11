@@ -369,6 +369,9 @@ action. It supersedes stale ticket rows above where they conflict.
   claimed fixed; independent review pending.
 - `d9e636e`: owner PASS/89 controls; signature-aware EXTRACTOR-TEXT floor 43 and
   source-view item offsets claimed; independent review pending.
+- Exact review of `d9e636e` is **BLOCKED**: item offsets and EOF-overblank pass,
+  but the 43-site census misses keyword/alias/compiled/helper readers and has no
+  negative control; hidden dependency comments still reach canonical edges.
 - `f7495b6`: BLOCKED; hidden/code split exposed raw-site and dependency
   extraction gaps.
 - `68fae6b`: BLOCKED; absent-artifact identity fix passes, but Markdown,
