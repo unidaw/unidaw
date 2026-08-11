@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'd9e636ea90622815e6ec69a7a34af7aa94fa176a'
+PREV_TIP     = '6dde12e2f5fbac8470592aedd6adb189f6a50956'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -1030,10 +1030,38 @@ if _outside:
 # mentions instead of instances, and a span detector that matched the gaps between spans. `ast` was
 # available the whole time and costs six lines; I reached for a regex because I had one written.
 _decor_raw = []
+# KEYWORD ARGS AND COMPILED PATTERNS TOO. The walk handled only `re.f(pattern, ..., text)` with
+# positional arguments, so `re.search(p, string=pkt)` and `RX.finditer(pkt)` were invisible —
+# codex-worker-2 passed four adversarial raw readers straight through it. That is the FOURTH
+# instance today of a predicate excluding what it cannot represent, and the third INSIDE a fix for
+# the previous one.
+# STATED FLOOR, because this walk is still not sound: a text passed through a LOCAL ALIAS
+# (`t = pkt; re.search(x, t)`) or read by a HELPER FUNCTION is invisible to it, and catching those
+# needs dataflow rather than a syntax walk. The number is a floor on raw readers, not a census of
+# them, and it is written here rather than implied by a passing run.
+_re_calls = []
 for _node in ast.walk(ast.parse(open(__file__).read())):
-    if not (isinstance(_node, ast.Call) and isinstance(_node.func, ast.Attribute)
-            and isinstance(_node.func.value, ast.Name) and _node.func.value.id == 're'
-            and len(_node.args) >= 2):
+    if not isinstance(_node, ast.Call) or not isinstance(_node.func, ast.Attribute):
+        continue
+    _recv = _node.func.value
+    _is_re = isinstance(_recv, ast.Name) and _recv.id == 're'
+    _is_compiled = isinstance(_recv, ast.Name) and _recv.id.isupper() and len(_recv.id) > 1
+    if not (_is_re or _is_compiled):
+        continue
+    # a compiled pattern's first positional arg IS the text; `re.f`'s is the pattern
+    _kw = {k.arg: k.value for k in _node.keywords}
+    if _is_compiled:
+        _txts = ([_node.args[0]] if _node.args else []) + ([_kw['string']] if 'string' in _kw else [])
+        for _t in _txts:
+            if isinstance(_t, ast.Name) and _t.id in ('pkt', 'body', 'head'):
+                _re_calls.append(('<compiled>', _t.id))
+        continue
+    if len(_node.args) < 1:
+        continue
+    if 'string' in _kw:
+        _node = ast.Call(func=_node.func, args=list(_node.args) + [_kw['string']],
+                         keywords=[])
+    if len(_node.args) < 2:
         continue
     # a pattern BUILT BY CONCATENATION is still a pattern. Restricting to `ast.Constant` dropped
     # every `r'...' + GATE_ID + r'...'` call — eleven of them — so my parsed count came out 24 while
@@ -1056,6 +1084,7 @@ for _node in ast.walk(ast.parse(open(__file__).read())):
     _tname = _txt.id if isinstance(_txt, ast.Name) else None
     if _lits and not any('`' in _l for _l in _lits) and _tname in ('pkt', 'body', 'head'):
         _decor_raw.append((_lits[0][:38], _tname))
+_decor_raw += [(p_, t_) for p_, t_ in _re_calls]
 # 43. THIS POPULATION HAS NOW BEEN COUNTED FOUR TIMES AND ONLY THE LAST ONE IS SOUND:
 #
 #   35   my line regex          blind to 11 calls whose arguments wrap
