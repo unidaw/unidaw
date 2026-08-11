@@ -751,6 +751,13 @@ raw marker delimiters are forbidden outside the leading marker run, all four
 prior view probes fire, and extractor floor 44 records the intentional raw-byte
 exception. Exact review is pending; G3/G0/M1/item37 remain gated.
 
+Exact review of `2e9880e` is **BLOCKED**. The raw delimiter policy and four probes
+pass, but implementation reads `_unhidden` body with HTML comments already
+blanked; a hidden-comment delimiter therefore clean-passes. “RAW bytes” comments
+are false, and the extractor ratchet does not prove raw access because the input
+is normalized. G4 union derivation/stale reasons and G0/G2/G3/M1/item37/N/
+Watchdog blockers remain.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
