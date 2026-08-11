@@ -27,15 +27,18 @@ The blockers from the exact review are reconciled here, and the count is deliber
    in their TESTS and in the PRODUCT respectively — **a plannable gate is not a decidable one**, and
    the manifest keeps the two apart deliberately. The zero case is a different sentence rather than
    a missing one, so the check cannot pass by the claim disappearing. G1-B's readers were withdrawn and are AUTHORED again under R1
-   with rules, members and drift detectors; G2-A's scope and G4's out-plane are not. **THREE GATES ARE ACCEPTANCE-DECIDABLE — G0-A, G1-A and G1-B —
-   and five items block (18, 19, 24, 26 and 27)** and three of them need product
+   with rules, members and drift detectors; G2-A's scope and G4's out-plane are not. **TWO GATES ARE ACCEPTANCE-DECIDABLE — G0-A and G1-A —
+   and six items block (18, 19, 24, 26, 27 and 33)** and three of them need product
    work rather than packet work. That list is derived from the items themselves and every
    restatement of it anywhere in this document is compared against the derivation
    (`BLOCKER-SET-RESTATED`) — this paragraph carried (18, 19, 23, 24, 29) for several SHAs, three
    members wrong on the packet's first screen, because the check knew about the open-items header
    and not about the sentence that repeats it. **That set is DERIVED and checked (`GATE-ACCEPT-PROSE`)**, not asserted. It read "No gate is
    acceptance-decidable" until the check that derives it was written, and the check failed on its
-   first run: three gates carry no blocking item and no unaccepted dependency. The sentence had been
+   first run: three gates carried no blocking item. It is TWO now — G1-B left the set when item 33
+   was filed, because restoring its withdrawn PASS conditions revealed that the tests they name do
+   not exist. **The withdrawal had been carrying the gate's acceptance**: a withdrawn condition is
+   not a failing one, so nothing contradicted the flag while the words stood. The sentence had been
    true when the packet was younger and was never re-decided, which is the fourth stale universal
    this opening has carried.
    The manifest publishes both senses as `decidable_for_planning` and `decidable_for_acceptance`,
@@ -55,7 +58,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    packet**: a sentence of the form "each population carries its extraction command" is false at
    this SHA by construction, and this paragraph previously ended with one while opening with the
    disqualification, because I patched its head across three rounds and left its tail alone.
-2. **The open list is 32 atomic items, not 15 categories.** The four that compression swallowed are
+2. **The open list is 33 atomic items, not 15 categories.** The four that compression swallowed are
    restored: G0-B's unowned mutation floor, G2-A's BATCH blindness, G2-B's probe-order false-green,
    and G3's debug-env requirement plus its self-contradicting static check.
 3. **G0-A's mailbox census was wrong twice and is corrected with its method.** See G0-A.
@@ -1457,7 +1460,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `7d8866da98e25abe269b0ea84465ca7c21ea1689`, A.0 SCRIPT BLOB `d9b447263789798b3c6b46e5af313747f575e95c`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `51477caf404676dabd6daf1926735e0661730ae9`, A.0 SCRIPT BLOB `c5f9349c69fdb06ef2baa06ab1a41ca322c1aee8`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1465,7 +1468,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 32 items, 24 open · 14 RAW (13 hand-ruled) + 31 commanded claims, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 33 items, 25 open · 14 RAW (13 hand-ruled) + 31 commanded claims, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1753,9 +1756,9 @@ to the end and swallowed R10 and R11 into R9's text. **A hardcoded range and a s
 the same failure in two notations, and this packet has now shipped both.** A ruling recorded as a closure would be the same error as a
 census recorded as a proof, which this packet has already made once at item 7.
 
-# Open items — 32 atomic, 8 CLOSED at this SHA, 24 open
+# Open items — 33 atomic, 8 CLOSED at this SHA, 25 open
 
-One per line, numbered in document order, so the count is checkable. FIVE are BLOCKING — 18, 19, 24, 26 and 27. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
+One per line, numbered in document order, so the count is checkable. SIX are BLOCKING — 18, 19, 24, 26, 27 and 33. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
 carrying one cannot be decided by any implementation.
 
 1. **G0-B** — The generated header breaks the documented `-DDAW_BUILD_PATCHER_RUST=OFF` build for six unconditional targets, with no stated path, include directory or target-ordering edge.
@@ -1994,6 +1997,17 @@ carrying one cannot be decided by any implementation.
     state in its payload"; its NAME asks "does it MUTATE the document"; and G2-A's arbitrated
     population is derived from it. A predicate this gate depends on is inconsistent with the
     behaviour it names, which is a defect in the predicate and not in its wording.
+
+33. **G1-B** — **BLOCKING. The tests PASS 9 and S4 name do not exist.** Restoring them from
+    "withdrawn with the population" to live conditions made the gap visible: PASS 9 requires a
+    mechanical echo ratchet over the seven authored send sites and S4 requires drift detectors
+    pinning the population's size, and NEITHER IS WRITTEN. While they read "withdrawn", G1-B's
+    acceptance flag was true and nothing contradicted it, because a withdrawn condition is not a
+    failing one — **the withdrawal was carrying the gate's acceptance**. This is the same shape as
+    item 26 (G4): a gate whose population is authored and whose tests are absent, and in both cases
+    the population work is what got done because it is the part a packet can do. Product work; the
+    detectors belong with the LayoutSpec assertions in constraint 1, and the ratchet is a sibling of
+    the one item 31 (all) now executes.
 
 # Provenance of this packet's own numbers
 

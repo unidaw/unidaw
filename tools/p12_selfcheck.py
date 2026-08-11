@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '5be99953173e765742b58557baab5fc8b635fbe0'
+PREV_TIP     = '88a063f9f35377f84fdbd907ec652a46520d84e7'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -215,10 +215,10 @@ for i, a in enumerate(sys.argv):
 # merely makes the run FAIL proves nothing — the fifth way a negative control lies is landing in
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
- 'open-count':       ('# Open items — 32 atomic', '# Open items — 33 atomic', 1, 'OPEN-COUNT'),
- 'closed-count':     ('8 CLOSED at this SHA, 24 open', '7 CLOSED at this SHA, 25 open', 1,
+ 'open-count':       ('# Open items — 33 atomic', '# Open items — 34 atomic', 1, 'OPEN-COUNT'),
+ 'closed-count':     ('8 CLOSED at this SHA, 25 open', '7 CLOSED at this SHA, 26 open', 1,
                       'OPEN-CLOSED-COUNT'),
- 'open-arithmetic':  ('8 CLOSED at this SHA, 24 open', '8 CLOSED at this SHA, 17 open', 1,
+ 'open-arithmetic':  ('8 CLOSED at this SHA, 25 open', '8 CLOSED at this SHA, 17 open', 1,
                       'OPEN-ARITHMETIC'),
  # anchored on the tree hash, not on a count: the previous anchor was '11 RAW +', which the
  # document outgrew, leaving the control unable to land while the gate still reported PASS
@@ -235,8 +235,8 @@ CONTROLS = {
  # this, the next gate that writes S.1 or "Static 1" disappears exactly as G0-B did.
  'label-spelling':   ('**Static checks.** S1 the ready-clear', '**Static checks.** S-1 the ready-clear', 1,
                       'MANIFEST-STALE'),
- 'blocker-set':      ('FIVE are BLOCKING — 18, 19, 24, 26 and 27',
-                      'FIVE are BLOCKING — 18, 19, 24, 26 and 28', 1, 'BLOCKER-SET'),
+ 'blocker-set':      ('SIX are BLOCKING — 18, 19, 24, 26, 27 and 33',
+                      'SIX are BLOCKING — 18, 19, 24, 26, 27 and 28', 1, 'BLOCKER-SET'),
  'constraint-lost':  ('1. Production atomic **size/alignment', '1x. Production atomic **size/alignment', 1,
                       'CONSTRAINTS-COUNT'),
  'opening-gates':    ('**EVERY GATE IS PLANNABLE AT THIS SHA**',
@@ -297,7 +297,7 @@ CONTROLS = {
  # the mutation backend actually ran, now expressible only as an INSERTION because R8 carries
  # no digits: proving the number cannot come back rather than that this one instance is right.
  # proves the second-site check is not vacuous: the opening's list, not the header's.
- 'restate-blockers': ('block (18, 19, 24, 26 and 27)', 'block (18, 19, 24, 26 and 28)', 1,
+ 'restate-blockers': ('block (18, 19, 24, 26, 27 and 33)', 'block (18, 19, 24, 26, 27 and 28)', 1,
                       'BLOCKER-SET-RESTATED'),
  # the item half of the same check: item 26's history is where the digits went when R8 lost them,
  # and a check that ranged only over rulings would have watched them move.
@@ -352,7 +352,7 @@ CONTROLS = {
  'reader-row-moved': ('    6  engine_consumer.cpp:766',
                       '    x  engine_consumer.cpp:766', 1, 'OUT-MEMBERS'),
  # a manifest must never be published from a packet that failed its own gate
- 'emit-fail-open':   ('# Open items — 32 atomic', '# Open items — 33 atomic', 1, 'OPEN-COUNT'),
+ 'emit-fail-open':   ('# Open items — 33 atomic', '# Open items — 34 atomic', 1, 'OPEN-COUNT'),
  # both items are G2-A, so the forward gate check agrees and only the backward one can catch it
  'ruling-item-swap2': ('**R12 — item 27 (G2-A)', '**R12 — item 28 (G2-A)', 1, 'RULING-ITEM-BIND'),
  # the diagram has contradicted the text twice; it is checked now, so make sure the check fires
@@ -374,8 +374,8 @@ CONTROLS = {
  'census-wrong-file': ("`git grep -n 'process(pluginInputPtrs' apps/juce_host_process_main.cpp | wc -l` returns 1.",
                       "`git grep -n 'audioInOffset = offset' apps/engine_ui_shm.cpp | wc -l` returns 1.", 1,
                       'CENSUS-SITES'),
- 'accept-prose':     ('GATES ARE ACCEPTANCE-DECIDABLE — G0-A, G1-A and G1-B',
-                      'GATES ARE ACCEPTANCE-DECIDABLE — G0-A, G1-A and G3', 1, 'GATE-ACCEPT-PROSE'),
+ 'accept-prose':     ('GATES ARE ACCEPTANCE-DECIDABLE — G0-A and G1-A',
+                      'GATES ARE ACCEPTANCE-DECIDABLE — G0-A and G3', 1, 'GATE-ACCEPT-PROSE'),
  'restate-census-i': ('sized by the two OUT census rows', 'sized at 7 cross-agent reads', 1,
                       'CENSUS-RESTATED'),
  'restate-census':   ('R5 named\nthe readers,', 'the 7 cross-agent reads. R5 named\nthe readers,', 1,
