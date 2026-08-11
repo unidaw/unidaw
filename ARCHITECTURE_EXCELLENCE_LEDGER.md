@@ -732,6 +732,13 @@ blockers with its rule, and item18’s retained circularity is explicitly bounde
 as history rather than current status. Exact review is pending; G3/G0/M1/item37
 oracle remain gated.
 
+Exact review of `9574317` is **BLOCKED**. Nominal line-boundary, delimiter,
+visible-view, and WORD[100] fixes pass, but the visible-view regex overblanks
+raw closing-bracket/open-paren text without proving a link opener: literal
+malformed markers can evade, while escaped link openers/backticks evade and
+valid nested links/four-backtick code falsely trigger. G4/item18/G0/G3/M1 and
+item37 oracle remain blocked.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
