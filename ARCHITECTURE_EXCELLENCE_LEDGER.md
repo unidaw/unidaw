@@ -258,11 +258,11 @@ action. It supersedes stale ticket rows above where they conflict.
   `699abfe8f72e597cfd1b6fb3da93ee7f35aa7fef`).
 - Governance worktree: `/Users/jak/src/daw-backend`.
 - Current packet owner: `claude-worker-2`; current latest packet reported:
-  `93618fb`.
-- Latest packet status: mechanical PASS, 89 controls, 37 items/10 blockers;
-  strict sweep matching and propagation of the R15/R17 G3 corrections are
-  claimed fixed. G3 still needs owner decisions for N derivation and
-  `daw::Watchdog` fate. Exact review pending.
+  `895223f`.
+- Latest packet status: mechanical PASS, 90 controls, 37 items/9 blockers;
+  R16 is retracted and item37 withdrawn, R17 is narrowed/discharged, and a
+  ruling-body-swap control closes the binding fail-open. G3 still needs owner
+  decisions for N derivation and `daw::Watchdog` fate. Exact review pending.
 
 ### Required review protocol
 
@@ -435,6 +435,9 @@ away exact-SHA review or shared-hotspot ownership to improve throughput.
   count, item-body ruling binding is fail-open, and R16/item37 is unsupported
   under the frozen hostReady exclusion/relaunch protocol. G3 and G2/G0/G4
   decisions remain open.
+- `895223f`: owner PASS/90 controls; R16/item37 retracted/withdrawn, R17
+  narrowed and register discharged, ruling-body-swap control added. Exact review
+  pending; G3 N/Watchdog and G2/G0 decisions remain.
 - `93618fb`: owner PASS/89 controls; sweep fullmatch tightened and R15/R17
   superseded phrasings propagated. Exact review pending; N derivation and
   Watchdog fate remain owner decisions.
