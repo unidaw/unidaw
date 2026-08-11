@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '78c56707b0f8ab88489d67982fe148a78805fffd'
+PREV_TIP     = 'e26f91faa31a42067f208c8abd7d680d062801f1'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -171,6 +171,10 @@ CONTROLS = {
  # proves the second-site check is not vacuous: the opening's list, not the header's.
  'restate-blockers': ('block (18, 19, 24, 26 and 27)', 'block (18, 19, 24, 26 and 28)', 1,
                       'BLOCKER-SET-RESTATED'),
+ # the item half of the same check: item 26's history is where the digits went when R8 lost them,
+ # and a check that ranged only over rulings would have watched them move.
+ 'restate-census-i': ('sized by the two OUT census rows', 'sized at 7 cross-agent reads', 1,
+                      'CENSUS-RESTATED'),
  'restate-census':   ('R5 named\nthe readers,', 'the 7 cross-agent reads. R5 named\nthe readers,', 1,
                       'CENSUS-RESTATED'),
 }
@@ -257,6 +261,28 @@ if only_gate:
 # `R[1-9]` swallowed R10/R11 for two SHAs and nothing noticed, because no check ever asked how many
 # rulings there are. A parser that cannot see a member and a sentence that stops counting are the
 # same defect; this check is what makes either one visible.
+# the census rows, parsed once and used by both the check and the manifest. A row is six-space
+# indented, names a role, carries one backticked command and states what it returns.
+census_rows, _rel = [], None
+for ln in pkt.splitlines():
+    h = re.match(r'^    (IN|OUT) plane — (.*)', ln)
+    if h: _rel = h.group(1); continue
+    r = re.match(r'^      (\S.*?)\s{2,}(?:claims (\d+) — )?(.*?)`([^`]+)`\s*returns (\d+)\.', ln)
+    if r and _rel:
+        # `claimed` is the population size; `returns` is what the pattern answers. For the IN rows
+        # they are the same number and the row is DERIVED. For the two OUT rows they differ by
+        # construction, and publishing only `returns` would have told a consumer there are four
+        # cross-agent reads when the population is seven — a typed field that is precisely wrong
+        # beats a missing one at misleading a reader.
+        census_rows.append({'relation': _rel, 'role': r.group(1).strip(),
+                            'qualifier': r.group(3).strip(' —-') or None,
+                            'command': r.group(4), 'returns': int(r.group(5)),
+                            'claimed': int(r.group(2)) if r.group(2) else int(r.group(5)),
+                            'derived': _rel == 'IN'})
+if len(census_rows) < 7:
+    bad('CENSUS-BLOCK', f'{len(census_rows)} census rows parsed, the block defines 7 — an extraction '
+                        f'that returns nothing must never read as a document containing nothing')
+
 rids = [int(x) for x in re.findall(r'(?m)^\*\*R(\d+) — ', pkt)]
 if not rids:
     bad('RULING-SET', 'no "**Rn — " ruling headings parsed at all')
@@ -276,7 +302,9 @@ else:
 # the digit is stronger than comparing it — a fact stated once cannot drift.
 ROLE = (r'(cross-agent (?:byte-consuming )?read|host (?:byte-producing )?write|in-plane|out-plane|'
         r'addressing site|alias hop)')
-for m in re.finditer(r'(?m)^\*\*R\d+ — .*?(?=\n\n\*\*R\d+ — |\*\*What these rulings do NOT)', pkt, re.S):
+for m in list(re.finditer(r'(?m)^\*\*R\d+ — .*?(?=\n\n\*\*R\d+ — |\*\*What these rulings do NOT)',
+                          pkt, re.S)) + list(re.finditer(r'(?m)^\d{1,2}\. \*\*.*?(?=\n\d{1,2}\. \*\*|\n# |\Z)',
+                          body, re.S)):
     for d in re.finditer(r'(\d+)\s+\w{0,12}\s?' + ROLE, m.group(0)):
         bad('CENSUS-RESTATED', f'{m.group(0)[:14].strip()} restates a census count: {d.group(0)[:44]!r}')
 
@@ -546,6 +574,8 @@ MANIFEST = 'docs/architecture/tasks/AE-P1.2-manifest.json'
 def line_of(off): return pkt.count('\n', 0, off) + 1     # offsets are useless to a planner
 item_line = {int(m.group(1)): line_of(pkt.find(body) + m.start())
              for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*', body)}
+item_body = {int(m.group(1)): m.group(0) for m in
+             re.finditer(r'(?m)^(\d{1,2})\. \*\*.*?(?=\n\d{1,2}\. \*\*|\n# |\Z)', body, re.S)}
 body_off = pkt.find(body)
 gate_hdr = [{'gate': m.group(1), 'line': line_of(m.start()),
              'end_line': line_of(pkt.find('\n# ', m.end()) if pkt.find('\n# ', m.end()) != -1 else len(pkt) - 1)}
@@ -688,6 +718,9 @@ man = {
             'title': re.sub(r'\s+', ' ',
                             (re.search(r'(?m)^%d\. \*\*[^*]+\*\* — (.{0,110})' % n, body).group(1)
                              if re.search(r'(?m)^%d\. ' % n, body) else '')),
+            # the WHOLE item, not a headline. An item is the unit a consumer plans from, and 110
+            # characters of it is a title pretending to be a record.
+            'body': re.sub(r'\s+', ' ', item_body.get(n, '')).strip(),
             'blocking': 'BLOCKING' in (re.search(r'(?m)^%d\. \*\*[^*]+\*\* — (.{0,200})' % n, body).group(1)
                                        if re.search(r'(?m)^%d\. ' % n, body) else ''),
             'closed': n in closed_set} for n in nums],
@@ -699,6 +732,12 @@ man = {
                  'minus': [int(x) for x in re.findall(r'minus \*{0,2}(\d+)', pkt[a:b])],
                  'results': [int(x) for x in re.findall(r'→ \*{0,2}(\d+)', pkt[a:b])]}
                 for a, b in spans if b > a],
+ # the census as STRUCTURE, not as a truncated sentence. backend's blocker: the manifest carried
+ # `items[].title` clipped at 110 chars, so a consumer planning item 26 got the words "REOPENED: the
+ # census covers ONE OF THE TWO PLANES" and no members, no relation, no counts. A planner cannot
+ # build from a headline. Rows carry their command and whether they are DERIVED or hand-classified,
+ # so a consumer can tell the five reproducible rows from the two that are judgement.
+ 'census': census_rows,
  'controls': sorted(CONTROLS),
  'counts': {'items': len(nums), 'open': len(nums) - closed, 'closed': closed,
             'blocking': blocking_n, 'raw_claims': len(tokens), 'hand_ruled': byhand,

@@ -1223,8 +1223,8 @@ excluding writes while R8 included them.
     marker of their own because they are not a second population, and a marker here would inflate
     the hand-classified count by restating one. No single pattern reproduces either row.
     What the patterns DO return is stated, so the distance is visible rather than implied:
-      cross-agent byte-consuming reads   floor, name-reachable addressing only — `git grep -n -E 'safeAudioOutPtr\(blockIndex|audioOutChannelPtr\(' apps/engine_produce_block.cpp apps/juce_host_process_main.cpp apps/engine_master_render.cpp | wc -l` returns 4.
-      host byte-producing writes         SUPERSET, includes addressing, zero-fills and the `:834` self-read — `git grep -n -E 'outputPtrs\[ch\]|auxOutputPtrs\[ch\]' apps/juce_host_process_main.cpp | wc -l` returns 13.
+      cross-agent byte-consuming reads   claims 7 — floor, name-reachable addressing only — `git grep -n -E 'safeAudioOutPtr\(blockIndex|audioOutChannelPtr\(' apps/engine_produce_block.cpp apps/juce_host_process_main.cpp apps/engine_master_render.cpp | wc -l` returns 4.
+      host byte-producing writes         claims 8 — SUPERSET, includes addressing, zero-fills and the `:834` self-read — `git grep -n -E 'outputPtrs\[ch\]|auxOutputPtrs\[ch\]' apps/juce_host_process_main.cpp | wc -l` returns 13.
 
 **The two OUT rows are the ones a reader should distrust**, and stating 4 against a claim of seven
 and 13 against a claim of eight is the point: the gap IS the hand classification, and a row that
@@ -1367,7 +1367,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `ab598a723fd14050abc5a21e3b702e4d051cc1b0`, A.0 SCRIPT BLOB `8aa432b788d75f65198c30a2a3078a5877d8e9c2`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `5849f0dfa08cb5aec7448b0259733501ebc79f22`, A.0 SCRIPT BLOB `8514587227bc4fe72bd805c1953d1aff5e0a4736`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1425,14 +1425,14 @@ back to: A.0's "what it does not decide" list is the exact place where a stale s
 what has been settled.)
 And nothing about the product beyond what a text search can see.
 
-**Controls.** Thirty-nine, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Forty, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
-`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-blockers`. The last five exist because
+`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`. The last six exist because
 backend MUTATED THIS PACKET AND THE GATE STILL SAID PASS: deleting the item's reopening sentence,
 inverting input for output, changing R8's 7/8 to 70/80, R9's one to two and item 31's four to five —
 every one of them survived. **Thirty-four controls were checking status ARITHMETIC and no control
@@ -1703,9 +1703,11 @@ carrying one cannot be decided by any implementation.
     discussion was about instead of what the invariant says. No better selector would have caught
     it — only reading the sentence the gate is built on. Previously: the population is measured from
     the MAPPED BASE with aliases
-    followed and roles assigned by USE at the dereference: 7 cross-agent readers + 8 host writers
-    (7 direct, 1 indirect) in scope per R8(c), with 2 same-agent readbacks excluded by argument, 6
-    establishing sites and 16 non-sites accounted — 23 role-bearing, arithmetic closing. The
+    followed and roles assigned by USE at the dereference, sized by the two OUT census rows and
+    split direct/indirect per R8(c), with two same-agent readbacks excluded by argument and the
+    establishing and non-site sets accounted so the arithmetic closes. Those figures are CITED, not
+    restated here: a count written twice is the surface backend mutated, and this paragraph is
+    history, which is the worst place for a live number to hide. The
     four-spelling selector is RETIRED with its blindness quantified: it saw 6 of 7 readers and none
     of the aux writes. Previously: The out-plane population is the 3
     BYTE-CONSUMING READS (`engine_produce_block.cpp:923`, `:1150`, `engine_master_render.cpp:100`),
