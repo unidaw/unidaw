@@ -258,12 +258,10 @@ action. It supersedes stale ticket rows above where they conflict.
   `699abfe8f72e597cfd1b6fb3da93ee7f35aa7fef`).
 - Governance worktree: `/Users/jak/src/daw-backend`.
 - Current packet owner: `claude-worker-2`; current latest packet reported:
-  `8052160`.
-- Latest packet status: mechanical PASS, 89 controls plus three executable
-  proofs; R15 defines G3 M1 and adds blocking item 36 for the unresolved
-  post-marker stall interpretation. The owner also corrected the prior shell
-  sweep evidence (bash 89/89, not the misleading zsh one-shot). Exact review
-  pending.
+  `8400cbd`.
+- Latest packet status: mechanical PASS, 89 controls, 36 items/9 blockers;
+  R15/M1 corrections are applied, item 36 is coherent and blocking on a
+  telemetry instrument that does not yet exist. Exact review pending.
 
 ### Required review protocol
 
@@ -354,7 +352,7 @@ away exact-SHA review or shared-hotspot ownership to improve throughput.
 
 ### Immediate next actions
 
-1. Obtain the exact independent review of `8052160`; do not expand parser
+1. Obtain the exact independent review of `8400cbd`; do not expand parser
    hunting beyond the claimed live-ratchet binding.
    while the comma shield and gate decisions remain.
 2. Consolidate the six owner decisions into one decision record: G2-B oracle,
@@ -421,6 +419,10 @@ away exact-SHA review or shared-hotspot ownership to improve throughput.
   pass, but R15/M1 lacks host identity/progress binding, stopped-state proof,
   anti-SKIP handling, and safe log-marker lifecycle; R15/item36 text conflicts
   and item36 contains unrelated copy-paste. G3 remains blocked.
+- `8400cbd`: owner PASS/89 controls; R15's wrong-type citation, dead inactive
+  branch, inadequate telemetry, marker/play false-greens, and item36 copy-paste
+  are corrected. G3 remains blocked on a real telemetry instrument; exact review
+  pending.
 - Exact review of `2699a2c` is **BLOCKED**: the extractor proof duplicates rather
   than binds the production classifier/floor, blanking proof is narrow, hidden
   link destinations still become dependencies, identity proves bytes only, and
