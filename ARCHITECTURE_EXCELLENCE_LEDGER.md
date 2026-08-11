@@ -258,10 +258,11 @@ action. It supersedes stale ticket rows above where they conflict.
   `699abfe8f72e597cfd1b6fb3da93ee7f35aa7fef`).
 - Governance worktree: `/Users/jak/src/daw-backend`.
 - Current packet owner: `claude-worker-2`; current latest packet reported:
-  `8400cbd`.
-- Latest packet status: mechanical PASS, 89 controls, 36 items/9 blockers;
-  R15/M1 corrections are applied, item 36 is coherent and blocking on a
-  telemetry instrument that does not yet exist. Exact review pending.
+  `5150b5c`.
+- Latest packet status: mechanical PASS, 89 controls, 37 items/10 blockers;
+  R16 adds the resumed-host eviction/slot-reuse safety rule as blocking item
+  37. N derivation, Watchdog fate, and static-check reconciliation remain owner
+  decisions. Exact review pending.
 
 ### Required review protocol
 
@@ -352,7 +353,7 @@ away exact-SHA review or shared-hotspot ownership to improve throughput.
 
 ### Immediate next actions
 
-1. Obtain the exact independent review of `8400cbd`; do not expand parser
+1. Obtain the exact independent review of `5150b5c`; do not expand parser
    hunting beyond the claimed live-ratchet binding.
    while the comma shield and gate decisions remain.
 2. Consolidate the six owner decisions into one decision record: G2-B oracle,
@@ -422,6 +423,9 @@ away exact-SHA review or shared-hotspot ownership to improve throughput.
 - `8400cbd`: owner PASS/89 controls; R15's wrong-type citation, dead inactive
   branch, inadequate telemetry, marker/play false-greens, and item36 copy-paste
   are corrected. G3 remains blocked on a real telemetry instrument; exact review
+  pending.
+- `5150b5c`: owner PASS/89 controls; R16 rules resumed-host eviction unsafe
+  without a resume/currency protocol and adds blocking item37. Exact review
   pending.
 - Exact review of `2699a2c` is **BLOCKED**: the extractor proof duplicates rather
   than binds the production classifier/floor, blanking proof is narrow, hidden
