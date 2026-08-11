@@ -574,6 +574,13 @@ publication-taxonomy/history wording corrected. Exact review is pending;
 R15/M1 propagation, the sweep early-`)` fail-open, and carried gate blockers
 remain under review.
 
+Exact review of `b6a9e22` is **BLOCKED**. Schema `/5` represents arrays but its
+validator enforces only PRODUCT: removing, misspelling, or moving PACKET markers
+passes. Item36, G2-A item28, and G2-B item18 also require packet/mixed work but
+remain PRODUCT or empty. Item37 taxonomy has source inaccuracies and its oracle
+is unwritten. G3/G0/G4 false-greens, the sweep internal-`)` length bypass, and
+false active-open history remain.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
