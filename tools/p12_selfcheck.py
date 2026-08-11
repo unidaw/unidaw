@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'bdb53c8fb21e1c2783d15925d2c98092c80c44a9'
+PREV_TIP     = '05be19323b74eadcc78c7e3e320fedf933915fe4'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -241,7 +241,7 @@ CONTROLS = {
                       'CONSTRAINTS-COUNT'),
  'opening-gates':    ('**EVERY GATE IS PLANNABLE AT THIS SHA**',
                       '**FOUR OF THE EIGHT GATES CANNOT BE DECIDED**', 1, 'OPENING-GATE-COUNT'),
- 'manifest-stale':   ('18. **G2-B** — **BLOCKING', '18. **G2-B** — **blocking', 1,
+ 'manifest-stale':   ('18. **G2-B** — ⟦PRODUCT⟧ **BLOCKING', '18. **G2-B** — ⟦PRODUCT⟧ **blocking', 1,
                       'MANIFEST-STALE'),
  'unresolved-tail':  ('master-track stores (`engine_master_render.cpp:121` and `:132`) → **13 IN\nSCOPE**.',
                       'master-track stores (`engine_master_render.cpp:121` and `:132`).', 1,
@@ -284,7 +284,7 @@ CONTROLS = {
  # INSERTION controls now: no gate declares its population dead at this SHA, so there is nothing to
  # delete. Each adds the declaration to ONE side and requires the asymmetry to be caught — which
  # tests the same rule from the opposite direction and cannot go dead when the packet is healthy.
- 'drop-item-block':  ('27. **G2-A** — **BLOCKING,', '27. **G2-A** — **BLOCKING. AUTHORING RETRACTED.', 1,
+ 'drop-item-block':  ('27. **G2-A** — ⟦PRODUCT⟧ **BLOCKING,', '27. **G2-A** — ⟦PRODUCT⟧ **BLOCKING. AUTHORING RETRACTED.', 1,
                       'PLANNING-BLOCK-ASYMMETRIC'),
  # re-anchored onto G2-A: G4's retraction was LIFTED when its population was completed, and a
  # control anchored on retired text is a control that cannot land — the failure mode that let
@@ -367,6 +367,8 @@ CONTROLS = {
  # the PREFIXED variant: anchoring alone left the label unparsed and the sticky path absorbed it
  'writer-path-prefix': ('juce:989/994', 'fake/juce:989/994', 1, 'OUT-MEMBERS'),
  # the NUMERIC prefix, which walked past both the label scan and the tokenizer
+ # the blocker KIND classification, now marked in place and derived from the markers
+ 'blocker-kind':     ('35. **G0-B** — ⟦PRODUCT⟧ ', '35. **G0-B** — ', 1, 'BLOCKER-KIND'),
  'writer-path-numeric': ('juce:989/994', '9/juce:989/994', 1, 'OUT-MEMBERS'),
  'control-dupe':     ('`member-per-type`,', '`member-per-type`, `member-per-type`,', 1,
                       'CONTROL-DUPLICATE'),
@@ -735,6 +737,31 @@ if not _declared:
 elif WORDNUM.get(_declared.group(1).upper()) != len(RATCHET_MEMBERS):
     bad('RATCHET-DRIFT', f'item 31 says {_declared.group(1)}, the roster pins {len(RATCHET_MEMBERS)}')
 
+# ---- 2e5. product-vs-packet classification of the blockers, DERIVED ---------------------------
+# The opening said "three of them need product work" while at least six blocker bodies say so in
+# their own words. A0 derived the blocker IDS and never their KIND, so the split was the last
+# hand-counted number in the opening — and a hand-counted number in that paragraph has been wrong
+# every time this packet has checked one.
+_bodies = {int(m.group(1)): m.group(0) for m in
+           re.finditer(r'(?m)^(\d{1,2})\. \*\*.*?(?=\n\d{1,2}\. \*\*|\n# |\Z)', body, re.S)}
+# an EXPLICIT marker, not a phrase hunt. Scanning for "product work" found 2 of 8 — items 19, 24
+# and 26 need product work and say so in other words — so the predicate was measuring vocabulary,
+# not kind. Marking in place and counting the markers is the same repair as the hand-classified
+# populations elsewhere in this packet.
+_prod = sorted(n for n in _derived_blk if '⟦PRODUCT⟧' in _bodies.get(n, ''))
+_marked = sorted(int(m.group(1)) for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ⟦PRODUCT⟧', body))
+if _marked != sorted(_derived_blk):
+    bad('BLOCKER-KIND', f'⟦PRODUCT⟧ markers on {_marked}, blockers are {sorted(_derived_blk)}')
+# the phrase wraps across a line in the packet, so the whitespace between its words is not a
+# space — matching a literal ' ' would have made this check silently unable to find its own
+# subject, which is how a check comes to report a missing claim instead of a wrong one.
+_said = re.search(r'and (?:ALL )?(\w+)(?: of them)? need\s+product\s+work', pkt)
+if not _said:
+    bad('BLOCKER-KIND', 'the opening states no product-work count to check')
+elif WORDNUM.get(_said.group(1).upper()) != len(_prod):
+    bad('BLOCKER-KIND', f'opening says {_said.group(1)} blockers need product work; '
+                        f'{len(_prod)} say so themselves: {_prod}')
+
 # ---- 2f. a ruling names an item, and that mapping was unbound in both directions --------------
 # codex-worker-1 changed R10's "item 30" to "item 29" and it passed. The OPEN-REF checks match
 # "open item N (Gx)"; a ruling heading writes "item N (Gx)" without the word, so every ruling->item
@@ -997,6 +1024,8 @@ WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twen
         61: 'Sixty-one', 62: 'Sixty-two', 63: 'Sixty-three', 64: 'Sixty-four',
         65: 'Sixty-five', 66: 'Sixty-six', 67: 'Sixty-seven', 68: 'Sixty-eight',
         69: 'Sixty-nine', 70: 'Seventy', 71: 'Seventy-one', 72: 'Seventy-two',
+        73: 'Seventy-three', 74: 'Seventy-four', 75: 'Seventy-five', 76: 'Seventy-six',
+        77: 'Seventy-seven', 78: 'Seventy-eight', 79: 'Seventy-nine', 80: 'Eighty',
         33: 'Thirty-three', 34: 'Thirty-four', 35: 'Thirty-five', 36: 'Thirty-six',
         37: 'Thirty-seven', 38: 'Thirty-eight', 39: 'Thirty-nine', 40: 'Forty'}
 if not listed:

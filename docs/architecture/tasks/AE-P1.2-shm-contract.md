@@ -28,8 +28,13 @@ The blockers from the exact review are reconciled here, and the count is deliber
    the manifest keeps the two apart deliberately. The zero case is a different sentence rather than
    a missing one, so the check cannot pass by the claim disappearing. G1-B's readers were withdrawn and are AUTHORED again under R1
    with rules, members and drift detectors; G2-A's scope and G4's out-plane are not. **TWO GATES ARE ACCEPTANCE-DECIDABLE — G0-A and G1-A —
-   and eight items block (18, 19, 24, 26, 27, 29, 33 and 35)** and three of them need product
-   work rather than packet work. That list is derived from the items themselves and every
+   and eight items block (18, 19, 24, 26, 27, 29, 33 and 35)** and ALL EIGHT need product
+   work rather than packet work — every one carries a ⟦PRODUCT⟧ marker at its head and the count is
+   derived from those markers (`BLOCKER-KIND`), because the previous figure was three and a lexical
+   scan for the words "product work" finds only two: items 19, 24 and 26 need product work and say
+   so in other words entirely. **A classification cannot be read out of prose that was not written
+   to carry it.** The packet's own work is done to the point where nothing on the blocker list is a
+   packet edit. That list is derived from the items themselves and every
    restatement of it anywhere in this document is compared against the derivation
    (`BLOCKER-SET-RESTATED`) — this paragraph carried (18, 19, 23, 24, 29) for several SHAs, three
    members wrong on the packet's first screen, because the check knew about the open-items header
@@ -1377,7 +1382,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `0a77754eb11ed23f6fce61734083ce624b2e8a69`, A.0 SCRIPT BLOB `36ce29f7823645f62b7fadf453b559e1f654f628`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `fb782d26be4736b9c97a50848b4965331c42e15c`, A.0 SCRIPT BLOB `3d946b722e7591796267be4fb6b657210a178d92`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1444,14 +1449,14 @@ check, staged and atomically replaced, and `MANIFEST-STALE` is suppressed on an 
 a check that forbids its own remedy is a deadlock rather than a guard — that deadlock appeared the
 moment the write moved, and is recorded here because it is the predictable cost of the fix.
 
-**Controls.** Seventy-two, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Seventy-three, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
-`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`, `ratchet-count`, `writer-extra`, `reader-row-moved`, `emit-fail-open`, `ruling-item-swap2`, `diagram-edge`, `control-phantom`, `writer-regroup`, `gate-multidigit`, `withdrawn-status`, `census-row-moved`, `writer-wrong-path`, `writer-path-prefix`, `writer-path-numeric`, `control-dupe`. The last thirty-eight exist because
+`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`, `ratchet-count`, `writer-extra`, `reader-row-moved`, `emit-fail-open`, `ruling-item-swap2`, `diagram-edge`, `control-phantom`, `writer-regroup`, `gate-multidigit`, `withdrawn-status`, `census-row-moved`, `writer-wrong-path`, `writer-path-prefix`, `writer-path-numeric`, `blocker-kind`, `control-dupe`. The last thirty-nine exist because
 **codex-worker-1** MUTATED THIS PACKET AND THE GATE STILL SAID PASS (the finding reached me relayed
 by backend, and two commit messages in this lineage credit the relay rather than the author —
 `e26f91f` and `c332c03`, immutable and wrong on this point): deleting the item's reopening sentence,
@@ -1879,12 +1884,12 @@ carrying one cannot be decided by any implementation.
 15. **G2-B** — The self-deadlock: the admitted fix class requires `applyHostBypassStates` to stop taking `controllerMutex`.
 16. **G2-B** — The swap trap rests on an unratcheted guard at `apps/daw_engine_main.cpp:1107-1109`.
 17. **G2-B** — Probe ordering: without forbidding the offline probe from acquiring before the RT probe reports, the PASS token is producible by the packet's own fixture.
-18. **G2-B** — **BLOCKING, RULED (R2) and PROPAGATED into the gates at this SHA; open for the
+18. **G2-B** — ⟦PRODUCT⟧ **BLOCKING, RULED (R2) and PROPAGATED into the gates at this SHA; open for the
     product implementation only.** The circularity is dissolved in the specification: dispatch is
     permitted at `mapped-and-bypassed`, so the ack that establishes `mirror-complete` arrives during
     a `ProcessBlock` the gate now allows. What remains is building the two levels. Original
     statement of the circularity. The ack arrives only during a `ProcessBlock` that `processTrack` refuses while `hostReady` is false. A PASS bullet was withdrawn rather than reworded, and the owner HAS ruled (R2: two-level readiness) and the mirror half is unspecified until that ruling is PROPAGATED into this gate and G4 — the item is open for the propagation, not for the decision.
-19. **G3** — **BLOCKING, not closed. The ruling is MADE (R3: N = 3, authored) and no further ruling is required.** N has no source in the tree; R3 supplies it as an authored constant. What remains is implementation, not decision (R3: N = 3, authored), which makes the gate decidable for PLANNING; it is not decidable for ACCEPTANCE until the ticket lands — N pinned with units and semantics, a static check on the literal, watchdog instrumentation, drift acceptance and independent validation.
+19. **G3** — ⟦PRODUCT⟧ **BLOCKING, not closed. The ruling is MADE (R3: N = 3, authored) and no further ruling is required.** N has no source in the tree; R3 supplies it as an authored constant. What remains is implementation, not decision (R3: N = 3, authored), which makes the gate decidable for PLANNING; it is not decidable for ACCEPTANCE until the ticket lands — N pinned with units and semantics, a static check on the literal, watchdog instrumentation, drift acceptance and independent validation.
 20. **G3** — `DAW_ENGINE_DEBUG_STALL` must be set by the Layer-2 fixture or the channel a PASS bullet reads does not exist.
 21. **G3** — The static-check contradiction: one check places the eviction where its natural implementation changes an exit count another check pins.
 22. **G4** — The fixture definitions added here (F0-F6, S1-S8) and the corrected ack-census counts have not been run against anything; the reviewer should confirm them against the fixture rather than against this packet.
@@ -1893,7 +1898,7 @@ carrying one cannot be decided by any implementation.
     it was invisible to two earlier predicates because it carries no per-slot token and is guarded by
     the global `ui_version`. Originally: It cannot be placed until item 11 gives the gate a population.
 
-24. **G0-B** — BLOCKING for G0-B only. **RULED (R4): the Rust side renames.** The pure name join requires one rename: `patcher_abi.h:75`
+24. **G0-B** — ⟦PRODUCT⟧ BLOCKING for G0-B only. **RULED (R4): the Rust side renames.** The pure name join requires one rename: `patcher_abi.h:75`
     declares `uint8_t reserved[4]{}` where `patcher_rust/src/lib.rs:86` declares `pub _pad0: [u8; 4]`,
     so the two sides of a byte-identical member disagree by NAME and no rule that forbids an alias
     table can join them. PASS 9 is RED until this lands and states so. **RULED (R4): the RUST
@@ -1911,7 +1916,7 @@ carrying one cannot be decided by any implementation.
     marker and this item; a sixth appearing without one fails the gate. Deriving them needs a
     predicate nobody has proposed, so this is open, not closed.
 
-26. **G4** — **BLOCKING, and the reason has MOVED: the population now covers both planes and the
+26. **G4** — ⟦PRODUCT⟧ **BLOCKING, and the reason has MOVED: the population now covers both planes and the
     GATE'S TESTS still cover one.** The input relation is enumerated — seven derived census rows,
     every member pinned by path, line and content — so the incompleteness that reopened this item is
     closed. What is not closed is that G4's PASS conditions, its deterministic test and its static
@@ -1946,7 +1951,7 @@ carrying one cannot be decided by any implementation.
     they establish a plane and consume nothing, so no rule has to prefer one. Drift detector on the
     out-plane command's raw figure, which is stated once in the population and not restated here.
 
-27. **G2-A** — **BLOCKING, and the scope is AUTHORED under R12: the gate ranges over the three
+27. **G2-A** — ⟦PRODUCT⟧ **BLOCKING, and the scope is AUTHORED under R12: the gate ranges over the three
     production adoptable-refusal emit sites.** The retraction is lifted. Every earlier scope here was
     falsified by the same move — it selected on the ARBITRATION and the gate is about the ANSWER, so
     it kept including commands whose refusal is TERMINAL AND UNADDRESSED — the ResyncNeeded
@@ -1997,7 +2002,7 @@ carrying one cannot be decided by any implementation.
     extracted and each replaced, and no check over that extraction can be written until the
     extraction has a predicate, a command and a member list.
 
-29. **G2-A** — **BLOCKING. The `SetRowOps` refusal is malformed for the channel it rides**, measured
+29. **G2-A** — ⟦PRODUCT⟧ **BLOCKING. The `SetRowOps` refusal is malformed for the channel it rides**, measured
     at the frozen product by claude-worker-1 and independent of this packet's scope question. It was
     unmarked while item 27 delegated its blocking status to it — **an item can only delegate to an
     item that carries the weight**, and for two SHAs the delegation pointed at an item the manifest
@@ -2071,7 +2076,7 @@ carrying one cannot be decided by any implementation.
     population is derived from it. A predicate this gate depends on is inconsistent with the
     behaviour it names, which is a defect in the predicate and not in its wording.
 
-33. **G1-B** — **BLOCKING. The tests PASS 9 and S4 name do not exist.** Restoring them from
+33. **G1-B** — ⟦PRODUCT⟧ **BLOCKING. The tests PASS 9 and S4 name do not exist.** Restoring them from
     "withdrawn with the population" to live conditions made the gap visible: PASS 9 requires a
     mechanical echo ratchet over the SEND SITES — a population nobody has enumerated, so that bullet
     is blocked on a missing population and not only on an unwritten test — and S4 requires drift
@@ -2095,7 +2100,7 @@ carrying one cannot be decided by any implementation.
     reasoning error rather than deleting them. **Kept in the list rather than removed**: an item
     that was blocking for a day and then vanished would read as work completed.
 
-35. **G0-B** — **BLOCKING. The patcher's `EventEntry` has no `ready` field and its writer stores the
+35. **G0-B** — ⟦PRODUCT⟧ **BLOCKING. The patcher's `EventEntry` has no `ready` field and its writer stores the
     whole object over C++'s.** `patcher_rust/src/lib.rs:97-105` is `#[repr(C, align(64))]` with six
     members summing to 60 bytes, so [60,64) is TAIL PADDING; `apps/shared_memory.h:450` puts the
     multi-producer publication flag `ready` in exactly those bytes; and `push_event`
