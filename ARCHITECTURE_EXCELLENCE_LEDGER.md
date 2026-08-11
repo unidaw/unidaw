@@ -613,6 +613,12 @@ with corrected item37 publication taxonomy. M1 and G3 N/Watchdog remain open by
 design. Exact review is pending; prior R15/sweep and carried gate closures must
 still be verified.
 
+Owner successor `165e21b` claims the remaining e67 defects are corrected:
+PASS1/R15 rule contradiction retracted, item36 stale sentence removed with an
+assertive edit, empty sweep detail rejected and covered, and the proof comment
+now matches arithmetic length enforcement. Exact review is pending; M1/G3
+N/Watchdog and carried G2/G0/G4 decisions remain open.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
