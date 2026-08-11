@@ -496,6 +496,14 @@ proof. It remains **PENDING exact review**; the item37 generation-bound oracle,
 typed withdrawal/schema closure, and carried G2/G0/G3/G4 decisions must still
 be independently verified.
 
+Exact review of `8dcc0cd` is **BLOCKED**. The advertised M1 deletion,
+non-absorbing wording, ASCII sweep, and proof additions are real narrow
+closures. Remaining blockers are the residual R15/item36 “forever”/ID claim;
+an overbroad sweep matcher and stale proof/doc prose; contradictory R16/item37
+withdrawal status; misclassified mapping-owned `completedBlockId`; missing
+generation-safety oracle and external-host policy; additive withdrawal schema
+and hidden-link spoof; and unresolved G3 N/Watchdog, G2-A/B, G0-A/B, and G4.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
