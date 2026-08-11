@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'de76109375ffadd0061bc21d2cf3282c43c290fb'
+PREV_TIP     = '83b4edc98472309e1e62ddf2a0c825efbaa22d1d'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -471,6 +471,8 @@ CONTROLS = {
                       'PACKET-SET-RESTATED'),
  'marker-unclosed':  ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
                       '37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ⟦BROKEN ', 1, 'KIND-MARKER-UNKNOWN'),
+ 'marker-closer':    ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
+                      '37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ⟧ ', 1, 'KIND-MARKER-UNKNOWN'),
  'marker-qualified': ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
                       '37. **G3** — ⟦PRODUCT⟧ ⟦PACKET: extra⟧ ', 1, 'KIND-MARKER-UNKNOWN'),
  'marker-empty':     ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ',
@@ -947,10 +949,20 @@ _bodies = {int(m.group(1)): m.group(0) for m in
 # reject — anything it cannot represent it reports as absent, which is this packet's oldest shape.
 _MARKER_RUN = re.compile(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ((?:⟦[^⟧\n]*⟧ ?)*)')
 _KIND_TOKENS = {'PRODUCT', 'PACKET'}
+# TO THE LINE BOUNDARY, not to a character count, and through the VISIBLE view.
+#
+# `.{0,200}` was a cap sitting inside the check I had just called structural: a malformed marker
+# placed after character 200 of the same headline escaped it, so out-of-run detection was
+# length-dependent. Parse to the delimiter — the headline is a LINE — and there is no outside.
+#
+# `_unhidden` kept link destinations, so an ordinary `[text](https://host/⟦path⟧)` in a head FAILED
+# the stray-delimiter check for a delimiter no reader sees. `_visible` blanks destinations, and the
+# marker run below reads the SAME view: two views of one text is the split this packet keeps
+# rediscovering, and it would have been reintroduced here by fixing only the false positive.
 _HEAD_TEXT = {int(m.group(1)): m.group(2) for m in
-              re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — (.{0,200})', _unhidden(body))}
+              re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ([^\n]*)', _visible(body))}
 _KINDS, _MARKER_ERR = {}, []
-for _m in _MARKER_RUN.finditer(_unhidden(body)):
+for _m in _MARKER_RUN.finditer(_visible(body)):
     # `*` here too. Widening the RUN grammar to admit ⟦⟧ and leaving this extractor at `+` meant the
     # empty marker was matched by the outer pattern and then dropped by the inner one — the same
     # normalisation, one layer down, inside the fix for it.
@@ -991,9 +1003,12 @@ for _m in _MARKER_RUN.finditer(_unhidden(body)):
     # "a grammar cannot reject what it cannot match", after the empty marker and the qualifier.
     # Checked against the text FOLLOWING the run rather than inside it, because that is where an
     # unmatched opener necessarily lands.
+    # BOTH DELIMITERS. Checking only ⟦ let a stray closing ⟧ through — an asymmetry with no
+    # justification except that the probe I was answering used an opener.
     _tail = _HEAD_TEXT.get(_n, '')[len(_m.group(2)):]
-    if '⟦' in _tail:
-        _MARKER_ERR.append(f'item {_n} has an unclosed or out-of-run ⟦ in its head')
+    _stray = [d for d in ('⟦', '⟧') if d in _tail]
+    if _stray:
+        _MARKER_ERR.append(f'item {_n} has a stray {"".join(_stray)} outside its marker run')
     _KINDS[_n] = _kinds
 for _e in _MARKER_ERR:
     bad('KIND-MARKER-UNKNOWN', _e)
@@ -1507,7 +1522,10 @@ elif int(claimed.group(1)) != handmade:
     bad('HANDMADE-COUNT', f'provenance says {claimed.group(1)}, document marks {handmade}')
 
 # ---- 5e. the prose control list must equal the harness ------------------------------------
-listed = re.search(r'\*\*Controls\.\*\* ([\w-]+), each naming', pkt)  # 'Twenty-two' is not \w+
+# `[\w -]+`: 'Twenty-two' is not \w+, and 'One hundred' is not [\w-]+ either — the pattern was
+# widened once for a hyphen and had to be widened again for a space the moment its own WORD table
+# reached three digits. The table and the pattern that reads it are one fact in two places.
+listed = re.search(r'\*\*Controls\.\*\* ([\w -]+?), each naming', pkt)
 # bounded by the PARAGRAPH, not by 900 characters: adding control names pushed the last one out of
 # the window and the check reported it unlisted. A character window standing in for a boundary,
 # inside the check whose job is to police exactly that.
