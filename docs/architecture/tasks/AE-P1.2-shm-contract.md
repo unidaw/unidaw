@@ -1382,7 +1382,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `fb782d26be4736b9c97a50848b4965331c42e15c`, A.0 SCRIPT BLOB `3d946b722e7591796267be4fb6b657210a178d92`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `6496b69c157b728027844afaa36290f3bd623776`, A.0 SCRIPT BLOB `06969343732796872ea329f8c34a4d0a6414d472`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1395,8 +1395,9 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 
 **The MANIFEST is the canonical machine-readable source.**
 `docs/architecture/tasks/AE-P1.2-manifest.json` carries the gates and their decidability, the
-rulings with `named_at` — every place the packet names each one, with line and context; there
-is no `applied` field, because a ruling is applied TO ITEMS and its items can disagree — every item with its gate and blocking/closed state, every RAW
+rulings with `named_at` — every NON-HEADING mention of each one, with line and context, the
+heading itself being carried by the record's own `line` field; there is no `applied` field, because
+a ruling is applied TO ITEMS and its items can disagree — every item with its gate and blocking/closed state, every RAW
 claim with its command and arithmetic, the control names, and the counts. It is EMITTED by this
 checker from the same extraction the checks run on (`--emit-manifest`) and the checker FAILS if the
 committed copy differs, so it is canonical without being a second hand-maintained document — which
@@ -1800,12 +1801,29 @@ What survives as a real question, and it is codex-worker-1's rather than mine: G
 still withdrawn with no replacement while R2 says propagation is done, and no PASS condition accepts
 the two-level implementation that exists. That is item 18's, where it already lives.
 
+**R14 — item 35 (G0-B): EXACT MEMBER PARITY IS REQUIRED FOR `EventEntry`, and PASS 8's
+byte-disjointness exception does not reach it.** G0-B's invariant demands per-member parity between
+the C++ and Rust declarations of a shared type; PASS 8 permits a one-sided member where the bytes
+are provably disjoint. Those two are not in conflict in general — a member one side never touches is
+genuinely harmless — but they cannot BOTH be satisfied by this pair, and item 35 named the mismatch
+without saying which rule wins.
+
+**Ruling: parity.** The exception is about bytes NEITHER side treats as live data. `ready` is
+written and read as the multi-producer publication flag on the C++ side, so disjointness would
+require the Rust side never to write [60,64) — and `*slot = entry` is a whole-object store whose
+width is `size_of`, which includes the padding. **A byte-disjointness argument that depends on a
+compiler's discretion about padding is not a disjointness argument.** Whatever fixes item 35 must
+make the two declarations agree member-for-member: declare `ready` on the Rust side, or give the
+patcher path a distinct transfer type that is not claimed to be the same ABI. A field-wise copy
+alone does NOT satisfy this — it would leave 7 members against 6 and the invariant unmet, which is
+the trap codex-worker-1 named.
+
 **What these rulings do NOT do.** None of them closes an item that names PRODUCT work — R1 through
 R13 make such items implementable, and R13 is RETRACTED rather than applied, and each stays open until the work exists and is verified by
 someone other than me. **A ruling CAN close an item whose whole content was a packet decision**, and
 item 11 is the case: it asked for an authored population, R1 authored one, and there was nothing
 left in it. That distinction was missing and the rule read as universal, which contradicted item
-11's own CLOSED marker three SHAs running. That range — "R1 through R13" above — is checked against the rulings actually parsed
+11's own CLOSED marker three SHAs running. That range — "R1 through R14" above — is checked against the rulings actually parsed
 (`RULING-SET`), because it read "R1 through R4" for as long as there were eleven: the sentence was
 written when four was the whole set and no later ruling was an edit to it. The manifest's parser
 had the matching defect from the other side — `R[1-9]` could not match `**R10 — `, so R9's block ran
@@ -2117,7 +2135,11 @@ carrying one cannot be decided by any implementation.
     two structs one ABI and they disagree member-for-member. `sizeof` agrees only because the Rust
     side's missing field is covered by padding, so every layout assertion over the pair passes for a
     reason that is not layout equality — and the first use of that struct against shared memory, or
-    the first member added to either side, breaks silently. That is what the gate stays blocked on. Two fixes are available and this item does not choose between them: give the
+    the first member added to either side, breaks silently. That is what the gate stays blocked on. **R14 chooses between the two fixes that were open here, because leaving them open was itself the
+    defect codex-worker-1 named:** G0-B's invariant demands member parity while PASS 8 permits a
+    one-sided member on byte-disjointness, and this pair cannot satisfy both. Parity wins; a
+    field-wise copy alone does NOT close this item, since it would leave seven members against six.
+    Give the
     Rust struct an explicit `ready: u32` so the layouts match member-for-member, or make `push_event`
     assign field-wise so the flag's bytes are never touched. PRODUCT work.
     **How this got missed:** the register asked the right question and I answered it by reading
