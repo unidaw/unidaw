@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'f462a6dccb1531567cc6af220424f1bc5a5b4b6d'
+PREV_TIP     = 'd9f74b067b90907431b6acb064f474275409eb6c'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -392,6 +392,8 @@ CONTROLS = {
  # the wrapper family, closed by the visible view rather than by another regex: the whole citation
  # hidden in a comment loses a member, and a label separated from its colon by hidden syntax
  # becomes a detached label once the wrapper is blanked to spaces.
+ # codex-worker-2's numeric wrapper, which a letter-initial deny-list could not see
+ 'writer-num-prefix': ('juce:989/994', '9/ :989/994', 1, 'OUT-MEMBERS'),
  'writer-in-comment': ('juce:989/994', '<!--juce:989/994-->', 1, 'OUT-MEMBERS'),
  'writer-wrapped-sep': ('juce:989/994', 'fake<!--x-->:989/994', 1, 'OUT-MEMBERS'),
  'writer-detached':  ('juce:989/994', 'fake :989/994', 1, 'OUT-MEMBERS'),
@@ -720,9 +722,16 @@ else:
     # after a citation that DECLARED one; a word in that position is a claim about the path and is
     # rejected as one. (An earlier version of this check was written and silently did not land: its
     # anchor no longer existed. It is verified against the spoof below rather than assumed.)
-    for _w in re.finditer(r'([A-Za-z_][\w/.]*)\s+:\d{3,4}', wseg.group(0)):
-        bad('OUT-MEMBERS', f'writer citation has a detached label {_w.group(1)!r} before a bare '
-                           f'`:NNN` — a path is declared with a colon or not at all')
+    # ALLOW-LIST the separator, do not deny-list the label. Rejecting `[A-Za-z_]...` before a bare
+    # citation left `9/ :989` through, because the token began with a digit — a deny-list only ever
+    # covers the shapes its author thought of, which is the fourth time this field has taught me
+    # that. A bare `:NNN` may follow a separator (`·`, `,`), the end of a previous citation (a
+    # digit), or the segment start. Anything else is a label wearing a space.
+    for _w in re.finditer(r'(\S+)\s+:\d{3,4}', wseg.group(0)):
+        _prev = _w.group(1)
+        if _prev[-1] not in '·,0123456789':
+            bad('OUT-MEMBERS', f'writer citation has a detached prefix {_prev!r} before a bare '
+                               f'`:NNN` — a path is declared with a colon or not at all')
     _rest = wseg.group(0)
     _pos = 0
     while _pos < len(_rest):
@@ -1574,6 +1583,15 @@ if NEG_TAG:
 # with rc 0. A guard placed early tests the failures known early; the ONLY correct position for a
 # publish is after everything that could refuse it. Staged write and atomic replace, so a crash
 # between cannot leave a half-written canonical artifact either.
+# THE EMIT REFUSAL, PROVEN IN-PROCESS. The `emit-fail-open` control mutated the open count and
+# asserted OPEN-COUNT — which tests the CHECK, not the emission. codex-worker-2 pointed out that
+# nothing exercised the refusal BRANCH. `--prove-emit-refuses` runs the branch's condition against a
+# synthetic failure and reports whether it would have written, so the claim "emission is refused on
+# any failure" is executable instead of asserted.
+if '--prove-emit-refuses' in sys.argv:
+    would_write = not (fail + ['[SYNTHETIC] injected failure'])
+    print(f'with one injected failure, emission would write: {would_write}')
+    sys.exit(0 if not would_write else 1)
 if '--emit-manifest' in sys.argv or '--manifest' in sys.argv:
     if fail or NEG:
         for f in fail[:30]: print('  ' + f)
