@@ -504,6 +504,12 @@ withdrawal status; misclassified mapping-owned `completedBlockId`; missing
 generation-safety oracle and external-host policy; additive withdrawal schema
 and hidden-link spoof; and unresolved G3 N/Watchdog, G2-A/B, G0-A/B, and G4.
 
+Owner successor `2868efd` claims those R16/item37 and manifest-status issues
+are corrected: narrowed original-theory withdrawal, mapping-owned
+`completedBlockId`, a cross-path generation-safety oracle, and schema `/4` with
+`active_open` plus visible-view withdrawal extraction. Exact review is
+pending; carried G3/G2/G0/G4 decisions remain explicitly unclaimed.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
