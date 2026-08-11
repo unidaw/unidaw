@@ -643,6 +643,14 @@ actual nondiscriminating-log defect. M1 specification is deliberately deferred
 to the telemetry implementer. Exact review is pending; G2/G3/G0/G4 decisions
 remain gated.
 
+Exact review of `3ac0544` is **BLOCKED**. Narrow headline/KINDS/product-kind
+closures pass, but `_prod` independently scans bodies for PRODUCT counts, so
+the single-derivation claim is false; malformed `BLOCKED-ON: abc` is silently
+dropped; and packet-marker-move duplicates deletion. Items18/26/35 require
+PACKET but remain PRODUCT-only or contradictory, item28 lacks S3 extraction,
+and item36/G3 still conflicts over contradiction versus nondiscriminating
+defect. G0/G3/G4 status blockers remain.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
