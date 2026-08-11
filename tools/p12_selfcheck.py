@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'c332c0359091d9c46005e28b06f1e5b1560dd93a'
+PREV_TIP     = 'd21c0539fc3f70e65e4fa431cd0ae313056da94a'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -173,6 +173,9 @@ CONTROLS = {
                       'BLOCKER-SET-RESTATED'),
  # the item half of the same check: item 26's history is where the digits went when R8 lost them,
  # and a check that ranged only over rulings would have watched them move.
+ # flips the opening's universal without touching a gate: the sentence must be derived, not trusted.
+ 'accept-prose':     ('GATES ARE ACCEPTANCE-DECIDABLE — G0-A, G1-A and G1-B',
+                      'GATES ARE ACCEPTANCE-DECIDABLE — G0-A, G1-A and G3', 1, 'GATE-ACCEPT-PROSE'),
  'restate-census-i': ('sized by the two OUT census rows', 'sized at 7 cross-agent reads', 1,
                       'CENSUS-RESTATED'),
  'restate-census':   ('R5 named\nthe readers,', 'the 7 cross-agent reads. R5 named\nthe readers,', 1,
@@ -539,6 +542,7 @@ WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twen
         21: 'Twenty-one', 22: 'Twenty-two', 23: 'Twenty-three', 24: 'Twenty-four',
         25: 'Twenty-five', 26: 'Twenty-six', 27: 'Twenty-seven', 28: 'Twenty-eight',
         29: 'Twenty-nine', 30: 'Thirty', 31: 'Thirty-one', 32: 'Thirty-two',
+        41: 'Forty-one', 42: 'Forty-two', 43: 'Forty-three', 44: 'Forty-four',
         33: 'Thirty-three', 34: 'Thirty-four', 35: 'Thirty-five', 36: 'Thirty-six',
         37: 'Thirty-seven', 38: 'Thirty-eight', 39: 'Thirty-nine', 40: 'Forty'}
 if not listed:
@@ -626,6 +630,28 @@ for g in gate_hdr:
                   'decidable_for_acceptance': not blk,
                   'reason_if_not_acceptance': ('blocked by items %s' % blk) if blk else None,
                   'reason_if_not_planning': 'own population withdrawn' if withdrawn_pop else None})
+# Dependency propagation. Both decidability flags were LOCAL: G4 published
+# `decidable_for_acceptance: false, blocking_items: [26]`, so a consumer closing item 26 would read
+# G4 as acceptable — while G0-B, G2-A, G2-B and G3, all of which G4 declares as dependencies, remain
+# unacceptable. The dependency edges were emitted and never USED, which is the same defect as a
+# named hole emitted as an empty field: present in the data, absent from the conclusion.
+by_id = {g['id']: g for g in gates}
+def closure(gid, seen=None):
+    seen = seen if seen is not None else set()
+    for d in by_id.get(gid, {}).get('dependencies', []):
+        if d in seen or d not in by_id: continue
+        seen.add(d); closure(d, seen)
+    return seen
+for g in gates:
+    deps = sorted(closure(g['id']))
+    g['dependency_closure'] = deps
+    g['acceptance_blocked_by'] = [d for d in deps if not by_id[d]['decidable_for_acceptance']]
+    g['planning_blocked_by'] = [d for d in deps if not by_id[d]['decidable_for_planning']]
+    # the flag a consumer should actually gate on: own blockers AND the whole closure clean
+    g['acceptable_with_dependencies'] = (g['decidable_for_acceptance']
+                                         and not g['acceptance_blocked_by'])
+    g['plannable_with_dependencies'] = (g['decidable_for_planning']
+                                        and not g['planning_blocked_by'])
 rulings = []
 # `R[1-9]` — the third hardcoded range in this file to be outgrown by its own population. It
 # matched the "R1" inside "**R10 — ", and the lookahead `\n\n\*\*R[1-9] — ` could never match
@@ -755,6 +781,16 @@ if described:
                       ('raw_claims', 'RAW claim'), ('controls', 'control'), ('counts', 'count')]:
         if word in described.group(1) and key not in man:
             bad('MANIFEST-OVERPROMISED', f'A.0 says the manifest carries {word}; no {key} key')
+# the opening's universal about acceptance, derived rather than believed
+acceptable = [g['id'] for g in gates if g['acceptable_with_dependencies']]
+said = re.search(r'GATES ARE ACCEPTANCE-DECIDABLE — ([^—]{0,60}?) —\n', pkt)
+if not said:
+    bad('GATE-ACCEPT-PROSE', 'the opening names no acceptance-decidable set to check')
+else:
+    named = sorted(re.findall(r'G[0-9]-?[AB]?', said.group(1)))
+    if named != sorted(acceptable):
+        bad('GATE-ACCEPT-PROSE', f'opening names {named}, derived set is {sorted(acceptable)}')
+
 # The VALUES half. MANIFEST-OVERPROMISED compares described KEYS to emitted keys and cannot reach a
 # key whose CONTENT disagrees with the prose. The opening sentence counts the gates that cannot be
 # decided; the manifest derives the same set. They must agree, or the sentence is the next third

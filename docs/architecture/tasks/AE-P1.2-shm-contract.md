@@ -21,15 +21,25 @@ The blockers from the exact review are reconciled here, and the count is deliber
 1. **TWO OF THE EIGHT GATES CANNOT BE DECIDED AT THIS SHA** — G2-A and G4, whose authorings are
    RETRACTED; see items 26, 27 and the retraction note in each gate, which must agree or
    `PLANNING-BLOCK-ASYMMETRIC` fires. G1-B's readers were withdrawn and are AUTHORED again under R1
-   with rules, members and drift detectors; G2-A's scope and G4's out-plane are not. **No gate is
-   acceptance-decidable: five items block (18, 19, 24, 26 and 27)** and three of them need product
+   with rules, members and drift detectors; G2-A's scope and G4's out-plane are not. **THREE GATES ARE ACCEPTANCE-DECIDABLE — G0-A, G1-A and G1-B —
+   and five items block (18, 19, 24, 26 and 27)** and three of them need product
    work rather than packet work. That list is derived from the items themselves and every
    restatement of it anywhere in this document is compared against the derivation
    (`BLOCKER-SET-RESTATED`) — this paragraph carried (18, 19, 23, 24, 29) for several SHAs, three
    members wrong on the packet's first screen, because the check knew about the open-items header
-   and not about the sentence that repeats it. The manifest publishes both senses as
-   `decidable_for_planning` and `decidable_for_acceptance`, and G3 shows why one boolean will not
-   do: R3 makes it plannable and it is not acceptance-decidable until the N ticket lands.
+   and not about the sentence that repeats it. **That set is DERIVED and checked (`GATE-ACCEPT-PROSE`)**, not asserted. It read "No gate is
+   acceptance-decidable" until the check that derives it was written, and the check failed on its
+   first run: three gates carry no blocking item and no unaccepted dependency. The sentence had been
+   true when the packet was younger and was never re-decided, which is the fourth stale universal
+   this opening has carried.
+   The manifest publishes both senses as `decidable_for_planning` and `decidable_for_acceptance`,
+   and G3 shows why one boolean will not do: R3 makes it plannable and it is not acceptance-decidable
+   until the N ticket lands. **Each also has a `_with_dependencies` form**, because the local flags
+   were the whole answer and a gate's dependencies were emitted and never USED: G4 published
+   `decidable_for_acceptance: false, blocking_items: [26]`, so a consumer closing item 26 would have
+   read G4 as acceptable while G0-B, G2-A, G2-B and G3 — every one of them a declared dependency of
+   G4 — stayed unacceptable. `acceptance_blocked_by` now names that closure. An edge present in the
+   data and absent from the conclusion is the same defect as a named hole emitted as an empty field.
    **This paragraph is where every stale claim in the packet has accumulated**, because it is
    written once and thereafter read as framing rather than as claims; it now states no number that
    is not derived elsewhere and checked here.  Every gate carries the record's SHAPE — population slot,
@@ -1378,7 +1388,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `ce996ed7c12ce56083de1330568630a763abd1e7`, A.0 SCRIPT BLOB `856d7c8b7d6311a79f81e280c7dea9e4654ec8ef`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `cd31d11d63c8673fad408884502b181c6c9a6dc6`, A.0 SCRIPT BLOB `ef9f61fd94225216600b75d9f5dd330373251b75`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1436,14 +1446,14 @@ back to: A.0's "what it does not decide" list is the exact place where a stale s
 what has been settled.)
 And nothing about the product beyond what a text search can see.
 
-**Controls.** Forty, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Forty-one, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
-`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`. The last six exist because
+`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`. The last seven exist because
 **codex-worker-1** MUTATED THIS PACKET AND THE GATE STILL SAID PASS (the finding reached me relayed
 by backend, and two commit messages in this lineage credit the relay rather than the author —
 `e26f91f` and `c332c03`, immutable and wrong on this point): deleting the item's reopening sentence,
