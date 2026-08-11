@@ -1374,7 +1374,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `e558cd720429c5b3c04087814a71b4c1e5d6c8cc`, A.0 SCRIPT BLOB `3780b422d266d49b69777110636a785f40716926`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `3ac35ff88fa0ec3105b2defe8e6b1a5f94f74323`, A.0 SCRIPT BLOB `025febcb752e4adb1879bde2f0687a6ab059d9a3`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1440,14 +1440,14 @@ check, staged and atomically replaced, and `MANIFEST-STALE` is suppressed on an 
 a check that forbids its own remedy is a deadlock rather than a guard — that deadlock appeared the
 moment the write moved, and is recorded here because it is the predictable cost of the fix.
 
-**Controls.** Sixty-seven, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** Seventy, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. Run them with `--negative <name>`, list with `--list`: `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
-`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`, `ratchet-count`, `writer-extra`, `reader-row-moved`, `emit-fail-open`, `ruling-item-swap2`, `diagram-edge`, `control-phantom`, `writer-regroup`, `gate-multidigit`, `withdrawn-status`. The last thirty-three exist because
+`unresolved-tail`, `unstated-return`, `withdrawn-claim`, `wrong-command`, `wrong-gate-ref`, `wrong-raw`, `drop-item-block`, `drop-gate-block`, `ruling-swallowed`, `restate-census`, `restate-census-i`, `restate-blockers`, `accept-prose`, `census-row-gone`, `census-relabel`, `census-cmd-swap`, `restate-r5-word`, `ruling-item-swap`, `dep-unknown`, `census-wrong-file`, `out-member-stale`, `out-writer-moved`, `dep-cycle`, `dep-self`, `census-fake-out`, `census-compound`, `dep-heading`, `dep-bad-token`, `ruling-long-head`, `ratchet-count`, `writer-extra`, `reader-row-moved`, `emit-fail-open`, `ruling-item-swap2`, `diagram-edge`, `control-phantom`, `writer-regroup`, `gate-multidigit`, `withdrawn-status`, `census-row-moved`, `writer-wrong-path`, `control-dupe`. The last thirty-six exist because
 **codex-worker-1** MUTATED THIS PACKET AND THE GATE STILL SAID PASS (the finding reached me relayed
 by backend, and two commit messages in this lineage credit the relay rather than the author —
 `e26f91f` and `c332c03`, immutable and wrong on this point): deleting the item's reopening sentence,
@@ -1916,12 +1916,17 @@ carrying one cannot be decided by any implementation.
 27. **G2-A** — **BLOCKING, and the scope is AUTHORED under R12: the gate ranges over the three
     production adoptable-refusal emit sites.** The retraction is lifted. Every earlier scope here was
     falsified by the same move — it selected on the ARBITRATION and the gate is about the ANSWER, so
-    it kept including commands whose refusal carries no retry value and excluding `SetRowOps`, which
-    emits an adoptable refusal while being arbitrated by nothing. There are THREE refusal channels
+    it kept including commands whose refusal is TERMINAL AND UNADDRESSED — the ResyncNeeded
+    channels, which DO carry a retry value and carry no command field — and excluding `SetRowOps`,
+    which emits an addressed refusal while being arbitrated by nothing. There are THREE refusal channels
     (adoptable `ClipRejected`, `UiDiffType::ResyncNeeded`, `UiHarmonyDiffType::ResyncNeeded`) and
-    treating them as one is what made every containment claim false. **This item stays BLOCKING for
-    the PRODUCT defect, not for its scope:** one of the three members cannot satisfy the invariant
-    at this SHA, which is open item 29 (G2-A). Previously: The scope is two populations related
+    treating them as one is what made every containment claim false. **This item stays BLOCKING for the
+    PRODUCT defect, not for its scope: ALL THREE members cannot satisfy the invariant** —
+    `UiClipRejectPayload` carries no sender-minted per-command identity, so `commandType` names a
+    KIND and not an instance for every member, and `engine_rowops_commands.cpp:49` is additionally
+    worse. That is open item 29 (G2-A), which is BLOCKING. This paragraph said "one of the three"
+    for two SHAs after R12 said all three: I corrected the RULING and left the ITEM, which is the
+    third instance today of a finding and its argument living apart. Previously: The scope is two populations related
     by containment: A (arbitrated against a version counter, 9 call sites) and B (emits an adoptable
     `ClipRejected`), with **B = A ∪ {SetRowOps}** determined from the three production emit sites
     rather than from a name list, and a drift detector on that site count. Every control must name
@@ -1933,7 +1938,7 @@ carrying one cannot be decided by any implementation.
     **Measured at the frozen product by claude-worker-1, and it is worse than "outside the nine":**
     `UiSetRowOpsPayload` has NO `baseVersion` field, so `SetRowOps` cannot be arbitrated even in
     principle, yet `engine_rowops_commands.cpp:49` emits an adoptable `ClipRejected` with
-    `/*sentBase=*/0, /*currentBase=*/0` — constants, where the other three emit sites pass real
+    `/*sentBase=*/0, /*currentBase=*/0` — constants, where the other TWO emit sites pass real
     values and the payload's own comment calls `currentBase` "the value to retry with". There is
     nothing to retry with. **And zero is a live value**: `clipVersion` initialises to 0
     (`shared_memory.h:1376`, `daw_engine_main.cpp:675`), so a consumer cannot tell these zeros from a

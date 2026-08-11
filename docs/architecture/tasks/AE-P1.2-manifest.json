@@ -114,9 +114,11 @@
   "census-fake-out",
   "census-relabel",
   "census-row-gone",
+  "census-row-moved",
   "census-wrong-file",
   "closed-count",
   "constraint-lost",
+  "control-dupe",
   "control-phantom",
   "control-unlisted",
   "dangling-ref",
@@ -169,6 +171,7 @@
   "withdrawn-status",
   "writer-extra",
   "writer-regroup",
+  "writer-wrong-path",
   "wrong-command",
   "wrong-gate-ref",
   "wrong-raw"
@@ -178,7 +181,7 @@
   "census_rows": 9,
   "closed": 8,
   "commanded_claims": 31,
-  "controls": 67,
+  "controls": 70,
   "hand_ruled": 13,
   "items": 33,
   "open": 25,
@@ -743,7 +746,7 @@
   },
   {
    "blocking": true,
-   "body": "27. **G2-A** — **BLOCKING, and the scope is AUTHORED under R12: the gate ranges over the three production adoptable-refusal emit sites.** The retraction is lifted. Every earlier scope here was falsified by the same move — it selected on the ARBITRATION and the gate is about the ANSWER, so it kept including commands whose refusal carries no retry value and excluding `SetRowOps`, which emits an adoptable refusal while being arbitrated by nothing. There are THREE refusal channels (adoptable `ClipRejected`, `UiDiffType::ResyncNeeded`, `UiHarmonyDiffType::ResyncNeeded`) and treating them as one is what made every containment claim false. **This item stays BLOCKING for the PRODUCT defect, not for its scope:** one of the three members cannot satisfy the invariant at this SHA, which is open item 29 (G2-A). Previously: The scope is two populations related by containment: A (arbitrated against a version counter, 9 call sites) and B (emits an adoptable `ClipRejected`), with **B = A ∪ {SetRowOps}** determined from the three production emit sites rather than from a name list, and a drift detector on that site count. Every control must name which it ranges over. What is NOT closed is the PRODUCT defect this exposed, which is open item 29 (G2-A). **The two populations are NOT NESTED**, which is the finding that settles the shape of the fix: \"commands arbitrated against a version counter\" and \"commands that emit an adoptable refusal\" are different sets, and `SetRowOps` is in the second and not the first. Any control here must say WHICH population it ranges over. **Measured at the frozen product by claude-worker-1, and it is worse than \"outside the nine\":** `UiSetRowOpsPayload` has NO `baseVersion` field, so `SetRowOps` cannot be arbitrated even in principle, yet `engine_rowops_commands.cpp:49` emits an adoptable `ClipRejected` with `/*sentBase=*/0, /*currentBase=*/0` — constants, where the other three emit sites pass real values and the payload's own comment calls `currentBase` \"the value to retry with\". There is nothing to retry with. **And zero is a live value**: `clipVersion` initialises to 0 (`shared_memory.h:1376`, `daw_engine_main.cpp:675`), so a consumer cannot tell these zeros from a genuine base of 0 on a fresh track — the one value that should mean \"nothing to say\" already means something on this wire. **The consequence is LATENT, not wired, and I defended the wrong half of this.** `ui/daw-cli/src/main.rs:1179` correlates on `(track, command_type, sentBase)` and `await_clip_outcome` is live with four callers (`:2989`, `:3000`, `:5418`, `:5430`) — so when codex-worker-1 said the correlator was dead I checked, and it is not. But **none of those callers is SetRowOps**: the CLI's SetRowOps path at `:4263-4288` sends and prints, with no await at all, and the agent and sidecar do not wait either. So the inert third key harms no consumer TODAY; it makes the refusal uncorrelatable for any consumer that starts waiting. I was right that the function is live and wrong about the case this item uses it for, which is the half that mattered. Acceptance is unaffected — `applySetRowOps` bumps the clip version at `engine_clip_edit.cpp:439` — so this is a refusal-path defect only. The arbitrated-command SCOPE is FALSIFIED and unreplaced, so G2-A governs an undefined set. Falsified by exhibit: `engine_rowops_commands.cpp:49` emits an adoptable refusal for `SetRowOps`, outside the nine. The 51 correlators also span chain, sampler, mod-link and journal refusals. Either the nine becomes ten-or-more by enumeration, or the gate states which refusals it governs and why the rest are out — and the two populations must stop being treated as one set.",
+   "body": "27. **G2-A** — **BLOCKING, and the scope is AUTHORED under R12: the gate ranges over the three production adoptable-refusal emit sites.** The retraction is lifted. Every earlier scope here was falsified by the same move — it selected on the ARBITRATION and the gate is about the ANSWER, so it kept including commands whose refusal is TERMINAL AND UNADDRESSED — the ResyncNeeded channels, which DO carry a retry value and carry no command field — and excluding `SetRowOps`, which emits an addressed refusal while being arbitrated by nothing. There are THREE refusal channels (adoptable `ClipRejected`, `UiDiffType::ResyncNeeded`, `UiHarmonyDiffType::ResyncNeeded`) and treating them as one is what made every containment claim false. **This item stays BLOCKING for the PRODUCT defect, not for its scope: ALL THREE members cannot satisfy the invariant** — `UiClipRejectPayload` carries no sender-minted per-command identity, so `commandType` names a KIND and not an instance for every member, and `engine_rowops_commands.cpp:49` is additionally worse. That is open item 29 (G2-A), which is BLOCKING. This paragraph said \"one of the three\" for two SHAs after R12 said all three: I corrected the RULING and left the ITEM, which is the third instance today of a finding and its argument living apart. Previously: The scope is two populations related by containment: A (arbitrated against a version counter, 9 call sites) and B (emits an adoptable `ClipRejected`), with **B = A ∪ {SetRowOps}** determined from the three production emit sites rather than from a name list, and a drift detector on that site count. Every control must name which it ranges over. What is NOT closed is the PRODUCT defect this exposed, which is open item 29 (G2-A). **The two populations are NOT NESTED**, which is the finding that settles the shape of the fix: \"commands arbitrated against a version counter\" and \"commands that emit an adoptable refusal\" are different sets, and `SetRowOps` is in the second and not the first. Any control here must say WHICH population it ranges over. **Measured at the frozen product by claude-worker-1, and it is worse than \"outside the nine\":** `UiSetRowOpsPayload` has NO `baseVersion` field, so `SetRowOps` cannot be arbitrated even in principle, yet `engine_rowops_commands.cpp:49` emits an adoptable `ClipRejected` with `/*sentBase=*/0, /*currentBase=*/0` — constants, where the other TWO emit sites pass real values and the payload's own comment calls `currentBase` \"the value to retry with\". There is nothing to retry with. **And zero is a live value**: `clipVersion` initialises to 0 (`shared_memory.h:1376`, `daw_engine_main.cpp:675`), so a consumer cannot tell these zeros from a genuine base of 0 on a fresh track — the one value that should mean \"nothing to say\" already means something on this wire. **The consequence is LATENT, not wired, and I defended the wrong half of this.** `ui/daw-cli/src/main.rs:1179` correlates on `(track, command_type, sentBase)` and `await_clip_outcome` is live with four callers (`:2989`, `:3000`, `:5418`, `:5430`) — so when codex-worker-1 said the correlator was dead I checked, and it is not. But **none of those callers is SetRowOps**: the CLI's SetRowOps path at `:4263-4288` sends and prints, with no await at all, and the agent and sidecar do not wait either. So the inert third key harms no consumer TODAY; it makes the refusal uncorrelatable for any consumer that starts waiting. I was right that the function is live and wrong about the case this item uses it for, which is the half that mattered. Acceptance is unaffected — `applySetRowOps` bumps the clip version at `engine_clip_edit.cpp:439` — so this is a refusal-path defect only. The arbitrated-command SCOPE is FALSIFIED and unreplaced, so G2-A governs an undefined set. Falsified by exhibit: `engine_rowops_commands.cpp:49` emits an adoptable refusal for `SetRowOps`, outside the nine. The 51 correlators also span chain, sampler, mod-link and journal refusals. Either the nine becomes ten-or-more by enumeration, or the gate states which refusals it governs and why the rest are out — and the two populations must stop being treated as one set.",
    "closed": false,
    "gate": "G2-A",
    "line": 1916,
@@ -755,7 +758,7 @@
    "body": "28. **G2-A** — The requirement that was S3, split out of item 27 because they are separately fixable and bundling them means neither can be closed: the counter-only decisions must be extracted and each replaced, and no check over that extraction can be written until the extraction has a predicate, a command and a member list.",
    "closed": false,
    "gate": "G2-A",
-   "line": 1957,
+   "line": 1962,
    "n": 28,
    "title": "The requirement that was S3, split out of item 27 because they are separately"
   },
@@ -764,7 +767,7 @@
    "body": "29. **G2-A** — **BLOCKING. The `SetRowOps` refusal is malformed for the channel it rides**, measured at the frozen product by claude-worker-1 and independent of this packet's scope question. It was unmarked while item 27 delegated its blocking status to it — **an item can only delegate to an item that carries the weight**, and for two SHAs the delegation pointed at an item the manifest reported as non-blocking. `engine_rowops_commands.cpp:49` passes `/*sentBase=*/0, /*currentBase=*/0` where the other emit sites pass real values, and the payload's own comment calls `currentBase` \"the value to retry with\" — there is nothing to retry with. Zero is a LIVE value (`clipVersion` initialises to 0 at `shared_memory.h:1376` and `daw_engine_main.cpp:675`), so a consumer cannot distinguish these from a genuine base of 0 on a fresh track. `ui/daw-cli/src/main.rs:1179` correlates on `(track, command_type, sentBase)`, so for `SetRowOps` the third key is INERT and two concurrent refusals on one track would be indistinguishable — **but NO CONSUMER AWAITS A SetRowOps REFUSAL at this SHA**, so the collision is latent rather than live. The CLI's SetRowOps path (`ui/daw-cli/src/main.rs:4263-4288`) sends and prints; `await_clip_outcome`'s four callers pass note, delete and chord command types. This item said the collision was happening and item 27 said it was not, for a SHA and a half — **two items of one gate holding opposite readings of one line of Rust**, because I corrected the sentence where the argument lived and not the sentence where the finding was filed. Acceptance is unaffected: `applySetRowOps` bumps the clip version at `engine_clip_edit.cpp:439`. This is a refusal-path defect and it is a PRODUCT fix, not a packet edit.",
    "closed": false,
    "gate": "G2-A",
-   "line": 1962,
+   "line": 1967,
    "n": 29,
    "title": "**BLOCKING. The `SetRowOps` refusal is malformed for the channel it rides**, measured"
   },
@@ -773,7 +776,7 @@
    "body": "30. **G2-A** — **RULED (R10): the wiring is DEAD, the hazard is REAL, and they are separate work.** Remove the unused `requireMatchingClipVersion` member from `UndoCommandDeps`; separately, undo replaces the whole document via `applyDocument`, so an edit made between a user's view and their undo is silently reverted, and covering that needs a DOCUMENT-level version which does not exist. Deleting the wiring must not read as dismissing the risk. Originally: the undo path holds an arbiter it never calls, measured by claude-worker-1 at the frozen product with TYPE-LEVEL evidence rather than a call-site census, which is the only kind that can see it: `engine_undo_commands.h:38` declares the clip arbiter as a `std::function` member and `engine_undo_commands.cpp` contains ZERO occurrences of the name. Undo and Redo mutate clips and are wired to receive the per-track optimistic-concurrency gate without consulting it. **The absence IS the finding**, so no census over call sites can produce it. **That tail is SUPERSEDED TWICE and is kept as history.** It said the dead-wiring question was an owner call I had not made and that item 27's scope could not close until it was — R10 made the call (dead wiring, removed separately from the hazard) and R12 authored item 27's scope without reference to the arbitrated set at all, because the gate ranges over the EMIT sites. So the sentence describing what blocks item 27 outlived both the ruling that answered it and the ruling that made it irrelevant. **A dependency between items is a claim like any other and goes stale like any other**, and this one survived two rulings because nothing re-reads a sentence that merely says what is blocked on what.",
    "closed": false,
    "gate": "G2-A",
-   "line": 1983,
+   "line": 1988,
    "n": 30,
    "title": "**RULED (R10): the wiring is DEAD, the hazard is REAL, and they are separate work.**"
   },
@@ -782,7 +785,7 @@
    "body": "31. **all** — **The pointer-helper RATCHET, and it must pin the GENERAL population, not G4's subset.** The completeness argument rests on a closed set of functions returning a plane pointer. A ratchet pinned at \"two OUT-PLANE helpers\" would have to decide which plane a NEW helper serves, and the only thing available to decide that is its NAME — the selector defect reappearing inside the guard built against it; a `safeAudioAuxPtr` would be classified by spelling. **Pin instead: every `float*`-returning function or lambda in non-test `apps/*.cpp` that reaches a segment base.** The ratchet holds at **four** at this SHA (`audio_shm.cpp:5`, `:17`, `engine_produce_block.cpp:848`, `:861`) and is now EXECUTED rather than described (`RATCHET-DRIFT`): A.0 runs the predicate against the pinned tree, compares the sites AND the fingerprint of each line, and compares the count against the word in this sentence. It was prose in every SHA before this one — a ratchet that is only written down is a ratchet that has never been pulled. The `.h` declarations are excluded because a declaration returns no pointer; the predicate is over definitions. That predicate needs no judgement about planes, so a fifth of ANY name or plane turns it red and a person decides. **The rename-invariance claim is WITHDRAWN and the reason is worth keeping.** This item said: \"add a fifth and it must fire; RENAME an existing one and it must NOT, because the count is over structure.\" The implemented ratchet pins each member as (path, line, fingerprint of that LINE), and a line contains the function's name — so a rename DOES fire, and the stated invariant is false about the check that enforces it. **The count is over structure; the FINGERPRINT is not**, and I wrote the invariant before the mechanism existed and never re-read it against what got built. A rename firing is arguably the safer failure — a renamed helper deserves a look — but it is not what the packet promised, and a guard whose documented behaviour differs from its actual behaviour is the thing this packet exists to prevent. What survives: add a fifth of any name or plane and it fires, which is the property the completeness argument actually needs. **It belongs with the LayoutSpec work in constraint 1, not inside either gate**, because G1-A's input-plane writers and G4's out-plane readers share this ratchet without sharing a population.",
    "closed": false,
    "gate": "all",
-   "line": 2003,
+   "line": 2008,
    "n": 31,
    "title": "**The pointer-helper RATCHET, and it must pin the GENERAL population, not G4's"
   },
@@ -791,7 +794,7 @@
    "body": "32. **G2-A** — **RULED (R11).** `commandMutatesDocument(Undo)` returns FALSE with the comment \"no document state\" (`engine_command_mutates.h:58`) while `handleUndo` calls `applyDocument` and replaces the entire `ProjectDocument`. The classifier answers \"does this command CARRY document state in its payload\"; its NAME asks \"does it MUTATE the document\"; and G2-A's arbitrated population is derived from it. A predicate this gate depends on is inconsistent with the behaviour it names, which is a defect in the predicate and not in its wording.",
    "closed": false,
    "gate": "G2-A",
-   "line": 2029,
+   "line": 2034,
    "n": 32,
    "title": "**RULED (R11).** `commandMutatesDocument(Undo)` returns FALSE with the comment \"no"
   },
@@ -800,7 +803,7 @@
    "body": "33. **G1-B** — **BLOCKING. The tests PASS 9 and S4 name do not exist.** Restoring them from \"withdrawn with the population\" to live conditions made the gap visible: PASS 9 requires a mechanical echo ratchet over the SEND SITES — a population nobody has enumerated, so that bullet is blocked on a missing population and not only on an unwritten test — and S4 requires drift detectors pinning the authored population's size. NEITHER IS WRITTEN. This item repeated \"the seven authored send sites\" when it was filed, taking a count from the request/answer population and a unit from a population that does not exist; PASS 9 states it correctly and this item now matches it. While they read \"withdrawn\", G1-B's acceptance flag was true and nothing contradicted it, because a withdrawn condition is not a failing one — **the withdrawal was carrying the gate's acceptance**. This is the same shape as item 26 (G4): a gate whose population is authored and whose tests are absent, and in both cases the population work is what got done because it is the part a packet can do. Product work; the detectors belong with the LayoutSpec assertions in constraint 1, and the ratchet is a sibling of the one item 31 (all) now executes.",
    "closed": false,
    "gate": "G1-B",
-   "line": 2036,
+   "line": 2041,
    "n": 33,
    "title": "**BLOCKING. The tests PASS 9 and S4 name do not exist.** Restoring them from"
   }
@@ -1795,6 +1798,26 @@
     {
      "context": "d item 11 is the case: it asked for an authored population, R1 authored one, and there was nothing lef",
      "line": 1768
+    },
+    {
+     "context": "em 11's own CLOSED marker three SHAs running. That range — \"R1 through R12\" above — is checked against",
+     "line": 1770
+    },
+    {
+     "context": "he rulings actually parsed (`RULING-SET`), because it read \"R1 through R4\" for as long as there were e",
+     "line": 1771
+    },
+    {
+     "context": "one. 11. **G1-B** — **CLOSED at this SHA by AUTHORING under R1: SEVEN.** The request set is the `R",
+     "line": 1830
+    },
+    {
+     "context": ", not for the choice, which is made. 25. **all** — **RULED (R1): authored with drift detectors.** The ",
+     "line": 1870
+    },
+    {
+     "context": " RING index population, which became the sixth when the R1 mechanism was applied to it, tracked ra",
+     "line": 1872
     }
    ],
    "text": "**R1 — item 11 (G1-B) and item 25 (all): AUTHORED POPULATIONS, with drift detectors.** No predicate distinguishes a request/answer reader from any other `read_` function, and none distinguishes a REGION from the offset fields addressing it. Three attempts at a predicate produced 6 by hand, then 2 by intersection, then a withdrawal. The ruling is that these populations are **authored, not derived**: each authored population must carry an EXPLICIT MEMBER LIST and a DRIFT DETECTOR — a command whose figure is pinned, so that a change in the surrounding code invalidates the authored list instead of silently outdating it. For G1-B that detector is `grep -rn 'pub fn read_' ui/daw-bridge/src/control.rs` returns 21; if it ever returns anything else, the authored list is stale by construction and the gate fails until it is re-authored. This is weaker than a derivation and stronger than what preceded it, which was a hand selection presented as a population. It also matches what the packet already does for the hand-classified populations, so the two items resolve on one mechanism rather than two. **NOT YET APPLIED, and the ruling does not pretend otherwise.** G1-B still declares NO population and item 25's categories carry no member lists and no detectors — the ruling states the mechanism, and writing the lists is work that has not been done at this SHA. The reviewer found this by reading R1 against the gates rather than against itself, which is the right test and one I did not run: I wrote \"the packet lists the members explicitly\" in the same commit in which it did not. **Cost:** a reviewer must read the lists, not re-run a command; the detector bounds staleness, not correctness. Item 11 and item 25 stay open FOR THIS WORK, which is now named rather than implied."
@@ -2087,11 +2110,11 @@
     },
     {
      "context": "RODUCT fix, not a packet edit. 30. **G2-A** — **RULED (R10): the wiring is DEAD, the hazard is REA",
-     "line": 1983
+     "line": 1988
     },
     {
      "context": "ade and that item 27's scope could not close until it was — R10 made the call (dead wiring, removed",
-     "line": 1995
+     "line": 2000
     }
    ],
    "text": "**R10 — item 30 (G2-A): THE UNDO ARBITER IS DEAD WIRING, THE HAZARD IS REAL, AND THE INSTRUMENT IS WRONG FOR IT.** Measured before ruling. `handleUndo` (`engine_undo_commands.cpp:46-72`) calls `deps.applyDocument(doc)` — it replaces the ENTIRE `ProjectDocument` from history, then restores plugin state. A per-clip `requireMatchingClipVersion` cannot express \"the document you are undoing from is the one you saw\": it arbitrates ONE clip's version while undo swaps everything. **So the `std::function` member at `engine_undo_commands.h:38` is dead wiring — remove it.** Keeping an unused gate wired in suggests to every reader that arbitration happens here, which is worse than its absence: it is a check that exists in the type system and nowhere in the behaviour. **And the hazard it appears to cover is REAL and uncovered**: undo applies a whole document, so an edit made between the user's view and their undo is silently reverted. Closing that needs a DOCUMENT-level version, which does not exist at this SHA. Item 30 records the removal and the hazard separately, because deleting the wiring must not read as dismissing the risk."
@@ -2111,7 +2134,7 @@
     },
     {
      "context": "chet without sharing a population. 32. **G2-A** — **RULED (R11).** `commandMutatesDocument(Undo)` retu",
-     "line": 2029
+     "line": 2034
     }
    ],
    "text": "**R11 — item 32 (G2-A): `commandMutatesDocument(Undo)` RETURNS FALSE WHILE UNDO REPLACES THE DOCUMENT.** `engine_command_mutates.h:58` classifies `Undo` as \"no document state\" and returns false; `handleUndo` calls `applyDocument`. The classifier is answering \"does this command CARRY document state in its payload\" and its name asks \"does it MUTATE the document\" — and G2-A's arbitrated population is derived from that classifier. A command that replaces the entire document while classified as not mutating it is a live inconsistency in the predicate this gate depends on, not merely a misleading name."
@@ -2150,8 +2173,12 @@
      "line": 1916
     },
     {
+     "context": "is paragraph said \"one of the three\" for two SHAs after R12 said all three: I corrected the RULING ",
+     "line": 1928
+    },
+    {
      "context": " call (dead wiring, removed separately from the hazard) and R12 authored item 27's scope without re",
-     "line": 1996
+     "line": 2001
     }
    ],
    "text": "**R12 — item 27 (G2-A): THE GATE RANGES OVER THE ADOPTABLE-REFUSAL EMIT SITES, and the reason the old scope kept falsifying is that THERE ARE THREE REFUSAL CHANNELS, not one.** The population is the production `emitClipReject` sites — RAW 4 (`git grep -n -E '^ +emitClipReject\\(' apps`) → minus 1 (`engine_ui_publish_tests_main.cpp:198`, a test main) → **3 IN SCOPE**: `engine_clip_edit.cpp:965` (UnknownTrack), `:986` (StaleBase) and `engine_rowops_commands.cpp:49` (SetRowOps). ⟂ **The three channels, each with a different adoptability.** ClipRejected requireMatchingClipVersion (the DEPS one) -> emitClipReject. command-specific `UiClipRejectPayload` carries **commandType** — it names what was refused. Reached from 6 arbitration call sites (`git grep -n -E 'requireMatchingClipVersion\\((auto|chord|diff|h|p|payload)' apps | wc -l` returns 6) UiDiffType::ResyncNeeded daw::requireMatchingClipVersion (the FREE one, `clip_edit.cpp:5-15`) terminal, not addressed fills a diff with `clipVersion = currentVersion` and NO command field UiHarmonyDiffType:: HarmonyTimeline::requireMatchingHarmonyVersion ResyncNeeded (`engine_harmony_timeline.cpp:111-120`) sets terminal, not addressed `harmonyVersion = current`, no command field. Reached from `engine_note_commands.cpp:93` and `:112` — WriteHarmony and DeleteHarmony, which never reach either clip arbiter **A CORRECTION TO THIS RULING'S FIRST STATED REASON, which was false at the pin.** R12 originally excluded the two ResyncNeeded channels because they \"carry no retry value, nothing to adopt\". **They both carry one** — `diffOut.clipVersion = currentVersion` at `clip_edit.cpp:13` and `diffPayload.harmonyVersion = current` at `engine_harmony_timeline.cpp:119`. codex-worker-1 caught it. The real distinction is that a `ClipRejected` NAMES A COMMAND and a ResyncNeeded diff does not: one is addressed to a caller, the other is a terminal \"you are stale\" that any reader may pick up. The exclusion stands and its reason was wrong, which is worth more than a quiet edit — I authored a ruling on a property I had not read the payload for. **WHY THE EMIT SITES AND NOT THE ARBITRATED COMMANDS.** G2-A's invariant is that a refused command tells the UI what to retry with. That is a property of the EMIT, not of the check. Selecting on arbitration includes commands whose refusal the gate cannot test — the two ResyncNeeded channels carry no retry value — and EXCLUDES a site that fails the invariant, because `SetRowOps` emits an adoptable refusal while being arbitrated by nothing: `UiSetRowOpsPayload` has no `baseVersion` field at all. **Every previous scope here was falsified by the same move: it selected on the check and the gate is about the answer.** The containment claim B = A ∪ {SetRowOps} failed for the same reason — the two sets are not nested because they are indexed on different things. **ALL THREE MEMBERS FAIL THE INVARIANT, not one — and that correction is codex-worker-1's.** I wrote that `engine_rowops_commands.cpp:49` was the single failing member because it passes `/*sentBase=*/0, /*currentBase=*/0` — constants, where the other two pass real values and zero is a live `clipVersion`. That is true and it is not the whole defect. **`commandType` names a KIND, not an INSTANCE**, and `UiClipRejectPayload` carries no sender-minted per-command identity at all (`event_payloads.h`: diffType, reason, trackId, sentBase, currentBase, commandType, reserved). The consumer correlates on `(track, commandType, sentBase)` — `ui/daw-cli/src/main.rs:1179`, live, with four call sites of `await_clip_outcome` at `:2989`, `:3000`, `:5418`, `:5430` — so two concurrent refusals of the SAME command type on one track at the same base are indistinguishable for every member of the population, not just for the one that zeroes its bases. rowops:49 is additionally worse, not uniquely wrong. **A population all of whose members fail is the right population.** Open item 29 (G2-A) is the product defect; a population defined to exclude its own failing members would be a population chosen to pass, and one narrowed to a single failing member would have understated the work by two thirds. "

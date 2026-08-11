@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '7dfbe040d768eace9911440a07a882f94b2fcf3d'
+PREV_TIP     = '6a60e48e7d3772ae999ad583af0843fde5c7ab4c'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -360,6 +360,12 @@ CONTROLS = {
  # codex-worker-1's regrouping: same line numbers, different arity — one handover member spanning
  # two lines rewritten as two members. A line-set comparison cannot see it.
  # a multi-digit gate id must be seen by every parser, not only the heading one
+ # codex-worker-1's four exact reproductions against the previous SHA
+ 'census-row-moved': ("      host indirect handoff              `git grep -n 'process(pluginInputPtrs' apps/juce_host_process_main.cpp | wc -l` returns 1.\n", '', 1,
+                      'CENSUS-ROSTER'),
+ 'writer-wrong-path': ('juce:989/994', 'fake:989/994', 1, 'OUT-MEMBERS'),
+ 'control-dupe':     ('`member-per-type`,', '`member-per-type`, `member-per-type`,', 1,
+                      'CONTROL-DUPLICATE'),
  'gate-multidigit':  ('**Dependencies** G0-A, G0-B', '**Dependencies** G0-A, G10-B', 1,
                       'GATE-DEP-UNKNOWN'),
  # a bullet describing a FORMER withdrawal must not be reported as withdrawn
@@ -476,8 +482,15 @@ if only_gate:
 # same defect; this check is what makes either one visible.
 # the census rows, parsed once and used by both the check and the manifest. A row is six-space
 # indented, names a role, carries one backticked command and states what it returns.
+# BOUND TO THE CENSUS BLOCK. Scanning the whole packet with a sticky IN/OUT state meant a row
+# deleted from the block and re-appended after the final paragraph still parsed — the relation
+# header stayed latched from hundreds of lines earlier, so position carried no meaning at all. Rows
+# are members of a BLOCK; a scanner with no block has no way to say a row is in the wrong place.
+_cb = re.search(r'\*\*THE CENSUS BLOCK.*?(?=\n\*\*EVERY ROW IS BOUND TWICE)', pkt, re.S)
+if not _cb:
+    bad('CENSUS-BLOCK', 'no census block found to parse')
 census_rows, _rel = [], None
-for ln in pkt.splitlines():
+for ln in (_cb.group(0).splitlines() if _cb else []):
     h = re.match(r'^    (IN|OUT) plane — (.*)', ln)
     if h: _rel = h.group(1); continue
     r = re.match(r'^      (\S.*?)\s{2,}(?:claims (\d+) — )?(.*?)`([^`]+)`\s*returns (\d+)\.', ln)
@@ -651,11 +664,17 @@ else:
     # two lines, so the arity of the population was unbound while its line set was pinned. Each
     # citation is now a GROUP: a single line, a range `a-b`, or a slash pair `a/b`, and the expected
     # groups are declared with their form.
+    # the PATH is part of a citation. `juce:989/994` rewritten as `fake:989/994` passed, because the
+    # parser read line numbers and forms and never looked at what file they were in.
     cited = []
-    for m in re.finditer(r':(\d{3,4})(?:\s*([-/])\s*:?(\d{3,4}))?', wseg.group(0)):
-        cited.append((int(m.group(1)), m.group(2) or '', int(m.group(3)) if m.group(3) else None))
-    EXPECT_GROUPS = [(664, '-', 665), (686, '', None), (719, '', None), (725, '-', 726),
-                     (925, '', None), (952, '', None), (956, '', None), (989, '/', 994)]
+    _path = None
+    for m in re.finditer(r'(?:\b(\w+):)?(\d{3,4})(?:\s*([-/])\s*:?(\d{3,4}))?', wseg.group(0)):
+        if m.group(1): _path = m.group(1)
+        cited.append((_path, int(m.group(2)), m.group(3) or '',
+                      int(m.group(4)) if m.group(4) else None))
+    EXPECT_GROUPS = [('juce', 664, '-', 665), ('juce', 686, '', None), ('juce', 719, '', None),
+                     ('juce', 725, '-', 726), ('juce', 925, '', None), ('juce', 952, '', None),
+                     ('juce', 956, '', None), ('juce', 989, '/', 994)]
     if sorted(cited) != sorted(EXPECT_GROUPS):
         bad('OUT-MEMBERS', f'writer citations {sorted(cited)} != expected groups '
                            f'{sorted(EXPECT_GROUPS)} — grouping and arity, not only line numbers')
@@ -927,8 +946,13 @@ _cs = pkt.find('list with `--list`:')
 _ce = pkt.find('. ', _cs)
 if _cs == -1:
     bad('CONTROL-PROSE-MISSING', 'no "list with `--list`:" list to parse')
-names = set(re.findall(r'`([^`]+)`', pkt[_cs + len('list with `--list`:'):
-                                         _ce if _ce != -1 else _cs + 2000]))
+_listed_tokens = re.findall(r'`([^`]+)`', pkt[_cs + len('list with `--list`:'):
+                                              _ce if _ce != -1 else _cs + 2000])
+# OCCURRENCES, then the set. A set collapses duplicates, so listing one control twice made the
+# prose's count and the harness's disagree by one while set equality still held.
+_dupes = sorted({t for t in _listed_tokens if _listed_tokens.count(t) > 1})
+if _dupes: bad('CONTROL-DUPLICATE', 'listed more than once: ' + ', '.join(_dupes))
+names = set(_listed_tokens)
 WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twenty',
         21: 'Twenty-one', 22: 'Twenty-two', 23: 'Twenty-three', 24: 'Twenty-four',
         25: 'Twenty-five', 26: 'Twenty-six', 27: 'Twenty-seven', 28: 'Twenty-eight',
@@ -1146,7 +1170,7 @@ for m in re.finditer(r'(?m)^\*\*(R\d+) — .*?(?=\n\n\*\*R\d+ — |\n# |\*\*What
         'named_at': [{'line': line_of(mm.start()),
                       'context': re.sub(r'\s+', ' ', pkt[max(0, mm.start() - 60):mm.end() + 40])}
                      for mm in re.finditer(r'\b%s\b' % m.group(1), pkt)
-                     if not pkt[mm.start() - 2:mm.start()] == '**'][:12],
+                     if not pkt[mm.start() - 2:mm.start()] == '**'],
         # from the HEADING only. Deriving from the whole block made R9 claim items [26, 31]
         # because its body MENTIONS item 31 — a mention became an ownership claim, and a
         # planner reading the manifest would have seen item 31 owned by two rulings.
