@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '0715a9d197e9ffbd1f9239b91415f82f5171baa9'
+PREV_TIP     = '716c72b18c60690f01c3018439949780f0959cca'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -311,7 +311,7 @@ CONTROLS = {
  # INSERTION controls now: no gate declares its population dead at this SHA, so there is nothing to
  # delete. Each adds the declaration to ONE side and requires the asymmetry to be caught — which
  # tests the same rule from the opposite direction and cannot go dead when the packet is healthy.
- 'drop-item-block':  ('27. **G2-A** — ⟦PRODUCT⟧ ⟦BLOCKED-ON: 29⟧ **BLOCKING,', '27. **G2-A** — ⟦PRODUCT⟧ ⟦BLOCKED-ON: 29⟧ **BLOCKING. AUTHORING RETRACTED.', 1,
+ 'drop-item-block':  ('27. **G2-A** — ⟦PRODUCT⟧ **BLOCKING,', '27. **G2-A** — ⟦PRODUCT⟧ **BLOCKING. AUTHORING RETRACTED.', 1,
                       'PLANNING-BLOCK-ASYMMETRIC'),
  # re-anchored onto G2-A: G4's retraction was LIFTED when its population was completed, and a
  # control anchored on retired text is a control that cannot land — the failure mode that let
@@ -403,10 +403,15 @@ CONTROLS = {
  # the digit-SUFFIX variant, which the last-character allow-list could not see
  # codex-worker-2's remaining classes, one control each so none can regress silently
  'marker-nonblocker': ('1. **G0-B** — ', '1. **G0-B** — ⟦BLOCKED-ON: 999⟧ ', 1, 'BLOCKER-KIND'),
- 'edge-cycle':       ('29. **G2-A** — ⟦PRODUCT⟧ ', '29. **G2-A** — ⟦PRODUCT⟧ ⟦BLOCKED-ON: 27⟧ ', 1,
-                      'BLOCKER-KIND'),
+ # item 27's edge to 29 was WRONG and is removed, so no BLOCKED-ON edge exists at this SHA. The
+ # control inserts one pointing at a NON-BLOCKING item, which the target check rejects — the cycle
+ # and duplicate logic still runs on every emitted edge and has no edge to run on today.
+ 'edge-bad-target':  ('27. **G2-A** — ⟦PRODUCT⟧ ',
+                      '27. **G2-A** — ⟦PRODUCT⟧ ⟦BLOCKED-ON: 1⟧ ', 1, 'BLOCKER-KIND'),
  'gate-bad-suffix':  ('**Dependencies** G0-A, G0-B', '**Dependencies** G0-A, G0-B_x', 1,
                       'GATE-DEP-UNKNOWN'),
+ # a bare number posing as a prior citation — the grammar was written from a citation's TAIL
+ 'writer-bare-num':  ('juce:989/994', '1234 :989/994', 1, 'OUT-MEMBERS'),
  'writer-num-suffix': ('juce:989/994', 'fake9 :989/994', 1, 'OUT-MEMBERS'),
  'writer-num-prefix': ('juce:989/994', '9/ :989/994', 1, 'OUT-MEMBERS'),
  'writer-in-comment': ('juce:989/994', '<!--juce:989/994-->', 1, 'OUT-MEMBERS'),
@@ -746,7 +751,10 @@ else:
     # through — a heuristic about a boundary rather than a grammar for one, which is the same error
     # as every anchor this field has already taught me. The preceding token must BE a separator or
     # BE a citation, matched in full.
-    _SEP_OR_CITE = re.compile(r'[·,]|(?:[A-Za-z_]\w*:)?\d{3,4}(?:[-/]\d{3,4})?[,·]?')
+    # A CITATION ALWAYS CARRIES ITS COLON. Allowing a bare `\d{3,4}` as a prior citation let
+    # `1234 :989/994` through — I had written the grammar from what a citation's TAIL looks like
+    # rather than from the two documented forms, `juce:NNN` and `:NNN`. A number on its own is prose.
+    _SEP_OR_CITE = re.compile(r'[·,]|(?:[A-Za-z_]\w*)?:\d{3,4}(?:[-/]\d{3,4})?[,·]?')
     for _w in re.finditer(r'(\S+)\s+:\d{3,4}', wseg.group(0)):
         _prev = _w.group(1)
         if not _SEP_OR_CITE.fullmatch(_prev):
