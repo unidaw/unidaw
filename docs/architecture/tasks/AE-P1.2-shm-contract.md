@@ -44,9 +44,11 @@ The blockers from the exact review are reconciled here, and the count is deliber
    **The derivation is only as good as the marking, and the marking is mine** — this check can catch
    a marker missing from a blocker, and cannot catch a blocker marked wrongly; item 27 was marked
    ⟦PRODUCT⟧ for one SHA when its scope is authored and its blocker is item 29's defect. **A classification cannot be read out of prose that was not written
-   to carry it.** One blocker IS a packet edit as well as a product fix — item 37, whose acceptance
-   oracle is unwritten — and it now carries ⟦PACKET⟧ beside ⟦PRODUCT⟧ so the manifest can say so;
-   until `kind` became an array that fact was unrepresentable and the record said PRODUCT. That list is derived from the items themselves and every
+   to carry it.** TWO blockers are packet edits as well as product fixes — item 37, whose
+   acceptance oracle is unwritten, and item 36, whose Layer 0, PASS 1 and register text all need
+   rewriting alongside the telemetry it waits on. Both carry ⟦PACKET⟧ beside ⟦PRODUCT⟧ so the
+   manifest can say so; until `kind` became an array that fact was unrepresentable and the record
+   said PRODUCT. An earlier version of this sentence named only item 37. That list is derived from the items themselves and every
    restatement of it anywhere in this document is compared against the derivation
    (`BLOCKER-SET-RESTATED`) — this paragraph carried (18, 19, 23, 24, 29) for several SHAs, three
    members wrong on the packet's first screen, because the check knew about the open-items header
@@ -1006,10 +1008,13 @@ the packet must not carry into a verdict. Layer 1 decides the rule with no proce
 predecessor's open list dropped.
 
 **PASS conditions.**
-1. Layer 0 decided the experiment, not the engine's lifespan. **THIS BULLET NO LONGER DEPENDS ON
-   M1**, which R15 rules is diagnostic rather than acceptance evidence and which cannot be built from
-   today's telemetry; a PASS condition resting on it would make the gate undecidable by construction.
-   What Layer 0 asserts is settled statically in R15. *REFUTED BY* any Layer-0 verdict that reads a
+1. Layer 0 decided the experiment, not the engine's lifespan. **THIS BULLET DEPENDS ON AN M1 THAT
+   DOES NOT YET EXIST**, and an earlier version said the opposite on the strength of a static
+   settlement R15 has since retracted: a real drop path
+   (`apps/engine_produce_block.cpp:1096-1100`) means nothing static separates "gated and stayed
+   gated" from "gated, dispatched, send failed, host dropped". This bullet is therefore NOT
+   satisfiable until the telemetry M1 needs is built — which is what item 36 blocks on, and is
+   PACKET work here as well as product work. *REFUTED BY* any Layer-0 verdict that reads a
    duration or an engine lifetime instead of the experiment's own outcome — and specifically NOT by
    `kill -0`, which R15 retracts as an instrument here: it answers identically for a stopped and a
    running process, so it never established the state this bullet is about.
@@ -1044,10 +1049,11 @@ guarded by the eviction transition. The `hostReady` write-form ratchet, 21 total
 **Review register.** The reviewer SHALL obtain an owner ruling for N and record its derivation:
 nothing in the tree sources one, all three production `Watchdog`s using `hardTimeoutBlocks = 500`.
 The reviewer SHALL rule on which of two contradictory statements is stale, and record the ruling
-next to BOTH — `tools/host_stall_check.sh:16-19` and the producer comment. **R15 DISCHARGES THIS**,
-and without M1: the mechanism claim is decidable at the pin and the check is the stale side. What
-this sentence originally deferred to M1 no longer waits on it, and what remains — which false-green
-channel operates in a given run — needs telemetry that does not exist, per item 36. The reviewer
+next to BOTH — `tools/host_stall_check.sh:16-19` and the producer comment. **R15 DOES NOT DISCHARGE THIS**, and an
+earlier version of this sentence said it did. R15 defines M1 and rules on the register's framing, but
+its central claim — that the mechanism was decidable at the pin and the check was the stale side — is
+RETRACTED: a real drop path exists at `apps/engine_produce_block.cpp:1096-1100`. The demand stands,
+and it now waits on telemetry that does not exist, per item 36. The reviewer
 SHALL confirm that evicting a host which still owes dispatched blocks cannot corrupt what a RESUMED
 host reads or publishes. **R16 DISCHARGES THIS ONLY FOR THE PRODUCER-VECTOR READING**, which PASS 7
 forbids anyway: under `hostReady = false` the producer, the input/output write and the mixer all
@@ -1403,7 +1409,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `0ef9d9a01193454794b4e58f6b34852358791299`, A.0 SCRIPT BLOB `3163833fba3cd930cb8927726c6f8d541868e7f9`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `2d10341ef57cb28ad62d7605f59b7a73321eff71`, A.0 SCRIPT BLOB `66288d8d3edc8a621a6ebcf756c87b88510ec8b6`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1871,9 +1877,9 @@ patcher path a distinct transfer type that is not claimed to be the same ABI. A 
 alone does NOT satisfy this — it would leave 7 members against 6 and the invariant unmet, which is
 the trap codex-worker-1 named.
 
-**R15 — item 36 (G3): G3's M1 IS DEFINED HERE, AND ON THE CONTRADICTION THE REGISTER NAMES THE
-CHECK IS THE STALE SIDE — on its mechanism claim, which is decidable at the pin. What survives is a
-sharper question than the register asked.** G3's Deterministic-test block names Layer 0, Layer 1 and
+**R15 — item 36 (G3): G3's M1 IS DEFINED HERE, AND ITS CENTRAL CLAIM IS RETRACTED — the check is
+NOT the stale side, the mechanism is NOT statically decidable, and M1 or an equivalent measurement
+IS owed.** G3's Deterministic-test block names Layer 0, Layer 1 and
 Layer 2 and never defines an M1; PASS 1 and the register then both refer to one, borrowing G0-B's
 M-label convention (`:335`) across a gate boundary that does not carry it. **M1 is hereby Layer 0's
 mechanism**: run `tools/host_stall_check.sh` against the pinned tree with `DAW_ENGINE_DEBUG_STALL`
@@ -1994,11 +2000,12 @@ Readings 4 and 5 are two independent channels by which the check returns 0 WITHO
 the producer is gated, and neither needs a bypass in the engine. **They show the check is
 non-discriminating, not that the gate is held forever** — an earlier draft said "gated forever",
 which claims a perpetual population membership nothing here establishes and which R15's own
-try_lock/mailbox paragraph contradicts. **That dissolves the contradiction rather
-than deferring it**: `apps/engine_rt_helpers.h:232-234` is consistent with the implementation, the
-check's mechanism comment names nothing, and the check's green is explainable without any of it
-being true. What remains unobserved is which channel actually operates in a given run — a debugging
-question, not an acceptance one.
+try_lock/mailbox paragraph contradicts. **They do NOT dissolve the contradiction, and an earlier
+version of this paragraph said they did.** They establish that the check cannot tell its own answer
+apart from a false green — which is a defect in the check — while leaving the register's question
+open, because the drop path the check's comment names is real. Which mechanism actually operates in a
+given run is therefore an ACCEPTANCE question for this gate, not a debugging one, and it needs a
+measurement nothing currently emits.
 
 **Recorded next to both, as the register requires.** The two addresses are
 `tools/host_stall_check.sh:16-19`, with `:101-104` carrying the mechanism claim that fails, and
@@ -2139,7 +2146,7 @@ describes, and that question is not visible in the sentence that uses it. Item 2
 whole content was a packet decision and there is nothing left for an implementer to choose between.
 
 **What these rulings do NOT do.** None of them closes an item that names PRODUCT work — R1 through
-R17 make such items implementable, R13 and R16 are RETRACTED rather than applied, and each stays open until the work exists and is verified by
+R17 make such items implementable, R13 and R16 are RETRACTED rather than applied and R15's central claim is retracted within it, and each stays open until the work exists and is verified by
 someone other than me. **A ruling CAN close an item whose whole content was a packet decision**, and
 item 11 is the case: it asked for an authored population, R1 authored one, and there was nothing
 left in it. That distinction was missing and the rule read as universal, which contradicted item
@@ -2463,7 +2470,7 @@ carrying one cannot be decided by any implementation.
     **How this got missed:** the register asked the right question and I answered it by reading
     `ui/daw-bridge/src/layout.rs`, a DIFFERENT Rust endpoint that does declare `ready`, then marked
     it resolved. See the G0-B register entry, which now records the substitution.
-36. **G3** — ⟦PRODUCT⟧ **BLOCKING. `tools/host_stall_check.sh` asserts a producer behaviour the
+36. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING. `tools/host_stall_check.sh` asserts a producer behaviour the
     shipped back-pressure rule contradicts, so one of the two is wrong in PRODUCT.** The check's pass
     predicate (`:105-109`: at most three post-marker `producer stall (inFlight)` lines) PASSES only
     when few such lines are logged, which the check reads as a SIGSTOPped host having stopped holding
@@ -2479,8 +2486,9 @@ carrying one cannot be decided by any implementation.
     can, on a later dispatch (`apps/engine_produce_block.cpp:1072-1108`). R15 narrows the stronger claim this item used to
     carry: the state is NOT statically absorbing, because `:232-233` and `:236-237` skip a host
     on a failed try_lock or an absent mailbox, so the counted population varies between
-    iterations. No liveness
-    drop exists to appeal to. **R15 settles the mechanism claim against the check.** What makes this
+    iterations. No LIVENESS drop exists, but a
+    failed-send drop does (`apps/engine_produce_block.cpp:1096-1100`), so the check's comment is not
+    a fiction and R15's mechanism ruling against it is RETRACTED. **R15 settles the mechanism claim against the check.** What makes this
     PRODUCT work is that the check has at least two identified ways to report zero stalls while the
     producer's gate is never observed, both found by codex-worker-1 and both decidable at the pin: its
     `froze-host-marker` is appended through a second file description and can be overwritten by the
@@ -2489,8 +2497,8 @@ carrying one cannot be decided by any implementation.
     `:289` sits outside it, so a producer that never started playing — `cli do play … || true` at
     `:77` discards the failure — stays gated and silent. **A check counting log lines cannot see a
     gate that does not log.** Fixing the check means making its oracle the gate rather than the
-    logging of the gate; fixing the comment at `:101-104` means deleting a mechanism that does not
-    exist. Both are PRODUCT edits. M1 or an equivalent measurement IS owed — R15 gives the
+    logging of the gate; fixing the comment at `:101-104` means describing the mechanism that DOES
+    exist — a failed-send drop, not the unconditional drop it implies. Both are PRODUCT edits. M1 or an equivalent measurement IS owed — R15 gives the
     single status, and retracts the static settlement that had made it dispensable, because a real
     drop path exists at `apps/engine_produce_block.cpp:1096-1100` and nothing static separates
     "gated and stayed gated" from "gated, dispatched, send failed, host dropped". It cannot be built

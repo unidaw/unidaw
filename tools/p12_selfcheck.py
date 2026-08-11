@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '0c65b542355249b7be4ad4737aac0ff188fbd953'
+PREV_TIP     = 'b6a9e227dc10f215c11add6906c17df8a4e05653'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -1864,9 +1864,12 @@ man = {
             # and `active_open` could fall below the truth. And the test is anchored, not a bare
             # substring — `WITHDRAWN` must open a bolded state clause, so a head that merely
             # discusses withdrawal does not become withdrawn.
-            # A SET COUNT, not arithmetic. `items - closed - withdrawn` double-subtracts an item
-            # that is both, and a probe marking item 21 closed AND withdrawn drove it to 26 while
-            # the true active work was 27. States overlap; subtraction assumes they do not.
+            # A SET COUNT rather than arithmetic. THE CLAIMED DEFECT WAS NOT ONE: the previous
+            # form already excluded closed items from the withdrawn subtraction, so it was
+            # algebraically identical and no input could separate them. I reported a fix and wrote
+            # false history about a number that never moved; codex-worker-1 checked the algebra.
+            # The set form stays because it states the intent directly, not because it changed a
+            # count — recorded here so the next reader does not trust the story.
             'active_open': len([n for n in nums if n not in closed_set
                                 and not re.match(r'\*\*WITHDRAWN\b',
                                                  _ITEM_HEAD_U.get(n, '').lstrip())]),
@@ -2095,21 +2098,28 @@ def _sweep_patterns(name, tag):
     grammar; the comment beneath them records only WHY each narrowing exists.
     """
     nm, tg = re.escape(name), re.escape(tag)
-    # THE GRAMMAR IS DESCRIBED ONLY BY THE PATTERNS BELOW, deliberately: an earlier version of this
-    # docstring spelled out the digit class and the tag form, and drifted from the code within one
-    # commit. A comment restating a regex is a copy that cannot be checked.
+    # WHY EACH NARROWING EXISTS, in the order reviewers found them wider than the emitter:
+    # a prefix test where an exact match was claimed; an expected string built from the line under
+    # test; `\d` matching every Unicode decimal against an ASCII `str(len(...))`; counts of 0 or
+    # `01` that `len()` of a non-empty list cannot produce; an empty or bracket-less detail when
+    # every `fail` entry `bad()` builds is `[TAG] message`.
     #
-    # What the patterns encode, and why each was narrowed after a reviewer found it wider than the
-    # emitter: ASCII-only digits, because Python's `\d` matches every Unicode decimal while the
-    # emitter prints `str(len(...))`; counts starting at 1, because both lines print `len()` of a
-    # list already tested non-empty; a consequential detail that starts with `[` and runs at most 60
-    # characters, because it is `other[0][:60]` and every `fail` entry `bad()` builds begins with
-    # `[TAG] `; and a tag line that must carry a non-space after the separator.
-    return (re.compile(rf'^CONTROL {nm} OK'
-                       rf'(?: — \[{tg}\] fired \([1-9][0-9]*\)|'
-                       rf' \(\+[1-9][0-9]* consequential: (?=[^\n]{{1,60}}\))'
-                       rf'\[[A-Z][A-Z0-9-]*\] [^\n]+\))$'),
-            re.compile(rf'^ {{2}}\[{tg}\] \S'))
+    # THE LENGTH BOUND IS ARITHMETIC AND LIVES IN CODE. Expressing "at most 60 characters" as a
+    # lookahead let the lookahead stop at an EARLY ')' while the consuming tail ran on to the outer
+    # one, so a 128-character detail satisfied a bound of 60. Excluding ')' instead broke two real
+    # controls whose messages contain one. A regex is the wrong instrument for counting; `len()` is
+    # the right one, and it cannot be tricked by the contents.
+    fired = re.compile(rf'^CONTROL {nm} OK — \[{tg}\] fired \([1-9][0-9]*\)$')
+    conseq = re.compile(rf'^CONTROL {nm} OK \(\+[1-9][0-9]* consequential: '
+                        rf'(\[[A-Z][A-Z0-9-]*\] [^\n]*)\)$')
+
+    def okline(ln):
+        if fired.fullmatch(ln):
+            return True
+        m = conseq.fullmatch(ln)
+        return bool(m) and len(m.group(1)) <= 60
+
+    return okline, re.compile(rf'^ {{2}}\[{tg}\] \S')
 
 if '--prove-sweep-predicate' in sys.argv:
     # A CRAFTED-LINE PROOF, committed rather than run at a prompt. codex-worker-2's standing point is
@@ -2131,6 +2141,10 @@ if '--prove-sweep-predicate' in sys.argv:
         ('CONTROL open-count OK (+2 consequential: [X])',               False, 'tag with no message'),
         ('CONTROL open-count OK (+2 consequential:    )',               False, 'whitespace-only detail'),
         ('CONTROL open-count OK (+2 consequential: [X] ' + 'y'*70 + ')', False, 'detail past the 60-char truncation'),
+        # THE LOOKAHEAD COULD STOP AT AN EARLY ')' while the consuming tail ran on to the outer
+        # one, so a 128-character detail satisfied a bound of 60. codex-worker-1 built the line.
+        # Excluding ')' from both the lookahead and the tail is what actually bounds it.
+        ('CONTROL open-count OK (+1 consequential: [X] a)' + 'y'*80 + ')', False, 'early paren beats the length bound'),
         ('CONTROL open-count OK (+1 consequential: [T] z)',             True,  'form 2, single'),
         ('CONTROL open-count OK — [WRONG-TAG] fired (1)',               False, 'wrong tag'),
         ('CONTROL open-count OK (+ suffix I made up',                   False, 'prefix-only spoof'),
@@ -2147,7 +2161,7 @@ if '--prove-sweep-predicate' in sys.argv:
             ('  [OPEN-COUNT]garbage',             False, 'tag prefix with no separator'),
             ('  [OPEN-COUNT] ',                   False, 'separator with no message'),
             ('  [OPEN-COUNTX] header',            False, 'longer tag sharing the prefix')]
-    wrong = [w for ln, want, w in CASES if bool(okline.fullmatch(ln)) != want]
+    wrong = [w for ln, want, w in CASES if bool(okline(ln)) != want]
     wrong += [w for ln, want, w in TAGS if bool(tagline.match(ln)) != want]
     print(f'sweep predicate: {len(CASES) + len(TAGS)} crafted lines, '
           + ('all classified correctly' if not wrong else f'WRONG on {wrong}'))
@@ -2188,7 +2202,7 @@ if '--sweep' in sys.argv:
         okline, tagline = _sweep_patterns(name, CONTROLS[name][3])
         lines = r.stdout.splitlines()
         ok = (r.returncode == 0
-              and any(okline.fullmatch(ln) for ln in lines)
+              and any(okline(ln) for ln in lines)
               and any(tagline.match(ln) for ln in lines))
         (fired if ok else dead).append(name)
     visited = len(fired) + len(dead)
