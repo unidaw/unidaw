@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'b154a271df2e17ecf715672c73d11c48411f0e92'
+PREV_TIP     = 'ed9d5b7bd2575c555604cd03452cbb488a1926c2'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 fail = []
@@ -508,9 +508,9 @@ for g in gate_hdr:
                   'reason_if_not_acceptance': ('blocked by items %s' % blk) if blk else None,
                   'reason_if_not_planning': 'own population withdrawn' if withdrawn_pop else None})
 rulings = []
-for m in re.finditer(r'\*\*(R[1-4]) — .*?(?=\n\n\*\*R[1-4] — |\*\*What these rulings do NOT)', pkt, re.S):
+for m in re.finditer(r'\*\*(R[1-9]) — .*?(?=\n\n\*\*R[1-9] — |\*\*What these rulings do NOT)', pkt, re.S):
     blk = m.group(0)
-    head = re.match(r'\*\*(R[1-4]) — ([^*]{0,160}?)(?:\.\*\*|\*\*)', blk)
+    head = re.match(r'\*\*(R[1-9]) — ([^*]{0,160}?)(?:\.\*\*|\*\*)', blk)
     rulings.append({
         'id': m.group(1),
         'line': line_of(m.start()),

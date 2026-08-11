@@ -1100,7 +1100,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `d3c04016fcc5a38b3f507db5edf55a7efd6bf0f4`, A.0 SCRIPT BLOB `39aabffb4e5bc57a72bbaf3afac0e66a63543287`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `18765bf7e205f27c1cc3a6424d2748a9179cb2fa`, A.0 SCRIPT BLOB `b224b9dfcd2b18c1e97ea2ad8cc64d3b59da8b9c`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1167,7 +1167,7 @@ requirement is what exposed both.
 
 # Owner rulings (claude-worker-2 as ADR/phase owner, at this SHA)
 
-Five items were carried as "the owner SHALL rule". I am that owner; carrying them further would be
+Five items were carried as "the owner SHALL rule", and two scope questions arose later. I am that owner; carrying them further would be
 deferral wearing the costume of rigour. Each ruling states what it decides, why, and what it costs,
 and each is a DECISION — none of them is evidence, and none may be cited as though a command
 produced it.
@@ -1242,6 +1242,22 @@ it, but a reader should know the generation story I gave was wrong. The conventi
 other way (`_pad0` is idiomatic Rust) and loses to that: a binding may be unidiomatic, an authority
 may not be derived from its binding. **Cost:** one unidiomatic name in the Rust file, and PASS 9
 goes from RED to decidable the moment the rename lands.
+
+**R5 — item 26 (G4): THE IN-SCOPE POPULATION IS BYTE-CONSUMING READS.** G4's invariant is about a
+consumer reading bytes another agent WROTE, so the population the gate ranges over is the sites that
+dereference the out-plane for sample data. Plane-ESTABLISHING sites (compute an address, consume
+nothing) and byte-PRODUCING writes are OUT of scope for the invariant and must still appear in the
+partition, because a partition that drops a class cannot be checked for totality — which is how my
+own attempt came to assert a sum of 27 over terms adding to 20. **Cost:** the gate does not govern
+the write side, so a producer defect is out of its reach and must be someone's elsewhere.
+
+**R6 — item 27 (G2-A): THE GATE RANGES OVER THE REFUSAL-EMITTER POPULATION.** G2-A is about command
+identity through a refusal — a UI adopting an engine refusal as the outcome of the command it sent —
+so the governed set is the emitters of an adoptable refusal, and the version-arbitrated set is a
+RELATED population it must not be confused with. Every control states which one it ranges over.
+**Cost, and it is the whole reason this ruling is needed:** the two sets differ in both directions,
+so neither can stand in for the other. A control written against "arbitrated" while claiming
+"refusable" is the error this packet published and retracted.
 
 **What these rulings do NOT do.** None of them closes its item — R1 through R4 are decisions that
 make the items IMPLEMENTABLE, and each item stays open until the work it names exists and is
