@@ -11,7 +11,7 @@ not caller-supplied, and every control asserts its mutation reached the populati
 verdict is read. An earlier version of this file took the pin as an argument with no verification,
 claimed ten RAW checks while executing seven, and never validated the RULE arithmetic at all.
 """
-import ast, hashlib, json, os, re, shlex, subprocess, sys
+import ast, hashlib, html, json, os, re, shlex, subprocess, sys
 
 PACKET_PATH  = 'docs/architecture/tasks/AE-P1.2-shm-contract.md'
 PRODUCT_SHA  = '75c6f0646417828641e43287c260bea3d38b5a6f'
@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'a1f1a383b19604067dba5334d0ea7bc5284f91e9'
+PREV_TIP     = 'bec8cbe8bca97ec78a99ff39c384049cd7af5279'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -629,6 +629,24 @@ CONTROLS = {
  # non-blocking.
  'status-parked':    ('38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING.',
                       '38. **G1-B** — scoped to G1-B. **NOT BLOCKING.', 1, 'ITEM-STATUS-MISSING'),
+ # THE SAME PARKING ONE LINE FURTHER DOWN, which the first-line scan walked past. A LINE is not a
+ # unit of this grammar; the rule is about RUNS.
+ 'status-parked-l2': ('38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING.',
+                      '38. **G1-B** — scoped to G1-B.\n    **NOT BLOCKING.', 1,
+                      'ITEM-STATUS-MISSING'),
+ # AN HTML ENTITY RENDERS TO A CHARACTER, and handling only backslash escapes left `&#95;` producing
+ # the underscore the grammar claims to reject.
+ 'status-entity':    ('38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING.',
+                      '38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING&#95;EXTRA.', 1, 'ITEM-STATUS-MISSING'),
+ # DELETING A LITERAL CHARACTER JOINS ITS NEIGHBOURS into a delimiter the document does not contain,
+ # which then cancels a real unmatched opener and leaves the parity even.
+ 'md-fabricated':    ('an item scoped `all` is a claim about every gate',
+                      'an item scoped `all` *\\_* **is a claim about every gate', 1,
+                      'ITEM-MD-UNBALANCED'),
+ # A DUPLICATE OF AN ALLOWED SECTION NAME: permitted by membership, and it truncates the one above.
+ 'section-dupe':     ('\n# Provenance of this packet',
+                      '\n# Implementation constraints (non-negotiable, backend 2026-08-10)\n\n'
+                      'orphan **text.\n\n# Provenance of this packet', 1, 'SECTION-DUPLICATE'),
  # A SHAPE CHANGE UNDER AN UNCHANGED VERSION. Reverting the schema string to the predecessor's while
  # the keys differ is exactly what 359cde8 shipped, and it is what this control reinstates.
  'schema-unstated':  ('canonical machine-readable source, at `ae-p1.2-manifest/7`',
@@ -805,6 +823,7 @@ def _unhidden(t):
 # so an allowed form was fail-open. CommonMark escapes any ASCII punctuation, and that whole class is
 # removed before counting rather than the one character the probe used.
 _ESCAPE_RE = re.compile(r'\\[!-/:-@\[-`{-~]')
+_ENTITY_RE = re.compile(r'&(?:#\d{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});')
 
 def _render(t):
     """CommonMark backslash escapes resolved: (rendered text, literal flag per character).
@@ -820,18 +839,34 @@ def _render(t):
     parity needs it ABSENT from the delimiter population (it is literal text, not a delimiter). Both
     are answered by knowing WHICH characters are escaped.
     """
+    # ENTITIES RENDER TO CHARACTERS TOO, and handling only backslashes left `&#95;` producing an
+    # underscore the parser never saw — `**NOT BLOCKING&#95;EXTRA.**` reads as the malformed status
+    # the grammar claims to reject. codex-worker-1's probe, one notation over from the last one.
+    # An entity's character is LITERAL for the same reason an escaped one is: CommonMark produces
+    # the character, not the construct it would otherwise start.
     out, lit, i = [], [], 0
     while i < len(t):
-        if t[i] == chr(92) and i + 1 < len(t) and _ESCAPE_RE.match(t[i:i + 2]):
+        ent = _ENTITY_RE.match(t, i)
+        if ent:
+            dec = html.unescape(ent.group(0))
+            out.extend(dec); lit.extend([True] * len(dec)); i = ent.end()
+        elif t[i] == chr(92) and i + 1 < len(t) and _ESCAPE_RE.match(t[i:i + 2]):
             out.append(t[i + 1]); lit.append(True); i += 2
         else:
             out.append(t[i]); lit.append(False); i += 1
     return ''.join(out), lit
 
 def _delimiters(t):
-    """The text with ESCAPED characters removed, so a literal `*` is not counted as a delimiter."""
+    """The text with literal characters BLANKED, so a literal `*` is neither a delimiter nor a join.
+
+    REMOVING them FABRICATED delimiters. `*\\_*` is one star, a literal underscore, one star — no
+    emphasis pair anywhere — and deleting the underscore butted the two stars together into a `**`
+    the document does not contain, which then cancelled a real unmatched opener elsewhere in the
+    item and left the parity even. codex-worker-1's probe. A literal character is TEXT: it separates
+    its neighbours, and blanking preserves that where deletion destroys it.
+    """
     r, lit = _render(t)
-    return ''.join(c for c, l in zip(r, lit) if not l)
+    return ''.join(' ' if l else c for c, l in zip(r, lit))
 
 unhid = _unhidden(pkt)
 
@@ -958,8 +993,8 @@ _TOKEN_RE  = re.compile(r"[A-Za-z0-9_\'-]+")
 _HEADS_RE  = re.compile(r'(?m)^(\d{1,2})\. \*\*[^*\n]+\*\* — (.*?)(?=\n\d{1,2}\. \*\*|\n# |\Z)', re.S)
 _PHRASE_RE = re.compile(r"(NOT )?BLOCKING(?![A-Za-z0-9_\'-])")
 
-def _status_runs(rest):
-    """The item's leading bold sequence, as runs of text between `**` delimiters.
+def _status_runs(rest, leading=True):
+    """Bold runs: the leading sequence by default, or EVERY run in the item when leading=False.
 
     AN UNCLOSED RUN IS READ TO THE END, not dropped. Dropping it was a fail-open I wrote into the
     repair and then leaned on: with no closing delimiter the region came back EMPTY, so the item had
@@ -970,7 +1005,9 @@ def _status_runs(rest):
     """
     i, runs = 0, []
     while True:
-        m = re.match(r'(?:\s|⟦[^⟧]*⟧)*\*\*', rest[i:])
+        m = (re.match(r'(?:\s|⟦[^⟧]*⟧)*\*\*', rest[i:]) if leading
+             else re.compile(r'\*\*').search(rest, i) and
+                  re.match(r'.*?\*\*', rest[i:], re.S))
         if not m:
             break
         j = i + m.end()
@@ -1018,14 +1055,19 @@ for _m in _HEADS_RE.finditer(body_vis):
     # A STATUS PARKED AFTER PROSE IS AN ABSENCE THE REGION CANNOT SEE. `_status_runs` stops at the
     # first thing that is not whitespace or a marker, so `— some prose **NOT BLOCKING...**` yields an
     # EMPTY region: no tokens, no status, and `.get(n, False)` answering "not blocking" — absence
-    # read as a value, for the third time in this parser and in a third disguise. codex-worker-1's
-    # probe. The headline's FIRST LINE is scanned outside the region as well; item 27's second
-    # `BLOCKING`, which is prose deep in its body, is not on that line and stays prose.
-    _line1 = _render(_m.group(2).split('\n', 1)[0])[0]
-    _outside = [t for t in _TOKEN_RE.findall(_line1) if t.startswith('BLOCKING')]
-    if len(_outside) > len(_toks) and _n2 not in closed_set:
-        bad('ITEM-STATUS-MISSING', f'item {_n2} names the status word on its headline but outside '
-                                   f'the leading bold sequence, where no status can be declared')
+    # read as a value, for the third time in this parser and in a third disguise.
+    #
+    # MY FIRST REPAIR SCANNED THE FIRST LINE, so the same status one line further down walked past
+    # it — codex-worker-1 moved the prose to line 1 and the run to line 2 and it clean-passed. A LINE
+    # is not a unit of this grammar and never was; that is the lesson the head extent already taught
+    # once. The rule is about RUNS: **only the first bold run may OPEN with a status phrase.** Item
+    # 27's `**This item stays BLOCKING for the PRODUCT defect...**` is a later run that does not open
+    # with one, so prose stays prose, and a parked declaration has nowhere to be.
+    for _ri, _run in enumerate(_status_runs(_render(_m.group(2))[0], leading=False)):
+        if _PHRASE_RE.match(_run.lstrip()) and not (_ri == 0 and _runs):
+            bad('ITEM-STATUS-MISSING', f'item {_n2} opens a bold run with a status phrase that is '
+                                       f'not the first run of its leading sequence; only that run '
+                                       f'declares a status')
 
 # AN ITEM'S STATE, WHEREVER IT IS ASSERTED, MUST AGREE WITH THE ITEM. `RULING-ITEM-STATE` forbids a
 # SHAPE, and codex-worker-1 walked out of it three times in one pass — an adverb between the verb and
@@ -2310,12 +2352,21 @@ _SECTIONS = ('AE-P1.2 — SHM contract phase packet',
              'Owner rulings (claude-worker-2 as ADR/phase owner, at this SHA)',
              "Provenance of this packet's own numbers")
 _SECTION_PAT = re.compile(r'Open items — \d+ atomic, \d+ CLOSED at this SHA, \d+ open')
+_seen_headings = []
 for _m2 in re.finditer(r'(?m)^# (.*)$', _visible(pkt)):
     _h = _m2.group(1).strip()
+    _seen_headings.append(_h)
     if re.fullmatch(GATE_ID + r' — .+', _h) or _SECTION_PAT.fullmatch(_h) or _h in _SECTIONS:
         continue
     bad('SECTION-UNKNOWN', f'top-level heading {_h[:48]!r} is neither a gate nor a named structural '
                            f'section; an invented section truncates the one above it')
+# MEMBERSHIP IS NOT UNIQUENESS. Exact-matching the names closed the prefix hole and left a DUPLICATE
+# of an allowed name passing — a second `# Implementation constraints (...)` truncates the section
+# above it and carries orphan text, and every name in it is permitted. codex-worker-1's probe, one
+# property along from the one I had just repaired. A section appears once because it IS a section.
+for _h in sorted({h for h in _seen_headings if _seen_headings.count(h) > 1}):
+    bad('SECTION-DUPLICATE', f'top-level heading {_h[:48]!r} appears {_seen_headings.count(_h)} '
+                             f'times; a duplicate ends the section above it and is allowed by name')
 
 body_off = pkt.find(body)
 gate_hdr = [{'gate': m.group(1), 'line': line_of(m.start()),

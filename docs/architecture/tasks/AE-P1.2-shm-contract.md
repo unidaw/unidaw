@@ -637,9 +637,12 @@ intersection the failure model names — daw-agent "reads the region before wait
 unguarded on top. The other two unguarded readers are reported with it rather than dropped, because
 handing over only the member that fits the story is how a population becomes an argument.
 
-**Drift detectors:** the `Request*` enum census returns 7 and
-`grep -c 'pub fn read_' ui/daw-bridge/src/control.rs` returns 21; either changing invalidates this
-authored list until re-authored.
+**Drift detectors, SPECIFIED here and not yet IMPLEMENTED as a static check:** the `Request*` enum
+census returns 7 and `grep -c 'pub fn read_' ui/daw-bridge/src/control.rs` returns 21; either
+changing invalidates this authored list until re-authored. **One word was doing two jobs** — a
+detector's command and figure, which are stated, and a runnable check that asserts them, which is
+item 33 (G1-B)'s — so R1 read as "the detectors exist" against S4's "they are not written" and both
+were true of different things. backend and codex-worker-1 both filed the contradiction.
 
 **Item 23 (all) is RESOLVED BY THIS RULE, not by it excluding the question:** `read_clip_window` IS a
 request/answer reader — `RequestClipWindow` is command 30 — and the exact review's classification was
@@ -728,7 +731,8 @@ the stale answer readable as complete. S3 minting expressions, naming the two co
 **RESTORED — the population it waited for exists.** It required drift detectors asserting "the
 three counts", which were counts over the hand-selected six the packet withdrew; a drift detector
 over a withdrawn population detects drift in nothing. R1 authored the replacement and item 11 (G1-B)
-is CLOSED, so the detectors now have a set to pin. **They are not written yet**, which makes this an
+is CLOSED, so the detectors now have a set to pin. **Their commands and figures are SPECIFIED in
+G1-B's population; what is not written is a runnable check asserting them**, which makes this an
 open test rather than a withdrawn one — the distinction the whole gate turns on. The requirement it
 encodes — that the authored population must have detectors pinning its size — is
 carried by open item 33 (G1-B) rather than left as an unrooted static check here. This paragraph
@@ -1482,7 +1486,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `7a07b3494c7a5918d174b2263563ed22461b8e79`, A.0 SCRIPT BLOB `160f660169454d0c1a2b0545932647568b994f85`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `cf1f71b0d60ee338f0365d23ce32ce0781064896`, A.0 SCRIPT BLOB `b82682caf8d88002f0c51f59315495e3b552e83b`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1655,7 +1659,20 @@ covers every byte between one item and the next by construction. Its control rep
 is the only reason it was written. A check nothing can trigger is worse than no check, because it
 reads as coverage. The rule is at the boundary instead: a top-level heading is a GATE or one of the
 document's named structural sections, and there is no third kind — a rule rather than a pinned
-sequence, so it needs no edit when a gate is added and an invented heading has nowhere to be.
+sequence, so it needs no edit when a gate is added and an invented heading has nowhere to be. **AND MEMBERSHIP
+IS NOT UNIQUENESS**: exact-matching the names closed the prefix hole and left a DUPLICATE of an
+allowed name passing, which truncates the section above it while every word in it is permitted —
+one property along from the one just repaired, found the same day. A section appears once because
+it IS a section.
+
+**A LITERAL CHARACTER SEPARATES ITS NEIGHBOURS, and deleting it FABRICATED a delimiter.** `*\_*` is
+one star, a literal underscore and one star — no emphasis pair anywhere — and removing the
+underscore butted the stars together into a `**` the document does not contain, which then cancelled
+a REAL unmatched opener elsewhere in the item and left the parity even. Literal characters are
+blanked now, not dropped. **And an HTML ENTITY renders to a character too**: `&#95;` produced the
+underscore in `**NOT BLOCKING&#95;EXTRA.**` that the status grammar claims to reject, one notation
+along from the backslash escape it was written for. Entities resolve through the same helper and
+their characters are literal for the same reason.
 **AND IT MATCHED BY PREFIX, so the final section's heading with one extra word appended passed as
 the section it truncates**, carrying orphan text with an unclosed emphasis run that nothing ranged
 over and no MANIFEST-STALE to show for it. **The heading is not quoted here, and that is a rule
@@ -1718,7 +1735,7 @@ only ADDS one is a no-op and reports BLIND correctly — a repaired opt-out prod
 tag — and it therefore adds the span AND breaks the real status, so the old scan reads the span as
 the status while the new parse names the malformed reach.
 
-**Controls.** One hundred fifty-five, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** One hundred fifty-nine, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1739,7 +1756,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `unclassified-kinded`, `unclassified-said`, `opening-gates-gone`, `planning-unknown-gone`, `status-slash`, `status-wrapped`, `status-after-ok`, `item-md-escape`, `section-orphan`, `schema-unstated`, `ruling-state-adverb`, `ruling-state-cited`, `item-state-stale`, `owner-choice-said`, `owner-choice-gone`, `section-prefix`, `status-escaped`, `status-parked`, `restate-total`, `restate-open`, `choice-compound`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `unclassified-kinded`, `unclassified-said`, `opening-gates-gone`, `planning-unknown-gone`, `status-slash`, `status-wrapped`, `status-after-ok`, `item-md-escape`, `section-orphan`, `schema-unstated`, `ruling-state-adverb`, `ruling-state-cited`, `item-state-stale`, `owner-choice-said`, `owner-choice-gone`, `section-prefix`, `status-escaped`, `status-parked`, `restate-total`, `restate-open`, `choice-compound`, `status-parked-l2`, `status-entity`, `md-fabricated`, `section-dupe`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
@@ -1781,9 +1798,11 @@ said NOT AT ALL for several SHAs after the population landed; I corrected it to 
 half was missing, and that was wrong too — G1-B publishes both, the seven-member roster enumerated
 from the `Request*` enum and the two drift detectors beside it. **I wrote that correction after
 grepping a line range that stopped short of the detectors**, which is the same mistake as the
-original, one range further on. What genuinely remains is item 25 (all): its six hand-classified
-populations carry counts, not member lists, and deriving them needs a predicate nobody has proposed.
-codex-worker-1 found both wrong versions of this clause. The reviewer found
+original, one range further on. What genuinely remains is item 25 (all), whose six
+hand-classified populations carry counts rather than member lists and need a predicate nobody has
+proposed — and, for G1-B, the RUNNABLE CHECK asserting the specified detectors, which is item 33
+(G1-B)'s and not this ruling's. codex-worker-1 found both wrong versions of this clause, and backend
+found the third thing it conflated. The reviewer found
 this by reading R1 against the gates rather than against itself, which is the right test and one I
 did not run: I wrote "the packet lists the members explicitly" in the same commit in which it did
 not. **Cost:** a reviewer must read the lists, not re-run a command; the detector bounds staleness,
