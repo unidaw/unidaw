@@ -44,11 +44,17 @@
 #   STRUCTURE — it ends at the first line that is not an attribute, a comment, or blank — so that
 #   is what the parser below walks. A doc comment of any length is now free.
 #
-# WHAT IS STILL NOT PROVEN: same! compares size and alignment, not field offsets, so two structs
-# with the same total size and permuted fields would pass it. bindgen's layout_tests do check
-# offsets, but only on the generated side. Both field lists are in fact derivable — the mirror's
-# from this source, the twin's from the bindings — so this is closable without a third list; it is
-# a separate ticket and until it lands, reordering is uncovered.
+# FIELD ORDER USED TO BE THE STANDING GAP AND IS NOT ANY MORE. same! compares size and alignment,
+# so two structs with the same total and permuted fields passed it. That is closed by the third
+# section below, which reconstructs each mirror's offsets from its Rust types and compares them to
+# the offsets bindgen asserts for the twin — no field list is named anywhere, both sides are
+# derived. The note that used to sit here said closing it "would mean naming every field in a third
+# place, which is another list to forget"; that premise was simply wrong, and a limitation notice
+# nobody re-tests outlives the limitation.
+#
+# WHAT IS STILL NOT PROVEN: two fields of the SAME WIDTH swapped. Their offsets are identical, so
+# no layout check can see it — it is a semantic swap, and only comparing names would catch it.
+# Names are deliberately not compared; see the third section for why that trade was taken.
 #
 #   tools/contract_layout_check.sh              the check
 #   tools/contract_layout_check.sh --selftest   its three negative controls
@@ -106,7 +112,12 @@ def repr_c_structs(text):
         if item:
             kind, name = item.group(1), item.group(2)
             if kind == 'struct' and (any(REPR_C.match(a) for a in pending) or 'repr(C' in line):
-                structs.setdefault(name, n)
+                forced = None                      # #[repr(C, align(64))] raises the struct's own
+                for a in pending + [line]:         # alignment above its widest member
+                    g = re.search(r'align\((\d+)\)', a)
+                    if g:
+                        forced = int(g.group(1))
+                structs.setdefault(name, (n, forced))
             pending = []
             continue
         if ATTR.match(line):
@@ -165,7 +176,7 @@ if orphans:
 if missing:
     print()
     for n in missing:
-        print("  %s (layout.rs:%d) has a generated twin and no same! line" % (n, hand[n]))
+        print("  %s (layout.rs:%d) has a generated twin and no same! line" % (n, hand[n][0]))
     print()
     print("        These structs are read from or written to shared memory with NOTHING checking")
     print("        that the Rust and C++ layouts agree. Add to bindgen_matches_hand_written in")
@@ -262,6 +273,136 @@ if bad:
     raise SystemExit(1)
 print("  patcher EventEntry: 6 offsets and a %d-byte payload extent agree with the C++"
       % pr_const['EVENT_PAYLOAD_BYTES'])
+
+# ---------------------------------------------------------------------------------------------
+# FIELD ORDER, WHICH SIZE AND ALIGNMENT CANNOT SEE.
+#
+# same! proves a mirror is as big as its twin and no more. Permute two fields of different widths
+# and the total is unchanged, so it passes while every offset after the swap has moved — the
+# reader then returns a pitch of 24576 and nothing faults.
+#
+# THE OBVIOUS FIX IS THE WRONG ONE. Comparing field NAMES in order needs the two spellings
+# reconciled, and they genuinely differ: `type` is a Rust keyword, so the mirrors call it
+# `event_type` and `node_type` while the C++ calls it `type`. No normalisation bridges those
+# without a hand-written rename map — the decaying list this whole file exists to abolish.
+#
+# So NAMES ARE NEVER READ. Each field's size and alignment follow from its Rust type, the C layout
+# rule turns those into offsets, and bindgen already asserts the C++ offset of every field. Two
+# offset sequences, no vocabulary in between. A rename is invisible to it, which is correct: a
+# rename does not move a byte.
+#
+# WHAT IT DOES NOT CATCH, so nobody has to re-derive it: two fields of the SAME width swapped.
+# Their offsets are identical, so this is not a layout divergence at all — it is a semantic swap,
+# and only a name comparison would find it. That trade is deliberate.
+#
+# AND UNCOMPUTABLE IS A REFUSAL, NOT A SKIP. If a field type cannot be sized, the honest report is
+# that this check no longer covers that struct. Skipping it would shrink the population silently
+# and still print PASS, which is the exact failure the parser above was rewritten to end.
+PRIM = {'u8': (1, 1), 'i8': (1, 1), 'u16': (2, 2), 'i16': (2, 2), 'u32': (4, 4), 'i32': (4, 4),
+        'f32': (4, 4), 'u64': (8, 8), 'i64': (8, 8), 'f64': (8, 8),
+        'AtomicU32': (4, 4), 'AtomicU64': (8, 8)}
+
+sources = {}
+for f in ("ui/daw-bridge/src/layout.rs", "ui/daw-bridge/src/control.rs"):
+    p = os.path.join(src, f)
+    if os.path.exists(p):
+        sources[f] = open(p).read()
+all_src = "\n".join(sources.values())
+
+# Array lengths are ABI: halve K_UI_MAX_PATCHER_NODES and the region changes shape.
+CONST = {m: int(v) for m, v in
+         re.findall(r'pub const ([A-Z_0-9]+):\s*[a-z0-9]+\s*=\s*(\d+);', all_src)}
+
+def fields_of(name):
+    m = re.search(r'pub struct %s \{(.*?)\n\}' % re.escape(name), all_src, re.S)
+    if not m:
+        return None
+    return [(f, t.strip()) for f, t in
+            re.findall(r'(?m)^\s*pub (\w+):\s*([^,\n]+),', m.group(1))]
+
+def size_align(t, seen):
+    """(size, alignment) of a Rust type, or a string saying why it could not be determined."""
+    t = t.strip()
+    if t in PRIM:
+        return PRIM[t]
+    arr = re.match(r'\[(.+);\s*(.+)\]$', t)
+    if arr:
+        count = arr.group(2).strip()
+        n = int(count) if count.isdigit() else CONST.get(count)
+        if n is None:
+            return "array length %s is not an integer constant in these sources" % count
+        elem = size_align(arr.group(1), seen)
+        if isinstance(elem, str):
+            return elem
+        return (elem[0] * n, elem[1])
+    if t in hand and t not in seen:
+        inner = layout_of(t, seen + (t,))
+        if isinstance(inner, str):
+            return inner
+        return (inner[1], inner[2])
+    return "no size is known for the type %s" % t
+
+def layout_of(name, seen=()):
+    """(offsets, size, alignment) laid out by the C rule, or a string saying what stopped it."""
+    flds = fields_of(name)
+    if flds is None:
+        return "its definition could not be read"
+    off, widest, offsets = 0, 1, []
+    for f, t in flds:
+        sa = size_align(t, seen)
+        if isinstance(sa, str):
+            return "field %s: %s" % (f, sa)
+        size_, align_ = sa
+        off = (off + align_ - 1) // align_ * align_
+        offsets.append(off)
+        off += size_
+        widest = max(widest, align_)
+    forced = hand.get(name, (0, None))[1]
+    if forced:
+        widest = max(widest, forced)
+    return offsets, (off + widest - 1) // widest * widest, widest
+
+drift, blocked, fields_compared = [], [], 0
+for n in sorted(mirrored):
+    cpp_off, cpp_size = bindgen_layout(n)
+    if not cpp_off or cpp_size is None:
+        continue                       # no per-field assertions to compare against
+    got = layout_of(n)
+    if isinstance(got, str):
+        blocked.append("%s: %s" % (n, got))
+        continue
+    offsets, total, _ = got
+    # bindgen materialises tail/interior padding as a field; repr(C) inserts it implicitly, so it
+    # is not a member on this side. The name is bindgen's own convention, not a judgement call.
+    want = sorted(v for k, v in cpp_off.items() if not k.startswith('__bindgen_padding'))
+    fields_compared += len(offsets)
+    if sorted(offsets) != want or total != cpp_size:
+        drift.append("%s: this mirror lays fields at %s (size %d); the C++ puts them at %s "
+                     "(size %d)" % (n, sorted(offsets)[:9], total, want[:9], cpp_size))
+
+if blocked:
+    print()
+    print("  FAIL: %d mirror(s) can no longer be laid out, so this check does not cover them:"
+          % len(blocked))
+    for b in blocked[:8]:
+        print("        %s" % b)
+    print()
+    print("        Teach size_align about the type — and add a control for it. Passing over it")
+    print("        would leave the check reporting PASS for a struct it stopped reading.")
+    raise SystemExit(1)
+
+if drift:
+    print()
+    print("  FAIL: %d mirror(s) have the same size as their twin and a DIFFERENT field order:"
+          % len(drift))
+    for d in drift:
+        print("        %s" % d)
+    print()
+    print("        Every field from the first divergence is read at the wrong offset, in both")
+    print("        directions, with nothing faulting.")
+    raise SystemExit(1)
+print("  field order: %d fields across %d mirrors lie at the offsets the C++ gives them"
+      % (fields_compared, len(mirrored)))
 
 print("contract_layout_check: PASS — every mirrored struct is pinned to its generated twin")
 PY
