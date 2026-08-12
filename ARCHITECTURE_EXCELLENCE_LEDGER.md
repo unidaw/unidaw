@@ -780,6 +780,14 @@ with explicit no-list failure and exact equality (`g4-dep-extra`), plus correcte
 item27/29 labels; 104 controls pass. Exact review is pending. Raw body handling
 is claimed inherited from `b953b64`; G3/G0/M1/item37 and G4 item26 framing remain.
 
+Exact review of `b953b64` is **BLOCKED**. Same-line comment bypass closure passes,
+but raw/normalized section parity is broken: raw rediscovery can treat hidden
+item-shaped lines as live or select a hidden `# Open items` section. Raw checks
+must use offsets from the identified normalized section. The f492 G4 member
+check remains vacuous on colon-plus-newline layout and, when made matchable,
+allows wrong labels/extras/duplicates via numeric dedup/subset. G2/G3/G0/M1/
+item37 blockers remain.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
