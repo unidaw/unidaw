@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '8ae28017b7a4923d0ae91a382bc4f02a13af5ee0'
+PREV_TIP     = '85f50c05bc7563fd344eabdfec2855bd7ef03e8a'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -1869,7 +1869,15 @@ for g in gates:
 # changing TEN to NINE while leaving all ten IDs listed emitted a clean PASS and a false manifest.
 # codex-worker-1's probe. The union below is the same treatment BLOCKER-SET-RESTATED gives the
 # global list — a stated figure compared against the graph that produces it.
-_final = [g for g in gates if 'Final gate' in (g.get('dependencies_text') or '')]
+# DERIVED FROM THE GRAPH. Selecting on the prose 'Final gate' let the document opt out of its own
+# check: renaming it to 'Terminal gate' skipped the whole loop and emitted a clean PASS. A validator
+# whose POPULATION is chosen by mutable text belonging to the checked party is not a validator —
+# the same defect as a census row asserting its own membership, one level up.
+#
+# The final gate is the one no other gate depends on, and which depends on at least one. That is a
+# fact about the dependency graph and nothing in the prose can change it.
+_depended_on = {d for g in gates for d in g['dependencies']}
+_final = [g for g in gates if g['id'] not in _depended_on and g['dependencies']]
 for _g in _final:
     _union = sorted({n for d in _g['dependencies'] for n in by_id.get(d, {}).get('blocking_items', [])}
                     - set(_g.get('blocking_items', [])))
@@ -1891,28 +1899,15 @@ for _g in _final:
     # count is supposed to come from `dependencies_text`, and moving the sole phrase elsewhere in
     # the gate satisfied a check whose comment said otherwise. A comment describing a stronger
     # binding than the code has — for the fourth time today.
-    # THE DEPENDENCIES PARAGRAPH, not `dependencies_text`. MEASURED, after the check below failed
-    # to fire on a probe that moved the phrase: `dependencies_text` is a loose slice that runs past
-    # the clause and swallowed the relocated sentence, so "in dependencies_text" was satisfied and
-    # the check was right to stay silent. The FIELD was not the clause my comment named — the same
-    # mistake as believing `body` was raw, and found the same way, by printing the value instead of
-    # reasoning about the code. The paragraph boundary is structural; a character distance would not
-    # have been.
-    # TO THE NEXT BOLD MARKER. Measured twice: `dependencies_text` runs past the clause, and the
-    # PARAGRAPH does too — there is no blank line before `**The ten**`, so paragraph-splitting put
-    # the relocated sentence inside the same block. `**` opens the next structural unit in this
-    # document's own conventions, and that is the boundary. Two wrong boundaries before the right
-    # one, each identified by printing the slice rather than reasoning about it.
-    _di = _gsec.find('**Dependencies**')
-    _dj = _gsec.find('\n**', _di + 1) if _di >= 0 else -1
-    _depara = _gsec[_di:_dj if _dj > 0 else len(_gsec)] if _di >= 0 else ''
-    # THE MATCHED PHRASE, not a bare substring of it. `'dependency blockers plus' in _depara` was
-    # satisfiable by any sentence containing those words — the segment could hold a decoy while the
-    # operative count sat elsewhere. `_said.group(0)` carries the uppercase count word, so what is
-    # required in the clause is the phrase actually being read.
-    if _said and _said.group(0) not in _depara:
-        bad('GATE-DEP-BLOCKERS', f'{_g["id"]} states its dependency-blocker count outside the '
-                                 f'Dependencies paragraph, where the derivation reads it')
+    # `dependencies_text` IS THE CLAUSE, and `_depara` was a second boundary I built on a
+    # misdiagnosis. It stopped only at the next bold marker while the canonical extractor stops at
+    # a blank line OR a bold marker — so mine was LOOSER, and a blank-separated insertion sat
+    # outside the canonical field but inside my copy. The original measurement that sent me down
+    # this road was taken with a misplaced probe; the field was right all along. Deleted, which is
+    # the same repair as every other duplicated derivation here.
+    if _said and _said.group(0) not in _visible(_g.get('dependencies_text') or ''):
+        bad('GATE-DEP-BLOCKERS', f'{_g["id"]} states its dependency-blocker count outside its '
+                                 f'Dependencies clause, where the derivation reads it')
     if not _said:
         bad('GATE-DEP-BLOCKERS', f'{_g["id"]} states no dependency-blocker count to check')
     elif WORDNUM.get(_said.group(1).upper()) != len(_union):
