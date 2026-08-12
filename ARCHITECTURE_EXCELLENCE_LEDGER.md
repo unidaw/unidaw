@@ -1319,3 +1319,11 @@ and a clean merge boundary; no two lanes edit SHM/layout files concurrently.
 Second implementation slice landed as `e632f606`: HostController cleanup now
 uses `lstat`, only unlinks owned socket files, tolerates `ENOENT`, and refuses
 regular files/symlinks. `daw_engine` and `juce_host_process` build targets pass.
+
+Owner successor `2b5f074` claims the schema-proof action-binding blocker closed:
+synthetic cases now drive `_schema_guard` and require a recorded failure;
+scalar-element type coverage has an independent non-short-circuit pair; owner
+choice parsing fixes case-insensitive abbreviation termination, negation, newline
+sentence boundaries, and duplicate per-gate counts; declaration counting uses
+rendered text. It reports schema /7, epoch 3, and 173 controls. Carried semantic
+and state/content blockers remain. Exact audit pending.
