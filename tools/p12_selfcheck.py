@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '3c41508ad587063a1acf5c925a81d4ff3d97d37a'
+PREV_TIP     = 'f4a05b3b60338103096e3b53b004ae2b8bd8a20c'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -1884,9 +1884,24 @@ for _g in _final:
     # count is supposed to come from `dependencies_text`, and moving the sole phrase elsewhere in
     # the gate satisfied a check whose comment said otherwise. A comment describing a stronger
     # binding than the code has — for the fourth time today.
-    if _said and 'dependency blockers plus' not in _visible(_g.get('dependencies_text') or ''):
-        bad('GATE-DEP-BLOCKERS', f'{_g["id"]} states its dependency-blocker count outside its '
-                                 f'Dependencies clause, where the derivation reads it')
+    # THE DEPENDENCIES PARAGRAPH, not `dependencies_text`. MEASURED, after the check below failed
+    # to fire on a probe that moved the phrase: `dependencies_text` is a loose slice that runs past
+    # the clause and swallowed the relocated sentence, so "in dependencies_text" was satisfied and
+    # the check was right to stay silent. The FIELD was not the clause my comment named — the same
+    # mistake as believing `body` was raw, and found the same way, by printing the value instead of
+    # reasoning about the code. The paragraph boundary is structural; a character distance would not
+    # have been.
+    # TO THE NEXT BOLD MARKER. Measured twice: `dependencies_text` runs past the clause, and the
+    # PARAGRAPH does too — there is no blank line before `**The ten**`, so paragraph-splitting put
+    # the relocated sentence inside the same block. `**` opens the next structural unit in this
+    # document's own conventions, and that is the boundary. Two wrong boundaries before the right
+    # one, each identified by printing the slice rather than reasoning about it.
+    _di = _gsec.find('**Dependencies**')
+    _dj = _gsec.find('\n**', _di + 1) if _di >= 0 else -1
+    _depara = _gsec[_di:_dj if _dj > 0 else len(_gsec)] if _di >= 0 else ''
+    if _said and 'dependency blockers plus' not in _depara:
+        bad('GATE-DEP-BLOCKERS', f'{_g["id"]} states its dependency-blocker count outside the '
+                                 f'Dependencies paragraph, where the derivation reads it')
     if not _said:
         bad('GATE-DEP-BLOCKERS', f'{_g["id"]} states no dependency-blocker count to check')
     elif WORDNUM.get(_said.group(1).upper()) != len(_union):
