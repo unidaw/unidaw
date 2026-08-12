@@ -70,6 +70,14 @@ struct Fixture {
                           daw::UiCommandType) {};
   std::function<void(const char*, const char*, uint32_t, uint32_t, const std::string&)>
       historyAppend = [](const char*, const char*, uint32_t, uint32_t, const std::string&) {};
+  // NOT EMPTY, and the reason is a negative control that fired for the wrong reason. With this
+  // left default-constructed, reverting `liveTrackAt` to `trackAt` made the removed-track case
+  // throw std::bad_function_call at engine_clip_edit.cpp:339 — before the search could reach the
+  // UnknownNote it was supposed to demonstrate. The test DID fail, so the control looked green,
+  // and it was not discriminating: it proved an empty std::function throws, not that the reason
+  // is wrong. codex-worker-1 caught it. A harmless stub lets the old path run to its real answer.
+  std::function<TrackStoreState(const TrackRuntime&)> snapshotTrackStore =
+      [](const TrackRuntime&) { return TrackStoreState{}; };
 
   ClipEditDeps deps() {
     return ClipEditDeps{engineState,      // engineState
@@ -86,7 +94,7 @@ struct Fixture {
                         0,                // patternTicks
                         {},               // pushStructuralUndo
                         {},               // rebuildFlatAndPublish
-                        {},               // snapshotTrackStore
+                        snapshotTrackStore,  // snapshotTrackStore
                         emitClipReject,   // emitClipReject
                         historyAppend};   // historyAppend
   }
