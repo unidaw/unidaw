@@ -1101,3 +1101,9 @@ malformed-follow-on statuses; parity is not escape-aware and top-level heading
 extraction can orphan text. Item 38 still publishes unresolved planning as
 definite true. R7 and R1/S4/PASS9 carry contradictory live item-state rulings;
 G0-A/G0-B/G2/G3/Watchdog blockers remain. No implementation authorization.
+
+Owner successor `359cde8` claims all five prior blockers closed: status grammar,
+item-38 Markdown, ruling/item-state separation, explicit `unclassified_open`
+with schema /6 and item 39, and tri-state planning verdicts. It reports 39 items,
+138 controls, and explicitly leaves item 38's ruling, sixteen classifications,
+and a prerequisite/verdict cross-record control open. Exact audit is pending.
