@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '92ae74c18299cc04fd7767642fc54e0e2adea710'
+PREV_TIP     = 'd669217cb6bcb9c7767332a64eb8b6fc5bd802dd'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -258,6 +258,8 @@ for i, a in enumerate(sys.argv):
 # merely makes the run FAIL proves nothing — the fifth way a negative control lies is landing in
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
+ 'section-indented': ('\n# Open items — 37 atomic', '\n # Open items — 37 atomic', 1,
+                      'OPEN-SECTION-MISSING'),
  'header-suffix':    ('# Open items — 37 atomic, 9 CLOSED at this SHA, 28 open',
                       '# Open items — 37 atomic, 9 CLOSED at this SHA, 28 open BUT ACTUALLY 99', 1,
                       'OPEN-HEADER-MISSING'),
@@ -654,15 +656,20 @@ _sections = re.findall(r'(?m)^# Open items', unhid)
 if len(_sections) != 1:
     bad('OPEN-SECTION-COUNT', f'{len(_sections)} "# Open items" sections; exactly one is permitted')
 _body_m = re.search(r'(?m)^# Open items.*?(?=\n# |\Z)', unhid, re.S)
+# A CRASH IS NOT A VERDICT. A one-space-indented CommonMark H1 is still a heading to a renderer but
+# not to `(?m)^#`, so `_body_m` was None and `.group(0)` raised an uncaught AttributeError — the run
+# died with a traceback instead of saying what was wrong.
+#
+# AND `print` + `sys.exit(2)` WAS NOT RATCHETABLE. That exit happens before the negative-control
+# evaluator, so no control could ever report on it: deleting the guard left all controls green and
+# the traceback free to return. codex-worker-1 proved that by deleting it. The guard now RECORDS
+# through `bad()` and lets the run reach evaluation on empty section text, so a control can demand
+# the tag. Everything downstream sees an empty section and fails loudly, which is correct: without
+# a section there are no items, and saying so many times is better than saying nothing once.
 if not _body_m:
-    # A CRASH IS NOT A VERDICT. A one-space-indented CommonMark H1 is still a heading to a renderer
-    # but not to `(?m)^#`, so `_body_m` was None and `.group(0)` raised an uncaught AttributeError —
-    # the run died with a traceback instead of saying what was wrong. A checker that aborts gives
-    # its caller no verdict at all, which is worse than a wrong one because there is nothing to read.
-    print('[OPEN-SECTION-MISSING] no unindented "# Open items" heading; a CommonMark heading may be '
-          'indented up to three spaces, and this checker requires column zero')
-    sys.exit(2)
-body = _body_m.group(0)
+    bad('OPEN-SECTION-MISSING', 'no unindented "# Open items" heading; a CommonMark heading may be '
+                                'indented up to three spaces, and this checker requires column zero')
+body = _body_m.group(0) if _body_m else ''
 # THE SAME SECTION FROM THE TRUE SOURCE, BY OFFSET. `_unhidden` blanks in place and preserves
 # length, so the section's span in `unhid` is its span in `pkt` — sliced, never re-discovered.
 #
@@ -678,7 +685,7 @@ body = _body_m.group(0)
 # `<!-- ⟦BROKEN -->` in a headline sailed through because `_unhidden` had already blanked it
 # upstream. codex-worker-1's probe. A claim about a variable is worth exactly what a check of that
 # variable is worth, and I checked the code I wrote instead of the input it consumes.
-body_raw = pkt[_body_m.start():_body_m.end()]
+body_raw = pkt[_body_m.start():_body_m.end()] if _body_m else ''
 # FROM THE SECTION ALREADY IDENTIFIED, not a third global search over `pkt`. As a global search a
 # commented-out `<!-- # Open items — 37 atomic ... -->` before the real section supplied the header
 # while the live one said something else — and worse, `--negative open-count` then mutated the DECOY
