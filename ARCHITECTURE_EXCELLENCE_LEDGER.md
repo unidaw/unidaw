@@ -870,6 +870,14 @@ and regenerating yields clean PASS while all G4 count/list checks are skipped.
 Selection must use a structural graph sink/gate ID with exactly-one assertion and
 a causal negative control.
 
+Full exact review of `f4a05b3` is **BLOCKED**. No-close/two-list controls and the
+exact moved-count probe pass, but count binding still compares a bare substring
+in `dependencies_text` with a gate-wide count phrase, allowing decoy words plus
+a later exact count. More critically, mutable `Final gate` prose selects the
+entire G4 validator; renaming it to `Terminal gate` skips all checks. Spacing /
+case variants evade patterns. Indented Open sections, prefix headers, G2-B/G3
+N/M1/item37/Watchdog, G4 item26, and G0 remain blocked.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
