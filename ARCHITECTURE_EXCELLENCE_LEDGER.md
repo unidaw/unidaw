@@ -1365,3 +1365,11 @@ no-reader case. Mirror/sender/reader registry checks, six sabotage controls,
 configure, engine build, and 3/3 targeted tests pass. No SHM/layout/schema files
 were changed. The lane is complete; dependent command-correlation work remains
 gated on the SHM foundation.
+
+`AE-IMPL-ENGINE-002` completed as `a756213` on the isolated engine branch. It
+corrects `commandMutatesDocument(Undo/Redo)` and introduces the existing policy
+vocabulary so history commands mutate document state without opening recursive
+undo steps. Behavior remains routed through `commandUndoPolicy`; compile-time
+assertions, runtime checks, two negative controls, engine build, and pure/clip/
+startup tests pass. No SHM/layout/schema files changed. The worker may continue
+with the next disjoint ruled engine item (item 30/R10) after this record.
