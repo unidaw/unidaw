@@ -1074,3 +1074,9 @@ Owner successor `5348f77` claims the five blocker copies are now replaced by one
 token-bounded status derivation, with malformed/ambiguous/negated controls and
 127 controls total. Exact review is pending. Item-38 planning semantics/PACKET
 classification and remaining G4 stale statements are explicitly still owed.
+
+Owner successor `f27e898` claims item-38 `kind`/`blocking` orthogonality is
+restored (`kind:[PACKET]` while nonblocking), and all four stale G4 statements
+now carry only the narrow adjacent-multi-plugin fixture/oracle account. It
+deliberately leaves item-38 planning semantics undecided despite publishing a
+planning boolean. Exact review is pending; this remains a likely blocker.
