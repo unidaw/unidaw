@@ -1350,3 +1350,11 @@ no SHM/layout/schema files touched. It also found that production has no
 split into a follow-up wiring ticket (`P2-WDOG-02`) and is not claimed as a
 completed eviction behavior change. The PASS-4 timing/observation semantics must
 be resolved before wiring it.
+
+`AE-IMPL-ENGINE-001` completed as `a758b39` on an isolated implementation
+branch. It fixes item 29's `SetRowOps` current-base reporting by extracting a
+shared track-version read: row-op refusals now report the actual track version,
+while `sentBase=0` remains an explicit contract for the non-version-gated payload.
+Missing/removed tracks leave the output untouched. Focused helper/wiring tests,
+negative hardcoded-zero control, `daw_engine` build, and pure/startup/clip-helper
+tests pass. The remaining third correlation key is a separate wire-level decision.
