@@ -1814,3 +1814,16 @@ mirror state is orthogonal to readiness so replay can re-enter mid-render via
 `engine_render_track.cpp:554`. The worker withdrew the earlier startup-only
 fix after finding that third arming site. HOST-02a remains unaffected. Exact
 review of `afaf5b08` is now assigned to `codex-worker-1`; 02b/02c remain gated.
+
+Scheduled design ticket: `P2-CMD-00` — generic `CommandOutcome` contract.
+Before CTRL02-B-1 expands, define one protocol-level result with
+`client_id`, `command_id`, status/reason, resulting scope version, and returned
+IDs; specify deduplication, retry, batch semantics, and the boundary adapters
+for existing `ClipOutcome`/harmony results. `Unknown` must never imply Applied.
+This is design-only until independently reviewed; no wire/layout implementation
+is authorized under CTRL02-B-1.
+
+Combined HOST review is BLOCKED by replay re-entry/lifecycle loss,
+non-transactional mapping/generation publication, generation-wrap ABA,
+contradictory readiness prose, and non-causal controls. HOST follow-on work and
+CTRL02-B-1 are paused pending remediation design.
