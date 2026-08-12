@@ -1744,3 +1744,11 @@ last-dispatched/last-completed state, gate-transition observability, and
 failed-send/drop visibility. Host identity belongs to HOST-02; fatal play/start
 handling requires a separate inventory/ticket. No SHM/layout/wire changes are
 authorized in this slice.
+
+WDOG-02 was refined before implementation: `lastDispatchedBlockId` already
+exists on `TrackRuntime`, while `completedBlockId` is mapping-owned and consumed
+by `completedMinimum`; no duplicate shadow record is allowed. The deliverable
+is one observable transition/event surface over those canonical sources, plus
+events at the four silent drop sites, with deterministic controls. The worker
+was re-assigned this corrected scope and must complete a host.gave_up inventory
+before proposing fatal play/start behavior.
