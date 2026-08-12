@@ -43,21 +43,47 @@ namespace daw {
 enum class HostReadiness : uint8_t {
   // No host mapped, or one that was withdrawn. Nothing may be dispatched.
   NotMapped = 0,
-  // Mapped and bypassed. A dispatch IS permitted here — this is the level whose existence breaks
-  // the circularity, because the mirror's acknowledgement can only arrive during such a dispatch.
-  MappedAndBypassed = 1,
-  // The mirror is complete: parameters the host was carrying have been replayed and acknowledged.
-  // Only processing that DEPENDS on those parameters requires this level.
-  MirrorComplete = 2,
+  // A mapping exists and dispatch is PERMITTED. This is the level whose existence breaks the
+  // circularity: the mirror's acknowledgement can only arrive during such a dispatch.
+  //
+  // NOT "MappedAndBypassed", which is what the first version of this header called it. Bypass is
+  // applied by applyHostBypassStates() -> HostController::sendSetBypass, and that is FIRE-AND-
+  // FORGET: host_controller.cpp:595-601 returns whether the SEND succeeded, never whether the host
+  // applied it. The engine cannot observe that a plugin is bypassed, so a level asserting it
+  // asserts something unknowable. What is known here is that dispatch is permitted.
+  MappedAndDispatchable = 1,
+  // MirrorComplete is WITHDRAWN, not renamed. See the note below: it is not derivable from the
+  // state this tree holds, and the first version of this header derived it anyway.
 };
 
-// The level, from the two facts that determine it. `mirrorPrimed` is deliberately NOT a parameter:
-// primed distinguishes "params written, awaiting ack" from "not yet written", and both are inside
-// MappedAndBypassed. Taking it would invite a caller to treat priming as a level of its own.
-constexpr HostReadiness readinessLevel(bool hostReady, bool mirrorPending) {
-  if (!hostReady) return HostReadiness::NotMapped;
-  return mirrorPending ? HostReadiness::MappedAndBypassed : HostReadiness::MirrorComplete;
+// WHY THERE IS NO MirrorComplete HERE. The first version of this header returned it for
+// `hostReady && !mirrorPending`, and that is unsound in two ways, both measured in current files:
+//
+//  1. THE POST-RELAUNCH WINDOW. engine_restart_worker.cpp:92 stores hostReady=true; :93 applies
+//     bypass; :95-105 arms the replay OR clears the flags. Between :92 and the decision,
+//     mirrorPending is false — so the predicate said MirrorComplete while parameters were about to
+//     be replayed. A reader trusting it would process against the host's defaults.
+//
+//  2. THE MIRROR IS RE-ARMED MID-RENDER, so this is not a startup sequence that completes. Three
+//     sites arm it: engine_restart_worker.cpp:100 and engine_track_setup.cpp:419 are launch-time
+//     decisions, but engine_render_track.cpp:554 arms a replay when the note ring OVERFLOWS,
+//     whenever that happens. So the level can REGRESS after being complete, and any model shaped
+//     as "a decision made once at launch" is the wrong shape — including the `mirrorDecided` flag
+//     I drafted and withdrew.
+//
+// Modelling it needs to distinguish "no replay outstanding" from "no decision yet" AND to survive
+// re-entry from the render path. That is a redesign, it is P2-HOST-01 step 1b, and shipping a
+// third level before it is settled would put the unsound derivation back.
+
+// The level, from what the engine can actually observe. Two levels, both sound.
+constexpr HostReadiness readinessLevel(bool hostReady) {
+  return hostReady ? HostReadiness::MappedAndDispatchable : HostReadiness::NotMapped;
 }
+
+// Is the parameter mirror outstanding? A separate question from the level, deliberately: it is a
+// property that can become true again at any time, and folding it into an ordered level implies it
+// cannot.
+constexpr bool mirrorOutstanding(bool mirrorPending) { return mirrorPending; }
 
 // Ordered comparison, so a site states the level it NEEDS rather than the flags it happens to know.
 constexpr bool readinessAtLeast(HostReadiness have, HostReadiness need) {

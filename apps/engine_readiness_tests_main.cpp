@@ -200,79 +200,51 @@ void testTheSoloedTrackIsStillWaitedFor() {
 // standing up a host is a level nobody can test, and the flags are what the producer actually reads.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-// COLD START. A host that is not mapped is NotMapped whatever the mirror says — and the mirror can
-// say anything, because nothing has cleared it yet.
-void testColdStartIsNotMappedRegardlessOfMirror() {
-  CHECK(daw::readinessLevel(/*hostReady=*/false, /*mirrorPending=*/false)
-        == daw::HostReadiness::NotMapped);
-  CHECK(daw::readinessLevel(/*hostReady=*/false, /*mirrorPending=*/true)
-        == daw::HostReadiness::NotMapped);
-  // And nothing may be dispatched at cold start, which is the only level with that property.
-  CHECK(!daw::readinessAtLeast(daw::readinessLevel(false, false),
-                               daw::HostReadiness::MappedAndBypassed));
+// COLD START. Not mapped, so nothing may be dispatched.
+void testColdStartIsNotMapped() {
+  CHECK(daw::readinessLevel(/*hostReady=*/false) == daw::HostReadiness::NotMapped);
+  CHECK(!daw::readinessAtLeast(daw::readinessLevel(false),
+                               daw::HostReadiness::MappedAndDispatchable));
 }
 
-// A FRESH HOST WITH NO PARAMS TO RESTORE REACHES MirrorComplete IMMEDIATELY. engine_track_setup
-// stores hostReady=true and never arms the mirror when there is nothing to replay, so a new track
-// must not be held at the lower level waiting for an event that will never come.
-void testFreshHostWithNoMirrorIsComplete() {
-  CHECK(daw::readinessLevel(/*hostReady=*/true, /*mirrorPending=*/false)
-        == daw::HostReadiness::MirrorComplete);
-  CHECK(daw::readinessAtLeast(daw::readinessLevel(true, false),
-                              daw::HostReadiness::MirrorComplete));
+// MAPPED MEANS DISPATCHABLE, and that is all it means. It does NOT mean bypassed: applyHostBypassStates
+// goes through sendSetBypass, which is fire-and-forget (host_controller.cpp:595-601 returns whether
+// the SEND succeeded), so the engine never learns a plugin was bypassed.
+void testMappedMeansDispatchableAndNothingMore() {
+  CHECK(daw::readinessLevel(/*hostReady=*/true) == daw::HostReadiness::MappedAndDispatchable);
+  CHECK(daw::readinessAtLeast(daw::readinessLevel(true),
+                              daw::HostReadiness::MappedAndDispatchable));
 }
 
-// RELAUNCH. engine_restart_worker stores hostReady=true and THEN arms the mirror, so the state
-// immediately after a relaunch is MappedAndBypassed — dispatch permitted, mirror outstanding. This
-// is the level whose existence resolves the circularity: the acknowledgement that clears the mirror
-// can only arrive during a dispatch, and a dispatch is permitted here.
-void testRelaunchIsMappedAndBypassedNotComplete() {
-  const auto level = daw::readinessLevel(/*hostReady=*/true, /*mirrorPending=*/true);
-  CHECK(level == daw::HostReadiness::MappedAndBypassed);
-  CHECK(daw::readinessAtLeast(level, daw::HostReadiness::MappedAndBypassed));
-  // REFUTED BY treating this as complete: processing that depends on mirrored params would run
-  // against the host's defaults, which is the silent-wrong-parameters case.
-  CHECK(!daw::readinessAtLeast(level, daw::HostReadiness::MirrorComplete));
+// THE MIRROR IS A SEPARATE QUESTION, NOT A HIGHER LEVEL. It can become outstanding again at any
+// time — engine_render_track.cpp:554 arms a replay on note-ring overflow, mid-render — so folding
+// it into an ordered level would imply a completion that does not exist.
+void testMirrorIsOrthogonalToTheLevel() {
+  CHECK(daw::mirrorOutstanding(true));
+  CHECK(!daw::mirrorOutstanding(false));
+  // the level is the same either way: mapped is mapped
+  CHECK(daw::readinessLevel(true) == daw::HostReadiness::MappedAndDispatchable);
 }
 
-// PRIMING IS NOT A LEVEL. Between writing the params and the ack arriving, mirrorPrimed is true and
-// mirrorPending is still true — and the level must not move, or a caller could take "primed" for
-// "acknowledged" and read parameters the host has not confirmed.
-void testPrimingDoesNotAdvanceTheLevel() {
-  // primed is not an input by construction; the assertion is that the level is a function of the
-  // other two, so the same pair yields the same level whatever priming has happened.
-  CHECK(daw::readinessLevel(true, true) == daw::HostReadiness::MappedAndBypassed);
-  CHECK(daw::readinessLevel(true, true) != daw::HostReadiness::MirrorComplete);
-}
-
-// THE CIRCULAR WAIT, and it is the reason this header exists. The clearing loop
-// (engine_producer_thread.cpp:195) skips a runtime that is not hostReady, so an armed mirror on a
-// host that never comes up can never be cleared: the producer stays in mirrorOnly and the engine
-// emits nothing with nothing saying why. That is the aux-child wedge engine_rt_helpers.h:59-62
-// describes, expressed as a predicate instead of a paragraph.
+// A REPLAY ARMED ON A DOWN HOST CAN NEVER COMPLETE. engine_producer_thread.cpp:195 skips a runtime
+// that is not hostReady before it can clear mirrorPending, so the producer sits in mirrorOnly
+// emitting nothing with nothing saying why — the aux-child wedge engine_rt_helpers.h:59-62 names.
 void testAnArmedMirrorOnADownHostCanNeverComplete() {
   CHECK(!daw::mirrorReplayCanComplete(/*hostReady=*/false, /*mirrorPending=*/true));
-  // The three states that are NOT wedged, so the predicate is not simply always false:
-  CHECK(daw::mirrorReplayCanComplete(/*hostReady=*/true,  /*mirrorPending=*/true));
-  CHECK(daw::mirrorReplayCanComplete(/*hostReady=*/true,  /*mirrorPending=*/false));
-  CHECK(daw::mirrorReplayCanComplete(/*hostReady=*/false, /*mirrorPending=*/false));
+  CHECK(daw::mirrorReplayCanComplete(true, true));
+  CHECK(daw::mirrorReplayCanComplete(true, false));
+  CHECK(daw::mirrorReplayCanComplete(false, false));
 }
 
-// THE ORDER IS TOTAL AND STRICT. A comparison that treated the levels as unordered would let a site
-// asking for MirrorComplete be satisfied by MappedAndBypassed, which is the whole failure this
-// replaces.
-void testTheLevelsAreStrictlyOrdered() {
+// NEGATIVE CONTROL, SWAPPED ORDER. If the comparison were not strict, a site asking for the higher
+// level would be satisfied by the lower — the failure this ordering exists to prevent.
+void testTheOrderIsStrictInBothDirections() {
   const auto none = daw::HostReadiness::NotMapped;
-  const auto mapped = daw::HostReadiness::MappedAndBypassed;
-  const auto complete = daw::HostReadiness::MirrorComplete;
-  CHECK(daw::readinessAtLeast(complete, mapped));
-  CHECK(daw::readinessAtLeast(complete, none));
+  const auto mapped = daw::HostReadiness::MappedAndDispatchable;
   CHECK(daw::readinessAtLeast(mapped, none));
-  CHECK(!daw::readinessAtLeast(mapped, complete));
-  CHECK(!daw::readinessAtLeast(none, mapped));
   CHECK(daw::readinessAtLeast(mapped, mapped));
+  CHECK(!daw::readinessAtLeast(none, mapped));
 }
-
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // HOST GENERATION (P2-HOST-02a). Constructed and carried; no reader consults it yet. These pin the
@@ -319,12 +291,11 @@ int main() {
   testGenerationIsStrictlyIncreasing();
   testGenerationWrapSkipsZero();
   testFirstLaunchLeavesNeverLaunchedBehind();
-  testColdStartIsNotMappedRegardlessOfMirror();
-  testFreshHostWithNoMirrorIsComplete();
-  testRelaunchIsMappedAndBypassedNotComplete();
-  testPrimingDoesNotAdvanceTheLevel();
+  testColdStartIsNotMapped();
+  testMappedMeansDispatchableAndNothingMore();
+  testMirrorIsOrthogonalToTheLevel();
   testAnArmedMirrorOnADownHostCanNeverComplete();
-  testTheLevelsAreStrictlyOrdered();
+  testTheOrderIsStrictInBothDirections();
   testSoloedOutTrackIsNotWaitedFor();
   testTheSoloedTrackIsStillWaitedFor();
   testAnyReturnsWhileATrackIsStillSilent();
