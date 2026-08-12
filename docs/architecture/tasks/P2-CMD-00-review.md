@@ -107,7 +107,7 @@ Verified correct against current files:
   `sentBase@8`. The design's account of the key is right.
 - **`Unknown` resolves as success, and it is worse than the design says.** The design calls it
   *"documented as treated as applied"*. It is not documentation: `ClipOutcome::Applied |
-  ClipOutcome::Unknown =>` is a live match arm at `main.rs:2990`, `:3001`, `:5419` and `:5423`. Four
+  ClipOutcome::Unknown =>` is a live match arm at `main.rs:2990`, `:3001`, `:5419` and `:5431`. Four
   sites, not a comment. This is the strongest part of the design's motivation and it understated it.
 - **both analysed payloads are full at 40 bytes**, so neither can grow — correct, and now known to be
   true of all six.
@@ -120,6 +120,16 @@ Verified correct against current files:
   initialised on the engine side for the four payloads the design never examined.
 - The nine acceptance gates are untested claims about a design that changed under this review; they
   should be re-derived after the scope correction rather than carried.
+
+## A defect in this review's own process
+
+My citation script printed `MISMATCH ui/daw-cli/src/main.rs:5423` and I committed anyway, because it
+printed rather than exiting non-zero. The count of four was right and one line number was wrong — the
+fourth arm is at `:5431`. Corrected above.
+
+That is the same shape as the finding in §3: a control that reports rather than gates is a control the
+author can walk past, and I walked past this one within a minute of writing that sentence. A verifier
+whose failure path is a `print` is a log line, not a gate.
 
 ## Recommendation
 
