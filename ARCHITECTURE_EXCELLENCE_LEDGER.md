@@ -775,6 +775,11 @@ duplicates and ignores gate/reason annotations. Item27/29 labels and the raw
 hidden-comment gap are stale; G4/item26, G0, G2, and G3/M1/item37/N/Watchdog
 remain blocked.
 
+Owner successor `e965ef8` claims G4 member parsing is now causal (`g4-dep-member`)
+with explicit no-list failure and exact equality (`g4-dep-extra`), plus corrected
+item27/29 labels; 104 controls pass. Exact review is pending. Raw body handling
+is claimed inherited from `b953b64`; G3/G0/M1/item37 and G4 item26 framing remain.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
