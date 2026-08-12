@@ -1830,6 +1830,13 @@ correlation across refusal channels. SHM-01 is also refilled onto SHM-02's
 read-only buffer-identity trace for the patcher EventEntry; no edits are
 authorized until the buffer is proven gated versus scratch.
 
+CTRL02-A found a concrete liveness blocker in the bridge: seqlock readers spin
+forever when the engine dies with an odd version. A bounded scope is authorized
+for `codex-worker-2`: edit only `ui/daw-bridge/src/reader.rs` and `control.rs`
+(and `journal.rs` only if strictly necessary) to add deadline-aware try APIs,
+engine-death/odd-version tests, and negative controls. No SHM/layout/wire
+changes or unrelated client migration are allowed.
+
 SHM-02 trace resolved the ambiguity: patcher Rust `EventEntry` targets the
 engine-owned, count-gated `PatcherNodeBuffer::events` scratch array, not shared
 memory; `ready` is correctly absent. The remaining invariant is a 64-byte
