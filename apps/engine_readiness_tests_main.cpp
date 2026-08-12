@@ -273,9 +273,52 @@ void testTheLevelsAreStrictlyOrdered() {
   CHECK(daw::readinessAtLeast(mapped, mapped));
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// HOST GENERATION (P2-HOST-02a). Constructed and carried; no reader consults it yet. These pin the
+// two properties a later reader will depend on, so 02b cannot be built on an assumption.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+// MONOTONIC WITHIN A LIFETIME. A generation that can repeat cannot distinguish mappings, which is
+// the entire purpose.
+void testGenerationIsStrictlyIncreasing() {
+  uint32_t g = 0;
+  for (int i = 0; i < 1000; ++i) {
+    const uint32_t next = daw::nextHostGeneration(g);
+    CHECK(next != g);
+    CHECK(next == g + 1u);
+    g = next;
+  }
+  CHECK(g == 1000u);
+}
+
+// ZERO MEANS NEVER LAUNCHED, SO THE WRAP MUST SKIP IT. A counter wrapping to 0 would report a host
+// on its 4,294,967,296th launch as one that has never started — and the 02b reader would read that
+// as "no mapping to compare", which is the safe-LOOKING answer and the wrong one.
+void testGenerationWrapSkipsZero() {
+  CHECK(daw::nextHostGeneration(0xFFFFFFFEu) == 0xFFFFFFFFu);
+  CHECK(daw::nextHostGeneration(0xFFFFFFFFu) == 1u);   // not 0
+  CHECK(daw::nextHostGeneration(0xFFFFFFFFu) != 0u);
+  // and the predicate agrees on both sides of the wrap
+  CHECK(daw::hostEverLaunched(daw::nextHostGeneration(0xFFFFFFFFu)));
+  CHECK(!daw::hostEverLaunched(0u));
+  CHECK(daw::hostEverLaunched(1u));
+}
+
+// THE INITIAL STATE IS DISTINGUISHABLE. A fresh runtime has never launched, and the first launch
+// must leave it saying so.
+void testFirstLaunchLeavesNeverLaunchedBehind() {
+  const uint32_t fresh = 0;
+  CHECK(!daw::hostEverLaunched(fresh));
+  CHECK(daw::hostEverLaunched(daw::nextHostGeneration(fresh)));
+}
+
 }  // namespace
 
 int main() {
+  testGenerationIsStrictlyIncreasing();
+  testGenerationWrapSkipsZero();
+  testFirstLaunchLeavesNeverLaunchedBehind();
   testColdStartIsNotMappedRegardlessOfMirror();
   testFreshHostWithNoMirrorIsComplete();
   testRelaunchIsMappedAndBypassedNotComplete();

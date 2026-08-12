@@ -653,6 +653,8 @@ void runConsumerThread(ConsumerDeps& deps) {
                     const_cast<daw::ShmHeader*>(shmView->header));
                 info.header = shmView->header;
                 info.completedBlockId = shmView->completedBlockId;
+                info.hostGeneration =
+                    runtime->hostGeneration.load(std::memory_order_acquire);
                 info.hostReady = &runtime->hostReady;
                 info.active = &runtime->active;
                 info.gainLinear = &runtime->mixGainLinear;

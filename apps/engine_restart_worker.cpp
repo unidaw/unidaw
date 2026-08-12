@@ -1,5 +1,7 @@
 #include "engine_restart_worker.h"
 
+#include "engine_readiness_level.h"
+
 #include <chrono>
 #include <thread>
 
@@ -75,6 +77,9 @@ void runRestartWorker(RestartWorkerDeps& deps) {
           runtime->restartInFlight.store(false, std::memory_order_release);
           continue;
         }
+        runtime->hostGeneration.store(
+            daw::nextHostGeneration(runtime->hostGeneration.load(std::memory_order_relaxed)),
+            std::memory_order_release);
       }
       std::cout << "Consumer: Restarted track " << runtime->trackId
                 << " successfully." << std::endl;

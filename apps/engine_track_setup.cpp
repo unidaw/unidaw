@@ -1,5 +1,7 @@
 #include "engine_track_setup.h"
 
+#include "engine_readiness_level.h"
+
 #include "engine_rt_helpers.h"
 #include <vector>
 #include <string>
@@ -47,6 +49,9 @@ std::unique_ptr<TrackRuntime> setupTrackRuntime(TrackSetupDeps& deps, uint32_t t
         daw::LogLine() << "Engine: host connect/launch failed for track " << trackId << std::endl;
         return nullptr;
       }
+      runtime->hostGeneration.store(
+          daw::nextHostGeneration(runtime->hostGeneration.load(std::memory_order_relaxed)),
+          std::memory_order_release);
       if (!runtime->controller.shmHeader()) {
         daw::LogLine() << "Engine: host SHM missing for track " << trackId << std::endl;
         return nullptr;
@@ -392,6 +397,9 @@ bool restartTrackHost(TrackLifecycleDeps& deps, TrackRuntime& runtime,
     if (!connected) {
       return false;
     }
+    runtime.hostGeneration.store(
+        daw::nextHostGeneration(runtime.hostGeneration.load(std::memory_order_relaxed)),
+        std::memory_order_release);
     if (!runtime.controller.shmHeader()) {
       return false;
     }

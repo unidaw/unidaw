@@ -1104,6 +1104,11 @@ add_test(NAME request_registry_check
 )
 set_tests_properties(request_registry_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+add_test(NAME host_generation_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/host_generation_check.sh
+)
+set_tests_properties(host_generation_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 add_test(NAME sampler_envelope
   COMMAND sampler_envelope_tests
 )

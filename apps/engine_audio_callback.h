@@ -34,6 +34,9 @@ public:
   struct TrackInfo {
     std::shared_ptr<const daw::SharedMemoryView> shmView;
     void* shmBase = nullptr;
+    // The host lifetime shmBase belongs to (P2-HOST-02a). Carried, not yet consulted: 02b compares
+    // it against the runtime's live value before dereferencing shmBase. 0 = never launched.
+    uint32_t hostGeneration = 0;
     const daw::ShmHeader* header = nullptr;
     const std::atomic<uint32_t>* completedBlockId = nullptr;
     const std::atomic<bool>* hostReady = nullptr;

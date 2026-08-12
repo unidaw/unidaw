@@ -70,4 +70,30 @@ constexpr bool mirrorReplayCanComplete(bool hostReady, bool mirrorPending) {
   return !mirrorPending || hostReady;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// HOST GENERATION (AE-P1.2 G4 / P2-HOST-02a). The quintuple that identifies a dispatch opens with
+// "host generation g", and NOTHING IN THE TREE HELD ONE: every `generation` in apps/ is the project
+// seed or a publish counter. Correctness across a relaunch rests entirely on controllerMutex
+// discipline at four reader sites, two of which document the hazard in prose —
+// engine_master_render.cpp:44-48 (use-after-munmap) and engine_produce_block.cpp:889-897 (the
+// restart worker reassigns a non-atomic shared_ptr and munmaps the old mapping under that lock).
+//
+// A generation makes a stale mapping DETECTABLE rather than merely excluded by locking. This is
+// 02a: the value is constructed and carried. NO READER CONSULTS IT YET — that is 02b, and it is a
+// behaviour change that wants its own review.
+//
+// ZERO MEANS NEVER LAUNCHED, so the wrap must skip it. A counter that wraps to 0 would report a
+// host on its 4,294,967,296th launch as one that has never started — and the reader added in 02b
+// would treat that as "no mapping to compare", which is the safe-looking answer and the wrong one.
+
+// The next generation, given the current one. Monotonic within a lifetime, and never 0 after the
+// first launch.
+constexpr uint32_t nextHostGeneration(uint32_t current) {
+  const uint32_t next = current + 1u;
+  return next == 0u ? 1u : next;
+}
+
+// Has this runtime ever been launched? Distinguishes "no mapping yet" from "some mapping".
+constexpr bool hostEverLaunched(uint32_t generation) { return generation != 0u; }
+
 }  // namespace daw

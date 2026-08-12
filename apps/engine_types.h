@@ -346,6 +346,10 @@ struct TrackRuntime {
   std::atomic<bool> needsRestart{false};
   std::atomic<bool> restartInFlight{false};
   std::atomic<bool> hostReady{false};
+  // AE-P1.2 G4 / P2-HOST-02a: which host lifetime the current mapping belongs to. 0 = never
+  // launched. Bumped at every launch and connect; carried into TrackInfo so a cached mapping can
+  // later be compared against the live one. No reader consults it yet.
+  std::atomic<uint32_t> hostGeneration{0};
   // Flapping guard: a plugin that crashes on load would otherwise spin the
   // restart worker forever, spawning host after host until the machine (or the
   // engine) falls over. Count restarts inside a rolling window; past the limit,
