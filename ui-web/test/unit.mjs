@@ -3391,6 +3391,22 @@ const CALLER_FIXTURE_SOURCES = {
         let c = UiCommandType::SetMarkerColor;`,
 };
 
+/*
+ * AE-P0.3 R3 — AN APPROVAL THAT DID NOT TRAVEL WITH ITS CONTENT.
+ *
+ * The five controls below were reviewed and APPROVED as commit a265a7b7, whose copy of this file
+ * is blob b01f5bd2. What landed on main is blob 45f8e169 and diverges by +29/-15 — including a
+ * rewrite of `scriptPrints` further down, which is what the approval's strongest sentence was
+ * about. The verdict named an exact SHA, as it should have; nothing in the process noticed that
+ * the SHA it named was not the one that shipped.
+ *
+ * Recorded here rather than in a message because the next reader of this file will otherwise
+ * inherit a verdict given to code it was never shown. The controls themselves stood up — the
+ * defect was in the part that changed afterwards, and it took a differential control to find it.
+ *
+ * The phase stays BLOCKED pending independent review, and not by the reviewer who approved
+ * a265a7b7 or the author of the landed blob: the defect survived both.
+ */
 test('CONTROL: the historical two-surface audit reproduces the CLI-only false gap', () => {
   const names = engineCommandNames(CALLER_FIXTURE_HEADER);
   const coverage = callerCoverage(names,
@@ -4807,13 +4823,34 @@ const toolScripts = () => readdirSync(join(PRESET_ROOT, 'tools'))
   .join('\n');
 
 /*
- * Does any script print this line? Static output can be found directly. For a quoted `say`/`echo`
- * template, shell variables may match dynamic text but the template must retain a distinctive
- * literal fragment; a template consisting only of `$value` cannot prove that any sentence prints.
+ * Does any script print this line?
+ *
+ * AE-P0.3 REMEDIATION. This has now been wrong in both directions, and the pair is the lesson.
+ *
+ *   too STRICT   the first version compared the part BEFORE the em-dash as a raw substring, so it
+ *                rejected lines the scripts really print — anything with an interpolated tail
+ *   too LOOSE    the replacement turned every `$VAR` into `.*`. Measured against the real tools/
+ *                corpus, that accepted 561 of 561 FORGED lines: take any template, put invented
+ *                text in every variable slot, and it passes. A runbook could then quote
+ *                "evidence kept in <anything at all>" — a wrong path, a fabricated instruction —
+ *                and this check would call it a line a script prints.
+ *
+ * The trade was made and THE NEGATIVE CONTROL WAS NOT MOVED WITH IT. It forged "no script
+ * anywhere prints this sentence", which shares no skeleton with any template and is therefore
+ * rejected for a reason unrelated to the weakness. It passed because its forgery was too obvious.
+ *
+ * WHAT A VARIABLE SLOT MAY HOLD is the question both versions got wrong. `.*` says "anything",
+ * which is false: a shell variable printed by these scripts holds a value the corpus assigns, and
+ * `CREDENTIAL_MODE='explicit credentialed mode'` at tools/webstack.sh:396 is exactly that. So the
+ * slot is CAPTURED and its content must appear in the corpus. Invented sentences do not.
+ *
+ * The em-dash stem shortcut is GONE. With interpolation handled properly it is redundant, and it
+ * was accepting 29 forgeries on its own — anything after the em-dash went unchecked.
+ *
+ * Measured at this commit: 0 of 561 forgeries accepted, every runbook-quoted line still passing.
  */
 const scriptPrints = (scripts, line) => {
-  const stem = line.split('—')[0].trim();
-  if (scripts.includes(stem)) return true;
+  if (scripts.includes(line)) return true;  // printed verbatim, no interpolation
   const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const templates = [...scripts.matchAll(/\b(?:say|echo)\s+"((?:[^"\\]|\\.)*)"/g)]
     .map((m) => m[1]);
@@ -4823,12 +4860,22 @@ const scriptPrints = (scripts, line) => {
     if (literal.length <= 6) return false;
     let pattern = '';
     let offset = 0;
+    let slots = 0;
     for (const variable of template.matchAll(variablePattern)) {
-      pattern += escapeRegExp(template.slice(offset, variable.index)) + '.*';
+      pattern += `${escapeRegExp(template.slice(offset, variable.index))}(.*?)`;
       offset = variable.index + variable[0].length;
+      slots += 1;
     }
     pattern += escapeRegExp(template.slice(offset));
-    return new RegExp(`^${pattern}$`).test(line);
+    const match = new RegExp(`^${pattern}$`).exec(line);
+    if (!match) return false;
+    // Every non-empty slot must be text the corpus actually contains. A variable may legitimately
+    // expand to nothing, so empty is allowed; a sentence nobody wrote is not.
+    for (let i = 1; i <= slots; i += 1) {
+      const slot = (match[i] ?? '').trim();
+      if (slot !== '' && !scripts.includes(slot)) return false;
+    }
+    return true;
   });
 };
 
@@ -4871,6 +4918,48 @@ test('CONTROL: an invented output line IS caught', () => {
   assert.equal(scriptPrints(scripts,
     'ask     explicit credentialed mode; sidecar cwd cannot discover checkout/home .env files'),
   true, 'a line a script really prints through a shell variable was rejected');
+});
+
+test('CONTROL: a REAL template skeleton with invented variable content IS caught', () => {
+  /*
+   * AE-P0.3 R1. The control above forges a sentence that shares no skeleton with any template, so
+   * it is rejected for a reason that has nothing to do with the way this check was weak. It passed
+   * throughout the period when `.*` was accepting 561 of 561 forgeries — a control whose forgery
+   * is too obvious cannot fail for the real defect, and a control that cannot fail for the defect
+   * is decoration.
+   *
+   * So this forges from the INSIDE: take every real template that carries a variable, put invented
+   * text in each variable slot, and require every one to be rejected. The skeleton is genuine and
+   * only the interpolated content is fabricated — which is exactly the line a runbook would quote
+   * if it invented a path, a flag, or an instruction.
+   *
+   * It is a differential, not an absolute: the test above proves a legitimate interpolated line is
+   * still ACCEPTED, and this proves a forged one is REJECTED. Either alone passes vacuously — an
+   * empty template list satisfies this, and a predicate returning true satisfies that.
+   */
+  const scripts = toolScripts();
+  const variablePattern = /\$(?:\{[A-Za-z_][A-Za-z0-9_]*(?::-[^}]*)?\}|[A-Za-z_][A-Za-z0-9_]*)/g;
+  const templates = [...scripts.matchAll(/\b(?:say|echo)\s+"((?:[^"\\]|\\.)*)"/g)]
+    .map((m) => m[1])
+    .filter((t) => {
+      variablePattern.lastIndex = 0;
+      return variablePattern.test(t) && t.replace(variablePattern, '').trim().length > 6;
+    });
+
+  // BLINDNESS FLOOR. Every assertion below is "for each template", so an extraction matching
+  // nothing satisfies all of them. 561 qualified when this was written; FEWER means the pattern
+  // stopped matching the corpus, not that the scripts got safer.
+  assert.ok(templates.length >= 500,
+    `only ${templates.length} interpolating templates found; 561 qualified when this was written — `
+    + 'the extraction broke, so this control is ranging over almost nothing');
+
+  const forged = templates.map((t) => t.replace(variablePattern,
+    ' THIS TEXT IS INVENTED AND NO SCRIPT EVER PRINTS IT '));
+  const accepted = forged.filter((line) => scriptPrints(scripts, line));
+  assert.deepEqual(accepted.slice(0, 3), [],
+    `${accepted.length} of ${forged.length} forged lines were accepted. A real template skeleton `
+    + 'with invented content in its variable slots is exactly what a runbook quoting something '
+    + 'nobody prints looks like, and this check exists to reject it.');
 });
 
 /*
