@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'c40e7b3bd0e8905a56848bd38b8dd59d0441ae76'
+PREV_TIP     = 'e39d8170777b653a9a62fdca08130262127f37f1'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -558,6 +558,20 @@ CONTROLS = {
  'item-md-view':     ('an item scoped `all` is a claim about every gate',
                       'an item scoped `all` `**` **is a claim about every gate', 1,
                       'ITEM-MD-UNBALANCED'),
+ # A RULING RESTATING AN ITEM'S STATE — the shape that made R7's Cost clause name a superseded
+ # reason and R1 assert that a CLOSED item stays open. The control reinstates it on R3.
+ 'ruling-item-state': ('That work is filed at item 19 (G3),',
+                      'That work is filed at item 19 (G3), and item 19 stays open,', 1,
+                      'RULING-ITEM-STATE'),
+ # AND THE CITATION FORM MUST STAY EXEMPT, differentially. `open item N (Gx)` is how this packet
+ # cites an item; subtracting it is what stops R12 tripping. This control adds a citation AND a real
+ # assertion in one sentence: with the subtraction the assertion is still seen and the tag fires;
+ # without it the sentence would fire anyway, so the exemption is pinned from the other side —
+ # remove the subtraction and R12's untouched citation fires on the PRISTINE document, which the
+ # harness reports as UNCLEAN rather than as this control's tag.
+ 'ruling-cite-plus':  ('That work is filed at item 19 (G3),',
+                      'That work is filed at open item 19 (G3), and item 21 is closed,', 1,
+                      'RULING-ITEM-STATE'),
  'blocking-negated': ('38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING',
                       '38. **G1-B** — ⟦PACKET⟧ **BLOCKING', 1, 'BLOCKER-SET'),
  'marker-nonblocker': ('1. **G0-B** — ', '1. **G0-B** — ⟦BLOCKED-ON: 999⟧ ', 1, 'BLOCKER-KIND'),
@@ -2273,6 +2287,27 @@ for m in re.finditer(r'(?m)^\*\*(R\d+) — .*?(?=\n\n\*\*R\d+ — |\n# |\*\*What
     # decision. The view is length-preserving precisely so these two can be different reads of one
     # region. Evidence answers WHERE, content answers WHAT, and they need different views.
     blk = pkt[m.start():m.end()]
+    # A RULING RULES; IT DOES NOT CARRY AN ITEM'S STATE. R7's Cost clause said the census method
+    # "is why item 26 stays open" — a reason that had been superseded twice: the census is done, and
+    # item 26's live blocker is a missing fixture. codex-worker-1 found that one. The same pass
+    # found a second, which it did not: R1 asserted "Item 11 and item 25 stay open FOR THIS WORK"
+    # while item 11 has been CLOSED since R1 was authored. Both are the one-fact-two-sources shape,
+    # and patching the two sentences would leave the class open — every ruling is an opportunity to
+    # restate a state that lives somewhere else, and a restatement decays the moment the item moves.
+    #
+    # So the state is read at the item and asserted nowhere else. The check is per SENTENCE, split
+    # on its terminator rather than a character count, and the packet's cross-reference FORM
+    # `open item N (Gx)` is subtracted first — it is a citation, not a predicate, and R12 uses it.
+    # The predicate is a closed pairing of state verbs with the two lifecycle values plus the
+    # blocking axis, which is the whole vocabulary this document has for an item's state.
+    for _sent in re.split(r'(?<=[.!?])\s+', _visible(pkt)[m.start():m.end()]):
+        _clean = re.sub(r'\bopen\s+items?\s+\d{1,2}\s*\(', ' ', _sent, flags=re.I)
+        if (re.search(r'\bitems?\s+\d{1,2}\b', _clean, re.I) and
+                re.search(r'\b(stays?|remains?|is|are|was|were|kept|keeps)\s+'
+                          r'(open|closed|blocking|nonblocking|non-blocking)\b', _clean, re.I)):
+            bad('RULING-ITEM-STATE', f'{m.group(1)} states an item\'s state: '
+                                     f'{re.sub(chr(92) + "s+", " ", _sent)[:70]!r}; a ruling cites '
+                                     f'an item, the item states its own status')
     # the 160-char cap silently emitted `decision: null` for R5, whose heading grew past it when
     # the supersession was written into it — so the manifest lost the very sentence that
     # resolves R5 against R8(c), and A0 checked ids only. A cap is a truncation wearing a

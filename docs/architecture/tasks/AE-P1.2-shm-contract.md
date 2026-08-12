@@ -1154,8 +1154,11 @@ auxOutputPlaneOffset(header)".
 `std::fill(..., 0.0f)` zeroes every aux slot every block. G4's invariant is a consumer reading bytes
 ANOTHER AGENT WROTE — the other agent is the host, and this gate's population is blind to it
 writing. That is the `S-1` spelling defect at the scale of a whole agent.
-**R7 (below) rules the host IN SCOPE.** The census must be rebuilt, and the OBVIOUS rebuild is also
-wrong: keying on `ShmHeader::audioOutOffset` STILL misses the host, because
+**R7 (below) rules the host IN SCOPE. THE REST OF THIS PARAGRAPH IS THE RECORD OF A REBUILD THAT
+HAS SINCE HAPPENED** — it is written in the tense of the decision and marked here, at its head,
+rather than only at its close, because a reader who stops in the middle of it otherwise leaves with
+"the census must be rebuilt" as the live state. The census was rebuilt, and the OBVIOUS rebuild was
+also wrong: keying on `ShmHeader::audioOutOffset` STILL misses the host, because
 `juce_host_process_main.cpp:487-504` walks a running accumulator —
 `header.audioOutOffset = offset; offset += alignUp(outBlockBytes, 64); state.audioAuxOutOffset = offset;` — so the host's aux offset is numerically a DESCENDANT of the field and SYNTACTICALLY A
 SIBLING. A census keyed on the field NAME misses it for exactly the reason the four-spelling census
@@ -1447,7 +1450,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `020b2273221dbfb48091241152046494045409fa`, A.0 SCRIPT BLOB `df26e139624f6382e623026e285eda5bde3dd596`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `575f210d71b0b7106ddaf22c80ff458f13e05c9b`, A.0 SCRIPT BLOB `07e158623c8d1b81a7a0b988417c47f09f2af364`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1526,6 +1529,19 @@ extractor count at its floor. `--prove-sweep-predicate` classifies a crafted-lin
 every spoof a reviewer has landed on the sweep's success test — a bare `OK (+` prefix, an unanchored
 tail, a wrong tag, a count the emitter cannot print, and a tag line with no separator.
 
+**A RULING RULES; IT DOES NOT CARRY AN ITEM'S STATE.** R7's `Cost` clause said its census method
+"is why item 26 stays open" — a reason superseded twice over, because the census is DONE and item
+26's live blocker is a missing fixture. codex-worker-1 found that one. The same pass found a second
+it did not name: R1 asserted "Item 11 and item 25 stay open FOR THIS WORK" while item 11 has been
+CLOSED since R1 was authored. Two sentences, one shape, both wrong in the same direction — **a
+restatement decays the moment the item moves, and every ruling is an opportunity to make one.** So
+patching the two would have left the class open; the state is now read at the item and asserted
+nowhere else, and three further rulings (R2, R3, R17) were reduced from asserting a state to citing
+the item that holds it. `RULING-ITEM-STATE` refuses the shape, per SENTENCE — split on its
+terminator, not a character count — with one subtraction: **the packet's cross-reference FORM
+`open item N (Gx)` is a citation, not a predicate.** That subtraction is load-bearing and pinned
+from both sides: removing it makes R12's untouched citation refuse the pristine document.
+
 **NOTHING HERE READ AN ITEM AS MARKDOWN, so an edit could leave a bold run open and every check
 passed.** Editing item 38 at the predecessor SHA I replaced a sentence's opening clause and left its
 closing `**` behind: the body carried an odd number of delimiters, a lowercase orphan fragment, and
@@ -1557,7 +1573,7 @@ only ADDS one is a no-op and reports BLIND correctly — a repaired opt-out prod
 tag — and it therefore adds the span AND breaks the real status, so the old scan reads the span as
 the status while the new parse names the malformed reach.
 
-**Controls.** One hundred thirty-two, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** One hundred thirty-four, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1578,7 +1594,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
@@ -1621,8 +1637,7 @@ mechanism, and writing the lists is work that has not been done at this SHA. The
 this by reading R1 against the gates rather than against itself, which is the right test and one I
 did not run: I wrote "the packet lists the members explicitly" in the same commit in which it did
 not. **Cost:** a reviewer must read the lists, not re-run a command; the detector bounds staleness,
-not correctness. Item 11 and item 25 stay open FOR THIS WORK, which is now named rather than
-implied.
+not correctness. This work is filed at item 11 (G1-B) and item 25 (all).
 
 **R2 — item 18 (G2-B): TWO-LEVEL READINESS, not a recovery-only exemption.** Readiness is staged —
 `mapped-and-bypassed` and `mirror-complete` — and dispatch is permitted at the lower level. The
@@ -1636,8 +1651,9 @@ QUINTUPLE and PASS 5 compares five components. G2-B's invariant permits dispatch
 `mapped-and-bypassed` and requires `mirror-complete` only for processing that depends on mirrored
 parameters. **That propagation is DONE at this SHA** — it was described here as pending for three
 SHAs while I wrote notes about it, and a ruling that contradicts the gates it governs is worse than
-an open question, because a reader can satisfy the gates and violate the ruling. Item 18 stays open
-for the IMPLEMENTATION of the two levels in the product, which no packet edit can deliver.
+an open question, because a reader can satisfy the gates and violate the ruling. What this ruling
+does NOT deliver is the IMPLEMENTATION of the two levels in the product, which no packet edit can
+reach; that work is filed at item 18 (G2-B), and its state is read there.
 
 **R3 — item 19 (G3): N IS AUTHORED AT 3, and the packet says authored, not derived.** Nothing in
 the tree sources an observation count; `hardTimeoutBlocks = 500` is a block count and converting it
@@ -1652,7 +1668,8 @@ rather than describing it as though it exists. **Per backend's direction at
 this SHA**, R3 makes G3 decidable FOR IMPLEMENTATION PLANNING in the same way R1 does for the
 authored populations: N = 3 is an authored parameter, not a derived fact, and the work it implies is
 a ticket — pin N with its units and semantics, instrument the production watchdogs, define drift and
-measurement acceptance, and have it independently validated. Item 19 stays OPEN until that passes.
+measurement acceptance, and have it independently validated. That work is filed at item 19 (G3),
+which this ruling does not discharge.
 G3 is NOT permanently resolution-blocked and must not be classified as such. **Cost, and a correction to this ruling's
 own reasoning:** I first justified 3 as "the smallest value that is not 1". Two is. The reviewer
 caught it and the justification is replaced rather than patched: 1 evicts on a single unlucky
@@ -1715,9 +1732,13 @@ ANOTHER AGENT wrote, and the other agent is `juce_host_process_main`. A scope th
 leave the gate unable to see the write side of its own invariant — and it already does not see it,
 because the population's four name-terms miss the host's spelling entirely. Note this differs from
 G1-A, whose RAW deliberately excludes `juce_host_process_main` because that gate is about the
-engine's own ring; a per-gate scope is not a packet-wide one. **Cost:** the population must be
-rebuilt by derivation from `ShmHeader::audioOutOffset` rather than by matching spellings, which is a
-harder census than a grep and is why item 26 stays open rather than closing on a corrected number.
+engine's own ring; a per-gate scope is not a packet-wide one. **Cost:** the population had to be
+rebuilt by derivation rather than by matching spellings, which is a harder census than a grep. **That
+census is DONE, and this clause named the wrong derivation for four SHAs.** It said the rebuild must
+key on `ShmHeader::audioOutOffset` — the shape the G4 population passage REFUTES, because the host's
+aux offset is a running accumulator descended from that field and a census keyed on the field name
+misses it for exactly the reason the four-spelling census did. The implementable census keys on the
+MAPPED BASE and is the complete role census in G4. Remaining work is filed at item 26 (G4).
 
 **R8 — item 26 (G4): THE THREE ROLE RULINGS claude-worker-1 correctly refused to make.**
 **(a) SAME-AGENT READBACK IS OUT OF THE POPULATION, and named rather than dropped.** `juce:834` and
@@ -2213,8 +2234,9 @@ reproducing command reads as a rule, because that is what a reproducing command 
 This packet's convention is the opposite — every census figure is a fact about `PRODUCT_SHA` — and
 the register wrote a sentence that spends one as a budget. **A pinned measurement and a forward
 constraint are indistinguishable in prose**; they are told apart only by asking which tree the number
-describes, and that question is not visible in the sentence that uses it. Item 21 is CLOSED: its
-whole content was a packet decision and there is nothing left for an implementer to choose between.
+describes, and that question is not visible in the sentence that uses it. The whole content of
+item 21 (G3) was a packet decision, with nothing left for an implementer to choose between —
+which is why this ruling discharges it, and item 21 records what that made it.
 
 **What these rulings do NOT do.** None of them closes an item that names PRODUCT work — R1 through
 R17 make such items implementable, R13 and R16 are RETRACTED rather than applied and R15's central claim is retracted within it, and each stays open until the work exists and is verified by
