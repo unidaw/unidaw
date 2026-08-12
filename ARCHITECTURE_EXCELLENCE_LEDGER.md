@@ -888,6 +888,13 @@ phrase (`_said.group(0)`) inside Dependencies, with a causal decoy control; 114
 controls pass. Item26’s stale reason, member-order fidelity, final-gate
 selection, and G3/G0/M1/item37 semantics remain open. Exact review is pending.
 
+Exact review of `8ae2801` is **BLOCKED**. Probe correction passes, but
+Dependencies/depara boundaries differ and `_said` remains gate-wide: moving the
+exact count after a blank or after a bold boundary (with only bare words in the
+canonical field) clean-passes. Mutable Final-gate prose still skips all G4
+validation. Indented Open sections, prefix headers, order/reasons, G2-B/G3/G0/
+G4/M1/item37 remain blocked.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
