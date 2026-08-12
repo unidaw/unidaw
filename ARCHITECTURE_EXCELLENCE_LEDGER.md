@@ -796,6 +796,13 @@ count phrase. Raw section handling still independently finds the first hidden
 overwrite visible item dictionaries. G4 stale labels/planning, G3 N/M1/item37/
 Watchdog, and G0 remain blocked.
 
+Owner successor `e9aff2c` claims raw section parity is closed by slicing
+`body_raw` from the canonical unhidden section offsets, and hidden item-line
+overwrite is eliminated by separating headline location from raw-byte content;
+the prior comment probe is classified as correctly changing the item. G4 member
+closures are inherited; 104 controls and extractor floor 43. Exact review is
+pending. G3 N/Watchdog/item37 oracle/M1/G0/G4 item26 remain gated.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
