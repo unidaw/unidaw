@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'aec396867fff7ddf3042e1df7719d7d474b624c1'
+PREV_TIP     = 'e94f0de3719f81d0a0fd8388d0be9933bc3430fd'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -520,6 +520,11 @@ CONTROLS = {
  'edge-second':      ('27. **G2-A** — ⟦PRODUCT⟧ ',
                       '27. **G2-A** — ⟦PRODUCT⟧ ⟦BLOCKED-ON: 29⟧ ⟦BLOCKED-ON: 999⟧ ', 1,
                       'BLOCKER-KIND'),
+ 'status-malformed': ('38. **G1-B** — **NOT BLOCKING,', '38. **G1-B** — **NOT BLOCKINGLY,', 1,
+                      'ITEM-STATUS-MISSING'),
+ 'status-ambiguous': ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING,',
+                      '37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING, and also BLOCKING,', 1,
+                      'ITEM-STATUS-AMBIGUOUS'),
  'blocking-negated': ('38. **G1-B** — **NOT BLOCKING',
                       '38. **G1-B** — **BLOCKING', 1, 'BLOCKER-SET'),
  'marker-nonblocker': ('1. **G0-B** — ', '1. **G0-B** — ⟦BLOCKED-ON: 999⟧ ', 1, 'BLOCKER-KIND'),
@@ -718,7 +723,54 @@ for c in cand:
 closed_set = {int(m.group(1)) for m in
               re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — \*{0,2}CLOSED at this SHA', body)}
 closed = len(closed_set)
-blocking_n = len(re.findall(r'(?m)^\d{1,2}\. \*\*[^*]+\*\* — [^\n]{0,120}(?<!NOT )BLOCKING', body))
+
+# ONE PARSED STATUS FOR EVERY CONSUMER, replacing five regexes that each re-derived "is this item
+# blocking" and disagreed about which inputs they accepted. codex-worker-1 proved the divergence
+# three ways: a positive `BLOCKING` after character 120 but before 200 made the emitter say blocking
+# while the set said not; a declaration at column 304 was invisible to all of them; and
+# `NOT BLOCKINGLY` passed as non-blocking because a lookbehind is not a token boundary.
+#
+# Patching five copies is not making one derivation, and I had claimed it was. The window sizes were
+# never a grammar — they were how far each copy happened to look. This parses the STATUS as a token
+# at a fixed position: the leading bold run of the headline, `BLOCKING` or `NOT BLOCKING`, bounded
+# by \b so `BLOCKINGLY` is neither.
+_STATUS_RE = re.compile(r'(?m)^(\d{1,2})\. \*\*[^*\n]+\*\* — [^\n]*?\*\*(NOT )?BLOCKING\b')
+_ITEM_STATUS = {}
+for _m in _STATUS_RE.finditer(body):
+    _ITEM_STATUS[int(_m.group(1))] = not _m.group(2)
+# a stray positive BLOCKING outside the parsed status is a defect, not a second opinion: it means
+# the headline says two things and the consumers would have to choose.
+_ITEM_HEADS_SEEN, _ITEM_HEADLINE = set(), {}
+for _m in re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*\n]+\*\* — ([^\n]*)', body):
+    _n2, _rest = int(_m.group(1)), _m.group(2)
+    _ITEM_HEADS_SEEN.add(_n2)
+    _ITEM_HEADLINE[_n2] = _rest
+    _hits = len(re.findall(r'(?<!NOT )\bBLOCKING\b', _rest))
+    if _hits > 1 or (_hits == 1 and not _ITEM_STATUS.get(_n2, False)):
+        bad('ITEM-STATUS-AMBIGUOUS', f'item {_n2} headline states BLOCKING more than once or '
+                                     f'outside its leading status')
+
+# AND AN ITEM WITHOUT A PARSEABLE STATUS IS A DEFECT, not a non-blocking item. With `\b` making
+# `BLOCKINGLY` match nothing, the item simply had no entry and `.get(n, False)` answered "not
+# blocking" — absence read as a value, which is how the malformed spelling passed. Every open item
+# must state a status the grammar accepts.
+# ONLY A MALFORMED ATTEMPT, not an absent one. Omission means non-blocking — that is the packet's
+# convention and most items rely on it — so requiring a status everywhere would have demanded
+# seventeen edits to say what silence already says. What must not happen is a headline that REACHES
+# for the status word and misses: `BLOCKINGLY` parsed as nothing and was read as non-blocking, so a
+# typo in a blocker's status would silently declassify it.
+for _n2 in sorted(_ITEM_HEADS_SEEN):
+    if _n2 in _ITEM_STATUS or _n2 in closed_set:
+        continue
+    if 'BLOCKING' in (_ITEM_HEADLINE.get(_n2) or ''):
+        bad('ITEM-STATUS-MISSING', f'item {_n2} spells BLOCKING in a form the grammar does not '
+                                   f'accept: the status is **BLOCKING** or **NOT BLOCKING**, as a '
+                                   f'whole word inside the leading bold run')
+
+def _is_blocking(n):
+    return _ITEM_STATUS.get(n, False)
+
+blocking_n = sum(1 for n in _ITEM_STATUS if _is_blocking(n))
 if not hdr:
     bad('OPEN-HEADER-MISSING', 'no "# Open items — N atomic, K CLOSED at this SHA, M open"')
 else:
@@ -919,8 +971,7 @@ for m in list(re.finditer(r'(?m)^\*\*R\d+ — .*?(?=\n\n\*\*R\d+ — |\n# |\*\*W
 # A THIRD DERIVATION OF THE SAME PREDICATE, and the one that actually feeds the blocker SET — I
 # patched the emitter and the count for negation and left this one, so the set and the emitted
 # `blocking` flag disagreed. Three copies of "is this item blocking", found one at a time.
-_derived_blk = sorted(int(m.group(1)) for m in
-                      re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — [^\n]{0,120}(?<!NOT )BLOCKING', body))
+_derived_blk = sorted(n for n in _ITEM_STATUS if _is_blocking(n))
 for m in re.finditer(r'(?:items?|block)[^.\n]{0,40}?\((\d{1,2}(?:, \d{1,2}){2,}(?:,? and \d{1,2})?)\)', pkt):
     got = sorted(int(x) for x in re.findall(r'\d+', m.group(1)))
     if got != _derived_blk:
@@ -1410,7 +1461,10 @@ _decor_raw = classify_raw_prose(open(__file__).read())
 # 43 -> 42: `hdr` became a `re.match` against a single sliced line instead of a search over the
 # section, so one more raw-prose scan disappeared. Downward again, and again because a repair
 # removed a search rather than adding one.
-_DECOR_FLOOR = 42
+# 42 -> 38: FOUR raw-prose extractors disappeared when five copies of the blocking predicate became
+# one parsed status. The largest single drop this floor has seen, and the right direction — the
+# ratchet exists to make raw-prose reads deliberate, and the best outcome is fewer of them.
+_DECOR_FLOOR = 38
 # THE FLOOR MUST EQUAL TODAY'S COUNT, not merely bound it. As a `>` test the floor could be raised
 # to 999 and the ratchet would pass forever while asserting nothing — codex-worker-2 demonstrated
 # exactly that, and the executable proof stayed green because it tested the CLASSIFIER and never the
@@ -1893,12 +1947,11 @@ for g in gate_hdr:
     if g['gate'] in deps:
         bad('GATE-DEP-CYCLE', f'{g["gate"]} declares itself a dependency')
     blk = sorted(i for i in nums
-                                           if entry.get(i) == g['gate'] and i not in closed_set
-                                           and re.search(r'(?m)^%d\. \*\*[^*]+\*\* — [^\n]{0,120}(?<!NOT )BLOCKING' % i, body))
+                 if entry.get(i) == g['gate'] and i not in closed_set and _is_blocking(i))
     # `all`-tagged items are cross-cutting: a blocking one belongs to EVERY gate, and building
     # blocking_items per gate tag alone made that population invisible while it happens to be empty.
     xcut = sorted(i for i in nums if entry.get(i) == 'all' and i not in closed_set
-                  and re.search(r'(?m)^%d\. \*\*[^*]+\*\* — [^\n]{0,120}(?<!NOT )BLOCKING' % i, body))
+                  and _is_blocking(i))
     blk = sorted(set(blk) | set(xcut))
     # TWO decidabilities, because the packet makes the distinction deliberately and one boolean
     # collapsed it toward less work: G3 is plannable (R3 authored N) and not acceptance-decidable.
@@ -2300,9 +2353,9 @@ man = {
             # found when I wrote exactly that phrase into item 38 and the derivation disagreed with
             # the prose. Same bare-substring shape as `not Final gate` two checks over; a predicate
             # that cannot see negation was in the field the whole blocker set is built from.
-            'blocking': bool(re.search(r'(?<!NOT )BLOCKING',
-                                       (re.search(r'(?m)^%d\. \*\*[^*]+\*\* — (.{0,200})' % n, body).group(1)
-                                        if re.search(r'(?m)^%d\. ' % n, body) else ''))),
+            # THE FIFTH CONSUMER, and the one whose 200-character window disagreed with the other
+            # four's 120. It reads the single parsed status now; no window survives.
+            'blocking': _is_blocking(n),
             # WITHDRAWN IS A STATE AND WAS NOT TYPED. A withdrawn item emitted closed=false,
             # blocking=false, kind=null and sat among the open ones — indistinguishable to a
             # canonical consumer from live nonblocking work, which is exactly the audience the

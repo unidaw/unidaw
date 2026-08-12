@@ -209,6 +209,8 @@
   "section-indented",
   "span-dbl-across",
   "stale-a0-sample",
+  "status-ambiguous",
+  "status-malformed",
   "two-markers",
   "ungated-ref",
   "unmarked-popn",
@@ -237,7 +239,7 @@
   "census_rows": 9,
   "closed": 9,
   "commanded_claims": 32,
-  "controls": 125,
+  "controls": 127,
   "hand_ruled": 13,
   "items": 38,
   "open": 29,
@@ -852,7 +854,7 @@
   {
    "blocked_on": [],
    "blocking": true,
-   "body": "24. **G0-B** — ⟦PRODUCT⟧ BLOCKING for G0-B only. **RULED (R4): the Rust side renames.** The pure name join requires one rename: `patcher_abi.h:75` declares `uint8_t reserved[4]{}` where `patcher_rust/src/lib.rs:86` declares `pub _pad0: [u8; 4]`, so the two sides of a byte-identical member disagree by NAME and no rule that forbids an alias table can join them. PASS 9 is RED until this lands and states so. **RULED (R4): the RUST side renames**, `_pad0` becomes `reserved`. The convention argument — `_pad0` is idiomatic Rust — was weighed and lost: a binding may be unidiomatic, an authority may not be derived from its binding. This item is open for the RENAME, not for the choice, which is made.",
+   "body": "24. **G0-B** — ⟦PRODUCT⟧ **BLOCKING for G0-B only.** **RULED (R4): the Rust side renames.** The pure name join requires one rename: `patcher_abi.h:75` declares `uint8_t reserved[4]{}` where `patcher_rust/src/lib.rs:86` declares `pub _pad0: [u8; 4]`, so the two sides of a byte-identical member disagree by NAME and no rule that forbids an alias table can join them. PASS 9 is RED until this lands and states so. **RULED (R4): the RUST side renames**, `_pad0` becomes `reserved`. The convention argument — `_pad0` is idiomatic Rust — was weighed and lost: a binding may be unidiomatic, an authority may not be derived from its binding. This item is open for the RENAME, not for the choice, which is made.",
    "closed": false,
    "gate": "G0-B",
    "kind": [
@@ -860,7 +862,7 @@
    ],
    "line": 2287,
    "n": 24,
-   "title": "⟦PRODUCT⟧ BLOCKING for G0-B only. **RULED (R4): the Rust side renames.** The pure name join requires one renam",
+   "title": "⟦PRODUCT⟧ **BLOCKING for G0-B only.** **RULED (R4): the Rust side renames.** The pure name join requires one r",
    "withdrawn": false
   },
   {
@@ -2210,7 +2212,7 @@
      "line": 2190
     },
     {
-     "context": " 24. **G0-B** — ⟦PRODUCT⟧ BLOCKING for G0-B only. **RULED (R4): the Rust side renames.** The pure nam",
+     "context": ". **G0-B** — ⟦PRODUCT⟧ **BLOCKING for G0-B only.** **RULED (R4): the Rust side renames.** The pure nam",
      "line": 2287
     },
     {
