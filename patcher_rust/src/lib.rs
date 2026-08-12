@@ -94,6 +94,25 @@ pub struct PatcherRandomDegreeConfig {
     pub duration_ticks: u64,
 }
 
+/// The element type of `PatcherNodeBuffer::events` — **an engine-owned scratch array, not the
+/// shared-memory command ring.** `apps/engine_run_patcher_node.cpp:82` hands
+/// `buffer.events.data()` in as `ctx.event_buffer` and `&buffer.count` as `ctx.event_count`; the
+/// buffer is `std::array<daw::EventEntry, 1024>` declared at `apps/engine_types.h:84-87`, consumed
+/// by the engine on the same thread that called this node.
+///
+/// **PUBLICATION HERE IS `count`, NOT A PER-SLOT FLAG — which is why this type has no `ready`.**
+/// The C++ and daw-bridge `EventEntry` both carry a `ready` u32 at offset 60: that is the
+/// multi-producer ring's publication flag, where a producer CAS-reserves a slot and only then
+/// marks it readable. This buffer has one producer and one consumer on one thread, so the flag
+/// would mean nothing. `push_event` stores the whole object, which writes this type's tail padding
+/// over those four bytes — harmless, because nothing reads them from this buffer.
+///
+/// **THE INVARIANT THAT IS NOT OPTIONAL IS THE SIZE.** The C++ side indexes that array by
+/// `sizeof(daw::EventEntry)` = 64, and this type stores through it. The two structs are DIFFERENT
+/// — 7 members there, 6 here — and the only thing keeping the writes on the right slot is that
+/// both are exactly 64 bytes. If either drifts, this writes at the wrong stride into an
+/// engine-owned array, silently, on the audio thread. The assertion below is what makes that a
+/// build failure instead.
 #[repr(C, align(64))]
 pub struct EventEntry {
     pub sample_time: u64,
@@ -103,6 +122,24 @@ pub struct EventEntry {
     pub flags: u32,
     pub payload: [u8; 40],
 }
+
+// THE STRIDE, ASSERTED AT COMPILE TIME. A plain `const` block rather than a crate, so it costs no
+// dependency; a mismatch is a build error naming this line. See the doc comment above for why 64
+// is not an arbitrary number here.
+const _: () = assert!(core::mem::size_of::<EventEntry>() == 64);
+const _: () = assert!(core::mem::align_of::<EventEntry>() == 64);
+// AND EVERY OFFSET, because SIZE ALONE DOES NOT PIN THE LAYOUT — proven, not assumed. Changing
+// `flags` from u32 to u64 moves `payload` from 20 to 24 and the struct still ends at exactly 64,
+// so a size-only assertion compiles clean while every field after `size` has moved. The C++ side
+// would then read a payload the patcher wrote four bytes away. These offsets are the ones measured
+// from `apps/shared_memory.h`; the C++ type has a 7th member, `ready` at 60, which this one
+// deliberately lacks — see the doc comment above.
+const _: () = assert!(core::mem::offset_of!(EventEntry, sample_time) == 0);
+const _: () = assert!(core::mem::offset_of!(EventEntry, block_id) == 8);
+const _: () = assert!(core::mem::offset_of!(EventEntry, type_) == 12);
+const _: () = assert!(core::mem::offset_of!(EventEntry, size) == 14);
+const _: () = assert!(core::mem::offset_of!(EventEntry, flags) == 16);
+const _: () = assert!(core::mem::offset_of!(EventEntry, payload) == 20);
 
 #[repr(C, align(64))]
 pub struct PatcherContext {
