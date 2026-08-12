@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '6a9cbbb381268e8267390a1a1aaa9ca6e146d3d2'
+PREV_TIP     = '301b66c7c4d7bcf63375177d2ce12df87e14ce5b'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -346,6 +346,11 @@ CONTROLS = {
  'ruling-body-swap': ('CLOSED at this SHA.** The static-check contradiction was not one. R17 shows',
                       'CLOSED at this SHA.** The static-check contradiction was not one. R16 shows', 1,
                       'RULING-BODY-BIND'),
+ 'g4-dep-garbage':   ('19 (G3) no source for N,', '19 (G3) no source for N, 7 (Garbage) invented,',
+                      1, 'GATE-DEP-BLOCKERS'),
+ 'g4-dep-twophrase': ('on TEN dependency blockers plus one of its own.',
+                      'on TEN dependency blockers plus one of its own. Formerly on NINE dependency blockers plus one.',
+                      1, 'GATE-DEP-BLOCKERS'),
  'g4-dep-dupe':      ('18 (G2-B) the absent PASS 4 replacement,',
                       '18 (G2-B) the absent PASS 4 replacement, 18 (G2-B) again,', 1,
                       'GATE-DEP-BLOCKERS'),
@@ -1837,7 +1842,16 @@ for _g in _final:
     # BOUNDED TO THE GATE'S OWN dependencies_text, not the whole packet: a decoy phrase anywhere
     # earlier in the document shadowed the real one, because `re.search` returns the FIRST match and
     # nothing tied the phrase to the gate it describes.
-    _said = re.search(r'on ([A-Z]+) dependency blockers plus', _visible(_g.get('dependencies_text') or ''))
+    # THE GATE'S OWN LINES, both for the phrase and the list. A global search let an earlier decoy
+    # — a quoted historical list, or a second count phrase — certify the wrong operative text, the
+    # same defect as `hdr` searching the whole packet for a heading. And the phrase must be UNIQUE
+    # within the gate: `dependencies_text` carried a quoted TEN and a live NINE at once and neither
+    # contradicted the other, because `re.search` stops at the first.
+    _gsec = '\n'.join(_visible(pkt).split('\n')[_g['line'] - 1:_g['end_line']])
+    _phr = re.findall(r'on ([A-Z]+) dependency blockers plus', _gsec)
+    if len(_phr) > 1:
+        bad('GATE-DEP-BLOCKERS', f'{_g["id"]} states its dependency-blocker count {len(_phr)} times: {_phr}')
+    _said = re.search(r'on ([A-Z]+) dependency blockers plus', _gsec)
     if not _said:
         bad('GATE-DEP-BLOCKERS', f'{_g["id"]} states no dependency-blocker count to check')
     elif WORDNUM.get(_said.group(1).upper()) != len(_union):
@@ -1849,7 +1863,7 @@ for _g in _final:
     # member mutation codex-worker-1 tried passed cleanly. I wrote a note today about conditionals
     # failing silently where assertions fail loudly, and then wrote this.
     _listed = re.search(r'\*\*The ' + (_said.group(1).lower() if _said else 'ten') +
-                        r'\*\*, carried by gates [^:]*:\s*(.*?)(?=\n\*\*|\n\n)', _visible(pkt), re.S)
+                        r'\*\*, carried by gates [^:]*:\s*(.*?)(?=\n\*\*|\n\n)', _gsec, re.S)
     if not _listed:
         bad('GATE-DEP-BLOCKERS', f'{_g["id"]} states no dependency-blocker LIST to check')
     else:
@@ -1864,6 +1878,14 @@ for _g in _final:
         # actually carries item 19.
         _pairs = re.findall(r'(?<![0-9])(\d{1,2}) \((' + GATE_ID + r')\)', _listed.group(1))
         _ids = [int(n) for n, _ in _pairs]
+        # ANYTHING SHAPED LIKE A MEMBER MUST PARSE AS ONE. `re.findall` cannot report what it did
+        # not match, so `7 (Garbage)` and `7 (G9-X)` were invisible rather than rejected — the
+        # extractor's silence read as their absence. Every `N (...)` in the list is counted, and a
+        # surplus over the parsed pairs is a malformed entry.
+        _shaped = re.findall(r'(?<![0-9])(\d{1,2}) \([^)\n]*\)', _listed.group(1))
+        if len(_shaped) != len(_pairs):
+            bad('GATE-DEP-BLOCKERS', f'{_g["id"]} has {len(_shaped) - len(_pairs)} member-shaped '
+                                     f'entr(y/ies) that do not parse as `N (Gate)`')
         _dupes = sorted({n for n in _ids if _ids.count(n) > 1})
         if _dupes:
             bad('GATE-DEP-BLOCKERS', f'{_g["id"]} lists {_dupes} more than once')
