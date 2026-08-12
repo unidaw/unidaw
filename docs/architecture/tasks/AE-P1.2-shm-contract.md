@@ -27,7 +27,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    in their TESTS and in the PRODUCT respectively — **a plannable gate is not a decidable one**, and
    the manifest keeps the two apart deliberately. The zero case is a different sentence rather than
    a missing one, so the check cannot pass by the claim disappearing. G1-B's readers were withdrawn and are AUTHORED again under R1
-   with rules, members and drift detectors; G2-A's scope and G4's out-plane are not. **TWO GATES ARE ACCEPTANCE-DECIDABLE — G0-A and G1-A —
+   with rules, members and drift detectors; G2-A's scope is AUTHORED under R12 and G4's population is complete across both planes — this sentence said neither was, and outlived both. **TWO GATES ARE ACCEPTANCE-DECIDABLE — G0-A and G1-A —
    and eleven items block (18, 19, 24, 26, 27, 28, 29, 33, 35, 36 and 37)** and ALL ELEVEN need product
    work. **Item 37 needs a PACKET EDIT BESIDES**, and the opening used to imply otherwise: G3's
    acceptance surface cannot see the defect that item names, so writing its oracle into the
@@ -85,12 +85,14 @@ The blockers from the exact review are reconciled here, and the count is deliber
    written once and thereafter read as framing rather than as claims; it now states no number that
    is not derived elsewhere and checked here.  Every gate carries the record's SHAPE — population slot,
    failure model, deterministic test, PASS conditions each naming their refutation, static checks,
-   review register — and for those three the population slot reads "withdrawn", which satisfies the
-   shape and decides nothing. **No universal claim about populations is made anywhere in this
+   review register — and for those three the population slot read "withdrawn" when this was
+   written, which satisfied the shape and decided nothing. **G4's slot no longer does** — its
+   population is complete across both planes and its blocker is the missing adjacent multi-plugin
+   fixture, per item 26. **No universal claim about populations is made anywhere in this
    packet**: a sentence of the form "each population carries its extraction command" is false at
    this SHA by construction, and this paragraph previously ended with one while opening with the
    disqualification, because I patched its head across three rounds and left its tail alone.
-2. **The open list is 37 atomic items, not 15 categories.** The four that compression swallowed are
+2. **The open list is 38 atomic items, not 15 categories.** The four that compression swallowed are
    restored: G0-B's unowned mutation floor, G2-A's BATCH blindness, G2-B's probe-order false-green,
    and G3's debug-env requirement plus its self-contradicting static check.
 3. **G0-A's mailbox census was wrong twice and is corrected with its method.** See G0-A.
@@ -971,9 +973,9 @@ watchdog instrumentation, drift acceptance and independent validation. Describin
 and nothing in the tree sources N: all three production `Watchdog`s use `hardTimeoutBlocks = 500`,
 which is a block count and not an observation count, and no other artifact proposes one. The exact
 review's verdict that this gate "remains undecidable" is accepted rather than argued. The bullets are
-retained because they are correct GIVEN N, and they become decidable the moment N is ruled — but no
-implementation may be accepted against this gate until then, and the packet does not pretend
-otherwise. **Dependencies** G2-B **of this packet** — the ruling on N that this clause used to name as a prerequisite is discharged by R3, which authors N = 3, and item 19 records that no further ruling is required; the clause outlived the ruling and went on emitting a prerequisite the packet had already met, which is why the manifest kept reporting one. Note the parser reads gate identifiers out of this clause, so an all-caps word here is read as a gate id — the
+retained because they are correct GIVEN N, and N IS RULED — R3 authors it at 3, so they are decidable
+now. This sentence used to say they "become decidable the moment N is ruled" and that no
+implementation could be accepted "until then"; that chronology outlived the ruling it waited for. **Dependencies** G2-B **of this packet** — the ruling on N that this clause used to name as a prerequisite is discharged by R3, which authors N = 3, and item 19 records that no further ruling is required; the clause outlived the ruling and went on emitting a prerequisite the packet had already met, which is why the manifest kept reporting one. Note the parser reads gate identifiers out of this clause, so an all-caps word here is read as a gate id — the
 gate as received named a document that does not exist in the pinned tree, and the reference is
 resolved here rather than left dangling.
 
@@ -1059,8 +1061,11 @@ token. The containment event is emitted on a TRANSITION, appearing exactly once 
 guarded by the eviction transition. The `hostReady` write-form ratchet, 21 total with 4/17 and no
 `exchange` forms.
 
-**Review register.** The reviewer SHALL obtain an owner ruling for N and record its derivation:
-nothing in the tree sources one, all three production `Watchdog`s using `hardTimeoutBlocks = 500`.
+**Review register.** **The owner-ruling demand for N is DISCHARGED and this sentence used to
+restate it.** R3 authors N = 3 and item 19 records that no further ruling is required; nothing in the
+tree sources N, and all three production `Watchdog`s use `hardTimeoutBlocks = 500`, which is why an
+authored constant was the only available answer. What remains for N is implementation and static
+validation against the authored value, not a decision.
 The reviewer SHALL rule on which of two contradictory statements is stale, and record the ruling
 next to BOTH — `tools/host_stall_check.sh:16-19` and the producer comment. **R15 DOES NOT DISCHARGE THIS**, and an
 earlier version of this sentence said it did. R15 defines M1 and rules on the register's framing, but
@@ -1321,9 +1326,13 @@ been one more statement in the file being mutated; it is in the script, which th
 a function pointer. The WRITER census is a floor of 2 for the same reason plus helper indirection.
 The IN-plane rows are floors for a third reason on top of both: an alias hop is a syntactic form, so
 a THIRD hop — or a plane pointer stored in a struct field, which no row above would match — extends
-every count. There is no
-reader floor: the reader selection was withdrawn when this was written (open item 26 (G4)), and
-quoting a floor of 7 for a withdrawn population would have restated the very number the withdrawal
+every count. No reader floor is
+QUOTED here, which is not the same as there being none: the OUT reader row two paragraphs above is
+itself a floor and returns four, with seven authored members pinned beside it. The reason no floor
+is quoted is that no selector establishes COMPLETENESS — the defensible claim — rather than the one
+this sentence used to give, that the population was withdrawn. It was withdrawn when this was
+written (open item 26 (G4)), and quoting a floor of 7 for a withdrawn population would have restated
+the very number the withdrawal
 removed. **Item 26 has since recorded that the population is complete and covers both planes**, so
 the withdrawal this sentence relies on is history; the floor stays unquoted because the reason above
 still holds, not because the population is still withdrawn.
@@ -1434,7 +1443,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `892854535e2296d091bc37bab944ee879f2e9e76`, A.0 SCRIPT BLOB `1011b96d1eb8639f831256701a0cf7b43bb90d05`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `53c1965e8397f048a674b72bff00f791379ca057`, A.0 SCRIPT BLOB `3564cc1fe0ffc24177430457e90327c94bd35046`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1442,7 +1451,7 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 37 items, 28 open · 14 RAW (13 hand-ruled) + 32 commanded-claim occurrences, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 38 items, 29 open · 14 RAW (13 hand-ruled) + 32 commanded-claim occurrences, all executed
     PASS
 
 **The MANIFEST is the canonical machine-readable source.**
@@ -1513,7 +1522,7 @@ extractor count at its floor. `--prove-sweep-predicate` classifies a crafted-lin
 every spoof a reviewer has landed on the sweep's success test — a bare `OK (+` prefix, an unanchored
 tail, a wrong tag, a count the emitter cannot print, and a tag line with no separator.
 
-**Controls.** One hundred twenty-four, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** One hundred twenty-five, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1534,7 +1543,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
@@ -2185,10 +2194,9 @@ to the end and swallowed R10 and R11 into R9's text. **A hardcoded range and a s
 the same failure in two notations, and this packet has now shipped both.** A ruling recorded as a closure would be the same error as a
 census recorded as a proof, which this packet has already made once at item 7.
 
-# Open items — 37 atomic, 9 CLOSED at this SHA, 28 open
+# Open items — 38 atomic, 9 CLOSED at this SHA, 29 open
 
-One per line, numbered in document order, so the count is checkable. ELEVEN are BLOCKING — 18, 19, 24, 26, 27, 28, 29, 33, 35, 36 and 37. Twenty-six and twenty-seven became blocking when their populations were withdrawn rather than replaced: a withdrawal that leaves a gate with nothing to range over is a stronger blocker than a wrong population, because a wrong one at least fails visibly. A gate
-carrying one cannot be decided by any implementation.
+One per line, numbered in document order, so the count is checkable. ELEVEN are BLOCKING — 18, 19, 24, 26, 27, 28, 29, 33, 35, 36 and 37. **Items 26 and 27 became blocking when their populations were withdrawn rather than replaced, and BOTH have since moved on**: item 27's scope is authored under R12 and its blocker is the class-wide missing sender identity; item 26's population is complete across both planes and its blocker is the missing adjacent multi-plugin fixture. The withdrawal reasoning below is retained because it explains why a withdrawn population is a stronger blocker than a wrong one — a wrong one at least fails visibly — but neither item rests on it now.
 
 1. **G0-B** — The generated header breaks the documented `-DDAW_BUILD_PATCHER_RUST=OFF` build for six unconditional targets, with no stated path, include directory or target-ordering edge.
 2. **G0-B** — The declaring macro invalidates the `#[repr(C` grep this gate's population floor depends on.
@@ -2291,13 +2299,14 @@ carrying one cannot be decided by any implementation.
     marker and this item; a sixth appearing without one fails the gate. Deriving them needs a
     predicate nobody has proposed, so this is open, not closed.
 
-26. **G4** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING, and the reason has MOVED: the population now covers both planes and the
-    GATE'S TESTS still cover one.** The input relation is enumerated — seven derived census rows,
-    every member pinned by path, line and content — so the incompleteness that reopened this item is
-    closed. What is not closed is that G4's PASS conditions, its deterministic test and its static
-    checks were all written against the OUTPUT relation, and a gate whose population covers both
-    halves of its invariant while its tests cover one half is not decidable by any implementation of
-    those tests. **A population is not a gate.** **Both specifics I gave for that were wrong and are withdrawn.** I wrote that failure model (1)
+26. **G4** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING on ONE missing fixture and its oracle: an adjacent
+    multi-plugin segment.** The input relation is enumerated — seven derived census rows, every
+    member pinned by path, line and content — so the incompleteness that reopened this item is
+    closed. **THE BROAD REASON THIS ITEM USED TO GIVE IS FALSE AND IS WITHDRAWN**: it said G4's PASS
+    conditions, deterministic test and static checks were "all written against the OUTPUT relation",
+    which the next sentence of this same item then contradicts — G4 specifies input coverage in S2,
+    S5, PASS 2's ordering and PASS 4's input immutability. An item may not publish a false broad
+    account and its true narrow replacement as though both were current. **Both specifics I gave for that were wrong and are withdrawn.** I wrote that failure model (1)
     has "no test at all" — G4 specifies input coverage in S2, S5, PASS 2's ordering and PASS 4's
     input immutability, so the gap is not the absence of a test. **The precise missing case is a
     MULTI-PLUGIN SEGMENT fixture**, and it is the only one that can exercise the alias rebinding at
@@ -2624,6 +2633,29 @@ carrying one cannot be decided by any implementation.
     delivers that — a host-side currency test, a reader-side monotonic clamp, a re-baseline on
     resume, or a per-slot block stamp — is an owner choice R16 deliberately leaves open. PRODUCT
     work.
+
+38. **G1-B** — **NOT BLOCKING, and carrying no kind marker for that reason. Scoped to G1-B because that is where it is LIVE, though the defect is in the shared derivation. A live non-gate
+    prerequisite does not affect any typed planning
+    field, so a planner walking the graph cannot see it.** `non_gate_prerequisites` is emitted, but
+    `decidable_for_planning`, `planning_blocked_by` and `plannable_with_dependencies` are derived
+    from the withdrawn-population predicate and a closure that follows gate IDs only. G1-B shows
+    this live TODAY: it carries "the production atomic size/alignment assertions" as a non-gate
+    prerequisite while reporting planning true with no planning blocker. Restoring G3's discharged
+    N prerequisite reproduces the same shape on a second gate — the emitted record gains the
+    prerequisite and keeps `decidable_for_planning: true`. codex-worker-1 found and proved it.
+    **THE DECISION IS NOT MINE**: either a live non-gate prerequisite makes planning false and
+    populates a typed blocker, or the schema states why it does not — and which is right depends on
+    whether a planner can write tickets against a gate whose non-gate prerequisite is unmet, which
+    is a question about how this packet is consumed rather than about its text. I have deliberately
+    not guessed; inventing that semantics is how this gate acquired an unbuildable oracle. Whoever
+    rules must also add the cross-record control, since nothing currently fails when the two
+    disagree. **Scoping matters here and I got it wrong first: filed as `all`, it attached to
+    every gate and drove the acceptance-decidable set to empty — an item scoped `all` is a
+    claim about every gate, which this is not.** The work is a PACKET edit; the marker set is reserved for blockers, which this is
+    not, so the kind is stated here in prose instead. **Filed as a blocker for one draft, which made every gate acceptance-undecidable —
+    an item scoped "all" propagates to all — and that was the wrong verdict: this defect does not
+    leave any gate's acceptance criteria unmet, it makes a PLANNING field unreliable. The checker
+    telling me so is the derivation working.** PACKET work.
 
 # Provenance of this packet's own numbers
 

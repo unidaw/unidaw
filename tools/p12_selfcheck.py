@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'c72a2738f93b44f6d923745f3aacb275ee469030'
+PREV_TIP     = 'aec396867fff7ddf3042e1df7719d7d474b624c1'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -258,24 +258,24 @@ for i, a in enumerate(sys.argv):
 # merely makes the run FAIL proves nothing — the fifth way a negative control lies is landing in
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
- 'section-indented': ('\n# Open items — 37 atomic', '\n # Open items — 37 atomic', 1,
+ 'section-indented': ('\n# Open items — 38 atomic', '\n # Open items — 38 atomic', 1,
                       'OPEN-SECTION-MISSING'),
- 'header-suffix':    ('# Open items — 37 atomic, 9 CLOSED at this SHA, 28 open',
-                      '# Open items — 37 atomic, 9 CLOSED at this SHA, 28 open BUT ACTUALLY 99', 1,
+ 'header-suffix':    ('# Open items — 38 atomic, 9 CLOSED at this SHA, 29 open',
+                      '# Open items — 38 atomic, 9 CLOSED at this SHA, 29 open BUT ACTUALLY 99', 1,
                       'OPEN-HEADER-MISSING'),
  'open-section-two': ('# Provenance of this packet',
                       '# Open items — 1 atomic, 0 CLOSED at this SHA, 1 open\n\n'
                       '1. **G0-B** — decoy.\n\n# Provenance of this packet', 1,
                       'OPEN-SECTION-COUNT'),
- 'header-not-first': ('# Open items — 37 atomic', '# Open items BROKEN — 37 atomic', 1,
+ 'header-not-first': ('# Open items — 38 atomic', '# Open items BROKEN — 38 atomic', 1,
                       'OPEN-HEADER-MISSING'),
  'item-dupe-number': ('# Provenance of this packet',
                       '37. **G3** — editorial duplicate.\n\n# Provenance of this packet', 1,
                       'ITEM-NUMBER-DUPLICATE'),
- 'open-count':       ('# Open items — 37 atomic', '# Open items — 38 atomic', 1, 'OPEN-COUNT'),
- 'closed-count':     ('9 CLOSED at this SHA, 28 open', '8 CLOSED at this SHA, 29 open', 1,
+ 'open-count':       ('# Open items — 38 atomic', '# Open items — 39 atomic', 1, 'OPEN-COUNT'),
+ 'closed-count':     ('9 CLOSED at this SHA, 29 open', '8 CLOSED at this SHA, 30 open', 1,
                       'OPEN-CLOSED-COUNT'),
- 'open-arithmetic':  ('9 CLOSED at this SHA, 28 open', '9 CLOSED at this SHA, 18 open', 1,
+ 'open-arithmetic':  ('9 CLOSED at this SHA, 29 open', '9 CLOSED at this SHA, 19 open', 1,
                       'OPEN-ARITHMETIC'),
  # anchored on the tree hash, not on a count: the previous anchor was '11 RAW +', which the
  # document outgrew, leaving the control unable to land while the gate still reported PASS
@@ -474,7 +474,7 @@ CONTROLS = {
  'reader-row-moved': ('    6  engine_consumer.cpp:766',
                       '    x  engine_consumer.cpp:766', 1, 'OUT-MEMBERS'),
  # a manifest must never be published from a packet that failed its own gate
- 'emit-fail-open':   ('# Open items — 37 atomic', '# Open items — 38 atomic', 1, 'OPEN-COUNT'),
+ 'emit-fail-open':   ('# Open items — 38 atomic', '# Open items — 39 atomic', 1, 'OPEN-COUNT'),
  # both items are G2-A, so the forward gate check agrees and only the backward one can catch it
  'ruling-item-swap2': ('**R12 — item 27 (G2-A)', '**R12 — item 28 (G2-A)', 1, 'RULING-ITEM-BIND'),
  # the diagram has contradicted the text twice; it is checked now, so make sure the check fires
@@ -520,6 +520,8 @@ CONTROLS = {
  'edge-second':      ('27. **G2-A** — ⟦PRODUCT⟧ ',
                       '27. **G2-A** — ⟦PRODUCT⟧ ⟦BLOCKED-ON: 29⟧ ⟦BLOCKED-ON: 999⟧ ', 1,
                       'BLOCKER-KIND'),
+ 'blocking-negated': ('38. **G1-B** — **NOT BLOCKING',
+                      '38. **G1-B** — **BLOCKING', 1, 'BLOCKER-SET'),
  'marker-nonblocker': ('1. **G0-B** — ', '1. **G0-B** — ⟦BLOCKED-ON: 999⟧ ', 1, 'BLOCKER-KIND'),
  # item 27's edge to 29 was WRONG and is removed, so no BLOCKED-ON edge exists at this SHA. The
  # control inserts one pointing at a NON-BLOCKING item, which the target check rejects — the cycle
@@ -716,7 +718,7 @@ for c in cand:
 closed_set = {int(m.group(1)) for m in
               re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — \*{0,2}CLOSED at this SHA', body)}
 closed = len(closed_set)
-blocking_n = len(re.findall(r'(?m)^\d{1,2}\. \*\*[^*]+\*\* — [^\n]{0,120}BLOCKING', body))
+blocking_n = len(re.findall(r'(?m)^\d{1,2}\. \*\*[^*]+\*\* — [^\n]{0,120}(?<!NOT )BLOCKING', body))
 if not hdr:
     bad('OPEN-HEADER-MISSING', 'no "# Open items — N atomic, K CLOSED at this SHA, M open"')
 else:
@@ -914,8 +916,11 @@ for m in list(re.finditer(r'(?m)^\*\*R\d+ — .*?(?=\n\n\*\*R\d+ — |\n# |\*\*W
 # it to the section below — and only the control sweep noticed, because a deleted check is silent by
 # construction. That is the argument for controls that run every time rather than when suspicion is
 # aroused.
+# A THIRD DERIVATION OF THE SAME PREDICATE, and the one that actually feeds the blocker SET — I
+# patched the emitter and the count for negation and left this one, so the set and the emitted
+# `blocking` flag disagreed. Three copies of "is this item blocking", found one at a time.
 _derived_blk = sorted(int(m.group(1)) for m in
-                      re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — [^\n]{0,120}BLOCKING', body))
+                      re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — [^\n]{0,120}(?<!NOT )BLOCKING', body))
 for m in re.finditer(r'(?:items?|block)[^.\n]{0,40}?\((\d{1,2}(?:, \d{1,2}){2,}(?:,? and \d{1,2})?)\)', pkt):
     got = sorted(int(x) for x in re.findall(r'\d+', m.group(1)))
     if got != _derived_blk:
@@ -1889,11 +1894,11 @@ for g in gate_hdr:
         bad('GATE-DEP-CYCLE', f'{g["gate"]} declares itself a dependency')
     blk = sorted(i for i in nums
                                            if entry.get(i) == g['gate'] and i not in closed_set
-                                           and re.search(r'(?m)^%d\. \*\*[^*]+\*\* — [^\n]{0,120}BLOCKING' % i, body))
+                                           and re.search(r'(?m)^%d\. \*\*[^*]+\*\* — [^\n]{0,120}(?<!NOT )BLOCKING' % i, body))
     # `all`-tagged items are cross-cutting: a blocking one belongs to EVERY gate, and building
     # blocking_items per gate tag alone made that population invisible while it happens to be empty.
     xcut = sorted(i for i in nums if entry.get(i) == 'all' and i not in closed_set
-                  and re.search(r'(?m)^%d\. \*\*[^*]+\*\* — [^\n]{0,120}BLOCKING' % i, body))
+                  and re.search(r'(?m)^%d\. \*\*[^*]+\*\* — [^\n]{0,120}(?<!NOT )BLOCKING' % i, body))
     blk = sorted(set(blk) | set(xcut))
     # TWO decidabilities, because the packet makes the distinction deliberately and one boolean
     # collapsed it toward less work: G3 is plannable (R3 authored N) and not acceptance-decidable.
@@ -2290,8 +2295,14 @@ man = {
             # the WHOLE item, not a headline. An item is the unit a consumer plans from, and 110
             # characters of it is a title pretending to be a record.
             'body': re.sub(r'\s+', ' ', item_body.get(n, '')).strip(),
-            'blocking': 'BLOCKING' in (re.search(r'(?m)^%d\. \*\*[^*]+\*\* — (.{0,200})' % n, body).group(1)
-                                       if re.search(r'(?m)^%d\. ' % n, body) else ''),
+            # NOT PRECEDED BY "NOT". `'BLOCKING' in head` cannot tell `BLOCKING` from `NOT
+            # BLOCKING`, so an item declaring itself non-blocking was still derived as blocking —
+            # found when I wrote exactly that phrase into item 38 and the derivation disagreed with
+            # the prose. Same bare-substring shape as `not Final gate` two checks over; a predicate
+            # that cannot see negation was in the field the whole blocker set is built from.
+            'blocking': bool(re.search(r'(?<!NOT )BLOCKING',
+                                       (re.search(r'(?m)^%d\. \*\*[^*]+\*\* — (.{0,200})' % n, body).group(1)
+                                        if re.search(r'(?m)^%d\. ' % n, body) else ''))),
             # WITHDRAWN IS A STATE AND WAS NOT TYPED. A withdrawn item emitted closed=false,
             # blocking=false, kind=null and sat among the open ones — indistinguishable to a
             # canonical consumer from live nonblocking work, which is exactly the audience the
