@@ -1164,3 +1164,11 @@ editorial `/7` mention before A.0 plus changing the real A.0 declaration to `/6`
 clean-passes because `_SCHEMA_M` takes the first global match and does not scope
 or require uniqueness. The claimed single-source schema guard is therefore not
 yet trustworthy.
+
+Final `7d29752` audit remains BLOCKED. Schema guard can be bypassed via rollback,
+decoy first-match source, heterogeneous/deep record fields, and direct proof
+invocation not bound to production refusal. State scan misses subject-before-
+reference contradictions and mishandles negation/history. G3 choice extraction
+still loses the second choice; owner-choice population is incomplete; item 38's
+planning rationale is stale; escaped status, fake sections, and post-prose status
+remain clean-pass. No packet acceptance or implementation cutover.
