@@ -1225,3 +1225,11 @@ owner-choice extraction handles adverbs, dotted identifiers, compound choices,
 and records a 12-choice floor; state scan handles sentence-initial, negated, and
 quoted forms. It reports schema /7 and 162 controls, while carrying G0-A/G0-B,
 R7/G4, item-38 ruling, and unclassified-kind work. Exact audit pending.
+
+Exact audit of `82215c3` remains BLOCKED. Deep record traversal, dotted owner
+choices, G2-B `SHALL also rule`, state scan, and 162 controls pass. Two release
+blockers remain: scalar-list element types are omitted from the schema fingerprint
+(`string[]` can become `number[]` without a bump), and schema-source uniqueness is
+checked only inside A.0, allowing a second visible authority elsewhere. Required
+fixes: union scalar element types (empty lists provide no evidence) and require
+exactly one global declaration whose span is inside the unique A.0 section.
