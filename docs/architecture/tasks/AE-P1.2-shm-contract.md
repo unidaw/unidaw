@@ -973,7 +973,7 @@ which is a block count and not an observation count, and no other artifact propo
 review's verdict that this gate "remains undecidable" is accepted rather than argued. The bullets are
 retained because they are correct GIVEN N, and they become decidable the moment N is ruled — but no
 implementation may be accepted against this gate until then, and the packet does not pretend
-otherwise. **Dependencies** an owner ruling on N, then G2-B **of this packet** — the
+otherwise. **Dependencies** G2-B **of this packet** — the ruling on N that this clause used to name as a prerequisite is discharged by R3, which authors N = 3, and item 19 records that no further ruling is required; the clause outlived the ruling and went on emitting a prerequisite the packet had already met, which is why the manifest kept reporting one. Note the parser reads gate identifiers out of this clause, so an all-caps word here is read as a gate id — the
 gate as received named a document that does not exist in the pinned tree, and the reference is
 resolved here rather than left dangling.
 
@@ -1108,7 +1108,7 @@ on every gate, so every blocker on another gate blocks it. The four named above 
 whose SHAPE was analysed here; the rest block by the same rule without a separate argument — G2-A is one of G4's dependencies, so its missing sender identity blocks G4 exactly as a missing
 population would. Item 11 was a fifth until it CLOSED; leaving a closed item in a blocker list is
 how a gate acquires a permanent-looking obstacle that no longer exists.
-**The one of its own** is 26, G4's out-plane population, whose selector is proven partial.
+**The one of its own** is 26, whose reason has MOVED: the out-plane population is complete and covers both planes, and what remains is the missing adjacent multi-plugin fixture and the test surface for it. This sentence said "whose selector is proven partial" for several SHAs after item 26 itself recorded the move.
 **TWO CONDITIONS, stated once.** (a) Every dependency GATE PASSES — not that its items are ruled,
 which they already are. (b) G4's OWN population exists. Both are required; (b) has been lost twice
 in edits to (a), and this paragraph carried it twice at once after the second recovery, which is
@@ -1322,8 +1322,11 @@ a function pointer. The WRITER census is a floor of 2 for the same reason plus h
 The IN-plane rows are floors for a third reason on top of both: an alias hop is a syntactic form, so
 a THIRD hop — or a plane pointer stored in a struct field, which no row above would match — extends
 every count. There is no
-reader floor: the reader selection is withdrawn (open item 26 (G4)), and quoting a floor of 7 for a
-withdrawn population would restate the very number the withdrawal removed.
+reader floor: the reader selection was withdrawn when this was written (open item 26 (G4)), and
+quoting a floor of 7 for a withdrawn population would have restated the very number the withdrawal
+removed. **Item 26 has since recorded that the population is complete and covers both planes**, so
+the withdrawal this sentence relies on is history; the floor stays unquoted because the reason above
+still holds, not because the population is still withdrawn.
 
 **Failure model.** (1) Input overwritten under the host: the host is delayed before reading segment
 k's input; the engine memcpys segment k+1 over it (`:944-1037`). (2) Stale lap read as fresh: the host
@@ -1431,7 +1434,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `89dd9d90e2e00f944d8e4a7676cca05ffea707b7`, A.0 SCRIPT BLOB `317b7096664d9fc32cf5b66f6c639c6fd35a6db5`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `892854535e2296d091bc37bab944ee879f2e9e76`, A.0 SCRIPT BLOB `1011b96d1eb8639f831256701a0cf7b43bb90d05`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
