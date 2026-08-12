@@ -1377,6 +1377,15 @@ treated as unprovable rather than accepted, and empty/literal-zero cases are
 explicitly pinned. Suite is 151/153 with the same two pre-existing plugin failures.
 No transition proposed; independent adversarial review is in progress.
 
+Independent review of `e03c3c07` is BLOCKED. Per-script binding closes only the
+cross-script hole. Remaining fail-opens: flow-insensitive whole-file assignments
+accept impossible later/unreachable values; raw comments/source count as output;
+empty slots are unconditionally accepted (561/561, including impossible empty
+`CREDENTIAL_MODE`); pinned literal-zero positives are impossible under their
+branch guards; `${MODE:-fallback}` defaults are mishandled; and template
+population still asserts only `>=500`, allowing 61 templates to disappear. The
+two plugin-resolution failures remain proven pre-existing. No P0.3 transition.
+
 Exact audit of `76f1672`: tombstone half PASS; item 29 remains blocked on the
 correlation/consumer contract. Production missing/removed paths now use
 `liveTrackAt` and emit `UnknownTrack`, with causal rowops-rejected tests and clean
