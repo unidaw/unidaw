@@ -1142,3 +1142,10 @@ contradict current detector/item state; schema `/6` is incompatible and requires
 contradictions remain. Required fixes: decode or forbid status escapes, enforce
 status position, exact structural headings, repair R1/item11, bump schema, and
 type G3/G0 choices.
+
+Owner successor `7d29752` claims those blockers closed: schema bumped to `/7`
+with an unversioned-shape guard, ruling-state grammar hardened with contradiction
+detection, owner choices and non-gate prerequisites now feed typed planning
+verdicts, and six proofs/149 controls pass. It reports all eight gates `unknown`
+and explicitly leaves item 38's ruling, sixteen unclassified items, the third
+kind for item 22, and the cross-record control open. Exact audit is pending.
