@@ -693,8 +693,11 @@ halves with barrier-paused writers.
    mechanical echo ratchet needs a set to range over and the set was withdrawn; R1 authored it and
    item 11 (G1-B) is CLOSED, so the condition it was waiting on is met and the withdrawal outlived
    it. **The requirement is a ratchet over the SEND SITES, and that population has never been
-   authored** — what R1 authored is the request kinds (seven, from the enum) and their readers
-   (six); the sites that SEND a request are a third population and nobody has enumerated them. So
+   authored** — what R1 authored is the request kinds (seven, from the enum) and their answers
+   (seven — six region readers plus `drain_ui_out`, which the population INCLUDES as its worst case
+   rather than excluding; this clause said "readers (six)" and took the six-member count from
+   before that correction); the sites that SEND a request are a third population and nobody has
+   enumerated them. So
    this bullet is blocked on a missing POPULATION and not merely on an unwritten test, which is a
    different and larger gap than the one I recorded last SHA when I wrote "the seven authored send
    sites" — a phrase that took a count from one population and a unit from another. Carried by open
@@ -711,9 +714,12 @@ the stale answer readable as complete. S3 minting expressions, naming the two co
 three counts", which were counts over the hand-selected six the packet withdrew; a drift detector
 over a withdrawn population detects drift in nothing. R1 authored the replacement and item 11 (G1-B)
 is CLOSED, so the detectors now have a set to pin. **They are not written yet**, which makes this an
-open test rather than a withdrawn one — the distinction the whole gate turns on. It returns with open item 11 (G1-B), and the requirement it
+open test rather than a withdrawn one — the distinction the whole gate turns on. The requirement it
 encodes — that the authored population must have detectors pinning its size — is
-carried by open item 33 (G1-B) rather than left as an unrooted static check here.
+carried by open item 33 (G1-B) rather than left as an unrooted static check here. This paragraph
+also said the check returns with item 11 (G1-B), three lines after saying item 11 is CLOSED; one
+paragraph naming two carriers, one of them since discharged, is the restatement defect at its shortest
+range.
 
 **Review register.** The reviewer SHALL rule on how device-params acquires a request identity — a new
 field on `UiDeviceParamsRegion` implies a `kShmVersion` bump; SHALL confirm whether the plain snapshot
@@ -1459,7 +1465,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `5eec8c76ed60266e0ff37b90c4b1ad499f35c8db`, A.0 SCRIPT BLOB `e1567ded6e225ed1b7035a01b8c1cb845191b77d`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `01f53446679162491a0f5c43895f8d52b071308a`, A.0 SCRIPT BLOB `c5ce6a83e66e0071d2961b9f545806520eb4bcf9`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1567,7 +1573,38 @@ at the syntax the document is written in. **The check is a DELIMITER-PARITY one 
 than that**: `**` runs are counted in the VISIBLE view, because a delimiter inside a code span is
 literal text rather than emphasis, and an odd count per item is refused. It cannot see a mis-NESTED
 pair, only an unmatched one — which is the defect an edit actually produces, and is the one that
-occurred. Run against the predecessor's packet it names item 38 and nothing else.
+occurred. Run against the predecessor's packet it names item 38 and nothing else. **A BACKSLASH
+ESCAPE IS NOT A DELIMITER**: `\**` is one literal asterisk followed by one emphasis character, and
+counting `**` substrings saw a pair — so a real unmatched opener could ride in beside an escaped one
+and the parity stay even. Escapes are inside this packet's Markdown subset, so an ALLOWED form was
+fail-open; the whole CommonMark punctuation class is removed before counting, not the one character
+the probe used. **And every per-item check is worth what the SECTION BOUNDARY is worth.** A `# `
+heading inserted before the last item terminates every item span and the section with it, leaving
+live text no item covers — invisible to parity, to the status grammar, to the manifest, and to
+MANIFEST-STALE, which preserved the omission faithfully. **My first repair for that was a check
+nothing could trigger**: a totality test over the section's interior, where the span regex already
+covers every byte between one item and the next by construction. Its control reported BLIND, which
+is the only reason it was written. A check nothing can trigger is worse than no check, because it
+reads as coverage. The rule is at the boundary instead: a top-level heading is a GATE or one of the
+document's named structural sections, and there is no third kind — a rule rather than a pinned
+sequence, so it needs no edit when a gate is added and an invented heading has nowhere to be.
+
+**AND A GRAMMAR IS NOT A TOKENISER.** The parse below closed the three scan shapes and codex-worker-1
+broke IT three ways in the next pass, each naming something the tokeniser had thrown away.
+`**NOT/BLOCKING ...**` tokenised to `NOT`, `BLOCKING` and was accepted, because comparing a leading
+token LIST discards everything BETWEEN the tokens. A bold run legally split across the line break
+was invisible, because the head was a physical LINE and a bold run is delimited by its delimiters.
+And a valid `BLOCKING` followed by a malformed `NOT BLOCKING_EXTRA` passed, because the
+malformed-reach check was conditioned on no valid status existing — **one good declaration licensing
+every bad one after it.** Three properties replace them, stated once each: the REGION is the item's
+leading bold SEQUENCE, taken from the item body rather than a line; the PHRASE is matched ANCHORED
+at the first run's start with one literal space, so nothing between the words is skipped; and the
+POPULATION is every token in the region beginning with `BLOCKING`, each of which must BE `BLOCKING`,
+checked unconditionally. `NONBLOCKING` does not begin with it and stays prose. **An unclosed run is
+now read to its end rather than dropped** — dropping it was a fail-open I wrote into the repair and
+then leaned on, telling myself the parity check covered it; parity does fire, but one refusal
+standing in for two made the revert test unreadable, and it made one: reverting the head extent
+blinded every status control at once instead of the one it should have.
 
 **AN ITEM'S BLOCKING STATUS IS PARSED, not scanned, and that is a different property from being
 parsed ONCE.** Five copies of the predicate became one at the predecessor SHA; codex-worker-1 then
@@ -1588,7 +1625,7 @@ only ADDS one is a no-op and reports BLIND correctly — a repaired opt-out prod
 tag — and it therefore adds the span AND breaks the real status, so the old scan reads the span as
 the status while the new parse names the malformed reach.
 
-**Controls.** One hundred thirty-eight, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** One hundred forty-three, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1609,7 +1646,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `unclassified-kinded`, `unclassified-said`, `opening-gates-gone`, `planning-unknown-gone`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `unclassified-kinded`, `unclassified-said`, `opening-gates-gone`, `planning-unknown-gone`, `status-slash`, `status-wrapped`, `status-after-ok`, `item-md-escape`, `section-orphan`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
@@ -1646,9 +1683,12 @@ the authored list is stale by construction and the gate fails until it is re-aut
 This is weaker than a derivation and stronger than what preceded it, which was a hand selection
 presented as a population. It also matches what the packet already does for the
 hand-classified populations, so the two items resolve on one mechanism rather than two.
-**NOT YET APPLIED, and the ruling does not pretend otherwise.** G1-B still declares NO population
-and item 25's categories carry no member lists and no detectors — the ruling states the
-mechanism, and writing the lists is work that has not been done at this SHA. The reviewer found
+**PARTLY APPLIED, and this clause said NOT AT ALL for several SHAs after the first half landed.**
+G1-B's population IS authored under R1 — seven request/answer readers, enumerated from the
+`Request*` enum with the roster printed. What has not been written anywhere is the DETECTOR half:
+no drift detector exists for that population, and item 25's categories still carry no member lists.
+The ruling states the mechanism; writing the lists and the detectors is work.
+codex-worker-1 found this clause still denying the half that shipped. The reviewer found
 this by reading R1 against the gates rather than against itself, which is the right test and one I
 did not run: I wrote "the packet lists the members explicitly" in the same commit in which it did
 not. **Cost:** a reviewer must read the lists, not re-run a command; the detector bounds staleness,

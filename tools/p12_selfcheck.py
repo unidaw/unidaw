@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '21a46bfd80319c6a227cde58a2f3d3818f6e8b14'
+PREV_TIP     = '359cde86227dce68f21f6a2fe97e1257e99f3b23'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -556,6 +556,19 @@ CONTROLS = {
  'status-code-span': ('38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING.',
                       '38. **G1-B** — ⟦PACKET⟧ `**BLOCKING**` **NOT BLOCKINGLY.', 1,
                       'ITEM-STATUS-MISSING'),
+ # THE THREE SHAPES THE TOKENISED REPAIR ACCEPTED, all landed by codex-worker-1 on c40e7b3.
+ # (4) A SEPARATOR THE TOKENISER DISCARDED. `NOT/BLOCKING` is two tokens and no phrase.
+ 'status-slash':     ('38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING.',
+                      '38. **G1-B** — ⟦PACKET⟧ **NOT/BLOCKING.', 1, 'ITEM-STATUS-MISSING'),
+ # (5) A BOLD RUN SPLIT ACROSS THE LINE BREAK. Legal Markdown, invisible to a line-bounded head:
+ #     the run opens at the end of the headline and the status words begin on the next line.
+ 'status-wrapped':   ('38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING.',
+                      '38. **G1-B** — ⟦PACKET⟧ **\n    NOT BLOCKINGLY.', 1, 'ITEM-STATUS-MISSING'),
+ # (6) A VALID STATUS LICENSING A MALFORMED ONE. The reach check used to be conditioned on no
+ #     status having parsed, so anything after a good declaration went unexamined.
+ 'status-after-ok':  ('35. **G0-B** — ⟦PRODUCT⟧ **BLOCKING.',
+                      '35. **G0-B** — ⟦PRODUCT⟧ **BLOCKING.** **NOT BLOCKING_EXTRA.', 1,
+                      'ITEM-STATUS-MISSING'),
  # THE DEFECT THAT ACTUALLY OCCURRED: an edit removed a sentence's opening clause and left its
  # closing delimiter behind. The control reproduces it by deleting one opener from item 37.
  'item-md-unbalanced': ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING,',
@@ -568,6 +581,16 @@ CONTROLS = {
  'item-md-view':     ('an item scoped `all` is a claim about every gate',
                       'an item scoped `all` `**` **is a claim about every gate', 1,
                       'ITEM-MD-UNBALANCED'),
+ # A BACKSLASH ESCAPE IS NOT A DELIMITER. `\**` is one literal asterisk plus one emphasis character;
+ # counting `**` substrings saw a pair, so a real unmatched opener could ride in beside it.
+ 'item-md-escape':   ('an item scoped `all` is a claim about every gate',
+                      'an item scoped `all` \\** **is a claim about every gate', 1,
+                      'ITEM-MD-UNBALANCED'),
+ # THE SECTION BOUNDARY. A `# ` heading before the last item's end terminates every item span and
+ # the section with it, so the text after it belongs to no item and no check ranges over it.
+ 'section-orphan':   ('\n# Provenance of this packet',
+                      '\n# Interlude\n\nlive text belonging to no item.\n\n# Provenance of this packet',
+                      1, 'SECTION-UNKNOWN'),
  # A RULING RESTATING AN ITEM'S STATE — the shape that made R7's Cost clause name a superseded
  # reason and R1 assert that a CLOSED item stays open. The control reinstates it on R3.
  'ruling-item-state': ('That work is filed at item 19 (G3),',
@@ -815,66 +838,86 @@ closed = len(closed_set)
 #                                           `-`, and a hyphenated compound is one WORD, not two
 #   `` `**BLOCKING**` `` in a code span     parsed blocking off raw bytes a reader sees quoted
 #
-# Widening `\b` to exclude `-` would have been the fourth spelling patch in this region. The repair
-# is to stop scanning. The status is the FIRST BOLD RUN after the headline's ` — `, read in the
-# VISIBLE view, and only its leading WORD TOKENS are the status: token 1 is `BLOCKING`, or tokens
-# 1-2 are `NOT` `BLOCKING`. A token is a maximal run of `[A-Za-z0-9'-]`, hyphen included — that one
-# decision is what makes `BLOCKING-LIKE` a different word from `BLOCKING` and `BLOCKINGLY` a
-# different word again, without enumerating either. Nothing else on the line can be the status, so
-# there is no window left to widen.
-_TOKEN_RE  = re.compile(r"[A-Za-z0-9'-]+")
-_HEADS_RE  = re.compile(r'(?m)^(\d{1,2})\. \*\*[^*\n]+\*\* — ([^\n]*)')
+# Widening `\b` to exclude `-` would have been the fourth spelling patch in this region.
+#
+# AND THE FIRST REPAIR WAS STILL NOT A GRAMMAR. It tokenised the run and compared the leading token
+# LIST — which DISCARDS everything between the tokens, so `NOT/BLOCKING` tokenised to `NOT`,
+# `BLOCKING` and was accepted; it read only the physical headline LINE, so a bold run legally split
+# across the line break was invisible and the item went non-blocking by omission; and the
+# malformed-reach check was conditioned on no valid status existing, which made one valid status a
+# LICENCE for any number of malformed ones after it. codex-worker-1 landed all three on the repair.
+#
+# Three properties, stated once each:
+#
+#   THE REGION is the item's LEADING BOLD SEQUENCE — the consecutive `**...**` runs after ` — `,
+#     separated only by whitespace and ⟦markers⟧ — taken from the item BODY, not from a line. A bold
+#     run is delimited by its delimiters; the line break is not one of them. Item 24 has two runs in
+#     its sequence and both are part of the lead-in a reader sees.
+#   THE PHRASE is matched ANCHORED at the first run's start, not assembled from tokens:
+#     `(NOT )?BLOCKING` with one literal space, followed by a token-boundary lookahead. Nothing
+#     between the words is discarded because nothing is skipped over.
+#   THE POPULATION is every token in the region beginning with `BLOCKING`. Each must BE `BLOCKING`,
+#     there must be at most one, and it must be the phrase just parsed. `NONBLOCKING` does not begin
+#     with it and stays prose; item 27's second `BLOCKING`, deep in its body, is outside the region.
+#
+# The third is what closes the licence: it is not conditioned on anything.
+_TOKEN_RE  = re.compile(r"[A-Za-z0-9_\'-]+")
+_HEADS_RE  = re.compile(r'(?m)^(\d{1,2})\. \*\*[^*\n]+\*\* — (.*?)(?=\n\d{1,2}\. \*\*|\n# |\Z)', re.S)
+_PHRASE_RE = re.compile(r"(NOT )?BLOCKING(?![A-Za-z0-9_\'-])")
 
-def _parse_status(rest):
-    """The leading tokens of the headline's first bold run. None when there is no status."""
-    m = re.search(r'\*\*', rest)
-    if not m:
-        return None
-    run = rest[m.end():]
-    close = run.find('**')
-    if close >= 0:
-        run = run[:close]
-    tok = _TOKEN_RE.findall(run)
-    if tok[:1] == ['BLOCKING']:
-        return True
-    if tok[:2] == ['NOT', 'BLOCKING']:
-        return False
-    return None
+def _status_runs(rest):
+    """The item's leading bold sequence, as runs of text between `**` delimiters.
 
-_ITEM_STATUS, _ITEM_HEADS_SEEN, _ITEM_HEADLINE = {}, set(), {}
+    AN UNCLOSED RUN IS READ TO THE END, not dropped. Dropping it was a fail-open I wrote into the
+    repair and then leaned on: with no closing delimiter the region came back EMPTY, so the item had
+    no parsed status AND no status-word check, and I had told myself ITEM-MD-UNBALANCED covered it.
+    Parity does fire — but one refusal standing in for two is exactly the arrangement that makes a
+    revert test unreadable, and it made one: reverting the head extent blinded every status control
+    at once instead of the one it should have. Reading to the end keeps the two checks independent.
+    """
+    i, runs = 0, []
+    while True:
+        m = re.match(r'(?:\s|⟦[^⟧]*⟧)*\*\*', rest[i:])
+        if not m:
+            break
+        j = i + m.end()
+        k = rest.find('**', j)
+        runs.append(rest[j:] if k < 0 else rest[j:k])
+        if k < 0:
+            break
+        i = k + 2
+    return runs
+
+_ITEM_STATUS, _ITEM_HEADS_SEEN, _ITEM_REGION = {}, set(), {}
 for _m in _HEADS_RE.finditer(body_vis):
-    _n2, _rest = int(_m.group(1)), _m.group(2)
+    _n2, _runs = int(_m.group(1)), _status_runs(_m.group(2))
     _ITEM_HEADS_SEEN.add(_n2)
-    _ITEM_HEADLINE[_n2] = _rest
-    _st = _parse_status(_rest)
-    if _st is not None:
-        _ITEM_STATUS[_n2] = _st
-    # A SECOND STATUS WORD ANYWHERE ON THE LINE IS A CONTRADICTION, whatever its polarity. The old
-    # count excluded `NOT BLOCKING`, so a headline could open `BLOCKING` and retract it in the next
-    # clause with nothing to notice; the consumers would all have agreed on the opening, which is
-    # agreement about which half of a contradiction to read. Both spellings are one status word.
-    if len(re.findall(r'\bBLOCKING\b', _rest)) > 1:
-        bad('ITEM-STATUS-AMBIGUOUS', f'item {_n2} headline states the status word more than once; '
-                                     f'a headline that declares and then retracts declares nothing')
-
-# AND AN ITEM WITHOUT A PARSEABLE STATUS IS A DEFECT, not a non-blocking item. With `\b` making
-# `BLOCKINGLY` match nothing, the item simply had no entry and `.get(n, False)` answered "not
-# blocking" — absence read as a value, which is how the malformed spelling passed. Every open item
-# must state a status the grammar accepts.
-# ONLY A MALFORMED ATTEMPT, not an absent one. Omission means non-blocking — that is the packet's
-# convention and most items rely on it — so requiring a status everywhere would have demanded
-# seventeen edits to say what silence already says. What must not happen is a headline that REACHES
-# for the status word and misses: `BLOCKINGLY` parsed as nothing and was read as non-blocking, so a
-# typo in a blocker's status would silently declassify it. `NOT BLOCKING-LIKE` is the same reach one
-# character further on, and it is this check — not the ambiguity one — that owns it: the headline
-# names the status word once, so there is nothing ambiguous about it, it is simply not the word.
-for _n2 in sorted(_ITEM_HEADS_SEEN):
-    if _n2 in _ITEM_STATUS or _n2 in closed_set:
-        continue
-    if 'BLOCKING' in (_ITEM_HEADLINE.get(_n2) or ''):
-        bad('ITEM-STATUS-MISSING', f'item {_n2} spells BLOCKING in a form the grammar does not '
-                                   f'accept: the status is **BLOCKING** or **NOT BLOCKING**, as the '
-                                   f'leading word tokens of the headline\'s first bold run')
+    _ITEM_REGION[_n2] = _runs
+    _ph = _PHRASE_RE.match(_runs[0]) if _runs else None
+    if _ph:
+        _ITEM_STATUS[_n2] = not _ph.group(1)
+    _toks = [t for r in _runs for t in _TOKEN_RE.findall(r) if t.startswith('BLOCKING')]
+    # A SECOND STATUS WORD IN THE REGION IS A CONTRADICTION, whatever its polarity and whether or
+    # not the first one parsed. The old count excluded `NOT BLOCKING`, so a lead-in could declare
+    # and retract with nothing to notice — agreement among consumers about which half of a
+    # contradiction to read is not agreement.
+    if len(_toks) > 1:
+        bad('ITEM-STATUS-AMBIGUOUS', f'item {_n2} states the status word {len(_toks)} times in its '
+                                     f'leading bold sequence; one declaration, or none')
+    # AND A REACH THAT MISSES IS A DEFECT WHEREVER IT LANDS. `BLOCKINGLY` parsed as nothing and
+    # `.get(n, False)` answered "not blocking" — absence read as a value. `NOT BLOCKING-LIKE` and
+    # `NOT BLOCKING_EXTRA` are the same reach one character further on. Omission still means
+    # non-blocking; that is the packet's convention and most items rely on it. What must not happen
+    # is a lead-in that reaches for the status word and misses, and this runs even when a valid
+    # status was parsed — otherwise one good declaration licenses every malformed one after it.
+    for _t in _toks:
+        if _t != 'BLOCKING':
+            bad('ITEM-STATUS-MISSING', f'item {_n2} spells the status word as {_t!r}; it is '
+                                       f'**BLOCKING** or **NOT BLOCKING**, as the leading phrase of '
+                                       f'the first bold run')
+    if _toks and _n2 not in _ITEM_STATUS and _n2 not in closed_set:
+        bad('ITEM-STATUS-MISSING', f'item {_n2} names the status word outside the leading phrase of '
+                                   f'its first bold run')
 
 def _is_blocking(n):
     return _ITEM_STATUS.get(n, False)
@@ -2026,11 +2069,43 @@ item_body = {int(m.group(1)): m.group(0) for m in
 # runs in the VISIBLE view (a delimiter inside a code span is literal text, not emphasis) and
 # requires an even number per item. It is NOT a CommonMark parse and cannot see a mis-NESTED pair,
 # only an unmatched one — which is the defect that actually occurred and the one an edit produces.
+#
+# AND A BACKSLASH ESCAPE IS NOT A DELIMITER. `\**` is one literal asterisk followed by one emphasis
+# character, and counting `**` substrings saw a pair — so an item could gain a real unmatched opener
+# and stay even. codex-worker-1's probe; backslash escapes are inside this packet's Markdown subset,
+# so an allowed form was fail-open. CommonMark escapes any ASCII punctuation, and that whole class is
+# removed before counting rather than the one character the probe used.
+_ESCAPE_RE = re.compile(r'\\[!-/:-@\[-`{-~]')
 for _n2 in sorted(item_body):
     _ib = re.search(rf'(?m)^{_n2}\. \*\*.*?(?=\n\d{{1,2}}\. \*\*|\n# |\Z)', body_vis, re.S)
-    if _ib and len(re.findall(r'\*\*', _ib.group(0))) % 2:
+    if _ib and len(re.findall(r'\*\*', _ESCAPE_RE.sub('  ', _ib.group(0)))) % 2:
         bad('ITEM-MD-UNBALANCED', f'item {_n2} has an odd number of ** emphasis delimiters; an edit '
                                   f'left a bold run open and the manifest publishes the fragment')
+# EVERY PER-ITEM CHECK IS WORTH WHAT THE SECTION BOUNDARY IS WORTH. `item_body` spans end at the
+# next item or the next `# ` heading, so a heading inserted before the last item's end terminates
+# every span AND the section itself — leaving live text that no item covers, invisible to parity, to
+# the status grammar, to the manifest and to MANIFEST-STALE, which preserved the omission faithfully.
+# codex-worker-1's probe.
+#
+# MY FIRST REPAIR WAS UNFIREABLE AND I NEARLY SHIPPED IT. I wrote a totality check over the section's
+# interior — and the span regex covers every byte between one item and the next by construction, so
+# no input can make it fail. The control reported BLIND, correctly, and that is the whole reason it
+# was written. A check nothing can trigger is worse than no check: it reads as coverage.
+#
+# The defect is at the BOUNDARY, so the rule is about headings. A top-level heading is a GATE or one
+# of the document's named structural sections, and there is no third kind. That is a rule rather than
+# a pinned sequence: it needs no edit when a gate is added, and an invented heading has nowhere to be.
+_SECTIONS = ('AE-P1.2 — SHM contract phase packet', 'Implementation constraints',
+             'A.0 — the gate this packet is decided by', 'Owner rulings', 'Open items',
+             "Provenance of this packet's own numbers")
+for _m2 in re.finditer(r'(?m)^# (.*)$', _visible(pkt)):
+    _h = _m2.group(1).strip()
+    if re.match(GATE_ID + r' — ', _h):
+        continue
+    if not any(_h.startswith(_sec) for _sec in _SECTIONS):
+        bad('SECTION-UNKNOWN', f'top-level heading {_h[:48]!r} is neither a gate nor a named '
+                               f'structural section; an invented section truncates the one above it')
+
 body_off = pkt.find(body)
 gate_hdr = [{'gate': m.group(1), 'line': line_of(m.start()),
              'end_line': line_of(pkt.find('\n# ', m.end()) if pkt.find('\n# ', m.end()) != -1 else len(pkt) - 1)}
