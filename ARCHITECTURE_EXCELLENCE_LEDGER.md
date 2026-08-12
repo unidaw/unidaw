@@ -1366,6 +1366,14 @@ behavior unchanged today. The classifier/policy correction remains valid; the
 end-to-end history assertion pins that no-change rule, while static policy
 assertions retain the intended command classification.
 
+Further R11 audit qualification: `UndoPolicy::None` is load-bearing for supported
+partial plugin snapshots even though the complete happy path is protected by the
+no-change commit rule. If an incomplete cursor snapshot omits a device blob,
+mapping Undo to `Version` can capture a newly available blob, make plugin state
+unequal, append an unintended Undo-labeled version, and truncate redo. Keep the
+policy branch/static assertions and add a partial-snapshot negative control before
+claiming behavior protection is complete.
+
 `P2-G1B-01` completed as `5261f88`: independently enumerates 7 request kinds,
 16 production send sites, and 6 readers plus the declared chain-snapshot
 no-reader case. Mirror/sender/reader registry checks, six sabotage controls,
