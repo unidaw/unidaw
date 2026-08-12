@@ -13,7 +13,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, existsSync, writeFileSync,
-         mkdtempSync } from 'node:fs';
+         mkdtempSync, lstatSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -4862,42 +4863,78 @@ const codeOnly = (text) => text.split('\n')
   .join('\n');
 
 /*
- * THE EXPANSIONS A PERSON HAS READ, WITH THE PROVENANCE CHECKED BY MACHINE.
+ * THE EXPANSIONS A PERSON HAS READ, UNDER A CLOSED-WORLD FAIL-CLOSED CONTRACT.
  *
- * THREE ROUNDS OF INFERRING what a shell variable can hold all leaked — `.*` per variable, then
- * "appears anywhere in the corpus", then "assigned in this script" (whose scanner could not see
- * `[ ... ] && VAR="$U"` and so accepted the one value a branch guard made impossible). A regex over
- * shell is a proxy for parsing shell, so the model stopped inferring and became a list.
+ * FIVE ROUNDS GOT HERE. `.*` per variable accepted 561/561 forged lines; "appears in the corpus"
+ * accepted 561/561 again; "assigned in this script" could not see `[ ... ] && VAR="$U"` and so
+ * admitted the one value a branch guard made impossible; the hand-verified list that replaced it
+ * cited a guard as an assignment; and its cardinality guard was blind to six of sixteen ways shell
+ * can bind a name. Every round fixed the leak that was named and produced another of the same
+ * family, because each answered a question about shell by pattern-matching shell.
  *
- * THEN THE LIST'S OWN CITATION WAS WRONG. It said the assignments were at webstack.sh:396,401.
- * They are at 392 and 396; 401 is inside a guard and assigns nothing. A hand-verified list whose
- * verification record is unchecked is a claim with no evidence — the exact shape of the approval
- * that started this phase, where a verdict named a SHA that was not what shipped.
+ * SO THE WORLD IS CLOSED. An entry names its entrypoint, the exact transitive source closure, and
+ * a blob for every file in it. Nothing outside that closure is consulted and nothing inside it is
+ * assumed: every `source` occurrence must be accounted for, every binding of the variable must be
+ * a cited one, and any construct a static reading cannot decide — eval, nameref, indirect or
+ * computed names — REJECTS the entry rather than being noted. Unresolved is not admitted.
  *
- * So provenance is DATA and every field is asserted against the script below: the cited lines must
- * contain the cited assignments, the count of assignments in the file must equal the count cited
- * (a new one anywhere — including inline in a compound command — fails), and the output site must
- * contain the template. A silent widen, empty or replace fails a named assertion rather than
- * quietly enlarging what this check will accept.
+ * FAIL-CLOSED IS THE POINT. Every failure mode above ended with a check accepting something; this
+ * contract's failure mode is refusing to prove a line that is genuinely printable. That is the
+ * direction to be wrong in for a check whose job is to catch a runbook quoting fiction.
  */
 const VERIFIED_EXPANSIONS = [
   {
     variable: 'CREDENTIAL_MODE',
-    script: 'tools/webstack.sh',
-    // `case "${DAW_WEBSTACK_ALLOW_CREDENTIALS:-0}"` — two arms, both reachable, read 2026-08-12.
+    entrypoint: { path: 'tools/webstack.sh', blob: '56f4d0d74ab8c8871b15138e1572ccd74054cbca' },
+    // The closure is EXACT: these files and no others, each pinned by blob. A pin that only names
+    // paths cannot tell that a file changed under it.
+    closure: [
+      { path: 'tools/webstack.sh', blob: '56f4d0d74ab8c8871b15138e1572ccd74054cbca' },
+      { path: 'tools/lib/repository_root.sh', blob: '173b3b60a9cb4f0112bb3e3bff706742377d252d' },
+    ],
+    // Every `source`/`.` command in the closure, with the target a person resolved. The path is
+    // `$SCRIPT_DIR/...` in the source, which no static reading resolves — so the human resolves it
+    // and the machine checks that the resolution was DECLARED and that no occurrence is missing.
+    sourceOccurrences: [
+      {
+        path: 'tools/webstack.sh',
+        line: 22,
+        text: '. "$SCRIPT_DIR/lib/repository_root.sh" || exit 2',
+        resolvesTo: 'tools/lib/repository_root.sh',
+      },
+    ],
+    // `case "${DAW_WEBSTACK_ALLOW_CREDENTIALS:-0}"` — two arms, both reachable.
     assignments: [
-      { line: 392, value: 'credential-free default' },
-      { line: 396, value: 'explicit credentialed mode' },
+      { path: 'tools/webstack.sh', line: 392, value: 'credential-free default' },
+      { path: 'tools/webstack.sh', line: 396, value: 'explicit credentialed mode' },
     ],
     outputSite: {
+      path: 'tools/webstack.sh',
       line: 423,
       template: 'ask     $CREDENTIAL_MODE; sidecar cwd cannot discover checkout/home .env files',
     },
+    // Ceilings live on the ENTRY, not on the module: a closure that grows must be re-read by a
+    // person, and a control targeting a later branch has to be able to state the size it created.
+    maxFiles: 2,
+    maxBytes: 47615,
     reviewer: 'claude-worker-1',
+    date: '2026-08-12',
   },
 ];
 
-// The list keyed by name, for the matcher. Built from the records so the two cannot diverge.
+// A `source`/`.` used as a COMMAND, not the word "source" inside a string. Approximated by command
+// position — line start or after a separator — which is why `say "page    source verified..."` and
+// `"...configured source root"` are not occurrences. Verified against both directions below.
+const SOURCE_COMMAND = /(?:^|[;&|(){]|\b(?:then|do|else)\s)\s*(?:\.|source)\s+(?=\S)/;
+
+// Constructs a static reading cannot decide. Presence anywhere in the closure rejects the entry.
+const DANGER_FORMS = [
+  { name: 'eval', re: /\beval\b/ },
+  { name: 'nameref', re: /\b(?:declare|local|typeset)\s+-n\b/ },
+  { name: 'indirect expansion', re: /\$\{!/ },
+  { name: 'computed variable name', re: /\b(?:printf\s+-v|read)\s+"?\$\{?[A-Za-z_]/ },
+];
+
 const verifiedValues = () => Object.fromEntries(VERIFIED_EXPANSIONS
   .map((e) => [e.variable, e.assignments.map((a) => a.value)]));
 
@@ -5065,69 +5102,238 @@ test('CONTROL: a REAL template skeleton with invented variable content IS caught
  * another way). It is NOT to relax the slot back to `.*`, which is the move that produced both of
  * the defects above.
  */
-test('every VERIFIED_EXPANSIONS record is true of the script it cites', () => {
-  /*
-   * THE LIST'S OWN CITATION WAS WRONG and nothing noticed: it named 396,401 for assignments that
-   * are at 392,396, and 401 is a guard. A hand-verified entry whose record is unchecked carries no
-   * more evidence than an unverified one, which is how this phase began — an approval naming a SHA
-   * that was not the one that shipped.
-   *
-   * So every field is executable here. The cited line must hold the cited assignment; the number of
-   * assignments to that variable ANYWHERE in the file must equal the number cited, including inline
-   * ones in compound commands — that blindness is what let a guarded impossible value through two
-   * rounds ago; and the output site must hold the template. Widening, emptying or replacing an
-   * entry fails a named assertion instead of quietly enlarging what is accepted.
-   */
-  for (const rec of VERIFIED_EXPANSIONS) {
-    const lines = readFileSync(join(PRESET_ROOT, rec.script), 'utf8').split('\n');
+/*
+ * CAUSAL CONTROLS. Each mutates a PRODUCTION file in the closure, runs the contract, and requires
+ * the named branch to fire — then restores the file and verifies the restoration. A control that
+ * only edits the record would prove the record is read; these prove the contract BINDS.
+ *
+ * The mutation is written and reverted inside a finally, and the final assertion re-reads the file
+ * and compares its blob to the pinned one, so a control that dies mid-run cannot leave the tree
+ * altered without the next test saying so.
+ */
+const contractFailure = (records) => {
+  try {
+    runVerifiedExpansionsContract(records);
+    return null;
+  } catch (e) {
+    return e.message;
+  }
+};
 
-    for (const a of rec.assignments) {
-      const text = lines[a.line - 1] ?? '';
-      assert.ok(text.includes(`${rec.variable}=`),
-        `${rec.script}:${a.line} does not assign ${rec.variable} — the citation is wrong, which is `
-        + `the defect this test exists for. Line reads: ${JSON.stringify(text.trim().slice(0, 80))}`);
-      assert.ok(text.includes(`'${a.value}'`) || text.includes(`"${a.value}"`),
-        `${rec.script}:${a.line} does not assign ${JSON.stringify(a.value)} to ${rec.variable}`);
-      assert.notEqual(a.value.trim(), '',
-        `${rec.variable} lists an empty expansion; an empty slot must be justified, not listed`);
+// THE BLOB PIN MASKS EVERY BRANCH BEHIND IT. Any mutation changes the blob, so the pin fires first
+// and no later branch can be reached by a mutation-based control — my first version of these
+// controls "fired" six times and every one was the pin. So a control that targets a later branch
+// RE-PINS the blob it just changed, which is the only way to test the thing it names. The pin has
+// its own control below, where not re-pinning is the point.
+const repinned = (relPath, text) => {
+  const blob = createHash('sha1')
+    .update(`blob ${Buffer.byteLength(text)}\0`).update(text).digest('hex');
+  return VERIFIED_EXPANSIONS.map((rec) => ({
+    ...rec,
+    closure: rec.closure.map((f) => (f.path === relPath ? { ...f, blob } : f)),
+    entrypoint: rec.entrypoint.path === relPath ? { ...rec.entrypoint, blob } : rec.entrypoint,
+    // The mutation grows the file; a control that did not restate the budget would trip the
+    // CEILING and never reach the branch it names — which is how the blob pin masked all six of
+    // these on the first attempt.
+    maxBytes: rec.maxBytes + Buffer.byteLength(text),
+  }));
+};
+
+test('CONTROL: every branch of the closed-world contract fires on a real mutation', () => {
+  const cases = [
+    ['C3 cross-file binding', 'tools/lib/repository_root.sh',
+      (s) => `${s}\nCREDENTIAL_MODE='injected by a control'\n`, /is bound at/],
+    ['C4 binding inside a function', 'tools/lib/repository_root.sh',
+      (s) => `${s}\n_ctl() { CREDENTIAL_MODE='x'; }\n`, /is bound at/],
+    ['C5 eval rejects', 'tools/lib/repository_root.sh',
+      (s) => `${s}\neval 'true'\n`, /uses eval/],
+    ['C6 indirect rejects', 'tools/lib/repository_root.sh',
+      (s) => `${s}\necho "\${!PATH}"\n`, /indirect expansion/],
+    ['C2 unaccounted source', 'tools/lib/repository_root.sh',
+      (s) => `${s}\n. ./nowhere.sh\n`, /source commands found at/],
+  ];
+  for (const [name, file, mutate, expected] of cases) {
+    const abs = join(PRESET_ROOT, file);
+    const original = readFileSync(abs);
+    let msg;
+    try {
+      const mutated = mutate(original.toString('utf8'));
+      writeFileSync(abs, mutated);
+      msg = contractFailure(repinned(file, mutated));
+    } finally {
+      writeFileSync(abs, original);
+    }
+    assert.ok(msg, `${name}: the contract PASSED with the mutation applied — the branch is inert`);
+    assert.match(msg, expected, `${name}: fired, but not the expected branch. Got: ${msg}`);
+  }
+});
+
+test('CONTROL: a closure that grows past its stated ceiling is refused', () => {
+  // The ceiling's own control. The other controls restate the budget so they can reach the branch
+  // they name; this one does not, and the growth must be refused.
+  const file = 'tools/lib/repository_root.sh';
+  const abs = join(PRESET_ROOT, file);
+  const original = readFileSync(abs);
+  let msg;
+  try {
+    const grown = `${original.toString('utf8')}\n# ${'x'.repeat(200)}\n`;
+    writeFileSync(abs, grown);
+    // re-pin the blob so the PIN does not mask the ceiling — the branch under test is the size
+    const blob = createHash('sha1')
+      .update(`blob ${Buffer.byteLength(grown)}\0`).update(grown).digest('hex');
+    msg = contractFailure(VERIFIED_EXPANSIONS.map((rec) => ({
+      ...rec,
+      closure: rec.closure.map((f) => (f.path === file ? { ...f, blob } : f)),
+    })));
+  } finally {
+    writeFileSync(abs, original);
+  }
+  assert.ok(msg, 'a closure that grew past its ceiling was accepted');
+  assert.match(msg, /closure is \d+ bytes, ceiling/, `expected the ceiling to fire. Got: ${msg}`);
+});
+
+test('CONTROL: an unrepinned change to a closure file trips the blob pin', () => {
+  // The pin's own control: here the mutation is NOT re-pinned, and the pin must catch it before
+  // anything else does. This is what makes the pin a pin rather than a comment.
+  const file = 'tools/lib/repository_root.sh';
+  const abs = join(PRESET_ROOT, file);
+  const original = readFileSync(abs);
+  let msg;
+  try {
+    writeFileSync(abs, `${original.toString('utf8')}\n# a change nobody declared\n`);
+    msg = contractFailure();
+  } finally {
+    writeFileSync(abs, original);
+  }
+  assert.ok(msg, 'an undeclared change to a closure file was accepted');
+  assert.match(msg, /is blob/, `expected the blob pin to fire first. Got: ${msg}`);
+});
+
+test('CONTROL: the closure files are byte-identical to their pins after the controls ran', () => {
+  // A mutating control that fails to restore leaves the next reader debugging the wrong thing.
+  const gitBlob = (buf) => createHash('sha1').update(`blob ${buf.length}\0`).update(buf).digest('hex');
+  for (const rec of VERIFIED_EXPANSIONS) {
+    for (const f of rec.closure) {
+      assert.equal(gitBlob(readFileSync(join(PRESET_ROOT, f.path))), f.blob,
+        `${f.path} was left modified by a control`);
+    }
+  }
+});
+
+function runVerifiedExpansionsContract(records = VERIFIED_EXPANSIONS) {
+  /*
+   * C1-C9. Every field is checked against the files it names, and anything unresolved REJECTS.
+   * The controls that prove each branch can fail live in the test below this one, and they mutate
+   * the PRODUCTION scripts rather than this record — a control that only edits the record proves
+   * the record is read, not that the contract binds.
+   */
+  const gitBlob = (buf) => createHash('sha1')
+    .update(`blob ${buf.length}\0`).update(buf).digest('hex');
+  const root = PRESET_ROOT;
+
+  for (const rec of records) {
+    // ---- C7/C9: the closure resolves, is inside the root, is not a symlink, and is pinned -----
+    let bytes = 0;
+    const closureText = new Map();
+    for (const f of rec.closure) {
+      const abs = join(root, f.path);
+      assert.ok(!f.path.includes('..') && !f.path.startsWith('/'),
+        `${f.path} escapes the repository root`);
+      const st = lstatSync(abs);
+      assert.ok(!st.isSymbolicLink(), `${f.path} is a symlink; the closure must be real files`);
+      const buf = readFileSync(abs);
+      assert.equal(gitBlob(buf), f.blob,
+        `${f.path} is blob ${gitBlob(buf)}, the record pins ${f.blob}. The file changed under a `
+        + 'pin that names it — which is the whole reason the pin names a blob and not a path.');
+      closureText.set(f.path, buf.toString('utf8'));
+      bytes += buf.length;
+    }
+    assert.ok(rec.closure.length <= rec.maxFiles,
+      `closure has ${rec.closure.length} files, ceiling ${rec.maxFiles} — growth must be a `
+      + 'decision, not a side effect');
+    assert.ok(bytes <= rec.maxBytes,
+      `closure is ${bytes} bytes, ceiling ${rec.maxBytes}`);
+
+    // ---- C1/C2: every source occurrence accounted for, and the closure is exactly reachable ----
+    const seen = [];
+    for (const [path, text] of closureText) {
+      text.split('\n').forEach((line, i) => {
+        if (line.trimStart().startsWith('#')) return;
+        if (!SOURCE_COMMAND.test(line)) return;
+        seen.push({ path, line: i + 1, text: line.trim() });
+      });
+    }
+    const declared = rec.sourceOccurrences.map((o) => `${o.path}:${o.line}`);
+    assert.deepEqual(seen.map((s) => `${s.path}:${s.line}`), declared,
+      `source commands found at ${seen.map((s) => `${s.path}:${s.line}`).join(', ') || '(none)'} `
+      + `but the record declares ${declared.join(', ') || '(none)'}. An unaccounted source line is `
+      + 'a file entering the closure without anyone reading it.');
+    for (const occ of rec.sourceOccurrences) {
+      const actual = (closureText.get(occ.path) ?? '').split('\n')[occ.line - 1] ?? '';
+      assert.equal(actual.trim(), occ.text,
+        `${occ.path}:${occ.line} is not the declared source line`);
+      assert.ok(rec.closure.some((f) => f.path === occ.resolvesTo),
+        `${occ.path}:${occ.line} resolves to ${occ.resolvesTo}, which is not in the closure`);
+      assert.ok(existsSync(join(root, occ.resolvesTo)),
+        `${occ.resolvesTo} does not exist; an unresolved source must reject, not be skipped`);
+    }
+    // the closure must be exactly {entrypoint} ∪ {declared resolutions} — no extra, no missing
+    const reachable = new Set([rec.entrypoint.path,
+      ...rec.sourceOccurrences.map((o) => o.resolvesTo)]);
+    assert.deepEqual([...closureText.keys()].sort(), [...reachable].sort(),
+      'the declared closure is not exactly what the declared source occurrences reach');
+
+    // ---- C5/C6: constructs a static reading cannot decide reject the entry ---------------------
+    for (const [path, text] of closureText) {
+      for (const d of DANGER_FORMS) {
+        const hit = text.split('\n').findIndex((l) => !l.trimStart().startsWith('#') && d.re.test(l));
+        assert.equal(hit, -1,
+          `${path}:${hit + 1} uses ${d.name}. A static reading cannot decide what it binds, so this `
+          + 'entry is UNPROVABLE and is rejected rather than assumed harmless.');
+      }
     }
 
-    // CARDINALITY. Any assignment to this variable anywhere in the file, including
-    // `[ ... ] && VAR=...`, must be one of the cited ones. A new arm added later silently widens
-    // what this check accepts, and that is exactly the "silent widen" a value list cannot see.
-    // EVERY WAY SHELL CAN BIND A NAME, not every way it can look like `VAR=`. The predecessor of
-    // this regex matched only `VAR=` and so missed `[ ... ] && VAR="$U"`, which is how a guarded
-    // impossible value survived two rounds. I probed the successor against sixteen forms before
-    // trusting it and it missed six — read, read -r, printf -v, array element, arithmetic, and a
-    // for/while loop variable. Each of those binds the name as surely as an assignment does, and a
-    // detector that cannot see them lets an entry silently widen.
+    // ---- C3/C4: the variable is bound only at the cited lines, anywhere in the closure ---------
     const v = rec.variable;
     const bindsRe = new RegExp([
-      `(?:^|[;&|({]|\\s)(?:local\\s+|export\\s+|declare\\s+|typeset\\s+)?${v}=`,  // VAR= in any position
-      `(?:^|[;&|({]|\\s)${v}\\[[^\\]]*\\]=`,                                        // VAR[i]=
-      `\\bread\\s+(?:-[A-Za-z]+\\s+)*(?:[A-Za-z_][A-Za-z0-9_]*\\s+)*${v}\\b`,      // read [-r] ... VAR
-      `\\bprintf\\s+-v\\s+${v}\\b`,                                                 // printf -v VAR
-      `\\b(?:mapfile|readarray)\\s+(?:-[A-Za-z]+\\s+)*${v}\\b`,                     // mapfile -t VAR
-      `\\(\\(\\s*${v}\\s*(?:[-+*/%]?=|\\+\\+|--)`,                              // (( VAR = / VAR++ ))
-      `\\bfor\\s+${v}\\s+in\\b`,                                                    // for VAR in
+      `(?:^|[;&|({]|\\s)(?:local\\s+|export\\s+|declare\\s+|typeset\\s+)?${v}=`,
+      `(?:^|[;&|({]|\\s)${v}\\[[^\\]]*\\]=`,
+      `\\bread\\s+(?:-[A-Za-z]+\\s+)*(?:[A-Za-z_][A-Za-z0-9_]*\\s+)*${v}\\b`,
+      `\\bprintf\\s+-v\\s+${v}\\b`,
+      `\\b(?:mapfile|readarray)\\s+(?:-[A-Za-z]+\\s+)*${v}\\b`,
+      `\\(\\(\\s*${v}\\s*(?:[-+*/%]?=|\\+\\+|--)`,
+      `\\bfor\\s+${v}\\s+in\\b`,
     ].join('|'));
-    const assignRe = bindsRe;
-    const found = lines
-      .map((l, i) => ({ line: i + 1, text: l }))
-      .filter(({ text }) => !text.trimStart().startsWith('#') && assignRe.test(text));
-    assert.deepEqual(found.map((f) => f.line), rec.assignments.map((a) => a.line),
-      `${rec.script} assigns ${rec.variable} at ${found.map((f) => f.line).join(', ')}, but the `
-      + `record cites ${rec.assignments.map((a) => a.line).join(', ')}. An uncited assignment `
-      + 'widens the accepted set without anyone deciding to.');
+    const bindings = [];
+    for (const [path, text] of closureText) {
+      text.split('\n').forEach((line, i) => {
+        if (line.trimStart().startsWith('#')) return;
+        if (bindsRe.test(line)) bindings.push(`${path}:${i + 1}`);
+      });
+    }
+    assert.deepEqual(bindings, rec.assignments.map((a) => `${a.path}:${a.line}`),
+      `${v} is bound at ${bindings.join(', ')} but the record cites `
+      + `${rec.assignments.map((a) => `${a.path}:${a.line}`).join(', ')}. A binding anywhere in the `
+      + 'closure — including inside a function in a sourced file — widens what this accepts.');
 
-    const site = lines[rec.outputSite.line - 1] ?? '';
+    for (const a of rec.assignments) {
+      const line = (closureText.get(a.path) ?? '').split('\n')[a.line - 1] ?? '';
+      assert.ok(line.includes(`'${a.value}'`) || line.includes(`"${a.value}"`),
+        `${a.path}:${a.line} does not assign ${JSON.stringify(a.value)}`);
+      assert.notEqual(a.value.trim(), '', `${v} lists an empty expansion`);
+    }
+
+    // ---- the output site ----------------------------------------------------------------------
+    const site = (closureText.get(rec.outputSite.path) ?? '').split('\n')[rec.outputSite.line - 1] ?? '';
     assert.ok(site.includes(rec.outputSite.template),
-      `${rec.script}:${rec.outputSite.line} does not print the cited template. Line reads: `
-      + `${JSON.stringify(site.trim().slice(0, 90))}`);
-    assert.ok(site.includes(`$${rec.variable}`),
-      `${rec.script}:${rec.outputSite.line} does not interpolate ${rec.variable}`);
-    assert.ok(rec.reviewer, `${rec.variable} names no reviewer`);
+      `${rec.outputSite.path}:${rec.outputSite.line} does not print the cited template`);
+    assert.ok(site.includes(`$${v}`), 'the output site does not interpolate the variable');
+    assert.ok(rec.reviewer && rec.date, `${v} names no reviewer or date`);
   }
+}
+
+test('every VERIFIED_EXPANSIONS record is true of the closure it declares', () => {
+  runVerifiedExpansionsContract();
 });
 
 test('CONTROL: a sentence that exists only in a shell COMMENT is caught', () => {
