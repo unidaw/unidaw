@@ -1126,3 +1126,10 @@ round-2 handles escapes, section boundaries, and malformed runs; three stale
 restatements are corrected; 143 controls pass. It explicitly carries item 38's
 ruling, sixteen unclassified items/third kind, cross-record control, and the
 remaining G0/G2/G3/Watchdog blockers. Exact audit is pending.
+
+Exact audit of `5ce6674` remains BLOCKED. The prior count contradiction persists
+at `AE-P1.2-shm-contract.md:104`: “open list is 39” while manifest counts 39
+total, 30 open, 29 active, 9 closed. Worse, the new selfcheck compares that
+phrase to the total count, ratcheting the semantic error. Additional probes find
+escaped-status and prefixed-section orphan fail-opens, plus stale R1 assignments;
+schema `/6` compatibility prose remains unresolved. No implementation gate.
