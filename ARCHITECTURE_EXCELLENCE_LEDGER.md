@@ -1233,3 +1233,12 @@ blockers remain: scalar-list element types are omitted from the schema fingerpri
 checked only inside A.0, allowing a second visible authority elsewhere. Required
 fixes: union scalar element types (empty lists provide no evidence) and require
 exactly one global declaration whose span is inside the unique A.0 section.
+
+Owner successor `7c38e70` claims the be9193d parser/view findings are closed:
+literal escaped/entity stars are masked for delimiter detection while preserving
+rendered run text, malformed later status attempts are rejected, up-to-three-space
+headings are recognized, and item33 now distinguishes specified detectors from
+missing runnable assertions. It reports 166 controls and schema /7; carried
+schema/choice claims were previously asserted closed, while G0-A/G0-B, R7/G4,
+item38, unclassified kinds, and subject-before-reference remain open. Exact audit
+is pending.
