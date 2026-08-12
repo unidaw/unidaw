@@ -1837,6 +1837,12 @@ for `codex-worker-2`: edit only `ui/daw-bridge/src/reader.rs` and `control.rs`
 engine-death/odd-version tests, and negative controls. No SHM/layout/wire
 changes or unrelated client migration are allowed.
 
+Assignment correction: CTRL02-A was misrouted to `claude-worker-2`, whose
+branch never touched `ui/daw-bridge`; no work was started and no files were
+modified. The task is now explicitly assigned to `claude-worker-1` with the
+original bounded file scope. `claude-worker-2` remains idle/available after
+SHM02 completion; `codex-worker-1` continues the R3a review.
+
 Fleet refill (2026-08-12): `codex-worker-2` remains active on the bounded
 CTRL02-A bridge liveness fix; `codex-worker-1` is actively completing the
 tightened R3a review; `claude-worker-1` is assigned a read-only CMD00 migration
