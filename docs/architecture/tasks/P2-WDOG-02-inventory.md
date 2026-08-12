@@ -78,3 +78,38 @@ Related: AE-P1.2 open items 36 (`tools/host_stall_check.sh` cannot distinguish i
 (readiness and the mapping it authorises), and R16 (the resume mechanism, an owner choice). Those
 are the frozen packet's record of the same territory; this inventory is measured independently from
 the current checkout and agrees with them on the Watchdog.
+
+## `host.gave_up` — the read-only inventory, before any fatal play/start change
+
+**One emission site**, `engine_restart_worker.cpp:63`. `git grep -n "gave_up" -- apps` returns
+exactly that line.
+
+**Its guard** is `runtime->restartAttempts > kMaxRestartsPerWindow`, inside the restart worker's
+loop. On that branch it sets five flags — `hostGaveUp=true`, `hostReady=false`, `active=false`,
+`needsRestart=false`, `restartInFlight=false` — writes a human log line explaining that the track is
+disabled and the engine stays up, emits the event with `track` and `attempts`, and `continue`s.
+
+**What it does NOT do:** stop the transport, fail the play, or surface anything to the UI beyond the
+event. "Fatal play/start failure handling" therefore has no existing behaviour to extend — it would
+be new policy, which is why it wants its own ticket rather than a line in this slice.
+
+### A FIFTH SILENT PATH, adjacent to the four drops
+
+Immediately below the give-up branch, `engine_restart_worker.cpp:70-76`: when
+`runtime->controller.launch(runtime->config)` returns false, the worker clears `hostReady`,
+`active` and `restartInFlight`, writes a log line, and `continue`s — **with no DAW_EVENT at all**.
+
+That is the path that PRECEDES giving up: a host is dying and being relaunched, each failure
+invisible to any structured consumer, until the attempt counter crosses the threshold and the one
+event finally fires. So the only machine-readable signal in this whole sequence is the LAST one,
+and the sequence leading to it — which is what a stall/drop oracle needs — is a log line.
+
+It is listed here rather than fixed because backend's authorized slice names four drop sites and
+this is a fifth; adding it silently would be widening an explicit scope by hand.
+
+### Proposed ticket, bounded
+
+**P2-WDOG-03 — fatal play/start failure policy.** Decide what a give-up MEANS to the transport and
+the UI: today it disables one track and says so only in a log and one event. That is a behaviour
+decision, not an observability one, and it needs an owner. Its prerequisite is this slice's
+transition surface, so that "how did we get here" is answerable when the policy is written.
