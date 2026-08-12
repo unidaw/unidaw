@@ -1610,3 +1610,16 @@ rejects. Acceptance controls C1-C9 cover removed/unaccounted sources,
 cross-file/function bindings, eval/indirect, missing paths, current-entry cost,
 and closure floor. Design accepted in principle; independent review is required
 before implementation. P0.3 remains BLOCKED.
+
+Independent design review conditionally passes the C1-C9 rule only as a
+closed-world, fail-closed contract—not exhaustive Bash inference. Required
+authority keys: entrypoint path/blob, variable, exact output span/template,
+values, reviewer/date, and exact transitive closure path/blob. Every source
+occurrence must be accounted by byte span; unresolved/dynamic/out-of-root/symlink
+paths reject. Closure scans must reject unsupported eval/nameref/indirect/dynamic
+names/mutating external functions unless explicitly modeled; scope reachability
+must be respected; runtime-unresolved constructs fail closed; closure ceilings
+must refuse growth. Causal controls must mutate production inputs and prove each
+verifier branch. Current closure is exactly webstack plus repository_root (~47.6KB).
+Implementation is authorized only against this shape, in `ui-web/test/unit.mjs`,
+with no status transition until independent review.
