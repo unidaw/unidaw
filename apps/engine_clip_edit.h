@@ -109,6 +109,20 @@ bool applyRemoveChordAt(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick,
 // against; if the engine has moved on, the edit is REFUSED rather than applied to a document the
 // caller has not seen. That refusal goes to the UI and to the journal, which is why this needs
 // both emitClipReject and historyAppend.
+// THE COUNTER A COMMAND IS GATED ON, and whether its track is there — one read, two callers.
+//
+// Track-scoped commands are gated on the track's own `trackClipVersion`; global-scope ones on the
+// engine's `clipVersion`, because an undo can touch ANY track and comparing it against the caller's
+// incidental trackId would let it ride on track 0's version. Reading that took a mutex and a
+// removed-flag check, and it lived INSIDE the version gate — so the row-op refusal, which is not
+// version-gated and therefore never calls the gate, had no way to say what the engine holds and
+// reported a literal 0 instead. Extracted rather than copied: a second implementation of a read
+// under a lock is how the two answers start to disagree.
+//
+// Returns false when a track-scoped command names a track that is not present; `out` is untouched.
+bool currentClipVersionFor(ClipEditDeps& deps, daw::UiCommandType commandType, uint32_t trackId,
+                           uint32_t& out);
+
 bool requireMatchingClipVersion(ClipEditDeps& deps, uint32_t baseVersion, daw::UiCommandType commandType, uint32_t trackId);
 
 // Which placement covers this tick on this track, if any. The one answer to a question that used

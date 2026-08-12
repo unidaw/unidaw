@@ -929,28 +929,37 @@ bool applyRemoveChordAt(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick,
     return emitRemoveChordDiff(deps, trackId, *removed, absTick);
 }
 
+// See the header. The read the version gate used to do inline, so a caller that is not
+// version-gated can still say what the engine holds.
+bool currentClipVersionFor(ClipEditDeps& deps, daw::UiCommandType commandType, uint32_t trackId,
+                           uint32_t& out) {
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
+  // Undo/Redo (and the other global-scope ops) can touch ANY track, so they are
+  // gated on the global counter — comparing them against the caller's incidental
+  // trackId would let an undo of a track-3 edit ride on track 0's version.
+  if (daw::uiCommandIsGlobalScope(commandType)) {
+    out = deps.clipVersion.load(std::memory_order_acquire);
+    return true;
+  }
+  std::lock_guard<std::mutex> lock(tracksMutex);
+  if (trackId < tracks.size() && tracks[trackId] &&
+      !tracks[trackId]->removed.load(std::memory_order_acquire)) {
+    out = tracks[trackId]->trackClipVersion.load(std::memory_order_acquire);
+    return true;
+  }
+  return false;
+}
+
 bool requireMatchingClipVersion(ClipEditDeps& deps, uint32_t baseVersion, daw::UiCommandType commandType, uint32_t trackId) {
   auto& clipVersion = deps.clipVersion;
   auto& emitClipReject = deps.emitClipReject;
   auto& emitUiDiff = deps.emitUiDiff;
   auto& historyAppend = deps.historyAppend;
-  auto& tracks = deps.engineState.trackTable.tracks;
-  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
 
     uint32_t current = clipVersion.load(std::memory_order_acquire);
-    // Undo/Redo (and the other global-scope ops) can touch ANY track, so they are
-    // gated on the global counter — comparing them against the caller's incidental
-    // trackId would let an undo of a track-3 edit ride on track 0's version.
-    if (!daw::uiCommandIsGlobalScope(commandType)) {
-      bool haveTrack = false;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (trackId < tracks.size() && tracks[trackId] &&
-            !tracks[trackId]->removed.load(std::memory_order_acquire)) {
-          current = tracks[trackId]->trackClipVersion.load(std::memory_order_acquire);
-          haveTrack = true;
-        }
-      }
+    {
+      const bool haveTrack = currentClipVersionFor(deps, commandType, trackId, current);
       if (!haveTrack) {
         // A track-scoped edit naming a track that is not there used to fall through to
         // the global counter, get ACCEPTED, and then quietly do nothing when the edit

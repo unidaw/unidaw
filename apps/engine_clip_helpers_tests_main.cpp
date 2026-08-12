@@ -26,6 +26,9 @@
 //   placement's own localEdits flag — the same placement the edit will target, so the scope
 //   decision and the target decision cannot disagree.
 #include "apps/engine_clip_edit.h"
+#include "apps/engine_rowops_commands.h"
+
+#include <cstring>
 
 #include <atomic>
 #include <cstdio>
@@ -302,6 +305,92 @@ void testEditScope() {
   CHECK(!editIsLocalScope(d, 999, 100, 0));
 }
 
+// WHAT THE ENGINE HOLDS, for a caller that is NOT version-gated.
+//
+// `handleSetRowOps` passed a literal 0 as `ClipRejected.currentBase` — the field the payload calls
+// "the value to retry with" — while every other emit site passes a real figure. Zero is a LIVE
+// value: `clipVersion` initialises to 0, so a refusal on a track at version 7 was indistinguishable
+// from a genuine base on a fresh track. Open item 29, measured at the frozen product.
+//
+// The read lived INSIDE the version gate, which a row-op edit never calls, so this asserts the
+// extracted helper directly: the negative control is that a track at a NON-ZERO version must report
+// that version, which is exactly the case a hardcoded 0 satisfies by accident when the version is 0.
+void testCurrentClipVersionForReportsTheTrackCounter() {
+  Fixture f;
+  auto deps = f.deps();
+  TrackRuntime& rt = f.addTrack(3);
+  rt.trackClipVersion.store(7, std::memory_order_release);
+  f.clipVersion.store(41, std::memory_order_release);
+
+  uint32_t out = 999;
+  CHECK(currentClipVersionFor(deps, daw::UiCommandType::SetRowOps, 3, out));
+  CHECK(out == 7u);        // the TRACK's counter, not the global one and not a literal 0
+
+  // A GLOBAL-SCOPE command rides the engine counter, because an undo can touch any track.
+  out = 999;
+  CHECK(currentClipVersionFor(deps, daw::UiCommandType::Undo, 3, out));
+  CHECK(out == 41u);
+
+  // AND A MISSING TRACK HAS NO VALUE TO REPORT, which is the one case the caller must not
+  // paper over: `out` is left alone rather than being given a fabricated figure.
+  out = 999;
+  CHECK(!currentClipVersionFor(deps, daw::UiCommandType::SetRowOps, 9, out));
+  CHECK(out == 999u);
+
+  // A REMOVED track is gone for this purpose too — the version gate has always treated it so,
+  // and the extraction has to keep that or the two callers disagree about what "present" means.
+  rt.removed.store(true, std::memory_order_release);
+  out = 999;
+  CHECK(!currentClipVersionFor(deps, daw::UiCommandType::SetRowOps, 3, out));
+  CHECK(out == 999u);
+}
+
+// THE REFUSAL ITSELF, through handleSetRowOps, so the wiring is covered and not just the helper.
+// A test of the helper alone would stay green if the row-op site kept its hardcoded 0.
+void testRowOpsRefusalReportsTheEngineVersion() {
+  Fixture f;
+  auto deps = f.deps();
+  TrackRuntime& rt = f.addTrack(2);
+  rt.trackClipVersion.store(5, std::memory_order_release);
+
+  uint32_t sawSent = 999, sawCurrent = 999;
+  uint32_t sawTrack = 999;
+  daw::UiClipRejectReason sawReason = daw::UiClipRejectReason::None;
+  daw::engine::RowopsCommandDeps rowops{
+      [](uint32_t, uint32_t, daw::EventId, const daw::RowOpEdit&, bool,
+         daw::UiClipRejectReason& reason) {
+        reason = daw::UiClipRejectReason::UnknownTrack;
+        return false;
+      },
+      [&](daw::UiClipRejectReason reason, uint32_t trackId, uint32_t sentBase,
+          uint32_t currentBase, daw::UiCommandType) {
+        sawReason = reason;
+        sawTrack = trackId;
+        sawSent = sentBase;
+        sawCurrent = currentBase;
+      },
+      [&](uint32_t trackId, uint32_t& out) {
+        return currentClipVersionFor(deps, daw::UiCommandType::SetRowOps, trackId, out);
+      }};
+
+  daw::UiSetRowOpsPayload p{};
+  p.trackId = 2;
+  p.clipId = 1;
+  daw::EventEntry entry{};
+  std::memcpy(entry.payload, &p, sizeof(p));
+  daw::UiCommandPayload header{};
+  handleSetRowOps(rowops, entry, header, daw::UiCommandType::SetRowOps);
+
+  CHECK(sawReason == daw::UiClipRejectReason::UnknownTrack);
+  CHECK(sawTrack == 2u);
+  CHECK(sawCurrent == 5u);   // was a literal 0 before this change
+  // `sentBase` is 0 BY CONTRACT: UiSetRowOpsPayload carries no base version, because a row-op edit
+  // is not version-gated. Asserted so that giving it an invented value is a test failure and not a
+  // quiet improvement — item 29's remaining half is that the correlation key is inert, which is a
+  // decision about the wire and not something this site may make up.
+  CHECK(sawSent == 0u);
+}
+
 }  // namespace
 
 int main() {
@@ -313,6 +402,8 @@ int main() {
   testEnsurePlacementIds();
   testForkOwnedClip();
   testEditScope();
+  testCurrentClipVersionForReportsTheTrackCounter();
+  testRowOpsRefusalReportsTheEngineVersion();
 
   if (g_fail != 0) {
     std::printf("engine_clip_helpers_tests: FAIL (%d)\n", g_fail);
