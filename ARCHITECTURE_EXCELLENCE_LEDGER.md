@@ -1752,3 +1752,12 @@ is one observable transition/event surface over those canonical sources, plus
 events at the four silent drop sites, with deterministic controls. The worker
 was re-assigned this corrected scope and must complete a host.gave_up inventory
 before proposing fatal play/start behavior.
+
+Independent HOST-01 Step 1 review is BLOCKED semantically (scaffolding/build
+passes). The accessor incorrectly maps `hostReady=true, mirrorPending=false`
+to `MirrorComplete`, despite restart publishing readiness before replay is
+armed; `MappedAndBypassed` is also unproven because bypass application is
+asynchronous and send results are ignored. HOST-02a is paused. HOST-01 must
+rename the lower state, model replay/bypass ordering coherently, and add
+production-helper transition tests plus a swapped-order negative control
+before generation work resumes.
