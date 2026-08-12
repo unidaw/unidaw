@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '753177c817793c948209cf33c034231278c6d1cc'
+PREV_TIP     = '1585c9a448f41fa916a6769eef4593a2710f9d4a'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -355,9 +355,16 @@ CONTROLS = {
  # THE DECOY GOES IN THE CLAUSE AND THE REAL PHRASE OUTSIDE IT. The first version put both inside
  # and came back BLIND — the mutation landed and the check was right not to fire, which is the
  # position mistake this packet recorded one commit earlier, repeated within the hour.
- 'g4-final-twice':   ('**Dependencies** G0-A, G0-B, G1-A, G1-B, G2-A, G2-B, G3. Final gate — ',
-                      '**Dependencies** G0-A, G0-B, G1-A, G1-B, G2-A, G2-B, G3. Final gate — x. Final gate — ', 1,
-                      'GATE-DEP-BLOCKERS'),
+ # ON A NONTERMINAL GATE, which is the shape that actually passed. Duplicating G4's own
+ # declaration was already rejected by the per-gate `== 1` logic this control was meant to ratchet,
+ # so restoring that logic left the control GREEN — it proved nothing about the repair.
+ # codex-worker-1 reproduced that exactly. Two declarations on G3 is the corpus that used to pass.
+ 'g4-zero-terminal': ('**Severity** HIGH. **Dependencies** none; first gate.',
+                      '**Severity** HIGH. **Dependencies** G4; first gate.', 1,
+                      'GATE-TERMINAL-COUNT'),
+ 'g4-final-twice':   ('**Severity** MEDIUM-HIGH. **Dependencies** G1-A, G1-B.',
+                      '**Severity** MEDIUM-HIGH. **Dependencies** G1-A, G1-B. Final gate — a. Final gate — b.',
+                      1, 'GATE-DEP-BLOCKERS'),
  'g4-final-negated': ('G3. Final gate — and therefore NOT DECIDABLE',
                       'G3. not Final gate — and therefore NOT DECIDABLE', 1,
                       'GATE-DEP-BLOCKERS'),
@@ -1707,7 +1714,11 @@ WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twen
         108: 'One hundred eight', 109: 'One hundred nine', 110: 'One hundred ten',
         111: 'One hundred eleven', 112: 'One hundred twelve', 113: 'One hundred thirteen',
         114: 'One hundred fourteen', 115: 'One hundred fifteen', 116: 'One hundred sixteen',
-        117: 'One hundred seventeen', 118: 'One hundred eighteen'}
+        117: 'One hundred seventeen', 118: 'One hundred eighteen',
+        # EXTENDED BY RANGE: this hand-written table ran out three times in one evening, each time
+        # producing "prose says X, harness has N" with X and N equal — a mismatch report where the
+        # two sides agree, because the lookup returned '?' and the message printed the integer.
+        119: 'One hundred nineteen', 120: 'One hundred twenty', 121: 'One hundred twenty-one', 122: 'One hundred twenty-two', 123: 'One hundred twenty-three', 124: 'One hundred twenty-four', 125: 'One hundred twenty-five', 126: 'One hundred twenty-six', 127: 'One hundred twenty-seven', 128: 'One hundred twenty-eight', 129: 'One hundred twenty-nine', 130: 'One hundred thirty', 131: 'One hundred thirty-one', 132: 'One hundred thirty-two', 133: 'One hundred thirty-three', 134: 'One hundred thirty-four', 135: 'One hundred thirty-five', 136: 'One hundred thirty-six', 137: 'One hundred thirty-seven', 138: 'One hundred thirty-eight', 139: 'One hundred thirty-nine', 140: 'One hundred forty', 141: 'One hundred forty-one', 142: 'One hundred forty-two', 143: 'One hundred forty-three', 144: 'One hundred forty-four', 145: 'One hundred forty-five', 146: 'One hundred forty-six', 147: 'One hundred forty-seven', 148: 'One hundred forty-eight', 149: 'One hundred forty-nine', 150: 'One hundred fifty'}
 if not listed:
     bad('CONTROL-PROSE-MISSING', 'no "**Controls.** <N>, each naming" sentence')
 elif listed.group(1) != WORD.get(len(CONTROLS), '?'):
@@ -1900,9 +1911,10 @@ if len(_final) != 1:
     bad('GATE-TERMINAL-COUNT', f'{len(_final)} terminal gate(s) in the dependency graph; '
                              f'the packet\'s final-gate contracts are singular: '
                              f'{sorted(g["id"] for g in _final)}')
-# AND THE PROSE IS A CROSS-CHECK, NOT THE SELECTOR. Using it to CHOOSE let the document opt out;
-# using it to CONFIRM makes a rename a disagreement between two independent derivations, which is
-# a failure rather than a silence. The graph decides; the prose must agree.
+# AND THE PROSE IS A LEXICAL SYNCHRONISATION CHECK, NOT AN INDEPENDENT AUTHORITY. Using it to
+# CHOOSE let the document opt out; using it to compare catches a label that was renamed, deleted,
+# duplicated or attached to the wrong gate. It does NOT establish that the prose means what it
+# spells — see below. The graph decides terminal truth; this only keeps the label in step with it.
 # A SPELLING CHECK, AND THAT IS ALL IT IS — narrowed after claiming more. It matches the canonical
 # designation form and rejects `not Final gate`, but `Final gate — NO: this gate is not terminal`
 # still matches, because a regex cannot judge whether a sentence AFFIRMS. I called this a positive
@@ -1913,8 +1925,8 @@ if len(_final) != 1:
 # by containing the words it denies. That is the bare-substring defect I fixed in the count phrase
 # ONE COMMIT EARLIER, in this same function, and did not carry across to the line below it.
 #
-# The designation is sentence-initial and em-dash terminated in this packet's own form, and it must
-# occur exactly once in the clause: a second copy is as much a defect as a negated one.
+# The SPELLING is sentence-initial and em-dash terminated in this packet's own form, and it must
+# occur exactly once per gate: a second copy is as much a defect as a missing one.
 _FINAL_DECL = re.compile(r'(?:^|\. )Final gate — ')
 # COUNTED GLOBALLY. Per-gate `== 1` EXCLUDED a gate that declared itself twice instead of failing
 # it: two declarations on nonterminal G3 left `_said_final == ['G4']` and everything passed, while
