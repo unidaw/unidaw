@@ -1094,3 +1094,10 @@ token-bounded status grammar with visible-view/code-span/ambiguity ratchets, and
 item-38 Markdown delimiter-balance checking. They report 132 controls. Remaining
 work is R7/R1 stale item-state prose, kind completeness for G0-B items 1-4, and
 typed planning unknown semantics. Exact current-byte audit is pending.
+
+Exact audit: c40/e39 closures PASS, overall BLOCKED. Status and item-38 parity
+repairs are real, but grammar still accepts slash-separated, multiline, and
+malformed-follow-on statuses; parity is not escape-aware and top-level heading
+extraction can orphan text. Item 38 still publishes unresolved planning as
+definite true. R7 and R1/S4/PASS9 carry contradictory live item-state rulings;
+G0-A/G0-B/G2/G3/Watchdog blockers remain. No implementation authorization.
