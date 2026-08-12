@@ -918,6 +918,12 @@ silently audited as finals. Open-section indentation/prefix and G4 order/reason
 gaps remain. G0-A/B, G2-A/B, G3 N/M1/item37/Watchdog, and G4 item26 semantics
 remain blocked.
 
+Owner successor `ea2d08f` claims final-gate selection now asserts exactly one
+terminal and cross-checks graph identity against prose (`g4-final-rename`), with
+115 controls; zero/two/wrong-terminal behavior is addressed. Exact review is
+pending. Open-heading/prefix, order/reason, item26, and G0/G2/G3/M1/item37/
+Watchdog semantics remain open.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
