@@ -1133,3 +1133,12 @@ total, 30 open, 29 active, 9 closed. Worse, the new selfcheck compares that
 phrase to the total count, ratcheting the semantic error. Additional probes find
 escaped-status and prefixed-section orphan fail-opens, plus stale R1 assignments;
 schema `/6` compatibility prose remains unresolved. No implementation gate.
+
+Final exact audit of `5ce6674` remains BLOCKED. Nominal suite and prior controls
+pass, but clean-PASS probes still accept escaped `NOT BLOCKING_EXTRA`, prefixed
+fake Provenance sections, and status moved after prose. R1/item-11 assignments
+contradict current detector/item state; schema `/6` is incompatible and requires
+`/7`; G3/G0 planning choices remain untyped; item-38 ruling/control and R7/G4
+contradictions remain. Required fixes: decode or forbid status escapes, enforce
+status position, exact structural headings, repair R1/item11, bump schema, and
+type G3/G0 choices.
