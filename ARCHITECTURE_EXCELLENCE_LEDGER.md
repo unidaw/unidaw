@@ -911,6 +911,13 @@ the loop still runs; 114 controls pass. Exact review is pending. One-space Open
 sections, prefix headers, order/reason fidelity, item26’s stale reason, and the
 semantic set remain open.
 
+Exact review of `bc5e89a` is **BLOCKED**. Count-field binding and prose rename
+closure pass, but graph final selection lacks an exactly-one terminal-sink and
+G4-identity invariant: zero sinks skip all G4 validation, while two sinks are
+silently audited as finals. Open-section indentation/prefix and G4 order/reason
+gaps remain. G0-A/B, G2-A/B, G3 N/M1/item37/Watchdog, and G4 item26 semantics
+remain blocked.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
