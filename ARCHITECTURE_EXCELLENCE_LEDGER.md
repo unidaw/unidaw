@@ -1837,6 +1837,12 @@ for `codex-worker-2`: edit only `ui/daw-bridge/src/reader.rs` and `control.rs`
 engine-death/odd-version tests, and negative controls. No SHM/layout/wire
 changes or unrelated client migration are allowed.
 
+Fleet refill (2026-08-12): `codex-worker-2` remains active on the bounded
+CTRL02-A bridge liveness fix; `codex-worker-1` is actively completing the
+tightened R3a review; `claude-worker-1` is assigned a read-only CMD00 migration
+caller inventory while R3a remains gated. No reported-idle slot is left
+unassigned.
+
 SHM-02 trace resolved the ambiguity: patcher Rust `EventEntry` targets the
 engine-owned, count-gated `PatcherNodeBuffer::events` scratch array, not shared
 memory; `ready` is correctly absent. The remaining invariant is a 64-byte
