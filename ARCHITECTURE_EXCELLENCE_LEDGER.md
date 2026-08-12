@@ -1676,6 +1676,15 @@ Fleet dispatch after CTRL-01 completion:
 
 Both are active in isolated worktrees with commit/test/build deliverables.
 
+`P2-HOST-01` paused before coding after finding readiness levels already exist
+under unrelated names: engine-local `hostReady` is set before bypass application
+and mirror replay enqueue (level 1), while `mirrorPending`/`mirrorPrimed`/
+`mirrorGateSampleTime` represent level-2 progress. Blindly classifying ~45 sites
+would risk audio behavior. Step 1 is authorized: add a behavior-preserving
+`readinessLevel(runtime)` accessor, encode the host/mirror ordering invariant, and
+test cold start, relaunch, and circular-wait cases. Site classification and any
+SHM/ack layout change remain separate gated work.
+
 Option B design review is now PASS in principle under an explicit manual-attestation
 boundary. The implementation must record exact raw line bytes, stream/occurrence,
 transcript digest, encoding/newline/ANSI/completeness, argv/context/env/stdin/
