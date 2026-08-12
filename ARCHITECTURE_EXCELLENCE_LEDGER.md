@@ -1359,6 +1359,13 @@ Missing/removed tracks leave the output untouched. Focused helper/wiring tests,
 negative hardcoded-zero control, `daw_engine` build, and pure/startup/clip-helper
 tests pass. The remaining third correlation key is a separate wire-level decision.
 
+R11 qualification: the policy guard is defense-in-depth, not the mechanism that
+currently prevents Undo/Redo self-recording. `DocumentHistory::commit` rejects
+unchanged documents before redo-tail truncation, which is what makes history
+behavior unchanged today. The classifier/policy correction remains valid; the
+end-to-end history assertion pins that no-change rule, while static policy
+assertions retain the intended command classification.
+
 `P2-G1B-01` completed as `5261f88`: independently enumerates 7 request kinds,
 16 production send sites, and 6 readers plus the declared chain-snapshot
 no-reader case. Mirror/sender/reader registry checks, six sabotage controls,
