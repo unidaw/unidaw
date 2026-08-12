@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'b953b64974944a29e66fcbfed9235d2e57f1f08b'
+PREV_TIP     = 'e965ef8712c721b883ae09b9a4fbea254d7711e5'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -576,14 +576,24 @@ def _unhidden(t):
 unhid = _unhidden(pkt)
 
 # ---- 1. open items: header == body, contiguous, no orphan markers ---------------------------
-body = re.search(r'# Open items.*?(?=\n# |\Z)', unhid, re.S).group(0)
-# THE SAME SECTION FROM THE TRUE SOURCE. `body` is sliced from `unhid`, so anything reading it is
+_body_m = re.search(r'# Open items.*?(?=\n# |\Z)', unhid, re.S)
+body = _body_m.group(0)
+# THE SAME SECTION FROM THE TRUE SOURCE, BY OFFSET. `_unhidden` blanks in place and preserves
+# length, so the section's span in `unhid` is its span in `pkt` — sliced, never re-discovered.
+#
+# An independent `re.search` over raw `pkt` was the first version and it introduced the CONVERSE of
+# the bug it fixed: a commented-out `# Open items` earlier in the file selected the wrong section,
+# and a commented-out item-shaped line inside the section was scanned as a live headline — which,
+# because the head maps are keyed by item number, let a HIDDEN duplicate overwrite the real item.
+# codex-worker-1 built both probes and named this fix. Two searches for one thing is the same
+# defect as two derivations of one thing, and the repair is the same: derive once.
+# `body` is sliced from `unhid`, so anything reading it is
 # reading a NORMALISED document however raw the reader believes it is being — I moved the marker
 # checks onto `body` and wrote "raw, unrendered, no view" three times in the comments, and an
 # `<!-- ⟦BROKEN -->` in a headline sailed through because `_unhidden` had already blanked it
 # upstream. codex-worker-1's probe. A claim about a variable is worth exactly what a check of that
 # variable is worth, and I checked the code I wrote instead of the input it consumes.
-body_raw = re.search(r'# Open items.*?(?=\n# |\Z)', pkt, re.S).group(0)
+body_raw = pkt[_body_m.start():_body_m.end()]
 hdr  = re.search(r'# Open items — (\d+) atomic, (\d+) CLOSED at this SHA, (\d+) open', pkt)
 cand = [int(n) for n in re.findall(r'(?m)^(\d{1,2})\. ', body)]
 nums, nxt = [], 1
@@ -989,14 +999,18 @@ _KIND_TOKENS = {'PRODUCT', 'PACKET'}
 #
 # This ends the family instead of its next member: there is no Markdown construct left to disagree
 # about, because Markdown is no longer being parsed.
-_HEAD_TEXT = {int(m.group(1)): m.group(2) for m in
-              re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ([^\n]*)', body_raw)}
+# HEADLINES ARE LOCATED IN THE CANONICAL (UNHIDDEN) SECTION AND READ FROM THE RAW ONE at the same
+# offsets. Locating them in the raw text instead meant a commented-out item-shaped line was scanned
+# as a headline, and because these maps are keyed by item NUMBER the hidden duplicate overwrote the
+# real item — an editorial comment produced BLOCKER-KIND and PACKET-SET errors about nothing.
+# codex-worker-1's benign probe. What is canonical is WHERE an item is; what is raw is WHAT ITS
+# BYTES SAY. Those are different questions and each source answers the one it can.
+_HEAD_TEXT = {int(m.group(1)): body_raw[m.start(2):m.end(2)] for m in
+              re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — ([^\n]*)', body)}
 _KINDS, _MARKER_ERR = {}, []
-for _m in _MARKER_RUN.finditer(body_raw):
-    # `*` here too. Widening the RUN grammar to admit ⟦⟧ and leaving this extractor at `+` meant the
-    # empty marker was matched by the outer pattern and then dropped by the inner one — the same
-    # normalisation, one layer down, inside the fix for it.
-    _n, _seq = int(_m.group(1)), re.findall(r'⟦([^⟧]*)⟧', _m.group(2))
+for _n, _head in sorted(_HEAD_TEXT.items()):
+    _rm = re.match(r'((?:⟦[^⟧\n]*⟧ ?)*)', _head)
+    _seq = re.findall(r'⟦([^⟧]*)⟧', _rm.group(1))
     _kinds = []
     for _tok in _seq:
         # ONLY BLOCKED-ON CARRIES A PAYLOAD. Splitting at ':' and validating the prefix accepted
@@ -1035,7 +1049,7 @@ for _m in _MARKER_RUN.finditer(body_raw):
     # unmatched opener necessarily lands.
     # BOTH DELIMITERS. Checking only ⟦ let a stray closing ⟧ through — an asymmetry with no
     # justification except that the probe I was answering used an opener.
-    _tail = _HEAD_TEXT.get(_n, '')[len(_m.group(2)):]
+    _tail = _HEAD_TEXT.get(_n, '')[len(_rm.group(1)):]
     _stray = [d for d in ('⟦', '⟧') if d in _tail]
     if _stray:
         _MARKER_ERR.append(f'item {_n} has a stray {"".join(_stray)} outside its marker run — '
@@ -1268,7 +1282,13 @@ _decor_raw = classify_raw_prose(open(__file__).read())
 # 44 -> 45: `body_raw` is a new raw source and its reads are now COUNTED. The floor moved because
 # the population grew, not because a check relaxed — and it only moved visibly because `body_raw`
 # was added to RAW in the same edit.
-_DECOR_FLOOR = 45
+# 45 -> 44: the independent raw `re.search` for the section is GONE, replaced by an offset slice,
+# so there is one fewer raw-prose read. The floor tracks the population; it dropped because a raw
+# reader was deleted, which is the direction this ratchet should always welcome.
+# 44 -> 43: the marker run is now matched against a string already sliced from `body_raw`, so one
+# more regex-over-raw-text became a regex over a local. Every move in this sequence has been
+# downward because the repairs deleted searches rather than adding them.
+_DECOR_FLOOR = 43
 # THE FLOOR MUST EQUAL TODAY'S COUNT, not merely bound it. As a `>` test the floor could be raised
 # to 999 and the ratchet would pass forever while asserting nothing — codex-worker-2 demonstrated
 # exactly that, and the executable proof stayed green because it tested the CLASSIFIER and never the
