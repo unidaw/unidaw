@@ -1358,6 +1358,17 @@ suite is 150/152 with the two pre-existing Zebralette/Zebra2 environment failure
 unchanged from baseline. Owner proposes no transition; independent review by
 `codex-worker-1` is now in progress. P0.3 remains BLOCKED.
 
+Independent review of `6a34abe0` is BLOCKED. The narrow control and SHA
+provenance pass; the two plugin failures are proven pre-existing by exact parent
+comparison. But `scriptPrints` accepts a captured variable value when that text
+appears anywhere in the concatenated tools corpus, not when the same script/control
+flow assigns it. A forged `CREDENTIAL_MODE=PASS` line is accepted although the
+script only assigns `credential-free default` or `explicit credentialed mode`; broad
+substitutions also pass. The 0/561 sentinel result therefore does not prove the
+general property. Required repair: derive allowed values per variable from the same
+script/control flow or enumerate exact known expansions, with a CREDENTIAL_MODE=PASS
+negative control. P0.3 remains BLOCKED.
+
 Exact audit of `76f1672`: tombstone half PASS; item 29 remains blocked on the
 correlation/consumer contract. Production missing/removed paths now use
 `liveTrackAt` and emit `UnknownTrack`, with causal rowops-rejected tests and clean
