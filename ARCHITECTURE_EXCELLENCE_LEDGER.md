@@ -1736,3 +1736,11 @@ it into `TrackInfo` beside the mapping, with no reader behavior, SHM/layout, or
 wire changes. HOST-02b/02c (reader refusal behavior) require a separate exact
 review after 02a. A possible wire-level host generation is explicitly deferred
 to a future ticket.
+
+WDOG-02 inventory (`122919af`) found `Watchdog::check()` has zero production
+callers; live stall observation is therefore absent, and host identity is
+generation-bound. We authorize only the disjoint middle slice: engine-side
+last-dispatched/last-completed state, gate-transition observability, and
+failed-send/drop visibility. Host identity belongs to HOST-02; fatal play/start
+handling requires a separate inventory/ticket. No SHM/layout/wire changes are
+authorized in this slice.
