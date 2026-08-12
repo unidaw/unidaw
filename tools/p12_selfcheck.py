@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'e9aff2cafe965a06f096721659f5f495aa02b196'
+PREV_TIP     = '6a9cbbb381268e8267390a1a1aaa9ca6e146d3d2'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -258,6 +258,9 @@ for i, a in enumerate(sys.argv):
 # merely makes the run FAIL proves nothing — the fifth way a negative control lies is landing in
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
+ 'item-dupe-number': ('# Provenance of this packet',
+                      '37. **G3** — editorial duplicate.\n\n# Provenance of this packet', 1,
+                      'ITEM-NUMBER-DUPLICATE'),
  'open-count':       ('# Open items — 37 atomic', '# Open items — 38 atomic', 1, 'OPEN-COUNT'),
  'closed-count':     ('9 CLOSED at this SHA, 28 open', '8 CLOSED at this SHA, 29 open', 1,
                       'OPEN-CLOSED-COUNT'),
@@ -581,7 +584,9 @@ def _unhidden(t):
 unhid = _unhidden(pkt)
 
 # ---- 1. open items: header == body, contiguous, no orphan markers ---------------------------
-_body_m = re.search(r'# Open items.*?(?=\n# |\Z)', unhid, re.S)
+# LINE-ANCHORED. `# Open items` unanchored matched inside an inline code span or a comment, so a
+# literal `# Open items — editorial example` earlier in the document hijacked the section.
+_body_m = re.search(r'(?m)^# Open items.*?(?=\n# |\Z)', unhid, re.S)
 body = _body_m.group(0)
 # THE SAME SECTION FROM THE TRUE SOURCE, BY OFFSET. `_unhidden` blanks in place and preserves
 # length, so the section's span in `unhid` is its span in `pkt` — sliced, never re-discovered.
@@ -599,8 +604,22 @@ body = _body_m.group(0)
 # upstream. codex-worker-1's probe. A claim about a variable is worth exactly what a check of that
 # variable is worth, and I checked the code I wrote instead of the input it consumes.
 body_raw = pkt[_body_m.start():_body_m.end()]
-hdr  = re.search(r'# Open items — (\d+) atomic, (\d+) CLOSED at this SHA, (\d+) open', pkt)
+# FROM THE SECTION ALREADY IDENTIFIED, not a third global search over `pkt`. As a global search a
+# commented-out `<!-- # Open items — 37 atomic ... -->` before the real section supplied the header
+# while the live one said something else — and worse, `--negative open-count` then mutated the DECOY
+# and reported its control OK, so the control certified the wrong source. A control that passes
+# against text the checker does not use is the most expensive kind of green there is.
+hdr  = re.search(r'# Open items — (\d+) atomic, (\d+) CLOSED at this SHA, (\d+) open', body)
 cand = [int(n) for n in re.findall(r'(?m)^(\d{1,2})\. ', body)]
+# A REPEATED NUMBER IS A DEFECT, not a duplicate to ignore. `cand` was consumed by value against a
+# running counter, so a second live `37.` was simply skipped — and every number-keyed map after this
+# point (entry, _HEAD_TEXT, item_body, item_line) then took the LAST occurrence, splicing one
+# manifest record out of two different items while the counts stayed plausible. codex-worker-1's
+# probe kept item 37's title and blocking status while replacing its body and line.
+_dupe_items = sorted({c for c in cand if cand.count(c) > 1})
+if _dupe_items:
+    bad('ITEM-NUMBER-DUPLICATE', f'item number(s) {_dupe_items} appear more than once; '
+                                 f'number-keyed records would take the last occurrence')
 nums, nxt = [], 1
 for c in cand:
     if c == nxt: nums.append(c); nxt += 1
@@ -1635,7 +1654,8 @@ WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twen
         95: 'Ninety-five', 96: 'Ninety-six', 97: 'Ninety-seven',
         98: 'Ninety-eight', 99: 'Ninety-nine', 100: 'One hundred', 101: 'One hundred one',
         102: 'One hundred two', 103: 'One hundred three', 104: 'One hundred four',
-        105: 'One hundred five', 106: 'One hundred six'}
+        105: 'One hundred five', 106: 'One hundred six', 107: 'One hundred seven',
+        108: 'One hundred eight', 109: 'One hundred nine'}
 if not listed:
     bad('CONTROL-PROSE-MISSING', 'no "**Controls.** <N>, each naming" sentence')
 elif listed.group(1) != WORD.get(len(CONTROLS), '?'):
