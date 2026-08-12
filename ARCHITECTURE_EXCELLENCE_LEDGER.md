@@ -833,6 +833,11 @@ list/count extraction is gate-scoped, and duplicate count phrases are rejected;
 109 controls pass. It explicitly leaves order/reason fidelity and stale labels
 unaddressed. Exact review is pending; G3/G0/M1/item37 remain gated.
 
+Owner successor `3c41508` claims the header is now anchored to the section’s
+first line and exactly-one-section is enforced (`open-section-two`), with 111
+controls and extractor floor 42. Order/reason fidelity and stale G4 labels are
+explicitly unaddressed. Exact review is pending.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
