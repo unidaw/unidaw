@@ -1158,3 +1158,9 @@ while reconciliation checks only gate IDs. Separate stable choice IDs/records
 and equality-gate the full choice population. A heterogeneous-list schema
 mutation also shows `_shape` checks only element zero; validate every record or
 enforce homogeneity.
+
+Additional exact probe on `7d29752`: schema source binding is decoyable. A fake
+editorial `/7` mention before A.0 plus changing the real A.0 declaration to `/6`
+clean-passes because `_SCHEMA_M` takes the first global match and does not scope
+or require uniqueness. The claimed single-source schema guard is therefore not
+yet trustworthy.
