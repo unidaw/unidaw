@@ -4862,35 +4862,44 @@ const codeOnly = (text) => text.split('\n')
   .join('\n');
 
 /*
- * THE EXPANSIONS A PERSON HAS READ AND CONFIRMED. This is an allow-list, not an inference.
+ * THE EXPANSIONS A PERSON HAS READ, WITH THE PROVENANCE CHECKED BY MACHINE.
  *
- * THREE ROUNDS OF INFERRING IT FROM THE SOURCE ALL LEAKED, each in the same family:
+ * THREE ROUNDS OF INFERRING what a shell variable can hold all leaked — `.*` per variable, then
+ * "appears anywhere in the corpus", then "assigned in this script" (whose scanner could not see
+ * `[ ... ] && VAR="$U"` and so accepted the one value a branch guard made impossible). A regex over
+ * shell is a proxy for parsing shell, so the model stopped inferring and became a list.
  *
- *   `.*` per variable          accepted 561/561 forged lines
- *   "appears in the corpus"    accepted 561/561 again — PASS, true, 0 and main occur everywhere
- *                              in 500KB of shell, so every variable looked as though it held them
- *   "assigned in this script"  looked sound and is not. The assignment scanner only sees
- *                              assignments at the START of a line, so `[ ... ] && UNMAPPED="$U"`
- *                              at voice_telemetry_check.sh:147 is invisible and UNMAPPED appears
- *                              to hold only the literal 0 it is initialised to. The line that
- *                              prints it is guarded by `[ "$UNMAPPED" = "0" ] ||`, so the single
- *                              value the model accepted is the one value that CANNOT print.
+ * THEN THE LIST'S OWN CITATION WAS WRONG. It said the assignments were at webstack.sh:396,401.
+ * They are at 392 and 396; 401 is inside a guard and assigns nothing. A hand-verified list whose
+ * verification record is unchecked is a claim with no evidence — the exact shape of the approval
+ * that started this phase, where a verdict named a SHA that was not what shipped.
  *
- * Every round fixed the leak that was named and produced another of the same shape, because a
- * regex over shell is a proxy for parsing shell. A sound answer needs control-flow semantics, which
- * is out of proportion to a documentation check.
- *
- * So the model is narrow and exact instead: a quoted line is provable only if it needs no variable
- * at all, or if every variable it needs is listed HERE with the expansions someone verified by
- * reading the script. The list is one entry today because the runbook quotes one interpolated line.
- * It is meant to stay small — an entry is a claim a person is making, and adding one without
- * reading the script is the move this whole sequence exists to prevent.
+ * So provenance is DATA and every field is asserted against the script below: the cited lines must
+ * contain the cited assignments, the count of assignments in the file must equal the count cited
+ * (a new one anywhere — including inline in a compound command — fails), and the output site must
+ * contain the template. A silent widen, empty or replace fails a named assertion rather than
+ * quietly enlarging what this check will accept.
  */
-const VERIFIED_EXPANSIONS = {
-  // tools/webstack.sh:396,401 — a two-branch choice on whether a key resolves; both reachable,
-  // read on 2026-08-12. Nothing else assigns it, including inside a compound command.
-  CREDENTIAL_MODE: ['credential-free default', 'explicit credentialed mode'],
-};
+const VERIFIED_EXPANSIONS = [
+  {
+    variable: 'CREDENTIAL_MODE',
+    script: 'tools/webstack.sh',
+    // `case "${DAW_WEBSTACK_ALLOW_CREDENTIALS:-0}"` — two arms, both reachable, read 2026-08-12.
+    assignments: [
+      { line: 392, value: 'credential-free default' },
+      { line: 396, value: 'explicit credentialed mode' },
+    ],
+    outputSite: {
+      line: 423,
+      template: 'ask     $CREDENTIAL_MODE; sidecar cwd cannot discover checkout/home .env files',
+    },
+    reviewer: 'claude-worker-1',
+  },
+];
+
+// The list keyed by name, for the matcher. Built from the records so the two cannot diverge.
+const verifiedValues = () => Object.fromEntries(VERIFIED_EXPANSIONS
+  .map((e) => [e.variable, e.assignments.map((a) => a.value)]));
 
 const scriptPrints = (scriptTexts, line) => {
   const texts = (Array.isArray(scriptTexts) ? scriptTexts : [scriptTexts]).map(codeOnly);
@@ -4905,7 +4914,8 @@ const scriptPrints = (scriptTexts, line) => {
       if (template.replace(VARIABLE_PATTERN, '').trim().length <= 6) continue;
       // Unverified variables make the template unprovable. "I cannot show this prints" is the
       // honest answer; `.*` said "anything", and that is what accepted every forgery twice.
-      if (!names.every((n) => VERIFIED_EXPANSIONS[n])) continue;
+      const verified = verifiedValues();
+      if (!names.every((n) => verified[n])) continue;
       let pattern = '';
       let offset = 0;
       VARIABLE_PATTERN.lastIndex = 0;
@@ -4916,7 +4926,7 @@ const scriptPrints = (scriptTexts, line) => {
       pattern += escapeRegExp(template.slice(offset));
       const match = new RegExp(`^${pattern}$`).exec(line);
       if (!match) continue;
-      const ok = names.every((n, k) => VERIFIED_EXPANSIONS[n]
+      const ok = names.every((n, k) => verified[n]
         .some((v) => v.trim() === (match[k + 1] ?? '').trim()));
       if (ok) return true;
     }
@@ -4997,10 +5007,12 @@ test('CONTROL: a REAL template skeleton with invented variable content IS caught
   // stopped matching, not that the scripts got safer.
   // The floor is the COUNT, not a round number below it. `>= 500` permitted 61 templates to vanish
   // in silence, which is the same slack that lets a population shrink without anyone deciding to.
-  assert.ok(templates.length >= 561,
-    `only ${templates.length} interpolating templates found; 561 qualified when this was written. `
-    + 'Fewer means the extraction stopped matching, not that the scripts got safer — fix the '
-    + 'pattern, and if templates were genuinely removed, say so and move this number deliberately.');
+  // EXACT, not a floor. `>=` cannot see templates being ADDED either, and a population that may
+  // only grow is as unpinned as one that may only shrink.
+  assert.equal(templates.length, 561,
+    `${templates.length} interpolating templates found; 561 qualified when this was written. `
+    + 'Fewer means the extraction stopped matching; more means the corpus grew. Either way a '
+    + 'person decides and moves this number deliberately.');
 
   const substitutions = [
     ' THIS TEXT IS INVENTED AND NO SCRIPT EVER PRINTS IT ',
@@ -5053,6 +5065,55 @@ test('CONTROL: a REAL template skeleton with invented variable content IS caught
  * another way). It is NOT to relax the slot back to `.*`, which is the move that produced both of
  * the defects above.
  */
+test('every VERIFIED_EXPANSIONS record is true of the script it cites', () => {
+  /*
+   * THE LIST'S OWN CITATION WAS WRONG and nothing noticed: it named 396,401 for assignments that
+   * are at 392,396, and 401 is a guard. A hand-verified entry whose record is unchecked carries no
+   * more evidence than an unverified one, which is how this phase began — an approval naming a SHA
+   * that was not the one that shipped.
+   *
+   * So every field is executable here. The cited line must hold the cited assignment; the number of
+   * assignments to that variable ANYWHERE in the file must equal the number cited, including inline
+   * ones in compound commands — that blindness is what let a guarded impossible value through two
+   * rounds ago; and the output site must hold the template. Widening, emptying or replacing an
+   * entry fails a named assertion instead of quietly enlarging what is accepted.
+   */
+  for (const rec of VERIFIED_EXPANSIONS) {
+    const lines = readFileSync(join(PRESET_ROOT, rec.script), 'utf8').split('\n');
+
+    for (const a of rec.assignments) {
+      const text = lines[a.line - 1] ?? '';
+      assert.ok(text.includes(`${rec.variable}=`),
+        `${rec.script}:${a.line} does not assign ${rec.variable} — the citation is wrong, which is `
+        + `the defect this test exists for. Line reads: ${JSON.stringify(text.trim().slice(0, 80))}`);
+      assert.ok(text.includes(`'${a.value}'`) || text.includes(`"${a.value}"`),
+        `${rec.script}:${a.line} does not assign ${JSON.stringify(a.value)} to ${rec.variable}`);
+      assert.notEqual(a.value.trim(), '',
+        `${rec.variable} lists an empty expansion; an empty slot must be justified, not listed`);
+    }
+
+    // CARDINALITY. Any assignment to this variable anywhere in the file, including
+    // `[ ... ] && VAR=...`, must be one of the cited ones. A new arm added later silently widens
+    // what this check accepts, and that is exactly the "silent widen" a value list cannot see.
+    const assignRe = new RegExp(`(?:^|[;&|(]|\\s)(?:local\\s+|export\\s+)?${rec.variable}=`);
+    const found = lines
+      .map((l, i) => ({ line: i + 1, text: l }))
+      .filter(({ text }) => !text.trimStart().startsWith('#') && assignRe.test(text));
+    assert.deepEqual(found.map((f) => f.line), rec.assignments.map((a) => a.line),
+      `${rec.script} assigns ${rec.variable} at ${found.map((f) => f.line).join(', ')}, but the `
+      + `record cites ${rec.assignments.map((a) => a.line).join(', ')}. An uncited assignment `
+      + 'widens the accepted set without anyone deciding to.');
+
+    const site = lines[rec.outputSite.line - 1] ?? '';
+    assert.ok(site.includes(rec.outputSite.template),
+      `${rec.script}:${rec.outputSite.line} does not print the cited template. Line reads: `
+      + `${JSON.stringify(site.trim().slice(0, 90))}`);
+    assert.ok(site.includes(`$${rec.variable}`),
+      `${rec.script}:${rec.outputSite.line} does not interpolate ${rec.variable}`);
+    assert.ok(rec.reviewer, `${rec.variable} names no reviewer`);
+  }
+});
+
 test('CONTROL: a sentence that exists only in a shell COMMENT is caught', () => {
   /*
    * The verbatim branch asked whether the line appears anywhere in the script text, and a shell
