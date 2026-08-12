@@ -85,7 +85,7 @@ target_link_libraries(juce_host_process PRIVATE platform_juce)
 # pre-extraction file so they were dead before the move rather than broken by it. main.cpp had
 # three more. A warning that does not fail is a comment, and this repo has spent the night
 # finding out what comments are worth.
-set(engine_commands_warnings -Werror=unused-variable)
+set(engine_commands_warnings -Werror=unused-variable -Werror=switch)
 file(GLOB _engine_command_sources ${CMAKE_CURRENT_SOURCE_DIR}/apps/engine_*_commands.cpp)
 set_source_files_properties(apps/engine_render_track.cpp apps/engine_save_project.cpp
                             apps/engine_handle_ui_entry.cpp
@@ -107,7 +107,7 @@ set_source_files_properties(apps/engine_render_track.cpp apps/engine_save_projec
                             apps/engine_history_journal.cpp
                             apps/engine_song_store.cpp
                             apps/engine_consumer.cpp
-                            PROPERTIES COMPILE_OPTIONS -Werror=unused-variable)
+                            PROPERTIES COMPILE_OPTIONS "-Werror=unused-variable;-Werror=switch")
 set_source_files_properties(${_engine_command_sources}
   PROPERTIES COMPILE_OPTIONS "${engine_commands_warnings}")
 
@@ -210,7 +210,7 @@ target_link_libraries(engine_commands PUBLIC engine_core)
 add_executable(daw_engine
   apps/daw_engine_main.cpp
 )
-target_compile_options(daw_engine PRIVATE -Werror=unused-variable)
+target_compile_options(daw_engine PRIVATE -Werror=unused-variable -Werror=switch)
 
 # The host processes get the same gate as the engine. Dead code hid in main.cpp for as long as it
 # did because that file was never compiled with this warning; leaving the two hosts uncovered
