@@ -808,6 +808,13 @@ duplicate and owner checks, and its count phrase is scoped to the gate’s own
 dependencies; five G4 controls and 106 total controls pass. Exact review is
 pending. G3 N/Watchdog/item37 oracle, M1, G0, and G4 item26 remain open.
 
+Exact review of `e9aff2c` is **BLOCKED**. Canonical body/raw span/head repair
+passes, but a second global header search lets hidden or inline-code `# Open
+items` decoys hijack selection; heading discovery must be line-anchored. Live
+duplicate item numbers silently overwrite keyed records. G4 typed member
+validation remains incomplete (duplicate IDs and wrong owner annotations pass).
+G2-A labels, R3/N, M1, item37 oracle, Watchdog, G0, and G4 item26 remain.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
