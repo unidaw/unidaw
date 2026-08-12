@@ -1185,3 +1185,11 @@ still says they are unwritten and assigns item 33; and one G3 owner-choice marke
 still covers two independent choices, so the manifest omits the R16 resume
 mechanism. Fresh parser fail-opens also remain for fabricated delimiter parity,
 continuation-line parked status, duplicate allowed headings, and HTML entities.
+
+Owner successor `bec8cbe` claims the 7d blockers closed: schema is now an
+append-only versioned shape ledger with deep-union validation and unique source;
+state scan handles citations/history/negation; owner choices derive from register
+verbs into one record per choice; CHOICE-COMPOUND and proof-liveness controls are
+fixed; item-38 stale planning prose is corrected. It reports schema /7 and 155
+controls, while carrying R7/G4 prose, G0-A/G0-B, item 38 ruling, and unclassified
+kind work. Exact audit is pending.
