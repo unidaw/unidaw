@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # THE NEGATIVE CONTROLS FOR tools/contract_layout_check.sh.
 #
-# A check that has never failed is a check nobody has seen work. Each control below reintroduces
-# one specific defect and requires the check to refuse FOR THE NAMED REASON — not merely to exit
+# A check that has never failed is a check nobody has seen work. Most controls below reintroduce
+# one specific defect and require the check to refuse FOR THE NAMED REASON — not merely to exit
 # non-zero, because a check can fail for a syntax error, a missing file or an unrelated assertion
 # and look identical in a log.
+#
+# TWO OF THEM REQUIRE A PASS INSTEAD, and they are not filler. A check that reconstructs layout can
+# start refusing things that are not defects, and the two shapes most likely to do that are a
+# rename, which moves no byte, and a same-width swap, which is the limitation the design knowingly
+# accepts. Those two assert the check STAYS QUIET — and additionally that the section under test
+# actually ran, so neither can be satisfied by the check having quietly stopped looking.
 #
 # TWO PROPERTIES EACH CONTROL MUST HAVE, both learned the hard way in this repo:
 #
@@ -15,7 +21,10 @@
 #   that the PARSER THIS REPLACED — the 200-character window — is BLIND to their mutation, and
 #   control 3 asserts that the six offset assertions still agree, so nothing but the new extent
 #   check can be producing the refusal. Without those, a control stays green while the property it
-#   names quietly stops being tested.
+#   names quietly stops being tested. For the field-order controls the ratchet is the PAIR: the two
+#   pass-controls are what stop the refusing four from being satisfied by a check that simply
+#   refuses a lot, and 4.unsizeable is what stops a struct being dropped from the population
+#   instead of reported.
 #
 # Nothing here edits a tracked file. Each control copies the sources into a temp tree and points
 # the check at that with DAW_CONTRACT_SRC, so there is no restore step to get wrong — a control
@@ -27,7 +36,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CHECK="$ROOT/tools/contract_layout_check.sh"
 REAL_BINDINGS="$(find "$ROOT/ui/target" -name shm_sys.rs 2>/dev/null | xargs ls -t 2>/dev/null | head -1)"
-PASS=0; FAIL=0
+FIRED=0; HELD=0; FAIL=0
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 [ -n "$REAL_BINDINGS" ] || { echo "  UNRUNNABLE: no bindings; build the bridge first"; exit 1; }
@@ -59,7 +68,7 @@ expect_refusal() {
     printf '%s\n' "$out" | sed 's/^/           /' | head -8
     FAIL=$((FAIL+1)); return
   fi
-  echo "  ok — $name"; PASS=$((PASS+1))
+  echo "  ok — $name"; FIRED=$((FIRED+1))
 }
 
 # ---------------------------------------------------------------- 1. a mirror behind a long doc
@@ -184,9 +193,101 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# ============================================================ FIELD ORDER (the third section)
+#
+# Four of these six require a refusal and TWO REQUIRE A PASS. The passing pair are not filler: a
+# check that reconstructs offsets can easily start refusing things that are not defects, and the
+# two shapes most likely to do that are a rename — which moves no byte — and a same-width swap,
+# which is the limitation the design deliberately accepts. Asserting them keeps both honest, and
+# expect_pass additionally requires the field-order line in the output, so a control cannot pass by
+# the section having quietly stopped running.
+mutate() {                      # mutate <dir> <control> — every anchor asserted, in one place
+  python3 - "$1/ui/daw-bridge/src/layout.rs" "$2" <<'PY'
+import re, sys
+path, which = sys.argv[1], sys.argv[2]
+src = open(path).read()
+
+def whole(old, new):
+    if src.count(old) != 1:
+        raise SystemExit("  MUTATION DID NOT LAND: %d occurrence(s) of the anchor, wanted exactly 1"
+                         % src.count(old))
+    return src.replace(old, new, 1)
+
+def inside(struct, old, new):
+    m = re.search(r'pub struct %s \{.*?\n\}' % struct, src, re.S)
+    if not m:
+        raise SystemExit("  MUTATION DID NOT LAND: no struct %s" % struct)
+    body = m.group(0)
+    if body.count(old) != 1:
+        raise SystemExit("  MUTATION DID NOT LAND: %d occurrence(s) inside %s, wanted exactly 1"
+                         % (body.count(old), struct))
+    return src[:m.start()] + body.replace(old, new, 1) + src[m.end():]
+
+if which == 'permute':          # different widths reordered; the total is untouched
+    out = whole("    pub event_type: u16,\n    pub size: u16,\n    pub flags: u32,",
+                "    pub flags: u32,\n    pub event_type: u16,\n    pub size: u16,")
+elif which == 'rename':         # moves no byte — must NOT be reported
+    out = whole("    pub node_type: u8, // PatcherNodeType",
+                "    pub kind_renamed: u8, // PatcherNodeType")
+elif which == 'nested_width':   # inside an element type, reached only by recursing
+    out = whole("pub struct UiPatcherNode {\n    pub id: u32,",
+                "pub struct UiPatcherNode {\n    pub id: u64,")
+elif which == 'same_width':     # identical offsets — the accepted blind spot
+    out = inside('UiClipNote', "    pub pitch: u8,\n    pub velocity: u8,",
+                               "    pub velocity: u8,\n    pub pitch: u8,")
+elif which == 'unsizeable':     # the calculator must refuse rather than skip the struct
+    out = inside('UiPatcherNode', "    pub config: [i32; 8],",
+                                  "    pub config: SomeTypeNobodyDefined,")
+elif which == 'count':          # an array length is ABI too
+    out = whole("pub const K_UI_MAX_PATCHER_NODES: usize = 64;",
+                "pub const K_UI_MAX_PATCHER_NODES: usize = 32;")
+else:
+    raise SystemExit("  unknown control %s" % which)
+
+if out == src:
+    raise SystemExit("  MUTATION DID NOT LAND: the text is unchanged")
+open(path, 'w').write(out)
+PY
+}
+
+# expect_pass <name> <dir> — the check must pass AND must have run the field-order section
+expect_pass() {
+  local name="$1" dir="$2" out rc
+  out="$(DAW_CONTRACT_SRC="$dir" bash "$CHECK" 2>&1)"; rc=$?
+  if [ $rc -ne 0 ]; then
+    echo "  FALSE POSITIVE: $name — the check refused something that moves no byte:"
+    printf '%s\n' "$out" | sed 's/^/           /' | tail -6
+    FAIL=$((FAIL+1)); return
+  fi
+  if ! printf '%s' "$out" | grep -q "field order: .* fields across"; then
+    echo "  VACUOUS: $name — the check passed without running the field-order section at all"
+    FAIL=$((FAIL+1)); return
+  fi
+  echo "  ok — $name"; HELD=$((HELD+1))
+}
+
+for c in "permute:refuse:EventEntry: this mirror lays fields at" \
+         "rename:pass:" \
+         "nested_width:refuse:UiPatcherNode: this mirror lays fields at" \
+         "same_width:pass:" \
+         "unsizeable:refuse:can no longer be laid out" \
+         "count:refuse:UiPatcherRegion: this mirror lays fields at"; do
+  name="${c%%:*}"; rest="${c#*:}"; mode="${rest%%:*}"; want="${rest#*:}"
+  D="$(stage "fo_$name")"
+  if mutate "$D" "$name"; then
+    case "$mode" in
+      refuse) expect_refusal "4.$name" "$D" "$want" ;;
+      pass)   expect_pass    "4.$name" "$D" ;;
+    esac
+  else
+    FAIL=$((FAIL+1))
+  fi
+done
+
 echo
 if [ $FAIL -eq 0 ]; then
-  echo "contract_layout_check_selftest: PASS — $PASS controls fired, each for its named reason"
+  echo "contract_layout_check_selftest: PASS — $FIRED controls refused for their named reason,"\
+       "$HELD held without a false positive"
 else
   echo "contract_layout_check_selftest: FAIL — $FAIL control(s) did not catch what they cover"
 fi
