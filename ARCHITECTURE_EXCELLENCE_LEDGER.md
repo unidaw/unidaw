@@ -1782,6 +1782,11 @@ regression guard for the ping-pong invariant, with no host fixture or SHM
 changes. Single-plugin plane binding is explicitly deferred as a separate
 follow-on.
 
+Automatic refill: `claude-worker-1`, now idle after HOST work, is assigned a
+read-only CTRL02-B inventory of command families still lacking CommandOutcome
+correlation. No wire/layout/product edits are authorized; the deliverable is
+disjoint follow-on ticket boundaries and acceptance tests.
+
 The clip-helper diagnostic completed: 61 runs across four configurations,
 including the originating `084891f8` tree and a Debug build, all passed. The
 historical red is therefore NOT REPRODUCIBLE and remains unclassified; it must
