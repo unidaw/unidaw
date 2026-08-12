@@ -1325,6 +1325,12 @@ well as ticket/state messages, causing false ambiguous/silent/untracked-ticket
 alarms. Ticket syntax and topic syntax must be separated before automation may
 derive state from bus messages.
 
+P0.3 ownership remediation: `claude-worker-1` is now the named owner. The prior
+bus approval remains revoked. The owner must establish a fresh baseline, write a
+bounded scope/dependency/acceptance plan, and submit the transition for independent
+review; the owner may not self-approve. No unrelated product edits are authorized
+until P0.3 scope is explicit.
+
 Second implementation slice landed as `e632f606`: HostController cleanup now
 uses `lstat`, only unlinks owned socket files, tolerates `ENOENT`, and refuses
 regular files/symlinks. `daw_engine` and `juce_host_process` build targets pass.
