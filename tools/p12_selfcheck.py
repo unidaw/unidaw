@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'f4a05b3b60338103096e3b53b004ae2b8bd8a20c'
+PREV_TIP     = '8ae28017b7a4923d0ae91a382bc4f02a13af5ee0'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -352,6 +352,13 @@ CONTROLS = {
  'ruling-body-swap': ('CLOSED at this SHA.** The static-check contradiction was not one. R17 shows',
                       'CLOSED at this SHA.** The static-check contradiction was not one. R16 shows', 1,
                       'RULING-BODY-BIND'),
+ # THE DECOY GOES IN THE CLAUSE AND THE REAL PHRASE OUTSIDE IT. The first version put both inside
+ # and came back BLIND — the mutation landed and the check was right not to fire, which is the
+ # position mistake this packet recorded one commit earlier, repeated within the hour.
+ 'g4-dep-bareword':  ('on TEN dependency blockers plus one of its own.\n**The ten**',
+                      'on the dependency blockers plus nothing.\n'
+                      '**The ten**\n\nRestated: on TEN dependency blockers plus one of its own.\n\n**Also**',
+                      1, 'GATE-DEP-BLOCKERS'),
  'g4-dep-noclose':   ('19 (G3) no source for N,', '19 (G3) no source for N, 7 (Garbage invented,',
                       1, 'GATE-DEP-BLOCKERS'),
  'g4-dep-twolists':  ('**The ten**, carried by gates G4 depends on',
@@ -1899,7 +1906,11 @@ for _g in _final:
     _di = _gsec.find('**Dependencies**')
     _dj = _gsec.find('\n**', _di + 1) if _di >= 0 else -1
     _depara = _gsec[_di:_dj if _dj > 0 else len(_gsec)] if _di >= 0 else ''
-    if _said and 'dependency blockers plus' not in _depara:
+    # THE MATCHED PHRASE, not a bare substring of it. `'dependency blockers plus' in _depara` was
+    # satisfiable by any sentence containing those words — the segment could hold a decoy while the
+    # operative count sat elsewhere. `_said.group(0)` carries the uppercase count word, so what is
+    # required in the clause is the phrase actually being read.
+    if _said and _said.group(0) not in _depara:
         bad('GATE-DEP-BLOCKERS', f'{_g["id"]} states its dependency-blocker count outside the '
                                  f'Dependencies paragraph, where the derivation reads it')
     if not _said:
