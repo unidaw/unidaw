@@ -1402,6 +1402,16 @@ route (c); the lead decision remains route (a), extracting the pure
 `RecordVersion` decision and adding the partial-snapshot causal test before R11
 can be called complete.
 
+R11 route (a) completed as `76fbdbb`: pure `recordActionFor(policy, history,
+capture, amend)` now owns the Skip/Amend/Commit decision beside the policy;
+production destructor branches are unchanged. Tests prove `None -> Skip` without
+calling commit and the partial-snapshot mechanism where a difference appends and
+truncates redo; sabotaging history verbs to `Version` fails the policy assertions.
+The host refusal-then-recovery trigger remains unproven because no fixture exists.
+One `engine_clip_helpers_tests` failure occurred during an interleaved restore/
+rebuild batch and passed after a clean rebuild; it is recorded as unexplained,
+not dismissed, and requires a clean reproducibility check.
+
 `P2-CTRL-01` protocol gate: refusal IDs alone are insufficient because unrelated
 version movement can satisfy a losing same-base command, and successful SetRowOps
 may emit no positive diff. The ticket is authorized to design an additive
