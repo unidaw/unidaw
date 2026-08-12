@@ -1719,3 +1719,12 @@ unapproved wire extension. `codex-worker-2` is active on this scope.
 review. It adds only a behavior-preserving readiness accessor and predicate
 tests; Step 2 site classification remains paused until review. `protocol_audit`
 was asked to review the exact current files directly, without git archaeology.
+
+Automatic refill assignments (2026-08-12): `claude-worker-2` is assigned a
+bounded P2-WDOG-02 preparatory slice: watchdog host identity/dispatch-completion/
+gate/drop measurement and deterministic oracle scaffolding only, with no
+SHM/layout/generation changes. `codex-worker-1` is assigned independent exact
+review of HOST-01 Step 1. `claude-worker-1`, now free while that review runs,
+is assigned a read-only HOST-02 generation-binding inventory/design; no
+production or layout edits are authorized until HOST-01 review and a bounded
+split are approved.
