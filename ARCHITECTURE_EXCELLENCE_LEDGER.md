@@ -857,6 +857,13 @@ pass. It explicitly leaves the canonical Dependencies count-phrase check
 unexplained and not closed, while item26’s stale reason remains. Exact review is
 pending.
 
+Follow-up exact audit finds the original displaced-count probe is correctly
+rejected, but count binding still fails open: the check tests only a bare
+“dependency blockers plus” substring in `dependencies_text`, while the exact
+count match can come from later prose. Replacing the canonical count with bare
+words and moving the exact count phrase later clean-passes after regeneration.
+The fix must parse/compare the exact matched count within `dependencies_text`.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
