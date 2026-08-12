@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'e94f0de3719f81d0a0fd8388d0be9933bc3430fd'
+PREV_TIP     = '5348f7753740daf9f56b704ffb93e1604a49190d'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -520,13 +520,13 @@ CONTROLS = {
  'edge-second':      ('27. **G2-A** — ⟦PRODUCT⟧ ',
                       '27. **G2-A** — ⟦PRODUCT⟧ ⟦BLOCKED-ON: 29⟧ ⟦BLOCKED-ON: 999⟧ ', 1,
                       'BLOCKER-KIND'),
- 'status-malformed': ('38. **G1-B** — **NOT BLOCKING,', '38. **G1-B** — **NOT BLOCKINGLY,', 1,
+ 'status-malformed': ('38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING.', '38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKINGLY.', 1,
                       'ITEM-STATUS-MISSING'),
  'status-ambiguous': ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING,',
                       '37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING, and also BLOCKING,', 1,
                       'ITEM-STATUS-AMBIGUOUS'),
- 'blocking-negated': ('38. **G1-B** — **NOT BLOCKING',
-                      '38. **G1-B** — **BLOCKING', 1, 'BLOCKER-SET'),
+ 'blocking-negated': ('38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING',
+                      '38. **G1-B** — ⟦PACKET⟧ **BLOCKING', 1, 'BLOCKER-SET'),
  'marker-nonblocker': ('1. **G0-B** — ', '1. **G0-B** — ⟦BLOCKED-ON: 999⟧ ', 1, 'BLOCKER-KIND'),
  # item 27's edge to 29 was WRONG and is removed, so no BLOCKED-ON edge exists at this SHA. The
  # control inserts one pointing at a NON-BLOCKING item, which the target check rejects — the cycle
@@ -1253,10 +1253,15 @@ else:
 # (the enum lives in the single derivation above)
 # WAS: every blocker must OPEN with ⟦PRODUCT⟧ — which forbade a packet-only blocker and any
 # order but one, in the same commit that introduced an array to allow both. The rule is that
-# marked items and blockers are the same SET, whatever kinds they carry and in whatever order.
+# EVERY BLOCKER CARRIES A KIND; a non-blocker MAY. The old rule made the two sets EQUAL, which
+# erased the work-kind of an open non-blocking item — item 38 says it is PACKET work and emitted
+# `kind: []` because it is not a blocker. The packet's own text says classification and state are
+# ORTHOGONAL: `kind` is what closes an item, blocking is whether a gate waits on it. Equality made
+# them the same axis. codex-worker-1 named the contradiction.
 _marked = sorted(n for n in _KINDS if _KINDS[n])
-if _marked != sorted(_derived_blk):
-    bad('BLOCKER-KIND', f'kind markers on {_marked}, blockers are {sorted(_derived_blk)}')
+_unkinded = [n for n in _derived_blk if n not in _marked]
+if _unkinded:
+    bad('BLOCKER-KIND', f'blockers with no kind marker: {_unkinded}')
 # the phrase wraps across a line in the packet, so the whitespace between its words is not a
 # space — matching a literal ' ' would have made this check silently unable to find its own
 # subject, which is how a check comes to report a missing claim instead of a wrong one.

@@ -46,16 +46,16 @@ The blockers from the exact review are reconciled here, and the count is deliber
    ⟦PRODUCT⟧ for one SHA when its scope is authored and its blocker is item 29's defect. **A classification cannot be read out of prose that was not written
    to carry it.** FIVE blockers are packet edits as well as product fixes — item 28, whose
    extraction predicate, command and member list have never been authored while a counter-only
-   decision survives at `ui/daw-cli/src/main.rs:1183-1184`; item 26, whose gate
-   writes its PASS conditions, deterministic test and static checks against one plane while its
-   population covers two, so those surfaces must be authored before any implementation can decide
-   it; item 37, whose
+   decision survives at `ui/daw-cli/src/main.rs:1183-1184`; item 26, whose gate needs one
+   fixture authored — an adjacent multi-plugin segment — and the oracle for it; this used to say
+   G4's PASS conditions, deterministic test and static checks were written against one plane, which
+   item 26 has since withdrawn as false because S2, S5, PASS 2 and PASS 4 already cover input; item 37, whose
    acceptance oracle is unwritten; item 36, whose Layer 0, PASS 1 and register text all need
    rewriting alongside the telemetry it waits on; and item 18, where G2-B's PASS 4 is withdrawn with
    no replacement, so no PASS condition accepts the two-level implementation that exists and writing
    one is packet work. Each carries ⟦PACKET⟧ beside ⟦PRODUCT⟧ so the
    manifest can say so; until `kind` became an array that fact was unrepresentable and the record
-   said PRODUCT. An earlier version of this sentence named only item 37. **⟦PACKET⟧ MARKS (18, 26, 28, 36, 37)**, derived from the item heads and compared against this restatement, because representing a
+   said PRODUCT. An earlier version of this sentence named only item 37. **⟦PACKET⟧ MARKS (18, 26, 28, 36, 37, 38)**, derived from the item heads and compared against this restatement, because representing a
    kind is not binding it: deleting the marker, ADDING one to a nonblocking item, DUPLICATING it and
    misspelling it all passed until these checks existed — and a two-site MOVE is not expressible in
    the single-anchor control format, so no control claims to perform one, and a marker parked later in a head
@@ -1113,7 +1113,7 @@ on every gate, so every blocker on another gate blocks it. The four named above 
 whose SHAPE was analysed here; the rest block by the same rule without a separate argument — G2-A is one of G4's dependencies, so its missing sender identity blocks G4 exactly as a missing
 population would. Item 11 was a fifth until it CLOSED; leaving a closed item in a blocker list is
 how a gate acquires a permanent-looking obstacle that no longer exists.
-**The one of its own** is 26, whose reason has MOVED: the out-plane population is complete and covers both planes, and what remains is the missing adjacent multi-plugin fixture and the test surface for it. This sentence said "whose selector is proven partial" for several SHAs after item 26 itself recorded the move.
+**The one of its own** is 26, whose reason has MOVED: G4's population is complete across both planes, and what remains is the missing adjacent multi-plugin fixture and the test surface for it. This sentence said "whose selector is proven partial" for several SHAs after item 26 itself recorded the move.
 **TWO CONDITIONS, stated once.** (a) Every dependency GATE PASSES — not that its items are ruled,
 which they already are. (b) G4's OWN population exists. Both are required; (b) has been lost twice
 in edits to (a), and this paragraph carried it twice at once after the second recovery, which is
@@ -1140,7 +1140,9 @@ subtraction, which put it outside the arithmetic the gate checks. *Out-plane rea
 OUTPUT relation only while G4's invariant has two halves; the census block now carries both, seven
 derived IN rows and two hand-classified OUT rows with every member pinned. **The gate remains
 undecidable for a different reason, which open item 26 (G4) now states: the POPULATION covers both
-halves and the gate's PASS conditions, deterministic test and static checks still cover one.** The population is rebuilt below from the mapped base; what follows
+halves and ONE FIXTURE IS MISSING — an adjacent multi-plugin segment — together with its oracle.
+This sentence used to say the gate's PASS conditions, deterministic test and static checks cover one
+plane; item 26 withdrew that as false.** The population is rebuilt below from the mapped base; what follows
 records why the selector had to go, because a retired selector with no reason invites its own
 return.** The four RAW terms are four SPELLINGS, and the host uses a fifth: `grep -rn audioAuxOutOffset apps/`
 returns 5 sites and ZERO of them match any RAW term. The engine spells the aux plane
@@ -1234,8 +1236,10 @@ all**, which is exactly why the four-term census could not see reader 7.
                                                 consumed at :448 and :463 (NAMES NO OFFSET SYMBOL)
 
 Four of the seven reach the plane through a helper, a struct field or a callee. **That is why every
-name-based census of this population has been wrong**, and why the in-scope selection stays open at
-item 26 until the mapped-base census replaces the four-term grep.
+name-based census of this population has been wrong**, and why the in-scope selection STAYED open at
+item 26 until the mapped-base census replaced the four-term grep. **That replacement is DONE** — the
+complete role census below is the mapped-base measurement, and item 26's remaining gap is the
+adjacent multi-plugin fixture, not the selection.
 
 **THE COMPLETE ROLE CENSUS, measured by claude-worker-1 from the MAPPED BASE and alias-followed —
 23 role-bearing sites, and the arithmetic closes.** Role assigned by USE at the dereference, never
@@ -1443,7 +1447,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `54e363903469baf6be3c24a4b3b7d67b918055d9`, A.0 SCRIPT BLOB `1cca3ec0ad686315f46da069a103f083a13c8d56`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `63e1de50592fdcecac859548269c1fe248ef63a0`, A.0 SCRIPT BLOB `1c9f9f76bfb1c118f17a7c713ac4a6f017034a86`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -2634,7 +2638,7 @@ One per line, numbered in document order, so the count is checkable. ELEVEN are 
     resume, or a per-slot block stamp — is an owner choice R16 deliberately leaves open. PRODUCT
     work.
 
-38. **G1-B** — **NOT BLOCKING, and carrying no kind marker for that reason. Scoped to G1-B because that is where it is LIVE, though the defect is in the shared derivation. A live non-gate
+38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING. Scoped to G1-B because that is where it is LIVE, though the defect is in the shared derivation. A live non-gate
     prerequisite does not affect any typed planning
     field, so a planner walking the graph cannot see it.** `non_gate_prerequisites` is emitted, but
     `decidable_for_planning`, `planning_blocked_by` and `plannable_with_dependencies` are derived
@@ -2651,8 +2655,11 @@ One per line, numbered in document order, so the count is checkable. ELEVEN are 
     rules must also add the cross-record control, since nothing currently fails when the two
     disagree. **Scoping matters here and I got it wrong first: filed as `all`, it attached to
     every gate and drove the acceptance-decidable set to empty — an item scoped `all` is a
-    claim about every gate, which this is not.** The work is a PACKET edit; the marker set is reserved for blockers, which this is
-    not, so the kind is stated here in prose instead. **Filed as a blocker for one draft, which made every gate acceptance-undecidable —
+    claim about every gate, which this is not.** The item carries a PACKET kind marker although it is not a
+    blocker; the old rule made the marked set EQUAL to the blocker set, which erased the
+    work-kind of every open non-blocker. Kind and state are orthogonal — kind says what closes
+    an item, blocking says whether a gate waits on it — so every blocker now carries a kind
+    while a non-blocker may.
     an item scoped "all" propagates to all — and that was the wrong verdict: this defect does not
     leave any gate's acceptance criteria unmet, it makes a PLANNING field unreliable. The checker
     telling me so is the derivation working.** PACKET work.
