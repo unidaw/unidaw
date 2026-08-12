@@ -895,6 +895,16 @@ add_test(NAME contract_layout
 )
 set_tests_properties(contract_layout PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# ...and the three negative controls that prove it still refuses what it was written to refuse.
+# Registered separately rather than folded into the check above so that a control going blind is
+# its own red test with its own name, instead of one line inside a passing check's output. Note
+# the file is *_selftest.sh, which check_registry_check's *_check.sh glob does not select — it is
+# wired up here deliberately and not by falling outside the pattern.
+add_test(NAME contract_layout_selftest
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/contract_layout_check_selftest.sh
+)
+set_tests_properties(contract_layout_selftest PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 # THE RUST SIDE'S OWN TESTS, which had never run here. contract_layout proves every mirror is
 # LISTED in bindgen_matches_hand_written; that test is what actually compares the bytes, and it
 # only ever ran under `cargo test`. So the byte-level guard was absent from the suite that gates

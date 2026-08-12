@@ -120,8 +120,17 @@ pub struct EventEntry {
     pub type_: u16,
     pub size: u16,
     pub flags: u32,
-    pub payload: [u8; 40],
+    pub payload: [u8; EVENT_PAYLOAD_BYTES],
 }
+
+/// The payload's EXTENT, which is ABI and not an implementation detail — declared as a constant so
+/// the field above and the assertion below have ONE source. Writing `[u8; 40]` in the field and
+/// `40` in the assertion would let the two disagree, and the assertion would then be checking a
+/// literal rather than the field.
+pub const EVENT_PAYLOAD_BYTES: usize = 40;
+/// Where `ready` begins in the C++ `daw::EventEntry` (`apps/shared_memory.h`). This type does not
+/// mirror that member, so this offset is the boundary its payload must stop at.
+pub const EVENT_READY_OFFSET: usize = 60;
 
 // THE STRIDE, ASSERTED AT COMPILE TIME. A plain `const` block rather than a crate, so it costs no
 // dependency; a mismatch is a build error naming this line. See the doc comment above for why 64
@@ -140,6 +149,14 @@ const _: () = assert!(core::mem::offset_of!(EventEntry, type_) == 12);
 const _: () = assert!(core::mem::offset_of!(EventEntry, size) == 14);
 const _: () = assert!(core::mem::offset_of!(EventEntry, flags) == 16);
 const _: () = assert!(core::mem::offset_of!(EventEntry, payload) == 20);
+// AND WHERE PAYLOAD *ENDS*, because the six offsets above pin where fields START. Shrink the C++
+// `payload` to 36 and insert a `uint32_t` at 56 and every assertion above still holds — the six
+// starts are unmoved and the struct is still 64 bytes — while this type's `payload[40]` now runs
+// over the new member. Growing the C++ payload is already caught (`ready` would push the size past
+// 64); shrinking it was not caught by anything until this line. The boundary is `ready`'s offset:
+// this mirror's payload must stop exactly where the member it does not mirror begins.
+const _: () = assert!(core::mem::offset_of!(EventEntry, payload) + EVENT_PAYLOAD_BYTES
+                      == EVENT_READY_OFFSET);
 
 #[repr(C, align(64))]
 pub struct PatcherContext {
