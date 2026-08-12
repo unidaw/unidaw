@@ -18,7 +18,9 @@ never written is the same error's fingerprint.
 
 The blockers from the exact review are reconciled here, and the count is deliberately not restated: it moved between rounds and a fixed number here would be a twin of the item list, which is the authority:
 
-1. **GATE PLANNING VERDICTS — plannable 3, unknown 5, blocked 0.** Every gate names a population
+1. **GATE PLANNING VERDICTS — plannable 0, unknown 8, blocked 0.** **OWNER CHOICES (G0-A, G0-B,
+   G3)** and **NON-GATE PREREQUISITES (G1-B)**, the first derived from ⟦OWNER-CHOICE⟧ markers and
+   the second from the gates' `Dependencies` clauses, both compared against this restatement. Every gate names a population
    it can range over, which is what this line used to report as "EVERY GATE IS PLANNABLE AT THIS
    SHA"; that claim read TWO, then ONE, then every, across three SHAs, and it is **withdrawn as
    OVERSTATED rather than as wrong.** No gate's own population is withdrawn — the fact it was
@@ -84,7 +86,10 @@ The blockers from the exact review are reconciled here, and the count is deliber
    this opening has carried.
    The manifest publishes both senses as `decidable_for_planning` and `decidable_for_acceptance`,
    and G3 shows why one boolean will not do: R3 makes it plannable and it is not acceptance-decidable
-   until the N ticket lands. **Each also has a `_with_dependencies` form**, because the local flags
+   until the N ticket lands. **Acceptance also has an `acceptable_with_dependencies` form; planning's
+   equivalent is the three-valued `planning_verdict`, which closes over dependencies in its own
+   right** — this sentence said "each also has a `_with_dependencies` form" for one SHA after the
+   planning one was removed. Both exist because the local flags
    were the whole answer and a gate's dependencies were emitted and never USED: G4 published
    `decidable_for_acceptance: false, blocking_items: [26]`, so a consumer closing item 26 would have
    read G4 as acceptable while G0-B, G2-A, G2-B and G3 — every one of them a declared dependency of
@@ -283,9 +288,10 @@ accident-prone kind and is named as such rather than disclaimed · S4 each of S1
 with the violation restored · S5 `response.shmName` reaches `shm_open` only after a length-bounded
 read.
 
-**Review register.** The reviewer SHALL confirm: the owner's ruling on post-attach shrink, which no
-validation closes because the child keeps its fd; the expected verdict for a valid object under a name
-the engine did not choose; refuse-versus-degrade for a bad ring offset; that `mmap` past the object
+**Review register.** ⟦OWNER-CHOICE: G0-A⟧ The reviewer SHALL confirm: the owner's ruling on
+post-attach shrink, which no validation closes because the child keeps its fd; the expected verdict
+for a valid object under a name the engine did not choose — **both are live CHOICES OF BEHAVIOUR,
+not confirmations of fact**, and a planner cannot write the validator's ticket without them; refuse-versus-degrade for a bad ring offset; that `mmap` past the object
 succeeds on this platform, nothing here having been executed; that the fixture asserts `offsetof`
 rather than trusting a hand-computed byte 96; that the enumerations were RE-DERIVED at the delivering
 SHA; that all **seven live** mailbox readers take their pointer from the validated layout; whether
@@ -397,7 +403,9 @@ list of the eight type names. S-3 the one-sided admission is a byte-range disjoi
 no member name used as an admission key. S-4 name normalisation is a pure function of the input
 string — no map or table literal keyed by a member name.
 
-**Review register.** The reviewer SHALL confirm: that libclang's layout for the eight types equals
+**Review register.** ⟦OWNER-CHOICE: G0-B⟧ The reviewer SHALL CHOOSE the mutation floor: 600 is a
+fifth pinned integer with no owner, and no ticket can be written against a number nobody has picked
+(open item 4 (G0-B)). The reviewer SHALL confirm: that libclang's layout for the eight types equals
 that of the compiler building `engine_core`, since the C++ numbers come from bindgen and the product
 comes from the host compiler; **whether Rust's whole-struct store writes `EventEntry` bytes [60,64), the C++ `ready` member —
 STILL OPEN, and my ANSWER TO IT WAS INVALID.** I marked this ANSWERED-NO by reading
@@ -1092,8 +1100,10 @@ host reads or publishes. **R16 DISCHARGES THIS ONLY FOR THE PRODUCER-VECTOR READ
 forbids anyway: under `hostReady = false` the producer, the input/output write and the mixer all
 skip the host, and SIGCONT cannot readmit the stopped process. It does NOT discharge the mixer's
 snapshot path, where readiness is live and the mapping is not — item 37. The demand stands for
-that half. The reviewer SHALL decide `daw::Watchdog`'s fate — deletion or
-re-specification — since the gate accepts either with equal force and deliberately cannot choose.
+that half. ⟦OWNER-CHOICE: G3⟧ The reviewer SHALL decide `daw::Watchdog`'s fate — deletion or
+re-specification — since the gate accepts either with equal force and deliberately cannot choose,
+and SHALL choose the resume mechanism R16 leaves open at item 37 (G3): a host-side currency test, a
+reader-side monotonic clamp, a re-baseline on resume, or a per-slot block stamp.
 **The reviewer SHALL resolve the static-check contradiction**: one check places the eviction inside
 `apps/engine_producer_thread.cpp:225-252`, whose natural implementation was said to move the exit
 count off 12, which a sibling check was said to forbid. **R17 DISCHARGES THIS AND ITEM 21 IS
@@ -1465,7 +1475,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `01f53446679162491a0f5c43895f8d52b071308a`, A.0 SCRIPT BLOB `c5ce6a83e66e0071d2961b9f545806520eb4bcf9`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `c6b2f5225c03272adda962d8fe8d0d643bed28da`, A.0 SCRIPT BLOB `3cba8678d66695535534324114bb09a1dff4021b`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1476,12 +1486,18 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
     packet blob <oid> · product 75c6f064 tree 699abfe8 · 39 items, 30 open · 14 RAW (13 hand-ruled) + 32 commanded-claim occurrences, all executed
     PASS
 
-**The MANIFEST is the canonical machine-readable source, at `ae-p1.2-manifest/6`.** **A SEMANTIC
+**The MANIFEST is the canonical machine-readable source, at `ae-p1.2-manifest/7`.** **A SEMANTIC
 WIDENING IS A VERSION CHANGE EVEN WHEN THE JSON SHAPE IS UNTOUCHED**, and /5 broke that: the
 observable invariant moved from `kind` marks EQUALLING the blocker set to blockers being a SUBSET
 of the marked items, and a consumer that had read the equality as schema semantics got no warning
-because no key changed. codex-worker-1 raised it as a compatibility caveat. /6 carries that
-widening as well as the new `unclassified_open` population.
+because no key changed. codex-worker-1 raised it as a compatibility caveat. /6 carried that
+widening as well as the new `unclassified_open` population — **and /6 then went out TWICE with
+different gate shapes**, once with `plannable_with_dependencies` and once without it and with
+`planning_verdict` beside it. That happened in the commit AFTER the one that wrote the rule, and the
+rule had been applied correctly in the same edit to the widening it was written for. **Writing a rule
+is not obeying it, and the gap between the two was one commit** — a rule feels like context rather
+than a constraint at exactly the moment you are the one changing something. codex-worker-1 compared
+the key sets. `/7` is the version the second shape should have had.
 `docs/architecture/tasks/AE-P1.2-manifest.json` carries the gates and their decidability, the
 rulings with `named_at` — every NON-HEADING mention of each one, with line and context, the
 heading itself being carried by the record's own `line` field; there is no `applied` field, because
@@ -1539,13 +1555,22 @@ check, staged and atomically replaced, and `MANIFEST-STALE` is suppressed on an 
 a check that forbids its own remedy is a deadlock rather than a guard — that deadlock appeared the
 moment the write moved, and is recorded here because it is the predictable cost of the fix.
 
-**Executable proofs.** Four, each a flag on the same script, because a check verified at somebody's
+**Executable proofs.** Six, each a flag on the same script, because a check verified at somebody's
 shell prompt is evidence for that person and nobody else. `--prove-blanking` is a DIFFERENTIAL, not
 an absolute: text injected outside a hiding place must raise the count and text injected inside must
 not, so the blanking is shown to be doing work rather than merely agreeing with its author on a clean
 document. `--prove-emit-identity` drives a real failure into a real run and requires the committed
 manifest to be byte-identical afterwards — it REFUSES when the artifact is absent, because
-`None == None` proved nothing the first time. `--prove-extractor-ratchet` holds the raw-prose
+`None == None` proved nothing the first time. **`--prove-schema-guard` exists because a check no
+CONTROL can reach needs one**: no packet mutation can change the manifest's SHAPE, since the shape
+is fixed by the emitter, so the control written for `SCHEMA-UNVERSIONED` reported BLIND and was
+right to. The proof synthesises a predecessor and runs BOTH arms — four shapes that must be refused
+under a held version, and two that must not, one of them a version that WAS bumped and one a change
+of values with the shape intact. It is bound to production like the extractor ratchet: the live
+comparison is the same function, and a proof exercising a private copy says nothing about the run.
+**This is the second check in one day that I nearly shipped with nothing able to trigger it**, and
+both times the signal was a control reporting BLIND on its first run — which is the control doing
+the one job a green suite cannot. `--prove-extractor-ratchet` holds the raw-prose
 extractor count at its floor. `--prove-sweep-predicate` classifies a crafted-line corpus covering
 every spoof a reviewer has landed on the sweep's success test — a bare `OK (+` prefix, an unanchored
 tail, a wrong tag, a count the emitter cannot print, and a tag line with no separator.
@@ -1625,7 +1650,7 @@ only ADDS one is a no-op and reports BLIND correctly — a repaired opt-out prod
 tag — and it therefore adds the span AND breaks the real status, so the old scan reads the span as
 the status while the new parse names the malformed reach.
 
-**Controls.** One hundred forty-three, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** One hundred forty-nine, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1646,7 +1671,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `unclassified-kinded`, `unclassified-said`, `opening-gates-gone`, `planning-unknown-gone`, `status-slash`, `status-wrapped`, `status-after-ok`, `item-md-escape`, `section-orphan`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `unclassified-kinded`, `unclassified-said`, `opening-gates-gone`, `planning-unknown-gone`, `status-slash`, `status-wrapped`, `status-after-ok`, `item-md-escape`, `section-orphan`, `schema-unstated`, `ruling-state-adverb`, `ruling-state-cited`, `item-state-stale`, `owner-choice-said`, `owner-choice-gone`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
@@ -2313,7 +2338,8 @@ One per line, numbered in document order, so the count is checkable. ELEVEN are 
 1. **G0-B** — The generated header breaks the documented `-DDAW_BUILD_PATCHER_RUST=OFF` build for six unconditional targets, with no stated path, include directory or target-ordering edge.
 2. **G0-B** — The declaring macro invalidates the `#[repr(C` grep this gate's population floor depends on.
 3. **G0-B** — The mutation floor ">= 600" is asserted with no derivation and counts near 551 over the real 131 members, so the battery would fail its own floor permanently.
-4. **G0-B** — 600 is a fifth pinned integer with no owner.
+4. **G0-B** — 600 is a fifth pinned integer with no owner; the choice is carried in G0-B's review
+   register, where owner choices are marked.
 5. **G0-B** — CLOSED at this SHA. Both member counts are produced by a printed command over the pinned tree, the C++ one spanning the three headers the eight types are actually declared in. The per-type breakdown puts the entire 66-vs-65 difference in `EventEntry` (7 vs 6), which corroborates the one-sided-member claim rather than restating it.
 6. **G1-A** — CLOSED at this SHA. The entry-address extraction's rule ships inside the printed command: the data-statement and index-site pipelines each carry their own exclusions and return 4 (3 production) and 12. Closing it is also what exposed the classification error the arithmetic had been hiding — the rule as prose said "four non-data operations" where the ready-flag operations are five, so the in-scope figure was 5 and is 4.
 7. **G1-A** — **OPEN. REOPENED at this SHA after being wrongly closed.** The census I closed it
@@ -2743,7 +2769,8 @@ One per line, numbered in document order, so the count is checkable. ELEVEN are 
     confirmation cannot be given and states the requirement instead**: a resumed host must not write
     a lapped slot, and a stale `completedBlockId` must not lower the minimum. Which mechanism
     delivers that — a host-side currency test, a reader-side monotonic clamp, a re-baseline on
-    resume, or a per-slot block stamp — is an owner choice R16 deliberately leaves open. PRODUCT
+    resume, or a per-slot block stamp — is an owner choice R16 deliberately leaves open, marked
+    in G3's review register. PRODUCT
     work.
 
 38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING. THE EFFECT of a live non-gate prerequisite on planning is
@@ -2762,7 +2789,13 @@ One per line, numbered in document order, so the count is checkable. ELEVEN are 
     prerequisite is unmet — a question about how this packet is CONSUMED rather than about its text.
     **But declining to overstate is not deciding.** `planning_verdict` is three-valued —
     `plannable`, `unknown`, `blocked` — and `planning_unknown_from` names the gates the unknown
-    comes from. `plannable_with_dependencies` is REMOVED rather than widened: a tri-state string in
+    comes from. **That field had ONE input for a SHA and lied by omission**: a live OWNER CHOICE
+    also leaves planning unestablished, and G3 reported its unknown as coming from G1-B alone while
+    `daw::Watchdog`'s fate and R16's resume mechanism were both unchosen — so resolving G1-B would
+    have flipped G3 to `plannable`. Both inputs feed it now, and neither is a ruling here: this
+    item's question is whether an unmet prerequisite makes planning FALSE and populates a typed
+    blocker, which is the `blocked` state and is untouched.
+    `plannable_with_dependencies` is REMOVED rather than widened: a tri-state string in
     a boolean's key reads as TRUE in every consumer written against `/5`, so a meaning that no
     longer fits its type is deleted at a schema bump where the break is loud. Whoever rules turns
     the five unknowns into `plannable` or into a typed blocker, and must add the cross-record
