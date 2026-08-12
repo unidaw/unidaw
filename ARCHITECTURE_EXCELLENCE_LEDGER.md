@@ -828,6 +828,11 @@ duplicate item numbers silently overwrite keyed records. G4 typed member
 validation remains incomplete (duplicate IDs and wrong owner annotations pass).
 G2-A labels, R3/N, M1, item37 oracle, Watchdog, G0, and G4 item26 remain.
 
+Owner successor `d1a87b1` claims G4 malformed member-like entries are now named,
+list/count extraction is gate-scoped, and duplicate count phrases are rejected;
+109 controls pass. It explicitly leaves order/reason fidelity and stale labels
+unaddressed. Exact review is pending; G3/G0/M1/item37 remain gated.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
