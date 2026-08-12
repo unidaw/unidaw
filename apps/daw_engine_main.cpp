@@ -2005,7 +2005,7 @@ int main(int argc, char** argv) {
   };
   daw::engine::UndoCommandDeps undoCommandDeps{
      engineState, applyUndoEntry, restoreSongStore, restoreTrackStore,
-      requireMatchingClipVersion, applyDocument, restorePluginState
+      applyDocument, restorePluginState
   };
 
   daw::engine::DeviceCommandDeps deviceCommandDeps{

@@ -35,7 +35,18 @@ struct UndoCommandDeps {
   std::function<bool(const daw::UndoEntry&, bool)> applyUndoEntry;
   std::function<bool(const SongStoreState&)> restoreSongStore;
   std::function<bool(uint32_t, const TrackStoreState&)> restoreTrackStore;
-  std::function<bool(uint32_t, daw::UiCommandType, uint32_t)> requireMatchingClipVersion;
+  // THE CLIP ARBITER USED TO BE HERE AND IT WAS NEVER CALLED. `handleUndo`/`handleRedo` contain
+  // zero occurrences of the name; the member was wired in, held, and read by nothing —
+  // type-level evidence, which is the only kind that can see a dead `std::function` member, since
+  // a call-site census over the file finds nothing either way. Open item 30, RULED (R10).
+  //
+  // **DELETING IT DOES NOT DISMISS THE HAZARD, and the ruling says so explicitly.** Undo replaces
+  // the WHOLE document through `applyDocument`, so an edit a user makes between seeing the screen
+  // and pressing Ctrl-Z is silently reverted with it. The per-track clip version cannot cover
+  // that: it is the wrong instrument, because the thing being replaced is not a track. Covering it
+  // needs a DOCUMENT-level version, which does not exist at this SHA. Restoring this member would
+  // reinstate the appearance of a guard without the guard, which is worse than the gap being
+  // visible — so the gap is written here instead of a parameter that suggests it is handled.
   std::function<bool(daw::ProjectDocument&)> applyDocument;
   // UNDO STAGE 5. applyDocument puts back the song; this puts back the plugins, which are not in
   // it. Returns how many hosts were actually written to — a note edit changes no plugin state, so
