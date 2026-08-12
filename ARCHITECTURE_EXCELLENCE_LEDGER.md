@@ -975,6 +975,13 @@ sibling-position comment is corrected; 121 controls pass. Exact review is
 pending. H1/trailing header, G4 order, item26 framing, and semantic-set blockers
 remain.
 
+Exact review of `5255bd6` is **BLOCKED**. Bang-boundary fix passes, but the
+claimed sentence grammar misses punctuation followed by quotes, falsely counts
+abbreviation periods, misses ideographic punctuation, and lacks a question
+boundary control (reverting `[.!?]` to `[.!]` leaves all controls green). Define
+the limited ASCII grammar explicitly or parse punctuation/quotes. Open suffix/
+indented H1/order and G0/G2/G3/M1/item37/Watchdog/G4 item26 blockers remain.
+
 Exact review of `01c86f7` is **BLOCKED**. Parent duplicate regression and
 zero-terminal coverage pass causally, but the duplicate branch itself is not
 isolated: deleting explicit duplicate failure leaves the control green via
