@@ -1706,3 +1706,16 @@ observation and transcript digest, emitter/output-site pins, invocation context,
 pins. Controls cover replay, stale, duplicate, missing, emitter, marker, exact
 count, and byte ceiling with branch isolation. Independent schema review is
 pending; no code/status transition.
+
+`P2-CTRL-02` scope is now pinned: the authorized implementation slice is the
+ui-web optimistic note/chord pending path, replacing global `clipVersion`
+movement inference with exact `CommandOutcome` correlation and negative tests
+for unrelated version advances. Harmony/quantize, undo/redo, generic sidecar
+BATCH, and CLI sampler-kit callers lacking outcomes are inventory/design only
+in this ticket; they require explicit follow-on tickets rather than an
+unapproved wire extension. `codex-worker-2` is active on this scope.
+
+`P2-HOST-01` Step 1 (`a726c9f4`) is complete and awaiting focused independent
+review. It adds only a behavior-preserving readiness accessor and predicate
+tests; Step 2 site classification remains paused until review. `protocol_audit`
+was asked to review the exact current files directly, without git archaeology.
