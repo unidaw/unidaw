@@ -1096,8 +1096,8 @@ from a plugin-bearing track. **Dependencies** G0-A, G0-B, G1-A, G1-B, G2-A, G2-B
 this SHA, on TEN dependency blockers plus one of its own.
 **The ten**, carried by gates G4 depends on, are every blocker except its own 26:
 18 (G2-B) the absent PASS 4 replacement, 19 (G3) no source for N,
-24 (G0-B) the rename PASS 9 is RED without, 27 (G2-A) the undefined arbitrated scope,
-28 (G2-A) the unauthored S3 extraction, 29 (G2-A) the arbitration defect,
+24 (G0-B) the rename PASS 9 is RED without, 27 (G2-A) the class-wide missing sender identity,
+28 (G2-A) the unauthored S3 extraction, 29 (G2-A) the malformed SetRowOps zero-base refusal,
 33 (G1-B) the missing tests, 35 (G0-B) the EventEntry parity,
 36 (G3) the non-discriminating stall check, and 37 (G3) the readiness/mapping generation gap.
 Item 18's label used to read "the mirror-ack circularity"; R2 dissolved that and the label outlived
@@ -1431,7 +1431,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `dcaa45c0529151f57e030804b359ebd976a570d6`, A.0 SCRIPT BLOB `e9b5765a9ff2019971237548c4398c5c03b72c79`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `a2634d489b3459d18f2d4705fa9dc427f9409359`, A.0 SCRIPT BLOB `13b5b43006cce6d009f4f3ed7147c8d95446c741`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1510,7 +1510,7 @@ extractor count at its floor. `--prove-sweep-predicate` classifies a crafted-lin
 every spoof a reviewer has landed on the sweep's success test — a bare `OK (+` prefix, an unanchored
 tail, a wrong tag, a count the emitter cannot print, and a tag line with no separator.
 
-**Controls.** One hundred two, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** One hundred four, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1531,7 +1531,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,

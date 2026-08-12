@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'f49273bfc79c6b835958dd1d42261a8031fbb80f'
+PREV_TIP     = 'b953b64974944a29e66fcbfed9235d2e57f1f08b'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -343,6 +343,10 @@ CONTROLS = {
  'ruling-body-swap': ('CLOSED at this SHA.** The static-check contradiction was not one. R17 shows',
                       'CLOSED at this SHA.** The static-check contradiction was not one. R16 shows', 1,
                       'RULING-BODY-BIND'),
+ 'g4-dep-member':    ('18 (G2-B) the absent PASS 4 replacement', '17 (G2-B) the absent PASS 4 replacement',
+                      1, 'GATE-DEP-BLOCKERS'),
+ 'g4-dep-extra':     ('19 (G3) no source for N,', '19 (G3) no source for N, 7 (G1-A) invented,',
+                      1, 'GATE-DEP-BLOCKERS'),
  'g4-dep-count':     ('on TEN dependency blockers plus', 'on NINE dependency blockers plus', 1,
                       'GATE-DEP-BLOCKERS'),
  'restate-blockers': ('block (18, 19, 24, 26, 27, 28, 29, 33, 35, 36 and 37)', 'block (18, 19, 24, 26, 27, 28, 29, 33, 35, 36 and 21)', 1,
@@ -1605,7 +1609,8 @@ WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twen
         37: 'Thirty-seven', 38: 'Thirty-eight', 39: 'Thirty-nine', 40: 'Forty',
         95: 'Ninety-five', 96: 'Ninety-six', 97: 'Ninety-seven',
         98: 'Ninety-eight', 99: 'Ninety-nine', 100: 'One hundred', 101: 'One hundred one',
-        102: 'One hundred two', 103: 'One hundred three'}
+        102: 'One hundred two', 103: 'One hundred three', 104: 'One hundred four',
+        105: 'One hundred five', 106: 'One hundred six'}
 if not listed:
     bad('CONTROL-PROSE-MISSING', 'no "**Controls.** <N>, each naming" sentence')
 elif listed.group(1) != WORD.get(len(CONTROLS), '?'):
@@ -1790,15 +1795,24 @@ for _g in _final:
     elif WORDNUM.get(_said.group(1).upper()) != len(_union):
         bad('GATE-DEP-BLOCKERS', f'{_g["id"]} says {_said.group(1)} dependency blockers, '
                                  f'the graph gives {len(_union)}: {_union}')
+    # `:\s*`, NOT `: ` — the committed layout ends the heading with `26:` and starts the list on
+    # the NEXT line, so a literal colon-space made `_listed` None on the pristine packet. And the
+    # skip was silent: `if _listed:` meant a check that matched nothing reported nothing, so every
+    # member mutation codex-worker-1 tried passed cleanly. I wrote a note today about conditionals
+    # failing silently where assertions fail loudly, and then wrote this.
     _listed = re.search(r'\*\*The ' + (_said.group(1).lower() if _said else 'ten') +
-                        r'\*\*, carried by gates [^:]*: (.*?)(?=\n\*\*|\n\n)', _visible(pkt), re.S)
-    if _listed:
+                        r'\*\*, carried by gates [^:]*:\s*(.*?)(?=\n\*\*|\n\n)', _visible(pkt), re.S)
+    if not _listed:
+        bad('GATE-DEP-BLOCKERS', f'{_g["id"]} states no dependency-blocker LIST to check')
+    else:
         # ONLY the `N (Gx)` form. The first version also scraped bare numbers up to the first
         # em-dash, which picked "4" out of "PASS 4" and truncated the moment prose gained a dash —
         # my own edit tripped it within the minute. Every member is written in the typed form, so
         # the extractor needs no fallback and no delimiter guess.
         _ids = sorted({int(x) for x in re.findall(r'(?<![0-9])(\d{1,2}) \(G', _listed.group(1))})
-        if not set(_union) <= set(_ids):
+        # EQUALITY, not subset: `<=` let extras and duplicates through, so a list could name a
+        # nonblocking item and still satisfy a check about which items block.
+        if set(_ids) != set(_union):
             bad('GATE-DEP-BLOCKERS', f'{_g["id"]} names {sorted(_ids)}, graph requires {_union}')
 
 def closure(gid, seen=None, path=()):
