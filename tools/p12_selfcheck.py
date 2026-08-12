@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'ea2d08f9ee9daa4f19b6e240ad27f7bdcd99e586'
+PREV_TIP     = '753177c817793c948209cf33c034231278c6d1cc'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -355,12 +355,15 @@ CONTROLS = {
  # THE DECOY GOES IN THE CLAUSE AND THE REAL PHRASE OUTSIDE IT. The first version put both inside
  # and came back BLIND — the mutation landed and the check was right not to fire, which is the
  # position mistake this packet recorded one commit earlier, repeated within the hour.
+ 'g4-final-twice':   ('**Dependencies** G0-A, G0-B, G1-A, G1-B, G2-A, G2-B, G3. Final gate — ',
+                      '**Dependencies** G0-A, G0-B, G1-A, G1-B, G2-A, G2-B, G3. Final gate — x. Final gate — ', 1,
+                      'GATE-DEP-BLOCKERS'),
  'g4-final-negated': ('G3. Final gate — and therefore NOT DECIDABLE',
                       'G3. not Final gate — and therefore NOT DECIDABLE', 1,
                       'GATE-DEP-BLOCKERS'),
  'g4-two-terminals': ('**Dependencies** G0-A, G0-B, G1-A, G1-B, G2-A, G2-B, G3. Final gate',
                       '**Dependencies** G0-A, G0-B, G1-A, G1-B, G2-A, G2-B. Final gate', 1,
-                      'GATE-DEP-BLOCKERS'),
+                      'GATE-TERMINAL-COUNT'),
  'g4-final-rename':  ('G3. Final gate — and therefore NOT DECIDABLE',
                       'G3. Terminal gate — and therefore NOT DECIDABLE', 1, 'GATE-DEP-BLOCKERS'),
  'g4-dep-bareword':  ('on TEN dependency blockers plus one of its own.\n**The ten**',
@@ -1894,13 +1897,18 @@ _final = [g for g in gates if g['id'] not in _depended_on and g['dependencies']]
 # graph-chosen one and never asked how big it was — the vacuous-check family, one level up from the
 # `if _listed:` skip earlier in this file.
 if len(_final) != 1:
-    bad('GATE-DEP-BLOCKERS', f'{len(_final)} terminal gate(s) in the dependency graph; '
+    bad('GATE-TERMINAL-COUNT', f'{len(_final)} terminal gate(s) in the dependency graph; '
                              f'the packet\'s final-gate contracts are singular: '
                              f'{sorted(g["id"] for g in _final)}')
 # AND THE PROSE IS A CROSS-CHECK, NOT THE SELECTOR. Using it to CHOOSE let the document opt out;
 # using it to CONFIRM makes a rename a disagreement between two independent derivations, which is
 # a failure rather than a silence. The graph decides; the prose must agree.
-# A POSITIVE, UNIQUE DESIGNATION — not substring presence. `'Final gate' in ...` read the clause
+# A SPELLING CHECK, AND THAT IS ALL IT IS — narrowed after claiming more. It matches the canonical
+# designation form and rejects `not Final gate`, but `Final gate — NO: this gate is not terminal`
+# still matches, because a regex cannot judge whether a sentence AFFIRMS. I called this a positive
+# designation; it recognises a spelling. The load-bearing check is the GRAPH; this one catches a
+# renamed or deleted label and nothing subtler, and saying so is better than a stronger comment
+# over the same code. A genuinely semantic version needs a TYPED designation, not prose. `'Final gate' in ...` read the clause
 # `not Final gate` as AGREEMENT, so the document could deny the graph and satisfy the cross-check
 # by containing the words it denies. That is the bare-substring defect I fixed in the count phrase
 # ONE COMMIT EARLIER, in this same function, and did not carry across to the line below it.
@@ -1908,8 +1916,16 @@ if len(_final) != 1:
 # The designation is sentence-initial and em-dash terminated in this packet's own form, and it must
 # occur exactly once in the clause: a second copy is as much a defect as a negated one.
 _FINAL_DECL = re.compile(r'(?:^|\. )Final gate — ')
-_said_final = [g['id'] for g in gates
-               if len(_FINAL_DECL.findall(_visible(g.get('dependencies_text') or ''))) == 1]
+# COUNTED GLOBALLY. Per-gate `== 1` EXCLUDED a gate that declared itself twice instead of failing
+# it: two declarations on nonterminal G3 left `_said_final == ['G4']` and everything passed, while
+# the comment beside it said a second copy is a defect. A duplicate must fail, not disappear —
+# that is the same "silence reads as absence" shape as the malformed members.
+_decl_counts = {g['id']: len(_FINAL_DECL.findall(_visible(g.get('dependencies_text') or '')))
+                for g in gates}
+for _gid, _n in sorted(_decl_counts.items()):
+    if _n > 1:
+        bad('GATE-DEP-BLOCKERS', f'{_gid} declares itself the final gate {_n} times')
+_said_final = [gid for gid, _n in sorted(_decl_counts.items()) if _n >= 1]
 if len(_final) == 1 and _said_final != [_final[0]['id']]:
     bad('GATE-DEP-BLOCKERS', f'the graph makes {_final[0]["id"]} the terminal gate; the prose names '
                              f'{_said_final or "none"}')
