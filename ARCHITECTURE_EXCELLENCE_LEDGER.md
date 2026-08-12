@@ -1193,3 +1193,11 @@ verbs into one record per choice; CHOICE-COMPOUND and proof-liveness controls ar
 fixed; item-38 stale planning prose is corrected. It reports schema /7 and 155
 controls, while carrying R7/G4 prose, G0-A/G0-B, item 38 ruling, and unclassified
 kind work. Exact audit is pending.
+
+Exact audit of `bec8cbe` is BLOCKED on two release blockers: the claimed deep
+schema union still retains only the first record's nested value, so heterogeneous
+nested shapes evade `/7` detection; and owner-choice extraction stops at periods
+inside code/file identifiers (`control.rs`, `host_stall_check.sh`), truncating
+canonical reasons and potentially hiding later choices. Normal validation and
+155 controls pass, but these require recursive all-record validation and
+Markdown-aware sentence segmentation with full source-span equality.
