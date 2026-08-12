@@ -1276,3 +1276,11 @@ uniqueness is keyed by semantic section/gate kind rather than full caption text.
 It reports schema /7, epoch 3, and 170 controls. Carried G0-A/G0-B, R7/G4,
 SEND-SITES/PASS9, item38 ruling, unclassified kinds, subject-before-reference,
 and owner-choice reason-content issues remain. Exact audit pending.
+
+Exact audit of `a944df4`: composed-status and kind-based heading fixes pass, but
+the schema-proof action-binding blocker is unchanged. Synthetic cases still call
+`_schema_refusal()` directly while production refusal is a separate `bad(...)`
+branch in `_schema_guard()`; removing that branch leaves the run marker and all
+170 proof controls green. Remaining parser/heading totality and owner-choice
+issues are also not phase-ready. Required proof must exercise the same observable
+production action (for example via isolated subprocess/injected mismatch).
