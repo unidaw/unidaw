@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'f27e898d5430a7ef2ef9d0c470869044daf67194'
+PREV_TIP     = 'c40e7b3bd0e8905a56848bd38b8dd59d0441ae76'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -546,6 +546,18 @@ CONTROLS = {
  'status-code-span': ('38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING.',
                       '38. **G1-B** — ⟦PACKET⟧ `**BLOCKING**` **NOT BLOCKINGLY.', 1,
                       'ITEM-STATUS-MISSING'),
+ # THE DEFECT THAT ACTUALLY OCCURRED: an edit removed a sentence's opening clause and left its
+ # closing delimiter behind. The control reproduces it by deleting one opener from item 37.
+ 'item-md-unbalanced': ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING,',
+                      '37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ BLOCKING,', 1, 'ITEM-MD-UNBALANCED'),
+ # AND THE VIEW, differentially. A delimiter inside a code span is literal text, not emphasis, so a
+ # parity check reading RAW bytes counts it and one reading the visible view does not. This control
+ # adds a code-span `**` AND one real opener: the visible count gains one and goes odd, the raw
+ # count gains two and stays even. It fires on the view that is correct and is BLIND on the other,
+ # which is the only way to pin a view in a harness where every control must provoke a tag.
+ 'item-md-view':     ('an item scoped `all` is a claim about every gate',
+                      'an item scoped `all` `**` **is a claim about every gate', 1,
+                      'ITEM-MD-UNBALANCED'),
  'blocking-negated': ('38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING',
                       '38. **G1-B** — ⟦PACKET⟧ **BLOCKING', 1, 'BLOCKER-SET'),
  'marker-nonblocker': ('1. **G0-B** — ', '1. **G0-B** — ⟦BLOCKED-ON: 999⟧ ', 1, 'BLOCKER-KIND'),
@@ -1940,6 +1952,21 @@ item_line = {int(m.group(1)): line_of(_body_off + m.start())
              for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*', body)}
 item_body = {int(m.group(1)): m.group(0) for m in
              re.finditer(r'(?m)^(\d{1,2})\. \*\*.*?(?=\n\d{1,2}\. \*\*|\n# |\Z)', body, re.S)}
+# EMPHASIS DELIMITERS MUST BALANCE INSIDE AN ITEM. Editing item 38 at the previous SHA I replaced a
+# sentence's opening clause and left its closing `**` behind, so the body carried an odd number of
+# delimiters: a lowercase orphan fragment, and a bold run a renderer closes wherever it next can.
+# Every check passed — the headline was intact, the counts summed, the manifest emitted the broken
+# text verbatim as `items[38].body` — because nothing here read the body AS MARKDOWN.
+#
+# codex-worker-1 found it by reading. The rule is a delimiter-parity one and says so: it counts `**`
+# runs in the VISIBLE view (a delimiter inside a code span is literal text, not emphasis) and
+# requires an even number per item. It is NOT a CommonMark parse and cannot see a mis-NESTED pair,
+# only an unmatched one — which is the defect that actually occurred and the one an edit produces.
+for _n2 in sorted(item_body):
+    _ib = re.search(rf'(?m)^{_n2}\. \*\*.*?(?=\n\d{{1,2}}\. \*\*|\n# |\Z)', body_vis, re.S)
+    if _ib and len(re.findall(r'\*\*', _ib.group(0))) % 2:
+        bad('ITEM-MD-UNBALANCED', f'item {_n2} has an odd number of ** emphasis delimiters; an edit '
+                                  f'left a bold run open and the manifest publishes the fragment')
 body_off = pkt.find(body)
 gate_hdr = [{'gate': m.group(1), 'line': line_of(m.start()),
              'end_line': line_of(pkt.find('\n# ', m.end()) if pkt.find('\n# ', m.end()) != -1 else len(pkt) - 1)}

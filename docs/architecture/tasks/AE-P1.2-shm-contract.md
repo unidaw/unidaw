@@ -1447,7 +1447,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `1043817cb09815aed44de3be7b83a6dd3bd53f41`, A.0 SCRIPT BLOB `d85050c700929f0dd55cb75b52c3a1a504021e83`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `020b2273221dbfb48091241152046494045409fa`, A.0 SCRIPT BLOB `df26e139624f6382e623026e285eda5bde3dd596`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1526,6 +1526,18 @@ extractor count at its floor. `--prove-sweep-predicate` classifies a crafted-lin
 every spoof a reviewer has landed on the sweep's success test — a bare `OK (+` prefix, an unanchored
 tail, a wrong tag, a count the emitter cannot print, and a tag line with no separator.
 
+**NOTHING HERE READ AN ITEM AS MARKDOWN, so an edit could leave a bold run open and every check
+passed.** Editing item 38 at the predecessor SHA I replaced a sentence's opening clause and left its
+closing `**` behind: the body carried an odd number of delimiters, a lowercase orphan fragment, and
+a run a renderer closes wherever it next can — and the headline was intact, the counts summed, and
+the manifest published the broken text verbatim as `items[38].body`. codex-worker-1 found it by
+reading. Every check in this gate counted, matched or arithmetically verified; none of them looked
+at the syntax the document is written in. **The check is a DELIMITER-PARITY one and claims no more
+than that**: `**` runs are counted in the VISIBLE view, because a delimiter inside a code span is
+literal text rather than emphasis, and an odd count per item is refused. It cannot see a mis-NESTED
+pair, only an unmatched one — which is the defect an edit actually produces, and is the one that
+occurred. Run against the predecessor's packet it names item 38 and nothing else.
+
 **AN ITEM'S BLOCKING STATUS IS PARSED, not scanned, and that is a different property from being
 parsed ONCE.** Five copies of the predicate became one at the predecessor SHA; codex-worker-1 then
 broke the single copy three ways in one pass, and the three shapes name the three things a scan
@@ -1545,7 +1557,7 @@ only ADDS one is a no-op and reports BLIND correctly — a repaired opt-out prod
 tag — and it therefore adds the span AND breaks the real status, so the old scan reads the span as
 the status while the new parse names the malformed reach.
 
-**Controls.** One hundred thirty, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** One hundred thirty-two, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1566,7 +1578,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
@@ -2672,16 +2684,15 @@ One per line, numbered in document order, so the count is checkable. ELEVEN are 
     is a question about how this packet is consumed rather than about its text. I have deliberately
     not guessed; inventing that semantics is how this gate acquired an unbuildable oracle. Whoever
     rules must also add the cross-record control, since nothing currently fails when the two
-    disagree. **Scoping matters here and I got it wrong first: filed as `all`, it attached to
-    every gate and drove the acceptance-decidable set to empty — an item scoped `all` is a
-    claim about every gate, which this is not.** The item carries a PACKET kind marker although it is not a
-    blocker; the old rule made the marked set EQUAL to the blocker set, which erased the
-    work-kind of every open non-blocker. Kind and state are orthogonal — kind says what closes
-    an item, blocking says whether a gate waits on it — so every blocker now carries a kind
-    while a non-blocker may.
-    an item scoped "all" propagates to all — and that was the wrong verdict: this defect does not
-    leave any gate's acceptance criteria unmet, it makes a PLANNING field unreliable. The checker
-    telling me so is the derivation working.** PACKET work.
+    disagree. **Scoping matters here and I got it wrong twice, in opposite directions. Filed as
+    `all` and as a BLOCKER for one draft, it attached to every gate and drove the
+    acceptance-decidable set to empty — an item scoped `all` is a claim about every gate, and this
+    is not one: the defect leaves no gate's acceptance criteria unmet, it makes a PLANNING field
+    unreliable. Then, scoped correctly, it carried no kind marker, because the old rule made the
+    marked set EQUAL to the blocker set and erased the work-kind of every open non-blocker. Kind
+    and state are orthogonal — kind says what closes an item, blocking says whether a gate waits
+    on it — so every blocker carries a kind and a non-blocker may.** Both times the checker
+    refusing was the derivation working. PACKET work.
 
 # Provenance of this packet's own numbers
 
