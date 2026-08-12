@@ -329,8 +329,10 @@ versions and migrates them.
 **The Rust mirror is generated, not typed.** `ui/daw-bridge/build.rs` runs bindgen over
 `apps/shared_memory.h` and `apps/event_payloads.h`. Hand-written mirrors are ratcheted against the
 generated twins by `layout.rs::bindgen_matches_hand_written`, and `tools/contract_layout_check.sh`
-derives both sets from source and fails if anything in the intersection is unlisted. Field
-reordering within an identical size is still uncovered.
+derives both sets from source and fails if anything in the intersection is unlisted. It also
+reconstructs each mirror's field offsets from its Rust types and compares them to the offsets
+bindgen asserts, so a reorder that preserves the total size no longer passes. What remains
+uncovered is a swap of two fields of the SAME width, whose offsets are identical.
 
 **Derived, never stored twice.** The flat clip comes from placements and clips, slice extents from
 marker order, ADSR from the same envelope points, bar positions through the meter map.

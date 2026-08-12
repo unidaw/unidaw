@@ -895,7 +895,8 @@ add_test(NAME contract_layout
 )
 set_tests_properties(contract_layout PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
-# ...and the three negative controls that prove it still refuses what it was written to refuse.
+# ...and the nine controls that prove it still refuses what it was written to refuse — and, for
+# two of them, that it still stays quiet about what is not a defect.
 # Registered separately rather than folded into the check above so that a control going blind is
 # its own red test with its own name, instead of one line inside a passing check's output. Note
 # the file is *_selftest.sh, which check_registry_check's *_check.sh glob does not select — it is
@@ -906,9 +907,10 @@ add_test(NAME contract_layout_selftest
 set_tests_properties(contract_layout_selftest PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 # THE RUST SIDE'S OWN TESTS, which had never run here. contract_layout proves every mirror is
-# LISTED in bindgen_matches_hand_written; that test is what actually compares the bytes, and it
-# only ever ran under `cargo test`. So the byte-level guard was absent from the suite that gates
-# every commit — the list was checked and the thing the list points at was not.
+# LISTED in bindgen_matches_hand_written, and now reconstructs each mirror's offsets itself; that
+# test is what compares the sizes as the COMPILER sees them rather than as a script computes them,
+# and it only ever ran under `cargo test`. So the compiled guard was absent from the suite that
+# gates every commit — the list was checked and the thing the list points at was not.
 add_test(NAME bridge_layout
   COMMAND cargo test --manifest-path ${CMAKE_CURRENT_SOURCE_DIR}/ui/Cargo.toml -p daw-bridge
 )
@@ -1489,7 +1491,8 @@ set_tests_properties(block_edge_note PROPERTIES
 # THE COMMAND ENUM IS WRITTEN TWICE, IN TWO LANGUAGES. The Rust value is what goes on the wire and
 # the C++ value is what the engine switches on, so a disagreement is not a build error — it is a
 # command that silently does something else. contract_freshness_check says outright that it does
-# NOT check the mirrors agree; contract_layout_check pins sizes only; op_registry_check reads a
+# NOT check the mirrors agree; contract_layout_check pins layout, not meaning, and an enumerator
+# is meaning; op_registry_check reads a
 # different file. This is the pair every feature commit touches.
 # TRACK-TO-TRACK MIDI ROUTING, IN BOTH DIRECTIONS. The receive path had NO fixture at all — an
 # abort() at the top of the destination's inbound drain did not fire in any of the 189 registered

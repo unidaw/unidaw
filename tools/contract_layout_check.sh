@@ -57,7 +57,8 @@
 # Names are deliberately not compared; see the third section for why that trade was taken.
 #
 #   tools/contract_layout_check.sh              the check
-#   tools/contract_layout_check.sh --selftest   its three negative controls
+#   tools/contract_layout_check.sh --selftest   its nine controls: seven refusals, two that
+#                                               must NOT fire
 #
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

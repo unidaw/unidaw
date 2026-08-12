@@ -9,8 +9,9 @@
 #
 # NOTHING CHECKED THIS UNTIL NOW, and the gap was stated in the tree rather than hidden:
 # tools/contract_freshness_check.sh:31 says outright "WHAT THIS DOES NOT CHECK: that the two
-# mirrors AGREE". tools/contract_layout_check.sh pins struct SIZE and ALIGNMENT, which two equal-
-# width swapped fields survive. tools/op_registry_check.sh reads ui/daw-cli/src/main.rs, a
+# mirrors AGREE". tools/contract_layout_check.sh pins struct SIZE, ALIGNMENT and every field
+# OFFSET, all of which two equal-width swapped fields survive — its own control 4.same_width
+# asserts exactly that. tools/op_registry_check.sh reads ui/daw-cli/src/main.rs, a
 # different file. And this is the one pair that EVERY feature commit touches — measured across six
 # opcode-adding commits, all seven to ten files, all of them including these two.
 #
