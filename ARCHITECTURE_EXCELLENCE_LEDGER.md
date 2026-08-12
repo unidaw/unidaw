@@ -1666,3 +1666,14 @@ controls must be branch-isolated for stale/replay/duplicate/missing/changed inpu
 Resolve the current `DEMO.md` `> ask ...` versus `say()` two-leading-spaces
 output mismatch explicitly (marker mapping or raw-output fence; no silent trim).
 No implementation/status transition until this representation is reviewed.
+
+Option B schema proposal received. The DEMO whitespace mismatch is resolved by a
+pinned emitter: `say()` at `webstack.sh:37` defines `printf '  %s\\n'`, while the
+record stores the readable `> ` marker separately from quote text; validation
+derives the two-space prefix from the pinned emitter and compares exact raw output.
+The proposed record contains ordered quote occurrence/marker/text, raw stream
+observation and transcript digest, emitter/output-site pins, invocation context,
+`claimedReviewer` manual trust boundary, and tree/docs/script path+blob+realpath
+pins. Controls cover replay, stale, duplicate, missing, emitter, marker, exact
+count, and byte ceiling with branch isolation. Independent schema review is
+pending; no code/status transition.
