@@ -956,6 +956,12 @@ its own tag. Zero-terminal protection is unratcheted. Claim narrowing still
 says prose must agree/designate while admitting lexical spelling only. Open H1/
 trailing header/order and G0/G2/G3/M1/item37/Watchdog/G4 item26 remain.
 
+Owner successor `01c86f7` claims `g4-final-twice` now duplicates a nonterminal
+G2-A declaration and ratchets blind on parent logic, `g4-zero-terminal` is added,
+prose wording is consistently lexical synchronization, and number-word support
+extends to 150; 119 controls pass. Exact review is pending. One-space H1,
+trailing header, G4 order, item26 framing, and semantic-set blockers remain.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
