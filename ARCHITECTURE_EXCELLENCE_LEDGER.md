@@ -962,6 +962,13 @@ prose wording is consistently lexical synchronization, and number-word support
 extends to 150; 119 controls pass. Exact review is pending. One-space H1,
 trailing header, G4 order, item26 framing, and semantic-set blockers remain.
 
+Exact review of `8832007` is **BLOCKED**. Dedicated duplicate branch and both
+causal controls pass, but lexical `Final gate —` parsing only recognizes field
+start or period-space; an exact duplicate after exclamation/question sentence
+boundaries passes. Use a complete sentence-boundary grammar or typed field.
+Open H1/trailing garbage/G4 order and G0/G2/G3/M1/item37/Watchdog/G4 item26
+remain.
+
 Exact review of `01c86f7` is **BLOCKED**. Parent duplicate regression and
 zero-terminal coverage pass causally, but the duplicate branch itself is not
 isolated: deleting explicit duplicate failure leaves the control green via
