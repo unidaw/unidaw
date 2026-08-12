@@ -1390,6 +1390,18 @@ unchanged and no `undo.version_recorded`; sabotaging the policy exception must
 fail. No R11 closure until this test is committed; worker has uncommitted ratchet
 changes to resolve.
 
+Item-29 tombstone correction completed as `76f1672`: row-op handling now uses a
+single `liveTrackAt` rule, so never-added and removed tracks both produce
+`UnknownTrack` through the real `applySetRowOps` path; rowops rejection events
+and a negative restored-`trackAt` control prove the production behavior. Engine,
+pure, clip-helper, document-history, startup, and gesture tests pass. The
+correlation half remains deferred to the SHM-owned payload ticket.
+
+R11 execution note: the worker incorrectly treated the prior instruction as
+route (c); the lead decision remains route (a), extracting the pure
+`RecordVersion` decision and adding the partial-snapshot causal test before R11
+can be called complete.
+
 `12a0773` closes the R11 follow-ups: Undo/Redo ratchet census is now explicit,
 `-Werror=switch` enforces command exhaustiveness, end-to-end two-edit/undo/redo
 history behavior is covered, and the partial-snapshot append/redo-truncation
