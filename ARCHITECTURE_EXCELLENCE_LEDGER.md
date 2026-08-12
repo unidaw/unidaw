@@ -1782,6 +1782,13 @@ regression guard for the ping-pong invariant, with no host fixture or SHM
 changes. Single-plugin plane binding is explicitly deferred as a separate
 follow-on.
 
+Fleet discipline is explicit: completion messages trigger immediate refill.
+Current assignments are tracked here and on the bus: `codex-worker-1` reviews
+the reconciled HOST commits; `claude-worker-1` inventories CTRL02-B;
+`protocol_audit` reviews G4-02; and `claude-worker-2`, after completing G4-02,
+is refilled with a read-only SHM-01 ABI parity inventory. No worker is left
+idle after reporting completion unless all dependency-safe tickets are blocked.
+
 Automatic refill: `claude-worker-1`, now idle after HOST work, is assigned a
 read-only CTRL02-B inventory of command families still lacking CommandOutcome
 correlation. No wire/layout/product edits are authorized; the deliverable is
