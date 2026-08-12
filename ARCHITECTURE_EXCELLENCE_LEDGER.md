@@ -1774,6 +1774,14 @@ rename the lower state, model replay/bypass ordering coherently, and add
 production-helper transition tests plus a swapped-order negative control
 before generation work resumes.
 
+G4 inventory resolved the suspected adjacent-plugin aliasing: the host uses two
+distinct ping-pong buffers, and parity plus pre-clear ordering keeps every
+adjacent input separate from its output. The fixture plan is therefore
+rescoped. `claude-worker-2` is assigned P2-G4-02, a bounded arithmetic/property
+regression guard for the ping-pong invariant, with no host fixture or SHM
+changes. Single-plugin plane binding is explicitly deferred as a separate
+follow-on.
+
 The clip-helper diagnostic completed: 61 runs across four configurations,
 including the originating `084891f8` tree and a Debug build, all passed. The
 historical red is therefore NOT REPRODUCIBLE and remains unclassified; it must
