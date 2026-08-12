@@ -1331,6 +1331,14 @@ bounded scope/dependency/acceptance plan, and submit the transition for independ
 review; the owner may not self-approve. No unrelated product edits are authorized
 until P0.3 scope is explicit.
 
+Exact audit of `76f1672`: tombstone half PASS; item 29 remains blocked on the
+correlation/consumer contract. Production missing/removed paths now use
+`liveTrackAt` and emit `UnknownTrack`, with causal rowops-rejected tests and clean
+builds. Remaining issues are stale RowOps docs/value semantics, literal
+`sentBase=0` with no request/base identity or waiter, missing Rust reject-reason
+variants, and seven intentionally unconverted removed-track checks. These stay
+under the SHM-owned correlation ticket; the narrow tombstone fix is accepted.
+
 Second implementation slice landed as `e632f606`: HostController cleanup now
 uses `lstat`, only unlinks owned socket files, tolerates `ENOENT`, and refuses
 regular files/symlinks. `daw_engine` and `juce_host_process` build targets pass.
