@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '6a900ec8a9e38443aa4db11d4d0e2b6c7cec6e39'
+PREV_TIP     = 'a944df477b88c2bba6d98b623984da94191ad7c6'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -318,6 +318,18 @@ CONTROLS = {
  'owner-choice-count': ('The reviewer SHALL decide the expected verdict for a valid object',
                       'The reviewer SHALL confirm the expected verdict for a valid object', 1,
                       'OWNER-CHOICE-RESTATED'),
+ # A NEGATED DEMAND IS NOT A CHOICE, and the filter that was meant to say so never ran once.
+ 'choice-negated':   ('The reviewer SHALL choose the resume mechanism',
+                      'The register no longer says the reviewer SHALL choose the resume mechanism', 1,
+                      'OWNER-CHOICE-RESTATED'),
+ # A REPEATED ENTRY in the restatement is resolved by position and states nothing.
+ 'choice-dupe-said': ('**OWNER CHOICES (G0-A\u00d72, G0-B\u00d71,',
+                      '**OWNER CHOICES (G0-A\u00d7999, G0-A\u00d72, G0-B\u00d71,', 1,
+                      'OWNER-CHOICE-RESTATED'),
+ # A SECOND SCHEMA DECLARATION SPELLED WITH AN ENTITY renders identically to the first.
+ 'schema-entity-decoy': ('# A.0 — the gate this packet is decided by',
+                      'The canonical machine-readable source&#44; at `ae-p1.2-manifest/7`, is named '
+                      'twice.\n\n# A.0 — the gate this packet is decided by', 1, 'SCHEMA-UNSTATED'),
  # AIMED AT A GATE WITH EXACTLY ONE CHOICE. Aimed at G3 it went DEAD the moment G3 gained a second:
  # removing one of two leaves the gate in the population, so the restatement never moves. A control
  # over a SET must target a member whose removal empties its group.
@@ -2392,7 +2404,11 @@ _A0 = _A0[:_A0.find('\n# ', 3) if _A0.find('\n# ', 3) != -1 else len(_A0)]
 # to sit anywhere else — a reader finds two authorities and the checker reports one. backend named
 # it a release blocker. The count is taken over the whole document and the match over A.0's span,
 # so the declaration must be unique AND in its place, which are different properties.
-_SCHEMA_ANY = re.findall(r'canonical machine-readable source, at `(ae-p1\.2-manifest/\d+)`', unhid)
+# RENDERED, because a second declaration written `source&#44; at` renders identically and was not
+# counted, while a benign double-backtick literal was. The count must be over what a reader sees,
+# which is the same helper the status parser and the parity check already share.
+_SCHEMA_ANY = re.findall(r'canonical machine-readable source, at `(ae-p1\.2-manifest/\d+)`',
+                         _render(unhid)[0])
 _SCHEMA_ALL = re.findall(r'canonical machine-readable source, at `(ae-p1\.2-manifest/\d+)`', _A0)
 if len(_SCHEMA_ANY) != len(_SCHEMA_ALL):
     bad('SCHEMA-UNSTATED', f'{len(_SCHEMA_ANY)} manifest-version declarations in the document and '
@@ -2566,8 +2582,12 @@ pop_headings = [{'name': re.sub(r'^\*|\*\s*—\s*$', '', m.group(0)).strip(), 'l
 # abbreviation list would be the next widening, so the rule is grammatical instead: a terminator is a
 # period followed by whitespace and a CAPITAL or a bold marker, or end of text. `i.e. the` continues
 # in lowercase and is not one. codex-worker-1's probe.
+# `[A-Z]` UNDER `re.I` MATCHES LOWERCASE, so the capital-letter terminator I wrote to avoid an
+# abbreviation list matched `i.e. the` anyway and the reason still truncated. A case-insensitive
+# flag makes a case-based rule vacuous — the flag silently deleting the distinction the rule is
+# made of. The lookahead is case-SENSITIVE by inline flag; the verb stays insensitive.
 _CHOICE_RE = re.compile(r'\bSHALL\b[^.]{0,24}?\b(?:decide|rule|choose)\b.*?'
-                        r'(?:\.(?=\s+[A-Z*⟦])|\.\s*$)', re.I | re.S)
+                        r'(?:\.(?=\s+(?-i:[A-Z*⟦]))|\.\s*$)', re.I | re.S)
 _owner_choices = {}
 for _g in gate_hdr:
     _seg = unhid[unhid.find('\n# %s — ' % _g['gate']):]
@@ -2583,7 +2603,16 @@ for _g in gate_hdr:
         _stop = re.search(r'\n\n(?=\*\*|#|---)', _reg)
         _reg = _reg[:_stop.start()] if _stop else _reg
     for _c in _CHOICE_RE.finditer(_reg):
-        if _ST_NEG.search(_c.group(0)[:_c.group(0).lower().find('shall')]):
+        # THE NEGATOR IS BEFORE THE MATCH, not inside it. I searched the part of the match before
+        # its first `shall` — and every match STARTS at SHALL, so that slice is always empty and the
+        # filter never fired once. `no longer SHALL decide` typed a live choice out of a denial.
+        # AND THE SENTENCE START MUST USE THE SAME TERMINATOR THE EXTRACTOR DOES. `rfind('. ')`
+        # cannot see a period followed by a NEWLINE, so the span ran back past the previous sentence
+        # and picked up its `not` — dropping a live G3 choice. Two spellings of one boundary, in two
+        # lines of the same block.
+        _prev = [m.end() for m in re.finditer(r'\.\s', _reg[:_c.start()])]
+        _sstart = _prev[-1] if _prev else 0
+        if _ST_NEG.search(_reg[_sstart:_c.start()]):
             continue
         _owner_choices.setdefault(_g['gate'], []).append(
             'owner choice: ' + re.sub(r'\s+', ' ', _c.group(0)).strip())
@@ -2601,8 +2630,14 @@ else:
     # codex-worker-1's point that a set cannot protect record identity. The restatement carries a
     # count per gate. It still does not compare CONTENT, and this packet says so rather than
     # implying otherwise: the reasons themselves are checked by a reader.
-    _oc_claimed = {g: int(n) for g, n in re.findall(r'(' + GATE_ID + r')\u00d7(\d+)',
-                                                    _oc_said.group(1))}
+    _pairs = re.findall(r'(' + GATE_ID + r')\u00d7(\d+)', _oc_said.group(1))
+    # A DICT COMPREHENSION COLLAPSES DUPLICATES, so `G0-A×999, G0-A×2` kept the second and passed —
+    # the same defect as consuming item numbers by value against a counter, one population over.
+    _dupes = sorted({g for g, _ in _pairs if [x for x, _ in _pairs].count(g) > 1})
+    if _dupes:
+        bad('OWNER-CHOICE-RESTATED', f'the restatement names {_dupes} more than once; a repeated '
+                                     f'entry is resolved by position and states nothing')
+    _oc_claimed = {g: int(n) for g, n in _pairs}
     _oc_derived = {g: len(v) for g, v in _owner_choices.items()}
     if _oc_claimed != _oc_derived:
         bad('OWNER-CHOICE-RESTATED', f'{_oc_claimed} vs derived {_oc_derived}')
@@ -3565,12 +3600,24 @@ if '--prove-schema-guard' in sys.argv:
     # check nothing can control is worth exactly what its binding to production is worth.
     _L0 = {'ae-p1.2-manifest/x1': 'HASH0'}
     _base = {'gates': [{'id': 'G', 'a': 1, 'kind': ['x']}, {'id': 'H', 'a': 3, 'kind': ['y']}],
-             'counts': {'n': 1},
+             'counts': {'n': 1}, 'tags': ['a'],
              'rulings': [{'id': 'R1', 'named_at': [{'line': 1}]},
                          {'id': 'R2', 'named_at': [{'line': 2}]}]}
     def _case(cur, ver='ae-p1.2-manifest/x1', ledger=None, prev=None):
+        """Through the PRODUCTION ACTION, observed by whether a failure was RECORDED.
+
+        Calling `_schema_refusal` directly proved the predicate and not the guard: sabotaging the
+        `if msg:` inside `_schema_guard` left every case green, and a run marker proves invocation
+        rather than consequence. Both codex-worker-1 and backend named this, and it is the second
+        time this proof has been bound one layer short of where it needed to be. The observable is
+        the same one the run's verdict uses.
+        """
         led = dict(ledger or {ver: _shape_hash({**_base, 'schema': ver})})
-        return _schema_refusal(ver, _shape_hash({**cur, 'schema': ver}), led, prev) is not None
+        _n = len(fail)
+        _schema_guard(ver, _shape_hash({**cur, 'schema': ver}), led, prev)
+        _grew = len(fail) > _n
+        del fail[_n:]              # the proof's own cases are not the run's verdict
+        return _grew
     _h0 = _shape_hash({**_base, 'schema': 'ae-p1.2-manifest/x1'})
     _cases = [
         ('unchanged shape',        _case(_base),                                            False),
@@ -3595,15 +3642,28 @@ if '--prove-schema-guard' in sys.argv:
                                          prev={'@epoch': str(_LEDGER_EPOCH)}),               False),
         # codex-worker-1's scalar sibling, and backend's element-type union
         ('scalar in a record list',_case({**_base, 'rulings': _base['rulings'] + ['loose']}),  True),
-        ('scalar list type change',_case({**_base, 'counts': {'n': 1},
-                                          'tags': ['a']}) or _case({**_base, 'tags': [1]}),   True),
-        ('empty list is no evidence', _shape_hash({**_base, 'tags': [], 'schema': 'x'}) ==
-                                      _shape_hash({**_base, 'schema': 'x'}) is False,        False),
+        # `tags` is in the BASE so only its element TYPE differs — as an added key the first case
+        # was already a new-key failure and short-circuited the second, which codex-worker-1 caught.
+        ('scalar list type change',_case({**_base, 'tags': [1]}),                             True),
+        # THE UNION IS ACROSS OCCURRENCES: one record's list going empty is no evidence while a
+        # sibling still carries the type. Emptying the ONLY occurrence does change the union,
+        # which is correct and is a different case.
+        ('a record list empties',  _case({**_base, 'gates': [{'id': 'G', 'a': 1, 'kind': []},
+                                                    {'id': 'H', 'a': 3, 'kind': ['y']}]}),  False),
+        ('the only one empties',   _case({**_base, 'tags': []}),                            True),
     ]
     # THE PRODUCTION GUARD MUST HAVE RUN. Sabotaging the action left every case green while nothing
     # could refuse anything; the run's own invocation is the thing being proved reachable.
     if not _SCHEMA_GUARD_RUNS:
         print('  the production schema guard did not run'); sys.exit(1)
+    # AND ITS ACTION MUST BE LIVE, not merely called: a deliberate mismatch driven through the same
+    # guard has to RECORD a failure. A run marker proves invocation; this proves consequence.
+    _n = len(fail)
+    _schema_guard('ae-p1.2-manifest/x1', 'DELIBERATE-MISMATCH',
+                  {'ae-p1.2-manifest/x1': 'SOMETHING-ELSE'}, None)
+    if len(fail) == _n:
+        print('  the production guard recorded nothing for a deliberate mismatch'); sys.exit(1)
+    del fail[_n:]
     _fail = 0
     for _name, _got, _want in _cases:
         print(f'  {_name:28} refused={str(_got):5} expected={str(_want):5} '
@@ -3613,7 +3673,7 @@ if '--prove-schema-guard' in sys.argv:
     # itself takes. Disabling that branch now fails here.
     if _schema_refusal(_SCHEMA, _shape_hash(man), _SHAPE_LEDGER, _prev_ledger) is not None:
         print('  the live manifest is refused by its own guard'); sys.exit(1)
-    print('schema guard: 15 cases, deep typed shapes, ledger arms'
+    print('schema guard: 16 cases, deep typed shapes, ledger arms'
           if not _fail else 'schema guard FAILED')
     sys.exit(1 if _fail else 0)
 

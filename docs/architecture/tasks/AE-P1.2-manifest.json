@@ -120,6 +120,8 @@
   "census-wrong-file",
   "choice-adverb",
   "choice-compound",
+  "choice-dupe-said",
+  "choice-negated",
   "closed-count",
   "constraint-lost",
   "control-dupe",
@@ -226,6 +228,7 @@
   "ruling-state-adverb",
   "ruling-state-cited",
   "ruling-swallowed",
+  "schema-entity-decoy",
   "schema-unstated",
   "section-dupe",
   "section-indented",
@@ -282,7 +285,7 @@
   "census_rows": 9,
   "closed": 9,
   "commanded_claims": 32,
-  "controls": 170,
+  "controls": 173,
   "hand_ruled": 13,
   "items": 39,
   "open": 30,
@@ -571,7 +574,7 @@
    "non_gate_prerequisites": [],
    "planning_blocked_by": [],
    "planning_unknown_because": [
-    "owner choice: SHALL also rule on the self-deadlock: the fix class this gate admits requires `applyHostBypassStates` to stop taking `controllerMutex` at `:1116`, i.e."
+    "owner choice: SHALL also rule on the self-deadlock: the fix class this gate admits requires `applyHostBypassStates` to stop taking `controllerMutex` at `:1116`, i.e. a caller-holds contract or a lock-passing signature — which the predecessor did not state and which is a design decision, not a detail."
    ],
    "planning_unknown_from": [
     "G0-A",
