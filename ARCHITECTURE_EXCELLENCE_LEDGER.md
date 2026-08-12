@@ -803,6 +803,11 @@ the prior comment probe is classified as correctly changing the item. G4 member
 closures are inherited; 104 controls and extractor floor 43. Exact review is
 pending. G3 N/Watchdog/item37 oracle/M1/G0/G4 item26 remain gated.
 
+Owner successor `6a9cbbb` claims G4’s dependency list is now a typed list with
+duplicate and owner checks, and its count phrase is scoped to the gate’s own
+dependencies; five G4 controls and 106 total controls pass. Exact review is
+pending. G3 N/Watchdog/item37 oracle, M1, G0, and G4 item26 remain open.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
