@@ -1794,6 +1794,13 @@ read-only CTRL02-B inventory of command families still lacking CommandOutcome
 correlation. No wire/layout/product edits are authorized; the deliverable is
 disjoint follow-on ticket boundaries and acceptance tests.
 
+CTRL02-B inventory corrected the premise: the tree has `ClipOutcome`, not a
+generic `CommandOutcome`, and its `Unknown` currently defaults to applied.
+The worker is authorized to implement only CTRL02-B-1, a harmony ResyncNeeded
+reader/correlation slice for CLI/agent/sidecar, with forged-resync positive and
+negative tests and no wire/layout changes. Sampler-kit wait, batch outcome
+shape, and undo/redo remain separate or blocked follow-ons.
+
 The clip-helper diagnostic completed: 61 runs across four configurations,
 including the originating `084891f8` tree and a Debug build, all passed. The
 historical red is therefore NOT REPRODUCIBLE and remains unclassified; it must
