@@ -1316,6 +1316,15 @@ sole foundation owner for wire/layout files; `P2-CTRL-01`, `P2-HOST-01`,
 dependencies. Every lane must return a commit, focused tests, build evidence,
 and a clean merge boundary; no two lanes edit SHM/layout files concurrently.
 
+Governance incident recorded: the bus reported `AE-P0.3 [APPROVED]` while the
+ledger records P0.3 as BLOCKED and unassigned; a non-owner worker emitted the
+approval. Ledger state is authoritative, so that bus approval is revoked and no
+P0.3 transition is valid until an owner and reviewer are assigned. The bus also
+uses bracketed topic tags for coordination (`AE-CHANNEL`, `AE-BOOT`, `UNDO`) as
+well as ticket/state messages, causing false ambiguous/silent/untracked-ticket
+alarms. Ticket syntax and topic syntax must be separated before automation may
+derive state from bus messages.
+
 Second implementation slice landed as `e632f606`: HostController cleanup now
 uses `lstat`, only unlinks owned socket files, tolerates `ENOENT`, and refuses
 regular files/symlinks. `daw_engine` and `juce_host_process` build targets pass.
