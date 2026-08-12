@@ -1374,6 +1374,13 @@ unequal, append an unintended Undo-labeled version, and truncate redo. Keep the
 policy branch/static assertions and add a partial-snapshot negative control before
 claiming behavior protection is complete.
 
+R11 rationale correction: complete happy-path no-change comparison is only one
+  path. Code verification confirms `commit()` requires both document and plugin
+  equality, and policy `Version` also seeds empty history plus affects gesture
+  force-close/plugin capture. The partial-plugin-snapshot capture mechanism is
+  plausible but unverified; no universal claim is accepted until its dedicated
+  negative control exists.
+
 `P2-G1B-01` completed as `5261f88`: independently enumerates 7 request kinds,
 16 production send sites, and 6 readers plus the declared chain-snapshot
 no-reader case. Mirror/sender/reader registry checks, six sabotage controls,
