@@ -1611,6 +1611,16 @@ cross-file/function bindings, eval/indirect, missing paths, current-entry cost,
 and closure floor. Design accepted in principle; independent review is required
 before implementation. P0.3 remains BLOCKED.
 
+P0.3 closed-world implementation `02eb2d65` received for review, still no
+status transition. `ui-web/test/unit.mjs` now carries authority keys, exact
+transitive closure/path/blob accounting, in-root/non-symlink checks, all sixteen
+binding forms, fail-closed danger constructs, two-file/47,615-byte ceilings, and
+branch-isolated causal controls. The owner found early blob/ceiling assertions
+masked later branches; controls now repin prerequisites deliberately so each
+target branch is independently exercised. Suite is 157/159 with the same two
+pre-existing plugin failures. Independent review focuses on source-command
+lexical parsing and control self-masking.
+
 Independent design review conditionally passes the C1-C9 rule only as a
 closed-world, fail-closed contract—not exhaustive Bash inference. Required
 authority keys: entrypoint path/blob, variable, exact output span/template,
