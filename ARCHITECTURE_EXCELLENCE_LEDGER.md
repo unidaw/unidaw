@@ -1780,3 +1780,10 @@ historical red is therefore NOT REPRODUCIBLE and remains unclassified; it must
 not be closed as a flake. The worker was automatically refilled with a
 read-only P2-G4 adjacent multi-plugin ownership inventory/design, with no
 product or SHM edits.
+
+HOST-01 corrected step 1b landed as `afaf5b08`: the unobservable
+MappedAndBypassed claim was removed in favor of MappedAndDispatchable, and
+mirror state is orthogonal to readiness so replay can re-enter mid-render via
+`engine_render_track.cpp:554`. The worker withdrew the earlier startup-only
+fix after finding that third arming site. HOST-02a remains unaffected. Exact
+review of `afaf5b08` is now assigned to `codex-worker-1`; 02b/02c remain gated.
