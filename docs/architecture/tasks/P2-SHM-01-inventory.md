@@ -78,3 +78,58 @@ absence of `ready`, so the two Rust types cannot silently converge or diverge. T
 Related: AE-P1.2 item 35 (frozen packet) records the same third-type finding as PRODUCT/BLOCKING.
 This was measured independently and agrees on the shape; it does not agree that the hazard is
 established, because item 35 does not name the buffer either.
+
+## P2-SHM-02 STEP 1 ANSWERED: it is a SCRATCH BUFFER. No `ready` is required.
+
+**The trace, end to end, from current files:**
+
+    apps/engine_run_patcher_node.cpp:82    ctx.event_buffer = buffer.events.data();
+                                           ctx.event_capacity = buffer.events.size();
+                                           ctx.event_count = &buffer.count;
+    apps/engine_types.h:84-87              struct PatcherNodeBuffer {
+                                             std::array<daw::EventEntry, 1024> events{};
+                                             uint32_t count = 0;
+                                           };
+
+**It is a plain in-process array owned by the engine.** Not shared memory, not the multi-producer
+command ring. `count` is a bare `uint32_t` the patcher increments, not an atomic ring index, and the
+consumer is the engine itself on the same thread that called the node.
+
+**Nothing reads `ready` from it.** `grep -n "\.ready\|->ready"` over `engine_run_patcher_node.cpp`
+and `engine_produce_block.cpp` returns nothing. Publication here is `count`, not a per-slot flag.
+
+**So the whole-object store at `patcher_rust/src/lib.rs:158` is harmless.** It writes padding into
+bytes 60..64 of a slot whose consumer never looks there. **An explicit `ready` field in
+`patcher_rust`'s `EventEntry` is NOT required, and adding one would be answering a question nobody
+asked.**
+
+### THE INVARIANT THAT IS REAL, AND IS UNASSERTED
+
+The array's element type is `daw::EventEntry` — **the C++ 7-member one, with `ready`** — while the
+patcher stores through its own 6-member Rust type. That is safe only because both are exactly **64
+bytes**: the Rust store must land on the same stride the C++ array indexes by.
+
+**Nothing asserts that.** `git grep offset_of -- patcher_rust` returns nothing. If either type's
+size changed, the patcher would write at the wrong stride into an engine-owned array — silently, and
+in the audio path.
+
+### REVISED FOLLOW-ON, replacing the branch above
+
+**P2-SHM-02 is now a one-line assertion, not a field addition.** Add to `patcher_rust`:
+
+    const_assert_eq!(size_of::<EventEntry>(), 64);
+
+and a comment on that type naming which buffer it serves — `PatcherNodeBuffer::events`, an
+engine-owned scratch array gated on `count` — and stating that it deliberately has no `ready`
+because the ring's publication flag has no meaning here. **The comment is the more valuable half:**
+the next reader will ask exactly the question this document just spent two steps answering, and
+today neither file answers it.
+
+Negative control for the assertion: change the padding so the type is not 64 bytes and require the
+assert to fail. That is the whole test, and it pins the property that actually matters.
+
+### CORRECTION TO ITEM 35's FRAMING
+
+AE-P1.2 item 35 records this third type as PRODUCT and BLOCKING. On this trace **the missing `ready`
+is not a defect** — it is correct for the buffer it serves. What is missing is the SIZE assertion and
+the comment. The frozen packet cannot be edited; this is recorded here as the successor's finding.
