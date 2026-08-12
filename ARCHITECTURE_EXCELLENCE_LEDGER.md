@@ -1242,3 +1242,11 @@ missing runnable assertions. It reports 166 controls and schema /7; carried
 schema/choice claims were previously asserted closed, while G0-A/G0-B, R7/G4,
 item38, unclassified kinds, and subject-before-reference remain open. Exact audit
 is pending.
+
+Exact audit of `7c38e70`: four advertised fixes pass, overall BLOCKED. Fresh
+composed status with literal malformed continuation still clean-passes; indented
+duplicate gate headings evade column-zero section totality. Owner-choice parsing
+still truncates at `i.e.`, restates only gate IDs, and mis-types historical or
+telemetry prose. Schema still drops scalar record members/types and proof is not
+bound to production refusal. PASS9/item33, G0-A/G0-B, G4/R7, and G2/G3 semantic
+blockers remain.
