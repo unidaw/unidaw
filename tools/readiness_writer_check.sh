@@ -37,9 +37,12 @@
 # requests a restart the early returns may silently drop while leaving hostReady true.
 #
 # LIMITS, stated rather than implied.
-#   - Attribution is to TOP-LEVEL functions by brace depth, so the three writes inside main()'s
-#     scheduleHostRestart lambda are attributed to main(). Rule 2 covers that lambda by name; a write
-#     moved elsewhere inside main()'s 2000 lines would not be caught by rule 1 alone.
+#   - Attribution is to the innermost NAMED lambda if there is one, else the enclosing top-level
+#     function, both by brace depth. An UNNAMED lambda (the watchdog callbacks) is attributed to its
+#     function, because it has no name to allowlist. A write moved between two unnamed lambdas of the
+#     same function is therefore not caught by rule 1 — but each of those is the whole of its
+#     transition, so such a move would change what a lifecycle publishes and rule 1's counts would
+#     not shift. That case is left to review, and named here so it is not mistaken for covered.
 #   - The counts in rule 1 are a RATCHET, not a law. R3b collapses duplicate transitions and will
 #     change them deliberately. Drift in either direction fails: a write added is unlisted, and a
 #     write removed means a transition stopped publishing something.
@@ -99,12 +102,44 @@ def top_level_spans(lines):
         i += 1
     return out
 
-def enclosing(spans, ln):
+LAMBDA = re.compile(r'^\s*auto\s+([A-Za-z_]\w*)\s*=\s*\[')
+
+def named_lambda_spans(lines):
+    """(start, end, name) for each `auto NAME = [...]{...}`.
+
+    WHY THIS EXISTS. Attribution to top-level functions alone put all three of main()'s readiness
+    writes in one bucket called main() — and main() is over 2000 lines, so a write moved from
+    scheduleHostRestart to any other part of it kept the counts identical and passed. That is the
+    per-file counting defect this check was written to replace, surviving inside it at a coarser
+    grain. Unnamed lambdas (the watchdog callbacks, `[ptr = runtime]() {`) stay attributed to their
+    enclosing function: they have no name to allowlist, and they are already the whole of their
+    transition.
+    """
+    out, n = [], len(lines)
+    for i, l in enumerate(lines):
+        m = LAMBDA.match(l)
+        if not m:
+            continue
+        depth, k = 0, i
+        while k < n:
+            depth += lines[k].count('{') - lines[k].count('}')
+            if depth <= 0 and k > i:
+                break
+            k += 1
+        out.append((i + 1, k + 1, m.group(1)))
+    return out
+
+def enclosing(spans, ln, lams=()):
     best = None
     for a, b, name in spans:
         if a <= ln <= b and (best is None or (b - a) < (best[1] - best[0])):
             best = (a, b, name)
-    return best[2] if best else '<file scope>'
+    fn = best[2] if best else '<file scope>'
+    inner = None
+    for a, b, name in lams:
+        if a <= ln <= b and (inner is None or (b - a) < (inner[1] - inner[0])):
+            inner = (a, b, name)
+    return f'{fn}::{inner[2]}' if inner else fn
 
 files = [x for x in subprocess.run(['git', 'ls-files', 'apps/*.cpp', 'apps/*.h'],
                                    capture_output=True, text=True, cwd=ROOT).stdout.split()
@@ -115,25 +150,26 @@ for f in files:
     lines = open(f).read().splitlines()
     src[f] = lines
     spans = top_level_spans(lines)
+    lams = named_lambda_spans(lines)
     for i, l in enumerate(lines, 1):
         if l.strip().startswith('//'):
             continue                      # a comment naming a field is not a write
         for m in WRITE.finditer(l):
-            writes.append((f, i, m.group(1), enclosing(spans, i)))
+            writes.append((f, i, m.group(1), enclosing(spans, i, lams)))
 
 # ---- rule 1: the allowlist, keyed by (file, top-level function) with per-field counts ------------
 # Measured, not guessed. Each entry is one or more of the thirteen transitions in
 # docs/architecture/tasks/P2-HOST-R3-readiness-transaction.md.
 ALLOW = {
-  ('apps/daw_engine_main.cpp', 'main'):
-      {'active': 1, 'hostReady': 1, 'restartInFlight': 1},                 # scheduleHostRestart lambda
+  ('apps/daw_engine_main.cpp', 'main::scheduleHostRestart'):
+      {'active': 1, 'hostReady': 1, 'restartInFlight': 1},                 # restart requested
   ('apps/engine_chain_host.cpp', 'rebuildHostForChain'):
       {'active': 1, 'hostGaveUp': 1, 'hostReady': 1, 'needsRestart': 1},   # reconcile failed
   ('apps/engine_load_project.cpp', 'applyDocument'):
       {'active': 1, 'hostGaveUp': 1, 'hostReady': 1, 'needsRestart': 1},   # project closed
   ('apps/engine_master_render.cpp', 'runMasterRenderThread'):
       {'hostReady': 2, 'needsRestart': 2},                                 # master send / timeout
-  ('apps/engine_produce_block.cpp', 'produceBlock'):
+  ('apps/engine_produce_block.cpp', 'produceBlock::processTrack'):
       {'active': 1, 'hostReady': 1, 'needsRestart': 1},                    # dispatch failed
   ('apps/engine_producer_thread.cpp', 'runProducerThread'):
       {'active': 1},                                                       # progress observed
