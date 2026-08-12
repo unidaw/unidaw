@@ -1823,6 +1823,13 @@ for existing `ClipOutcome`/harmony results. `Unknown` must never imply Applied.
 This is design-only until independently reviewed; no wire/layout implementation
 is authorized under CTRL02-B-1.
 
+CTRL02-B-1 is formally BLOCKED: harmony `ResyncNeeded` carries no sender,
+command, or refused-base identity, and assigning meaning to reserved fields is
+a wire-contract change. The worker is refilled onto P2-CMD-00 design to unify
+correlation across refusal channels. SHM-01 is also refilled onto SHM-02's
+read-only buffer-identity trace for the patcher EventEntry; no edits are
+authorized until the buffer is proven gated versus scratch.
+
 Combined HOST review is BLOCKED by replay re-entry/lifecycle loss,
 non-transactional mapping/generation publication, generation-wrap ABA,
 contradictory readiness prose, and non-causal controls. HOST follow-on work and
