@@ -1666,6 +1666,16 @@ agent units, representative note/chord workflows, and diff cleanliness pass.
 Known unrelated merge-debt failures remain outside this slice; SHM/layout changes
 remain gated.
 
+Fleet dispatch after CTRL-01 completion:
+
+- `codex-worker-2` → `P2-CTRL-02`: replace counter-only success inference with
+  explicit correlated outcomes and unrelated-version negative tests.
+- `claude-worker-1` → `P2-HOST-01`: implement/design two-level readiness with
+  cold-start, relaunch, and circular-wait tests; stop for design review if a SHM
+  layout change is unavoidable.
+
+Both are active in isolated worktrees with commit/test/build deliverables.
+
 Option B design review is now PASS in principle under an explicit manual-attestation
 boundary. The implementation must record exact raw line bytes, stream/occurrence,
 transcript digest, encoding/newline/ANSI/completeness, argv/context/env/stdin/
