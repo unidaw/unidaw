@@ -4854,48 +4854,58 @@ const toolScriptFiles = () => readdirSync(join(PRESET_ROOT, 'tools'))
  */
 const VARIABLE_PATTERN = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}|([A-Za-z_][A-Za-z0-9_]*))/g;
 
-// The literal values a script assigns to one variable, and whether any assignment is DYNAMIC.
-// A variable fed by `$(...)`, `$?`, a read or an arithmetic expression cannot be enumerated — so a
-// template using it cannot PROVE that any particular line prints, and must not be used to accept
-// one. Saying "unprovable" is the honest answer; `.*` says "anything", which is the answer that
-// accepted every forgery.
-const assignedValues = (text, name) => {
-  const values = new Set();
-  let dynamic = false;
-  const re = new RegExp(`(?:^|\\n)\\s*(?:local\\s+|export\\s+)?${name}=(.*)`, 'g');
-  for (const m of text.matchAll(re)) {
-    const rhs = m[1].trim();
-    const single = rhs.match(/^'([^']*)'\s*(?:#.*)?$/);
-    const double = rhs.match(/^"([^"$`]*)"\s*(?:#.*)?$/);
-    const bare = rhs.match(/^([A-Za-z0-9_./-]+)\s*(?:#.*)?$/);
-    if (single) values.add(single[1]);
-    else if (double) values.add(double[1]);
-    else if (bare) values.add(bare[1]);
-    else dynamic = true;
-  }
-  return { values, dynamic };
-};
-
 // A script with its FULL-LINE COMMENTS removed. Prose about a message is not a message, and both
-// halves of this predicate were reading them: the verbatim branch accepted any sentence appearing
-// in a comment, and the template harvest picked up four `say "..."` occurrences that were somebody
-// explaining the code. A trailing comment on a code line is NOT stripped — a `#` inside a quoted
-// string is common in this corpus and cutting there would corrupt real output.
+// halves of this predicate were reading them. A trailing comment on a code line is NOT stripped —
+// a `#` inside a quoted string is common here and cutting there would corrupt real output.
 const codeOnly = (text) => text.split('\n')
   .filter((l) => !l.trimStart().startsWith('#'))
   .join('\n');
+
+/*
+ * THE EXPANSIONS A PERSON HAS READ AND CONFIRMED. This is an allow-list, not an inference.
+ *
+ * THREE ROUNDS OF INFERRING IT FROM THE SOURCE ALL LEAKED, each in the same family:
+ *
+ *   `.*` per variable          accepted 561/561 forged lines
+ *   "appears in the corpus"    accepted 561/561 again — PASS, true, 0 and main occur everywhere
+ *                              in 500KB of shell, so every variable looked as though it held them
+ *   "assigned in this script"  looked sound and is not. The assignment scanner only sees
+ *                              assignments at the START of a line, so `[ ... ] && UNMAPPED="$U"`
+ *                              at voice_telemetry_check.sh:147 is invisible and UNMAPPED appears
+ *                              to hold only the literal 0 it is initialised to. The line that
+ *                              prints it is guarded by `[ "$UNMAPPED" = "0" ] ||`, so the single
+ *                              value the model accepted is the one value that CANNOT print.
+ *
+ * Every round fixed the leak that was named and produced another of the same shape, because a
+ * regex over shell is a proxy for parsing shell. A sound answer needs control-flow semantics, which
+ * is out of proportion to a documentation check.
+ *
+ * So the model is narrow and exact instead: a quoted line is provable only if it needs no variable
+ * at all, or if every variable it needs is listed HERE with the expansions someone verified by
+ * reading the script. The list is one entry today because the runbook quotes one interpolated line.
+ * It is meant to stay small — an entry is a claim a person is making, and adding one without
+ * reading the script is the move this whole sequence exists to prevent.
+ */
+const VERIFIED_EXPANSIONS = {
+  // tools/webstack.sh:396,401 — a two-branch choice on whether a key resolves; both reachable,
+  // read on 2026-08-12. Nothing else assigns it, including inside a compound command.
+  CREDENTIAL_MODE: ['credential-free default', 'explicit credentialed mode'],
+};
 
 const scriptPrints = (scriptTexts, line) => {
   const texts = (Array.isArray(scriptTexts) ? scriptTexts : [scriptTexts]).map(codeOnly);
   const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   for (const text of texts) {
-    if (text.includes(line)) return true;  // printed verbatim by this script
+    if (text.includes(line)) return true;  // printed verbatim by this script, no expansion needed
     for (const tm of text.matchAll(/\b(?:say|echo)\s+"((?:[^"\\]|\\.)*)"/g)) {
       const template = tm[1];
       VARIABLE_PATTERN.lastIndex = 0;
       const names = [...template.matchAll(VARIABLE_PATTERN)].map((m) => m[1] || m[2]);
       if (!names.length) continue;
       if (template.replace(VARIABLE_PATTERN, '').trim().length <= 6) continue;
+      // Unverified variables make the template unprovable. "I cannot show this prints" is the
+      // honest answer; `.*` said "anything", and that is what accepted every forgery twice.
+      if (!names.every((n) => VERIFIED_EXPANSIONS[n])) continue;
       let pattern = '';
       let offset = 0;
       VARIABLE_PATTERN.lastIndex = 0;
@@ -4906,22 +4916,8 @@ const scriptPrints = (scriptTexts, line) => {
       pattern += escapeRegExp(template.slice(offset));
       const match = new RegExp(`^${pattern}$`).exec(line);
       if (!match) continue;
-      let ok = true;
-      for (let k = 0; k < names.length; k += 1) {
-        const slot = (match[k + 1] ?? '').trim();
-        const { values, dynamic } = assignedValues(text, names[k]);
-        if (dynamic) { ok = false; break; }            // cannot be enumerated, so cannot be proven
-        if (slot === '') {
-          // An empty expansion is only possible if the script never assigns the variable (it comes
-          // from the environment, and may be unset) or assigns it an empty value. Where every
-          // assignment is a non-empty literal, an empty slot asserts an expansion the script cannot
-          // produce — 36 of 943 variable occurrences are in that position.
-          if (values.size > 0 && ![...values].some((v) => v.trim() === '')) { ok = false; break; }
-          continue;
-        }
-        if (values.size === 0) { ok = false; break; }
-        if (![...values].some((v) => v.trim() === slot)) { ok = false; break; }
-      }
+      const ok = names.every((n, k) => VERIFIED_EXPANSIONS[n]
+        .some((v) => v.trim() === (match[k + 1] ?? '').trim()));
       if (ok) return true;
     }
   }
@@ -5023,24 +5019,23 @@ test('CONTROL: a REAL template skeleton with invented variable content IS caught
     + 'exactly what a runbook quoting a wrong path or a fabricated flag looks like.');
 
   /*
-   * TWO SUBSTITUTIONS ARE NOT FORGERIES, and they are asserted here rather than left out of the
-   * list — an omission is indistinguishable from an oversight, and choosing the substitutions that
-   * pass is the defect this control exists to catch.
+   * "0" USED TO BE ACCEPTED THREE TIMES AND THOSE THREE WERE IMPOSSIBLE. Under the inferred model
+   * they looked legitimate — their script assigns the literal 0 — and the independent review
+   * pointed out that the lines printing them are GUARDED by `[ "$VAR" = "0" ] ||`, so the one
+   * value the model accepted is the one value that cannot appear. The narrow model rejects all
+   * three, and this assertion is pinned at 0 rather than deleted so that a future acceptance has
+   * to be explained.
    *
-   *   "0"   three scripts literally assign 0 to the variable they print, so "0 SUITE(S) FAILED"
-   *         really is a line one of them prints. Accepting it is correct; the exact count is
-   *         pinned so that a FOURTH would have to be explained.
-   *   ""    a shell variable may legitimately expand to nothing, so the empty slot is skipped by
-   *         construction and every template matches. That is a property of shell, not a leak, and
-   *         it is why the empty string is not in the sweep above.
+   * The empty string is not in the sweep: a template whose variable is unverified is unprovable
+   * under this model, so an empty slot cannot make a line acceptable either.
    */
   const zeroAccepted = templates
     .map((tpl) => tpl.replace(VARIABLE_PATTERN, '0'))
     .filter((line) => scriptPrints(scripts, line));
-  assert.equal(zeroAccepted.length, 3,
-    `${zeroAccepted.length} templates accept "0" in every slot; 3 do so legitimately because their `
-    + 'script assigns that variable the literal 0. A different count means a script gained or lost '
-    + 'such an assignment, or the predicate changed — both need a person, not a new number here.');
+  assert.equal(zeroAccepted.length, 0,
+    `${zeroAccepted.length} templates accept "0" in every slot. Under the verified-expansion model `
+    + 'that should be none: 0 is not a listed expansion of any verified variable, and the three '
+    + 'that used to pass were guarded lines that could never print it.');
 });
 
 /*
