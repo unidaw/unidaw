@@ -95,11 +95,13 @@ void runRestartWorker(RestartWorkerDeps& deps) {
       {
         std::lock_guard<std::mutex> lockMirror(runtime->paramMirrorMutex);
         if (!runtime->paramMirror.empty()) {
-          enqueueMirrorReplay(*runtime);
+          enqueueMirrorReplay(*runtime, daw::kMirrorCauseRelaunch);
         } else {
-          runtime->mirrorPending.store(false, std::memory_order_release);
-          runtime->mirrorPrimed.store(false, std::memory_order_release);
-          runtime->mirrorGateSampleTime.store(0, std::memory_order_release);
+          // Nothing to restore, so THIS cause is answered — but clearing the whole state here used to
+          // discard a replay an overflow had armed, and the parameters the ring dropped were never
+          // re-sent. Retire only what this branch answers. An outstanding overflow still primes, gates
+          // and clears normally: engine_ui_publish.cpp writes the gate even when no params follow it.
+          retireMirrorCause(*runtime, daw::kMirrorCauseRelaunch);
         }
       }
       if (runtime->watchdog) {

@@ -211,9 +211,15 @@ void runProducerThread(ProducerThreadDeps& deps) {
           std::cout << "Mirror check: track " << runtime->trackId
                     << ", gateTime=" << gateTime
                     << ", ack=" << ack << std::endl;
-          if (ack >= gateTime) {
-            runtime->mirrorPending.store(false, std::memory_order_release);
-            std::cout << "Mirror completed for track " << runtime->trackId << std::endl;
+          // A NON-ZERO GATE IS REQUIRED. Arming zeroes the gate, so without this an arm landing
+          // between the primed check and here would be retired by the PREVIOUS replay's ack.
+          if (daw::mirrorReplayAnswered(gateTime, ack)) {
+            // Retire only the causes this replay actually answered. A cause armed after the params
+            // were written is not covered by this acknowledgement and must survive it.
+            const uint32_t answered = runtime->mirrorCauses.load(std::memory_order_acquire);
+            retireMirrorCause(*runtime, static_cast<daw::MirrorCause>(answered));
+            std::cout << "Mirror completed for track " << runtime->trackId
+                      << " (causes " << answered << ")" << std::endl;
           }
         }
       }

@@ -416,7 +416,7 @@ bool restartTrackHost(TrackLifecycleDeps& deps, TrackRuntime& runtime,
     {
       std::lock_guard<std::mutex> lockMirror(runtime.paramMirrorMutex);
       if (!runtime.paramMirror.empty()) {
-        enqueueMirrorReplay(runtime);
+        enqueueMirrorReplay(runtime, daw::kMirrorCauseRelaunch);
         std::cout << "Enqueueing mirror replay for track " << runtime.trackId
                   << " with " << runtime.paramMirror.size() << " params" << std::endl;
       } else {

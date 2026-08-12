@@ -21,6 +21,8 @@
 // Both hosts already up, neither track producing yet. That is the state the pump asks from.
 #include "apps/engine_audio_callback.h"
 #include "apps/engine_readiness_level.h"
+#include "apps/engine_mirror_replay.h"
+#include "apps/engine_rt_helpers.h"
 
 #include <atomic>
 #include <cstdio>
@@ -285,9 +287,102 @@ void testFirstLaunchLeavesNeverLaunchedBehind() {
   CHECK(daw::hostEverLaunched(daw::nextHostGeneration(fresh)));
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// MIRROR REPLAY RE-ENTRY (HOST-R2). Four cases backend named, each a state the shared bit could not
+// represent. These drive the PRODUCTION functions on a real TrackRuntime — enqueueMirrorReplay and
+// retireMirrorCause out of engine_rt_helpers.cpp, the same symbols the engine calls — so the tests
+// cannot pass while the engine diverges. No host, no device, no sleep.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+// The engine primes in engine_produce_block.cpp:508-513 (write params, then set primed) and the gate
+// is published inside writeMirrorParams (engine_ui_publish.cpp:144, forced to at least 1). Stated once
+// here in that order so a test cannot accidentally prime without a gate.
+void primeLikeTheEngine(TrackRuntime& rt, uint64_t gate) {
+  rt.mirrorGateSampleTime.store(gate == 0 ? 1 : gate, std::memory_order_release);
+  rt.mirrorPrimed.store(true, std::memory_order_release);
+}
+
+// 1. PENDING + PRIMED, THEN RE-ARMED. The intent loss: render_track's `if (!mirrorPending)` dropped an
+// overflow arriving during a relaunch replay, so the parameters the ring dropped were never re-sent.
+void testOverflowDuringPrimedRelaunchReplayIsNotDropped() {
+  TrackRuntime rt;
+  enqueueMirrorReplay(rt, daw::kMirrorCauseRelaunch);
+  primeLikeTheEngine(rt, 4096);
+  CHECK(rt.mirrorPrimed.load());
+
+  enqueueMirrorReplay(rt, daw::kMirrorCauseOverflow);
+  CHECK((rt.mirrorCauses.load() & daw::kMirrorCauseRelaunch) != 0u);  // the first intent survives
+  CHECK((rt.mirrorCauses.load() & daw::kMirrorCauseOverflow) != 0u);  // and the second is recorded
+  CHECK(rt.mirrorPending.load());
+  CHECK(!rt.mirrorPrimed.load());                    // a fresh write is required
+  CHECK(rt.mirrorGateSampleTime.load() == 0);        // and a fresh gate
+}
+
+// 2. AN OLD ACKNOWLEDGEMENT MUST NOT ANSWER A RE-ARMED REPLAY. Arming zeroes the gate, so `ack >= 0`
+// would retire the new request on the previous replay's ack.
+void testAStaleAckCannotAnswerAReArmedReplay() {
+  TrackRuntime rt;
+  enqueueMirrorReplay(rt, daw::kMirrorCauseRelaunch);
+  primeLikeTheEngine(rt, 1000);
+  CHECK(daw::mirrorReplayAnswered(rt.mirrorGateSampleTime.load(), 1000));   // the real ack answers
+
+  enqueueMirrorReplay(rt, daw::kMirrorCauseOverflow);
+  CHECK(!daw::mirrorReplayAnswered(rt.mirrorGateSampleTime.load(), 1000));  // the same ack must not
+  CHECK(!daw::mirrorReplayAnswered(rt.mirrorGateSampleTime.load(), 99999)); // nor any, gate unpublished
+  primeLikeTheEngine(rt, 2000);
+  CHECK(!daw::mirrorReplayAnswered(rt.mirrorGateSampleTime.load(), 1999));  // below the new gate
+  CHECK(daw::mirrorReplayAnswered(rt.mirrorGateSampleTime.load(), 2000));   // at it
+}
+
+// 3. RETIRING IS PER-CAUSE. The other direction of the same loss: restart_worker's empty-mirror branch
+// cleared pending/primed/gate outright, so a relaunch with nothing to restore discarded an overflow
+// replay. Retiring the relaunch cause must leave the overflow armed AND still primed — the params were
+// already written, and a needless re-prime would re-send everything for no reason.
+void testRetiringOneCauseLeavesTheOtherArmed() {
+  TrackRuntime rt;
+  enqueueMirrorReplay(rt, daw::kMirrorCauseOverflow);
+  primeLikeTheEngine(rt, 512);
+  enqueueMirrorReplay(rt, daw::kMirrorCauseRelaunch);   // relaunch lands during the replay
+  primeLikeTheEngine(rt, 700);
+
+  retireMirrorCause(rt, daw::kMirrorCauseRelaunch);     // the empty-mirror branch
+  CHECK(rt.mirrorPending.load());                            // the overflow is NOT discarded
+  CHECK(rt.mirrorCauses.load() == daw::kMirrorCauseOverflow);
+  CHECK(rt.mirrorPrimed.load());                             // and its written params still stand
+  CHECK(rt.mirrorGateSampleTime.load() == 700);
+
+  retireMirrorCause(rt, daw::kMirrorCauseOverflow);     // now the last cause goes
+  CHECK(!rt.mirrorPending.load());
+  CHECK(!rt.mirrorPrimed.load());
+  CHECK(rt.mirrorGateSampleTime.load() == 0);
+}
+
+// 4. LIFECYCLE REUSE. The clearing loop retires the causes it OBSERVED, so a cause armed after the
+// params were written survives the acknowledgement; and a reused runtime starts clean, or a stale
+// cause makes the producer wait for an acknowledgement nobody will send.
+void testAckRetiresOnlyTheObservedCausesAndReuseStartsClean() {
+  TrackRuntime rt;
+  enqueueMirrorReplay(rt, daw::kMirrorCauseRelaunch);
+  primeLikeTheEngine(rt, 300);
+  const uint32_t observed = rt.mirrorCauses.load();          // what the clearing loop sampled
+  enqueueMirrorReplay(rt, daw::kMirrorCauseOverflow);   // arrives after that sample
+  retireMirrorCause(rt, static_cast<daw::MirrorCause>(observed));
+  CHECK(rt.mirrorPending.load());                            // the later cause outlives the ack
+  CHECK(rt.mirrorCauses.load() == daw::kMirrorCauseOverflow);
+
+  TrackRuntime fresh;
+  CHECK(fresh.mirrorCauses.load() == daw::kMirrorCauseNone);
+  CHECK(!fresh.mirrorPending.load());
+}
+
 }  // namespace
 
 int main() {
+  testOverflowDuringPrimedRelaunchReplayIsNotDropped();
+  testAStaleAckCannotAnswerAReArmedReplay();
+  testRetiringOneCauseLeavesTheOtherArmed();
+  testAckRetiresOnlyTheObservedCausesAndReuseStartsClean();
   testGenerationIsStrictlyIncreasing();
   testGenerationWrapSkipsZero();
   testFirstLaunchLeavesNeverLaunchedBehind();

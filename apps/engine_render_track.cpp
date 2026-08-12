@@ -550,9 +550,11 @@ bool renderTrack(RenderTrackDeps& deps,
           if (midiDropped) {
             runtime.ringStdPanicPending.store(true, std::memory_order_release);
           }
-          if (!runtime.mirrorPending.load(std::memory_order_acquire)) {
-            enqueueMirrorReplay(runtime);
-          }
+          // UNCONDITIONAL. The `if (!mirrorPending)` this replaces dropped an overflow that arrived
+          // while a relaunch replay was in flight: that replay would complete, and the parameters the
+          // ring dropped were never re-sent. Arming is re-entrant, so both causes are recorded and one
+          // replay serves both.
+          enqueueMirrorReplay(runtime, daw::kMirrorCauseOverflow);
         };
         auto flushPendingNoteOffs = [&](uint64_t sampleTime,
                                         uint32_t currentBlockId) {

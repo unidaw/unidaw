@@ -30,13 +30,29 @@ daw::ResolvedPitch quantizePitch(const daw::ScaleRegistry& registry, uint8_t pit
   return daw::quantizeToScale(pitch, harmony.root, *scale);
 }
 
-void enqueueMirrorReplay(TrackRuntime& runtime) {
+void enqueueMirrorReplay(TrackRuntime& runtime, daw::MirrorCause cause) {
   if (runtime.isAuxChild.load(std::memory_order_acquire)) {
     return;
   }
+  // RE-ENTRANT. Arming while a replay is already pending ADDS the cause and forces a re-prime: the
+  // in-flight replay's acknowledgement must not answer a request that arrived after it was written.
+  // A replay writes every mirrored parameter, so one re-armed replay serves both causes.
+  runtime.mirrorCauses.fetch_or(static_cast<uint32_t>(cause), std::memory_order_acq_rel);
   runtime.mirrorGateSampleTime.store(0, std::memory_order_release);
   runtime.mirrorPending.store(true, std::memory_order_release);
   runtime.mirrorPrimed.store(false, std::memory_order_release);
+}
+
+void retireMirrorCause(TrackRuntime& runtime, daw::MirrorCause cause) {
+  const uint32_t before =
+      runtime.mirrorCauses.fetch_and(~static_cast<uint32_t>(cause), std::memory_order_acq_rel);
+  const uint32_t remaining = before & ~static_cast<uint32_t>(cause);
+  if (remaining != 0u) {
+    return;  // somebody else is still waiting on this replay; leave it armed and primed
+  }
+  runtime.mirrorPending.store(false, std::memory_order_release);
+  runtime.mirrorPrimed.store(false, std::memory_order_release);
+  runtime.mirrorGateSampleTime.store(0, std::memory_order_release);
 }
 
 uint64_t tickDeltaToSamples(uint64_t tickDelta, long double samplesPerTick) {

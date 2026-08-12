@@ -57,13 +57,43 @@ because we just relaunched" from "params outstanding because the ring overflowed
 lifecycle (`pending → primed → cleared`) is shared by both, so a relaunch arriving during an overflow
 replay loses one of them.
 
-**HOST-R2** — separate the two causes. Two arming reasons, one lifecycle each, with the clearing loop
-(`engine_producer_thread.cpp:198-216`) able to say which it cleared. Engine-local; no layout.
-*Acceptance*: arm for overflow, then relaunch before the ack — both must complete, and the test must
-fail if either is silently dropped. That is the case a single bit cannot represent, so it is the test
-that proves the separation rather than describing it.
-*Depends on* nothing. This is the foundation the level model needs, and it should land **before** any
-third readiness level is attempted.
+**HOST-R2** — LANDED. Separated by cause, not by lifecycle. `TrackRuntime::mirrorCauses` is a
+`MirrorCause` bitmask; arming ORs a cause in and forces a re-prime; retiring clears **one** cause and
+leaves the replay armed if another remains. One re-entrant lifecycle, because a replay writes every
+mirrored parameter and therefore subsumes any earlier request — two parallel lifecycles would have been
+two writers of the same parameters.
+
+**The design note above was half the defect.** Implementing it surfaced a fourth site, and it fails in
+the *opposite* direction:
+
+| site | what it did | which intent it lost |
+|---|---|---|
+| `engine_render_track.cpp:553` | `if (!mirrorPending)` before arming | an **overflow** during a relaunch replay |
+| `engine_restart_worker.cpp:100` | empty mirror → `pending/primed/gate := 0` by hand | a **relaunch** discarding an overflow replay |
+
+The first is the one this ticket named. The second retires state it does not own: a track with nothing
+to restore answered its own question and took somebody else's replay with it. Neither is visible from
+the other's site, and a ticket written from one would have shipped as a fix while the inverse stood —
+the same shape as the subset finding that named one function and hid in its inverse.
+
+*Delivered*: `apps/engine_mirror_replay.h` (the cause enum and the answered-gate predicate, no state of
+its own — an earlier draft carried a parallel state machine and the tests drove **that**, a second copy
+that would pass while the engine diverged); the two transitions in `engine_rt_helpers.cpp`; four call
+sites converted; the clearing loop retires only the causes it observed, so a cause armed after the
+params were written survives the acknowledgement.
+
+*Controls*, each fired against a passing baseline and restored:
+
+- four unit controls in `engine_readiness_tests` — arming overwrites instead of accumulating (5 assertions
+  fail), a zero gate answers any ack (2), retiring one cause clears the lot (4), retiring drops `primed`
+  while a cause remains (1). Distinct counts, so no two controls are testing the same assertion.
+- three call-site controls on `tools/mirror_replay_check.sh` — restore the guard, restore the hand-clear,
+  drop the cause argument. **The unit tests pass under all three**: they drive the helpers, so they
+  cannot see a call site, and that is why the check exists rather than being implied by them.
+
+*Not done, and named*: `Watchdog::check()` still has no production call site, so a wedged replay on a
+down host is detected by nothing. That is a separate ticket, not a gap in this one.
+*Does not need* the generation transaction, so R3 stays unopened by this work.
 
 ## Blocker 3 — mapping + generation + readiness is not a transaction
 
@@ -110,8 +140,8 @@ passes, the new one must fail. That mutation is the control, and it is the one I
 ## Order and what it costs
 
 ```
-HOST-R2  replay lifecycle        no deps      ← must be first; everything else assumes it
-HOST-R1  prologue               no deps      ← can land any time, doc-only
+HOST-R2  replay lifecycle        no deps      ← LANDED; everything else assumes it
+HOST-R1  prologue               no deps      ← LANDED, doc-only
 HOST-R3  the transaction        needs R2
 HOST-R4  64-bit epoch           needs R3
 HOST-R5  production-bound check needs R3

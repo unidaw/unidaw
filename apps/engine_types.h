@@ -404,6 +404,11 @@ struct TrackRuntime {
   // Bumped alongside the global wherever this track's clips change.
   std::atomic<uint32_t> trackClipVersion{0};
   std::atomic<bool> removed{false};
+  // WHY a replay is outstanding, as a MirrorCause bitmask (apps/engine_mirror_replay.h). Non-zero is
+  // the pending condition; mirrorPending below is kept in step with it so the existing readers do not
+  // each have to learn the bitmask. Two causes arm this independently and a branch that answers one
+  // must not retire the other — see engine_mirror_replay.h for the two losses that came of sharing.
+  std::atomic<uint32_t> mirrorCauses{0};
   std::atomic<bool> mirrorPending{false};
   std::atomic<uint64_t> mirrorGateSampleTime{0};
   std::atomic<bool> mirrorPrimed{false};

@@ -24,6 +24,7 @@
 #include <optional>
 #include <vector>
 
+#include "apps/engine_mirror_replay.h"
 #include "apps/engine_types.h"
 #include "apps/harmony_timeline.h"
 #include "apps/patcher_graph.h"
@@ -60,7 +61,12 @@ daw::ResolvedPitch quantizePitch(const daw::ScaleRegistry& registry, uint8_t pit
 // mirror params to, so setting mirrorPending on it arms a flag that the priming and clearing
 // loops — both gated on hostReady — can never service. The producer then wedges into mirrorOnly
 // permanently: nothing observable says why, the engine simply stops emitting.
-void enqueueMirrorReplay(TrackRuntime& runtime);
+void enqueueMirrorReplay(TrackRuntime& runtime, daw::MirrorCause cause);
+
+// Retire ONLY `cause`. The replay stays pending if another cause is still outstanding. This is the
+// operation the restart worker's empty-mirror branch needed and did not have: it cleared the whole
+// state to answer its own question and took an overflow replay with it.
+void retireMirrorCause(TrackRuntime& runtime, daw::MirrorCause cause);
 
 // ---------------------------------------------------------------- THE RENDER BLOCK'S ARITHMETIC
 //
