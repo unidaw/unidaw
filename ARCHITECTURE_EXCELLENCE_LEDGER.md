@@ -1006,6 +1006,12 @@ ratcheted: deleting the guard leaves the full sweep green, and direct exit
 bypasses the evaluator. The path needs structured failure recording/control.
 G0-A/B, G2-A/B, G3 N/M1/item37/Watchdog, and G4 item26 contradictions remain.
 
+Owner successor `c72a273` claims the indented-H1 guard now records through
+`bad()` before continuing, with `section-indented` ratcheting and 124 controls;
+deleting the guard goes blind. It treats the remaining semantic set as the sole
+open work: G0-A/B, G2-B, G3 N/M1/item37/Watchdog, and G4/item26. Exact review is
+pending.
+
 Exact review of `01c86f7` is **BLOCKED**. Parent duplicate regression and
 zero-terminal coverage pass causally, but the duplicate branch itself is not
 isolated: deleting explicit duplicate failure leaves the control green via
