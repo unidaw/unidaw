@@ -1830,6 +1830,13 @@ correlation across refusal channels. SHM-01 is also refilled onto SHM-02's
 read-only buffer-identity trace for the patcher EventEntry; no edits are
 authorized until the buffer is proven gated versus scratch.
 
+SHM-02 trace resolved the ambiguity: patcher Rust `EventEntry` targets the
+engine-owned, count-gated `PatcherNodeBuffer::events` scratch array, not shared
+memory; `ready` is correctly absent. The remaining invariant is a 64-byte
+element stride matching C++. `claude-worker-2` is authorized to add only the
+Rust size assertion, explicit buffer/publication comment, and negative drift
+control—no wire/layout change.
+
 Combined HOST review is BLOCKED by replay re-entry/lifecycle loss,
 non-transactional mapping/generation publication, generation-wrap ABA,
 contradictory readiness prose, and non-causal controls. HOST follow-on work and
