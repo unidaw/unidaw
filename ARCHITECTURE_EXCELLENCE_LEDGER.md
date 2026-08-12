@@ -1378,8 +1378,17 @@ R11 rationale correction: complete happy-path no-change comparison is only one
   path. Code verification confirms `commit()` requires both document and plugin
   equality, and policy `Version` also seeds empty history plus affects gesture
   force-close/plugin capture. The partial-plugin-snapshot capture mechanism is
-  plausible but unverified; no universal claim is accepted until its dedicated
-  negative control exists.
+ plausible but unverified; no universal claim is accepted until its dedicated
+ negative control exists.
+
+Final R11 audit confirms the causal gap: existing static assertions and ordinary
+undo/redo e2e cover only complete snapshot equality. Policy `None` is required
+for empty-history seeding, gesture force-close/plugin capture, and partial cursor
+snapshots that can acquire a newly available blob. Required test: seed a partial
+snapshot, perform real Undo with blob recovery, assert history size/cursor/redo
+unchanged and no `undo.version_recorded`; sabotaging the policy exception must
+fail. No R11 closure until this test is committed; worker has uncommitted ratchet
+changes to resolve.
 
 `P2-G1B-01` completed as `5261f88`: independently enumerates 7 request kinds,
 16 production send sites, and 6 readers plus the declared chain-snapshot
