@@ -386,6 +386,37 @@ void runRowOpsRefusal(Fixture& f, ClipEditDeps& deps, uint32_t trackId,
   handleSetRowOps(rowops, entry, header, daw::UiCommandType::SetRowOps);
 }
 
+// THE REFUSAL REASON FROM PRODUCTION, not injected. The tests below stubbed applySetRowOps and
+// handed it the reason they wanted — so they asserted what the HANDLER does with a reason and never
+// what the ENGINE decides one is. That hid the tombstone defect completely: a removed track really
+// yields UnknownNote from production, because `trackAt` returns the tombstone and the search over
+// the cleared runtime finds nothing, while the injected test said UnknownTrack. codex-worker-1 and
+// backend both named it. This drives the real applySetRowOps.
+void testRowOpsReasonsComeFromProduction() {
+  Fixture f;
+  auto deps = f.deps();
+  TrackRuntime& rt = f.addTrack(2);
+  rt.trackClipVersion.store(5, std::memory_order_release);
+
+  daw::RowOpEdit edit{};
+  daw::UiClipRejectReason reason = daw::UiClipRejectReason::None;
+
+  // A TRACK THAT WAS NEVER ADDED.
+  reason = daw::UiClipRejectReason::None;
+  CHECK(!applySetRowOps(deps, /*trackId=*/9, /*clipId=*/1, /*noteId=*/1, edit,
+                        /*recordUndo=*/false, reason));
+  CHECK(reason == daw::UiClipRejectReason::UnknownTrack);
+
+  // A REMOVED TRACK. Its slot is TOMBSTONED and kept, so `trackAt` hands back a live pointer to a
+  // cleared runtime — this reported UnknownNote before `liveTrackAt`, telling the caller their
+  // note was gone when what was gone was the track.
+  rt.removed.store(true, std::memory_order_release);
+  reason = daw::UiClipRejectReason::None;
+  CHECK(!applySetRowOps(deps, /*trackId=*/2, /*clipId=*/1, /*noteId=*/1, edit,
+                        /*recordUndo=*/false, reason));
+  CHECK(reason == daw::UiClipRejectReason::UnknownTrack);
+}
+
 void testRowOpsRefusalReportsTheEngineVersion() {
   Fixture f;
   auto deps = f.deps();
@@ -439,6 +470,7 @@ int main() {
   testForkOwnedClip();
   testEditScope();
   testCurrentClipVersionForReportsTheTrackCounter();
+  testRowOpsReasonsComeFromProduction();
   testRowOpsRefusalReportsTheEngineVersion();
 
   if (g_fail != 0) {

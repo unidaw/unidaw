@@ -314,7 +314,12 @@ bool applySetRowOps(ClipEditDeps& deps, uint32_t trackId, uint32_t clipId, daw::
   auto& tracks = deps.engineState.trackTable.tracks;
   auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
 
-    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
+    // `liveTrackAt`, not `trackAt`: a REMOVED track is tombstoned and its slot kept, so `trackAt`
+    // returns a pointer to a cleared runtime. This searched it, found no note, and reported
+    // UnknownNote — telling the caller their note is gone when what is gone is the track. It also
+    // put this path at odds with `currentClipVersionFor` and `requireMatchingClipVersion`, which
+    // both treat removed as absent, so one command had two answers to "is this track there".
+    TrackRuntime* runtime = daw::engine::liveTrackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
       DAW_EVENT("rowops.rejected")
           .field("track", trackId)
