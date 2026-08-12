@@ -988,6 +988,12 @@ bang/question terminators are independently ratcheted (`122` controls). Exact
 review is pending. Open-header suffix, one-space H1, G4 order, item26 framing,
 and semantic-set blockers remain.
 
+Exact review of `92ae74c` is **BLOCKED overall**. The narrowed ASCII convention
+and independent question/bang controls pass (122/122), but canonical gate
+status remains contradictory: G0-A/B, G2-A/B, G3 N/M1/item37/Watchdog, and G4
+item26. Checker limits persist: trailing Open-header garbage, one-space H1
+AttributeError, and G4 order set-only.
+
 Exact review of `01c86f7` is **BLOCKED**. Parent duplicate regression and
 zero-terminal coverage pass causally, but the duplicate branch itself is not
 isolated: deleting explicit duplicate failure leaves the control green via
