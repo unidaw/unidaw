@@ -1342,3 +1342,11 @@ Idle fleet slots assigned:
 
 Both slices are disjoint from the SHM foundation and must return commit, tests,
 and build evidence.
+
+`P2-WDOG-01` completed as `ec077d5`: authored observation-based eviction bound
+N=3, units/drift checks, exact transition tests, and six sabotage checks all pass;
+no SHM/layout/schema files touched. It also found that production has no
+`Watchdog::check()` call, so the bound is currently inert. This is explicitly
+split into a follow-up wiring ticket (`P2-WDOG-02`) and is not claimed as a
+completed eviction behavior change. The PASS-4 timing/observation semantics must
+be resolved before wiring it.
