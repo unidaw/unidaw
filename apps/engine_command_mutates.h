@@ -39,6 +39,43 @@ namespace daw::engine {
 // document still has to be captured; what changes is whether a new step appears.
 enum class UndoPolicy { None, Version, Amend };
 
+// WHAT THE RECORDING BRACKET DOES WITH A POLICY — extracted so it can be ASKED.
+//
+// This decision lived inside the destructor of a `struct RecordVersion` declared local to
+// handleUiEntry, so nothing could construct it and nothing could test it. That mattered when
+// codex-worker-1 refuted my account of R11: I could show the policy is inert on the happy path
+// (delete the guard, the ratchet check still passes) and could NOT show the path where it is not,
+// because reaching the bracket meant building HandleUiEntryDeps — 24 sub-dependency structs, no
+// fixture in the tree. backend chose extraction over building that fixture.
+//
+// A PURE FUNCTION OF FOUR INPUTS, so the causal chain is two testable links instead of one
+// end-to-end run nobody can arrange:
+//   Skip   -> `commit` is NEVER CALLED, so no version appends and no redo tail is truncated.
+//   Commit -> `commit` decides, and it appends when the document OR THE PLUGIN SNAPSHOT differs
+//             (engine_document_history_tests proves that half).
+// Together those say what the end-to-end test would: with UndoPolicy::None a partial snapshot that
+// later fills in cannot append an Undo-labelled version, and with Version it can.
+enum class RecordAction { Skip, Amend, Commit };
+
+constexpr RecordAction recordActionFor(UndoPolicy policy, bool haveHistory, bool haveCapture,
+                                       bool amendForGesture) {
+  if (policy == UndoPolicy::None || !haveHistory || !haveCapture) {
+    return RecordAction::Skip;
+  }
+  // MID-GESTURE COMMANDS AMEND: the drag's first command opened the step and every one after it
+  // rewrites that step, so a 1000-command knob drag is ONE undo step holding the final value.
+  if (policy == UndoPolicy::Version && amendForGesture) {
+    return RecordAction::Amend;
+  }
+  // AN AUDITION KEEPS THE HISTORY HONEST WITHOUT ADDING TO IT: the swap must not consume a step,
+  // but the cursor's version still has to follow the live document or the next undo flips the
+  // placement back as collateral.
+  if (policy == UndoPolicy::Amend) {
+    return RecordAction::Amend;
+  }
+  return RecordAction::Commit;
+}
+
 // The audition swap is the only Amend today. Kept as its own function rather than a second
 // switch-complete classification, so there is one place that decides and nothing to drift apart.
 constexpr UndoPolicy commandUndoPolicy(daw::UiCommandType type);

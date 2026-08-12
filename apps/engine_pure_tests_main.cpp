@@ -579,6 +579,55 @@ static_assert(daw::engine::commandUndoPolicy(daw::UiCommandType::Redo) ==
                   daw::engine::UndoPolicy::None,
               "same for redo");
 
+// THE CAUSAL LINK R11 WAS MISSING. My negative control showed the policy guard is inert on the
+// happy path and I wrote that it is not load-bearing — a universal claim from one path.
+// codex-worker-1 refuted it: `commit` appends when the document OR THE PLUGIN SNAPSHOT differs, so
+// where the cursor's snapshot is PARTIAL and a later capture fills it in, a policy of Version would
+// append an Undo-labelled version and DESTROY THE REDO TAIL. UndoPolicy::None prevents that by
+// never reaching `commit` at all.
+//
+// TWO LINKS, EACH TESTABLE, TOGETHER CAUSAL:
+//   here            None -> Skip, so `commit` is never called
+//   history tests   a partial-snapshot difference alone makes `commit` append and truncate
+// The end-to-end version needs a plugin that refuses and then answers, which no fixture provides —
+// and reaching the bracket at all needed a 24-struct HandleUiEntryDeps. This is the route backend
+// chose over both.
+void testRecordActionSkipsTheHistoryVerbs() {
+  using daw::engine::RecordAction;
+  using daw::engine::recordActionFor;
+  using daw::engine::UndoPolicy;
+
+  // THE LINK ITSELF: a history verb never reaches `commit`, whatever the snapshot holds, and
+  // whatever a gesture is doing. `commit` is where a partial snapshot would append.
+  for (bool gesture : {false, true}) {
+    CHECK(recordActionFor(UndoPolicy::None, /*haveHistory=*/true, /*haveCapture=*/true, gesture) ==
+          RecordAction::Skip);
+  }
+  // AND THE SABOTAGE ARM: with the history verbs mapped to Version — the change a bare bool-flip
+  // of commandMutatesDocument would have made — the same inputs reach Commit, which is the call
+  // that appends and truncates.
+  CHECK(recordActionFor(UndoPolicy::Version, true, true, /*amendForGesture=*/false) ==
+        RecordAction::Commit);
+
+  // THE REST OF THE TABLE, so the assertion above is about the POLICY and not about the function
+  // returning Skip broadly.
+  CHECK(recordActionFor(UndoPolicy::Version, true, true, /*amendForGesture=*/true) ==
+        RecordAction::Amend);
+  CHECK(recordActionFor(UndoPolicy::Amend, true, true, false) == RecordAction::Amend);
+  CHECK(recordActionFor(UndoPolicy::Amend, true, true, true) == RecordAction::Amend);
+  // NO HISTORY OR NO CAPTURE IS ALSO SKIP — the two null guards the destructor had inline, kept
+  // in the decision rather than left behind in the caller where a second reader would re-derive.
+  CHECK(recordActionFor(UndoPolicy::Version, /*haveHistory=*/false, true, false) ==
+        RecordAction::Skip);
+  CHECK(recordActionFor(UndoPolicy::Version, true, /*haveCapture=*/false, false) ==
+        RecordAction::Skip);
+
+  // AND THE POLICY THE HISTORY VERBS ACTUALLY HAVE, so this test fails if someone maps them to
+  // Version — which is the regression the whole of R11 is about.
+  CHECK(daw::engine::commandUndoPolicy(daw::UiCommandType::Undo) == UndoPolicy::None);
+  CHECK(daw::engine::commandUndoPolicy(daw::UiCommandType::Redo) == UndoPolicy::None);
+}
+
 void testHistoryVerbsMutateButOpenNoStep() {
   using daw::engine::commandMutatesDocument;
   using daw::engine::commandUndoPolicy;
@@ -607,6 +656,7 @@ void testHistoryVerbsMutateButOpenNoStep() {
 }
 
 int main() {
+  testRecordActionSkipsTheHistoryVerbs();
   testHistoryVerbsMutateButOpenNoStep();
   testDocumentHasPerDeviceGraphs();
   testSamplerReasonFor();
