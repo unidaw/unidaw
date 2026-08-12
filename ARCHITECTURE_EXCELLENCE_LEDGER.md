@@ -1759,6 +1759,12 @@ pre-threshold failed-relaunch visibility, and UI presentation). No policy is
 invented prematurely; WDOG-02 observability must land first so the policy is
 verifiable.
 
+HOST-02a implementation completed at `c77bbd75` and is review-gated. It adds
+engine-side host generation across four launch/connect sites with three
+deliberately paired bumps, zero-wrap protection, and no SHM/layout/wire or
+reader behavior changes. Build and focused tests pass; `codex-worker-1` is
+performing exact independent review before 02b/02c may begin.
+
 Independent HOST-01 Step 1 review is BLOCKED semantically (scaffolding/build
 passes). The accessor incorrectly maps `hostReady=true, mirrorPending=false`
 to `MirrorComplete`, despite restart publishing readiness before replay is
