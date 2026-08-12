@@ -1284,3 +1284,27 @@ branch in `_schema_guard()`; removing that branch leaves the run marker and all
 170 proof controls green. Remaining parser/heading totality and owner-choice
 issues are also not phase-ready. Required proof must exercise the same observable
 production action (for example via isolated subprocess/injected mismatch).
+
+## P1.2 exit decision — implementation begins
+
+The packet is frozen as a governance artifact, not a release gate. We stop
+iterating on prose/checker repairs and carry the remaining findings as owned ADR
+tickets. No SHM layout/schema cutover is authorized until its ticket has a focused
+design review and production-bound test.
+
+Implementation queue:
+
+- `AE-IMPL-IPC-001` — landed `c1c27fd`: reject empty/overlong AF_UNIX paths in
+  both endpoints; retain build evidence and add focused regression coverage.
+- `AE-ADR-SHM-001` — protocol/schema guard and generated-layout redesign; owner
+  backend lead; blocked on explicit ADR and production-bound refusal tests.
+- `AE-ADR-SHM-002` — command/result correlation, reliable state recovery, and
+  ring semantics; owner backend lead; no layout edits until SHM-001 is approved.
+- `AE-IMPL-ENGINE-001` — select the next disjoint engine correctness fix from
+  the audited findings; owner backend implementation worker; must include a
+  focused test and build result.
+
+Exit criteria for this phase: every remaining P1.2 finding is represented by an
+ADR/ticket with owner, scope, dependency, and acceptance test; implementation may
+proceed on disjoint code, while schema/ring changes remain gated. This is the
+formal transition to P2 implementation preparation.
