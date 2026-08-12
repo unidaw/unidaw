@@ -924,6 +924,12 @@ terminal and cross-checks graph identity against prose (`g4-final-rename`), with
 pending. Open-heading/prefix, order/reason, item26, and G0/G2/G3/M1/item37/
 Watchdog semantics remain open.
 
+Exact review of `ea2d08f` is **BLOCKED**. Terminal cardinality and refusal pass,
+but graph/prose agreement remains lexical: explicit negation (`not Final gate`)
+passes as agreement. Require a positive unique grammar or typed G4 identity.
+Indented Open-section crashes, trailing header garbage, G4 order, and G0/G2/G3/
+M1/item37/Watchdog/G4 item26 contradictions remain.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
