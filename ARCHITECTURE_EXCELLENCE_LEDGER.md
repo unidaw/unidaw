@@ -1390,6 +1390,15 @@ unchanged and no `undo.version_recorded`; sabotaging the policy exception must
 fail. No R11 closure until this test is committed; worker has uncommitted ratchet
 changes to resolve.
 
+`12a0773` closes the R11 follow-ups: Undo/Redo ratchet census is now explicit,
+`-Werror=switch` enforces command exhaustiveness, end-to-end two-edit/undo/redo
+history behavior is covered, and the partial-snapshot append/redo-truncation
+mechanism has a causal test. It also fixed a serious test-hygiene defect:
+`engine_document_history_tests_main.cpp` used bare `assert()` and all 14 checks
+were compiled out under `RelWithDebInfo`/`NDEBUG`; they now use non-disableable
+checks with nonzero failure. Production host refusal/recovery triggering remains
+unproven, and item-29 tombstone handling is still open.
+
 `P2-G1B-01` completed as `5261f88`: independently enumerates 7 request kinds,
 16 production send sites, and 6 readers plus the declared chain-snapshot
 no-reader case. Mirror/sender/reader registry checks, six sabotage controls,
