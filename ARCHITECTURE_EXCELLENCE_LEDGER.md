@@ -994,6 +994,12 @@ status remains contradictory: G0-A/B, G2-A/B, G3 N/M1/item37/Watchdog, and G4
 item26. Checker limits persist: trailing Open-header garbage, one-space H1
 AttributeError, and G4 order set-only.
 
+Owner successor `d669217` claims indented H1 now exits with named
+`OPEN-SECTION-MISSING`, header lines are fullmatched with a suffix control, and
+123 controls pass. It leaves the semantic set as the remaining blocker; bang/
+question controls include unrelated diagnostics, the field-start arm is
+untested, and G4 ordering remains unbound. Exact review is pending.
+
 Exact review of `01c86f7` is **BLOCKED**. Parent duplicate regression and
 zero-terminal coverage pass causally, but the duplicate branch itself is not
 isolated: deleting explicit duplicate failure leaves the control green via
