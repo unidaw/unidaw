@@ -1386,6 +1386,16 @@ branch guards; `${MODE:-fallback}` defaults are mishandled; and template
 population still asserts only `>=500`, allowing 61 templates to disappear. The
 two plugin-resolution failures remain proven pre-existing. No P0.3 transition.
 
+Owner successor `a7c9bc19` abandons shell inference after the UNMAPPED false-positive
+finding and moves to an explicit `VERIFIED_EXPANSIONS` allowlist. Three prior fixes
+are carried from `8f6aa735`: comments stripped in both branches, empty expansions
+require script permission, and template population floor raised to 561. The old
+literal-zero positives are removed. Only one interpolated expansion (CREDENTIAL_MODE)
+is currently admitted; dynamic/unassigned variables are conservatively unprovable.
+Controls fail if the verified list is emptied or widened. Suite is 152/154 with
+the same two pre-existing plugin failures. No transition proposed; independent
+review must attack list provenance and source/line evidence.
+
 Exact audit of `76f1672`: tombstone half PASS; item 29 remains blocked on the
 correlation/consumer contract. Production missing/removed paths now use
 `liveTrackAt` and emit `UnknownTrack`, with causal rowops-rejected tests and clean
