@@ -901,6 +901,10 @@ moving the exact count after a blank line clean-passes. Mutable Final-gate prose
 still skips all G4 validation. Spelling/order/reason and Open-section/header
 gaps remain; G2/G3/G4/G0/M1/item37 semantics are unchanged.
 
+Supplemental exact run confirms `85f50c0` full sweep 114/114 and all proofs
+pass; the BLOCKED verdict is unchanged. The blank-boundary mismatch and mutable
+Final-gate selector remain the decisive fail-opens.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
