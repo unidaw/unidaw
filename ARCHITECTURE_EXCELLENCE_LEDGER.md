@@ -982,6 +982,12 @@ boundary control (reverting `[.!?]` to `[.!]` leaves all controls green). Define
 the limited ASCII grammar explicitly or parse punctuation/quotes. Open suffix/
 indented H1/order and G0/G2/G3/M1/item37/Watchdog/G4 item26 blockers remain.
 
+Owner successor `92ae74c` claims the sentence-boundary claim is replaced by an
+explicit local ASCII convention with documented accepted/missed shapes, and
+bang/question terminators are independently ratcheted (`122` controls). Exact
+review is pending. Open-header suffix, one-space H1, G4 order, item26 framing,
+and semantic-set blockers remain.
+
 Exact review of `01c86f7` is **BLOCKED**. Parent duplicate regression and
 zero-terminal coverage pass causally, but the duplicate branch itself is not
 isolated: deleting explicit duplicate failure leaves the control green via
