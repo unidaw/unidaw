@@ -34,6 +34,11 @@ void closeFd(int& fd) {
 }
 
 bool connectSocket(int& fd, const std::string& path) {
+  if (path.empty() || path.size() >= sizeof(sockaddr_un::sun_path)) {
+    std::cerr << "HostController: socket path is empty or too long (max "
+              << (sizeof(sockaddr_un::sun_path) - 1) << " bytes)" << std::endl;
+    return false;
+  }
   fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0) {
     std::cerr << "HostController: socket() failed: " << std::strerror(errno) << std::endl;
@@ -69,6 +74,12 @@ HostController::~HostController() { disconnect(); }
 
 bool HostController::launch(const HostConfig& config) {
   disconnect(); // Clean up any existing connection
+
+  if (config.socketPath.empty() || config.socketPath.size() >= sizeof(sockaddr_un::sun_path)) {
+    std::cerr << "HostController: refusing invalid socket path (max "
+              << (sizeof(sockaddr_un::sun_path) - 1) << " bytes)" << std::endl;
+    return false;
+  }
 
   // Ensure old socket is gone so waitForSocket actually waits for the new one
   ::unlink(config.socketPath.c_str());

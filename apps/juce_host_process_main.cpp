@@ -151,6 +151,11 @@ std::string makeShmName() {
 }
 
 int createServerSocket(const std::string& path) {
+  if (path.empty() || path.size() >= sizeof(sockaddr_un::sun_path)) {
+    std::cerr << "socket path is empty or too long (max "
+              << (sizeof(sockaddr_un::sun_path) - 1) << " bytes)\n";
+    return -1;
+  }
   int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0) {
     return -1;
