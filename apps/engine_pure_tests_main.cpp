@@ -16,6 +16,7 @@
 //   - findOrMintEnvelope must not match an LFO that shares the target
 //   - ensureDefaultModSet must NOT mint for a named-but-absent id
 #include "apps/engine_pure.h"
+#include "apps/engine_command_mutates.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -556,7 +557,57 @@ void testPlacementReachSaturates() {
 
 }  // namespace
 
+// THE HISTORY VERBS: what they CHANGE and whether they open a STEP are two questions, and one
+// bool was answering both by lying about the first.
+//
+// `commandMutatesDocument(Undo)` returned false with the comment "no document state" while
+// `handleUndo` calls `applyDocument` and replaces the entire ProjectDocument. G2-A's arbitrated
+// population is derived from that predicate, so the inconsistency was in the thing the gate
+// depends on. Open item 32, RULED (R11).
+//
+// THESE ARE constexpr, so the assertions are also static_asserts — a regression cannot compile.
+// Written as CHECKs too, because a static_assert that someone deletes leaves nothing behind, and
+// the run reports which pairing broke rather than which line failed to compile.
+static_assert(daw::engine::commandMutatesDocument(daw::UiCommandType::Undo),
+              "Undo replaces the document via applyDocument");
+static_assert(daw::engine::commandMutatesDocument(daw::UiCommandType::Redo),
+              "Redo replaces the document exactly as Undo does");
+static_assert(daw::engine::commandUndoPolicy(daw::UiCommandType::Undo) ==
+                  daw::engine::UndoPolicy::None,
+              "a step for the undo is how a history eats itself");
+static_assert(daw::engine::commandUndoPolicy(daw::UiCommandType::Redo) ==
+                  daw::engine::UndoPolicy::None,
+              "same for redo");
+
+void testHistoryVerbsMutateButOpenNoStep() {
+  using daw::engine::commandMutatesDocument;
+  using daw::engine::commandUndoPolicy;
+  using daw::engine::UndoPolicy;
+
+  // THE PREDICATE NOW SAYS WHAT IT NAMES.
+  CHECK(commandMutatesDocument(daw::UiCommandType::Undo));
+  CHECK(commandMutatesDocument(daw::UiCommandType::Redo));
+
+  // AND BEHAVIOUR IS UNCHANGED, which is the whole point of the separation: the history verbs
+  // still open no step. If flipping the bool had been the whole change, Ctrl-Z would have started
+  // pushing a step for itself and this is the assertion that would have caught it.
+  CHECK(commandUndoPolicy(daw::UiCommandType::Undo) == UndoPolicy::None);
+  CHECK(commandUndoPolicy(daw::UiCommandType::Redo) == UndoPolicy::None);
+
+  // THE THREE OTHER ANSWERS STILL LAND WHERE THEY DID, so this change is bounded to the two verbs:
+  //   a command that changes nothing saved                     -> None
+  //   a command that changes what EXISTS                       -> Version
+  //   the audition swap, which changes only what you are hearing -> Amend
+  CHECK(!commandMutatesDocument(daw::UiCommandType::TogglePlay));
+  CHECK(commandUndoPolicy(daw::UiCommandType::TogglePlay) == UndoPolicy::None);
+  CHECK(commandMutatesDocument(daw::UiCommandType::WriteNote));
+  CHECK(commandUndoPolicy(daw::UiCommandType::WriteNote) == UndoPolicy::Version);
+  CHECK(commandMutatesDocument(daw::UiCommandType::SwapPlacementClip));
+  CHECK(commandUndoPolicy(daw::UiCommandType::SwapPlacementClip) == UndoPolicy::Amend);
+}
+
 int main() {
+  testHistoryVerbsMutateButOpenNoStep();
   testDocumentHasPerDeviceGraphs();
   testSamplerReasonFor();
   testErrorScopeName();

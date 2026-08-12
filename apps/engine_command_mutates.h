@@ -55,8 +55,18 @@ constexpr bool commandMutatesDocument(daw::UiCommandType type) {
       return false;
     case daw::UiCommandType::DeleteNote:
       return true;
-    case daw::UiCommandType::Undo:  // no document state
-      return false;
+    // UNDO AND REDO REPLACE THE WHOLE DOCUMENT, so they are not "no document state" — `handleUndo`
+    // calls `applyDocument`. This said false with that comment while doing exactly the opposite of
+    // what the comment claimed, and G2-A's arbitrated population is derived from this predicate, so
+    // it was a live inconsistency in the thing the gate depends on rather than a misleading name.
+    // Open item 32, RULED (R11).
+    //
+    // BEHAVIOUR IS UNCHANGED, and it is `commandUndoPolicy` that holds it: a history verb mutates
+    // the document and must NOT open a step, which is exactly the case the enum below exists for
+    // and which a bool could never express. Every consumer goes through the policy; nothing reads
+    // this bool directly.
+    case daw::UiCommandType::Undo:
+      return true;
     case daw::UiCommandType::WriteHarmony:
       return true;
     case daw::UiCommandType::DeleteHarmony:
@@ -67,8 +77,8 @@ constexpr bool commandMutatesDocument(daw::UiCommandType type) {
       return true;
     case daw::UiCommandType::SetTrackHarmonyQuantize:
       return true;
-    case daw::UiCommandType::Redo:  // no document state
-      return false;
+    case daw::UiCommandType::Redo:  // replaces the document, exactly as Undo does — see above
+      return true;
     case daw::UiCommandType::SetLoopRange:  // no document state
       return false;
     case daw::UiCommandType::SetAutomationTarget:
@@ -342,6 +352,14 @@ constexpr const char* commandLabel(daw::UiCommandType type) {
 // it is on the audition list.
 constexpr UndoPolicy commandUndoPolicy(daw::UiCommandType type) {
   if (!commandMutatesDocument(type)) {
+    return UndoPolicy::None;
+  }
+  // THE HISTORY VERBS THEMSELVES. Undo and Redo replace the document — so the predicate above says
+  // true, which is what it names — and they must not open a step, because a step for the undo is
+  // how a history eats itself. They were kept out by CLAIMING not to mutate, which put the
+  // behaviour and the classification in one bool and made the bool lie; the separation is the
+  // same one the audition swap already needed.
+  if (type == daw::UiCommandType::Undo || type == daw::UiCommandType::Redo) {
     return UndoPolicy::None;
   }
   // SwapPlacementClip alone. Fork and ClearPlacementAlternate create and destroy drafts, which is
