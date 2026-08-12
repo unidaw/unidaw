@@ -838,6 +838,12 @@ first line and exactly-one-section is enforced (`open-section-two`), with 111
 controls and extractor floor 42. Order/reason fidelity and stale G4 labels are
 explicitly unaddressed. Exact review is pending.
 
+Exact review of `d1a87b` is **BLOCKED**. Narrow G4 malformed/two-phrase/local
+controls pass, but missing-close members are invisible; first-list historical
+shadows and count phrases can decoy; member order/reasons are unbound and stale;
+the header is unanchored and multiple Open sections are accepted. G2-B, G3
+N/M1/item37/Watchdog, G4 planning, and G0-A/B remain blocked.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
