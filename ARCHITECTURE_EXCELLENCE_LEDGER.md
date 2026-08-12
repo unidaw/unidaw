@@ -1447,6 +1447,19 @@ and a negative restored-`trackAt` control prove the production behavior. Engine,
 pure, clip-helper, document-history, startup, and gesture tests pass. The
 correlation half remains deferred to the SHM-owned payload ticket.
 
+Tombstone control correction `876eaf52`: the fixture now supplies a harmless
+snapshot-store stub, so restoring the old `trackAt` path reaches the real
+`UnknownNote` result instead of throwing `std::bad_function_call`. The mutant
+fails exactly the `reason == UnknownTrack` assertion; restored `liveTrackAt`
+passes. This is the causal negative control originally claimed by `76f1672`.
+
+Follow-up documentation qualifications are recorded: `UndoPolicy::None` means
+do-not-record rather than “changes nothing saved”; the pluginless two-undo ratchet
+does not detect a Version mutant; `haveCapture` names document capture; RowOps
+false-result wording is stale; and the R11/local-sequence test claim must not be
+described as the actual recording bracket. Host refuse-then-answer remains
+unproven.
+
 R11 execution note: the worker incorrectly treated the prior instruction as
 route (c); the lead decision remains route (a), extracting the pure
 `RecordVersion` decision and adding the partial-snapshot causal test before R11
