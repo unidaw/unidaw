@@ -5095,7 +5095,23 @@ test('every VERIFIED_EXPANSIONS record is true of the script it cites', () => {
     // CARDINALITY. Any assignment to this variable anywhere in the file, including
     // `[ ... ] && VAR=...`, must be one of the cited ones. A new arm added later silently widens
     // what this check accepts, and that is exactly the "silent widen" a value list cannot see.
-    const assignRe = new RegExp(`(?:^|[;&|(]|\\s)(?:local\\s+|export\\s+)?${rec.variable}=`);
+    // EVERY WAY SHELL CAN BIND A NAME, not every way it can look like `VAR=`. The predecessor of
+    // this regex matched only `VAR=` and so missed `[ ... ] && VAR="$U"`, which is how a guarded
+    // impossible value survived two rounds. I probed the successor against sixteen forms before
+    // trusting it and it missed six — read, read -r, printf -v, array element, arithmetic, and a
+    // for/while loop variable. Each of those binds the name as surely as an assignment does, and a
+    // detector that cannot see them lets an entry silently widen.
+    const v = rec.variable;
+    const bindsRe = new RegExp([
+      `(?:^|[;&|({]|\\s)(?:local\\s+|export\\s+|declare\\s+|typeset\\s+)?${v}=`,  // VAR= in any position
+      `(?:^|[;&|({]|\\s)${v}\\[[^\\]]*\\]=`,                                        // VAR[i]=
+      `\\bread\\s+(?:-[A-Za-z]+\\s+)*(?:[A-Za-z_][A-Za-z0-9_]*\\s+)*${v}\\b`,      // read [-r] ... VAR
+      `\\bprintf\\s+-v\\s+${v}\\b`,                                                 // printf -v VAR
+      `\\b(?:mapfile|readarray)\\s+(?:-[A-Za-z]+\\s+)*${v}\\b`,                     // mapfile -t VAR
+      `\\(\\(\\s*${v}\\s*(?:[-+*/%]?=|\\+\\+|--)`,                              // (( VAR = / VAR++ ))
+      `\\bfor\\s+${v}\\s+in\\b`,                                                    // for VAR in
+    ].join('|'));
+    const assignRe = bindsRe;
     const found = lines
       .map((l, i) => ({ line: i + 1, text: l }))
       .filter(({ text }) => !text.trimStart().startsWith('#') && assignRe.test(text));
