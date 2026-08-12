@@ -4817,10 +4817,13 @@ test('CONTROL: a ref that resolves to a DIFFERENT product IS caught', () => {
  * The `say` helper prefixes with "> ", so a quoted line beginning "> " is a claim about what a
  * script says, and it is checkable against the scripts.
  */
-const toolScripts = () => readdirSync(join(PRESET_ROOT, 'tools'))
+// The scripts kept APART. A variable's possible values are a property of the script that assigns
+// it, and the concatenation loses exactly that: in one 500KB string, `PASS` appears somewhere, so
+// every variable looks as though it might hold `PASS`. See scriptPrints below — that conflation is
+// what made the first remediation of this check accept 561 of 561 forgeries a second time.
+const toolScriptFiles = () => readdirSync(join(PRESET_ROOT, 'tools'))
   .filter((f) => f.endsWith('.sh'))
-  .map((f) => readFileSync(join(PRESET_ROOT, 'tools', f), 'utf8'))
-  .join('\n');
+  .map((f) => readFileSync(join(PRESET_ROOT, 'tools', f), 'utf8'));
 
 /*
  * Does any script print this line?
@@ -4849,39 +4852,68 @@ const toolScripts = () => readdirSync(join(PRESET_ROOT, 'tools'))
  *
  * Measured at this commit: 0 of 561 forgeries accepted, every runbook-quoted line still passing.
  */
-const scriptPrints = (scripts, line) => {
-  if (scripts.includes(line)) return true;  // printed verbatim, no interpolation
+const VARIABLE_PATTERN = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}|([A-Za-z_][A-Za-z0-9_]*))/g;
+
+// The literal values a script assigns to one variable, and whether any assignment is DYNAMIC.
+// A variable fed by `$(...)`, `$?`, a read or an arithmetic expression cannot be enumerated — so a
+// template using it cannot PROVE that any particular line prints, and must not be used to accept
+// one. Saying "unprovable" is the honest answer; `.*` says "anything", which is the answer that
+// accepted every forgery.
+const assignedValues = (text, name) => {
+  const values = new Set();
+  let dynamic = false;
+  const re = new RegExp(`(?:^|\\n)\\s*(?:local\\s+|export\\s+)?${name}=(.*)`, 'g');
+  for (const m of text.matchAll(re)) {
+    const rhs = m[1].trim();
+    const single = rhs.match(/^'([^']*)'\s*(?:#.*)?$/);
+    const double = rhs.match(/^"([^"$`]*)"\s*(?:#.*)?$/);
+    const bare = rhs.match(/^([A-Za-z0-9_./-]+)\s*(?:#.*)?$/);
+    if (single) values.add(single[1]);
+    else if (double) values.add(double[1]);
+    else if (bare) values.add(bare[1]);
+    else dynamic = true;
+  }
+  return { values, dynamic };
+};
+
+const scriptPrints = (scriptTexts, line) => {
+  const texts = Array.isArray(scriptTexts) ? scriptTexts : [scriptTexts];
   const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const templates = [...scripts.matchAll(/\b(?:say|echo)\s+"((?:[^"\\]|\\.)*)"/g)]
-    .map((m) => m[1]);
-  return templates.some((template) => {
-    const variablePattern = /\$(?:\{[A-Za-z_][A-Za-z0-9_]*(?::-[^}]*)?\}|[A-Za-z_][A-Za-z0-9_]*)/g;
-    const literal = template.replace(variablePattern, '').trim();
-    if (literal.length <= 6) return false;
-    let pattern = '';
-    let offset = 0;
-    let slots = 0;
-    for (const variable of template.matchAll(variablePattern)) {
-      pattern += `${escapeRegExp(template.slice(offset, variable.index))}(.*?)`;
-      offset = variable.index + variable[0].length;
-      slots += 1;
+  for (const text of texts) {
+    if (text.includes(line)) return true;  // printed verbatim by this script
+    for (const tm of text.matchAll(/\b(?:say|echo)\s+"((?:[^"\\]|\\.)*)"/g)) {
+      const template = tm[1];
+      VARIABLE_PATTERN.lastIndex = 0;
+      const names = [...template.matchAll(VARIABLE_PATTERN)].map((m) => m[1] || m[2]);
+      if (!names.length) continue;
+      if (template.replace(VARIABLE_PATTERN, '').trim().length <= 6) continue;
+      let pattern = '';
+      let offset = 0;
+      VARIABLE_PATTERN.lastIndex = 0;
+      for (const v of template.matchAll(VARIABLE_PATTERN)) {
+        pattern += `${escapeRegExp(template.slice(offset, v.index))}(.*?)`;
+        offset = v.index + v[0].length;
+      }
+      pattern += escapeRegExp(template.slice(offset));
+      const match = new RegExp(`^${pattern}$`).exec(line);
+      if (!match) continue;
+      let ok = true;
+      for (let k = 0; k < names.length; k += 1) {
+        const slot = (match[k + 1] ?? '').trim();
+        if (slot === '') continue;                     // a variable may expand to nothing
+        const { values, dynamic } = assignedValues(text, names[k]);
+        if (dynamic || values.size === 0) { ok = false; break; }
+        if (![...values].some((v) => v.trim() === slot)) { ok = false; break; }
+      }
+      if (ok) return true;
     }
-    pattern += escapeRegExp(template.slice(offset));
-    const match = new RegExp(`^${pattern}$`).exec(line);
-    if (!match) return false;
-    // Every non-empty slot must be text the corpus actually contains. A variable may legitimately
-    // expand to nothing, so empty is allowed; a sentence nobody wrote is not.
-    for (let i = 1; i <= slots; i += 1) {
-      const slot = (match[i] ?? '').trim();
-      if (slot !== '' && !scripts.includes(slot)) return false;
-    }
-    return true;
-  });
+  }
+  return false;
 };
 
 test('every script line the runbook quotes is a line a script prints', () => {
   const runbook = readFileSync(join(PRESET_ROOT, 'docs/DEMO.md'), 'utf8');
-  const scripts = toolScripts();
+  const scripts = toolScriptFiles();
 
   // Only inside fenced blocks, and only lines starting with the `say` prefix — prose that
   // happens to begin with "> " is a markdown quote, not a claim about output.
@@ -4912,7 +4944,7 @@ test('CONTROL: an invented output line IS caught', () => {
    * prints must be rejected, and a line somebody does print must be accepted. A control resting
    * on my reading of a script is a control resting on the thing that was wrong.
    */
-  const scripts = toolScripts();
+  const scripts = toolScriptFiles();
   assert.equal(scriptPrints(scripts, 'no script anywhere prints this sentence'), false,
     'an invented line was accepted — the check cannot fail and proves nothing');
   assert.equal(scriptPrints(scripts,
@@ -4922,44 +4954,91 @@ test('CONTROL: an invented output line IS caught', () => {
 
 test('CONTROL: a REAL template skeleton with invented variable content IS caught', () => {
   /*
-   * AE-P0.3 R1. The control above forges a sentence that shares no skeleton with any template, so
-   * it is rejected for a reason that has nothing to do with the way this check was weak. It passed
-   * throughout the period when `.*` was accepting 561 of 561 forgeries — a control whose forgery
-   * is too obvious cannot fail for the real defect, and a control that cannot fail for the defect
-   * is decoration.
+   * AE-P0.3 R1, STRENGTHENED after independent review BLOCKED the first attempt.
    *
-   * So this forges from the INSIDE: take every real template that carries a variable, put invented
-   * text in each variable slot, and require every one to be rejected. The skeleton is genuine and
-   * only the interpolated content is fabricated — which is exactly the line a runbook would quote
-   * if it invented a path, a flag, or an instruction.
+   * THE FIRST VERSION OF THIS CONTROL SWEPT ONE LONG SENTINEL and reported 0 of 561 accepted. That
+   * measured one string, not a property. The reviewer substituted `PASS` instead and got 561 of
+   * 561 accepted again — because the matcher asked whether the slot text appeared ANYWHERE in the
+   * concatenated corpus, and short common tokens (`PASS`, `true`, `0`, `main`, `done`) appear
+   * everywhere in 500KB of shell.
    *
-   * It is a differential, not an absolute: the test above proves a legitimate interpolated line is
-   * still ACCEPTED, and this proves a forged one is REJECTED. Either alone passes vacuously — an
-   * empty template list satisfies this, and a predicate returning true satisfies that.
+   * So I replaced one insufficiently-adversarial forgery with another, and measured against my own.
+   * That is the same defect this control was written to fix, committed one commit later while
+   * quoting the sentence that describes it. A single sentinel proves a sentinel is rejected.
+   *
+   * The sweep is a SET now, and it deliberately contains the tokens most likely to appear
+   * incidentally in a corpus. If a future substitution is accepted, the fix is a narrower
+   * predicate — never a longer sentinel.
    */
-  const scripts = toolScripts();
-  const variablePattern = /\$(?:\{[A-Za-z_][A-Za-z0-9_]*(?::-[^}]*)?\}|[A-Za-z_][A-Za-z0-9_]*)/g;
-  const templates = [...scripts.matchAll(/\b(?:say|echo)\s+"((?:[^"\\]|\\.)*)"/g)]
+  const scripts = toolScriptFiles();
+  const templates = scripts.flatMap((text) => [
+    ...text.matchAll(/\b(?:say|echo)\s+"((?:[^"\\]|\\.)*)"/g)]
     .map((m) => m[1])
-    .filter((t) => {
-      variablePattern.lastIndex = 0;
-      return variablePattern.test(t) && t.replace(variablePattern, '').trim().length > 6;
-    });
+    .filter((tpl) => {
+      VARIABLE_PATTERN.lastIndex = 0;
+      return VARIABLE_PATTERN.test(tpl) && tpl.replace(VARIABLE_PATTERN, '').trim().length > 6;
+    }));
 
   // BLINDNESS FLOOR. Every assertion below is "for each template", so an extraction matching
   // nothing satisfies all of them. 561 qualified when this was written; FEWER means the pattern
-  // stopped matching the corpus, not that the scripts got safer.
+  // stopped matching, not that the scripts got safer.
   assert.ok(templates.length >= 500,
     `only ${templates.length} interpolating templates found; 561 qualified when this was written — `
     + 'the extraction broke, so this control is ranging over almost nothing');
 
-  const forged = templates.map((t) => t.replace(variablePattern,
-    ' THIS TEXT IS INVENTED AND NO SCRIPT EVER PRINTS IT '));
-  const accepted = forged.filter((line) => scriptPrints(scripts, line));
-  assert.deepEqual(accepted.slice(0, 3), [],
-    `${accepted.length} of ${forged.length} forged lines were accepted. A real template skeleton `
-    + 'with invented content in its variable slots is exactly what a runbook quoting something '
-    + 'nobody prints looks like, and this check exists to reject it.');
+  const substitutions = [
+    ' THIS TEXT IS INVENTED AND NO SCRIPT EVER PRINTS IT ',
+    'PASS', 'true', 'false', 'main', 'done', 'error', 'OK', '1', 'yes', 'no',
+  ];
+  const leaks = [];
+  for (const sub of substitutions) {
+    const accepted = templates
+      .map((tpl) => tpl.replace(VARIABLE_PATTERN, sub))
+      .filter((line) => scriptPrints(scripts, line));
+    if (accepted.length) leaks.push(`${JSON.stringify(sub)}: ${accepted.length}/${templates.length}`);
+  }
+  assert.deepEqual(leaks, [],
+    'a forged line was accepted. Each substitution puts content into every variable slot of a REAL '
+    + 'template; the skeleton is genuine and only the interpolated text is invented, which is '
+    + 'exactly what a runbook quoting a wrong path or a fabricated flag looks like.');
+
+  /*
+   * TWO SUBSTITUTIONS ARE NOT FORGERIES, and they are asserted here rather than left out of the
+   * list — an omission is indistinguishable from an oversight, and choosing the substitutions that
+   * pass is the defect this control exists to catch.
+   *
+   *   "0"   three scripts literally assign 0 to the variable they print, so "0 SUITE(S) FAILED"
+   *         really is a line one of them prints. Accepting it is correct; the exact count is
+   *         pinned so that a FOURTH would have to be explained.
+   *   ""    a shell variable may legitimately expand to nothing, so the empty slot is skipped by
+   *         construction and every template matches. That is a property of shell, not a leak, and
+   *         it is why the empty string is not in the sweep above.
+   */
+  const zeroAccepted = templates
+    .map((tpl) => tpl.replace(VARIABLE_PATTERN, '0'))
+    .filter((line) => scriptPrints(scripts, line));
+  assert.equal(zeroAccepted.length, 3,
+    `${zeroAccepted.length} templates accept "0" in every slot; 3 do so legitimately because their `
+    + 'script assigns that variable the literal 0. A different count means a script gained or lost '
+    + 'such an assignment, or the predicate changed — both need a person, not a new number here.');
+});
+
+test('CONTROL: a value the script never assigns to THAT variable is caught', () => {
+  /*
+   * The reviewer's exact probe, kept as a named case because it is the one that exposed the
+   * cross-corpus conflation. tools/webstack.sh assigns CREDENTIAL_MODE two literal values and
+   * neither is `PASS`; `PASS` merely occurs elsewhere in tools/. A predicate asking "does this
+   * text appear in the corpus" cannot tell those apart, and one asking "does THIS script assign
+   * it to THIS variable" can.
+   */
+  const scripts = toolScriptFiles();
+  assert.equal(scriptPrints(scripts,
+    'ask     PASS; sidecar cwd cannot discover checkout/home .env files'), false,
+  'a slot value that appears elsewhere in tools/ but is never assigned to CREDENTIAL_MODE was '
+    + 'accepted — the predicate is reading the corpus, not the variable');
+  assert.equal(scriptPrints(scripts,
+    'ask     explicit credentialed mode; sidecar cwd cannot discover checkout/home .env files'),
+  true, 'the value webstack.sh really assigns was rejected');
 });
 
 /*
