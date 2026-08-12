@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '301b66c7c4d7bcf63375177d2ce12df87e14ce5b'
+PREV_TIP     = 'd1a87b15196ea90994ef384f73acf39aa9e91c03'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -258,6 +258,12 @@ for i, a in enumerate(sys.argv):
 # merely makes the run FAIL proves nothing — the fifth way a negative control lies is landing in
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
+ 'open-section-two': ('# Provenance of this packet',
+                      '# Open items — 1 atomic, 0 CLOSED at this SHA, 1 open\n\n'
+                      '1. **G0-B** — decoy.\n\n# Provenance of this packet', 1,
+                      'OPEN-SECTION-COUNT'),
+ 'header-not-first': ('# Open items — 37 atomic', '# Open items BROKEN — 37 atomic', 1,
+                      'OPEN-HEADER-MISSING'),
  'item-dupe-number': ('# Provenance of this packet',
                       '37. **G3** — editorial duplicate.\n\n# Provenance of this packet', 1,
                       'ITEM-NUMBER-DUPLICATE'),
@@ -591,6 +597,13 @@ unhid = _unhidden(pkt)
 # ---- 1. open items: header == body, contiguous, no orphan markers ---------------------------
 # LINE-ANCHORED. `# Open items` unanchored matched inside an inline code span or a comment, so a
 # literal `# Open items — editorial example` earlier in the document hijacked the section.
+# EXACTLY ONE SECTION. `re.search` takes the first and says nothing about the rest, so a second
+# live `# Open items — 1 atomic ...` appended later — with its own item 37 — was never examined:
+# the duplicate-number check cannot see items it was never shown. Uniqueness of the container is a
+# precondition for every count derived from it.
+_sections = re.findall(r'(?m)^# Open items', unhid)
+if len(_sections) != 1:
+    bad('OPEN-SECTION-COUNT', f'{len(_sections)} "# Open items" sections; exactly one is permitted')
 _body_m = re.search(r'(?m)^# Open items.*?(?=\n# |\Z)', unhid, re.S)
 body = _body_m.group(0)
 # THE SAME SECTION FROM THE TRUE SOURCE, BY OFFSET. `_unhidden` blanks in place and preserves
@@ -614,7 +627,12 @@ body_raw = pkt[_body_m.start():_body_m.end()]
 # while the live one said something else — and worse, `--negative open-count` then mutated the DECOY
 # and reported its control OK, so the control certified the wrong source. A control that passes
 # against text the checker does not use is the most expensive kind of green there is.
-hdr  = re.search(r'# Open items — (\d+) atomic, (\d+) CLOSED at this SHA, (\d+) open', body)
+# THE SECTION'S FIRST LINE, not anywhere inside it. Scoping to `body` was not enough: the live
+# heading could read `# Open items BROKEN` while an inline-code copy of the real header sat later in
+# the same section, and `--negative open-count` again mutated the COPY and reported OK. Scope
+# narrowed the search; only anchoring makes the header the heading.
+hdr  = re.match(r'# Open items — (\d+) atomic, (\d+) CLOSED at this SHA, (\d+) open',
+                body.split('\n', 1)[0])
 cand = [int(n) for n in re.findall(r'(?m)^(\d{1,2})\. ', body)]
 # A REPEATED NUMBER IS A DEFECT, not a duplicate to ignore. `cand` was consumed by value against a
 # running counter, so a second live `37.` was simply skipped — and every number-keyed map after this
@@ -1317,7 +1335,10 @@ _decor_raw = classify_raw_prose(open(__file__).read())
 # 44 -> 43: the marker run is now matched against a string already sliced from `body_raw`, so one
 # more regex-over-raw-text became a regex over a local. Every move in this sequence has been
 # downward because the repairs deleted searches rather than adding them.
-_DECOR_FLOOR = 43
+# 43 -> 42: `hdr` became a `re.match` against a single sliced line instead of a search over the
+# section, so one more raw-prose scan disappeared. Downward again, and again because a repair
+# removed a search rather than adding one.
+_DECOR_FLOOR = 42
 # THE FLOOR MUST EQUAL TODAY'S COUNT, not merely bound it. As a `>` test the floor could be raised
 # to 999 and the ratchet would pass forever while asserting nothing — codex-worker-2 demonstrated
 # exactly that, and the executable proof stayed green because it tested the CLASSIFIER and never the
@@ -1660,7 +1681,8 @@ WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twen
         98: 'Ninety-eight', 99: 'Ninety-nine', 100: 'One hundred', 101: 'One hundred one',
         102: 'One hundred two', 103: 'One hundred three', 104: 'One hundred four',
         105: 'One hundred five', 106: 'One hundred six', 107: 'One hundred seven',
-        108: 'One hundred eight', 109: 'One hundred nine'}
+        108: 'One hundred eight', 109: 'One hundred nine', 110: 'One hundred ten',
+        111: 'One hundred eleven', 112: 'One hundred twelve'}
 if not listed:
     bad('CONTROL-PROSE-MISSING', 'no "**Controls.** <N>, each naming" sentence')
 elif listed.group(1) != WORD.get(len(CONTROLS), '?'):
