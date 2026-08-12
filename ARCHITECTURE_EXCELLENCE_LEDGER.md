@@ -1250,3 +1250,12 @@ still truncates at `i.e.`, restates only gate IDs, and mis-types historical or
 telemetry prose. Schema still drops scalar record members/types and proof is not
 bound to production refusal. PASS9/item33, G0-A/G0-B, G4/R7, and G2/G3 semantic
 blockers remain.
+
+Owner successor `6a900ec` claims the two 82215c3 release blockers closed:
+production refusal and proof are now one invoked guard with proof-liveness;
+scalar siblings and scalar-list element types are fingerprinted across all
+occurrences (empty lists contribute no evidence); schema declaration is globally
+unique and A.0-scoped; owner-choice parsing handles abbreviations, register scope,
+negation, G1-A `establish/decline`, and G2-B formatting; restatement carries a
+count per gate. It reports schema ledger epoch 3 and 167 controls. Carried
+semantic/state/content blockers remain. Exact audit pending.
