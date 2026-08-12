@@ -1496,7 +1496,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `fffb613aae505a0e8cc5104a467992ae08e15e19`, A.0 SCRIPT BLOB `76254c2eea40c3eb5091c801d67c29c9302f4988`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `9364bad5918360b1334af06620b3dc1639046c21`, A.0 SCRIPT BLOB `9a6cb1cd56230888a6b04aebf134848e04b23f0b`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1724,6 +1724,19 @@ through the fix for the third. A headline that reaches for the status word with 
 declare it in is named for that. A LATER run that reaches and misses is named too: the earlier check
 demanded an exact phrase, so `**NOT BLOCKING_EXTRA...**` parked on a continuation line was a status
 attempt no rule was watching.
+
+**AND THE TWO CHECKS HAD A SEAM.** Composing the probes — ordinary prose on line 1, literal-star
+status on line 2 — walked between them: the bare-reach check read only the FIRST LINE and the run
+scanner correctly saw no real delimiters. **Neither check was wrong; the seam was**, which is the
+failure mode two correct checks produce and a single check cannot. The bare-reach arm reads the
+whole item, and it only runs when there is no leading bold sequence at all, so prose deep in an item
+that HAS one is untouched.
+
+**AND HEADING UNIQUENESS COMPARED FULL STRINGS**, so a second `# Open items` with a different
+derived tail was not a duplicate, and neither was a second `# G0-A — <another caption>`. Both are
+duplicates of a SECTION and neither is a duplicate STRING. Uniqueness is by KIND now — the gate it
+names, or the section it is — because a heading's kind is what a reader and a slicer bind to and its
+tail is a caption.
 **AND IT MATCHED BY PREFIX, so the final section's heading with one extra word appended passed as
 the section it truncates**, carrying orphan text with an unclosed emphasis run that nothing ranged
 over and no MANIFEST-STALE to show for it. **The heading is not quoted here, and that is a rule
@@ -1786,7 +1799,7 @@ only ADDS one is a no-op and reports BLIND correctly — a repaired opt-out prod
 tag — and it therefore adds the span AND breaks the real status, so the old scan reads the span as
 the status while the new parse names the malformed reach.
 
-**Controls.** One hundred sixty-seven, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** One hundred seventy, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1807,7 +1820,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `unclassified-kinded`, `unclassified-said`, `opening-gates-gone`, `planning-unknown-gone`, `status-slash`, `status-wrapped`, `status-after-ok`, `item-md-escape`, `section-orphan`, `schema-unstated`, `ruling-state-adverb`, `ruling-state-cited`, `item-state-stale`, `owner-choice-said`, `owner-choice-gone`, `section-prefix`, `status-escaped`, `status-parked`, `restate-total`, `restate-open`, `choice-compound`, `status-parked-l2`, `status-entity`, `md-fabricated`, `section-dupe`, `item-state-cap`, `item-state-negelse`, `choice-adverb`, `status-litstar`, `status-entstar`, `status-parked-bad`, `section-indented-dupe`, `owner-choice-count`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `unclassified-kinded`, `unclassified-said`, `opening-gates-gone`, `planning-unknown-gone`, `status-slash`, `status-wrapped`, `status-after-ok`, `item-md-escape`, `section-orphan`, `schema-unstated`, `ruling-state-adverb`, `ruling-state-cited`, `item-state-stale`, `owner-choice-said`, `owner-choice-gone`, `section-prefix`, `status-escaped`, `status-parked`, `restate-total`, `restate-open`, `choice-compound`, `status-parked-l2`, `status-entity`, `md-fabricated`, `section-dupe`, `item-state-cap`, `item-state-negelse`, `choice-adverb`, `status-litstar`, `status-entstar`, `status-parked-bad`, `section-indented-dupe`, `owner-choice-count`, `status-composed`, `section-recap`, `section-regate`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,

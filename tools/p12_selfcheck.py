@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '7c38e70dbd9b595d0f4da44aee69b86b71f62817'
+PREV_TIP     = '6a900ec8a9e38443aa4db11d4d0e2b6c7cec6e39'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -664,6 +664,18 @@ CONTROLS = {
  'section-indented-dupe': ('\n# Provenance of this packet',
                       '\n # Implementation constraints (non-negotiable, backend 2026-08-10)\n\n'
                       'orphan text.\n\n# Provenance of this packet', 1, 'SECTION-DUPLICATE'),
+ # THE SEAM BETWEEN TWO CHECKS: prose on line 1 and literal-star status on a continuation line, so
+ # the bare-reach check read only line 1 and the run scanner correctly saw no real delimiters.
+ 'status-composed':  ('38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING.',
+                      '38. **G1-B** — ⟦PACKET⟧ scoped to G1-B.\n    \\*\\*NOT BLOCKING.', 1,
+                      'ITEM-STATUS-MISSING'),
+ # A DUPLICATE SECTION WITH A DIFFERENT CAPTION: not a duplicate STRING, and still a second section.
+ 'section-recap':    ('\n# Provenance of this packet',
+                      '\n# Open items — 1 atomic, 0 CLOSED at this SHA, 1 open\n\n'
+                      'orphan text.\n\n# Provenance of this packet', 1, 'SECTION-DUPLICATE'),
+ 'section-regate':   ('\n# Provenance of this packet',
+                      '\n # G0-A — a second heading for a gate that already has one\n\n'
+                      'orphan text.\n\n# Provenance of this packet', 1, 'SECTION-DUPLICATE'),
  'section-dupe':     ('\n# Provenance of this packet',
                       '\n# Implementation constraints (non-negotiable, backend 2026-08-10)\n\n'
                       'orphan **text.\n\n# Provenance of this packet', 1, 'SECTION-DUPLICATE'),
@@ -1107,7 +1119,13 @@ for _m in _HEADS_RE.finditer(body_vis):
     # repair for the third. If the leading sequence is empty and the headline still reaches for the
     # status word, the reach is what must be named.
     if not _runs and _n2 not in closed_set:
-        _bare = [t for t in _TOKEN_RE.findall(_render(_m.group(2).split('\n', 1)[0])[0])
+        # THE WHOLE ITEM, not line one. Composing the two probes — ordinary prose on line 1 and
+        # `\*\*NOT BLOCKING...\*\*` on line 2 — walked between them: the bare-reach check read only
+        # the first line and the run scanner correctly saw no real delimiters. Neither was wrong;
+        # the SEAM was. This arm only runs when there is NO leading bold sequence at all, so item
+        # 27's later prose `BLOCKING` — which has one — is not in scope, and no item without a run
+        # names the status word today. codex-worker-1 composed it.
+        _bare = [t for t in _TOKEN_RE.findall(_render(_m.group(2))[0])
                  if t.startswith('BLOCKING')]
         if _bare:
             bad('ITEM-STATUS-MISSING', f'item {_n2} names the status word on its headline with no '
@@ -2461,9 +2479,23 @@ for _m2 in re.finditer(r'(?m)^ {0,3}# (.*)$', _visible(pkt)):
 # of an allowed name passing — a second `# Implementation constraints (...)` truncates the section
 # above it and carries orphan text, and every name in it is permitted. codex-worker-1's probe, one
 # property along from the one I had just repaired. A section appears once because it IS a section.
-for _h in sorted({h for h in _seen_headings if _seen_headings.count(h) > 1}):
-    bad('SECTION-DUPLICATE', f'top-level heading {_h[:48]!r} appears {_seen_headings.count(_h)} '
-                             f'times; a duplicate ends the section above it and is allowed by name')
+# BY KIND, not by full text. Comparing whole strings let a second `# Open items — 1 atomic, ...`
+# through on a different derived tail, and a second `# G0-A — <other title>` likewise: both are
+# duplicates of a SECTION, and neither is a duplicate STRING. codex-worker-1 landed both. A heading's
+# kind is what a reader and a slicer bind to; its tail is a caption.
+def _kind_of(h):
+    g = re.match(GATE_ID + r' — ', h)
+    if g:
+        return 'gate ' + g.group(0).split(' ')[0]
+    if _SECTION_PAT.fullmatch(h):
+        return 'section Open items'
+    return 'section ' + h
+
+_kinds_seen = [_kind_of(h) for h in _seen_headings]
+for _k in sorted({k for k in _kinds_seen if _kinds_seen.count(k) > 1}):
+    bad('SECTION-DUPLICATE', f'{_k!r} appears {_kinds_seen.count(_k)} times; a duplicate ends the '
+                             f'section above it, and a different caption does not make it a '
+                             f'different section')
 
 body_off = pkt.find(body)
 gate_hdr = [{'gate': m.group(1), 'line': line_of(m.start()),
