@@ -930,6 +930,12 @@ passes as agreement. Require a positive unique grammar or typed G4 identity.
 Indented Open-section crashes, trailing header garbage, G4 order, and G0/G2/G3/
 M1/item37/Watchdog/G4 item26 contradictions remain.
 
+Owner successor `753177c` claims graph/prose agreement now uses a positive,
+unique sentence-initial `Final gate —` designation; negation, duplicate, rename,
+and two-terminal controls are live (117 controls). Exact review is pending. One-
+space heading, prefix header, G4 ordering/item26, and G0/G2/G3/M1/item37/
+Watchdog semantics remain open.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
