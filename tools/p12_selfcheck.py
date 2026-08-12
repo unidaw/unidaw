@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '883200707f0574a7c3c8b8f66b891f472f0c793e'
+PREV_TIP     = '5255bd60294b8793d7ef9f93b6a94b02590bb545'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -364,6 +364,11 @@ CONTROLS = {
  # branch can catch it. Its sibling BELOW duplicates on a nonterminal and would still fire
  # through the population comparison if the duplicate branch were deleted; this one isolates it.
  # AFTER `! `, which the one-terminator pattern could not see. codex-worker-1's exact corpus.
+ # `?` was accepted by the pattern and exercised by nothing: regressing [.!?] to [.!] left every
+ # control green. Each character the convention accepts now has a control.
+ 'g4-dup-quest':     ('this SHA, on TEN dependency blockers plus one of its own.',
+                      'this SHA. Really? Final gate — duplicate declaration. On TEN dependency blockers plus one of its own.',
+                      1, 'GATE-DECL-DUPLICATE'),
  'g4-dup-bang':      ('this SHA, on TEN dependency blockers plus one of its own.',
                       'this SHA. No! Final gate — duplicate declaration. On TEN dependency blockers plus one of its own.',
                       1, 'GATE-DECL-DUPLICATE'),
@@ -1937,12 +1942,20 @@ if len(_final) != 1:
 # by containing the words it denies. That is the bare-substring defect I fixed in the count phrase
 # ONE COMMIT EARLIER, in this same function, and did not carry across to the line below it.
 #
-# The SPELLING is sentence-initial and em-dash terminated in this packet's own form, and it must
+# The SPELLING is boundary-initial under that convention and em-dash terminated, and it must
 # occur exactly once per gate: a second copy is as much a defect as a missing one.
-# THE SENTENCE-TERMINATOR CLASS, not one member of it. The comment said "sentence-initial" while
-# the pattern accepted only field-start or `. `, so an exact duplicate after `No! ` was invisible —
-# `[.!?]` is the class, and enumerating one of its members is the same approximation-for-a-boundary
-# defect this checker has now produced in a cap, a window, a prefix and a delimiter.
+# A DELIBERATELY LIMITED ASCII CONVENTION, and calling it "the sentence-terminator class" was the
+# sixth instance of naming a category over code that lists instances. What it accepts: field start,
+# or one of `.` `!` `?` followed by exactly one space. What it therefore MISSES: a terminator
+# followed by a closing quote (`The note says "No!" Final gate — ` is not counted), and any
+# non-ASCII terminator (`。`). What it WRONGLY counts: an abbreviation period (`An e.g. Final gate — `
+# reads as a new sentence). codex-worker-1 built all three.
+#
+# I am not writing a sentence-boundary parser here. That is the same trap as emulating Markdown's
+# hidden/visible split and as judging semantic affirmation — both of which this checker escaped only
+# by REMOVING the pretence rather than widening the pattern. The convention is stated as a
+# convention, its three accepted characters are each ratcheted by a control, and its false
+# negative/positive shapes are written down instead of being discovered again.
 _FINAL_DECL = re.compile(r'(?:^|[.!?] )Final gate — ')
 # COUNTED GLOBALLY. Per-gate `== 1` EXCLUDED a gate that declared itself twice instead of failing
 # it: two declarations on nonterminal G3 left `_said_final == ['G4']` and everything passed, while
