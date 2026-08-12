@@ -1331,6 +1331,17 @@ bounded scope/dependency/acceptance plan, and submit the transition for independ
 review; the owner may not self-approve. No unrelated product edits are authorized
 until P0.3 scope is explicit.
 
+P0.3 owner baseline received: status remains BLOCKED. The approved SHA `a265a7b7`
+does not match the landed main blob `45f8e169` (+29/-15); the approval is revoked
+for that reason alone. The landed `scriptPrints()` matcher accepts 400/400 forged
+lines because variable slots become `.*`, and its negative control does not test a
+real template-skeleton forgery. Scope is bounded to `ui-web/test/unit.mjs`:
+P03-R1 adds a real skeleton forgery differential, P03-R2 tightens matching until
+forged acceptance is 0/400 while existing quoted lines pass, and P03-R3 records
+the SHA mismatch. Owner remains `claude-worker-1`; reviewer must be independent
+of both owner and original author. Proposed transition is BLOCKED -> BLOCKED with
+corrected reason; no status change applied.
+
 Exact audit of `76f1672`: tombstone half PASS; item 29 remains blocked on the
 correlation/consumer contract. Production missing/removed paths now use
 `liveTrackAt` and emit `UnknownTrack`, with causal rowops-rejected tests and clean
