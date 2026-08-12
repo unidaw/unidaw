@@ -864,6 +864,12 @@ count match can come from later prose. Replacing the canonical count with bare
 words and moving the exact count phrase later clean-passes after regeneration.
 The fix must parse/compare the exact matched count within `dependencies_text`.
 
+Stronger exact finding: the entire G4 validator is selected by mutable prose
+(`Final gate` in dependencies text). Renaming that heading to `Terminal gate`
+and regenerating yields clean PASS while all G4 count/list checks are skipped.
+Selection must use a structural graph sink/gate ID with exactly-one assertion and
+a causal negative control.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
