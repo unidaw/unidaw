@@ -969,6 +969,12 @@ boundaries passes. Use a complete sentence-boundary grammar or typed field.
 Open H1/trailing garbage/G4 order and G0/G2/G3/M1/item37/Watchdog/G4 item26
 remain.
 
+Owner successor `5255bd6` claims the sentence-initial grammar now covers the
+full `[.!?]` terminator class with causal `g4-dup-bang` ratcheting, and the
+sibling-position comment is corrected; 121 controls pass. Exact review is
+pending. H1/trailing header, G4 order, item26 framing, and semantic-set blockers
+remain.
+
 Exact review of `01c86f7` is **BLOCKED**. Parent duplicate regression and
 zero-terminal coverage pass causally, but the duplicate branch itself is not
 isolated: deleting explicit duplicate failure leaves the control green via
