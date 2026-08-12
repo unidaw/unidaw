@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '5255bd60294b8793d7ef9f93b6a94b02590bb545'
+PREV_TIP     = '92ae74c18299cc04fd7767642fc54e0e2adea710'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -258,6 +258,9 @@ for i, a in enumerate(sys.argv):
 # merely makes the run FAIL proves nothing — the fifth way a negative control lies is landing in
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
+ 'header-suffix':    ('# Open items — 37 atomic, 9 CLOSED at this SHA, 28 open',
+                      '# Open items — 37 atomic, 9 CLOSED at this SHA, 28 open BUT ACTUALLY 99', 1,
+                      'OPEN-HEADER-MISSING'),
  'open-section-two': ('# Provenance of this packet',
                       '# Open items — 1 atomic, 0 CLOSED at this SHA, 1 open\n\n'
                       '1. **G0-B** — decoy.\n\n# Provenance of this packet', 1,
@@ -651,6 +654,14 @@ _sections = re.findall(r'(?m)^# Open items', unhid)
 if len(_sections) != 1:
     bad('OPEN-SECTION-COUNT', f'{len(_sections)} "# Open items" sections; exactly one is permitted')
 _body_m = re.search(r'(?m)^# Open items.*?(?=\n# |\Z)', unhid, re.S)
+if not _body_m:
+    # A CRASH IS NOT A VERDICT. A one-space-indented CommonMark H1 is still a heading to a renderer
+    # but not to `(?m)^#`, so `_body_m` was None and `.group(0)` raised an uncaught AttributeError —
+    # the run died with a traceback instead of saying what was wrong. A checker that aborts gives
+    # its caller no verdict at all, which is worse than a wrong one because there is nothing to read.
+    print('[OPEN-SECTION-MISSING] no unindented "# Open items" heading; a CommonMark heading may be '
+          'indented up to three spaces, and this checker requires column zero')
+    sys.exit(2)
 body = _body_m.group(0)
 # THE SAME SECTION FROM THE TRUE SOURCE, BY OFFSET. `_unhidden` blanks in place and preserves
 # length, so the section's span in `unhid` is its span in `pkt` — sliced, never re-discovered.
@@ -677,8 +688,11 @@ body_raw = pkt[_body_m.start():_body_m.end()]
 # heading could read `# Open items BROKEN` while an inline-code copy of the real header sat later in
 # the same section, and `--negative open-count` again mutated the COPY and reported OK. Scope
 # narrowed the search; only anchoring makes the header the heading.
-hdr  = re.match(r'# Open items — (\d+) atomic, (\d+) CLOSED at this SHA, (\d+) open',
-                body.split('\n', 1)[0])
+# FULLMATCH: `re.match` is prefix-only, so `# Open items — 37 atomic, 9 CLOSED at this SHA, 28 open
+# BUT ACTUALLY 99` parsed as the real header and the contradiction after it was never read. The
+# header line IS the claim; anything else on it is part of the claim.
+hdr  = re.fullmatch(r'# Open items — (\d+) atomic, (\d+) CLOSED at this SHA, (\d+) open',
+                    body.split('\n', 1)[0].rstrip())
 cand = [int(n) for n in re.findall(r'(?m)^(\d{1,2})\. ', body)]
 # A REPEATED NUMBER IS A DEFECT, not a duplicate to ignore. `cand` was consumed by value against a
 # running counter, so a second live `37.` was simply skipped — and every number-keyed map after this
