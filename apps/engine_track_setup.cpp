@@ -54,7 +54,8 @@ std::unique_ptr<TrackRuntime> setupTrackRuntime(TrackSetupDeps& deps, uint32_t t
       daw::LogLine() << "Engine: host ready for track " << trackId << std::endl;
 
       runtime->watchdog = std::make_unique<daw::Watchdog>(
-          runtime->controller.mailbox(), 500, [ptr = runtime.get()]() {
+          runtime->controller.mailbox(), daw::kHostLateObservationsBeforeEviction,
+          [ptr = runtime.get()]() {
             ptr->hostReady.store(false, std::memory_order_release);
             ptr->active.store(false, std::memory_order_release);
             ptr->needsRestart.store(true, std::memory_order_release);
@@ -395,7 +396,8 @@ bool restartTrackHost(TrackLifecycleDeps& deps, TrackRuntime& runtime,
       return false;
     }
     runtime.watchdog = std::make_unique<daw::Watchdog>(
-        runtime.controller.mailbox(), 500, [ptr = &runtime]() {
+        runtime.controller.mailbox(), daw::kHostLateObservationsBeforeEviction,
+        [ptr = &runtime]() {
           ptr->hostReady.store(false, std::memory_order_release);
           ptr->active.store(false, std::memory_order_release);
           ptr->needsRestart.store(true, std::memory_order_release);

@@ -8,6 +8,20 @@
 
 namespace daw {
 
+// THE EVICTION BOUND, AUTHORED. AE-P1.2 G3 ruling R3 pins this at 3; the value is AUTHORED, not
+// derived, and the packet says so — nothing in the tree sourced the previous 500, which appeared as
+// a bare literal at three construction sites with no unit anywhere.
+//
+// THE UNIT IS OBSERVATIONS, NOT MILLISECONDS. It counts consecutive calls to Watchdog::check() that
+// found the host late. A reader of `Watchdog(mailbox, 500, cb)` had no way to tell whether 500 was
+// a duration, a block count or a sample count — which is why this carries its unit in its name
+// rather than in a comment beside one of the three call sites.
+//
+// One definition, three users. tools/watchdog_bound_check.sh fails if a construction passes an
+// integer literal instead of this constant, or if this value drifts from the authored 3 without the
+// ruling moving with it.
+inline constexpr uint32_t kHostLateObservationsBeforeEviction = 3;
+
 enum class FaultType {
   None,
   TransientLate,  // Simulate a single missed deadline

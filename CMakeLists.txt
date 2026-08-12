@@ -422,6 +422,16 @@ target_include_directories(markers_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+# AE-P1.2 G3 / R3: the host eviction bound is AUTHORED at 3 observations, and the boundary is
+# exact. A test that only asserts "eviction eventually happens" passes for every N and cannot tell
+# 3 from the 500 that preceded it, so this pins N-1 and N as a pair.
+add_executable(watchdog_bound_tests
+  apps/watchdog_bound_tests_main.cpp
+)
+target_include_directories(watchdog_bound_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 # Sampler S1: multipoint drawable envelopes. The claim under test is that ADSR is a VIEW of the
 # same points (docs/SAMPLER_DESIGN.md R4) — if that is false, the sampler has two envelope models
 # pretending to be one and every later feature has to ask which it is talking to.
@@ -1078,6 +1088,16 @@ add_test(NAME markers
   COMMAND markers_tests
 )
 set_tests_properties(markers PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME watchdog_bound
+  COMMAND watchdog_bound_tests
+)
+set_tests_properties(watchdog_bound PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
+add_test(NAME watchdog_bound_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/watchdog_bound_check.sh
+)
+set_tests_properties(watchdog_bound_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
 add_test(NAME sampler_envelope
   COMMAND sampler_envelope_tests
