@@ -2,42 +2,40 @@
 
 #include <cstdint>
 
-// TWO-LEVEL HOST READINESS (AE-P1.2 G2-B, ruling R2), NAMED FROM STATE THAT ALREADY EXISTED.
+// ONE OBSERVABLE READINESS LEVEL, AND A SEPARATE MIRROR QUESTION (AE-P1.2 G2-B, ruling R2).
 //
-// R2 says readiness is staged: a dispatch is permitted once the host is mapped and bypassed, and
-// only processing that DEPENDS on mirrored parameters requires the mirror to be complete. Stating
-// it that way is what dissolves the circularity the gate was blocked on — the acknowledgement that
-// establishes mirror-complete arrives during a ProcessBlock that the lower level already permits,
-// so the gate stops demanding a state reachable only through a state it forbids.
+// R2 stages readiness: a dispatch is permitted once a mapping exists, and only processing that
+// DEPENDS on mirrored parameters requires the mirror settled. That framing is what dissolves the
+// circularity the gate was blocked on — the acknowledgement arrives during a ProcessBlock the lower
+// level already permits — but the SECOND level is NOT MODELLED HERE, and this prologue previously
+// described one that had been withdrawn from the body below. What follows is the current state.
 //
-// BOTH LEVELS WERE ALREADY IN THE TREE UNDER TWO UNRELATED NAMES, and that is why nothing related
-// them. Measured at the set-true site, apps/engine_restart_worker.cpp:
+// WHAT THIS HEADER PROVIDES
+//   HostReadiness        NotMapped | MappedAndDispatchable. Two levels, both observable.
+//   readinessLevel()     from hostReady alone.
+//   readinessAtLeast()   an ordered comparison, so a site states the level it NEEDS.
+//   mirrorOutstanding()  a SEPARATE question, deliberately not a level.
+//   mirrorReplayCanComplete()   the wedge predicate, below.
+//   nextHostGeneration() / hostEverLaunched()   host lifetime identity (P2-HOST-02a).
 //
-//     :88   runtime->hostReady.store(true, release)
-//     :89   applyHostBypassStates(*runtime)
-//     :91   lock paramMirrorMutex; enqueueMirrorReplay(*runtime)
+// WHY THERE IS NO MirrorComplete LEVEL. Two reasons, both measured, and the detail is at the
+// predicate rather than here so a reader cannot meet the claim without the reason:
+//   1. hostReady goes true BEFORE the mirror decision is made, so `hostReady && !mirrorPending` was
+//      true in a window where parameters were about to be replayed.
+//   2. engine_render_track.cpp:554 re-arms the replay on NOTE-RING OVERFLOW, mid-render. The state
+//      regresses after being settled, so any model shaped as a startup sequence is wrong by
+//      construction — including the `mirrorDecided` flag drafted for this and withdrawn.
+// Modelling it is P2-HOST-remediation HOST-R2, which must separate the two arming causes first.
 //
-// `hostReady` goes true BEFORE the bypass states are applied and BEFORE the mirror replay is
-// enqueued, so it has always meant MAPPED-AND-BYPASSED and never mirror-complete. The mirror half
-// is `mirrorPending` / `mirrorPrimed` / `mirrorGateSampleTime` (apps/engine_types.h:403-405), whose
-// lifecycle is:
+// KNOWN LIMITS OF WHAT IS BELOW, stated because a header silent about its limits reads as complete:
+//   * The generation, the mapping and hostReady are NOT published atomically. The generation is
+//     bumped inside controllerMutex; hostReady is stored outside it and the mirror decision under a
+//     different lock. A reader can observe a fresh generation beside a stale readiness. HOST-R3.
+//   * nextHostGeneration skips 0 on wrap, which addresses NEVER-LAUNCHED and NOT ABA. A reader
+//     holding generation N across 2^32 relaunches sees N again. A 64-bit epoch is HOST-R4.
+//   * tools/host_generation_check.sh counts occurrences per file; it does not bind a bump to the
+//     launch it belongs to. HOST-R5.
 //
-//     enqueueMirrorReplay          pending = true,  primed = false
-//     engine_produce_block.cpp     pending && !primed  ->  the producer runs mirrorOnly (:335)
-//                                  writes the params, primed = true (:508-513)
-//     engine_producer_thread.cpp   pending && primed && ack >= gate  ->  pending = false (:198-216)
-//
-// So the LEVEL BOUNDARY is `mirrorPending`, and `mirrorPrimed` is a sub-state inside level 1. This
-// header adds no state and changes no behaviour: it names the ordering that the flags already
-// encode, so that a site can say which level it needs instead of consulting whichever flag was
-// nearest.
-//
-// THE WEDGE THIS MAKES SAYABLE. apps/engine_producer_thread.cpp:195 skips a runtime that is not
-// hostReady before it can ever clear `mirrorPending`. So arming the mirror on a runtime that cannot
-// reach hostReady leaves `pending && !primed` true forever, the producer stays in mirrorOnly, and
-// the engine silently emits nothing — the aux-child case apps/engine_rt_helpers.h:59-62 describes.
-// `mirrorReplayCanComplete` is that condition, written as a predicate rather than as a comment.
-
 namespace daw {
 
 enum class HostReadiness : uint8_t {

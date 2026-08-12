@@ -1109,6 +1109,11 @@ add_test(NAME host_generation_check
 )
 set_tests_properties(host_generation_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+add_test(NAME readiness_doc_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/readiness_doc_check.sh
+)
+set_tests_properties(readiness_doc_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 add_test(NAME sampler_envelope
   COMMAND sampler_envelope_tests
 )
