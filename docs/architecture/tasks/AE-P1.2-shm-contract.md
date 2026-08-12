@@ -18,9 +18,18 @@ never written is the same error's fingerprint.
 
 The blockers from the exact review are reconciled here, and the count is deliberately not restated: it moved between rounds and a fixed number here would be a twin of the item list, which is the authority:
 
-1. **EVERY GATE IS PLANNABLE AT THIS SHA** — the first time in this lineage, and it is a small
-   claim: it means every gate names a population it can range over, not that any gate can be
-   decided. This sentence read TWO, then ONE, then this, across three SHAs. G4 left when its
+1. **GATE PLANNING VERDICTS — plannable 3, unknown 5, blocked 0.** Every gate names a population
+   it can range over, which is what this line used to report as "EVERY GATE IS PLANNABLE AT THIS
+   SHA"; that claim read TWO, then ONE, then every, across three SHAs, and it is **withdrawn as
+   OVERSTATED rather than as wrong.** No gate's own population is withdrawn — the fact it was
+   built on still holds — but planning also depends on a gate's NON-GATE prerequisites, and open
+   item 38 (G1-B) records that whether a live one defeats planning is UNRULED. G1-B carries one,
+   and the five gates whose dependency closure reaches G1-B inherit the same unknown. Publishing a
+   boolean `true` there stated an answer this packet does not have, so the verdict is now
+   three-valued and `plannable_with_dependencies` is GONE rather than overloaded — a tri-state
+   string in a boolean's key reads as TRUE in every consumer written against `/5`. **Declining to
+   overstate is not deciding**: nothing here rules item 38, and the counts move the moment someone
+   does. codex-worker-1 named the false precision and the repair. It is still a small claim: G4 left when its
    population was completed across BOTH halves of its invariant; G2-A left when R12 authored its
    scope as the adoptable-refusal EMIT sites, every earlier attempt having selected on the
    arbitration while the gate is about the answer. Both remain BLOCKING for acceptance, for defects
@@ -1450,7 +1459,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `0631499d32927980dddb4e6b3a063d50bee908f2`, A.0 SCRIPT BLOB `5b7177d4d6df27a33c7f2111c60821b2587b6200`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `5eec8c76ed60266e0ff37b90c4b1ad499f35c8db`, A.0 SCRIPT BLOB `e1567ded6e225ed1b7035a01b8c1cb845191b77d`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1471,8 +1480,8 @@ widening as well as the new `unclassified_open` population.
 rulings with `named_at` — every NON-HEADING mention of each one, with line and context, the
 heading itself being carried by the record's own `line` field; there is no `applied` field, because
 a ruling is applied TO ITEMS and its items can disagree — every item with its gate and blocking/closed state, every RAW
-claim with its command and arithmetic, the control names, the UNCLASSIFIED OPEN population, and the
-counts. It is EMITTED by this
+claim with its command and arithmetic, the control names, the UNCLASSIFIED OPEN population, the
+three-valued `planning_verdict` with the gates each unknown comes from, and the counts. It is EMITTED by this
 checker from the same extraction the checks run on (`--emit-manifest`) and the checker FAILS if the
 committed copy differs, so it is canonical without being a second hand-maintained document — which
 is the defect this packet has produced in every other form today. Read the manifest for facts and
@@ -1579,7 +1588,7 @@ only ADDS one is a no-op and reports BLIND correctly — a repaired opt-out prod
 tag — and it therefore adds the span AND breaks the real status, so the old scan reads the span as
 the status while the new parse names the malformed reach.
 
-**Controls.** One hundred thirty-six, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** One hundred thirty-eight, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1600,7 +1609,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `unclassified-kinded`, `unclassified-said`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `unclassified-kinded`, `unclassified-said`, `opening-gates-gone`, `planning-unknown-gone`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
@@ -2697,22 +2706,27 @@ One per line, numbered in document order, so the count is checkable. ELEVEN are 
     resume, or a per-slot block stamp — is an owner choice R16 deliberately leaves open. PRODUCT
     work.
 
-38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING. Scoped to G1-B because that is where it is LIVE, though the defect is in the shared derivation. A live non-gate
-    prerequisite does not affect any typed planning
-    field, so a planner walking the graph cannot see it.** `non_gate_prerequisites` is emitted, but
-    `decidable_for_planning`, `planning_blocked_by` and `plannable_with_dependencies` are derived
-    from the withdrawn-population predicate and a closure that follows gate IDs only. G1-B shows
-    this live TODAY: it carries "the production atomic size/alignment assertions" as a non-gate
-    prerequisite while reporting planning true with no planning blocker. Restoring G3's discharged
-    N prerequisite reproduces the same shape on a second gate — the emitted record gains the
-    prerequisite and keeps `decidable_for_planning: true`. codex-worker-1 found and proved it.
-    **THE DECISION IS NOT MINE**: either a live non-gate prerequisite makes planning false and
-    populates a typed blocker, or the schema states why it does not — and which is right depends on
-    whether a planner can write tickets against a gate whose non-gate prerequisite is unmet, which
-    is a question about how this packet is consumed rather than about its text. I have deliberately
-    not guessed; inventing that semantics is how this gate acquired an unbuildable oracle. Whoever
-    rules must also add the cross-record control, since nothing currently fails when the two
-    disagree. **Scoping matters here and I got it wrong twice, in opposite directions. Filed as
+38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING. THE EFFECT of a live non-gate prerequisite on planning is
+    UNRULED, and at this SHA the manifest says so instead of guessing.** Scoped to G1-B because
+    that is where the prerequisite is LIVE, though the derivation is shared. G1-B carries "the
+    production atomic size/alignment assertions"; the five gates whose dependency closure reaches
+    G1-B inherit it. **What was published before this SHA was worse than an open question**:
+    `non_gate_prerequisites` was emitted while `decidable_for_planning`, `planning_blocked_by` and
+    `plannable_with_dependencies` were derived from the withdrawn-population predicate and a
+    closure following gate IDs only — so every gate read `plannable: true` and a planner walking
+    the graph could not see the prerequisite at all. Restoring G3's discharged N prerequisite
+    reproduced the shape on a second gate. codex-worker-1 found and proved it, and named the repair
+    I had not seen. **THE DECISION IS STILL NOT MINE**: either a live non-gate prerequisite makes
+    planning false and populates a typed blocker, or the schema states why it does not, and which
+    is right depends on whether a planner can write tickets against a gate whose non-gate
+    prerequisite is unmet — a question about how this packet is CONSUMED rather than about its text.
+    **But declining to overstate is not deciding.** `planning_verdict` is three-valued —
+    `plannable`, `unknown`, `blocked` — and `planning_unknown_from` names the gates the unknown
+    comes from. `plannable_with_dependencies` is REMOVED rather than widened: a tri-state string in
+    a boolean's key reads as TRUE in every consumer written against `/5`, so a meaning that no
+    longer fits its type is deleted at a schema bump where the break is loud. Whoever rules turns
+    the five unknowns into `plannable` or into a typed blocker, and must add the cross-record
+    control, since nothing yet fails when a prerequisite and a verdict disagree. **Scoping matters here and I got it wrong twice, in opposite directions. Filed as
     `all` and as a BLOCKER for one draft, it attached to every gate and drove the
     acceptance-decidable set to empty — an item scoped `all` is a claim about every gate, and this
     is not one: the defect leaves no gate's acceptance criteria unmet, it makes a PLANNING field

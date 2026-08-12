@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '6f423d6137800d57f4d2204149e91932471844d9'
+PREV_TIP     = '21a46bfd80319c6a227cde58a2f3d3818f6e8b14'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -296,8 +296,18 @@ CONTROLS = {
                       'ELEVEN are BLOCKING — 18, 19, 24, 26, 27, 28, 29, 33, 35, 36 and 21', 1, 'BLOCKER-SET'),
  'constraint-lost':  ('1. Production atomic **size/alignment', '1x. Production atomic **size/alignment', 1,
                       'CONSTRAINTS-COUNT'),
- 'opening-gates':    ('**EVERY GATE IS PLANNABLE AT THIS SHA**',
-                      '**FOUR OF THE EIGHT GATES CANNOT BE DECIDED**', 1, 'OPENING-GATE-COUNT'),
+ 'opening-gates':    ('**GATE PLANNING VERDICTS — plannable 3, unknown 5, blocked 0.**',
+                      '**GATE PLANNING VERDICTS — plannable 8, unknown 0, blocked 0.**', 1,
+                      'OPENING-GATE-COUNT'),
+ # THE LINE ITSELF, not only its numbers — the zero case used to be a second accepted sentence so
+ # the claim could not pass by disappearing, and one sentence stating three counts has to keep that.
+ 'opening-gates-gone': ('**GATE PLANNING VERDICTS — plannable 3, unknown 5, blocked 0.**',
+                      '**Gate planning at this SHA.**', 1, 'OPENING-GATE-COUNT-MISSING'),
+ # AND THE UNKNOWN ARM, which is the one that did not exist before: removing G1-B's live non-gate
+ # prerequisite makes five gates plannable again, so the derivation moves and the restatement does
+ # not. Deleting the `planning_unknown_because` input alone would leave the numbers agreeing.
+ 'planning-unknown-gone': ('**Dependencies** G0-A, G1-A, and the production atomic\nsize/alignment assertions.',
+                      '**Dependencies** G0-A, G1-A.', 1, 'OPENING-GATE-COUNT'),
  'manifest-stale':   ('18. **G2-B** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING', '18. **G2-B** — ⟦PRODUCT⟧ ⟦PACKET⟧ **blocking', 1,
                       'MANIFEST-STALE'),
  'unresolved-tail':  ('master-track stores (`engine_master_render.cpp:121` and `:132`) → **13 IN\nSCOPE**.',
@@ -1571,7 +1581,9 @@ _decor_raw = classify_raw_prose(open(__file__).read())
 # ratchet exists to make raw-prose reads deliberate, and the best outcome is fewer of them.
 # 38 -> 36: the status parse and the headline scan moved off `body` onto `body_vis`, so an inline
 # code span can no longer supply a status. Two more raw reads became visible-view reads.
-_DECOR_FLOOR = 36
+# 36 -> 35: the opening planning claim is read from `_visible(pkt)` rather than raw, so a
+# commented-out or code-spanned verdict line cannot satisfy the check that gates it.
+_DECOR_FLOOR = 35
 # THE FLOOR MUST EQUAL TODAY'S COUNT, not merely bound it. As a `>` test the floor could be raised
 # to 999 and the ratchet would pass forever while asserting nothing — codex-worker-2 demonstrated
 # exactly that, and the executable proof stayed green because it tested the CLASSIFIER and never the
@@ -2114,7 +2126,16 @@ for g in gate_hdr:
                   'decidable_for_planning': not withdrawn_pop,
                   'decidable_for_acceptance': not blk,
                   'reason_if_not_acceptance': ('blocked by items %s' % blk) if blk else None,
-                  'reason_if_not_planning': 'own population withdrawn' if withdrawn_pop else None})
+                  'reason_if_not_planning': 'own population withdrawn' if withdrawn_pop else None,
+                  # A LIVE NON-GATE PREREQUISITE IS AN UNRULED INPUT TO PLANNING, and open item 38
+                  # says so: either it makes planning false and populates a typed blocker, or the
+                  # schema states why it does not. That choice is the owner's and I am not making
+                  # it. What was wrong was not the choice being open — it was publishing
+                  # `decidable_for_planning: true` next to a non-empty `non_gate_prerequisites`,
+                  # which states an answer this packet does not have. **Declining to overstate is
+                  # not deciding.** The prerequisites that make the verdict unknown are named here;
+                  # the verdict itself is derived below and closes over dependencies.
+                  'planning_unknown_because': list(nongate)})
 # Dependency propagation. Both decidability flags were LOCAL: G4 published
 # `decidable_for_acceptance: false, blocking_items: [26]`, so a consumer closing item 26 would read
 # G4 as acceptable — while G0-B, G2-A, G2-B and G3, all of which G4 declares as dependencies, remain
@@ -2301,8 +2322,23 @@ for g in gates:
     # the flag a consumer should actually gate on: own blockers AND the whole closure clean
     g['acceptable_with_dependencies'] = (g['decidable_for_acceptance']
                                          and not g['acceptance_blocked_by'])
-    g['plannable_with_dependencies'] = (g['decidable_for_planning']
-                                        and not g['planning_blocked_by'])
+    # `plannable_with_dependencies` WAS A BOOLEAN AND THE ANSWER IS NOT BOOLEAN. It read true for
+    # every gate, G1-B included, while G1-B carries a live non-gate prerequisite whose effect on
+    # planning open item 38 records as UNRULED — and every gate downstream inherited that true.
+    # codex-worker-1 named the false precision and offered the repair I had not seen: an explicit
+    # typed unknown, which resolves the PUBLICATION defect without making the owner's decision.
+    #
+    # The field is REPLACED rather than overloaded. A tri-state string in a boolean's key is worse
+    # than either: `if g['plannable_with_dependencies']` reads "unknown" as TRUE, silently, in every
+    # consumer that was written against /5. Removing the key breaks those consumers loudly at a
+    # schema bump, which is what a meaning that no longer fits its type should do.
+    _unk = sorted({d for d in deps if by_id[d]['planning_unknown_because']} |
+                  ({g['id']} if g['planning_unknown_because'] else set()))
+    g['planning_unknown_from'] = _unk
+    g['planning_verdict'] = ('blocked' if not (g['decidable_for_planning']
+                                               and not g['planning_blocked_by'])
+                             else 'unknown' if _unk
+                             else 'plannable')
 rulings = []
 # `R[1-9]` — the third hardcoded range in this file to be outgrown by its own population. It
 # matched the "R1" inside "**R10 — ", and the lookahead `\n\n\*\*R[1-9] — ` could never match
@@ -2642,22 +2678,27 @@ if prose_blk:
         bad('BLOCKER-SET', f'prose lists {listed}, manifest derives {derived_blk}')
     if WORDNUM.get(prose_blk.group(1).upper()) != len(derived_blk):
         bad('BLOCKER-COUNT', f'prose says {prose_blk.group(1)}, manifest derives {len(derived_blk)}')
-notplan = [g['id'] for g in man['gates'] if not g['decidable_for_planning']]
-# the zero case is a DIFFERENT sentence, not a missing one: when nothing is unplannable the
-# document must say so positively, and the check has to accept both forms or it fails the moment
-# the work succeeds.
-opening = re.search(r'\*\*(ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT) OF THE EIGHT GATES CANNOT BE '
-                    r'DECIDED', pkt)
-allplan = 'EVERY GATE IS PLANNABLE AT THIS SHA' in pkt
-if not opening and not allplan:
-    bad('OPENING-GATE-COUNT-MISSING', 'neither "<N> OF THE EIGHT GATES CANNOT BE DECIDED" nor '
-                                      '"EVERY GATE IS PLANNABLE AT THIS SHA"')
-elif opening and WORDNUM[opening.group(1)] != len(notplan):
-    bad('OPENING-GATE-COUNT', f'opening says {opening.group(1)}, manifest derives '
-                              f'{len(notplan)} ({", ".join(notplan)})')
-elif allplan and notplan:
-    bad('OPENING-GATE-COUNT', f'opening says every gate is plannable, manifest derives '
-                              f'{len(notplan)} that are not ({", ".join(notplan)})')
+# THE DISTRIBUTION, not a boolean and not two prose forms. This was a pair of alternative sentences
+# — "<N> OF THE EIGHT GATES CANNOT BE DECIDED" and "EVERY GATE IS PLANNABLE AT THIS SHA" — with the
+# zero case written as its own claim so the check could not pass by the claim disappearing. That
+# structure was right and its INPUT was wrong: both forms read `decidable_for_planning`, which is
+# true for every gate here and says nothing about the unruled non-gate prerequisite. One sentence
+# stating all three counts replaces both, because with a three-valued verdict a two-form check has
+# a case it cannot express, and an unexpressable case is where the next overstatement lives.
+_verd = {v: [g['id'] for g in man['gates'] if g['planning_verdict'] == v]
+         for v in ('plannable', 'unknown', 'blocked')}
+opening = re.search(r'\*\*GATE PLANNING VERDICTS — plannable (\d+), unknown (\d+), blocked (\d+)\.',
+                    _visible(pkt))
+if not opening:
+    bad('OPENING-GATE-COUNT-MISSING', 'no "**GATE PLANNING VERDICTS — plannable N, unknown M, '
+                                      'blocked K.**" line to check against the derivation')
+else:
+    _said = [int(x) for x in opening.groups()]
+    _got = [len(_verd['plannable']), len(_verd['unknown']), len(_verd['blocked'])]
+    if _said != _got:
+        bad('OPENING-GATE-COUNT', f'opening says plannable/unknown/blocked {_said}, manifest '
+                                  f'derives {_got} — unknown {_verd["unknown"]}, '
+                                  f'blocked {_verd["blocked"]}')
 # MANIFEST-STALE compares the COMMITTED manifest to what this run emits — which is exactly what an
 # emitting run is about to fix, so on `--manifest` it is not a failure but the reason for the run.
 # Moving emission after every check (correct) created this bootstrap: the stale manifest blocked the
