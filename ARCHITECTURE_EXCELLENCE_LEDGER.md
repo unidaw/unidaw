@@ -1208,3 +1208,12 @@ is run-based across lines, duplicate allowed headings are rejected, and R1/S4
 distinguish specified detector commands from the missing runnable check. It reports
 159 controls and schema /7; carried G0-A/G0-B, R7/G4, item-38 ruling, and kind
 classification issues remain. Exact audit is pending.
+
+Exact audit of `be9193d`: the four advertised parser repairs and R1/S4 wording
+pass narrowly, but the two carried release blockers remain unchanged. The schema
+deep-union still retains only the first repeated record's nested value, and the
+owner-choice extractor still terminates at periods inside filenames, truncating
+`control.rs`/`host_stall_check.sh` reasons and potentially hiding later choices.
+Additional fresh fail-opens: escaped literal emphasis can be treated as status,
+malformed parked continuation runs pass, and one-space-indented duplicate H1s
+evade heading uniqueness. No acceptance.
