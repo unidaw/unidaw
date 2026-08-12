@@ -1402,6 +1402,15 @@ route (c); the lead decision remains route (a), extracting the pure
 `RecordVersion` decision and adding the partial-snapshot causal test before R11
 can be called complete.
 
+`P2-CTRL-01` protocol gate: refusal IDs alone are insufficient because unrelated
+version movement can satisfy a losing same-base command, and successful SetRowOps
+may emit no positive diff. The ticket is authorized to design an additive
+`UiDiffType::CommandOutcome` payload echoed with `EventEntry.sampleTime`, plus
+caller waits and concurrent same-base tests. C++ payload and Rust mirror edits
+must be reviewed as one protocol change; no layout size/offset or `kShmVersion`
+bump may be assumed. If the additive payload changes wire layout/schema, stop and
+route it through `P2-SHM-01` before implementation.
+
 `12a0773` closes the R11 follow-ups: Undo/Redo ratchet census is now explicit,
 `-Werror=switch` enforces command exhaustiveness, end-to-end two-edit/undo/redo
 history behavior is covered, and the partial-snapshot append/redo-truncation
