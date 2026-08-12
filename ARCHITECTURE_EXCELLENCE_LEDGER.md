@@ -1201,3 +1201,10 @@ inside code/file identifiers (`control.rs`, `host_stall_check.sh`), truncating
 canonical reasons and potentially hiding later choices. Normal validation and
 155 controls pass, but these require recursive all-record validation and
 Markdown-aware sentence segmentation with full source-span equality.
+
+Owner successor `be9193d` claims those blockers and the R1/S4 detector contradiction
+closed: escaped/entity delimiter handling now preserves separators, parked status
+is run-based across lines, duplicate allowed headings are rejected, and R1/S4
+distinguish specified detector commands from the missing runnable check. It reports
+159 controls and schema /7; carried G0-A/G0-B, R7/G4, item-38 ruling, and kind
+classification issues remain. Exact audit is pending.
