@@ -1069,3 +1069,8 @@ withdrawn broad one-plane/pending-census claims. Required successor: decide and
 encode item-38 planning semantics, represent nonblocking PACKET work, derive all
 blocking state from one tokenized status parser with branch coverage, and remove
 the stale G4 claims. Carried G0/G2/G3/Watchdog blockers remain.
+
+Owner successor `5348f77` claims the five blocker copies are now replaced by one
+token-bounded status derivation, with malformed/ambiguous/negated controls and
+127 controls total. Exact review is pending. Item-38 planning semantics/PACKET
+classification and remaining G4 stale statements are explicitly still owed.
