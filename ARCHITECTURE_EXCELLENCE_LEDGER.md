@@ -768,6 +768,13 @@ sliced directly from packet bytes, with marker-in-comment control and extractor
 floor 45; 102 controls pass. Exact review is pending. G3/G0/M1/item37 remain
 gated.
 
+Exact review of `f49273b` is **BLOCKED**. G4 count derivation passes, but its
+member-list check is vacuous because the heading regex misses the line break;
+ID/extra/count mutations pass. Even if matched, subset logic permits extras and
+duplicates and ignores gate/reason annotations. Item27/29 labels and the raw
+hidden-comment gap are stale; G4/item26, G0, G2, and G3/M1/item37/N/Watchdog
+remain blocked.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
