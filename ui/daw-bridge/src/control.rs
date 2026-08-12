@@ -631,11 +631,10 @@ impl EngineHandle {
     /// the UI uses. Returns None while a write is in progress or no window has
     /// been requested yet.
     pub fn read_clip_window(&self) -> Option<UiClipWindowSnapshot> {
-        loop {
-            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 % 2 == 1 {
-                continue;
-            }
+        let mut attempt = crate::reader::SeqlockAttempt::until(
+            std::time::Instant::now() + crate::reader::DEFAULT_SEQLOCK_DEADLINE,
+        );
+        while let Some(v0) = attempt.begin(unsafe { &(*self.header).ui_version }) {
             let offset = unsafe { (*self.header).ui_clip_offset };
             let bytes = unsafe { (*self.header).ui_clip_bytes };
             if offset == 0 || bytes < std::mem::size_of::<UiClipWindowSnapshot>() as u64 {
@@ -644,12 +643,12 @@ impl EngineHandle {
             let snapshot = unsafe {
                 *(self._mmap.as_ptr().add(offset as usize) as *const UiClipWindowSnapshot)
             };
-            fence(Ordering::Acquire);
-            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 == v1 && v0 % 2 == 0 {
+            if attempt.commit(unsafe { &(*self.header).ui_version }, v0) {
                 return Some(snapshot);
             }
         }
+        // The writer never finished within the deadline: the engine died mid-publish.
+        None
     }
 
     /// Reads one track's clip from the all-tracks published region (v9), under
@@ -661,11 +660,10 @@ impl EngineHandle {
             return None;
         }
         let stride = std::mem::size_of::<UiClipWindowSnapshot>();
-        loop {
-            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 % 2 == 1 {
-                continue;
-            }
+        let mut attempt = crate::reader::SeqlockAttempt::until(
+            std::time::Instant::now() + crate::reader::DEFAULT_SEQLOCK_DEADLINE,
+        );
+        while let Some(v0) = attempt.begin(unsafe { &(*self.header).ui_version }) {
             let offset = unsafe { (*self.header).ui_clip_all_offset };
             let bytes = unsafe { (*self.header).ui_clip_all_bytes };
             if offset == 0 || (bytes as usize) < stride * K_UI_MAX_TRACKS {
@@ -674,12 +672,12 @@ impl EngineHandle {
             let base = self._mmap.as_ptr().wrapping_add(offset as usize)
                 as *const UiClipWindowSnapshot;
             let snapshot = unsafe { *base.add(track_id as usize) };
-            fence(Ordering::Acquire);
-            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 == v1 && v0 % 2 == 0 {
+            if attempt.commit(unsafe { &(*self.header).ui_version }, v0) {
                 return Some(snapshot);
             }
         }
+        // The writer never finished within the deadline: the engine died mid-publish.
+        None
     }
 
     /// Reads the published clip extents — the placed-clip boxes that drive rails
@@ -733,11 +731,10 @@ impl EngineHandle {
     /// count. Callers that do not care use `read_clip_extents`, which is this with the number
     /// dropped — one implementation, so the two can never diverge.
     pub fn read_clip_extents_with_truncation(&self) -> (Vec<UiClipExtent>, u32) {
-        loop {
-            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 % 2 == 1 {
-                continue;
-            }
+        let mut attempt = crate::reader::SeqlockAttempt::until(
+            std::time::Instant::now() + crate::reader::DEFAULT_SEQLOCK_DEADLINE,
+        );
+        while let Some(v0) = attempt.begin(unsafe { &(*self.header).ui_version }) {
             let offset = unsafe { (*self.header).ui_clip_extent_offset };
             if offset == 0 {
                 return (Vec::new(), 0);
@@ -750,12 +747,14 @@ impl EngineHandle {
             for i in 0..count {
                 out.push(unsafe { (*region).extents[i] });
             }
-            fence(Ordering::Acquire);
-            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 == v1 && v0 % 2 == 0 {
+            if attempt.commit(unsafe { &(*self.header).ui_version }, v0) {
                 return (out, truncated);
             }
         }
+        // The writer never finished within the deadline — the engine died mid-publish.
+        // Empty is what a fresh engine returns too, and it is the only answer that does
+        // not hang the caller forever on a process that no longer exists.
+        (Vec::new(), 0)
     }
 
     /// The published harmony timeline (root/scale changes over time), under the
@@ -798,11 +797,10 @@ impl EngineHandle {
     }
 
     pub fn read_harmony(&self) -> Vec<UiHarmonyEvent> {
-        loop {
-            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 % 2 == 1 {
-                continue;
-            }
+        let mut attempt = crate::reader::SeqlockAttempt::until(
+            std::time::Instant::now() + crate::reader::DEFAULT_SEQLOCK_DEADLINE,
+        );
+        while let Some(v0) = attempt.begin(unsafe { &(*self.header).ui_version }) {
             let off = unsafe { (*self.header).ui_harmony_offset };
             if off == 0 {
                 return Vec::new();
@@ -815,12 +813,14 @@ impl EngineHandle {
             for i in 0..count {
                 out.push(unsafe { (*snap).events[i] });
             }
-            fence(Ordering::Acquire);
-            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 == v1 && v0 % 2 == 0 {
+            if attempt.commit(unsafe { &(*self.header).ui_version }, v0) {
                 return out;
             }
         }
+        // The writer never finished within the deadline — the engine died mid-publish.
+        // Empty is what a fresh engine returns too, and it is the only answer that does
+        // not hang the caller forever on a process that no longer exists.
+        Vec::new()
     }
 
     /// The published mixer version — moves only when a track's gain/pan/mute/solo
@@ -833,11 +833,10 @@ impl EngineHandle {
     /// pan in thousandths, mute/solo in flags (MIXER_FLAG_*). Read under the
     /// seqlock so the row is internally consistent.
     pub fn read_mixer(&self) -> Vec<TrackMixer> {
-        loop {
-            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 % 2 == 1 {
-                continue;
-            }
+        let mut attempt = crate::reader::SeqlockAttempt::until(
+            std::time::Instant::now() + crate::reader::DEFAULT_SEQLOCK_DEADLINE,
+        );
+        while let Some(v0) = attempt.begin(unsafe { &(*self.header).ui_version }) {
             let count =
                 unsafe { std::ptr::read_volatile(&(*self.header).ui_track_count) } as usize;
             let count = count.min(K_UI_MAX_TRACKS);
@@ -850,12 +849,14 @@ impl EngineHandle {
                     ops_width: unsafe { (*self.header).ui_track_ops_width[i] },
                 });
             }
-            fence(Ordering::Acquire);
-            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 == v1 && v0 % 2 == 0 {
+            if attempt.commit(unsafe { &(*self.header).ui_version }, v0) {
                 return out;
             }
         }
+        // The writer never finished within the deadline — the engine died mid-publish.
+        // Empty is what a fresh engine returns too, and it is the only answer that does
+        // not hang the caller forever on a process that no longer exists.
+        Vec::new()
     }
 
     /// The published patcher-version counter (moves on any patcher edit).
@@ -871,11 +872,10 @@ impl EngineHandle {
     /// The published patcher graph the engine runs (one global graph today),
     /// under the seqlock. `device_id` is the device it's parked on (0 = default).
     pub fn read_patcher(&self) -> PatcherView {
-        loop {
-            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 % 2 == 1 {
-                continue;
-            }
+        let mut attempt = crate::reader::SeqlockAttempt::until(
+            std::time::Instant::now() + crate::reader::DEFAULT_SEQLOCK_DEADLINE,
+        );
+        while let Some(v0) = attempt.begin(unsafe { &(*self.header).ui_version }) {
             let off = unsafe { (*self.header).ui_patcher_offset };
             if off == 0 {
                 return PatcherView::default();
@@ -898,12 +898,14 @@ impl EngineHandle {
             for i in 0..edges_n {
                 view.edges.push(unsafe { (*region).edges[i] });
             }
-            fence(Ordering::Acquire);
-            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 == v1 && v0 % 2 == 0 {
+            if attempt.commit(unsafe { &(*self.header).ui_version }, v0) {
                 return view;
             }
         }
+        // The writer never finished within the deadline — the engine died mid-publish.
+        // Empty is what a fresh engine returns too, and it is the only answer that does
+        // not hang the caller forever on a process that no longer exists.
+        PatcherView::default()
     }
 
     /// The engine's scale registry (v16). Written once at startup and immutable,
@@ -1262,11 +1264,10 @@ impl EngineHandle {
 
     /// Per-track display names for the current track count (nul-trimmed).
     pub fn read_track_names(&self) -> Vec<String> {
-        loop {
-            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 % 2 == 1 {
-                continue;
-            }
+        let mut attempt = crate::reader::SeqlockAttempt::until(
+            std::time::Instant::now() + crate::reader::DEFAULT_SEQLOCK_DEADLINE,
+        );
+        while let Some(v0) = attempt.begin(unsafe { &(*self.header).ui_version }) {
             let count =
                 unsafe { std::ptr::read_volatile(&(*self.header).ui_track_count) } as usize;
             let count = count.min(K_UI_MAX_TRACKS);
@@ -1276,12 +1277,14 @@ impl EngineHandle {
                 let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
                 out.push(String::from_utf8_lossy(&raw[..end]).into_owned());
             }
-            fence(Ordering::Acquire);
-            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 == v1 && v0 % 2 == 0 {
+            if attempt.commit(unsafe { &(*self.header).ui_version }, v0) {
                 return out;
             }
         }
+        // The writer never finished within the deadline — the engine died mid-publish.
+        // Empty is what a fresh engine returns too, and it is the only answer that does
+        // not hang the caller forever on a process that no longer exists.
+        Vec::new()
     }
 
     /// A patcher node's configuration.
@@ -1314,11 +1317,10 @@ impl EngineHandle {
 
     /// v23: the first instrument's name per track (empty when the track has none).
     pub fn read_track_device_names(&self) -> Vec<String> {
-        loop {
-            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 % 2 == 1 {
-                continue;
-            }
+        let mut attempt = crate::reader::SeqlockAttempt::until(
+            std::time::Instant::now() + crate::reader::DEFAULT_SEQLOCK_DEADLINE,
+        );
+        while let Some(v0) = attempt.begin(unsafe { &(*self.header).ui_version }) {
             let count =
                 unsafe { std::ptr::read_volatile(&(*self.header).ui_track_count) } as usize;
             let count = count.min(K_UI_MAX_TRACKS);
@@ -1328,12 +1330,14 @@ impl EngineHandle {
                 let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
                 out.push(String::from_utf8_lossy(&raw[..end]).into_owned());
             }
-            fence(Ordering::Acquire);
-            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 == v1 && v0 % 2 == 0 {
+            if attempt.commit(unsafe { &(*self.header).ui_version }, v0) {
                 return out;
             }
         }
+        // The writer never finished within the deadline — the engine died mid-publish.
+        // Empty is what a fresh engine returns too, and it is the only answer that does
+        // not hang the caller forever on a process that no longer exists.
+        Vec::new()
     }
 
     /// Per-track stable ids (uiTrackId) + flags (UI_TRACK_FLAG_*), read together under
@@ -1351,11 +1355,10 @@ impl EngineHandle {
     /// the seqlock on every frame, and these are three more 64-entry arrays — 1 KB
     /// of copying at 120 Hz for values that change when a person turns a knob.
     pub fn read_track_quantize(&self) -> (Vec<(u64, u32, i32)>, u32) {
-        loop {
-            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 % 2 == 1 {
-                continue;
-            }
+        let mut attempt = crate::reader::SeqlockAttempt::until(
+            std::time::Instant::now() + crate::reader::DEFAULT_SEQLOCK_DEADLINE,
+        );
+        while let Some(v0) = attempt.begin(unsafe { &(*self.header).ui_version }) {
             let count =
                 unsafe { std::ptr::read_volatile(&(*self.header).ui_track_count) } as usize;
             let count = count.min(K_UI_MAX_TRACKS);
@@ -1371,20 +1374,21 @@ impl EngineHandle {
             }
             let version =
                 unsafe { std::ptr::read_volatile(&(*self.header).ui_quantize_version) };
-            fence(Ordering::Acquire);
-            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 == v1 && v0 % 2 == 0 {
+            if attempt.commit(unsafe { &(*self.header).ui_version }, v0) {
                 return (out, version);
             }
         }
+        // The writer never finished within the deadline — the engine died mid-publish.
+        // Empty is what a fresh engine returns too, and it is the only answer that does
+        // not hang the caller forever on a process that no longer exists.
+        (Vec::new(), 0)
     }
 
     pub fn read_track_ids_and_flags(&self) -> (Vec<u32>, Vec<u8>) {
-        loop {
-            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 % 2 == 1 {
-                continue;
-            }
+        let mut attempt = crate::reader::SeqlockAttempt::until(
+            std::time::Instant::now() + crate::reader::DEFAULT_SEQLOCK_DEADLINE,
+        );
+        while let Some(v0) = attempt.begin(unsafe { &(*self.header).ui_version }) {
             let count =
                 unsafe { std::ptr::read_volatile(&(*self.header).ui_track_count) } as usize;
             let count = count.min(K_UI_MAX_TRACKS);
@@ -1394,12 +1398,14 @@ impl EngineHandle {
                 ids.push(unsafe { std::ptr::read_volatile(&(*self.header).ui_track_id[i]) });
                 flags.push(unsafe { std::ptr::read_volatile(&(*self.header).ui_track_flags[i]) });
             }
-            fence(Ordering::Acquire);
-            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
-            if v0 == v1 && v0 % 2 == 0 {
+            if attempt.commit(unsafe { &(*self.header).ui_version }, v0) {
                 return (ids, flags);
             }
         }
+        // The writer never finished within the deadline — the engine died mid-publish.
+        // Empty is what a fresh engine returns too, and it is the only answer that does
+        // not hang the caller forever on a process that no longer exists.
+        (Vec::new(), Vec::new())
     }
 
     /// v24 per-insert meters for one track SLOT: (device_id, in_peak_mb, out_peak_mb,
