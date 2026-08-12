@@ -106,7 +106,9 @@ The blockers from the exact review are reconciled here, and the count is deliber
    packet**: a sentence of the form "each population carries its extraction command" is false at
    this SHA by construction, and this paragraph previously ended with one while opening with the
    disqualification, because I patched its head across three rounds and left its tail alone.
-2. **The open list is 39 atomic items, not 15 categories.** The four that compression swallowed are
+2. **The list is 39 atomic items, of which 30 are open — not 15 categories.** The word
+   "atomic" counts the whole list including CLOSED entries, and this sentence read "the open
+   list is 39" while the header said 30 open; backend caught the two readings. The four that compression swallowed are
    restored: G0-B's unowned mutation floor, G2-A's BATCH blindness, G2-B's probe-order false-green,
    and G3's debug-env requirement plus its self-contradicting static check.
 3. **G0-A's mailbox census was wrong twice and is corrected with its method.** See G0-A.
@@ -1475,7 +1477,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `c6b2f5225c03272adda962d8fe8d0d643bed28da`, A.0 SCRIPT BLOB `3cba8678d66695535534324114bb09a1dff4021b`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `a736cc96fd61ed0e06771bc772bb576b67b5c691`, A.0 SCRIPT BLOB `ef4f877428b78a830592d606a4b221676d13ab3d`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1598,7 +1600,17 @@ at the syntax the document is written in. **The check is a DELIMITER-PARITY one 
 than that**: `**` runs are counted in the VISIBLE view, because a delimiter inside a code span is
 literal text rather than emphasis, and an odd count per item is refused. It cannot see a mis-NESTED
 pair, only an unmatched one — which is the defect an edit actually produces, and is the one that
-occurred. Run against the predecessor's packet it names item 38 and nothing else. **A BACKSLASH
+occurred. Run against the predecessor's packet it names item 38 and nothing else.
+
+**ESCAPES ARE ONE FACT WITH TWO CONSUMERS, and having only the first was the next defect.** The
+parity check subtracted backslash escapes and the STATUS PARSER did not, so a status written
+`**NOT BLOCKING\_EXTRA ...**` read as clean: the phrase's boundary lookahead saw a backslash, which is not a token
+character, and the token scan split at it and found an exact `BLOCKING` — while a reader sees
+`NOT BLOCKING_EXTRA`, the exact form the grammar claims to reject. codex-worker-1's probe. The two
+consumers need OPPOSITE things from one fact, which is why they share a HELPER and not a transform:
+the status parser needs the escaped character PRESENT because it is part of a word, and parity needs
+it ABSENT from the delimiter population because it is literal text. Both are answered by knowing
+which characters are escaped, derived once. **A BACKSLASH
 ESCAPE IS NOT A DELIMITER**: `\**` is one literal asterisk followed by one emphasis character, and
 counting `**` substrings saw a pair — so a real unmatched opener could ride in beside an escaped one
 and the parity stay even. Escapes are inside this packet's Markdown subset, so an ALLOWED form was
@@ -1613,6 +1625,31 @@ is the only reason it was written. A check nothing can trigger is worse than no 
 reads as coverage. The rule is at the boundary instead: a top-level heading is a GATE or one of the
 document's named structural sections, and there is no third kind — a rule rather than a pinned
 sequence, so it needs no edit when a gate is added and an invented heading has nowhere to be.
+**AND IT MATCHED BY PREFIX, so the final section's heading with one extra word appended passed as
+the section it truncates**, carrying orphan text with an unclosed emphasis run that nothing ranged
+over and no MANIFEST-STALE to show for it. **The heading is not quoted here, and that is a rule
+rather than a style**: four controls anchor on that heading's opening words, and writing it into
+this paragraph put their FIRST occurrence in the explanation instead of the document — all four
+mutated prose, landed cleanly, and reported themselves BLIND. A control's anchor is a string the
+whole document shares, so the text describing a control must not contain it.
+
+**AND THE HARNESS COULD NOT SEE THAT, so `CONTROL-ANCHOR-AMBIGUOUS` now can.** It checked anchors
+for the ZERO case only. An anchor is replaced by occurrence — `replace(old, new, n)` takes the first
+n — so an anchor that occurs more times than its control declares is a POSITION-BASED selection with
+no stated meaning, and it reads as green either way. Turning the check on found **fifteen** already
+in the file: every one of them targeted a census row or a population datum whose prose mention came
+LATER in the document, so all fifteen were correct BY ORDERING and none by construction. That is the
+property my own paragraph broke by inserting an occurrence above four of them. Each anchor now
+carries enough of its own line to be unique. `LAST` is exempt because it names the occurrence it
+means; multiplicity is not ambiguity when the control says which one. The eighth prefix-where-an-equality-belonged in this checker,
+and the shortest-lived: it was written the same day. Two of the headings carry derived tails and are
+matched by their FULL patterns; the rest are exact.
+
+**A STATUS PARKED AFTER PROSE was an absence the region could not see**, for the third time in this
+parser and in a third disguise. `_status_runs` stops at the first thing that is not whitespace or a
+marker, so `— some prose **NOT BLOCKING...**` yields an EMPTY region: no tokens, no status, and the
+default answering "not blocking". The headline's first line is scanned outside the region as well,
+and a status word found there that the region did not account for is refused.
 
 **AND A GRAMMAR IS NOT A TOKENISER.** The parse below closed the three scan shapes and codex-worker-1
 broke IT three ways in the next pass, each naming something the tokeniser had thrown away.
@@ -1650,7 +1687,7 @@ only ADDS one is a no-op and reports BLIND correctly — a repaired opt-out prod
 tag — and it therefore adds the span AND breaks the real status, so the old scan reads the span as
 the status while the new parse names the malformed reach.
 
-**Controls.** One hundred forty-nine, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** One hundred fifty-four, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1671,7 +1708,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `unclassified-kinded`, `unclassified-said`, `opening-gates-gone`, `planning-unknown-gone`, `status-slash`, `status-wrapped`, `status-after-ok`, `item-md-escape`, `section-orphan`, `schema-unstated`, `ruling-state-adverb`, `ruling-state-cited`, `item-state-stale`, `owner-choice-said`, `owner-choice-gone`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `unclassified-kinded`, `unclassified-said`, `opening-gates-gone`, `planning-unknown-gone`, `status-slash`, `status-wrapped`, `status-after-ok`, `item-md-escape`, `section-orphan`, `schema-unstated`, `ruling-state-adverb`, `ruling-state-cited`, `item-state-stale`, `owner-choice-said`, `owner-choice-gone`, `section-prefix`, `status-escaped`, `status-parked`, `restate-total`, `restate-open`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
@@ -1708,16 +1745,19 @@ the authored list is stale by construction and the gate fails until it is re-aut
 This is weaker than a derivation and stronger than what preceded it, which was a hand selection
 presented as a population. It also matches what the packet already does for the
 hand-classified populations, so the two items resolve on one mechanism rather than two.
-**PARTLY APPLIED, and this clause said NOT AT ALL for several SHAs after the first half landed.**
-G1-B's population IS authored under R1 — seven request/answer readers, enumerated from the
-`Request*` enum with the roster printed. What has not been written anywhere is the DETECTOR half:
-no drift detector exists for that population, and item 25's categories still carry no member lists.
-The ruling states the mechanism; writing the lists and the detectors is work.
-codex-worker-1 found this clause still denying the half that shipped. The reviewer found
+**APPLIED FOR G1-B, NOT FOR ITEM 25, and this clause has now been wrong in BOTH directions.** It
+said NOT AT ALL for several SHAs after the population landed; I corrected it to say the DETECTOR
+half was missing, and that was wrong too — G1-B publishes both, the seven-member roster enumerated
+from the `Request*` enum and the two drift detectors beside it. **I wrote that correction after
+grepping a line range that stopped short of the detectors**, which is the same mistake as the
+original, one range further on. What genuinely remains is item 25 (all): its six hand-classified
+populations carry counts, not member lists, and deriving them needs a predicate nobody has proposed.
+codex-worker-1 found both wrong versions of this clause. The reviewer found
 this by reading R1 against the gates rather than against itself, which is the right test and one I
 did not run: I wrote "the packet lists the members explicitly" in the same commit in which it did
 not. **Cost:** a reviewer must read the lists, not re-run a command; the detector bounds staleness,
-not correctness. This work is filed at item 11 (G1-B) and item 25 (all).
+not correctness. What remains under this ruling is filed at item 25 (all); the G1-B half is
+discharged, and any further detector work there is item 33 (G1-B)'s, which is where S4 puts it.
 
 **R2 — item 18 (G2-B): TWO-LEVEL READINESS, not a recovery-only exemption.** Readiness is staged —
 `mapped-and-bypassed` and `mirror-complete` — and dispatch is permitted at the lower level. The

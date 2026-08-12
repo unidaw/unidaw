@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '5ce6674a6be128e4841c7ced0c83e3c99c89da7b'
+PREV_TIP     = '7d29752220cd29c743d2f8470b1a40776985fab2'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -273,6 +273,12 @@ CONTROLS = {
                       '37. **G3** — editorial duplicate.\n\n# Provenance of this packet', 1,
                       'ITEM-NUMBER-DUPLICATE'),
  'open-count':       ('# Open items — 39 atomic', '# Open items — 40 atomic', 1, 'OPEN-COUNT'),
+ # THE RESTATEMENT'S TWO NUMBERS, one control each. The total half was checked while the sentence
+ # read as the open count; the open half had no check at all until it had a number to check.
+ 'restate-total':    ('The list is 39 atomic items, of which 30 are open',
+                      'The list is 38 atomic items, of which 30 are open', 1, 'OPEN-COUNT-RESTATED'),
+ 'restate-open':     ('The list is 39 atomic items, of which 30 are open',
+                      'The list is 39 atomic items, of which 29 are open', 1, 'OPEN-COUNT-RESTATED'),
  'closed-count':     ('9 CLOSED at this SHA, 30 open', '8 CLOSED at this SHA, 30 open', 1,
                       'OPEN-CLOSED-COUNT'),
  'open-arithmetic':  ('9 CLOSED at this SHA, 30 open', '9 CLOSED at this SHA, 19 open', 1,
@@ -280,11 +286,12 @@ CONTROLS = {
  # anchored on the tree hash, not on a count: the previous anchor was '11 RAW +', which the
  # document outgrew, leaving the control unable to land while the gate still reported PASS
  'stale-a0-sample':  ('product 75c6f064 tree 699abfe8', 'product 75c6f064 tree 699abfe9', 1, 'A0-SAMPLE-STALE'),
- 'member-per-type':  ('EventEntry 7/6', 'EventEntry 7/7', 1, 'MEMBER-RUST'),
+ 'member-per-type':  ('    EventEntry 7/6', '    EventEntry 7/7', 1, 'MEMBER-RUST'),
  'member-dropped':   ('    HarmonyEvent 4/4\n', '', 1, 'MEMBER-UNLISTED'),
  'root-wide-grep':   ('`git grep -n sendProcessBlock`', '`grep -rn sendProcessBlock .`', 1,
                       'COMMAND-ROOT-WIDE'),
- 'unmarked-popn':    ('exact. [HAND-CLASSIFIED — open item 25 (all)]', 'exact.', 1,
+ 'unmarked-popn':    ('addresses* — 8, exact. [HAND-CLASSIFIED — open item 25 (all)]',
+                     'addresses* — 8, exact.', 1,
                       'POPULATION-UNCOMMANDED'),
  'handmade-count':   ('**6 populations are HAND-CLASSIFIED', '**4 populations are HAND-CLASSIFIED', 1,
                       'HANDMADE-COUNT'),
@@ -346,9 +353,9 @@ CONTROLS = {
  'withdrawn-claim':  ('\n# Open items', '\nG2-B now covers mirror replay.\n\n# Open items', 1,
                       'WITHDRAWN-STILL-CLAIMED'),
  'orphan-number':    ('\n23. ', '\n99. ', 1, 'OPEN-ORPHAN-NUMBER'),
- 'dangling-ref':     ('open item 18 (G2-B)', 'open item 97 (G2-B)', 1, 'OPEN-REF-DANGLING'),
- 'wrong-gate-ref':   ('open item 18 (G2-B)', 'open item 18 (G3)', 1, 'OPEN-REF-WRONG-GATE'),
- 'ungated-ref':      ('open item 18 (G2-B)', 'open item 18', 1, 'OPEN-REF-UNGATED'),
+ 'dangling-ref':     ('mirror half is open item 18 (G2-B)', 'mirror half is open item 97 (G2-B)', 1, 'OPEN-REF-DANGLING'),
+ 'wrong-gate-ref':   ('mirror half is open item 18 (G2-B)', 'mirror half is open item 18 (G3)', 1, 'OPEN-REF-WRONG-GATE'),
+ 'ungated-ref':      ('mirror half is open item 18 (G2-B)', 'mirror half is open item 18', 1, 'OPEN-REF-UNGATED'),
  'raw-without-cmd':  ('RAW 13 (`grep',
                       'RAW 13, and the command that produces it appears only after this deliberately '
                       'long interposed clause, which is what a claim with no reachable command looks '
@@ -504,9 +511,9 @@ CONTROLS = {
  # codex-worker-1's four exact reproductions against the previous SHA
  'census-row-moved': ("      host indirect handoff              `git grep -n 'process(pluginInputPtrs' apps/juce_host_process_main.cpp | wc -l` returns 1.\n", '', 1,
                       'CENSUS-ROSTER'),
- 'writer-wrong-path': ('juce:989/994', 'fake:989/994', 1, 'OUT-MEMBERS'),
+ 'writer-wrong-path': ('writer     juce:989/994', 'writer     fake:989/994', 1, 'OUT-MEMBERS'),
  # the PREFIXED variant: anchoring alone left the label unparsed and the sticky path absorbed it
- 'writer-path-prefix': ('juce:989/994', 'fake/juce:989/994', 1, 'OUT-MEMBERS'),
+ 'writer-path-prefix': ('writer     juce:989/994', 'writer     fake/juce:989/994', 1, 'OUT-MEMBERS'),
  # the NUMERIC prefix, which walked past both the label scan and the tokenizer
  # the blocker KIND classification, now marked in place and derived from the markers
  # a label detached from its colon by a space, riding the sticky path
@@ -600,6 +607,19 @@ CONTROLS = {
  'section-orphan':   ('\n# Provenance of this packet',
                       '\n# Interlude\n\nlive text belonging to no item.\n\n# Provenance of this packet',
                       1, 'SECTION-UNKNOWN'),
+ # THE PREFIX FORM, which `startswith` let through: a heading that reads as the real section, ends
+ # the one above it, and carries orphan text with an unclosed emphasis run nothing ranges over.
+ 'section-prefix':   ('\n# Provenance of this packet',
+                      "\n# Provenance of this packet's own numbers fake\n\norphan **text.\n"
+                      '\n# Provenance of this packet', 1, 'SECTION-UNKNOWN'),
+ # AND THE ESCAPED STATUS: a reader sees NOT BLOCKING_EXTRA, the raw bytes hid the underscore behind
+ # a backslash that is not a token character.
+ 'status-escaped':   ('38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING.',
+                      '38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING\\_EXTRA.', 1, 'ITEM-STATUS-MISSING'),
+ # A STATUS PARKED AFTER PROSE, where the leading bold sequence cannot reach it and absence read as
+ # non-blocking.
+ 'status-parked':    ('38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING.',
+                      '38. **G1-B** — scoped to G1-B. **NOT BLOCKING.', 1, 'ITEM-STATUS-MISSING'),
  # A SHAPE CHANGE UNDER AN UNCHANGED VERSION. Reverting the schema string to the predecessor's while
  # the keys differ is exactly what 359cde8 shipped, and it is what this control reinstates.
  'schema-unstated':  ('canonical machine-readable source, at `ae-p1.2-manifest/7`',
@@ -656,12 +676,12 @@ CONTROLS = {
  'gate-bad-suffix':  ('**Dependencies** G0-A, G0-B', '**Dependencies** G0-A, G0-B_x', 1,
                       'GATE-DEP-UNKNOWN'),
  # a bare number posing as a prior citation — the grammar was written from a citation's TAIL
- 'writer-bare-num':  ('juce:989/994', '1234 :989/994', 1, 'OUT-MEMBERS'),
- 'writer-num-suffix': ('juce:989/994', 'fake9 :989/994', 1, 'OUT-MEMBERS'),
- 'writer-num-prefix': ('juce:989/994', '9/ :989/994', 1, 'OUT-MEMBERS'),
- 'writer-in-comment': ('juce:989/994', '<!--juce:989/994-->', 1, 'OUT-MEMBERS'),
- 'writer-wrapped-sep': ('juce:989/994', 'fake<!--x-->:989/994', 1, 'OUT-MEMBERS'),
- 'writer-detached':  ('juce:989/994', 'fake :989/994', 1, 'OUT-MEMBERS'),
+ 'writer-bare-num':  ('writer     juce:989/994', 'writer     1234 :989/994', 1, 'OUT-MEMBERS'),
+ 'writer-num-suffix': ('writer     juce:989/994', 'writer     fake9 :989/994', 1, 'OUT-MEMBERS'),
+ 'writer-num-prefix': ('writer     juce:989/994', 'writer     9/ :989/994', 1, 'OUT-MEMBERS'),
+ 'writer-in-comment': ('writer     juce:989/994', 'writer     <!--juce:989/994-->', 1, 'OUT-MEMBERS'),
+ 'writer-wrapped-sep': ('writer     juce:989/994', 'writer     fake<!--x-->:989/994', 1, 'OUT-MEMBERS'),
+ 'writer-detached':  ('writer     juce:989/994', 'writer     fake :989/994', 1, 'OUT-MEMBERS'),
  'blocker-kind':     ('35. **G0-B** — ⟦PRODUCT⟧ ', '35. **G0-B** — ', 1, 'BLOCKER-KIND'),
  'packet-marker-gone': ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ', '37. **G3** — ⟦PRODUCT⟧ ', 1,
                       'PACKET-SET-RESTATED'),
@@ -693,14 +713,14 @@ CONTROLS = {
                       '36. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ⟦PACKET⟧ ', 1, 'KIND-MARKER-UNKNOWN'),
  'packet-marker-typo': ('36. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ ', '36. **G3** — ⟦PRODUCT⟧ ⟦PAKCET⟧ ', 1,
                       'KIND-MARKER-UNKNOWN'),
- 'writer-path-numeric': ('juce:989/994', '9/juce:989/994', 1, 'OUT-MEMBERS'),
+ 'writer-path-numeric': ('writer     juce:989/994', 'writer     9/juce:989/994', 1, 'OUT-MEMBERS'),
  'control-dupe':     ('`member-per-type`,', '`member-per-type`, `member-per-type`,', 1,
                       'CONTROL-DUPLICATE'),
  'gate-multidigit':  ('**Dependencies** G0-A, G0-B', '**Dependencies** G0-A, G10-B', 1,
                       'GATE-DEP-UNKNOWN'),
  # a bullet describing a FORMER withdrawal must not be reported as withdrawn
  'withdrawn-status': ('4. **WITHDRAWN', '4. **Withdrawn-but-live', 1, 'MANIFEST-STALE'),
- 'writer-regroup':   ('juce:989/994', 'juce:989, :994', 1, 'OUT-MEMBERS'),
+ 'writer-regroup':   ('writer     juce:989/994', 'writer     juce:989, :994', 1, 'OUT-MEMBERS'),
  'control-phantom':  ('`wrong-raw`,', '`wrongraw`, `wrong-raw`,', 1, 'CONTROL-PHANTOM'),
  'diagram-edge':     ('    G0-B → G4', '    G0-B → G1-A', 1, 'DIAGRAM-EDGE'),
  'ratchet-count':    ('ratchet holds at **four** at this SHA', 'ratchet holds at **five** at this SHA', 1,
@@ -770,6 +790,40 @@ def _unhidden(t):
             for i in range(m.start(), m.end()):
                 if out[i] != '\n': out[i] = ' '
     return ''.join(out)
+# AND A BACKSLASH ESCAPE IS NOT A DELIMITER. `\**` is one literal asterisk followed by one emphasis
+# character, and counting `**` substrings saw a pair — so an item could gain a real unmatched opener
+# and stay even. codex-worker-1's probe; backslash escapes are inside this packet's Markdown subset,
+# so an allowed form was fail-open. CommonMark escapes any ASCII punctuation, and that whole class is
+# removed before counting rather than the one character the probe used.
+_ESCAPE_RE = re.compile(r'\\[!-/:-@\[-`{-~]')
+
+def _render(t):
+    """CommonMark backslash escapes resolved: (rendered text, literal flag per character).
+
+    ONE DERIVATION, TWO CONSUMERS, because having only the first was the defect. Parity subtracted
+    escapes and the STATUS PARSER did not, so `**NOT BLOCKING\\_EXTRA...**` read as a clean status:
+    the phrase's lookahead saw a backslash, which is not a token character, and the token scan split
+    at the backslash and found an exact `BLOCKING`. A reader sees `NOT BLOCKING_EXTRA`, which the
+    grammar claims to reject. codex-worker-1's probe.
+
+    The two consumers need OPPOSITE things from one fact, which is why a shared helper and not a
+    shared transform: the status parser needs the escaped character PRESENT (it is part of a word),
+    parity needs it ABSENT from the delimiter population (it is literal text, not a delimiter). Both
+    are answered by knowing WHICH characters are escaped.
+    """
+    out, lit, i = [], [], 0
+    while i < len(t):
+        if t[i] == chr(92) and i + 1 < len(t) and _ESCAPE_RE.match(t[i:i + 2]):
+            out.append(t[i + 1]); lit.append(True); i += 2
+        else:
+            out.append(t[i]); lit.append(False); i += 1
+    return ''.join(out), lit
+
+def _delimiters(t):
+    """The text with ESCAPED characters removed, so a literal `*` is not counted as a delimiter."""
+    r, lit = _render(t)
+    return ''.join(c for c, l in zip(r, lit) if not l)
+
 unhid = _unhidden(pkt)
 
 # ---- 1. open items: header == body, contiguous, no orphan markers ---------------------------
@@ -920,7 +974,11 @@ def _status_runs(rest):
 
 _ITEM_STATUS, _ITEM_HEADS_SEEN, _ITEM_REGION = {}, set(), {}
 for _m in _HEADS_RE.finditer(body_vis):
-    _n2, _runs = int(_m.group(1)), _status_runs(_m.group(2))
+    # RENDERED, not raw. `**NOT BLOCKING\_EXTRA...**` read as a clean status because the phrase's
+    # lookahead saw a backslash — not a token character — and the token scan split at it and found an
+    # exact `BLOCKING`, while a reader sees `NOT BLOCKING_EXTRA`. The parser now reads what the
+    # reader reads, from the same derivation the parity check subtracts.
+    _n2, _runs = int(_m.group(1)), _status_runs(_render(_m.group(2))[0])
     _ITEM_HEADS_SEEN.add(_n2)
     _ITEM_REGION[_n2] = _runs
     _ph = _PHRASE_RE.match(_runs[0]) if _runs else None
@@ -948,6 +1006,17 @@ for _m in _HEADS_RE.finditer(body_vis):
     if _toks and _n2 not in _ITEM_STATUS and _n2 not in closed_set:
         bad('ITEM-STATUS-MISSING', f'item {_n2} names the status word outside the leading phrase of '
                                    f'its first bold run')
+    # A STATUS PARKED AFTER PROSE IS AN ABSENCE THE REGION CANNOT SEE. `_status_runs` stops at the
+    # first thing that is not whitespace or a marker, so `— some prose **NOT BLOCKING...**` yields an
+    # EMPTY region: no tokens, no status, and `.get(n, False)` answering "not blocking" — absence
+    # read as a value, for the third time in this parser and in a third disguise. codex-worker-1's
+    # probe. The headline's FIRST LINE is scanned outside the region as well; item 27's second
+    # `BLOCKING`, which is prose deep in its body, is not on that line and stays prose.
+    _line1 = _render(_m.group(2).split('\n', 1)[0])[0]
+    _outside = [t for t in _TOKEN_RE.findall(_line1) if t.startswith('BLOCKING')]
+    if len(_outside) > len(_toks) and _n2 not in closed_set:
+        bad('ITEM-STATUS-MISSING', f'item {_n2} names the status word on its headline but outside '
+                                   f'the leading bold sequence, where no status can be declared')
 
 # AN ITEM'S STATE, WHEREVER IT IS ASSERTED, MUST AGREE WITH THE ITEM. `RULING-ITEM-STATE` forbids a
 # SHAPE, and codex-worker-1 walked out of it three times in one pass — an adverb between the verb and
@@ -1006,8 +1075,15 @@ else:
     if cl != closed:     bad('OPEN-CLOSED-COUNT', f'header says {cl} CLOSED, body marks {closed}')
     if tot - cl != op:   bad('OPEN-ARITHMETIC', f'{tot} - {cl} is {tot-cl}, header says {op}')
 for c in [c for c in cand if c not in nums]: bad('OPEN-ORPHAN-NUMBER', str(c))
-for v in set(re.findall(r'open list is (\d+) atomic', pkt)):
+# THE PHRASE NAMES WHICH COUNT IT RESTATES. As "the open list is N atomic" it was checked against
+# the TOTAL while reading as the OPEN count, so a true sentence and a true check described
+# different numbers and backend read the contradiction straight off the page.
+for v in set(re.findall(r'The list is (\d+) atomic items, of which \d+ are open', unhid)):
     if hdr and v != hdr.group(1): bad('OPEN-COUNT-RESTATED', f'{v} vs header {hdr.group(1)}')
+# AND THE OPEN HALF, which the sentence now states and nothing checked — adding a second number
+# to a restatement without a second comparison is how the first one came to mean the wrong thing.
+for v in set(re.findall(r'The list is \d+ atomic items, of which (\d+) are open', unhid)):
+    if hdr and v != hdr.group(3): bad('OPEN-COUNT-RESTATED', f'open {v} vs header {hdr.group(3)}')
 
 # ---- 2. cross-references must resolve AND name the gate they land on ------------------------
 # resolution alone is worthless: three references pointed at real items belonging to other gates
@@ -1701,7 +1777,8 @@ _decor_raw = classify_raw_prose(open(__file__).read())
 # code span can no longer supply a status. Two more raw reads became visible-view reads.
 # 36 -> 35: the opening planning claim is read from `_visible(pkt)` rather than raw, so a
 # commented-out or code-spanned verdict line cannot satisfy the check that gates it.
-_DECOR_FLOOR = 35
+# 35 -> 34: both halves of the open-list restatement moved onto `unhid`.
+_DECOR_FLOOR = 34
 # THE FLOOR MUST EQUAL TODAY'S COUNT, not merely bound it. As a `>` test the floor could be raised
 # to 999 and the ratchet would pass forever while asserting nothing — codex-worker-2 demonstrated
 # exactly that, and the executable proof stayed green because it tested the CLASSIFIER and never the
@@ -2047,38 +2124,31 @@ _listed_tokens = re.findall(r'`([^`]+)`', pkt[_cs + len('list with `--list`:'):
 _dupes = sorted({t for t in _listed_tokens if _listed_tokens.count(t) > 1})
 if _dupes: bad('CONTROL-DUPLICATE', 'listed more than once: ' + ', '.join(_dupes))
 names = set(_listed_tokens)
-WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twenty',
-        21: 'Twenty-one', 22: 'Twenty-two', 23: 'Twenty-three', 24: 'Twenty-four',
-        25: 'Twenty-five', 26: 'Twenty-six', 27: 'Twenty-seven', 28: 'Twenty-eight',
-        29: 'Twenty-nine', 30: 'Thirty', 31: 'Thirty-one', 32: 'Thirty-two',
-        41: 'Forty-one', 42: 'Forty-two', 43: 'Forty-three', 44: 'Forty-four',
-        45: 'Forty-five', 46: 'Forty-six', 47: 'Forty-seven', 48: 'Forty-eight',
-        49: 'Forty-nine', 50: 'Fifty', 51: 'Fifty-one', 52: 'Fifty-two',
-        53: 'Fifty-three', 54: 'Fifty-four', 55: 'Fifty-five', 56: 'Fifty-six',
-        57: 'Fifty-seven', 58: 'Fifty-eight', 59: 'Fifty-nine', 60: 'Sixty',
-        61: 'Sixty-one', 62: 'Sixty-two', 63: 'Sixty-three', 64: 'Sixty-four',
-        65: 'Sixty-five', 66: 'Sixty-six', 67: 'Sixty-seven', 68: 'Sixty-eight',
-        69: 'Sixty-nine', 70: 'Seventy', 71: 'Seventy-one', 72: 'Seventy-two',
-        73: 'Seventy-three', 74: 'Seventy-four', 75: 'Seventy-five', 76: 'Seventy-six',
-        77: 'Seventy-seven', 78: 'Seventy-eight', 79: 'Seventy-nine', 80: 'Eighty',
-        81: 'Eighty-one', 82: 'Eighty-two', 83: 'Eighty-three', 84: 'Eighty-four',
-        85: 'Eighty-five', 86: 'Eighty-six', 87: 'Eighty-seven', 88: 'Eighty-eight',
-        89: 'Eighty-nine', 90: 'Ninety', 91: 'Ninety-one', 92: 'Ninety-two',
-        93: 'Ninety-three', 94: 'Ninety-four', 95: 'Ninety-five', 96: 'Ninety-six',
-        33: 'Thirty-three', 34: 'Thirty-four', 35: 'Thirty-five', 36: 'Thirty-six',
-        37: 'Thirty-seven', 38: 'Thirty-eight', 39: 'Thirty-nine', 40: 'Forty',
-        95: 'Ninety-five', 96: 'Ninety-six', 97: 'Ninety-seven',
-        98: 'Ninety-eight', 99: 'Ninety-nine', 100: 'One hundred', 101: 'One hundred one',
-        102: 'One hundred two', 103: 'One hundred three', 104: 'One hundred four',
-        105: 'One hundred five', 106: 'One hundred six', 107: 'One hundred seven',
-        108: 'One hundred eight', 109: 'One hundred nine', 110: 'One hundred ten',
-        111: 'One hundred eleven', 112: 'One hundred twelve', 113: 'One hundred thirteen',
-        114: 'One hundred fourteen', 115: 'One hundred fifteen', 116: 'One hundred sixteen',
-        117: 'One hundred seventeen', 118: 'One hundred eighteen',
-        # EXTENDED BY RANGE: this hand-written table ran out three times in one evening, each time
-        # producing "prose says X, harness has N" with X and N equal — a mismatch report where the
-        # two sides agree, because the lookup returned '?' and the message printed the integer.
-        119: 'One hundred nineteen', 120: 'One hundred twenty', 121: 'One hundred twenty-one', 122: 'One hundred twenty-two', 123: 'One hundred twenty-three', 124: 'One hundred twenty-four', 125: 'One hundred twenty-five', 126: 'One hundred twenty-six', 127: 'One hundred twenty-seven', 128: 'One hundred twenty-eight', 129: 'One hundred twenty-nine', 130: 'One hundred thirty', 131: 'One hundred thirty-one', 132: 'One hundred thirty-two', 133: 'One hundred thirty-three', 134: 'One hundred thirty-four', 135: 'One hundred thirty-five', 136: 'One hundred thirty-six', 137: 'One hundred thirty-seven', 138: 'One hundred thirty-eight', 139: 'One hundred thirty-nine', 140: 'One hundred forty', 141: 'One hundred forty-one', 142: 'One hundred forty-two', 143: 'One hundred forty-three', 144: 'One hundred forty-four', 145: 'One hundred forty-five', 146: 'One hundred forty-six', 147: 'One hundred forty-seven', 148: 'One hundred forty-eight', 149: 'One hundred forty-nine', 150: 'One hundred fifty'}
+# GENERATED, NOT LISTED. This was a hand-written table and it ran out FOUR times — three recorded in
+# its own comment, and then a fourth under that comment, each producing "prose says X, harness has N"
+# with X and N EQUAL, because the lookup returned '?' and the message printed the integer. A list
+# that must be extended every time the population grows is not a table, it is a countdown. Related:
+# every other place in this file where a hand-maintained list was replaced by the rule behind it.
+_ONES = ('zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen '
+         'fifteen sixteen seventeen eighteen nineteen').split()
+_TENS = ('twenty thirty forty fifty sixty seventy eighty ninety').split()
+
+def _words(n):
+    if n < 20:
+        return _ONES[n]
+    if n < 100:
+        return _TENS[n // 10 - 2] + ('-' + _ONES[n % 10] if n % 10 else '')
+    return _ONES[n // 100] + ' hundred' + (' ' + _words(n % 100) if n % 100 else '')
+
+class _WordTable:
+    def get(self, n, default=None):
+        return _words(n).capitalize() if isinstance(n, int) and 0 <= n < 1000 else default
+    def __contains__(self, w):
+        return any(_words(i).capitalize() == w for i in range(1000))
+    def __getitem__(self, n):
+        return _words(n).capitalize()
+
+WORD = _WordTable()
 if not listed:
     bad('CONTROL-PROSE-MISSING', 'no "**Controls.** <N>, each naming" sentence')
 elif listed.group(1) != WORD.get(len(CONTROLS), '?'):
@@ -2112,9 +2182,21 @@ else:
 
 
 pristine = before_pkt if NEG else pkt
-for cname, (canchor, _, _, _) in sorted(CONTROLS.items()):
-    if pristine.count(canchor) < 1:
+# AN ANCHOR MUST OCCUR AS MANY TIMES AS ITS CONTROL DECLARES, and `< 1` only caught the zero case.
+# Writing a control's own anchor into the PARAGRAPH THAT EXPLAINS IT put the first occurrence in the
+# explanation, so four controls mutated prose, landed cleanly, and reported themselves BLIND — the
+# harness replaces occurrence one and the document had gained a new one above it. A control's anchor
+# is a string the whole document shares; the count is part of the anchor, so it is checked.
+for cname, (canchor, _, ccount, _) in sorted(CONTROLS.items()):
+    _seen = pristine.count(canchor)
+    if _seen < 1:
         bad('CONTROL-ANCHOR-DEAD', f'{cname} cannot land: {canchor[:44]!r}')
+    elif ccount == 'LAST':
+        pass          # names the occurrence it means, so multiplicity is not ambiguity
+    elif _seen != ccount:
+        bad('CONTROL-ANCHOR-AMBIGUOUS', f'{cname} declares {ccount} anchor(s) and the packet has '
+                                        f'{_seen}: {canchor[:40]!r} — occurrence one is mutated, and '
+                                        f'it may not be the one the control means')
 
 # ---- manifest: canonical AND derived. Emitted from the same extraction the checks run on, so it
 # cannot become a second hand-maintained copy of the packet -- which is the defect this document
@@ -2158,15 +2240,9 @@ item_body = {int(m.group(1)): m.group(0) for m in
 # requires an even number per item. It is NOT a CommonMark parse and cannot see a mis-NESTED pair,
 # only an unmatched one — which is the defect that actually occurred and the one an edit produces.
 #
-# AND A BACKSLASH ESCAPE IS NOT A DELIMITER. `\**` is one literal asterisk followed by one emphasis
-# character, and counting `**` substrings saw a pair — so an item could gain a real unmatched opener
-# and stay even. codex-worker-1's probe; backslash escapes are inside this packet's Markdown subset,
-# so an allowed form was fail-open. CommonMark escapes any ASCII punctuation, and that whole class is
-# removed before counting rather than the one character the probe used.
-_ESCAPE_RE = re.compile(r'\\[!-/:-@\[-`{-~]')
 for _n2 in sorted(item_body):
     _ib = re.search(rf'(?m)^{_n2}\. \*\*.*?(?=\n\d{{1,2}}\. \*\*|\n# |\Z)', body_vis, re.S)
-    if _ib and len(re.findall(r'\*\*', _ESCAPE_RE.sub('  ', _ib.group(0)))) % 2:
+    if _ib and len(re.findall(r'\*\*', _delimiters(_ib.group(0)))) % 2:
         bad('ITEM-MD-UNBALANCED', f'item {_n2} has an odd number of ** emphasis delimiters; an edit '
                                   f'left a bold run open and the manifest publishes the fragment')
 # EVERY PER-ITEM CHECK IS WORTH WHAT THE SECTION BOUNDARY IS WORTH. `item_body` spans end at the
@@ -2183,16 +2259,24 @@ for _n2 in sorted(item_body):
 # The defect is at the BOUNDARY, so the rule is about headings. A top-level heading is a GATE or one
 # of the document's named structural sections, and there is no third kind. That is a rule rather than
 # a pinned sequence: it needs no edit when a gate is added, and an invented heading has nowhere to be.
-_SECTIONS = ('AE-P1.2 — SHM contract phase packet', 'Implementation constraints',
-             'A.0 — the gate this packet is decided by', 'Owner rulings', 'Open items',
+# EXACT, not a PREFIX. `startswith` accepted
+# `# Provenance of this packet's own numbers fake` — a heading that truncates the real section while
+# passing as it, and the orphan text after it was outside every item and every record with no
+# MANIFEST-STALE to show for it. codex-worker-1's probe, and the eighth time in this checker that a
+# prefix test has stood where an equality belonged. Two of these headings carry derived tails, so
+# they are matched by their FULL patterns rather than loosened to accommodate them.
+_SECTIONS = ('AE-P1.2 — SHM contract phase packet',
+             'Implementation constraints (non-negotiable, backend 2026-08-10)',
+             'A.0 — the gate this packet is decided by',
+             'Owner rulings (claude-worker-2 as ADR/phase owner, at this SHA)',
              "Provenance of this packet's own numbers")
+_SECTION_PAT = re.compile(r'Open items — \d+ atomic, \d+ CLOSED at this SHA, \d+ open')
 for _m2 in re.finditer(r'(?m)^# (.*)$', _visible(pkt)):
     _h = _m2.group(1).strip()
-    if re.match(GATE_ID + r' — ', _h):
+    if re.fullmatch(GATE_ID + r' — .+', _h) or _SECTION_PAT.fullmatch(_h) or _h in _SECTIONS:
         continue
-    if not any(_h.startswith(_sec) for _sec in _SECTIONS):
-        bad('SECTION-UNKNOWN', f'top-level heading {_h[:48]!r} is neither a gate nor a named '
-                               f'structural section; an invented section truncates the one above it')
+    bad('SECTION-UNKNOWN', f'top-level heading {_h[:48]!r} is neither a gate nor a named structural '
+                           f'section; an invented section truncates the one above it')
 
 body_off = pkt.find(body)
 gate_hdr = [{'gate': m.group(1), 'line': line_of(m.start()),
