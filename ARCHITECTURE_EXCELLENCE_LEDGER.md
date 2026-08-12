@@ -1396,6 +1396,17 @@ Controls fail if the verified list is emptied or widened. Suite is 152/154 with
 the same two pre-existing plugin failures. No transition proposed; independent
 review must attack list provenance and source/line evidence.
 
+Independent review of `a7c9bc19` is BLOCKED. The two CREDENTIAL_MODE values are
+source-true, but `VERIFIED_EXPANSIONS` is global by variable name and lacks exact
+script/blob, assignment line, output-site, reviewer, and executable provenance.
+Its citation is wrong/incomplete (396,401 omits default assignment 392; 401 is a
+guard). The list can be silently widened/emptied/replaced, and raw `text.includes`
+still accepts inline comments, assignments, and source templates as printed output.
+Population is exactly 561 qualified instances/444 strings today, but the check is
+only `>=561`, not equality. Required redesign: exact per-script expansion records,
+source-locator/cardinality/empty/value guards, output-site-only matching, and exact
+561 equality. P0.3 remains BLOCKED.
+
 Exact audit of `76f1672`: tombstone half PASS; item 29 remains blocked on the
 correlation/consumer contract. Production missing/removed paths now use
 `liveTrackAt` and emit `UnknownTrack`, with causal rowops-rejected tests and clean
