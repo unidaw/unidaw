@@ -1099,6 +1099,11 @@ add_test(NAME watchdog_bound_check
 )
 set_tests_properties(watchdog_bound_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+add_test(NAME request_registry_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/request_registry_check.sh
+)
+set_tests_properties(request_registry_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 add_test(NAME sampler_envelope
   COMMAND sampler_envelope_tests
 )
