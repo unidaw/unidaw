@@ -1373,3 +1373,11 @@ undo steps. Behavior remains routed through `commandUndoPolicy`; compile-time
 assertions, runtime checks, two negative controls, engine build, and pure/clip/
 startup tests pass. No SHM/layout/schema files changed. The worker may continue
 with the next disjoint ruled engine item (item 30/R10) after this record.
+
+Audit correction for `a758b39`: partial PASS only, not item-29 closure. Extant
+track refusals report the real per-track version, but UnknownTrack and removed
+track paths can still emit an initialized `currentBase=0` because the handler
+ignores the helper's false result; actual UnknownNote/ValueOutOfRange coverage is
+missing. The correlation half (sender/base identity and Rust outcome handling) is
+also unimplemented. Reopen `AE-IMPL-ENGINE-001` for these concrete paths before
+accepting item 29; defer item-30 work until the correction is verified.
