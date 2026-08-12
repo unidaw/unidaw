@@ -1621,6 +1621,18 @@ target branch is independently exercised. Suite is 157/159 with the same two
 pre-existing plugin failures. Independent review focuses on source-command
 lexical parsing and control self-masking.
 
+Independent review of `02eb2d65` is decisively BLOCKED. Canonical pins/ceilings
+and five named controls pass, but the closed-world claims fail: same-line second
+bindings bypass provenance; multiple source/danger forms are missed or falsely
+detected; output identity is raw substring rather than executable emitter/site;
+closure is a declared-path union rather than reachability; dynamic reads,
+comments, literal values, entrypoint blob, reviewer attestation, BASH_ENV, and
+intermediate symlink confinement are unbound; controls cover only a subset of
+branches; and no top-level script/byte cost ratchet exists. P0.3 must stop
+incremental regex repair and choose either a genuinely bounded AST/output-site
+verifier with authenticated exact records or a much narrower explicit-output
+allowlist with independent attestation. No status transition.
+
 Independent design review conditionally passes the C1-C9 rule only as a
 closed-world, fail-closed contract—not exhaustive Bash inference. Required
 authority keys: entrypoint path/blob, variable, exact output span/template,
