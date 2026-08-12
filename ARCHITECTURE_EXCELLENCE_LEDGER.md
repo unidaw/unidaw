@@ -788,6 +788,14 @@ check remains vacuous on colon-plus-newline layout and, when made matchable,
 allows wrong labels/extras/duplicates via numeric dedup/subset. G2/G3/G0/M1/
 item37 blockers remain.
 
+Exact review of `e965ef8` is **BLOCKED**. G4 union/list and causal controls pass,
+but typed-list validation deduplicates IDs (duplicate 18 passes), ignores gate
+annotations/reasons (19 with a wrong gate passes), and can be masked by a decoy
+count phrase. Raw section handling still independently finds the first hidden
+`# Open items`, making blockers kindless; hidden item-shaped comment lines can
+overwrite visible item dictionaries. G4 stale labels/planning, G3 N/M1/item37/
+Watchdog, and G0 remain blocked.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
