@@ -1259,3 +1259,13 @@ unique and A.0-scoped; owner-choice parsing handles abbreviations, register scop
 negation, G1-A `establish/decline`, and G2-B formatting; restatement carries a
 count per gate. It reports schema ledger epoch 3 and 167 controls. Carried
 semantic/state/content blockers remain. Exact audit pending.
+
+Exact audit of `6a900ec` remains BLOCKED on the schema-proof action binding. The
+production guard invokes `_schema_refusal()` and then separately performs the
+observable `bad(...)` refusal; proof cases call `_schema_refusal()` directly and
+only check an invocation marker. Removing the production refusal leaves normal
+validation accepting mismatches while all 167 proof controls still pass. Fix by
+running synthetic mismatches through the same observable guard/action, or inject
+a live mismatch and require the emitted failure/exit tag. Scalar unions, A.0
+source uniqueness, owner-choice counts, `SHALL also rule`, state scan, and normal
+validation otherwise pass.
