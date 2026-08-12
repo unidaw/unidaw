@@ -1053,3 +1053,10 @@ product `75c6f064`. It is planning input, not implementation authorization.
   coordinated version bump.
 - Item 29 remains separate (narrow SetRowOps zero-base defect); no ticket exists
   for it yet.
+
+Owner successor `e94f0de` claims G3 register discharge, withdrawal of the broad
+item-26 account, G4 prose propagation, item-38 filing, and five corrected
+blocking-predicate sites (125 controls). Exact review is pending. Claimed
+remaining semantic blockers are G0-A A13/A15, G0-B items 1-4 plus absent
+`patcher_rust/build.rs`, G2-A items 27-29, G2-B PASS4, G3 M1 telemetry, item-37
+oracle, and Watchdog disposition.
