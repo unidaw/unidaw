@@ -4876,8 +4876,17 @@ const assignedValues = (text, name) => {
   return { values, dynamic };
 };
 
+// A script with its FULL-LINE COMMENTS removed. Prose about a message is not a message, and both
+// halves of this predicate were reading them: the verbatim branch accepted any sentence appearing
+// in a comment, and the template harvest picked up four `say "..."` occurrences that were somebody
+// explaining the code. A trailing comment on a code line is NOT stripped — a `#` inside a quoted
+// string is common in this corpus and cutting there would corrupt real output.
+const codeOnly = (text) => text.split('\n')
+  .filter((l) => !l.trimStart().startsWith('#'))
+  .join('\n');
+
 const scriptPrints = (scriptTexts, line) => {
-  const texts = Array.isArray(scriptTexts) ? scriptTexts : [scriptTexts];
+  const texts = (Array.isArray(scriptTexts) ? scriptTexts : [scriptTexts]).map(codeOnly);
   const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   for (const text of texts) {
     if (text.includes(line)) return true;  // printed verbatim by this script
@@ -4900,9 +4909,17 @@ const scriptPrints = (scriptTexts, line) => {
       let ok = true;
       for (let k = 0; k < names.length; k += 1) {
         const slot = (match[k + 1] ?? '').trim();
-        if (slot === '') continue;                     // a variable may expand to nothing
         const { values, dynamic } = assignedValues(text, names[k]);
-        if (dynamic || values.size === 0) { ok = false; break; }
+        if (dynamic) { ok = false; break; }            // cannot be enumerated, so cannot be proven
+        if (slot === '') {
+          // An empty expansion is only possible if the script never assigns the variable (it comes
+          // from the environment, and may be unset) or assigns it an empty value. Where every
+          // assignment is a non-empty literal, an empty slot asserts an expansion the script cannot
+          // produce — 36 of 943 variable occurrences are in that position.
+          if (values.size > 0 && ![...values].some((v) => v.trim() === '')) { ok = false; break; }
+          continue;
+        }
+        if (values.size === 0) { ok = false; break; }
         if (![...values].some((v) => v.trim() === slot)) { ok = false; break; }
       }
       if (ok) return true;
@@ -4982,9 +4999,12 @@ test('CONTROL: a REAL template skeleton with invented variable content IS caught
   // BLINDNESS FLOOR. Every assertion below is "for each template", so an extraction matching
   // nothing satisfies all of them. 561 qualified when this was written; FEWER means the pattern
   // stopped matching, not that the scripts got safer.
-  assert.ok(templates.length >= 500,
-    `only ${templates.length} interpolating templates found; 561 qualified when this was written — `
-    + 'the extraction broke, so this control is ranging over almost nothing');
+  // The floor is the COUNT, not a round number below it. `>= 500` permitted 61 templates to vanish
+  // in silence, which is the same slack that lets a population shrink without anyone deciding to.
+  assert.ok(templates.length >= 561,
+    `only ${templates.length} interpolating templates found; 561 qualified when this was written. `
+    + 'Fewer means the extraction stopped matching, not that the scripts got safer — fix the '
+    + 'pattern, and if templates were genuinely removed, say so and move this number deliberately.');
 
   const substitutions = [
     ' THIS TEXT IS INVENTED AND NO SCRIPT EVER PRINTS IT ',
@@ -5021,6 +5041,44 @@ test('CONTROL: a REAL template skeleton with invented variable content IS caught
     `${zeroAccepted.length} templates accept "0" in every slot; 3 do so legitimately because their `
     + 'script assigns that variable the literal 0. A different count means a script gained or lost '
     + 'such an assignment, or the predicate changed — both need a person, not a new number here.');
+});
+
+/*
+ * THE KNOWN FALSE-NEGATIVE, stated because a check silent about its limits reads as total coverage.
+ *
+ * A variable fed by a command substitution, a read, or arithmetic cannot be enumerated from the
+ * source, so this predicate REJECTS any line that would need one — even a line the script really
+ * prints. That is deliberate: the alternative is `.*`, which is what accepted 561 of 561 forgeries
+ * twice. Rejecting the unprovable is a false negative; accepting the unprovable is a check that
+ * cannot fail.
+ *
+ * It costs nothing today — every line the runbook currently quotes passes — but that is a property
+ * of the current runbook, not of the rule. WHEN A LEGITIMATE LINE IS EVENTUALLY REJECTED, the fix
+ * is to widen the predicate for that variable deliberately (pin its expansions, or assert the line
+ * another way). It is NOT to relax the slot back to `.*`, which is the move that produced both of
+ * the defects above.
+ */
+test('CONTROL: a sentence that exists only in a shell COMMENT is caught', () => {
+  /*
+   * The verbatim branch asked whether the line appears anywhere in the script text, and a shell
+   * comment is script text. So any sentence in somebody's explanation of the code counted as a line
+   * the script prints — including three measured here that appear in comments and nowhere else.
+   *
+   * This was half of a review finding I fixed only in the template harvest and not in the verbatim
+   * branch. Both read the same text; only one of them had been taught the difference.
+   */
+  const scripts = toolScriptFiles();
+  for (const prose of [
+    'the assertions live in X',
+    'COUNTED, NOT WRITTEN DOWN',
+    'empty those bars first',
+  ]) {
+    const inAComment = scripts.some((s) => s.split('\n')
+      .some((l) => l.trimStart().startsWith('#') && l.includes(prose)));
+    assert.ok(inAComment, `${prose} no longer appears in a comment — pick another case`);
+    assert.equal(scriptPrints(scripts, prose), false,
+      `"${prose}" appears only inside a shell comment and was accepted as a printed line`);
+  }
 });
 
 test('CONTROL: a value the script never assigns to THAT variable is caught', () => {
