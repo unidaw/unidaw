@@ -1350,6 +1350,14 @@ isolated Node tests must report the two pre-existing plugin-resolution failures
 separately. Independent review by `protocol_audit` is required; status remains
 BLOCKED and the owner cannot self-approve.
 
+P0.3 remediation commit `6a34abe0` received. Owner reports the differential
+control fails against the loose matcher and passes the fix; forged acceptance is
+561/561 -> 0/561, legitimate interpolated/runbook lines remain accepted, and the
+approved `a265a7b7` versus landed `45f8e169` mismatch is recorded in-file. Isolated
+suite is 150/152 with the two pre-existing Zebralette/Zebra2 environment failures
+unchanged from baseline. Owner proposes no transition; independent review by
+`codex-worker-1` is now in progress. P0.3 remains BLOCKED.
+
 Exact audit of `76f1672`: tombstone half PASS; item 29 remains blocked on the
 correlation/consumer contract. Production missing/removed paths now use
 `liveTrackAt` and emit `UnknownTrack`, with causal rowops-rejected tests and clean
