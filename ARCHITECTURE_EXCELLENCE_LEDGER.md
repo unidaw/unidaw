@@ -1358,3 +1358,10 @@ while `sentBase=0` remains an explicit contract for the non-version-gated payloa
 Missing/removed tracks leave the output untouched. Focused helper/wiring tests,
 negative hardcoded-zero control, `daw_engine` build, and pure/startup/clip-helper
 tests pass. The remaining third correlation key is a separate wire-level decision.
+
+`P2-G1B-01` completed as `5261f88`: independently enumerates 7 request kinds,
+16 production send sites, and 6 readers plus the declared chain-snapshot
+no-reader case. Mirror/sender/reader registry checks, six sabotage controls,
+configure, engine build, and 3/3 targeted tests pass. No SHM/layout/schema files
+were changed. The lane is complete; dependent command-correlation work remains
+gated on the SHM foundation.
