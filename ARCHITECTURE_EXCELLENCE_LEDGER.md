@@ -905,6 +905,12 @@ Supplemental exact run confirms `85f50c0` full sweep 114/114 and all proofs
 pass; the BLOCKED verdict is unchanged. The blank-boundary mismatch and mutable
 Final-gate selector remain the decisive fail-opens.
 
+Owner successor `bc5e89a` claims `_depara` was removed, final-gate population is
+now graph-derived, and a differential rename-plus-falsified-count check proves
+the loop still runs; 114 controls pass. Exact review is pending. One-space Open
+sections, prefix headers, order/reason fidelity, item26’s stale reason, and the
+semantic set remain open.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
