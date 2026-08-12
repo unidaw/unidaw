@@ -1655,3 +1655,14 @@ quoted-line count, and branch-isolated masking. This intentionally proves only
 attested observations against exact bytes, not arbitrary future runtime behavior.
 A future script-execution harness is a separate integration ticket. No code or
 status transition until B1-B8 design review passes.
+
+Option B design review is now PASS in principle under an explicit manual-attestation
+boundary. The implementation must record exact raw line bytes, stream/occurrence,
+transcript digest, encoding/newline/ANSI/completeness, argv/context/env/stdin/
+fixture/lifecycle, pinned tree/docs/harness/script blobs with realpath and symlink
+checks, ordered quote-occurrence IDs with total attestation bijection, and a
+`claimedReviewer` trust boundary rather than false machine authentication. Causal
+controls must be branch-isolated for stale/replay/duplicate/missing/changed inputs.
+Resolve the current `DEMO.md` `> ask ...` versus `say()` two-leading-spaces
+output mismatch explicitly (marker mapping or raw-output fence; no silent trim).
+No implementation/status transition until this representation is reviewed.
