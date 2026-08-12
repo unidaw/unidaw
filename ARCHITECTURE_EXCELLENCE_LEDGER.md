@@ -814,6 +814,13 @@ decoyable; duplicate count claims can coexist; and order/reason fidelity is
 unbound. Adjacent raw/header/duplicate-item defects from e9aff remain. G2/G3/
 G0/M1/item37/G4 framing remains blocked.
 
+Exact review of `301b66c` is **BLOCKED**. Selected-section and duplicate-item
+fixes pass, but header identity is unbound: an unanchored header search can use
+a later inline-code fake while the live first line is broken, and multiple live
+sections are accepted because only the first match is used. G4 malformed pairs
+are silently omitted; global member/count searches remain decoyable and ignore
+order/reasons. G2/G3/G0/M1/item37/G4 semantics remain blocked.
+
 Exact review of `e9aff2c` is **BLOCKED**. Canonical body/raw span/head repair
 passes, but a second global header search lets hidden or inline-code `# Open
 items` decoys hijack selection; heading discovery must be line-anchored. Live
