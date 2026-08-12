@@ -62,6 +62,23 @@ bool connectSocket(int& fd, const std::string& path) {
   return true;
 }
 
+bool removeOwnedSocket(const std::string& path) {
+  struct stat metadata{};
+  if (::lstat(path.c_str(), &metadata) != 0) {
+    return errno == ENOENT;
+  }
+  if (!S_ISSOCK(metadata.st_mode)) {
+    std::cerr << "HostController: refusing to replace non-socket path " << path << std::endl;
+    return false;
+  }
+  if (::unlink(path.c_str()) != 0 && errno != ENOENT) {
+    std::cerr << "HostController: cannot remove stale socket " << path << ": "
+              << std::strerror(errno) << std::endl;
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 SharedMemoryView::~SharedMemoryView() {
@@ -82,7 +99,9 @@ bool HostController::launch(const HostConfig& config) {
   }
 
   // Ensure old socket is gone so waitForSocket actually waits for the new one
-  ::unlink(config.socketPath.c_str());
+  if (!removeOwnedSocket(config.socketPath)) {
+    return false;
+  }
   ownedSocketPath_ = config.socketPath;
 
   std::cerr << "HostController: launching host (socket "
@@ -349,7 +368,7 @@ void HostController::disconnectInternal(bool killHost) {
     // path this controller launched — never a sweep of the directory, which would delete a live
     // engine's socket out from under it.
     if (!ownedSocketPath_.empty()) {
-      ::unlink(ownedSocketPath_.c_str());
+      removeOwnedSocket(ownedSocketPath_);
       ownedSocketPath_.clear();
     }
   }
