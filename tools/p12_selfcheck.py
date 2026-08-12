@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'bc5e89a65d6e25ea6d142deca4f40ad267b9de1c'
+PREV_TIP     = 'ea2d08f9ee9daa4f19b6e240ad27f7bdcd99e586'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -355,6 +355,12 @@ CONTROLS = {
  # THE DECOY GOES IN THE CLAUSE AND THE REAL PHRASE OUTSIDE IT. The first version put both inside
  # and came back BLIND — the mutation landed and the check was right not to fire, which is the
  # position mistake this packet recorded one commit earlier, repeated within the hour.
+ 'g4-final-negated': ('G3. Final gate — and therefore NOT DECIDABLE',
+                      'G3. not Final gate — and therefore NOT DECIDABLE', 1,
+                      'GATE-DEP-BLOCKERS'),
+ 'g4-two-terminals': ('**Dependencies** G0-A, G0-B, G1-A, G1-B, G2-A, G2-B, G3. Final gate',
+                      '**Dependencies** G0-A, G0-B, G1-A, G1-B, G2-A, G2-B. Final gate', 1,
+                      'GATE-DEP-BLOCKERS'),
  'g4-final-rename':  ('G3. Final gate — and therefore NOT DECIDABLE',
                       'G3. Terminal gate — and therefore NOT DECIDABLE', 1, 'GATE-DEP-BLOCKERS'),
  'g4-dep-bareword':  ('on TEN dependency blockers plus one of its own.\n**The ten**',
@@ -1697,7 +1703,8 @@ WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twen
         105: 'One hundred five', 106: 'One hundred six', 107: 'One hundred seven',
         108: 'One hundred eight', 109: 'One hundred nine', 110: 'One hundred ten',
         111: 'One hundred eleven', 112: 'One hundred twelve', 113: 'One hundred thirteen',
-        114: 'One hundred fourteen', 115: 'One hundred fifteen'}
+        114: 'One hundred fourteen', 115: 'One hundred fifteen', 116: 'One hundred sixteen',
+        117: 'One hundred seventeen', 118: 'One hundred eighteen'}
 if not listed:
     bad('CONTROL-PROSE-MISSING', 'no "**Controls.** <N>, each naming" sentence')
 elif listed.group(1) != WORD.get(len(CONTROLS), '?'):
@@ -1893,7 +1900,16 @@ if len(_final) != 1:
 # AND THE PROSE IS A CROSS-CHECK, NOT THE SELECTOR. Using it to CHOOSE let the document opt out;
 # using it to CONFIRM makes a rename a disagreement between two independent derivations, which is
 # a failure rather than a silence. The graph decides; the prose must agree.
-_said_final = [g['id'] for g in gates if 'Final gate' in (g.get('dependencies_text') or '')]
+# A POSITIVE, UNIQUE DESIGNATION — not substring presence. `'Final gate' in ...` read the clause
+# `not Final gate` as AGREEMENT, so the document could deny the graph and satisfy the cross-check
+# by containing the words it denies. That is the bare-substring defect I fixed in the count phrase
+# ONE COMMIT EARLIER, in this same function, and did not carry across to the line below it.
+#
+# The designation is sentence-initial and em-dash terminated in this packet's own form, and it must
+# occur exactly once in the clause: a second copy is as much a defect as a negated one.
+_FINAL_DECL = re.compile(r'(?:^|\. )Final gate — ')
+_said_final = [g['id'] for g in gates
+               if len(_FINAL_DECL.findall(_visible(g.get('dependencies_text') or ''))) == 1]
 if len(_final) == 1 and _said_final != [_final[0]['id']]:
     bad('GATE-DEP-BLOCKERS', f'the graph makes {_final[0]["id"]} the terminal gate; the prose names '
                              f'{_said_final or "none"}')
