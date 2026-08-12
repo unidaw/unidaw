@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'e965ef8712c721b883ae09b9a4fbea254d7711e5'
+PREV_TIP     = 'e9aff2cafe965a06f096721659f5f495aa02b196'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -343,6 +343,11 @@ CONTROLS = {
  'ruling-body-swap': ('CLOSED at this SHA.** The static-check contradiction was not one. R17 shows',
                       'CLOSED at this SHA.** The static-check contradiction was not one. R16 shows', 1,
                       'RULING-BODY-BIND'),
+ 'g4-dep-dupe':      ('18 (G2-B) the absent PASS 4 replacement,',
+                      '18 (G2-B) the absent PASS 4 replacement, 18 (G2-B) again,', 1,
+                      'GATE-DEP-BLOCKERS'),
+ 'g4-dep-owner':     ('19 (G3) no source for N', '19 (G0-A) no source for N', 1,
+                      'GATE-DEP-BLOCKERS'),
  'g4-dep-member':    ('18 (G2-B) the absent PASS 4 replacement', '17 (G2-B) the absent PASS 4 replacement',
                       1, 'GATE-DEP-BLOCKERS'),
  'g4-dep-extra':     ('19 (G3) no source for N,', '19 (G3) no source for N, 7 (G1-A) invented,',
@@ -1809,7 +1814,10 @@ for _g in _final:
     _union = sorted({n for d in _g['dependencies'] for n in by_id.get(d, {}).get('blocking_items', [])}
                     - set(_g.get('blocking_items', [])))
     # a prose extractor reads a blanked view, like every other stated-count check here
-    _said = re.search(r'on ([A-Z]+) dependency blockers plus', _visible(pkt))
+    # BOUNDED TO THE GATE'S OWN dependencies_text, not the whole packet: a decoy phrase anywhere
+    # earlier in the document shadowed the real one, because `re.search` returns the FIRST match and
+    # nothing tied the phrase to the gate it describes.
+    _said = re.search(r'on ([A-Z]+) dependency blockers plus', _visible(_g.get('dependencies_text') or ''))
     if not _said:
         bad('GATE-DEP-BLOCKERS', f'{_g["id"]} states no dependency-blocker count to check')
     elif WORDNUM.get(_said.group(1).upper()) != len(_union):
@@ -1829,7 +1837,20 @@ for _g in _final:
         # em-dash, which picked "4" out of "PASS 4" and truncated the moment prose gained a dash —
         # my own edit tripped it within the minute. Every member is written in the typed form, so
         # the extractor needs no fallback and no delimiter guess.
-        _ids = sorted({int(x) for x in re.findall(r'(?<![0-9])(\d{1,2}) \(G', _listed.group(1))})
+        # A LIST, NOT A SET, and the gate annotation is read too. As a set, a duplicate
+        # `18 (G2-B)` collapsed and my comment beside it claimed equality caught duplicates — a
+        # false statement about the line under it. And capturing only the number certified wrong
+        # ownership: `19 (G9-X)` passed, because nothing compared the annotation to the gate that
+        # actually carries item 19.
+        _pairs = re.findall(r'(?<![0-9])(\d{1,2}) \((' + GATE_ID + r')\)', _listed.group(1))
+        _ids = [int(n) for n, _ in _pairs]
+        _dupes = sorted({n for n in _ids if _ids.count(n) > 1})
+        if _dupes:
+            bad('GATE-DEP-BLOCKERS', f'{_g["id"]} lists {_dupes} more than once')
+        for _n, _gid in _pairs:
+            if entry.get(int(_n)) != _gid:
+                bad('GATE-DEP-BLOCKERS', f'{_g["id"]} attributes item {_n} to {_gid}; '
+                                         f'the list says {entry.get(int(_n))!r}')
         # EQUALITY, not subset: `<=` let extras and duplicates through, so a list could name a
         # nonblocking item and still satisfy a check about which items block.
         if set(_ids) != set(_union):
