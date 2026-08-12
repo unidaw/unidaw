@@ -119,7 +119,18 @@ bool applyRemoveChordAt(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick,
 // reported a literal 0 instead. Extracted rather than copied: a second implementation of a read
 // under a lock is how the two answers start to disagree.
 //
-// Returns false when a track-scoped command names a track that is not present; `out` is untouched.
+// `out` IS ALWAYS SET TO A REAL VALUE, and that is the whole point of the contract rather than a
+// convenience. The first version left `out` untouched when the track was absent and returned false
+// — which put the burden on every caller to notice, and the first caller written against it did
+// not: it kept its own initialiser of 0 and emitted that, so the MISSING-track refusal reported a
+// fabricated 0, which is the defect this function was extracted to end. backend caught it.
+//
+// When there is no per-track counter the answer is the engine's GLOBAL `clipVersion`, which is what
+// the two sibling emit sites in this file have always reported in that case. It is a real figure
+// the engine holds, and reporting it is not the same claim as reporting a track's own.
+//
+// The bool says WHICH counter `out` came from: true = the track's own, false = the global, because
+// the track is absent or removed. A caller that ignores it still cannot fabricate.
 bool currentClipVersionFor(ClipEditDeps& deps, daw::UiCommandType commandType, uint32_t trackId,
                            uint32_t& out);
 

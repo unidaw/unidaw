@@ -331,64 +331,100 @@ void testCurrentClipVersionForReportsTheTrackCounter() {
   CHECK(currentClipVersionFor(deps, daw::UiCommandType::Undo, 3, out));
   CHECK(out == 41u);
 
-  // AND A MISSING TRACK HAS NO VALUE TO REPORT, which is the one case the caller must not
-  // paper over: `out` is left alone rather than being given a fabricated figure.
+  // A MISSING TRACK STILL GETS A REAL FIGURE — the engine's GLOBAL counter — and the bool says it
+  // is not the track's own. THIS ASSERTED `out == 999` (untouched) IN THE FIRST VERSION, and that
+  // was the wrong contract: it made "no answer" indistinguishable from the caller's initialiser,
+  // and the caller's initialiser was 0. backend caught the consequence at the handler.
   out = 999;
   CHECK(!currentClipVersionFor(deps, daw::UiCommandType::SetRowOps, 9, out));
-  CHECK(out == 999u);
+  CHECK(out == 41u);
 
   // A REMOVED track is gone for this purpose too — the version gate has always treated it so,
   // and the extraction has to keep that or the two callers disagree about what "present" means.
   rt.removed.store(true, std::memory_order_release);
   out = 999;
   CHECK(!currentClipVersionFor(deps, daw::UiCommandType::SetRowOps, 3, out));
-  CHECK(out == 999u);
+  CHECK(out == 41u);
 }
 
 // THE REFUSAL ITSELF, through handleSetRowOps, so the wiring is covered and not just the helper.
 // A test of the helper alone would stay green if the row-op site kept its hardcoded 0.
-void testRowOpsRefusalReportsTheEngineVersion() {
-  Fixture f;
-  auto deps = f.deps();
-  TrackRuntime& rt = f.addTrack(2);
-  rt.trackClipVersion.store(5, std::memory_order_release);
-
-  uint32_t sawSent = 999, sawCurrent = 999;
-  uint32_t sawTrack = 999;
-  daw::UiClipRejectReason sawReason = daw::UiClipRejectReason::None;
+// EVERY REFUSAL REASON, AND BOTH TRACK STATES. The first version of this test drove ONE reason on a
+// track its own fixture had ADDED — so the `UnknownTrack` case ran with the track PRESENT, which is
+// the one thing that case does not have. It passed while the handler still fabricated a 0 on the
+// real missing-track path, because the fixture supplied the precondition the failing case lacks.
+// backend found the hole. The refusal is driven per reason, and the track is present or absent as
+// the reason implies.
+void runRowOpsRefusal(Fixture& f, ClipEditDeps& deps, uint32_t trackId,
+                      daw::UiClipRejectReason reason, uint32_t& sawCurrent, uint32_t& sawSent,
+                      daw::UiClipRejectReason& sawReason) {
+  sawCurrent = 999;
+  sawSent = 999;
+  sawReason = daw::UiClipRejectReason::None;
   daw::engine::RowopsCommandDeps rowops{
-      [](uint32_t, uint32_t, daw::EventId, const daw::RowOpEdit&, bool,
-         daw::UiClipRejectReason& reason) {
-        reason = daw::UiClipRejectReason::UnknownTrack;
+      [reason](uint32_t, uint32_t, daw::EventId, const daw::RowOpEdit&, bool,
+               daw::UiClipRejectReason& out) {
+        out = reason;
         return false;
       },
-      [&](daw::UiClipRejectReason reason, uint32_t trackId, uint32_t sentBase,
-          uint32_t currentBase, daw::UiCommandType) {
-        sawReason = reason;
-        sawTrack = trackId;
+      [&](daw::UiClipRejectReason r, uint32_t, uint32_t sentBase, uint32_t currentBase,
+          daw::UiCommandType) {
+        sawReason = r;
         sawSent = sentBase;
         sawCurrent = currentBase;
       },
-      [&](uint32_t trackId, uint32_t& out) {
-        return currentClipVersionFor(deps, daw::UiCommandType::SetRowOps, trackId, out);
+      [&](uint32_t t, uint32_t& out) {
+        return currentClipVersionFor(deps, daw::UiCommandType::SetRowOps, t, out);
       }};
 
   daw::UiSetRowOpsPayload p{};
-  p.trackId = 2;
+  p.trackId = trackId;
   p.clipId = 1;
   daw::EventEntry entry{};
   std::memcpy(entry.payload, &p, sizeof(p));
   daw::UiCommandPayload header{};
   handleSetRowOps(rowops, entry, header, daw::UiCommandType::SetRowOps);
+}
 
+void testRowOpsRefusalReportsTheEngineVersion() {
+  Fixture f;
+  auto deps = f.deps();
+  TrackRuntime& rt = f.addTrack(2);
+  rt.trackClipVersion.store(5, std::memory_order_release);
+  f.clipVersion.store(41, std::memory_order_release);
+
+  uint32_t sawCurrent = 999, sawSent = 999;
+  daw::UiClipRejectReason sawReason = daw::UiClipRejectReason::None;
+
+  // A PRESENT TRACK reports its OWN counter, whatever the reason is.
+  for (auto reason : {daw::UiClipRejectReason::UnknownNote,
+                      daw::UiClipRejectReason::ValueOutOfRange}) {
+    runRowOpsRefusal(f, deps, 2, reason, sawCurrent, sawSent, sawReason);
+    CHECK(sawReason == reason);
+    CHECK(sawCurrent == 5u);   // was a literal 0 before this change
+    CHECK(sawSent == 0u);
+  }
+
+  // A MISSING TRACK — the case `UnknownTrack` actually names, and the one the first fix still
+  // fabricated a 0 for because the handler ignored the helper's false. Track 9 was never added.
+  runRowOpsRefusal(f, deps, 9, daw::UiClipRejectReason::UnknownTrack, sawCurrent, sawSent,
+                   sawReason);
   CHECK(sawReason == daw::UiClipRejectReason::UnknownTrack);
-  CHECK(sawTrack == 2u);
-  CHECK(sawCurrent == 5u);   // was a literal 0 before this change
-  // `sentBase` is 0 BY CONTRACT: UiSetRowOpsPayload carries no base version, because a row-op edit
-  // is not version-gated. Asserted so that giving it an invented value is a test failure and not a
-  // quiet improvement — item 29's remaining half is that the correlation key is inert, which is a
-  // decision about the wire and not something this site may make up.
+  CHECK(sawCurrent == 41u);    // the engine's global counter, and NOT a fabricated 0
   CHECK(sawSent == 0u);
+
+  // A REMOVED TRACK is the same case arriving a different way, and it is the one a live session
+  // reaches: the track existed when the edit was sent and was gone by the time it landed.
+  rt.removed.store(true, std::memory_order_release);
+  runRowOpsRefusal(f, deps, 2, daw::UiClipRejectReason::UnknownTrack, sawCurrent, sawSent,
+                   sawReason);
+  CHECK(sawCurrent == 41u);
+  CHECK(sawSent == 0u);
+
+  // `sentBase` is 0 BY CONTRACT throughout: UiSetRowOpsPayload carries no base version, because a
+  // row-op edit is not version-gated. Asserted so that giving it an invented value is a test
+  // failure and not a quiet improvement — item 29's remaining half is that the correlation key is
+  // inert, which is a decision about the wire and not something this site may make up.
 }
 
 }  // namespace

@@ -935,11 +935,14 @@ bool currentClipVersionFor(ClipEditDeps& deps, daw::UiCommandType commandType, u
                            uint32_t& out) {
   auto& tracks = deps.engineState.trackTable.tracks;
   auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
+  // THE GLOBAL FIRST, so `out` holds a real figure on every path out of here — see the header.
+  // Leaving it untouched on the absent-track path made "no answer" indistinguishable from "the
+  // caller's initialiser", and the caller's initialiser was 0.
+  out = deps.clipVersion.load(std::memory_order_acquire);
   // Undo/Redo (and the other global-scope ops) can touch ANY track, so they are
   // gated on the global counter — comparing them against the caller's incidental
   // trackId would let an undo of a track-3 edit ride on track 0's version.
   if (daw::uiCommandIsGlobalScope(commandType)) {
-    out = deps.clipVersion.load(std::memory_order_acquire);
     return true;
   }
   std::lock_guard<std::mutex> lock(tracksMutex);
@@ -952,12 +955,11 @@ bool currentClipVersionFor(ClipEditDeps& deps, daw::UiCommandType commandType, u
 }
 
 bool requireMatchingClipVersion(ClipEditDeps& deps, uint32_t baseVersion, daw::UiCommandType commandType, uint32_t trackId) {
-  auto& clipVersion = deps.clipVersion;
   auto& emitClipReject = deps.emitClipReject;
   auto& emitUiDiff = deps.emitUiDiff;
   auto& historyAppend = deps.historyAppend;
 
-    uint32_t current = clipVersion.load(std::memory_order_acquire);
+    uint32_t current = 0;
     {
       const bool haveTrack = currentClipVersionFor(deps, commandType, trackId, current);
       if (!haveTrack) {
