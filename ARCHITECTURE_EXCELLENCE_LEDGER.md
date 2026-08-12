@@ -1581,3 +1581,12 @@ ignores the helper's false result; actual UnknownNote/ValueOutOfRange coverage i
 missing. The correlation half (sender/base identity and Rust outcome handling) is
 also unimplemented. Reopen `AE-IMPL-ENGINE-001` for these concrete paths before
 accepting item 29; defer item-30 work until the correction is verified.
+
+P0.3 owner follow-up: six of sixteen shell binding forms were previously invisible
+to the cardinality guard (`read`, `read -r`, `printf -v`, indexed assignment,
+arithmetic assignment, `for VAR in`). The owner expanded binding classification to
+all sixteen forms plus two negatives and sabotaged the real `tools/webstack.sh`
+with `read -r CREDENTIAL_MODE`; the provenance guard now fails as required. Suite
+remains 153/155 with the same two plugin failures. `eval`, indirect `${!name}`,
+`source`-imported assignments, and cross-file function assignments are explicitly
+untested scope questions. No transition proposed; independent review pending.
