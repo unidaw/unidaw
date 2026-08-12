@@ -1656,6 +1656,16 @@ attested observations against exact bytes, not arbitrary future runtime behavior
 A future script-execution harness is a separate integration ticket. No code or
 status transition until B1-B8 design review passes.
 
+`P2-CTRL-01` completed as `e4ff102a6548df015a94ef8134208f0ee6cf1fe8` from the
+frozen product base. It adds sender-minted exact command identity, a layout-neutral
+`CommandOutcome` echo/persistence path, exact CLI/agent/sidecar waits, real
+SetRowOps base arbitration with bounded stale retry, and transactional row-op
+validation. No shared-memory size/offset/version change. Full CMake build,
+focused CTest 18/18, row-ops E2E 2/2, legal-column E2E, Rust bridge/CLI/sidecar/
+agent units, representative note/chord workflows, and diff cleanliness pass.
+Known unrelated merge-debt failures remain outside this slice; SHM/layout changes
+remain gated.
+
 Option B design review is now PASS in principle under an explicit manual-attestation
 boundary. The implementation must record exact raw line bytes, stream/occurrence,
 transcript digest, encoding/newline/ANSI/completeness, argv/context/env/stdin/
