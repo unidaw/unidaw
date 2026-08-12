@@ -1447,7 +1447,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `63e1de50592fdcecac859548269c1fe248ef63a0`, A.0 SCRIPT BLOB `1c9f9f76bfb1c118f17a7c713ac4a6f017034a86`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `1043817cb09815aed44de3be7b83a6dd3bd53f41`, A.0 SCRIPT BLOB `d85050c700929f0dd55cb75b52c3a1a504021e83`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1526,7 +1526,26 @@ extractor count at its floor. `--prove-sweep-predicate` classifies a crafted-lin
 every spoof a reviewer has landed on the sweep's success test — a bare `OK (+` prefix, an unanchored
 tail, a wrong tag, a count the emitter cannot print, and a tag line with no separator.
 
-**Controls.** One hundred twenty-seven, each naming the tag it must provoke; a control that mutates the file without
+**AN ITEM'S BLOCKING STATUS IS PARSED, not scanned, and that is a different property from being
+parsed ONCE.** Five copies of the predicate became one at the predecessor SHA; codex-worker-1 then
+broke the single copy three ways in one pass, and the three shapes name the three things a scan
+lacks. `**BLOCKING, then NOT BLOCKING ...**` declared and retracted on one line, and the ambiguity
+check counted only POSITIVE occurrences, so every consumer agreed — on the opening clause of a
+contradiction. `**NOT BLOCKING-LIKE ...**` passed because `\b` sits between `G` and `-`, so the
+scan read the head of a hyphenated word as the whole word. And an inline code span whose content is
+the literal text `**BLOCKING**` supplied a status off raw bytes a reader sees quoted. **The repair is not a
+fourth spelling patch.** The status is the FIRST BOLD RUN after the headline's `—`, read in the
+VISIBLE view, and only its leading WORD TOKENS: token 1 is `BLOCKING`, or tokens 1-2 are `NOT`
+`BLOCKING`, where a token is a maximal run of `[A-Za-z0-9'-]`. Including the hyphen in a word is the
+one decision that makes `BLOCKING-LIKE` a different word without enumerating it, and there is no
+window left to widen because nothing else on the line can be the status. A second status word
+anywhere on the headline is a contradiction whatever its polarity. The code-span control had to be
+DIFFERENTIAL: with the parser on the visible view a code span is simply blanked, so a control that
+only ADDS one is a no-op and reports BLIND correctly — a repaired opt-out produces silence, not a
+tag — and it therefore adds the span AND breaks the real status, so the old scan reads the span as
+the status while the new parse names the malformed reach.
+
+**Controls.** One hundred thirty, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1547,7 +1566,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,

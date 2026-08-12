@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '5348f7753740daf9f56b704ffb93e1604a49190d'
+PREV_TIP     = 'f27e898d5430a7ef2ef9d0c470869044daf67194'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -525,6 +525,27 @@ CONTROLS = {
  'status-ambiguous': ('37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING,',
                       '37. **G3** — ⟦PRODUCT⟧ ⟦PACKET⟧ **BLOCKING, and also BLOCKING,', 1,
                       'ITEM-STATUS-AMBIGUOUS'),
+ # THE THREE SHAPES A SCAN ACCEPTS. Each is the same tag as an existing control but a different code
+ # path, and each was verified by reverting the repair alone and requiring BLIND — a shared tag is
+ # only a problem when the two paths cannot be disabled independently.
+ # (1) DECLARED THEN RETRACTED. The old count excluded `NOT BLOCKING`, so the retraction was not
+ #     counted and all five consumers agreed on the opening clause.
+ 'status-contradicted': ('35. **G0-B** — ⟦PRODUCT⟧ **BLOCKING.',
+                      '35. **G0-B** — ⟦PRODUCT⟧ **BLOCKING, then NOT BLOCKING.', 1,
+                      'ITEM-STATUS-AMBIGUOUS'),
+ # (2) A HYPHENATED COMPOUND. `\b` sits between `G` and `-`, so a scan bounded by `\b` read the head
+ #     of a different word as the whole word.
+ 'status-hyphen':    ('38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING.',
+                      '38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING-LIKE.', 1, 'ITEM-STATUS-MISSING'),
+ # (3) A STATUS INSIDE A CODE SPAN. This one had to be DIFFERENTIAL: with the parser reading
+ #     `body_vis` the code span is blanked, so a control that only ADDS one is a no-op and reports
+ #     BLIND correctly — a repaired opt-out produces silence, not a tag. So it adds the code span AND
+ #     breaks the real status: under the fix the blanked span cannot supply one and the malformed
+ #     reach is named; under the old raw scan the span IS read as the status, the item parses as
+ #     blocking, and ITEM-STATUS-MISSING never fires.
+ 'status-code-span': ('38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING.',
+                      '38. **G1-B** — ⟦PACKET⟧ `**BLOCKING**` **NOT BLOCKINGLY.', 1,
+                      'ITEM-STATUS-MISSING'),
  'blocking-negated': ('38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING',
                       '38. **G1-B** — ⟦PACKET⟧ **BLOCKING', 1, 'BLOCKER-SET'),
  'marker-nonblocker': ('1. **G0-B** — ', '1. **G0-B** — ⟦BLOCKED-ON: 999⟧ ', 1, 'BLOCKER-KIND'),
@@ -693,6 +714,11 @@ body = _body_m.group(0) if _body_m else ''
 # upstream. codex-worker-1's probe. A claim about a variable is worth exactly what a check of that
 # variable is worth, and I checked the code I wrote instead of the input it consumes.
 body_raw = pkt[_body_m.start():_body_m.end()] if _body_m else ''
+# AND THE SAME SECTION IN THE VISIBLE VIEW, by the same offsets. `_visible` is length-preserving for
+# the same reason `_unhidden` is, so all three are reads of one span rather than three searches. The
+# status parser needs this one: reading raw headline bytes accepted a literal inline code span
+# `` `**BLOCKING**` `` as a live status — a reader sees the words quoted, the parser saw a blocker.
+body_vis = _visible(pkt)[_body_m.start():_body_m.end()] if _body_m else ''
 # FROM THE SECTION ALREADY IDENTIFIED, not a third global search over `pkt`. As a global search a
 # commented-out `<!-- # Open items — 37 atomic ... -->` before the real section supplied the header
 # while the live one said something else — and worse, `--negative open-count` then mutated the DECOY
@@ -731,24 +757,59 @@ closed = len(closed_set)
 # `NOT BLOCKINGLY` passed as non-blocking because a lookbehind is not a token boundary.
 #
 # Patching five copies is not making one derivation, and I had claimed it was. The window sizes were
-# never a grammar — they were how far each copy happened to look. This parses the STATUS as a token
-# at a fixed position: the leading bold run of the headline, `BLOCKING` or `NOT BLOCKING`, bounded
-# by \b so `BLOCKINGLY` is neither.
-_STATUS_RE = re.compile(r'(?m)^(\d{1,2})\. \*\*[^*\n]+\*\* — [^\n]*?\*\*(NOT )?BLOCKING\b')
-_ITEM_STATUS = {}
-for _m in _STATUS_RE.finditer(body):
-    _ITEM_STATUS[int(_m.group(1))] = not _m.group(2)
-# a stray positive BLOCKING outside the parsed status is a defect, not a second opinion: it means
-# the headline says two things and the consumers would have to choose.
-_ITEM_HEADS_SEEN, _ITEM_HEADLINE = set(), {}
-for _m in re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*\n]+\*\* — ([^\n]*)', body):
+# never a grammar — they were how far each copy happened to look.
+#
+# AND ONE DERIVATION IS NOT YET A GRAMMAR. All five consumers agreed after that commit; they agreed
+# on a SCAN. codex-worker-1 broke the scan three ways in one pass, and the three shapes name the
+# three things a scan lacks — a view, a position, and a token:
+#
+#   `**BLOCKING, then NOT BLOCKING ...**`   parsed blocking; the ambiguity check counted only
+#                                           POSITIVE occurrences, so the contradiction was invisible
+#   `**NOT BLOCKING-LIKE ...**`             parsed non-blocking; `\b` sits happily between `G` and
+#                                           `-`, and a hyphenated compound is one WORD, not two
+#   `` `**BLOCKING**` `` in a code span     parsed blocking off raw bytes a reader sees quoted
+#
+# Widening `\b` to exclude `-` would have been the fourth spelling patch in this region. The repair
+# is to stop scanning. The status is the FIRST BOLD RUN after the headline's ` — `, read in the
+# VISIBLE view, and only its leading WORD TOKENS are the status: token 1 is `BLOCKING`, or tokens
+# 1-2 are `NOT` `BLOCKING`. A token is a maximal run of `[A-Za-z0-9'-]`, hyphen included — that one
+# decision is what makes `BLOCKING-LIKE` a different word from `BLOCKING` and `BLOCKINGLY` a
+# different word again, without enumerating either. Nothing else on the line can be the status, so
+# there is no window left to widen.
+_TOKEN_RE  = re.compile(r"[A-Za-z0-9'-]+")
+_HEADS_RE  = re.compile(r'(?m)^(\d{1,2})\. \*\*[^*\n]+\*\* — ([^\n]*)')
+
+def _parse_status(rest):
+    """The leading tokens of the headline's first bold run. None when there is no status."""
+    m = re.search(r'\*\*', rest)
+    if not m:
+        return None
+    run = rest[m.end():]
+    close = run.find('**')
+    if close >= 0:
+        run = run[:close]
+    tok = _TOKEN_RE.findall(run)
+    if tok[:1] == ['BLOCKING']:
+        return True
+    if tok[:2] == ['NOT', 'BLOCKING']:
+        return False
+    return None
+
+_ITEM_STATUS, _ITEM_HEADS_SEEN, _ITEM_HEADLINE = {}, set(), {}
+for _m in _HEADS_RE.finditer(body_vis):
     _n2, _rest = int(_m.group(1)), _m.group(2)
     _ITEM_HEADS_SEEN.add(_n2)
     _ITEM_HEADLINE[_n2] = _rest
-    _hits = len(re.findall(r'(?<!NOT )\bBLOCKING\b', _rest))
-    if _hits > 1 or (_hits == 1 and not _ITEM_STATUS.get(_n2, False)):
-        bad('ITEM-STATUS-AMBIGUOUS', f'item {_n2} headline states BLOCKING more than once or '
-                                     f'outside its leading status')
+    _st = _parse_status(_rest)
+    if _st is not None:
+        _ITEM_STATUS[_n2] = _st
+    # A SECOND STATUS WORD ANYWHERE ON THE LINE IS A CONTRADICTION, whatever its polarity. The old
+    # count excluded `NOT BLOCKING`, so a headline could open `BLOCKING` and retract it in the next
+    # clause with nothing to notice; the consumers would all have agreed on the opening, which is
+    # agreement about which half of a contradiction to read. Both spellings are one status word.
+    if len(re.findall(r'\bBLOCKING\b', _rest)) > 1:
+        bad('ITEM-STATUS-AMBIGUOUS', f'item {_n2} headline states the status word more than once; '
+                                     f'a headline that declares and then retracts declares nothing')
 
 # AND AN ITEM WITHOUT A PARSEABLE STATUS IS A DEFECT, not a non-blocking item. With `\b` making
 # `BLOCKINGLY` match nothing, the item simply had no entry and `.get(n, False)` answered "not
@@ -758,14 +819,16 @@ for _m in re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*\n]+\*\* — ([^\n]*)', body):
 # convention and most items rely on it — so requiring a status everywhere would have demanded
 # seventeen edits to say what silence already says. What must not happen is a headline that REACHES
 # for the status word and misses: `BLOCKINGLY` parsed as nothing and was read as non-blocking, so a
-# typo in a blocker's status would silently declassify it.
+# typo in a blocker's status would silently declassify it. `NOT BLOCKING-LIKE` is the same reach one
+# character further on, and it is this check — not the ambiguity one — that owns it: the headline
+# names the status word once, so there is nothing ambiguous about it, it is simply not the word.
 for _n2 in sorted(_ITEM_HEADS_SEEN):
     if _n2 in _ITEM_STATUS or _n2 in closed_set:
         continue
     if 'BLOCKING' in (_ITEM_HEADLINE.get(_n2) or ''):
         bad('ITEM-STATUS-MISSING', f'item {_n2} spells BLOCKING in a form the grammar does not '
-                                   f'accept: the status is **BLOCKING** or **NOT BLOCKING**, as a '
-                                   f'whole word inside the leading bold run')
+                                   f'accept: the status is **BLOCKING** or **NOT BLOCKING**, as the '
+                                   f'leading word tokens of the headline\'s first bold run')
 
 def _is_blocking(n):
     return _ITEM_STATUS.get(n, False)
@@ -1469,7 +1532,9 @@ _decor_raw = classify_raw_prose(open(__file__).read())
 # 42 -> 38: FOUR raw-prose extractors disappeared when five copies of the blocking predicate became
 # one parsed status. The largest single drop this floor has seen, and the right direction — the
 # ratchet exists to make raw-prose reads deliberate, and the best outcome is fewer of them.
-_DECOR_FLOOR = 38
+# 38 -> 36: the status parse and the headline scan moved off `body` onto `body_vis`, so an inline
+# code span can no longer supply a status. Two more raw reads became visible-view reads.
+_DECOR_FLOOR = 36
 # THE FLOOR MUST EQUAL TODAY'S COUNT, not merely bound it. As a `>` test the floor could be raised
 # to 999 and the ratchet would pass forever while asserting nothing — codex-worker-2 demonstrated
 # exactly that, and the executable proof stayed green because it tested the CLASSIFIER and never the
