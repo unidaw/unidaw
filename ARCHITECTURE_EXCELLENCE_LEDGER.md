@@ -1342,6 +1342,14 @@ the SHA mismatch. Owner remains `claude-worker-1`; reviewer must be independent
 of both owner and original author. Proposed transition is BLOCKED -> BLOCKED with
 corrected reason; no status change applied.
 
+P0.3 remediation is authorized within the bounded scope `ui-web/test/unit.mjs`
+only. `claude-worker-1` is implementing P03-R1 (real-template skeleton forgery
+differential), P03-R2 (tighten `scriptPrints` while preserving legitimate quoted
+lines), and P03-R3 (record approved `a265a7b7` versus landed `45f8e169`). Clean
+isolated Node tests must report the two pre-existing plugin-resolution failures
+separately. Independent review by `protocol_audit` is required; status remains
+BLOCKED and the owner cannot self-approve.
+
 Exact audit of `76f1672`: tombstone half PASS; item 29 remains blocked on the
 correlation/consumer contract. Production missing/removed paths now use
 `liveTrackAt` and emit `UnknownTrack`, with causal rowops-rejected tests and clean
