@@ -1728,3 +1728,11 @@ review of HOST-01 Step 1. `claude-worker-1`, now free while that review runs,
 is assigned a read-only HOST-02 generation-binding inventory/design; no
 production or layout edits are authorized until HOST-01 review and a bounded
 split are approved.
+
+HOST-02 inventory found no existing host generation; current correctness relies
+on controller mutexes and raw mapping lifetime. We authorize only HOST-02a:
+introduce an engine-side generation, bump it at every launch/relaunch, and copy
+it into `TrackInfo` beside the mapping, with no reader behavior, SHM/layout, or
+wire changes. HOST-02b/02c (reader refusal behavior) require a separate exact
+review after 02a. A possible wire-level host generation is explicitly deferred
+to a future ticket.
