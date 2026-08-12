@@ -1088,3 +1088,9 @@ has an unmatched/orphan Markdown fragment; G0-B open packet items 1-4 remain
 kindless; and the unified status parser still accepts contradictory, hyphenated,
 and inline-code pseudo-statuses. Carried G0-A/G0-B/G2/G3/Watchdog blockers
 remain. No implementation authorization.
+
+Owner successors `c40e7b3` and `e39d817` claim two blockers closed: a
+token-bounded status grammar with visible-view/code-span/ambiguity ratchets, and
+item-38 Markdown delimiter-balance checking. They report 132 controls. Remaining
+work is R7/R1 stale item-state prose, kind completeness for G0-B items 1-4, and
+typed planning unknown semantics. Exact current-byte audit is pending.
