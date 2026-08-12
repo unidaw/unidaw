@@ -1017,6 +1017,11 @@ but the packet remains **BLOCKED** on canonical semantics: G0-A/B planning,
 G2-A/B acceptance, G3 N/M1/item37/Watchdog, and G4/item26 framing. G4 ordering
 remains intentionally set-only.
 
+Owner successor `aec3968` claims G3’s N prerequisite is now discharged
+(`non_gate_prerequisites=[]`) and G4’s stale item26 statements are corrected;
+124 controls pass. It narrows the remaining semantic set to G0-A/B, G2-A/B, and
+G3 M1/item37/Watchdog. Exact review is pending.
+
 Exact review of `01c86f7` is **BLOCKED**. Parent duplicate regression and
 zero-terminal coverage pass causally, but the duplicate branch itself is not
 isolated: deleting explicit duplicate failure leaves the control green via
