@@ -895,6 +895,12 @@ canonical field) clean-passes. Mutable Final-gate prose still skips all G4
 validation. Indented Open sections, prefix headers, order/reasons, G2-B/G3/G0/
 G4/M1/item37 remain blocked.
 
+Exact review of `85f50c0` is **BLOCKED**. Exact matched-phrase/bareword spoof
+closure passes, but canonical Dependencies and `_depara` boundaries differ:
+moving the exact count after a blank line clean-passes. Mutable Final-gate prose
+still skips all G4 validation. Spelling/order/reason and Open-section/header
+gaps remain; G2/G3/G4/G0/M1/item37 semantics are unchanged.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
