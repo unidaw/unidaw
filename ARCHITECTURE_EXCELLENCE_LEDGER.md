@@ -1590,3 +1590,12 @@ with `read -r CREDENTIAL_MODE`; the provenance guard now fails as required. Suit
 remains 153/155 with the same two plugin failures. `eval`, indirect `${!name}`,
 `source`-imported assignments, and cross-file function assignments are explicitly
 untested scope questions. No transition proposed; independent review pending.
+
+P0.3 scope clarification: measured untested binding forms. The current
+`CREDENTIAL_MODE` entry is unaffected by the sole sourced file (it contains no
+such binding). `eval` and indirect `${!name}` occur in other tools and are
+unprovable for future entries; the guard should refuse such entries. Cross-file
+function binding is a real model gap even though it does not affect the current
+entry. Proposed rule change, not yet authorized: a verified entry must bind only
+within its cited script, with transitive source scanning enforced; otherwise it is
+unprovable and rejected. P0.3 remains BLOCKED pending review of this rule.
