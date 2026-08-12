@@ -1217,3 +1217,11 @@ owner-choice extractor still terminates at periods inside filenames, truncating
 Additional fresh fail-opens: escaped literal emphasis can be treated as status,
 malformed parked continuation runs pass, and one-space-indented duplicate H1s
 evade heading uniqueness. No acceptance.
+
+Owner successor `82215c3` claims the bec8 blockers closed: schema ledger now
+tracks names, container kinds, and leaf types across all records/depths with an
+epoch and A.0-scoped declaration; production/proof share `_schema_refusal`;
+owner-choice extraction handles adverbs, dotted identifiers, compound choices,
+and records a 12-choice floor; state scan handles sentence-initial, negated, and
+quoted forms. It reports schema /7 and 162 controls, while carrying G0-A/G0-B,
+R7/G4, item-38 ruling, and unclassified-kind work. Exact audit pending.
