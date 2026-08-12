@@ -1369,6 +1369,14 @@ general property. Required repair: derive allowed values per variable from the s
 script/control flow or enumerate exact known expansions, with a CREDENTIAL_MODE=PASS
 negative control. P0.3 remains BLOCKED.
 
+P0.3 owner remediation `e03c3c07` accepted the corpus-wide matcher blocker and
+replaced global substring matching with per-variable/per-script assignment
+binding. Owner reports broad substitutions and the named `CREDENTIAL_MODE=PASS`
+probe reject, legitimate assigned values pass, command-substitution values are
+treated as unprovable rather than accepted, and empty/literal-zero cases are
+explicitly pinned. Suite is 151/153 with the same two pre-existing plugin failures.
+No transition proposed; independent adversarial review is in progress.
+
 Exact audit of `76f1672`: tombstone half PASS; item 29 remains blocked on the
 correlation/consumer contract. Production missing/removed paths now use
 `liveTrackAt` and emit `UnknownTrack`, with causal rowops-rejected tests and clean
