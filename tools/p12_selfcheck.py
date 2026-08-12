@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'e39d8170777b653a9a62fdca08130262127f37f1'
+PREV_TIP     = '6f423d6137800d57f4d2204149e91932471844d9'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -258,24 +258,24 @@ for i, a in enumerate(sys.argv):
 # merely makes the run FAIL proves nothing — the fifth way a negative control lies is landing in
 # the prose that DESCRIBES the check, where it changes the file and no check notices.
 CONTROLS = {
- 'section-indented': ('\n# Open items — 38 atomic', '\n # Open items — 38 atomic', 1,
+ 'section-indented': ('\n# Open items — 39 atomic', '\n # Open items — 39 atomic', 1,
                       'OPEN-SECTION-MISSING'),
- 'header-suffix':    ('# Open items — 38 atomic, 9 CLOSED at this SHA, 29 open',
-                      '# Open items — 38 atomic, 9 CLOSED at this SHA, 29 open BUT ACTUALLY 99', 1,
+ 'header-suffix':    ('# Open items — 39 atomic, 9 CLOSED at this SHA, 30 open',
+                      '# Open items — 39 atomic, 9 CLOSED at this SHA, 30 open BUT ACTUALLY 99', 1,
                       'OPEN-HEADER-MISSING'),
  'open-section-two': ('# Provenance of this packet',
                       '# Open items — 1 atomic, 0 CLOSED at this SHA, 1 open\n\n'
                       '1. **G0-B** — decoy.\n\n# Provenance of this packet', 1,
                       'OPEN-SECTION-COUNT'),
- 'header-not-first': ('# Open items — 38 atomic', '# Open items BROKEN — 38 atomic', 1,
+ 'header-not-first': ('# Open items — 39 atomic', '# Open items BROKEN — 39 atomic', 1,
                       'OPEN-HEADER-MISSING'),
  'item-dupe-number': ('# Provenance of this packet',
                       '37. **G3** — editorial duplicate.\n\n# Provenance of this packet', 1,
                       'ITEM-NUMBER-DUPLICATE'),
- 'open-count':       ('# Open items — 38 atomic', '# Open items — 39 atomic', 1, 'OPEN-COUNT'),
- 'closed-count':     ('9 CLOSED at this SHA, 29 open', '8 CLOSED at this SHA, 30 open', 1,
+ 'open-count':       ('# Open items — 39 atomic', '# Open items — 40 atomic', 1, 'OPEN-COUNT'),
+ 'closed-count':     ('9 CLOSED at this SHA, 30 open', '8 CLOSED at this SHA, 30 open', 1,
                       'OPEN-CLOSED-COUNT'),
- 'open-arithmetic':  ('9 CLOSED at this SHA, 29 open', '9 CLOSED at this SHA, 19 open', 1,
+ 'open-arithmetic':  ('9 CLOSED at this SHA, 30 open', '9 CLOSED at this SHA, 19 open', 1,
                       'OPEN-ARITHMETIC'),
  # anchored on the tree hash, not on a count: the previous anchor was '11 RAW +', which the
  # document outgrew, leaving the control unable to land while the gate still reported PASS
@@ -474,7 +474,7 @@ CONTROLS = {
  'reader-row-moved': ('    6  engine_consumer.cpp:766',
                       '    x  engine_consumer.cpp:766', 1, 'OUT-MEMBERS'),
  # a manifest must never be published from a packet that failed its own gate
- 'emit-fail-open':   ('# Open items — 38 atomic', '# Open items — 39 atomic', 1, 'OPEN-COUNT'),
+ 'emit-fail-open':   ('# Open items — 39 atomic', '# Open items — 40 atomic', 1, 'OPEN-COUNT'),
  # both items are G2-A, so the forward gate check agrees and only the backward one can catch it
  'ruling-item-swap2': ('**R12 — item 27 (G2-A)', '**R12 — item 28 (G2-A)', 1, 'RULING-ITEM-BIND'),
  # the diagram has contradicted the text twice; it is checked now, so make sure the check fires
@@ -572,6 +572,16 @@ CONTROLS = {
  'ruling-cite-plus':  ('That work is filed at item 19 (G3),',
                       'That work is filed at open item 19 (G3), and item 21 is closed,', 1,
                       'RULING-ITEM-STATE'),
+ # THE UNCLASSIFIED POPULATION, restated versus derived. Adding a kind to an unclassified item moves
+ # it OUT of the derived set while the restatement still names it — the same shape as the ⟦PACKET⟧
+ # set's control, one population over.
+ 'unclassified-kinded': ('1. **G0-B** — The generated header breaks',
+                      '1. **G0-B** — ⟦PRODUCT⟧ The generated header breaks', 1,
+                      'KIND-UNCLASSIFIED-RESTATED'),
+ # AND THE RESTATEMENT ITSELF, mutated on the side the derivation cannot reach.
+ 'unclassified-said': ('UNCLASSIFIED OPEN ITEMS (1, 2, 3, 4, 7,',
+                      'UNCLASSIFIED OPEN ITEMS (1, 2, 3, 4, 5, 7,', 1,
+                      'KIND-UNCLASSIFIED-RESTATED'),
  'blocking-negated': ('38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING',
                       '38. **G1-B** — ⟦PACKET⟧ **BLOCKING', 1, 'BLOCKER-SET'),
  'marker-nonblocker': ('1. **G0-B** — ', '1. **G0-B** — ⟦BLOCKED-ON: 999⟧ ', 1, 'BLOCKER-KIND'),
@@ -1324,8 +1334,9 @@ _pkt_kind = sorted(n for n in nums if 'PACKET' in _KINDS.get(n, []))
 # A KIND IS AT LEAST ONE MARKER, not specifically PRODUCT. Requiring ⟦PRODUCT⟧ made a packet-only
 # blocker unrepresentable — the model could not say "this is blocked on work in this document",
 # which is a category the packet has produced twice.
-_kindless = [n for n in _derived_blk if not _KINDS.get(n)]
-if _kindless: bad('BLOCKER-KIND', f'blockers with no kind marker: {_kindless}')
+# AND THIS WAS A SIXTH COPY OF ONE RULE, forty lines from its twin: `_kindless` and `_unkinded`
+# selected the same set by two spellings and raised the same tag. Found while fixing the population
+# below, which is how every copy in this file has been found — by touching the thing beside it.
 # REPRESENTED IS NOT BOUND. /5 could emit kind ["PRODUCT","PACKET"] while nothing checked the
 # marker existed, so deleting item 37's ⟦PACKET⟧, moving it to a nonblocking item, or typing
 # ⟦PAKCET⟧ all emitted a clean PASS — the manifest simply reported one fewer kind and no check
@@ -1612,6 +1623,33 @@ for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — [^\n]{0,120}?'
 # DIFFERENT reviewer finding. The view, not the pattern, is what decides what a check can see.
 _ITEM_HEAD_U = {int(m.group(1)): m.group(2) for m in
                 re.finditer(r'(?m)^(\d{1,2})\. \*\*[^*]+\*\* — (.{0,200})', _visible(body))}
+
+def _withdrawn(n):
+    return bool(re.match(r'\*\*WITHDRAWN\b', _ITEM_HEAD_U.get(n, '').lstrip()))
+
+# THE UNCLASSIFIED POPULATION, made a number instead of a silence. Relaxing kind==blockers to
+# blockers⊆kinds let an open non-blocker carry a kind; it did not make the marked set COMPLETE, and
+# codex-worker-1 was right that the relaxation on its own establishes nothing. The choice offered
+# was to classify all open work or to narrow the stated contract, and the honest answer is the
+# second — because this packet's own sentence says **a classification cannot be read out of prose
+# that was not written to carry it**, and marking sixteen items in one pass by skimming their heads
+# is exactly that. A wrong kind is worse than an absent one: the check can catch a blocker with no
+# marker and cannot catch a blocker marked wrongly.
+#
+# So a kind is AUTHORED and never derived, the contract requires one on every blocker and permits
+# one anywhere, and the items that carry none are named, counted and restated in the prose under
+# the same equality gate the ⟦PACKET⟧ set has. An empty `kind` now means UNCLASSIFIED — a state a
+# consumer can see and act on — where before it was indistinguishable from "no work kind".
+_active_open = [n for n in nums if n not in closed_set and not _withdrawn(n)]
+_unclassified = sorted(n for n in _active_open if not _KINDS.get(n))
+_uc_said = re.search(r'UNCLASSIFIED OPEN ITEMS \(([0-9,\s and]*)\)', _visible(pkt))
+if not _uc_said:
+    bad('KIND-UNCLASSIFIED-RESTATED', 'the packet states no UNCLASSIFIED OPEN ITEMS set to check '
+                                      'against the derivation')
+else:
+    _uc_claimed = sorted(int(x) for x in re.findall(r'\d+', _uc_said.group(1)))
+    if _uc_claimed != _unclassified:
+        bad('KIND-UNCLASSIFIED-RESTATED', f'{_uc_said.group(1)!r} vs derived {_unclassified}')
 
 # ---- 2c. the binding RATCHET, because both directions above read only the item HEADLINE ---------
 # codex-worker-1 mutated item 21's body from "R17 shows" to "R16 shows", regenerated, and the gate
@@ -2459,7 +2497,11 @@ man = {
  # says to version the moment a shape changes twice; codex-worker-2 had to point out that I had not.
  # A version that does not move is worse than no version: it is a promise of stability that was not
  # kept, and a consumer trusts it.
- 'schema': 'ae-p1.2-manifest/5',   # /4 added withdrawn+active_open; /5 makes kind an ARRAY
+ 'schema': 'ae-p1.2-manifest/6',   # /4 added withdrawn+active_open; /5 makes kind an ARRAY;
+ # /6 adds unclassified_open AND versions the invariant widening that shipped silently in /5:
+ # the observable rule went from kinds == blockers to blockers subset-of kinds, so a consumer
+ # treating the equality as schema semantics got no warning. A semantic widening is a version
+ # change even when the JSON shape is untouched — codex-worker-1's compatibility caveat.
  'static_checks': static_checks,
  'review_register': review_register,
  'failure_models': failure_models,
@@ -2493,7 +2535,7 @@ man = {
             # canonical consumer from live nonblocking work, which is exactly the audience the
             # manifest exists for. codex-worker-1 named it while item 37 carried that shape.
             # Read from the HEAD for the same reason `blocking` is: that is where it is validated.
-            'withdrawn': bool(re.match(r'\*\*WITHDRAWN\b', _ITEM_HEAD_U.get(n, '').lstrip())),
+            'withdrawn': _withdrawn(n),
             # the KIND marker, emitted rather than left in prose: a consumer planning the
             # blockers needs to know which are product work and which wait on another item,
             # and that was readable only by eye until now.
@@ -2532,6 +2574,11 @@ man = {
  # so a consumer can tell the five reproducible rows from the two that are judgement.
  'census': census_rows,
  'controls': sorted(CONTROLS),
+ # AN EMPTY `kind` MEANS UNCLASSIFIED, not "no work kind", and a consumer could not tell those
+ # apart while the population was a silence. The LIST is emitted here and the count in
+ # `counts`, matching `controls`: a count says how much is unclassified, a list says which,
+ # and only the second is actionable. Restated in the prose under an equality gate.
+ 'unclassified_open': _unclassified,
  # `open` is items minus closed and therefore COUNTS WITHDRAWN ITEMS, which are not work.
  # `active_open` is what a planner actually has to do. Both are emitted rather than one being
  # silently redefined, because a consumer pinned to `open` should not change meaning underneath it.
@@ -2546,9 +2593,8 @@ man = {
             # false history about a number that never moved; codex-worker-1 checked the algebra.
             # The set form stays because it states the intent directly, not because it changed a
             # count — recorded here so the next reader does not trust the story.
-            'active_open': len([n for n in nums if n not in closed_set
-                                and not re.match(r'\*\*WITHDRAWN\b',
-                                                 _ITEM_HEAD_U.get(n, '').lstrip())]),
+            'active_open': len(_active_open),
+            'unclassified_open': len(_unclassified),
             'blocking': blocking_n, 'raw_claims': len(tokens), 'hand_ruled': byhand,
             'controls': len(CONTROLS), 'commanded_claims': cmd_claims,
             'census_rows': len(census_rows), 'rulings': len(rulings)},

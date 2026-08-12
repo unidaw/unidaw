@@ -55,7 +55,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    no replacement, so no PASS condition accepts the two-level implementation that exists and writing
    one is packet work. Each carries ⟦PACKET⟧ beside ⟦PRODUCT⟧ so the
    manifest can say so; until `kind` became an array that fact was unrepresentable and the record
-   said PRODUCT. An earlier version of this sentence named only item 37. **⟦PACKET⟧ MARKS (18, 26, 28, 36, 37, 38)**, derived from the item heads and compared against this restatement, because representing a
+   said PRODUCT. An earlier version of this sentence named only item 37. **⟦PACKET⟧ MARKS (18, 26, 28, 36, 37, 38, 39)**, derived from the item heads and compared against this restatement, because representing a
    kind is not binding it: deleting the marker, ADDING one to a nonblocking item, DUPLICATING it and
    misspelling it all passed until these checks existed — and a two-site MOVE is not expressible in
    the single-anchor control format, so no control claims to perform one, and a marker parked later in a head
@@ -92,7 +92,7 @@ The blockers from the exact review are reconciled here, and the count is deliber
    packet**: a sentence of the form "each population carries its extraction command" is false at
    this SHA by construction, and this paragraph previously ended with one while opening with the
    disqualification, because I patched its head across three rounds and left its tail alone.
-2. **The open list is 38 atomic items, not 15 categories.** The four that compression swallowed are
+2. **The open list is 39 atomic items, not 15 categories.** The four that compression swallowed are
    restored: G0-B's unowned mutation floor, G2-A's BATCH blindness, G2-B's probe-order false-green,
    and G3's debug-env requirement plus its self-contradicting static check.
 3. **G0-A's mailbox census was wrong twice and is corrected with its method.** See G0-A.
@@ -1450,7 +1450,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `575f210d71b0b7106ddaf22c80ff458f13e05c9b`, A.0 SCRIPT BLOB `07e158623c8d1b81a7a0b988417c47f09f2af364`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `0631499d32927980dddb4e6b3a063d50bee908f2`, A.0 SCRIPT BLOB `5b7177d4d6df27a33c7f2111c60821b2587b6200`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1458,15 +1458,21 @@ its committed blob unless `AE_P12_DRAFT=1` is set for an unpublishable draft run
 **2**, so a broken gate can never be read as a passing one. Invocation and expected output:
 
     AE_P12_PIN=<pin> python3 tools/p12_selfcheck.py
-    packet blob <oid> · product 75c6f064 tree 699abfe8 · 38 items, 29 open · 14 RAW (13 hand-ruled) + 32 commanded-claim occurrences, all executed
+    packet blob <oid> · product 75c6f064 tree 699abfe8 · 39 items, 30 open · 14 RAW (13 hand-ruled) + 32 commanded-claim occurrences, all executed
     PASS
 
-**The MANIFEST is the canonical machine-readable source.**
+**The MANIFEST is the canonical machine-readable source, at `ae-p1.2-manifest/6`.** **A SEMANTIC
+WIDENING IS A VERSION CHANGE EVEN WHEN THE JSON SHAPE IS UNTOUCHED**, and /5 broke that: the
+observable invariant moved from `kind` marks EQUALLING the blocker set to blockers being a SUBSET
+of the marked items, and a consumer that had read the equality as schema semantics got no warning
+because no key changed. codex-worker-1 raised it as a compatibility caveat. /6 carries that
+widening as well as the new `unclassified_open` population.
 `docs/architecture/tasks/AE-P1.2-manifest.json` carries the gates and their decidability, the
 rulings with `named_at` — every NON-HEADING mention of each one, with line and context, the
 heading itself being carried by the record's own `line` field; there is no `applied` field, because
 a ruling is applied TO ITEMS and its items can disagree — every item with its gate and blocking/closed state, every RAW
-claim with its command and arithmetic, the control names, and the counts. It is EMITTED by this
+claim with its command and arithmetic, the control names, the UNCLASSIFIED OPEN population, and the
+counts. It is EMITTED by this
 checker from the same extraction the checks run on (`--emit-manifest`) and the checker FAILS if the
 committed copy differs, so it is canonical without being a second hand-maintained document — which
 is the defect this packet has produced in every other form today. Read the manifest for facts and
@@ -1573,7 +1579,7 @@ only ADDS one is a no-op and reports BLIND correctly — a repaired opt-out prod
 tag — and it therefore adds the span AND breaks the real status, so the old scan reads the span as
 the status while the new parse names the malformed reach.
 
-**Controls.** One hundred thirty-four, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** One hundred thirty-six, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1594,7 +1600,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `unclassified-kinded`, `unclassified-said`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
@@ -2251,7 +2257,7 @@ to the end and swallowed R10 and R11 into R9's text. **A hardcoded range and a s
 the same failure in two notations, and this packet has now shipped both.** A ruling recorded as a closure would be the same error as a
 census recorded as a proof, which this packet has already made once at item 7.
 
-# Open items — 38 atomic, 9 CLOSED at this SHA, 29 open
+# Open items — 39 atomic, 9 CLOSED at this SHA, 30 open
 
 One per line, numbered in document order, so the count is checkable. ELEVEN are BLOCKING — 18, 19, 24, 26, 27, 28, 29, 33, 35, 36 and 37. **Items 26 and 27 became blocking when their populations were withdrawn rather than replaced, and BOTH have since moved on**: item 27's scope is authored under R12 and its blocker is the class-wide missing sender identity; item 26's population is complete across both planes and its blocker is the missing adjacent multi-plugin fixture. The withdrawal reasoning below is retained because it explains why a withdrawn population is a stronger blocker than a wrong one — a wrong one at least fails visibly — but neither item rests on it now.
 
@@ -2713,8 +2719,29 @@ One per line, numbered in document order, so the count is checkable. ELEVEN are 
     unreliable. Then, scoped correctly, it carried no kind marker, because the old rule made the
     marked set EQUAL to the blocker set and erased the work-kind of every open non-blocker. Kind
     and state are orthogonal — kind says what closes an item, blocking says whether a gate waits
-    on it — so every blocker carries a kind and a non-blocker may.** Both times the checker
+    on it — so every blocker carries a kind and a non-blocker may. That relaxation does not make
+    the marked population COMPLETE, and open item 39 (all) carries what it leaves: a kind is
+    AUTHORED, an empty one means UNCLASSIFIED, and sixteen active open items are.** Both times the checker
     refusing was the derivation working. PACKET work.
+
+39. **all** — ⟦PACKET⟧ **NOT BLOCKING. The kind vocabulary does not span the open set, and
+    relaxing `kind == blockers` to `blockers ⊆ kinds` did not make the marked population
+    complete.** Sixteen active open items carry no kind: **UNCLASSIFIED OPEN ITEMS (1, 2, 3, 4, 7,
+    12, 14, 15, 16, 17, 20, 22, 25, 30, 31, 32)**, derived from the item heads and compared against
+    this restatement. codex-worker-1 named items 1-4 and offered the choice: classify all open work,
+    or narrow the stated contract. **I have narrowed it, and the reason is this packet's own
+    sentence — a classification cannot be read out of prose that was not written to carry it.**
+    Marking sixteen items in one pass by skimming their heads is that mistake at scale, and the
+    check can catch a blocker with no marker while being unable to catch a blocker marked wrongly,
+    so a wrong kind costs more than an absent one. What was fixed instead is the SILENCE: an empty
+    `kind` now means UNCLASSIFIED rather than being indistinguishable from "no work kind", the
+    population is emitted as a list, counted, and equality-gated against this sentence. **Item 22
+    is the evidence that the vocabulary itself is short**: its content is that fixture definitions
+    and ack-census counts have never been run, and the action it asks for is a REVIEW against a
+    fixture — neither a product edit nor a packet edit. Whoever classifies this population must
+    either place item 22 in one of the two kinds and say why, or author a third. Doing it well
+    means reading each item against its gate, which is why it is filed rather than guessed.
+    PACKET work.
 
 # Provenance of this packet's own numbers
 
