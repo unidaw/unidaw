@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '1585c9a448f41fa916a6769eef4593a2710f9d4a'
+PREV_TIP     = '01c86f74ef1814ef2fe0236a80fa7c6534797e47'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -358,13 +358,20 @@ CONTROLS = {
  # ON A NONTERMINAL GATE, which is the shape that actually passed. Duplicating G4's own
  # declaration was already rejected by the per-gate `== 1` logic this control was meant to ratchet,
  # so restoring that logic left the control GREEN — it proved nothing about the repair.
- # codex-worker-1 reproduced that exactly. Two declarations on G3 is the corpus that used to pass.
+ # codex-worker-1 reproduced that exactly. Two declarations on a NONTERMINAL gate — G2-A's clause
+ # below — is the corpus that used to pass; `g4-dup-terminal` covers the terminal-gate case.
+ # ON THE TERMINAL GATE ITSELF, which produces NO wrong-gate mismatch — so only the duplicate
+ # branch can catch it. Its sibling above duplicates on a nonterminal and would still fire
+ # through the population comparison if the duplicate branch were deleted; this one isolates it.
+ 'g4-dup-terminal':  ('G3. Final gate — and therefore NOT DECIDABLE',
+                      'G3. Final gate — x. Final gate — and therefore NOT DECIDABLE', 1,
+                      'GATE-DECL-DUPLICATE'),
  'g4-zero-terminal': ('**Severity** HIGH. **Dependencies** none; first gate.',
                       '**Severity** HIGH. **Dependencies** G4; first gate.', 1,
                       'GATE-TERMINAL-COUNT'),
  'g4-final-twice':   ('**Severity** MEDIUM-HIGH. **Dependencies** G1-A, G1-B.',
                       '**Severity** MEDIUM-HIGH. **Dependencies** G1-A, G1-B. Final gate — a. Final gate — b.',
-                      1, 'GATE-DEP-BLOCKERS'),
+                      1, 'GATE-DECL-DUPLICATE'),
  'g4-final-negated': ('G3. Final gate — and therefore NOT DECIDABLE',
                       'G3. not Final gate — and therefore NOT DECIDABLE', 1,
                       'GATE-DEP-BLOCKERS'),
@@ -1919,7 +1926,8 @@ if len(_final) != 1:
 # designation form and rejects `not Final gate`, but `Final gate — NO: this gate is not terminal`
 # still matches, because a regex cannot judge whether a sentence AFFIRMS. I called this a positive
 # designation; it recognises a spelling. The load-bearing check is the GRAPH; this one catches a
-# renamed or deleted label and nothing subtler, and saying so is better than a stronger comment
+# renamed, deleted, duplicated or wrong-gate label — but NOT semantic affirmation, which is the
+# actual boundary; saying so is better than a stronger comment
 # over the same code. A genuinely semantic version needs a TYPED designation, not prose. `'Final gate' in ...` read the clause
 # `not Final gate` as AGREEMENT, so the document could deny the graph and satisfy the cross-check
 # by containing the words it denies. That is the bare-substring defect I fixed in the count phrase
@@ -1936,7 +1944,7 @@ _decl_counts = {g['id']: len(_FINAL_DECL.findall(_visible(g.get('dependencies_te
                 for g in gates}
 for _gid, _n in sorted(_decl_counts.items()):
     if _n > 1:
-        bad('GATE-DEP-BLOCKERS', f'{_gid} declares itself the final gate {_n} times')
+        bad('GATE-DECL-DUPLICATE', f'{_gid} declares itself the final gate {_n} times')
 _said_final = [gid for gid, _n in sorted(_decl_counts.items()) if _n >= 1]
 if len(_final) == 1 and _said_final != [_final[0]['id']]:
     bad('GATE-DEP-BLOCKERS', f'the graph makes {_final[0]["id"]} the terminal gate; the prose names '
