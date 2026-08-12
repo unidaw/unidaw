@@ -851,6 +851,12 @@ is prefix-only; zero sections crash without a named refusal; and the
 missing-close/decoy list/count/order/reason checks remain fail-open with stale
 labels. G2-B, G3 N/M1/item37/Watchdog, G4 planning, and G0 remain blocked.
 
+Owner successor `f4a05b3` claims G4 no-close and two-list shadow cases are now
+causally rejected, and the G2-A stale scope reason is corrected; 113 controls
+pass. It explicitly leaves the canonical Dependencies count-phrase check
+unexplained and not closed, while item26’s stale reason remains. Exact review is
+pending.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
