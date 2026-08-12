@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '85f50c05bc7563fd344eabdfec2855bd7ef03e8a'
+PREV_TIP     = 'bc5e89a65d6e25ea6d142deca4f40ad267b9de1c'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -355,6 +355,8 @@ CONTROLS = {
  # THE DECOY GOES IN THE CLAUSE AND THE REAL PHRASE OUTSIDE IT. The first version put both inside
  # and came back BLIND — the mutation landed and the check was right not to fire, which is the
  # position mistake this packet recorded one commit earlier, repeated within the hour.
+ 'g4-final-rename':  ('G3. Final gate — and therefore NOT DECIDABLE',
+                      'G3. Terminal gate — and therefore NOT DECIDABLE', 1, 'GATE-DEP-BLOCKERS'),
  'g4-dep-bareword':  ('on TEN dependency blockers plus one of its own.\n**The ten**',
                       'on the dependency blockers plus nothing.\n'
                       '**The ten**\n\nRestated: on TEN dependency blockers plus one of its own.\n\n**Also**',
@@ -1878,6 +1880,23 @@ for g in gates:
 # fact about the dependency graph and nothing in the prose can change it.
 _depended_on = {d for g in gates for d in g['dependencies']}
 _final = [g for g in gates if g['id'] not in _depended_on and g['dependencies']]
+# CARDINALITY, because a population with no size assertion can be EMPTY and report success by not
+# running. Removing every dependency clause selected zero finals and the whole audit below executed
+# zero times, cleanly; splitting the graph selected two sinks and both were silently treated as the
+# final gate while the packet's contracts are singular. I replaced a prose-chosen population with a
+# graph-chosen one and never asked how big it was — the vacuous-check family, one level up from the
+# `if _listed:` skip earlier in this file.
+if len(_final) != 1:
+    bad('GATE-DEP-BLOCKERS', f'{len(_final)} terminal gate(s) in the dependency graph; '
+                             f'the packet\'s final-gate contracts are singular: '
+                             f'{sorted(g["id"] for g in _final)}')
+# AND THE PROSE IS A CROSS-CHECK, NOT THE SELECTOR. Using it to CHOOSE let the document opt out;
+# using it to CONFIRM makes a rename a disagreement between two independent derivations, which is
+# a failure rather than a silence. The graph decides; the prose must agree.
+_said_final = [g['id'] for g in gates if 'Final gate' in (g.get('dependencies_text') or '')]
+if len(_final) == 1 and _said_final != [_final[0]['id']]:
+    bad('GATE-DEP-BLOCKERS', f'the graph makes {_final[0]["id"]} the terminal gate; the prose names '
+                             f'{_said_final or "none"}')
 for _g in _final:
     _union = sorted({n for d in _g['dependencies'] for n in by_id.get(d, {}).get('blocking_items', [])}
                     - set(_g.get('blocking_items', [])))
