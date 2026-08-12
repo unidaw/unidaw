@@ -1308,3 +1308,14 @@ Exit criteria for this phase: every remaining P1.2 finding is represented by an
 ADR/ticket with owner, scope, dependency, and acceptance test; implementation may
 proceed on disjoint code, while schema/ring changes remain gated. This is the
 formal transition to P2 implementation preparation.
+
+P2 parallelization is approved with worktree/file ownership. `P2-SHM-01` is the
+sole foundation owner for wire/layout files; `P2-CTRL-01`, `P2-HOST-01`,
+`P2-WDOG-01`, and `P2-G1B-01` may proceed independently in separate worktrees.
+`P2-CTRL-02`, `P2-HOST-02`, `P2-WDOG-02`, and `P2-G4-01` wait on their listed
+dependencies. Every lane must return a commit, focused tests, build evidence,
+and a clean merge boundary; no two lanes edit SHM/layout files concurrently.
+
+Second implementation slice landed as `e632f606`: HostController cleanup now
+uses `lstat`, only unlinks owned socket files, tolerates `ENOENT`, and refuses
+regular files/symlinks. `daw_engine` and `juce_host_process` build targets pass.
