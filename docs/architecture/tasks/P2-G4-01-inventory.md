@@ -87,3 +87,57 @@ documenting correct behaviour. It is step 1 for exactly that reason.
 
 Related: AE-P1.2 item 26 (frozen packet) records the same fixture gap; this was measured
 independently from the current checkout and agrees with it.
+
+## STEP 1 ANSWERED: THE ALIASING IS NOT A LIVE HAZARD — the ping-pong prevents it
+
+Traced `juce_host_process_main.cpp:866-900` (loop head and buffer selection), `:1061` (the rebind)
+and `:219-227` (the allocation). **The concern I raised above is wrong, and here is why.**
+
+**The output buffer is chosen by parity, and the input is always the OPPOSITE parity.**
+
+    outputPtrs = isLast ? state.outputPtrs.data()
+                        : ((index - segmentStart) % 2 == 0 ? chainPtrsA.data()
+                                                           : chainPtrsB.data());   // :869-872
+    ...
+    inputPtrs = outputPtrs;                                                        // :1061
+
+So for a segment of N:
+
+| index | writes to | reads from |
+|---|---|---|
+| 0 | `chainPtrsA` | the segment input (`state.inputPtrs`) |
+| 1 | `chainPtrsB` | `chainPtrsA` |
+| 2 | `chainPtrsA` | `chainPtrsB` |
+| last | `state.outputPtrs` | whichever chain buffer the previous wrote |
+
+**Input and output are never the same memory for any adjacent pair.** `chainBufferA` and
+`chainBufferB` are two distinct `std::vector<float>` (`:87-88`), and `chainPtrsA/B` index into their
+own buffer (`:223-227`). `inputPtrs = outputPtrs` hands the next iteration the buffer just written,
+and the next iteration selects the OTHER one to write into. That is a ping-pong, and it is exactly
+the structure that makes in-place aliasing impossible here.
+
+**The pre-clear does not break it either.** `:883-888` zeroes the buffer this iteration is about to
+WRITE, only when `!isLast`. At index 2 that clears `chainBufferA` while the input is `chainPtrsB` —
+so the clear never touches the input it is about to read.
+
+### CONSEQUENCE FOR THE PLAN ABOVE
+
+**Steps 2-4 would document correct behaviour, not catch a defect.** That is a materially different
+task and should be scoped as one — a regression guard on a property that currently holds, worth
+having and worth pricing honestly, rather than a hunt for a bug that is not there.
+
+### THE RESIDUAL I AM NOT CLOSING
+
+**The single-plugin segment.** When `segmentLength == 1` the only plugin is `isLast`, so it reads
+`state.inputPtrs` and writes `state.outputPtrs` — and whether THOSE alias is an engine-side question
+about how the planes are bound, not a host-side one. It is outside the adjacency question and I have
+not checked it. It is also the case a two-plugin fixture would never exercise.
+
+### BOUNDED NEXT TICKET
+
+**P2-G4-02 — a regression guard on the chain ping-pong.** Assert that for a segment of two or more,
+each plugin's output buffer differs from its input buffer, and that the pre-clear never zeroes the
+buffer about to be read. Cheap, needs no host fixture (the selection is arithmetic over `index`,
+`segmentStart` and `isLast`), and it pins the property that makes adjacency safe TODAY — which is
+what would silently break if someone "simplified" the parity away. **That is a better use of the
+effort than the multi-plugin fixture**, and it does not need HOST01 or HOST02 at all.
