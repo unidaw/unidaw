@@ -1645,3 +1645,13 @@ must refuse growth. Causal controls must mutate production inputs and prove each
 verifier branch. Current closure is exactly webstack plus repository_root (~47.6KB).
 Implementation is authorized only against this shape, in `ui-web/test/unit.mjs`,
 with no status transition until independent review.
+
+P0.3 design decision: Option B is approved in principle, implementation gated on
+independent design review. Replace shell-semantic inference with an explicit
+allowlist of exact observed output lines, each attested by reviewer/date/command
+and blob pins for every executed script. Acceptance controls B1-B8 require quoted
+line membership, stale/missing script rejection, complete attestation, exact
+quoted-line count, and branch-isolated masking. This intentionally proves only
+attested observations against exact bytes, not arbitrary future runtime behavior.
+A future script-execution harness is a separate integration ticket. No code or
+status transition until B1-B8 design review passes.
