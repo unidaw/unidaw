@@ -1269,3 +1269,10 @@ running synthetic mismatches through the same observable guard/action, or inject
 a live mismatch and require the emitted failure/exit tag. Scalar unions, A.0
 source uniqueness, owner-choice counts, `SHALL also rule`, state scan, and normal
 validation otherwise pass.
+
+Owner successor `a944df4` claims the 7c38 parser findings closed: composed
+continuation-line status seams are checked as one item-wide reach, and heading
+uniqueness is keyed by semantic section/gate kind rather than full caption text.
+It reports schema /7, epoch 3, and 170 controls. Carried G0-A/G0-B, R7/G4,
+SEND-SITES/PASS9, item38 ruling, unclassified kinds, subject-before-reference,
+and owner-choice reason-content issues remain. Exact audit pending.
