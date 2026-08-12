@@ -19,14 +19,21 @@ never written is the same error's fingerprint.
 The blockers from the exact review are reconciled here, and the count is deliberately not restated: it moved between rounds and a fixed number here would be a twin of the item list, which is the authority:
 
 1. **GATE PLANNING VERDICTS — plannable 0, unknown 8, blocked 0.** **OWNER CHOICES (G0-A, G0-B,
-   G1-A, G1-B, G2-A, G3, G4)** and **NON-GATE PREREQUISITES (G1-B)**, the first derived from every
+   G1-A, G1-B, G2-A, G2-B, G3, G4)** and **NON-GATE PREREQUISITES (G1-B)**, the first derived from every
    `SHALL decide` / `SHALL rule` / `SHALL choose` demand in a gate's review register and the second
    from the gates' `Dependencies` clauses, both compared against this restatement. **The choice
    population was MARKER-AUTHORED for one SHA and I had five wrong**: codex-worker-1 found five live
    demands unmarked and G3's two choices sharing one marker, so the emitted reason lost the second
    entirely. The register's own VERB is the distinction I had said could not be read — this packet
-   writes `SHALL confirm` for a fact and `SHALL decide` for a choice, consistently — and a rule over
-   it is complete by construction where a marker is a population I can forget. Every gate names a population
+   writes `SHALL confirm` for a fact and `SHALL decide` for a choice — and a rule over it beats a
+   marker, which is a population I can forget. **I then claimed it was COMPLETE BY CONSTRUCTION and
+   it is not**: `SHALL confirm` carries G0-A's refuse-versus-degrade choice and `SHALL establish`
+   carries one in G1-A, so the verb set is a FLOOR over a named list and the population is at least
+   what it finds. Claiming completeness for a rule written in the same minute is the overclaim the
+   marker set made, one mechanism along. Three further repairs came with it, each a defect this
+   packet has already recorded elsewhere: `SHALL also rule` was missed by requiring the verb
+   ADJACENT to SHALL, the extractor scanned the whole gate rather than the REGISTER, and sentences
+   ended at any period so a reason truncated inside `control.rs`. Every gate names a population
    it can range over, which is what this line used to report as "EVERY GATE IS PLANNABLE AT THIS
    SHA"; that claim read TWO, then ONE, then every, across three SHAs, and it is **withdrawn as
    OVERSTATED rather than as wrong.** No gate's own population is withdrawn — the fact it was
@@ -741,12 +748,13 @@ paragraph naming two carriers, one of them since discharged, is the restatement 
 range.
 
 **Review register.** The reviewer SHALL rule on how device-params acquires a request identity — a new
-field on `UiDeviceParamsRegion` implies a `kShmVersion` bump; SHALL confirm whether the plain snapshot
-copy at `control.rs:644-646` bracketed by the `ui_version` double check is acceptable; SHALL state
-which thread owns each region's publication and confirm the device-params region and the audio clip
-table are INTENDED to be single-writer; and SHALL decide what abandonment this gate defends against —
-process death, an exception inside the body, or neither — since there is no early return between any
-open and its close.
+field on `UiDeviceParamsRegion` implies a `kShmVersion` bump. The reviewer SHALL decide what
+abandonment this gate defends against — process death, an exception inside the body, or neither —
+since there is no early return between any open and its close. **Each choice is its own sentence, so
+each gets its own record**; they were one sentence and the second had none. The reviewer SHALL
+confirm whether the plain snapshot copy at `control.rs:644-646` bracketed by the `ui_version` double
+check is acceptable; and SHALL state which thread owns each region's publication and confirm the
+device-params region and the audio clip table are INTENDED to be single-writer.
 
 ---
 
@@ -1486,7 +1494,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `cf1f71b0d60ee338f0365d23ce32ce0781064896`, A.0 SCRIPT BLOB `b82682caf8d88002f0c51f59315495e3b552e83b`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `746b032bde2abc0b775476cd7e385b1bb2a01391`, A.0 SCRIPT BLOB `da092a989d1b665960f3b913c27e0e50baff6c58`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1572,7 +1580,20 @@ an absolute: text injected outside a hiding place must raise the count and text 
 not, so the blanking is shown to be doing work rather than merely agreeing with its author on a clean
 document. `--prove-emit-identity` drives a real failure into a real run and requires the committed
 manifest to be byte-identical afterwards — it REFUSES when the artifact is absent, because
-`None == None` proved nothing the first time. **THE SCHEMA GUARD IS A LEDGER, not a comparison with a neighbour.** Its first version compared the
+`None == None` proved nothing the first time. **AND THE LEDGER'S FIRST VERSION WAS SHALLOW IN FOUR MORE WAYS**, all found the same day it
+shipped: it recorded no leaf TYPES, so `items[].kind` going from an array to a comma-separated
+string passed with the key set intact; it merged records first-wins, so a field present only on the
+SECOND ruling never appeared; "append-only" was a sentence, so rewriting an entry beside a new field
+passed; and the single declaration could be RELOCATED out of A.0 and still parse, because uniqueness
+without scope is not a place. The shape is now names, container kinds and leaf types over ALL
+records at every depth; the ledger is compared against the predecessor's under an EPOCH, so
+recomputing every hash is possible and visible rather than possible and silent; and the declaration
+is read from A.0's section. **The element type of a scalar list is deliberately NOT shape** — making
+it one turned an empty list into a different shape from a populated one, so a gate gaining a reason
+string demanded a version bump, and a guard that cries at values trains its reader to bump for
+nothing.
+
+**THE SCHEMA GUARD IS A LEDGER, not a comparison with a neighbour.** Its first version compared the
 emitted key sets against the manifest at `PREV_TIP`, and codex-worker-1 walked through it four ways
 in one pass: a version ROLLBACK passed because the parent had that shape under the old version, a
 key added to ONE record was invisible because the walk read element 0 and called it the list's
@@ -1735,7 +1756,7 @@ only ADDS one is a no-op and reports BLIND correctly — a repaired opt-out prod
 tag — and it therefore adds the span AND breaks the real status, so the old scan reads the span as
 the status while the new parse names the malformed reach.
 
-**Controls.** One hundred fifty-nine, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** One hundred sixty-two, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1756,7 +1777,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `unclassified-kinded`, `unclassified-said`, `opening-gates-gone`, `planning-unknown-gone`, `status-slash`, `status-wrapped`, `status-after-ok`, `item-md-escape`, `section-orphan`, `schema-unstated`, `ruling-state-adverb`, `ruling-state-cited`, `item-state-stale`, `owner-choice-said`, `owner-choice-gone`, `section-prefix`, `status-escaped`, `status-parked`, `restate-total`, `restate-open`, `choice-compound`, `status-parked-l2`, `status-entity`, `md-fabricated`, `section-dupe`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `unclassified-kinded`, `unclassified-said`, `opening-gates-gone`, `planning-unknown-gone`, `status-slash`, `status-wrapped`, `status-after-ok`, `item-md-escape`, `section-orphan`, `schema-unstated`, `ruling-state-adverb`, `ruling-state-cited`, `item-state-stale`, `owner-choice-said`, `owner-choice-gone`, `section-prefix`, `status-escaped`, `status-parked`, `restate-total`, `restate-open`, `choice-compound`, `status-parked-l2`, `status-entity`, `md-fabricated`, `section-dupe`, `item-state-cap`, `item-state-negelse`, `choice-adverb`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,

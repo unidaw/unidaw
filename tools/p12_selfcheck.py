@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'bec8cbe8bca97ec78a99ff39c384049cd7af5279'
+PREV_TIP     = 'be9193dda4b6062f8da745f284a296b3bb0d9088'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -311,7 +311,7 @@ CONTROLS = {
  'opening-gates-gone': ('**GATE PLANNING VERDICTS — plannable 0, unknown 8, blocked 0.**',
                       '**Gate planning at this SHA.**', 1, 'OPENING-GATE-COUNT-MISSING'),
  # THE OWNER-CHOICE POPULATION, restated versus derived — the second input to `unknown`.
- 'owner-choice-said': ('**OWNER CHOICES (G0-A, G0-B,\n   G1-A, G1-B, G2-A, G3, G4)**',
+ 'owner-choice-said': ('**OWNER CHOICES (G0-A, G0-B,\n   G1-A, G1-B, G2-A, G2-B, G3, G4)**',
                       '**OWNER CHOICES (G0-A, G0-B)**', 1, 'OWNER-CHOICE-RESTATED'),
  # AIMED AT A GATE WITH EXACTLY ONE CHOICE. Aimed at G3 it went DEAD the moment G3 gained a second:
  # removing one of two leaves the gate in the population, so the restatement never moves. A control
@@ -678,6 +678,17 @@ CONTROLS = {
  'item-state-stale': ('Item 11 was a fifth until it CLOSED',
                       'Item 11 is open, and was a fifth until it CLOSED', 1,
                       'ITEM-STATE-CONTRADICTED'),
+ # THE CITATION FORM, SENTENCE-INITIAL: same claim, and a case-sensitive scan let it through.
+ 'item-state-cap':   ('Both return under item 11 (G1-B).',
+                      'Open item 11 (G1-B) is where both return.', 1, 'ITEM-STATE-CONTRADICTED'),
+ # A NEGATOR ABOUT SOMETHING ELSE suppressed a live contradiction when the test was clause-wide.
+ 'item-state-negelse': ('Item 11 was a fifth until it CLOSED',
+                      'Item 11 is open and not yet reviewed. Item 11 was a fifth until it CLOSED', 1,
+                      'ITEM-STATE-CONTRADICTED'),
+ # THE VERB WITH AN ADVERB, in the owner-choice extractor this time: `SHALL also rule`.
+ 'choice-adverb':    ('The reviewer SHALL also rule on the self-deadlock',
+                      'The reviewer SHALL later consider the self-deadlock', 1,
+                      'OWNER-CHOICE-RESTATED'),
  # THE QUOTATION EXEMPTION IS NOT CONTROLLABLE and is proved instead. A control must provoke a tag,
  # and the exemption's whole content is that a quoted claim provokes NOTHING — the control I first
  # wrote for it was `item-state-stale` again with different words. `--prove-state-scan` runs both
@@ -1113,7 +1124,14 @@ def _state_contradictions(text, closed, known):
             cut = _ST_CLAUSE.search(tail)
             clause = tail[:cut.start()] if cut else tail
             pp = _ST_PRED.search(clause)
-            if not pp or k not in known or _ST_NEG.search(clause):
+            # THE NEGATOR MUST BE IN THE PREDICATE, not anywhere in the clause. As a clause-wide
+            # test `Item 11 is open and not yet reviewed` suppressed a live contradiction because a
+            # `not` about something else appeared after it. codex-worker-1's probe. The span that
+            # decides polarity is the one from the REFERENCE to the state word — `does not remain
+            # open` puts the negator BEFORE the verb, so a span starting at the verb misses it, and
+            # `is open and not yet reviewed` puts one after the state word, where it is about
+            # something else.
+            if not pp or k not in known or _ST_NEG.search(clause[:pp.end()]):
                 continue
             if (pp.group(2).lower() == 'closed') != (k in closed):
                 out.append((k, pp.group(2).lower() == 'closed',
@@ -1150,11 +1168,26 @@ for v in set(re.findall(r'The list is \d+ atomic items, of which (\d+) are open'
 # ---- 2. cross-references must resolve AND name the gate they land on ------------------------
 # resolution alone is worthless: three references pointed at real items belonging to other gates
 # (10 for 11, 12 for 13, 22 for 18), and every one of them "resolved".
+def _in_quotes(text, pos):
+    """Is `pos` inside a straight or curly quotation on its own line?"""
+    ls = text.rfind('\n', 0, pos) + 1
+    le = text.find('\n', pos)
+    line = text[ls:le if le != -1 else len(text)]
+    off = pos - ls
+    for q in (re.finditer(r'"[^"\n]*"', line),
+              re.finditer('[\u201c][^\u201d\n]*[\u201d]', line)):
+        for qm in q:
+            if qm.start() <= off < qm.end():
+                return True
+    return False
+
 entry = {}
 for m in re.finditer(r'(?m)^(\d{1,2})\. \*\*([^*]+)\*\* —', _unhidden(body)):
     entry[int(m.group(1))] = m.group(2).strip()
 # reads the UNHIDDEN view: a citation a reader cannot see is not a citation
-for m in re.finditer(r'open item (\d+)(?: \((' + GATE_ID + r'|all)\))?', unhid):
+# CASE-INSENSITIVE. `Open item 11 (G1-B)` at the start of a sentence is the same citation and the
+# same claim, and a case-sensitive scan let the sentence-initial form make it silently.
+for m in re.finditer(r'open items? (\d+)(?: \((' + GATE_ID + r'|all)\))?', unhid, re.I):
     r, gate = int(m.group(1)), m.group(2)
     if r not in nums: bad('OPEN-REF-DANGLING', f'open item {r}'); continue
     if not gate: bad('OPEN-REF-UNGATED', f'open item {r} names no gate'); continue
@@ -1165,7 +1198,10 @@ for m in re.finditer(r'open item (\d+)(?: \((' + GATE_ID + r'|all)\))?', unhid):
     # item's state could be asserted falsely with nothing to notice. Six live instances, four of
     # them calling CLOSED item 11 open. codex-worker-1 found it in the exemption I had just pinned
     # from both sides, which is where an exemption is least examined.
-    elif r in closed_set:
+    elif r in closed_set and not _in_quotes(unhid, m.start()):
+        # QUOTED IS REPORTED SPEECH HERE TOO. The prose scan strips quotations and this loop did
+        # not, so quoting a superseded citation made the checker call the history a lie — the same
+        # rule applied in one of its two places, which is the shape this file keeps producing.
         bad('ITEM-STATE-CONTRADICTED', f'item {r} is CLOSED and is cited as "open item {r} ({gate})"; '
                                        f'the citation form asserts the state it names')
 
@@ -2286,11 +2322,17 @@ MANIFEST = 'docs/architecture/tasks/AE-P1.2-manifest.json'
 # decoy that hijacked the open-items header two weeks of commits ago, in a check written to be the
 # single source of a fact. codex-worker-1 landed it within the hour. Declaring a version twice is a
 # defect on its own terms: a single source that appears twice is not one.
-_SCHEMA_ALL = re.findall(r'canonical machine-readable source, at `(ae-p1\.2-manifest/\d+)`', unhid)
+# AND SCOPED TO A.0. Uniqueness alone let the sole declaration MOVE — relocated into the opening
+# prose it still parsed, so the section that is supposed to declare the version declared nothing and
+# the gate did not notice. The same defect as a global search for a section header, one field over:
+# a fact belongs to a place, and a scan discards the place.
+_A0 = unhid[unhid.find('\n# A.0 — '):]
+_A0 = _A0[:_A0.find('\n# ', 3) if _A0.find('\n# ', 3) != -1 else len(_A0)]
+_SCHEMA_ALL = re.findall(r'canonical machine-readable source, at `(ae-p1\.2-manifest/\d+)`', _A0)
 if len(_SCHEMA_ALL) > 1:
     bad('SCHEMA-UNSTATED', f'{len(_SCHEMA_ALL)} declarations of the manifest version: {_SCHEMA_ALL}; '
                            f'exactly one is the source')
-_SCHEMA_M = re.search(r'canonical machine-readable source, at `(ae-p1\.2-manifest/\d+)`', unhid) \
+_SCHEMA_M = re.search(r'canonical machine-readable source, at `(ae-p1\.2-manifest/\d+)`', _A0) \
             if len(_SCHEMA_ALL) == 1 else None
 if not _SCHEMA_M:
     bad('SCHEMA-UNSTATED', 'A.0 states no "canonical machine-readable source, at '
@@ -2421,15 +2463,29 @@ pop_headings = [{'name': re.sub(r'^\*|\*\s*—\s*$', '', m.group(0)).strip(), 'l
 # overlap. G3's register had `SHALL decide ... and SHALL choose ...` in a single sentence and the
 # second was invisible in the emitted reason. The regex cannot fix that; the DOCUMENT states one
 # choice per sentence, and CHOICE-COMPOUND refuses a sentence that carries two.
-_CHOICE_RE = re.compile(r'\bSHALL (?:decide|rule|choose)\b[^.]*\.', re.I)
+# THREE REPAIRS AND ONE RETRACTION, all codex-worker-1's.
+#   THE ADVERB, again: `SHALL also rule` was missed by requiring the verb ADJACENT to SHALL, the
+#     same defect as `is still open` in the state predicate, in a check written after that one.
+#   THE SECTION: it scanned the whole gate, so a `SHALL decide` anywhere in the prose counted while
+#     the register — the place a gate names what its reviewer must settle — was not the unit.
+#   THE SENTENCE: `[^.]*\.` ends at the dot in `control.rs`, so reasons were truncated mid-identifier.
+#     A sentence ends at a terminator followed by SPACE or end of text, not at any period.
+# AND THE RETRACTION. I wrote that this derivation is "complete by construction" because the verb IS
+# the distinction. It is not: `SHALL confirm` carries G0-A's refuse-versus-degrade choice and
+# `SHALL establish` carries one in G1-A, so the verb set is a FLOOR over a named list and the
+# population is at least what it finds. Claiming completeness for a rule I had just written is the
+# same overclaim as the marker set it replaced, one mechanism along.
+_CHOICE_RE = re.compile(r'\bSHALL\b[^.]{0,24}?\b(?:decide|rule|choose)\b.*?(?:\.(?=\s)|\.$)',
+                        re.I | re.S)
 _owner_choices = {}
 for _g in gate_hdr:
     _seg = unhid[unhid.find('\n# %s — ' % _g['gate']):]
     _seg = _seg[:_seg.find('\n# ', 3) if _seg.find('\n# ', 3) != -1 else len(_seg)]
-    for _c in _CHOICE_RE.finditer(_seg):
+    _reg = _seg[_seg.find('**Review register.**'):] if '**Review register.**' in _seg else ''
+    for _c in _CHOICE_RE.finditer(_reg):
         _owner_choices.setdefault(_g['gate'], []).append(
             'owner choice: ' + re.sub(r'\s+', ' ', _c.group(0)).strip())
-        if len(re.findall(r'\bSHALL (?:decide|rule|choose)\b', _c.group(0), re.I)) > 1:
+        if len(re.findall(r'\bSHALL\b[^.]{0,24}?\b(?:decide|rule|choose)\b', _c.group(0), re.I)) > 1:
             bad('CHOICE-COMPOUND', f'{_g["gate"]}: one sentence carries two owner choices, so the '
                                    f'second gets no record: '
                                    f'{re.sub(chr(92) + "s+", " ", _c.group(0))[:70]!r}')
@@ -3072,52 +3128,95 @@ emitted = json.dumps(man, indent=1, ensure_ascii=False, sort_keys=True) + '\n'
 # shape change under a held version fails because the hash moves; and neither depends on which SHA
 # happens to be the parent.
 def _shape(v, path=''):
-    """Every key set at every depth, as a sorted list of (path, keys) — records included.
+    """Every key set AND every leaf TYPE at every depth, for every record.
 
-    THE UNION AND THE HETEROGENEITY, not element 0. A list of records was summarised by its first
-    element, so a field added to one record was invisible; the union catches that, and records in one
-    list disagreeing about their keys is itself reported, because a consumer binding to a list of
-    records binds to ONE shape and a heterogeneous list has none.
+    THREE HOLES CLOSED, all codex-worker-1's, all in the version that claimed "every level a
+    consumer binds to". It recorded no TYPES, so `items[].kind` going from an array to a
+    comma-separated string was invisible — a consumer-breaking change with the key set intact. It
+    merged records first-wins, so a field present only in `rulings[1].named_at[0]` never appeared,
+    because the descent followed the FIRST parent's value. And it read element 0 of each list before
+    that. A shape is not a set of names; it is names, containers and leaf kinds, over ALL records.
     """
     out = []
     if isinstance(v, dict):
-        out.append((path, tuple(sorted(v))))
+        out.append((path, 'dict:' + ','.join(sorted(v))))
         for k in sorted(v):
             out += _shape(v[k], f'{path}.{k}' if path else k)
     elif isinstance(v, list):
         recs = [x for x in v if isinstance(x, dict)]
         if recs:
             union = tuple(sorted({k for r in recs for k in r}))
-            out.append((path + '[]', union))
+            out.append((path + '[]', 'rec:' + ','.join(union)))
             if any(tuple(sorted(r)) != union for r in recs):
-                out.append((path + '[]!heterogeneous', union))
-            merged = {}
+                out.append((path + '[]!heterogeneous', 'rec:' + ','.join(union)))
+            # EVERY record, not a first-wins merge: a nested field on the second one is a shape.
             for r in recs:
-                for k, val in r.items():
-                    merged.setdefault(k, val)
-            for k in sorted(merged):
-                out += _shape(merged[k], f'{path}[].{k}')
-    return out
+                for k in sorted(r):
+                    out += _shape(r[k], f'{path}[].{k}')
+        else:
+            # CONTAINER KIND IS SHAPE; the element type of a scalar list is not. Recording element
+            # types made an EMPTY list a different shape from a populated one, so a gate gaining a
+            # reason string moved the hash — a value change reported as a schema change, which
+            # trains a reader to bump the version for nothing. `kind` going array -> string is still
+            # caught, because that is the CONTAINER changing.
+            out.append((path + '[]', 'list'))
+    else:
+        out.append((path, type(v).__name__))
+    return sorted(set(out))
 
 def _shape_hash(m):
-    body = json.dumps([[p, list(k)] for p, k in _shape({k: v for k, v in m.items() if k != 'schema'})],
+    body = json.dumps([list(x) for x in _shape({k: v for k, v in m.items() if k != 'schema'})],
                       sort_keys=True)
     return hashlib.sha256(body.encode()).hexdigest()[:16]
 
-# APPEND-ONLY. A version's entry is written when that version is first published and is never
-# edited: editing one is how a rollback would pass. Earlier versions have no entry because the
-# ledger did not exist when they shipped, and a version with no entry is refused rather than
-# assumed — which is what makes rolling back to one fail.
+# APPEND-ONLY, AND NOW ENFORCED. Entries are written when a version is first published and never
+# edited — but "never edited" was a sentence, so updating /7's hash beside a new field passed. The
+# chain pins the predecessor's script, so the predecessor's ledger is readable: every key it had
+# must still be present with the SAME value, and at most one key may be new. A guard whose only
+# defence is my intention is the defect this whole guard exists to answer.
+# THE FINGERPRINT FUNCTION IS PART OF THE CONTRACT, so changing it changes every recorded hash
+# without any manifest shape changing. That is not an append-only violation and must not be reported
+# as one — but it must not be SILENT either, or "recompute the hashes" becomes the way to rewrite an
+# entry. The epoch is bumped in the same edit, the whole ledger is recomputed, and the append-only
+# comparison is skipped for that one SHA with the recomputation visible in the diff.
+_LEDGER_EPOCH = 2
 _SHAPE_LEDGER = {
-    'ae-p1.2-manifest/7': '096d84c43c52af59',
+    'ae-p1.2-manifest/7': '455e4b9fa72cfbc5',
 }
+
+def _schema_refusal(schema, shape, ledger, prev_ledger):
+    """The production predicate, as one function so a proof cannot exercise a private copy."""
+    if prev_ledger is not None and prev_ledger.get('@epoch') == str(_LEDGER_EPOCH):
+        for k, v in prev_ledger.items():
+            if k == '@epoch':
+                continue
+            if k not in ledger:
+                return f'the shape ledger dropped {k}; entries are append-only'
+            if ledger[k] != v:
+                return f'the shape ledger rewrote {k} from {v} to {ledger[k]}; entries are append-only'
+        _new = set(ledger) - set(prev_ledger) - {'@epoch'}
+        if len(_new) > 1:
+            return f'the shape ledger gained {sorted(_new)} at once'
+    if schema not in ledger:
+        return (f'{schema} has no entry in the shape ledger; a version is recorded when it is first '
+                f'published and may not be re-used or rolled back')
+    if ledger[schema] != shape:
+        return f'{schema} was published with shape {ledger[schema]} and this run emits {shape}'
+    return None
+
+_prev_ledger = None
+if PREV_TIP:
+    _rc, _ps = git('.', 'show', f'{PREV_TIP}:tools/p12_selfcheck.py')
+    if _rc == 0:
+        _pm = re.search(r'(?m)^_SHAPE_LEDGER = \{(.*?)^\}', _ps, re.S)
+        _pe = re.search(r'(?m)^_LEDGER_EPOCH = (\d+)', _ps)
+        if _pm:
+            _prev_ledger = dict(re.findall(r"'([^']+)': '([^']+)'", _pm.group(1)))
+            _prev_ledger['@epoch'] = _pe.group(1) if _pe else '1'
 _have = _shape_hash(man)
-if _SCHEMA not in _SHAPE_LEDGER:
-    bad('SCHEMA-UNVERSIONED', f'{_SCHEMA} has no entry in the shape ledger; a version is recorded '
-                              f'when it is first published and may not be re-used or rolled back')
-elif _SHAPE_LEDGER[_SCHEMA] != _have:
-    bad('SCHEMA-UNVERSIONED', f'{_SCHEMA} was published with shape {_SHAPE_LEDGER[_SCHEMA]} and this '
-                              f'run emits {_have}; a shape change is a version change')
+_srefuse = _schema_refusal(_SCHEMA, _have, _SHAPE_LEDGER, _prev_ledger)
+if _srefuse:
+    bad('SCHEMA-UNVERSIONED', _srefuse + ' — a shape change is a version change')
 # A.0 describes what the manifest carries. That sentence is a THIRD statement — the emitter and the
 # committed file agree with each other and neither is compared to the prose, which is how the
 # manifest came to announce two keys it did not emit. The described keys are now checked.
@@ -3306,6 +3405,9 @@ if '--prove-state-scan' in sys.argv:
         ('negation not judged',      'Item 11 does not remain open.',               False),
         ('curly-quoted history',     'It once said \u201cItem 11 is open.\u201d',        False),
         ('same words, unquoted',     'Item 11 is open, plainly.',                   True),
+        # codex-worker-1's second round: a `not` about something ELSE suppressed a live claim
+        ('negator outside predicate','Item 11 is open and not yet reviewed.',       True),
+        ('negator inside predicate', 'Item 11 is not open.',                        False),
     ]
     _fail = 0
     for _name, _text, _want in _cases:
@@ -3316,7 +3418,7 @@ if '--prove-state-scan' in sys.argv:
     # bound to production: the live document must be clean under the same function
     if _state_contradictions(_visible(pkt), closed_set, set(nums)):
         print('  the live packet contradicts itself'); sys.exit(1)
-    print('state scan: 12 crafted sentences, both arms' if not _fail else 'state scan FAILED')
+    print('state scan: 14 crafted sentences, both arms' if not _fail else 'state scan FAILED')
     sys.exit(1 if _fail else 0)
 
 # A CHECK NO CONTROL CAN REACH NEEDS A PROOF, and the first one proved the wrong thing. No packet
@@ -3327,68 +3429,52 @@ if '--prove-state-scan' in sys.argv:
 # It now asserts the production BRANCH by construction — the ledger comparison the run performs —
 # and covers the four holes found in the neighbour-comparison version it replaced.
 if '--prove-schema-guard' in sys.argv:
-    def _refused(cur, ver, ledger_shape):
-        """EXACTLY the production predicate, called with substituted inputs."""
-        return ledger_shape != _shape_hash(cur) if ver else True
-    _base = {'gates': [{'id': 'G', 'a': 1, 'b': 2}, {'id': 'H', 'a': 3, 'b': 4}],
-             'counts': {'n': 1}, 'rulings': [{'id': 'R1', 'named_at': [{'line': 1, 'ctx': 'x'}]}]}
-    _h0 = _shape_hash({**_base, 'schema': 'x/1'})
+    # THE PRODUCTION PREDICATE, called — not reimplemented. The previous proof had its own copy of
+    # the comparison, so disabling the production refusal left all eight cases green: codex-worker-1
+    # showed the proof passing against a checker that could no longer refuse anything. A proof of a
+    # check nothing can control is worth exactly what its binding to production is worth.
+    _L0 = {'ae-p1.2-manifest/x1': 'HASH0'}
+    _base = {'gates': [{'id': 'G', 'a': 1, 'kind': ['x']}, {'id': 'H', 'a': 3, 'kind': ['y']}],
+             'counts': {'n': 1},
+             'rulings': [{'id': 'R1', 'named_at': [{'line': 1}]},
+                         {'id': 'R2', 'named_at': [{'line': 2}]}]}
+    def _case(cur, ver='ae-p1.2-manifest/x1', ledger=None, prev=None):
+        led = dict(ledger or {ver: _shape_hash({**_base, 'schema': ver})})
+        return _schema_refusal(ver, _shape_hash({**cur, 'schema': ver}), led, prev) is not None
+    _h0 = _shape_hash({**_base, 'schema': 'ae-p1.2-manifest/x1'})
     _cases = [
-        ('unchanged shape',            _base,                                              False),
-        ('key removed from ALL',       {**_base, 'gates': [{'id': 'G', 'a': 1}, {'id': 'H', 'a': 3}]}, True),
-        ('key added to ONE record',    {**_base, 'gates': [{'id': 'G', 'a': 1, 'b': 2, 'c': 3},
-                                                           {'id': 'H', 'a': 3, 'b': 4}]},   True),
-        ('nested list key added',      {**_base, 'rulings': [{'id': 'R1',
-                                        'named_at': [{'line': 1, 'ctx': 'x', 'new': 2}]}]},  True),
-        ('nested dict key removed',    {**_base, 'counts': {}},                             True),
-        ('top-level key added',        {**_base, 'extra': []},                              True),
-        ('values differ, shape same',  {**_base, 'counts': {'n': 99}},                      False),
+        ('unchanged shape',        _case(_base),                                            False),
+        ('key removed from ALL',   _case({**_base, 'gates': [{'id': 'G'}, {'id': 'H'}]}),     True),
+        ('key added to ONE record',_case({**_base, 'gates': [{'id': 'G', 'a': 1, 'kind': ['x'], 'c': 3},
+                                                             {'id': 'H', 'a': 3, 'kind': ['y']}]}), True),
+        ('LEAF TYPE changed',      _case({**_base, 'gates': [{'id': 'G', 'a': 1, 'kind': 'x,y'},
+                                                             {'id': 'H', 'a': 3, 'kind': 'y'}]}), True),
+        ('nested field on rec 2',  _case({**_base, 'rulings': [{'id': 'R1', 'named_at': [{'line': 1}]},
+                                          {'id': 'R2', 'named_at': [{'line': 2, 'new': 3}]}]}),  True),
+        ('nested dict key removed',_case({**_base, 'counts': {}}),                            True),
+        ('top-level key added',    _case({**_base, 'extra': []}),                             True),
+        ('values differ, shape same', _case({**_base, 'counts': {'n': 99}}),                  False),
+        ('unknown version',        _case(_base, ver='ae-p1.2-manifest/x9', ledger=_L0),       True),
+        ('ledger entry REWRITTEN', _case(_base, ledger={'ae-p1.2-manifest/x1': _h0},
+                                         prev={'ae-p1.2-manifest/x1': 'OLD',
+                                               '@epoch': str(_LEDGER_EPOCH)}),                True),
+        ('ledger entry DROPPED',   _case(_base, ledger={'ae-p1.2-manifest/x1': _h0},
+                                         prev={'ae-p1.2-manifest/x0': 'K',
+                                               '@epoch': str(_LEDGER_EPOCH)}),                True),
+        ('one new entry is fine',  _case(_base, ledger={'ae-p1.2-manifest/x1': _h0},
+                                         prev={'@epoch': str(_LEDGER_EPOCH)}),               False),
     ]
     _fail = 0
-    for _name, _cur, _want in _cases:
-        _got = _refused({**_cur, 'schema': 'x/1'}, 'x/1', _h0)
+    for _name, _got, _want in _cases:
         print(f'  {_name:28} refused={str(_got):5} expected={str(_want):5} '
               f'{"PASS" if _got == _want else "FAIL"}')
         _fail += _got != _want
-    # THE ROLLBACK ARM, which the neighbour comparison could not express at all: a version with no
-    # ledger entry is refused, so re-using a retired one cannot pass by matching some ancestor.
-    _roll = 'y/0' not in _SHAPE_LEDGER
-    print(f'  {"unknown version refused":28} refused={str(_roll):5} expected=True  '
-          f'{"PASS" if _roll else "FAIL"}')
-    _fail += not _roll
-    # BOUND TO PRODUCTION: the live version must be in the ledger and its shape must match, which is
-    # the branch the run itself takes. Sabotaging that branch now fails here too.
-    if _SCHEMA not in _SHAPE_LEDGER:
-        print('  the live version has no ledger entry'); sys.exit(1)
-    if _SHAPE_LEDGER[_SCHEMA] != _shape_hash(man):
-        print('  the live manifest does not match its ledger entry'); sys.exit(1)
-    print('schema guard: 8 cases, deep shapes, both arms' if not _fail else 'schema guard FAILED')
-    sys.exit(1 if _fail else 0)
-
-if '--prove-schema-guard' in sys.argv:
-    _base = {'schema': 'x/1', 'gates': [{'id': 'G', 'a': 1, 'b': 2}], 'counts': {'n': 1}}
-    _cases = [
-        ('key removed, version held',   {**_base, 'gates': [{'id': 'G', 'a': 1}]},        'x/1', True),
-        ('key added, version held',     {**_base, 'gates': [{'id': 'G', 'a': 1, 'b': 2, 'c': 3}]},
-                                                                                          'x/1', True),
-        ('nested key moved, held',      {**_base, 'counts': {'m': 1}},                    'x/1', True),
-        ('top-level key added, held',   {**_base, 'extra': []},                           'x/1', True),
-        ('key removed, version BUMPED', {**_base, 'gates': [{'id': 'G', 'a': 1}]},        'x/2', False),
-        ('values differ, shape same',   {**_base, 'gates': [{'id': 'H', 'a': 9, 'b': 8}]}, 'x/1', False),
-    ]
-    _fail = 0
-    for _name, _cur, _ver, _want in _cases:
-        _got = _schema_drift(_base, {**_cur, 'schema': _ver}) is not None
-        print(f'  {_name:32} refused={str(_got):5} expected={str(_want):5} '
-              f'{"PASS" if _got == _want else "FAIL"}')
-        _fail += _got != _want
-    # AND BOUND TO PRODUCTION, like the extractor ratchet: a proof that exercises a private copy
-    # says nothing about the run. The live comparison must be the same function.
-    if _prev_man is None:
-        print('  no predecessor manifest — the live guard had nothing to compare'); sys.exit(1)
-    if _schema_drift(_prev_man, man) is not None:
-        print('  the live manifest is itself unversioned drift'); sys.exit(1)
-    print('schema guard: 6 synthesised cases, both arms' if not _fail else 'schema guard FAILED')
+    # BOUND TO PRODUCTION: the live inputs through the live predicate, which is the branch the run
+    # itself takes. Disabling that branch now fails here.
+    if _schema_refusal(_SCHEMA, _shape_hash(man), _SHAPE_LEDGER, _prev_ledger) is not None:
+        print('  the live manifest is refused by its own guard'); sys.exit(1)
+    print('schema guard: 12 cases, deep typed shapes, ledger arms'
+          if not _fail else 'schema guard FAILED')
     sys.exit(1 if _fail else 0)
 
 if '--prove-blanking' in sys.argv:
