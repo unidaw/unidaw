@@ -878,6 +878,11 @@ entire G4 validator; renaming it to `Terminal gate` skips all checks. Spacing /
 case variants evade patterns. Indented Open sections, prefix headers, G2-B/G3
 N/M1/item37/Watchdog, G4 item26, and G0 remain blocked.
 
+Owner successor `8ae2801` claims the count-boundary issue was a misplaced probe,
+not a checker failure; a genuinely out-of-Dependencies placement now fires,
+while the narrower boundary fix remains. Exact review is pending; final-gate
+prose selection and remaining G4/G3/G0/M1/item37 issues remain gated.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
