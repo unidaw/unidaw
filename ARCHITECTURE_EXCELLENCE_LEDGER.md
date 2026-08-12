@@ -1149,3 +1149,12 @@ detection, owner choices and non-gate prerequisites now feed typed planning
 verdicts, and six proofs/149 controls pass. It reports all eight gates `unknown`
 and explicitly leaves item 38's ruling, sixteen unclassified items, the third
 kind for item 22, and the cross-record control open. Exact audit is pending.
+
+Exact audit of `7d29752` is BLOCKED. The count error persists: “open list is 39”
+is validated against total 39 rather than open 30/active 29. G3 declares two
+independent owner choices (Watchdog fate and R16 resume mechanism) behind one
+marker; extraction stops at the first period, so the manifest records only one,
+while reconciliation checks only gate IDs. Separate stable choice IDs/records
+and equality-gate the full choice population. A heterogeneous-list schema
+mutation also shows `_shape` checks only element zero; validate every record or
+enforce homogeneity.
