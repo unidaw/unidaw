@@ -808,6 +808,12 @@ duplicate and owner checks, and its count phrase is scoped to the gate’s own
 dependencies; five G4 controls and 106 total controls pass. Exact review is
 pending. G3 N/Watchdog/item37 oracle, M1, G0, and G4 item26 remain open.
 
+Exact review of `6a9cbbb` is **BLOCKED**. Well-formed G4 pair controls pass, but
+malformed member-like entries are silently omitted; global list search is
+decoyable; duplicate count claims can coexist; and order/reason fidelity is
+unbound. Adjacent raw/header/duplicate-item defects from e9aff remain. G2/G3/
+G0/M1/item37/G4 framing remains blocked.
+
 Exact review of `e9aff2c` is **BLOCKED**. Canonical body/raw span/head repair
 passes, but a second global header search lets hidden or inline-code `# Open
 items` decoys hijack selection; heading discovery must be line-anchored. Live
