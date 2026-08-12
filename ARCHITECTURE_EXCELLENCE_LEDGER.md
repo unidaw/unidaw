@@ -1060,3 +1060,12 @@ blocking-predicate sites (125 controls). Exact review is pending. Claimed
 remaining semantic blockers are G0-A A13/A15, G0-B items 1-4 plus absent
 `patcher_rust/build.rs`, G2-A items 27-29, G2-B PASS4, G3 M1 telemetry, item-37
 oracle, and Watchdog disposition.
+
+Exact audit of `e94f0de` is BLOCKED. Mechanical sweep and narrow G3/G4 repairs
+pass, but item 38 publishes an undecided planning boolean and drops its PACKET
+work kind; five blocker predicates remain independently bounded/divergent and
+the negative control does not exercise the `all` branch; G4 still contains
+withdrawn broad one-plane/pending-census claims. Required successor: decide and
+encode item-38 planning semantics, represent nonblocking PACKET work, derive all
+blocking state from one tokenized status parser with branch coverage, and remove
+the stale G4 claims. Carried G0/G2/G3/Watchdog blockers remain.
