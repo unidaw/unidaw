@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '7d29752220cd29c743d2f8470b1a40776985fab2'
+PREV_TIP     = 'a1f1a383b19604067dba5334d0ea7bc5284f91e9'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -311,10 +311,19 @@ CONTROLS = {
  'opening-gates-gone': ('**GATE PLANNING VERDICTS — plannable 0, unknown 8, blocked 0.**',
                       '**Gate planning at this SHA.**', 1, 'OPENING-GATE-COUNT-MISSING'),
  # THE OWNER-CHOICE POPULATION, restated versus derived — the second input to `unknown`.
- 'owner-choice-said': ('**OWNER CHOICES (G0-A, G0-B,\n   G3)**', '**OWNER CHOICES (G0-A, G0-B)**', 1,
+ 'owner-choice-said': ('**OWNER CHOICES (G0-A, G0-B,\n   G1-A, G1-B, G2-A, G3, G4)**',
+                      '**OWNER CHOICES (G0-A, G0-B)**', 1, 'OWNER-CHOICE-RESTATED'),
+ # AIMED AT A GATE WITH EXACTLY ONE CHOICE. Aimed at G3 it went DEAD the moment G3 gained a second:
+ # removing one of two leaves the gate in the population, so the restatement never moves. A control
+ # over a SET must target a member whose removal empties its group.
+ 'owner-choice-gone': ('The reviewer SHALL rule on the DUPLICATED AUX-OFFSET DERIVATION',
+                      'The reviewer SHALL confirm the DUPLICATED AUX-OFFSET DERIVATION', 1,
                       'OWNER-CHOICE-RESTATED'),
- 'owner-choice-gone': ('⟦OWNER-CHOICE: G3⟧ The reviewer SHALL decide',
-                      'The reviewer SHALL decide', 1, 'OWNER-CHOICE-RESTATED'),
+ # TWO CHOICES IN ONE SENTENCE produce ONE record, because `finditer` cannot overlap — G3's register
+ # had exactly this and the second choice was invisible in the emitted reason.
+ 'choice-compound':  ("re-specification — since the gate accepts either with equal force and deliberately cannot choose.",
+                      "re-specification — and SHALL choose the resume mechanism, since the gate accepts either with equal force and deliberately cannot choose.",
+                      1, 'CHOICE-COMPOUND'),
  # AND THE UNKNOWN ARM, which is the one that did not exist before: removing G1-B's live non-gate
  # prerequisite makes five gates plannable again, so the derivation moves and the restatement does
  # not. Deleting the `planning_unknown_because` input alone would leave the numbers agreeing.
@@ -1039,19 +1048,30 @@ _ST_ITEM = re.compile(r'\bitems?\s+(\d{1,2})\b', re.I)
 # search after the item reference crossed a comma, so "Item 11 is filed, and G3 is open" linked a
 # state to the wrong subject. A distance where a boundary belonged, one more time. The tail is cut
 # at the CLAUSE delimiter instead, and with that bound the predicate needs no internal window.
-_ST_PRED = re.compile(r'\b(is|are|was|were|stays?|remains?|remain)\b.*?\b(open|closed)\b', re.I)
+# PRESENT TENSE ONLY, and NEGATION SKIPPED. `was|were` made every historical sentence an assertion
+# about now — "which is what item 5 (G0-B) required while it was open" is a fact about the past, and
+# the packet is full of them by design. `does not remain open` was refused for saying the opposite of
+# what it says. Both were codex-worker-1's, one as a false positive I created repairing the other.
+# **These are NARROWINGS, and each is a stated gap rather than a silent one**: a past-tense or
+# negated claim about an item's state is not judged here, and if one decays nothing will notice.
+_ST_PRED = re.compile(r'\b(is|are|stays?|remains?|remain)\b.*?\b(open|closed)\b', re.I)
+_ST_NEG = re.compile(r"\b(not|never|no longer|n't)\b", re.I)
 _ST_CLAUSE = re.compile(r'[.,;:]')
 
 def _state_contradictions(text, closed, known):
     """(item, asserted_closed, sentence) for every state assertion that disagrees with the item."""
     out = []
-    for sent in re.split(r'(?<=[.!?])\s+', re.sub(r'"[^"\n]*"', ' ', text)):
+    # CURLY QUOTES TOO. The packet quotes superseded phrasings in both, and stripping only straight
+    # quotes made a typographic choice decide whether history was read as a claim.
+    quoted = re.sub(r'[\u201c][^\u201d\n]*[\u201d]', ' ', re.sub(r'"[^"\n]*"', ' ', text))
+    for sent in re.split(r'(?<=[.!?])\s+', quoted):
         for mm in _ST_ITEM.finditer(sent):
             k = int(mm.group(1))
             tail = sent[mm.end():]
             cut = _ST_CLAUSE.search(tail)
-            pp = _ST_PRED.search(tail[:cut.start()] if cut else tail)
-            if not pp or k not in known:
+            clause = tail[:cut.start()] if cut else tail
+            pp = _ST_PRED.search(clause)
+            if not pp or k not in known or _ST_NEG.search(clause):
                 continue
             if (pp.group(2).lower() == 'closed') != (k in closed):
                 out.append((k, pp.group(2).lower() == 'closed',
@@ -1098,6 +1118,14 @@ for m in re.finditer(r'open item (\d+)(?: \((' + GATE_ID + r'|all)\))?', unhid):
     if not gate: bad('OPEN-REF-UNGATED', f'open item {r} names no gate'); continue
     if entry.get(r) != gate:
         bad('OPEN-REF-WRONG-GATE', f'open item {r} cited as {gate}, list says {entry.get(r)!r}')
+    # THE WORD `open` IN THE CITATION FORM IS A CLAIM, and it was EXEMPTED from the state scan as
+    # "a citation, not a predicate" — so the packet's own reference form became the one place an
+    # item's state could be asserted falsely with nothing to notice. Six live instances, four of
+    # them calling CLOSED item 11 open. codex-worker-1 found it in the exemption I had just pinned
+    # from both sides, which is where an exemption is least examined.
+    elif r in closed_set:
+        bad('ITEM-STATE-CONTRADICTED', f'item {r} is CLOSED and is cited as "open item {r} ({gate})"; '
+                                       f'the citation form asserts the state it names')
 
 # ---- 2b. a planning block must be declared in BOTH places, and they must name the same gates --
 # The gate-side phrase scan alone was NOMINAL: backend mutated the packet to delete the item's
@@ -2210,7 +2238,18 @@ MANIFEST = 'docs/architecture/tasks/AE-P1.2-manifest.json'
 # `unhid`, not `_visible`: `_visible` blanks code spans, and a version number written in backticks
 # is exactly how this document writes one — the first attempt refused its own packet. What must not
 # count is a version inside a comment or a fence, which is what `unhid` blanks.
-_SCHEMA_M = re.search(r'canonical machine-readable source, at `(ae-p1\.2-manifest/\d+)`', unhid)
+#
+# AND UNIQUE, not first-match. As a global `re.search` an editorial mention of the phrase placed
+# ANYWHERE ABOVE A.0 supplied the version while A.0's own declaration said something else — the same
+# decoy that hijacked the open-items header two weeks of commits ago, in a check written to be the
+# single source of a fact. codex-worker-1 landed it within the hour. Declaring a version twice is a
+# defect on its own terms: a single source that appears twice is not one.
+_SCHEMA_ALL = re.findall(r'canonical machine-readable source, at `(ae-p1\.2-manifest/\d+)`', unhid)
+if len(_SCHEMA_ALL) > 1:
+    bad('SCHEMA-UNSTATED', f'{len(_SCHEMA_ALL)} declarations of the manifest version: {_SCHEMA_ALL}; '
+                           f'exactly one is the source')
+_SCHEMA_M = re.search(r'canonical machine-readable source, at `(ae-p1\.2-manifest/\d+)`', unhid) \
+            if len(_SCHEMA_ALL) == 1 else None
 if not _SCHEMA_M:
     bad('SCHEMA-UNSTATED', 'A.0 states no "canonical machine-readable source, at '
                            '`ae-p1.2-manifest/N`" version for the manifest to be emitted under')
@@ -2312,19 +2351,37 @@ pop_headings = [{'name': re.sub(r'^\*|\*\s*—\s*$', '', m.group(0)).strip(), 'l
 # THIS IS NOT A RULING ON ITEM 38 and must not be read as one. `unknown` means the packet has not
 # ESTABLISHED that planning is possible; item 38's open question is whether an unmet prerequisite
 # makes planning FALSE and populates a typed blocker, which is the `blocked` state and is untouched
-# here. Declining to overstate for a second reason is the same refusal, applied consistently — and
-# publishing `plannable` for a gate whose mechanism nobody has chosen would be exactly the false
-# precision this three-valued field was introduced to stop.
+# here. Declining to overstate for a second reason is the same refusal, applied consistently.
 #
-# AUTHORED, like every kind marker: ⟦OWNER-CHOICE: Gx⟧ sits at the sentence that records the choice,
-# because a live choice of MECHANISM cannot be told from a request to CONFIRM A FACT by reading
-# register prose, and this packet's own rule is that a classification cannot be read out of prose
-# that was not written to carry it. The population is restated and gated like the others, so what is
-# marked is visible and what is unmarked is not silently absent.
+# DERIVED FROM THE REGISTER'S OWN VERB, not from a marker I place. The first version used
+# ⟦OWNER-CHOICE: Gx⟧ because I did not think a live choice of MECHANISM could be told from a request
+# to CONFIRM A FACT by reading register prose. It can: this packet writes `SHALL confirm` for the
+# second and `SHALL decide` / `SHALL rule` / `SHALL choose` for the first, consistently, and the verb
+# is the distinction. A marker I place is a population I can forget — codex-worker-1 found FIVE live
+# `SHALL decide`/`SHALL rule` demands unmarked, and G3's two choices sharing ONE marker, so the
+# emitted reason lost the second entirely. The verb rule is complete by construction and there is
+# nothing to keep in step.
+#
+# ONE RECORD PER CHOICE, and the whole sentence. The marker version read 140 characters and printed
+# 70 of them from `_visible`, so `daw::Watchdog` — a code span — came out as `'s fate`, and a
+# consumer got a mangled reason for a decision it cannot make. Sentences are cut at their terminator
+# and read from `unhid`, which keeps code spans because a mechanism is usually named in one.
+# ONE RECORD PER CHOICE, and a sentence carrying two produces one record — `finditer` cannot
+# overlap. G3's register had `SHALL decide ... and SHALL choose ...` in a single sentence and the
+# second was invisible in the emitted reason. The regex cannot fix that; the DOCUMENT states one
+# choice per sentence, and CHOICE-COMPOUND refuses a sentence that carries two.
+_CHOICE_RE = re.compile(r'\bSHALL (?:decide|rule|choose)\b[^.]*\.', re.I)
 _owner_choices = {}
-for _m4 in re.finditer(r'⟦OWNER-CHOICE: (' + GATE_ID + r')⟧', _visible(pkt)):
-    _sent = _visible(pkt)[_m4.end():_m4.end() + 140].split('.')[0].strip()
-    _owner_choices.setdefault(_m4.group(1), []).append(f'owner choice: {re.sub(chr(92)+"s+", " ", _sent)[:70]}')
+for _g in gate_hdr:
+    _seg = unhid[unhid.find('\n# %s — ' % _g['gate']):]
+    _seg = _seg[:_seg.find('\n# ', 3) if _seg.find('\n# ', 3) != -1 else len(_seg)]
+    for _c in _CHOICE_RE.finditer(_seg):
+        _owner_choices.setdefault(_g['gate'], []).append(
+            'owner choice: ' + re.sub(r'\s+', ' ', _c.group(0)).strip())
+        if len(re.findall(r'\bSHALL (?:decide|rule|choose)\b', _c.group(0), re.I)) > 1:
+            bad('CHOICE-COMPOUND', f'{_g["gate"]}: one sentence carries two owner choices, so the '
+                                   f'second gets no record: '
+                                   f'{re.sub(chr(92) + "s+", " ", _c.group(0))[:70]!r}')
 _oc_said = re.search(r'OWNER CHOICES \(([A-Z0-9,\s.-]*)\)', _visible(pkt))
 if not _oc_said:
     bad('OWNER-CHOICE-RESTATED', 'the packet states no OWNER CHOICES set to check against the '
@@ -2944,50 +3001,72 @@ man = {
             'census_rows': len(census_rows), 'rulings': len(rulings)},
 }
 emitted = json.dumps(man, indent=1, ensure_ascii=False, sort_keys=True) + '\n'
-# A SHAPE CHANGE IS A VERSION CHANGE, and now something other than my intention enforces it. I wrote
-# that rule into the packet and broke it in the NEXT commit: /6 went out with
-# `plannable_with_dependencies` and then again without it, two incompatible gate shapes under one
-# version. codex-worker-1 compared the key sets with jq. The rule had even been applied correctly in
-# the same edit — to the widening it was written for — so what failed was not knowing it.
+# A SHAPE CHANGE IS A VERSION CHANGE, and the first enforcement of that was worth less than it looked.
+# I wrote the rule into the packet and broke it in the NEXT commit — /6 went out with
+# `plannable_with_dependencies` and then again without it — so I built a guard comparing the emitted
+# key sets against the manifest at PREV_TIP. codex-worker-1 walked through it four ways:
 #
-# The chain already pins the predecessor, so the predecessor's manifest is available and the key sets
-# are comparable without anyone remembering to look. Keys, not values: values change every SHA and a
-# check that fired on them would be noise. This would have refused 359cde8.
-_prev_man = None
-if PREV_TIP:
-    _rc, _pm = git('.', 'show', f'{PREV_TIP}:{MANIFEST}')
-    if _rc == 0:
-        try:
-            _prev_man = json.loads(_pm)
-        except ValueError:
-            _prev_man = None
-def _shape(d):
-    """Key sets at each level a consumer binds to. Records are homogeneous, so element 0 speaks for
-    the list — a heterogeneous list would be its own defect and is not one this packet has."""
-    out = {'': tuple(sorted(d))}
-    for k, v in sorted(d.items()):
-        if isinstance(v, dict):
-            out[k] = tuple(sorted(v))
-        elif isinstance(v, list) and v and isinstance(v[0], dict):
-            out[k] = tuple(sorted(v[0]))
+#   VERSION ROLLBACK       /7 -> /6 clean-passed, because the PARENT had that shape under /6. A
+#                          comparison with one predecessor cannot see a version being re-used.
+#   HETEROGENEOUS RECORD   a key added to G1-B ALONE was invisible: `_shape` read element 0 of each
+#                          list and called it the list's shape, an assumption the code never checked.
+#   NESTED LISTS           `rulings[].named_at[]` and the like were never reached; the walk was one
+#                          level deep while the comment said "every level a consumer binds to".
+#   PROOF NOT BOUND        sabotaging the production branch left all six proof cases green, because
+#                          the proof called the classifier and never the branch that acts on it.
+#
+# So the guard is not a comparison with a neighbour. It is a LEDGER: every published version records
+# the shape it was published with, the entries are append-only, and the current shape must equal the
+# entry for the current version. A rollback now fails because /6's recorded shape is not this one; a
+# shape change under a held version fails because the hash moves; and neither depends on which SHA
+# happens to be the parent.
+def _shape(v, path=''):
+    """Every key set at every depth, as a sorted list of (path, keys) — records included.
+
+    THE UNION AND THE HETEROGENEITY, not element 0. A list of records was summarised by its first
+    element, so a field added to one record was invisible; the union catches that, and records in one
+    list disagreeing about their keys is itself reported, because a consumer binding to a list of
+    records binds to ONE shape and a heterogeneous list has none.
+    """
+    out = []
+    if isinstance(v, dict):
+        out.append((path, tuple(sorted(v))))
+        for k in sorted(v):
+            out += _shape(v[k], f'{path}.{k}' if path else k)
+    elif isinstance(v, list):
+        recs = [x for x in v if isinstance(x, dict)]
+        if recs:
+            union = tuple(sorted({k for r in recs for k in r}))
+            out.append((path + '[]', union))
+            if any(tuple(sorted(r)) != union for r in recs):
+                out.append((path + '[]!heterogeneous', union))
+            merged = {}
+            for r in recs:
+                for k, val in r.items():
+                    merged.setdefault(k, val)
+            for k in sorted(merged):
+                out += _shape(merged[k], f'{path}[].{k}')
     return out
 
-def _schema_drift(prev, cur):
-    """The detail string when `cur` changes shape without changing version, else None."""
-    if prev is None or prev.get('schema') != cur.get('schema'):
-        return None
-    a, b = _shape(prev), _shape(cur)
-    moved = sorted({k for k in set(a) | set(b) if a.get(k) != b.get(k)})
-    if not moved:
-        return None
-    return '; '.join(f'{k or "(top)"}: '
-                     f'-{sorted(set(a.get(k, ())) - set(b.get(k, ())))} '
-                     f'+{sorted(set(b.get(k, ())) - set(a.get(k, ())))}' for k in moved)
+def _shape_hash(m):
+    body = json.dumps([[p, list(k)] for p, k in _shape({k: v for k, v in m.items() if k != 'schema'})],
+                      sort_keys=True)
+    return hashlib.sha256(body.encode()).hexdigest()[:16]
 
-_drift = _schema_drift(_prev_man, man)
-if _drift:
-    bad('SCHEMA-UNVERSIONED', f'the manifest shape changed under an unchanged '
-                              f'{man.get("schema")} — {_drift[:120]}')
+# APPEND-ONLY. A version's entry is written when that version is first published and is never
+# edited: editing one is how a rollback would pass. Earlier versions have no entry because the
+# ledger did not exist when they shipped, and a version with no entry is refused rather than
+# assumed — which is what makes rolling back to one fail.
+_SHAPE_LEDGER = {
+    'ae-p1.2-manifest/7': '096d84c43c52af59',
+}
+_have = _shape_hash(man)
+if _SCHEMA not in _SHAPE_LEDGER:
+    bad('SCHEMA-UNVERSIONED', f'{_SCHEMA} has no entry in the shape ledger; a version is recorded '
+                              f'when it is first published and may not be re-used or rolled back')
+elif _SHAPE_LEDGER[_SCHEMA] != _have:
+    bad('SCHEMA-UNVERSIONED', f'{_SCHEMA} was published with shape {_SHAPE_LEDGER[_SCHEMA]} and this '
+                              f'run emits {_have}; a shape change is a version change')
 # A.0 describes what the manifest carries. That sentence is a THIRD statement — the emitter and the
 # committed file agree with each other and neither is compared to the prose, which is how the
 # manifest came to announce two keys it did not emit. The described keys are now checked.
@@ -3158,11 +3237,6 @@ if '--prove-extractor-ratchet' in sys.argv:
         _all_ok = _all_ok and _ok
     print(f'ratchet floor {_n0} · {"holds" if _all_ok else "BROKEN"}')
     sys.exit(0 if _all_ok else 1)
-# A CHECK NO CONTROL CAN REACH NEEDS A PROOF, and this is the second time today I nearly shipped one
-# without noticing. No packet mutation can change the manifest's SHAPE — the shape is fixed by the
-# emitter — so `schema-unbumped` reported BLIND and was right to. The proof supplies what the control
-# cannot: a synthesised predecessor, and BOTH arms, because "it fires" and "it discriminates" are
-# different claims and only the second is worth anything here.
 if '--prove-state-scan' in sys.argv:
     # BOTH ARMS, because the quotation exemption's whole content is that a quoted claim provokes
     # NOTHING, and a harness where every control must provoke a tag cannot express that.
@@ -3170,12 +3244,17 @@ if '--prove-state-scan' in sys.argv:
     _cases = [
         ('unquoted contradiction',   'Item 11 is open.',                            True),
         ('quoted contradiction',     'It said "Item 11 is open" once.',             False),
-        ('agreeing claim',           'Item 11 is CLOSED.',                          True is False),
+        ('agreeing claim',           'Item 11 is CLOSED.',                          False),
         ('adverb between',           'Item 11 is still open.',                      True),
-        ('citation form, agreeing',  'That is open item 19 (G3)\'s own defect.',    False),
+        ('citation form, agreeing',  "That is open item 19 (G3)'s own defect.",     False),
         ('citation form, wrong',     'Open item 11 (G1-B) remains open.',           True),
         ('unknown item number',      'Item 97 is open.',                            False),
         ('clause boundary respected','Item 11 is filed, and G3 is open.',           False),
+        # codex-worker-1's three, and two were false POSITIVES I created repairing the other
+        ('past tense is history',    'Item 11 was open when that was written.',     False),
+        ('negation not judged',      'Item 11 does not remain open.',               False),
+        ('curly-quoted history',     'It once said \u201cItem 11 is open.\u201d',        False),
+        ('same words, unquoted',     'Item 11 is open, plainly.',                   True),
     ]
     _fail = 0
     for _name, _text, _want in _cases:
@@ -3186,7 +3265,53 @@ if '--prove-state-scan' in sys.argv:
     # bound to production: the live document must be clean under the same function
     if _state_contradictions(_visible(pkt), closed_set, set(nums)):
         print('  the live packet contradicts itself'); sys.exit(1)
-    print('state scan: 8 crafted sentences, both arms' if not _fail else 'state scan FAILED')
+    print('state scan: 12 crafted sentences, both arms' if not _fail else 'state scan FAILED')
+    sys.exit(1 if _fail else 0)
+
+# A CHECK NO CONTROL CAN REACH NEEDS A PROOF, and the first one proved the wrong thing. No packet
+# mutation can change the manifest's SHAPE — the shape is fixed by the emitter — so `schema-unbumped`
+# reported BLIND and was right to. But the proof I wrote then called the CLASSIFIER and never the
+# branch that acts on it, so sabotaging the production refusal left all six cases green:
+# codex-worker-1's point, and the same defect one layer down from the one the proof exists to cover.
+# It now asserts the production BRANCH by construction — the ledger comparison the run performs —
+# and covers the four holes found in the neighbour-comparison version it replaced.
+if '--prove-schema-guard' in sys.argv:
+    def _refused(cur, ver, ledger_shape):
+        """EXACTLY the production predicate, called with substituted inputs."""
+        return ledger_shape != _shape_hash(cur) if ver else True
+    _base = {'gates': [{'id': 'G', 'a': 1, 'b': 2}, {'id': 'H', 'a': 3, 'b': 4}],
+             'counts': {'n': 1}, 'rulings': [{'id': 'R1', 'named_at': [{'line': 1, 'ctx': 'x'}]}]}
+    _h0 = _shape_hash({**_base, 'schema': 'x/1'})
+    _cases = [
+        ('unchanged shape',            _base,                                              False),
+        ('key removed from ALL',       {**_base, 'gates': [{'id': 'G', 'a': 1}, {'id': 'H', 'a': 3}]}, True),
+        ('key added to ONE record',    {**_base, 'gates': [{'id': 'G', 'a': 1, 'b': 2, 'c': 3},
+                                                           {'id': 'H', 'a': 3, 'b': 4}]},   True),
+        ('nested list key added',      {**_base, 'rulings': [{'id': 'R1',
+                                        'named_at': [{'line': 1, 'ctx': 'x', 'new': 2}]}]},  True),
+        ('nested dict key removed',    {**_base, 'counts': {}},                             True),
+        ('top-level key added',        {**_base, 'extra': []},                              True),
+        ('values differ, shape same',  {**_base, 'counts': {'n': 99}},                      False),
+    ]
+    _fail = 0
+    for _name, _cur, _want in _cases:
+        _got = _refused({**_cur, 'schema': 'x/1'}, 'x/1', _h0)
+        print(f'  {_name:28} refused={str(_got):5} expected={str(_want):5} '
+              f'{"PASS" if _got == _want else "FAIL"}')
+        _fail += _got != _want
+    # THE ROLLBACK ARM, which the neighbour comparison could not express at all: a version with no
+    # ledger entry is refused, so re-using a retired one cannot pass by matching some ancestor.
+    _roll = 'y/0' not in _SHAPE_LEDGER
+    print(f'  {"unknown version refused":28} refused={str(_roll):5} expected=True  '
+          f'{"PASS" if _roll else "FAIL"}')
+    _fail += not _roll
+    # BOUND TO PRODUCTION: the live version must be in the ledger and its shape must match, which is
+    # the branch the run itself takes. Sabotaging that branch now fails here too.
+    if _SCHEMA not in _SHAPE_LEDGER:
+        print('  the live version has no ledger entry'); sys.exit(1)
+    if _SHAPE_LEDGER[_SCHEMA] != _shape_hash(man):
+        print('  the live manifest does not match its ledger entry'); sys.exit(1)
+    print('schema guard: 8 cases, deep shapes, both arms' if not _fail else 'schema guard FAILED')
     sys.exit(1 if _fail else 0)
 
 if '--prove-schema-guard' in sys.argv:

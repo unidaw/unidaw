@@ -19,8 +19,14 @@ never written is the same error's fingerprint.
 The blockers from the exact review are reconciled here, and the count is deliberately not restated: it moved between rounds and a fixed number here would be a twin of the item list, which is the authority:
 
 1. **GATE PLANNING VERDICTS — plannable 0, unknown 8, blocked 0.** **OWNER CHOICES (G0-A, G0-B,
-   G3)** and **NON-GATE PREREQUISITES (G1-B)**, the first derived from ⟦OWNER-CHOICE⟧ markers and
-   the second from the gates' `Dependencies` clauses, both compared against this restatement. Every gate names a population
+   G1-A, G1-B, G2-A, G3, G4)** and **NON-GATE PREREQUISITES (G1-B)**, the first derived from every
+   `SHALL decide` / `SHALL rule` / `SHALL choose` demand in a gate's review register and the second
+   from the gates' `Dependencies` clauses, both compared against this restatement. **The choice
+   population was MARKER-AUTHORED for one SHA and I had five wrong**: codex-worker-1 found five live
+   demands unmarked and G3's two choices sharing one marker, so the emitted reason lost the second
+   entirely. The register's own VERB is the distinction I had said could not be read — this packet
+   writes `SHALL confirm` for a fact and `SHALL decide` for a choice, consistently — and a rule over
+   it is complete by construction where a marker is a population I can forget. Every gate names a population
    it can range over, which is what this line used to report as "EVERY GATE IS PLANNABLE AT THIS
    SHA"; that claim read TWO, then ONE, then every, across three SHAs, and it is **withdrawn as
    OVERSTATED rather than as wrong.** No gate's own population is withdrawn — the fact it was
@@ -290,10 +296,10 @@ accident-prone kind and is named as such rather than disclaimed · S4 each of S1
 with the violation restored · S5 `response.shmName` reaches `shm_open` only after a length-bounded
 read.
 
-**Review register.** ⟦OWNER-CHOICE: G0-A⟧ The reviewer SHALL confirm: the owner's ruling on
-post-attach shrink, which no validation closes because the child keeps its fd; the expected verdict
-for a valid object under a name the engine did not choose — **both are live CHOICES OF BEHAVIOUR,
-not confirmations of fact**, and a planner cannot write the validator's ticket without them; refuse-versus-degrade for a bad ring offset; that `mmap` past the object
+**Review register.** The reviewer SHALL decide post-attach shrink, which no validation closes
+because the child keeps its fd. The reviewer SHALL decide the expected verdict for a valid object
+under a name the engine did not choose. **Both are live CHOICES OF BEHAVIOUR, not confirmations of
+fact**, and a planner cannot write the validator's ticket without them. The reviewer SHALL confirm: refuse-versus-degrade for a bad ring offset; that `mmap` past the object
 succeeds on this platform, nothing here having been executed; that the fixture asserts `offsetof`
 rather than trusting a hand-computed byte 96; that the enumerations were RE-DERIVED at the delivering
 SHA; that all **seven live** mailbox readers take their pointer from the validated layout; whether
@@ -330,8 +336,7 @@ because offset+size+name are together blind to `float sample_rate` becoming `uin
 cross-check against an `allowlist_file` closure over `apps/patcher_abi.h`, and no `build.rs` exists
 under `patcher_rust/` and no `allowlist_file` appears anywhere in the tree. The claim described a
 generation mechanism that is not there, so the two sides of the ABI are joined by NAME and OFFSET
-only, which is exactly why the `reserved`/`_pad0` mismatch at item 24 matters. *Members* — 66 C++ / 65 Rust, each produced by a command rather than by reading, which is what
-open item 5 (G0-B) required. C++: `awk '/^struct (alignas\([0-9]+\) )?(HarmonyEvent|MusicalLogicPayload|PatcherEuclideanConfig|PatcherSliceSelectConfig|PatcherRandomDegreeConfig|PatcherLfoConfig|PatcherContext|EventEntry) \{/{inb=1;next} inb&&/^};/{inb=0;next} inb{l=$0;sub(/\/\/.*/,"",l); if(l~/;/ && l!~/static_assert|static constexpr|typedef|using |\(/) c++} END{print c}' apps/harmony_timeline.h apps/patcher_abi.h apps/shared_memory.h` returns 66. Rust: `awk '/^#\[repr\(C/{r=1;next} r&&/^pub struct/{inb=1;r=0;next} inb&&/^}/{inb=0;next} inb&&/^[ \t]+(pub )?[A-Za-z_][A-Za-z0-9_]*[ \t]*:/{c++} END{print c}' patcher_rust/src/lib.rs` returns 65. The PER-TYPE breakdown is commanded too, because a total that
+only, which is exactly why the `reserved`/`_pad0` mismatch at item 24 matters. *Members* — 66 C++ / 65 Rust, each produced by a command rather than by reading, which is what item 5 (G0-B) required while it was open. C++: `awk '/^struct (alignas\([0-9]+\) )?(HarmonyEvent|MusicalLogicPayload|PatcherEuclideanConfig|PatcherSliceSelectConfig|PatcherRandomDegreeConfig|PatcherLfoConfig|PatcherContext|EventEntry) \{/{inb=1;next} inb&&/^};/{inb=0;next} inb{l=$0;sub(/\/\/.*/,"",l); if(l~/;/ && l!~/static_assert|static constexpr|typedef|using |\(/) c++} END{print c}' apps/harmony_timeline.h apps/patcher_abi.h apps/shared_memory.h` returns 66. Rust: `awk '/^#\[repr\(C/{r=1;next} r&&/^pub struct/{inb=1;r=0;next} inb&&/^}/{inb=0;next} inb&&/^[ \t]+(pub )?[A-Za-z_][A-Za-z0-9_]*[ \t]*:/{c++} END{print c}' patcher_rust/src/lib.rs` returns 65. The PER-TYPE breakdown is commanded too, because a total that
 agrees says nothing about where a difference sits: C++ `awk '/^struct (alignas\([0-9]+\) )?(HarmonyEvent|MusicalLogicPayload|PatcherEuclideanConfig|PatcherSliceSelectConfig|PatcherRandomDegreeConfig|PatcherLfoConfig|PatcherContext|EventEntry) \{/{n=$NF=="{"?$(NF-1):$NF;inb=1;c=0;next} inb&&/^};/{print n,c;inb=0;next} inb{l=$0;sub(/\/\/.*/,"",l); if(l~/;/ && l!~/static_assert|static constexpr|typedef|using |\(/) c++}' apps/harmony_timeline.h apps/patcher_abi.h apps/shared_memory.h` returns 8, Rust `awk '/^#\[repr\(C/{r=1;next} r&&/^pub struct/{n=$3;inb=1;c=0;r=0;next} inb&&/^}/{print n,c;inb=0;next} inb&&/^[ \t]+(pub )?[A-Za-z_][A-Za-z0-9_]*[ \t]*:/{c++}' patcher_rust/src/lib.rs` returns 8, and
 the two outputs are the block below. A total is a sum; the claim that the difference is one type is
 about the summands, so the summands carry the commands.
@@ -405,7 +410,7 @@ list of the eight type names. S-3 the one-sided admission is a byte-range disjoi
 no member name used as an admission key. S-4 name normalisation is a pure function of the input
 string — no map or table literal keyed by a member name.
 
-**Review register.** ⟦OWNER-CHOICE: G0-B⟧ The reviewer SHALL CHOOSE the mutation floor: 600 is a
+**Review register.** The reviewer SHALL CHOOSE the mutation floor: 600 is a
 fifth pinned integer with no owner, and no ticket can be written against a number nobody has picked
 (open item 4 (G0-B)). The reviewer SHALL confirm: that libclang's layout for the eight types equals
 that of the compiler building `engine_core`, since the C++ numbers come from bindgen and the product
@@ -459,7 +464,7 @@ reproducible, and four populations in the predecessor were exactly that.
   was reading for exactly this. The self-check verified 21 − 16 == 5 and could not
   see it, which is why A.0 says in terms that it decides a RULE's arithmetic and not its
   justification. The members are named here so the classification is auditable without re-running the
-  grep — and the rule now also ships INSIDE a command, which is what open item 6 (G1-A) asked for:
+  grep — and the rule now also ships INSIDE a command, which is what item 6 (G1-A) asked for while it was open:
   `grep -rnF 'entries[' apps/ | grep -v -e pluginCache -e cache.entries | grep -v -e storeReady -e loadReady`
   returns 4, and appending `| grep -v _tests_main` returns 3. A rule stated beside a command is a
   claim about a classification; a rule stated inside one is the classification.
@@ -693,7 +698,7 @@ halves with barrier-paused writers.
    SITES, and the phrase "two of the six" would have been wrong twice over: the hand-selected six
    were withdrawn, and what replaced them under R1 is seven. A bullet naming its sites survives a
    population being re-authored underneath it, which is why for the same reason the population is. Whether two is the whole set of
-   offending sites is open item 11 (G1-B); that these two offend is decidable at this SHA and is
+   offending sites was item 11 (G1-B), now CLOSED; that these two offend is decidable at this SHA and is
    what the bullet asserts. *REFUTED BY* either remaining.
 8. An abandoned publication is distinguishable from an unanswered one within a bounded number of
    observations, and the reader reports which it saw. *REFUTED BY* a reader that returns the same
@@ -1102,10 +1107,10 @@ host reads or publishes. **R16 DISCHARGES THIS ONLY FOR THE PRODUCER-VECTOR READ
 forbids anyway: under `hostReady = false` the producer, the input/output write and the mixer all
 skip the host, and SIGCONT cannot readmit the stopped process. It does NOT discharge the mixer's
 snapshot path, where readiness is live and the mapping is not — item 37. The demand stands for
-that half. ⟦OWNER-CHOICE: G3⟧ The reviewer SHALL decide `daw::Watchdog`'s fate — deletion or
-re-specification — since the gate accepts either with equal force and deliberately cannot choose,
-and SHALL choose the resume mechanism R16 leaves open at item 37 (G3): a host-side currency test, a
-reader-side monotonic clamp, a re-baseline on resume, or a per-slot block stamp.
+that half. The reviewer SHALL decide `daw::Watchdog`'s fate — deletion or
+re-specification — since the gate accepts either with equal force and deliberately cannot choose.
+The reviewer SHALL choose the resume mechanism R16 leaves open at item 37 (G3): a host-side
+currency test, a reader-side monotonic clamp, a re-baseline on resume, or a per-slot block stamp.
 **The reviewer SHALL resolve the static-check contradiction**: one check places the eviction inside
 `apps/engine_producer_thread.cpp:225-252`, whose natural implementation was said to move the exit
 count off 12, which a sibling check was said to forbid. **R17 DISCHARGES THIS AND ITEM 21 IS
@@ -1477,7 +1482,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `a736cc96fd61ed0e06771bc772bb576b67b5c691`, A.0 SCRIPT BLOB `ef4f877428b78a830592d606a4b221676d13ab3d`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `7a07b3494c7a5918d174b2263563ed22461b8e79`, A.0 SCRIPT BLOB `160f660169454d0c1a2b0545932647568b994f85`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1563,7 +1568,21 @@ an absolute: text injected outside a hiding place must raise the count and text 
 not, so the blanking is shown to be doing work rather than merely agreeing with its author on a clean
 document. `--prove-emit-identity` drives a real failure into a real run and requires the committed
 manifest to be byte-identical afterwards — it REFUSES when the artifact is absent, because
-`None == None` proved nothing the first time. **`--prove-schema-guard` exists because a check no
+`None == None` proved nothing the first time. **THE SCHEMA GUARD IS A LEDGER, not a comparison with a neighbour.** Its first version compared the
+emitted key sets against the manifest at `PREV_TIP`, and codex-worker-1 walked through it four ways
+in one pass: a version ROLLBACK passed because the parent had that shape under the old version, a
+key added to ONE record was invisible because the walk read element 0 and called it the list's
+shape, nested lists like `rulings[].named_at[]` were never reached at all while the comment claimed
+"every level a consumer binds to", and the proof called the CLASSIFIER rather than the branch, so
+sabotaging the production refusal left all six cases green. Every published version now records the
+shape it went out with, entries are append-only, and the current shape must equal the entry for the
+current version — a rollback fails because the retired version's recorded shape is not this one, a
+shape change under a held version fails because the hash moves, and neither depends on which SHA
+happens to be the parent. The walk takes the UNION of keys across every record and reports a
+heterogeneous list as its own defect, because a consumer binding to a list of records binds to one
+shape and a heterogeneous list has none.
+
+**`--prove-schema-guard` exists because a check no
 CONTROL can reach needs one**: no packet mutation can change the manifest's SHAPE, since the shape
 is fixed by the emitter, so the control written for `SCHEMA-UNVERSIONED` reported BLIND and was
 right to. The proof synthesises a predecessor and runs BOTH arms — four shapes that must be refused
@@ -1585,7 +1604,19 @@ CLOSED since R1 was authored. Two sentences, one shape, both wrong in the same d
 restatement decays the moment the item moves, and every ruling is an opportunity to make one.** So
 patching the two would have left the class open; the state is now read at the item and asserted
 nowhere else, and three further rulings (R2, R3, R17) were reduced from asserting a state to citing
-the item that holds it. `RULING-ITEM-STATE` refuses the shape, per SENTENCE — split on its
+the item that holds it. **AND THE CITATION FORM WAS THE ONE PLACE A STATE COULD BE ASSERTED FALSELY.** `open item N (Gx)`
+was EXEMPTED from the consistency scan as "a citation, not a predicate" — so the packet's own
+reference form became unexaminable, and six live citations called CLOSED items open, four of them
+item 11. codex-worker-1 found it inside the exemption I had pinned from both sides one commit
+earlier, which is where an exemption is least examined. The word `open` in that form is a CLAIM and
+is checked against the item.
+
+**AND THE SCAN IS NARROWED, in two places, each a stated gap rather than a silent one.** Past tense
+is history — `was open` made every historical sentence an assertion about now, and this packet is
+full of them by design — and a NEGATED clause is not judged at all, because `does not remain open`
+was refused for saying the opposite of what it says. If a past-tense or negated claim decays,
+nothing here will notice. Both were codex-worker-1's, the second a false positive I created while
+repairing the first. `RULING-ITEM-STATE` refuses the shape, per SENTENCE — split on its
 terminator, not a character count — with one subtraction: **the packet's cross-reference FORM
 `open item N (Gx)` is a citation, not a predicate.** That subtraction is load-bearing and pinned
 from both sides: removing it makes R12's untouched citation refuse the pristine document.
@@ -1687,7 +1718,7 @@ only ADDS one is a no-op and reports BLIND correctly — a repaired opt-out prod
 tag — and it therefore adds the span AND breaks the real status, so the old scan reads the span as
 the status while the new parse names the malformed reach.
 
-**Controls.** One hundred fifty-four, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** One hundred fifty-five, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1708,7 +1739,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `unclassified-kinded`, `unclassified-said`, `opening-gates-gone`, `planning-unknown-gone`, `status-slash`, `status-wrapped`, `status-after-ok`, `item-md-escape`, `section-orphan`, `schema-unstated`, `ruling-state-adverb`, `ruling-state-cited`, `item-state-stale`, `owner-choice-said`, `owner-choice-gone`, `section-prefix`, `status-escaped`, `status-parked`, `restate-total`, `restate-open`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `unclassified-kinded`, `unclassified-said`, `opening-gates-gone`, `planning-unknown-gone`, `status-slash`, `status-wrapped`, `status-after-ok`, `item-md-escape`, `section-orphan`, `schema-unstated`, `ruling-state-adverb`, `ruling-state-cited`, `item-state-stale`, `owner-choice-said`, `owner-choice-gone`, `section-prefix`, `status-escaped`, `status-parked`, `restate-total`, `restate-open`, `choice-compound`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
@@ -2410,15 +2441,15 @@ One per line, numbered in document order, so the count is checkable. ELEVEN are 
    inconsistent statements of the send-site count all quantified over the hand-selected six, which
    this packet withdraws; the census is withdrawn with it rather than being made self-consistent,
    because a count over a withdrawn population re-admits the population under a different name. PASS
-   7 is re-quantified over the two sites it names. Both return under open item 11 (G1-B).
-9. **G1-B** — CLOSED at this SHA as a defect, SUBSUMED by open item 11 (G1-B) as subject matter.
+   7 is re-quantified over the two sites it names. Both return under item 11 (G1-B).
+9. **G1-B** — CLOSED at this SHA as a defect, SUBSUMED by item 11 (G1-B) as subject matter.
    The contradiction was between a scope that omitted a region and a population that called that
    region one of "the only two" rewriting in place. The population making that claim is withdrawn,
    so the contradiction has no second side; the phrase appears nowhere in this packet. It returns
    the moment a derivable population does, and it returns as a REQUIREMENT on that population — any
    successor's population must be checked against the scope before it is published, which is the
    check whose absence produced this item.
-10. **G1-B** — CLOSED at this SHA as a defect, SUBSUMED by open item 11 (G1-B). Both recipes now
+10. **G1-B** — CLOSED at this SHA as a defect, SUBSUMED by item 11 (G1-B). Both recipes now
     state what they actually return rather than a list they do not produce: `pub fn read_` returns
     21 candidates and is explicitly NOT a population, and the `Region*` intersection returns 2 and
     is published as WRONG with the FAIL clause it shipped with. A recipe that names its true output
@@ -2838,8 +2869,11 @@ One per line, numbered in document order, so the count is checkable. ELEVEN are 
     `plannable_with_dependencies` is REMOVED rather than widened: a tri-state string in
     a boolean's key reads as TRUE in every consumer written against `/5`, so a meaning that no
     longer fits its type is deleted at a schema bump where the break is loud. Whoever rules turns
-    the five unknowns into `plannable` or into a typed blocker, and must add the cross-record
-    control, since nothing yet fails when a prerequisite and a verdict disagree. **Scoping matters here and I got it wrong twice, in opposite directions. Filed as
+    G1-B's PREREQUISITE half into `plannable` or into a typed blocker; **it does not turn any gate
+    plannable on its own**, because every gate also carries or inherits an OWNER CHOICE, and this
+    sentence said "the five unknowns" for one SHA while G0-A's and G3's causes sat beside it —
+    codex-worker-1 caught it in the commit that introduced the second input. Whoever rules must also
+    add the cross-record control, since nothing yet fails when a prerequisite and a verdict disagree. **Scoping matters here and I got it wrong twice, in opposite directions. Filed as
     `all` and as a BLOCKER for one draft, it attached to every gate and drove the
     acceptance-decidable set to empty — an item scoped `all` is a claim about every gate, and this
     is not one: the defect leaves no gate's acceptance criteria unmet, it makes a PLANNING field
