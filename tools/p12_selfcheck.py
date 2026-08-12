@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = '01c86f74ef1814ef2fe0236a80fa7c6534797e47'
+PREV_TIP     = '883200707f0574a7c3c8b8f66b891f472f0c793e'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -361,8 +361,12 @@ CONTROLS = {
  # codex-worker-1 reproduced that exactly. Two declarations on a NONTERMINAL gate — G2-A's clause
  # below — is the corpus that used to pass; `g4-dup-terminal` covers the terminal-gate case.
  # ON THE TERMINAL GATE ITSELF, which produces NO wrong-gate mismatch — so only the duplicate
- # branch can catch it. Its sibling above duplicates on a nonterminal and would still fire
+ # branch can catch it. Its sibling BELOW duplicates on a nonterminal and would still fire
  # through the population comparison if the duplicate branch were deleted; this one isolates it.
+ # AFTER `! `, which the one-terminator pattern could not see. codex-worker-1's exact corpus.
+ 'g4-dup-bang':      ('this SHA, on TEN dependency blockers plus one of its own.',
+                      'this SHA. No! Final gate — duplicate declaration. On TEN dependency blockers plus one of its own.',
+                      1, 'GATE-DECL-DUPLICATE'),
  'g4-dup-terminal':  ('G3. Final gate — and therefore NOT DECIDABLE',
                       'G3. Final gate — x. Final gate — and therefore NOT DECIDABLE', 1,
                       'GATE-DECL-DUPLICATE'),
@@ -1935,7 +1939,11 @@ if len(_final) != 1:
 #
 # The SPELLING is sentence-initial and em-dash terminated in this packet's own form, and it must
 # occur exactly once per gate: a second copy is as much a defect as a missing one.
-_FINAL_DECL = re.compile(r'(?:^|\. )Final gate — ')
+# THE SENTENCE-TERMINATOR CLASS, not one member of it. The comment said "sentence-initial" while
+# the pattern accepted only field-start or `. `, so an exact duplicate after `No! ` was invisible —
+# `[.!?]` is the class, and enumerating one of its members is the same approximation-for-a-boundary
+# defect this checker has now produced in a cap, a window, a prefix and a delimiter.
+_FINAL_DECL = re.compile(r'(?:^|[.!?] )Final gate — ')
 # COUNTED GLOBALLY. Per-gate `== 1` EXCLUDED a gate that declared itself twice instead of failing
 # it: two declarations on nonterminal G3 left `_said_final == ['G4']` and everything passed, while
 # the comment beside it said a second copy is a defect. A duplicate must fail, not disappear —
