@@ -1080,3 +1080,11 @@ restored (`kind:[PACKET]` while nonblocking), and all four stale G4 statements
 now carry only the narrow adjacent-multi-plugin fixture/oracle account. It
 deliberately leaves item-38 planning semantics undecided despite publishing a
 planning boolean. Exact review is pending; this remains a likely blocker.
+
+Exact audit of `f27e898` is BLOCKED. Kind/state decoupling and the four named G4
+edits pass, but R7 still carries the withdrawn mapped-base census ruling; item
+38 still publishes unresolved planning semantics as `true`; its canonical body
+has an unmatched/orphan Markdown fragment; G0-B open packet items 1-4 remain
+kindless; and the unified status parser still accepts contradictory, hyphenated,
+and inline-code pseudo-statuses. Carried G0-A/G0-B/G2/G3/Watchdog blockers
+remain. No implementation authorization.
