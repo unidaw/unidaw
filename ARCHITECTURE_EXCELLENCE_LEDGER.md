@@ -1407,6 +1407,15 @@ only `>=561`, not equality. Required redesign: exact per-script expansion record
 source-locator/cardinality/empty/value guards, output-site-only matching, and exact
 561 equality. P0.3 remains BLOCKED.
 
+Owner successor `37ffd10d` claims provenance is now executable: each verified
+expansion records script path, assignment lines/values, output site/template, and
+reviewer; cited locators, all assignments (including compound forms), output-site
+interpolation, nonempty values, and exact 561 template cardinality are checked.
+Wrong locator, widened value, and deleted assignment sabotages fail. Suite is
+153/155 with the same two pre-existing plugin failures. No transition proposed;
+independent review must attack untested assignment forms (heredocs, `read`,
+`printf -v`, arrays, conditionals/substitutions) and provenance guards.
+
 Exact audit of `76f1672`: tombstone half PASS; item 29 remains blocked on the
 correlation/consumer contract. Production missing/removed paths now use
 `liveTrackAt` and emit `UnknownTrack`, with causal rowops-rejected tests and clean
