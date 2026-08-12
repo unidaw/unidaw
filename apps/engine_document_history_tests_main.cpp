@@ -4,6 +4,7 @@
 // to keep in step — the engine previously had a hand-written invertUndoEntry used by BOTH paths,
 // with three branches each, which is six blocks that had to agree.
 #include "apps/engine_document_history.h"
+#include "apps/engine_command_mutates.h"
 #include <memory>
 #include <vector>
 
@@ -97,6 +98,66 @@ int main() {
     q.commit(doc, "edit", partial);
     CHECK(!q.commit(doc, "Undo", partial) && "identical document and snapshot must not append");
     printf("document history: a partial snapshot alone opens a step and drops the redo tail — OK\n");
+  }
+
+  // THE COMPOSITION, in one place: the DECISION and the HISTORY together, which is the causal test
+  // backend asked for. The two halves above prove the mechanism and the choosing separately; this
+  // runs the recording bracket's actual sequence — decide, then act only if the decision says to —
+  // against a cursor whose snapshot is PARTIAL and a capture that has since filled in.
+  {
+    const auto blob = std::make_shared<const std::vector<uint8_t>>(
+        std::vector<uint8_t>{9, 9});
+    daw::engine::PluginStateSnapshot partial;  // the plugin did not answer when the step was taken
+    partial.complete = false;
+    partial.asked = 1;
+    daw::engine::PluginStateSnapshot filled;   // the same step, captured again after an undo
+    filled.complete = true;
+    filled.asked = 1;
+    filled.blobs[{0u, 3u}] = blob;
+
+    // WHAT THE BRACKET DOES, for a given policy. Nothing here re-implements the decision — it
+    // calls the production one and then does exactly what the destructor does with the answer.
+    auto runBracket = [&](daw::engine::UndoPolicy policy,
+                          daw::engine::DocumentHistory& h,
+                          const daw::ProjectDocument& doc) {
+      const auto action = daw::engine::recordActionFor(policy, /*haveHistory=*/true,
+                                                       /*haveCapture=*/true,
+                                                       /*amendForGesture=*/false);
+      if (action == daw::engine::RecordAction::Skip) {
+        return;
+      }
+      if (action == daw::engine::RecordAction::Amend) {
+        h.amend(doc, filled);
+        return;
+      }
+      h.commit(doc, "Undo", filled);
+    };
+
+    auto seed = [&](daw::engine::DocumentHistory& h, daw::ProjectDocument& at) {
+      daw::ProjectDocument one; one.meta.name = "one";
+      daw::ProjectDocument two; two.meta.name = "two";
+      h.commit(one, "edit one", partial);
+      h.commit(two, "edit two", partial);
+      h.undo();          // cursor on "one", whose snapshot is PARTIAL
+      at = one;
+    };
+
+    // THE POLICY THE HISTORY VERBS HAVE. Skip, so `commit` is never reached and the redo tail —
+    // the user's own "two" — survives the undo.
+    daw::engine::DocumentHistory kept;
+    daw::ProjectDocument atCursor;
+    seed(kept, atCursor);
+    runBracket(daw::engine::commandUndoPolicy(daw::UiCommandType::Undo), kept, atCursor);
+    CHECK(kept.redo() != nullptr && "with UndoPolicy::None the redo tail must survive an undo");
+
+    // AND THE SABOTAGE, run as its own case rather than as an edit to the file: Version reaches
+    // commit, the filled snapshot differs from the cursor's partial one, and the tail is gone.
+    daw::engine::DocumentHistory lost;
+    seed(lost, atCursor);
+    runBracket(daw::engine::UndoPolicy::Version, lost, atCursor);
+    CHECK(lost.redo() == nullptr &&
+          "with Version a filled snapshot appends over a partial one and destroys the redo tail");
+    printf("document history: the bracket's decision is what saves the redo tail — OK\n");
   }
   if (g_fail != 0) {
     std::printf("engine_document_history_tests: FAIL (%d)\n", g_fail);
