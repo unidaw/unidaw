@@ -1172,3 +1172,8 @@ reference contradictions and mishandles negation/history. G3 choice extraction
 still loses the second choice; owner-choice population is incomplete; item 38's
 planning rationale is stale; escaped status, fake sections, and post-prose status
 remain clean-pass. No packet acceptance or implementation cutover.
+
+Owner successor `a1f1a38` claims the 5ce findings closed: escaped-status,
+prefixed-section, and post-prose status parsing repaired; control-anchor
+ambiguity guard added; number-word table generated; count wording fixed; R1
+corrected; schema /7 retained; 154 controls pass. Exact audit is pending.
