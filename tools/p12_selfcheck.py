@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'd1a87b15196ea90994ef384f73acf39aa9e91c03'
+PREV_TIP     = '3c41508ad587063a1acf5c925a81d4ff3d97d37a'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -352,6 +352,11 @@ CONTROLS = {
  'ruling-body-swap': ('CLOSED at this SHA.** The static-check contradiction was not one. R17 shows',
                       'CLOSED at this SHA.** The static-check contradiction was not one. R16 shows', 1,
                       'RULING-BODY-BIND'),
+ 'g4-dep-noclose':   ('19 (G3) no source for N,', '19 (G3) no source for N, 7 (Garbage invented,',
+                      1, 'GATE-DEP-BLOCKERS'),
+ 'g4-dep-twolists':  ('**The ten**, carried by gates G4 depends on',
+                      '**The ten**, carried by gates G4 depends on nothing. '
+                      '**The ten**, carried by gates G4 depends on', 1, 'GATE-DEP-BLOCKERS'),
  'g4-dep-garbage':   ('19 (G3) no source for N,', '19 (G3) no source for N, 7 (Garbage) invented,',
                       1, 'GATE-DEP-BLOCKERS'),
  'g4-dep-twophrase': ('on TEN dependency blockers plus one of its own.',
@@ -1682,7 +1687,8 @@ WORD = {13: 'Thirteen', 16: 'Sixteen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twen
         102: 'One hundred two', 103: 'One hundred three', 104: 'One hundred four',
         105: 'One hundred five', 106: 'One hundred six', 107: 'One hundred seven',
         108: 'One hundred eight', 109: 'One hundred nine', 110: 'One hundred ten',
-        111: 'One hundred eleven', 112: 'One hundred twelve'}
+        111: 'One hundred eleven', 112: 'One hundred twelve', 113: 'One hundred thirteen',
+        114: 'One hundred fourteen', 115: 'One hundred fifteen'}
 if not listed:
     bad('CONTROL-PROSE-MISSING', 'no "**Controls.** <N>, each naming" sentence')
 elif listed.group(1) != WORD.get(len(CONTROLS), '?'):
@@ -1874,6 +1880,13 @@ for _g in _final:
     if len(_phr) > 1:
         bad('GATE-DEP-BLOCKERS', f'{_g["id"]} states its dependency-blocker count {len(_phr)} times: {_phr}')
     _said = re.search(r'on ([A-Z]+) dependency blockers plus', _gsec)
+    # AND IT MUST BE IN THE CANONICAL FIELD. Gate-local was not the claim the comment made: the
+    # count is supposed to come from `dependencies_text`, and moving the sole phrase elsewhere in
+    # the gate satisfied a check whose comment said otherwise. A comment describing a stronger
+    # binding than the code has — for the fourth time today.
+    if _said and 'dependency blockers plus' not in _visible(_g.get('dependencies_text') or ''):
+        bad('GATE-DEP-BLOCKERS', f'{_g["id"]} states its dependency-blocker count outside its '
+                                 f'Dependencies clause, where the derivation reads it')
     if not _said:
         bad('GATE-DEP-BLOCKERS', f'{_g["id"]} states no dependency-blocker count to check')
     elif WORDNUM.get(_said.group(1).upper()) != len(_union):
@@ -1884,6 +1897,12 @@ for _g in _final:
     # skip was silent: `if _listed:` meant a check that matched nothing reported nothing, so every
     # member mutation codex-worker-1 tried passed cleanly. I wrote a note today about conditionals
     # failing silently where assertions fail loudly, and then wrote this.
+    # UNIQUE WITHIN THE GATE, like the count phrase. A correct historical list placed just before
+    # the operative one shadowed it, because `re.search` returns the first — the same first-match
+    # defect as the count, in the field beside it, fixed one SHA later than it should have been.
+    _lists = re.findall(r'\*\*The [a-z]+\*\*, carried by gates ', _gsec)
+    if len(_lists) > 1:
+        bad('GATE-DEP-BLOCKERS', f'{_g["id"]} states its dependency-blocker list {len(_lists)} times')
     _listed = re.search(r'\*\*The ' + (_said.group(1).lower() if _said else 'ten') +
                         r'\*\*, carried by gates [^:]*:\s*(.*?)(?=\n\*\*|\n\n)', _gsec, re.S)
     if not _listed:
@@ -1904,7 +1923,11 @@ for _g in _final:
         # not match, so `7 (Garbage)` and `7 (G9-X)` were invisible rather than rejected — the
         # extractor's silence read as their absence. Every `N (...)` in the list is counted, and a
         # surplus over the parsed pairs is a malformed entry.
-        _shaped = re.findall(r'(?<![0-9])(\d{1,2}) \([^)\n]*\)', _listed.group(1))
+        # A MEMBER-SHAPED START, with or without a closing paren. Requiring `)` meant
+        # `7 (Garbage invented,` was invisible again — the third time a malformed-input check has
+        # been written so that one more malformation escapes it. `N (` is the shape; what follows
+        # either parses as a gate or does not.
+        _shaped = re.findall(r'(?<![0-9])(\d{1,2}) \(', _listed.group(1))
         if len(_shaped) != len(_pairs):
             bad('GATE-DEP-BLOCKERS', f'{_g["id"]} has {len(_shaped) - len(_pairs)} member-shaped '
                                      f'entr(y/ies) that do not parse as `N (Gate)`')
