@@ -1494,7 +1494,7 @@ confirm where the acknowledgement lands and accept the consequences: inside `Blo
 
 # A.0 — the gate this packet is decided by
 
-`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `746b032bde2abc0b775476cd7e385b1bb2a01391`, A.0 SCRIPT BLOB `da092a989d1b665960f3b913c27e0e50baff6c58`
+`tools/p12_selfcheck.py` at this SHA, PREV PACKET BLOB `92556ebd8285eeb0771259597cbd535af3ea1360`, A.0 SCRIPT BLOB `0b5021284e2ad72328bba8f227a9348246c448c9`
 — the script hashes itself and refuses if the packet pins a different blob, so the gate and the
 document it decides cannot move apart. It refuses to run unbound: `AE_P12_PIN` must name a checkout of
 product `75c6f064` whose tree is `699abfe8` with zero modified paths, and the packet file must equal
@@ -1680,7 +1680,10 @@ covers every byte between one item and the next by construction. Its control rep
 is the only reason it was written. A check nothing can trigger is worse than no check, because it
 reads as coverage. The rule is at the boundary instead: a top-level heading is a GATE or one of the
 document's named structural sections, and there is no third kind — a rule rather than a pinned
-sequence, so it needs no edit when a gate is added and an invented heading has nowhere to be. **AND MEMBERSHIP
+sequence, so it needs no edit when a gate is added and an invented heading has nowhere to be. **AND A HEADING MAY BE INDENTED UP TO THREE SPACES**, which `^#` saw none of — so a one-space
+duplicate of an allowed name truncated the section above it and neither the membership check nor the
+uniqueness check was ever shown it. The same allowance the open-items section slice already makes,
+missed in the check written beside it. **AND MEMBERSHIP
 IS NOT UNIQUENESS**: exact-matching the names closed the prefix hole and left a DUPLICATE of an
 allowed name passing, which truncates the section above it while every word in it is permitted —
 one property along from the one just repaired, found the same day. A section appears once because
@@ -1694,6 +1697,21 @@ blanked now, not dropped. **And an HTML ENTITY renders to a character too**: `&#
 underscore in `**NOT BLOCKING&#95;EXTRA.**` that the status grammar claims to reject, one notation
 along from the backslash escape it was written for. Entities resolve through the same helper and
 their characters are literal for the same reason.
+
+**AND THE STATUS SPLITTER THREW THE FLAGS AWAY.** `_render` already knew which characters are
+literal, and the run splitter read only its rendered text — so `\*\*BLOCKING...\*\*`, two LITERAL
+stars and not an emphasis run, parsed as a declaration and emitted `blocking: true`; `&#42;&#42;`
+did the same. **That is the parity rule applied in one of its two places**, in a helper written an
+hour earlier so that both consumers could ask one question, and it is the shape this checker
+produces more than any other. Delimiters are found in a MASK where literal characters are blanked,
+and the run text is taken from the rendering at those offsets.
+
+**AND MASKING THEM MADE THE REGION EMPTY RATHER THAN MALFORMED**, so the repair produced no status,
+no tokens and no refusal — absence read as a value for the FOURTH time in this parser, arriving
+through the fix for the third. A headline that reaches for the status word with no bold run to
+declare it in is named for that. A LATER run that reaches and misses is named too: the earlier check
+demanded an exact phrase, so `**NOT BLOCKING_EXTRA...**` parked on a continuation line was a status
+attempt no rule was watching.
 **AND IT MATCHED BY PREFIX, so the final section's heading with one extra word appended passed as
 the section it truncates**, carrying orphan text with an unclosed emphasis run that nothing ranged
 over and no MANIFEST-STALE to show for it. **The heading is not quoted here, and that is a rule
@@ -1756,7 +1774,7 @@ only ADDS one is a no-op and reports BLIND correctly — a repaired opt-out prod
 tag — and it therefore adds the span AND breaks the real status, so the old scan reads the span as
 the status while the new parse names the malformed reach.
 
-**Controls.** One hundred sixty-two, each naming the tag it must provoke; a control that mutates the file without
+**Controls.** One hundred sixty-six, each naming the tag it must provoke; a control that mutates the file without
 provoking its own tag reports `BLIND` and fails. The prose count and the names are themselves
 checked against the harness, because this list said thirteen for two SHAs after the harness had
 eighteen. **Run them ALL with `--sweep`**, which is a check and not a convenience: it asserts the
@@ -1777,7 +1795,7 @@ and the loop's predicate searched the run's output for substrings of that same l
 the count `1` sitting next to the word ALL as the only tell. `--sweep` was then falsified twice: a
 dead anchor turns every control red, and a single control given a tag nothing emits turns exactly
 that one red while the rest stay green. Individual controls still run with
-`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `unclassified-kinded`, `unclassified-said`, `opening-gates-gone`, `planning-unknown-gone`, `status-slash`, `status-wrapped`, `status-after-ok`, `item-md-escape`, `section-orphan`, `schema-unstated`, `ruling-state-adverb`, `ruling-state-cited`, `item-state-stale`, `owner-choice-said`, `owner-choice-gone`, `section-prefix`, `status-escaped`, `status-parked`, `restate-total`, `restate-open`, `choice-compound`, `status-parked-l2`, `status-entity`, `md-fabricated`, `section-dupe`, `item-state-cap`, `item-state-negelse`, `choice-adverb`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
+`--negative <name>`, list with `--list`: `status-malformed`, `status-ambiguous`, `status-contradicted`, `status-hyphen`, `status-code-span`, `item-md-unbalanced`, `item-md-view`, `ruling-item-state`, `ruling-cite-plus`, `unclassified-kinded`, `unclassified-said`, `opening-gates-gone`, `planning-unknown-gone`, `status-slash`, `status-wrapped`, `status-after-ok`, `item-md-escape`, `section-orphan`, `schema-unstated`, `ruling-state-adverb`, `ruling-state-cited`, `item-state-stale`, `owner-choice-said`, `owner-choice-gone`, `section-prefix`, `status-escaped`, `status-parked`, `restate-total`, `restate-open`, `choice-compound`, `status-parked-l2`, `status-entity`, `md-fabricated`, `section-dupe`, `item-state-cap`, `item-state-negelse`, `choice-adverb`, `status-litstar`, `status-entstar`, `status-parked-bad`, `section-indented-dupe`, `blocking-negated`, `section-indented`, `header-suffix`, `g4-dup-quest`, `g4-dup-bang`, `g4-dup-terminal`, `g4-zero-terminal`, `g4-final-twice`, `g4-final-negated`, `g4-two-terminals`, `g4-final-rename`, `g4-dep-bareword`, `g4-dep-noclose`, `g4-dep-twolists`, `open-section-two`, `header-not-first`, `g4-dep-garbage`, `g4-dep-twophrase`, `item-dupe-number`, `g4-dep-dupe`, `g4-dep-owner`, `g4-dep-member`, `g4-dep-extra`, `marker-in-comment`, `g4-dep-count`, `marker-closer`, `marker-unclosed`, `edge-nospace`, `marker-qualified`, `marker-empty`, `edge-malformed`, `packet-marker-gone`, `packet-marker-added`, `packet-marker-dupe`, `packet-marker-typo`, `ruling-body-swap`, `closed-count`, `dangling-ref`,
 `drop-refutation`, `member-dropped`, `member-per-type`, `open-arithmetic`, `open-count`,
 `orphan-number`, `raw-without-cmd`, `rg-command`, `rule-arithmetic`, `stale-a0-sample`,
 `blocker-set`, `borrowed-cmd`, `byhand-count`, `heading-regress`, `constraint-lost`, `label-spelling`, `manifest-stale`, `opening-gates`, `orphan-marker`, `two-markers`, `control-unlisted`, `no-terminator`, `handmade-count`, `root-wide-grep`, `ungated-ref`, `unmarked-popn`,
@@ -2722,7 +2740,9 @@ One per line, numbered in document order, so the count is checkable. ELEVEN are 
     "withdrawn with the population" to live conditions made the gap visible: PASS 9 requires a
     mechanical echo ratchet over the SEND SITES — a population nobody has enumerated, so that bullet
     is blocked on a missing population and not only on an unwritten test — and S4 requires drift
-    detectors pinning the authored population's size. NEITHER IS WRITTEN. This item repeated "the
+    detectors pinning the authored population's size. **NEITHER RUNNABLE ASSERTION IS IMPLEMENTED** —
+    G1-B states the detectors' commands and figures, and nothing executes them; this line said
+    "neither is written", which literally denies the specified detectors as well. This item repeated "the
     seven authored send sites" when it was filed, taking a count from the request/answer population
     and a unit from a population that does not exist; PASS 9 states it correctly and this item now
     matches it. While they read "withdrawn", G1-B's

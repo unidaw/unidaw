@@ -20,7 +20,7 @@ PIN_ENV      = 'AE_P12_PIN'          # path to a read-only checkout of PRODUCT_S
 EXCLUDE      = ['--exclude-dir=target', '--exclude-dir=build', '--exclude-dir=node_modules',
                 '--exclude-dir=.venv', '--exclude-dir=dist', '--exclude-dir=.git']
 TIMEOUT      = 120                   # a canonical checkout carries node_modules; 45s timed one out
-PREV_TIP     = 'be9193dda4b6062f8da745f284a296b3bb0d9088'
+PREV_TIP     = '82215c370516d7b350cb4bac8411de1499fed7c0'
 PREV_BLOB    = ''                    # parent's packet blob; filled below from the parent commit
 
 # ---- the census roster: role identity and MEMBER identity, held OUTSIDE the document -----------
@@ -644,6 +644,21 @@ CONTROLS = {
                       'an item scoped `all` *\\_* **is a claim about every gate', 1,
                       'ITEM-MD-UNBALANCED'),
  # A DUPLICATE OF AN ALLOWED SECTION NAME: permitted by membership, and it truncates the one above.
+ # ESCAPED STARS ARE LITERAL TEXT, not an emphasis run — the splitter threw away the flags the
+ # renderer had already computed, so a status inside literal stars parsed as a declaration.
+ 'status-litstar':   ('33. **G1-B** — ⟦PRODUCT⟧ **BLOCKING.',
+                      '33. **G1-B** — ⟦PRODUCT⟧ \\*\\*BLOCKING.', 1, 'ITEM-STATUS-MISSING'),
+ # AND ENTITY-PRODUCED STARS, one notation along, as ever.
+ 'status-entstar':   ('33. **G1-B** — ⟦PRODUCT⟧ **BLOCKING.',
+                      '33. **G1-B** — ⟦PRODUCT⟧ &#42;&#42;BLOCKING.', 1, 'ITEM-STATUS-MISSING'),
+ # A LATER RUN THAT REACHES FOR A STATUS AND MISSES is parked just as much as an exact one.
+ 'status-parked-bad': ('38. **G1-B** — ⟦PACKET⟧ **NOT BLOCKING.',
+                      '38. **G1-B** — scoped to G1-B.\n    **NOT BLOCKING_EXTRA.', 1,
+                      'ITEM-STATUS-MISSING'),
+ # ONE TO THREE LEADING SPACES IS STILL A HEADING to CommonMark, and `^#` saw none of them.
+ 'section-indented-dupe': ('\n# Provenance of this packet',
+                      '\n # Implementation constraints (non-negotiable, backend 2026-08-10)\n\n'
+                      'orphan text.\n\n# Provenance of this packet', 1, 'SECTION-DUPLICATE'),
  'section-dupe':     ('\n# Provenance of this packet',
                       '\n# Implementation constraints (non-negotiable, backend 2026-08-10)\n\n'
                       'orphan **text.\n\n# Provenance of this packet', 1, 'SECTION-DUPLICATE'),
@@ -1004,7 +1019,7 @@ _TOKEN_RE  = re.compile(r"[A-Za-z0-9_\'-]+")
 _HEADS_RE  = re.compile(r'(?m)^(\d{1,2})\. \*\*[^*\n]+\*\* — (.*?)(?=\n\d{1,2}\. \*\*|\n# |\Z)', re.S)
 _PHRASE_RE = re.compile(r"(NOT )?BLOCKING(?![A-Za-z0-9_\'-])")
 
-def _status_runs(rest, leading=True):
+def _status_runs(rest, lit=None, leading=True):
     """Bold runs: the leading sequence by default, or EVERY run in the item when leading=False.
 
     AN UNCLOSED RUN IS READ TO THE END, not dropped. Dropping it was a fail-open I wrote into the
@@ -1014,15 +1029,22 @@ def _status_runs(rest, leading=True):
     revert test unreadable, and it made one: reverting the head extent blinded every status control
     at once instead of the one it should have. Reading to the end keeps the two checks independent.
     """
+    # DELIMITERS ARE FOUND IN THE MASK, TEXT IS TAKEN FROM THE RENDERING. `_render` already knew
+    # which characters are LITERAL — escaped or entity-produced — and the status splitter threw the
+    # flags away, so `\*\*BLOCKING...\*\*` (two literal stars, not emphasis) parsed as a bold run
+    # and the item emitted blocking:true; `&#42;&#42;` did the same. That is the parity rule applied
+    # in one of its two places, which is the shape this file keeps producing — and I wrote the
+    # helper an hour earlier precisely so both consumers could ask one question.
+    mask = rest if lit is None else ''.join(' ' if l else c for c, l in zip(rest, lit))
     i, runs = 0, []
     while True:
-        m = (re.match(r'(?:\s|⟦[^⟧]*⟧)*\*\*', rest[i:]) if leading
-             else re.compile(r'\*\*').search(rest, i) and
-                  re.match(r'.*?\*\*', rest[i:], re.S))
+        m = (re.match(r'(?:\s|⟦[^⟧]*⟧)*\*\*', mask[i:]) if leading
+             else re.compile(r'\*\*').search(mask, i) and
+                  re.match(r'.*?\*\*', mask[i:], re.S))
         if not m:
             break
         j = i + m.end()
-        k = rest.find('**', j)
+        k = mask.find('**', j)
         runs.append(rest[j:] if k < 0 else rest[j:k])
         if k < 0:
             break
@@ -1035,7 +1057,7 @@ for _m in _HEADS_RE.finditer(body_vis):
     # lookahead saw a backslash — not a token character — and the token scan split at it and found an
     # exact `BLOCKING`, while a reader sees `NOT BLOCKING_EXTRA`. The parser now reads what the
     # reader reads, from the same derivation the parity check subtracts.
-    _n2, _runs = int(_m.group(1)), _status_runs(_render(_m.group(2))[0])
+    _n2, _runs = int(_m.group(1)), _status_runs(*_render(_m.group(2)))
     _ITEM_HEADS_SEEN.add(_n2)
     _ITEM_REGION[_n2] = _runs
     _ph = _PHRASE_RE.match(_runs[0]) if _runs else None
@@ -1074,8 +1096,23 @@ for _m in _HEADS_RE.finditer(body_vis):
     # once. The rule is about RUNS: **only the first bold run may OPEN with a status phrase.** Item
     # 27's `**This item stays BLOCKING for the PRODUCT defect...**` is a later run that does not open
     # with one, so prose stays prose, and a parked declaration has nowhere to be.
-    for _ri, _run in enumerate(_status_runs(_render(_m.group(2))[0], leading=False)):
-        if _PHRASE_RE.match(_run.lstrip()) and not (_ri == 0 and _runs):
+    # A STATUS WORD WITH NO RUN AT ALL. Masking literal stars is correct and it makes the region
+    # EMPTY rather than malformed, so `\*\*BLOCKING...\*\*` produced no status, no tokens and no
+    # refusal — absence read as a value for the FOURTH time in this parser, arriving through the
+    # repair for the third. If the leading sequence is empty and the headline still reaches for the
+    # status word, the reach is what must be named.
+    if not _runs and _n2 not in closed_set:
+        _bare = [t for t in _TOKEN_RE.findall(_render(_m.group(2).split('\n', 1)[0])[0])
+                 if t.startswith('BLOCKING')]
+        if _bare:
+            bad('ITEM-STATUS-MISSING', f'item {_n2} names the status word on its headline with no '
+                                       f'bold run to declare it in; literal or entity-produced '
+                                       f'delimiters are text, not emphasis')
+    for _ri, _run in enumerate(_status_runs(*_render(_m.group(2)), leading=False)):
+        _first = (_TOKEN_RE.findall(_run) or [''])[0]
+        _reach = _PHRASE_RE.match(_run.lstrip()) or _first.startswith('BLOCKING') or (
+            _first == 'NOT' and any(t.startswith('BLOCKING') for t in _TOKEN_RE.findall(_run)[1:2]))
+        if _reach and not (_ri == 0 and _runs):
             bad('ITEM-STATUS-MISSING', f'item {_n2} opens a bold run with a status phrase that is '
                                        f'not the first run of its leading sequence; only that run '
                                        f'declares a status')
@@ -2395,7 +2432,11 @@ _SECTIONS = ('AE-P1.2 — SHM contract phase packet',
              "Provenance of this packet's own numbers")
 _SECTION_PAT = re.compile(r'Open items — \d+ atomic, \d+ CLOSED at this SHA, \d+ open')
 _seen_headings = []
-for _m2 in re.finditer(r'(?m)^# (.*)$', _visible(pkt)):
+# UP TO THREE LEADING SPACES IS STILL A HEADING to CommonMark, and `^#` saw none of them — so a
+# one-space-indented DUPLICATE of an allowed name truncated the section above it and neither
+# the membership check nor the uniqueness check was shown it. The same three-space allowance
+# the open-items section slice already handles, in the check written beside it.
+for _m2 in re.finditer(r'(?m)^ {0,3}# (.*)$', _visible(pkt)):
     _h = _m2.group(1).strip()
     _seen_headings.append(_h)
     if re.fullmatch(GATE_ID + r' — .+', _h) or _SECTION_PAT.fullmatch(_h) or _h in _SECTIONS:
