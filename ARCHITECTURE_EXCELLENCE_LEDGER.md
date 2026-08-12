@@ -1120,3 +1120,9 @@ Implementation has begun on a disjoint backend IPC slice. Commit `c1c27fd`
 rejects empty/overlong AF_UNIX socket paths consistently in HostController and
 juce_host_process, preventing truncation-induced collisions. `daw_engine` and
 `juce_host_process` build targets passed.
+
+Owner successor `5ce6674` claims the c40/e39 findings are closed: status grammar
+round-2 handles escapes, section boundaries, and malformed runs; three stale
+restatements are corrected; 143 controls pass. It explicitly carries item 38's
+ruling, sixteen unclassified items/third kind, cross-record control, and the
+remaining G0/G2/G3/Watchdog blockers. Exact audit is pending.
