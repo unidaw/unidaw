@@ -1107,3 +1107,16 @@ item-38 Markdown, ruling/item-state separation, explicit `unclassified_open`
 with schema /6 and item 39, and tri-state planning verdicts. It reports 39 items,
 138 controls, and explicitly leaves item 38's ruling, sixteen classifications,
 and a prerequisite/verdict cross-record control open. Exact audit is pending.
+
+Final bounded audit of `359cde8` remains BLOCKED. Focused semantic checks pass,
+but schema compatibility is broken: `/6` removes `plannable_with_dependencies`
+and adds tri-state planning fields, requiring `/7`; stale `_with_dependencies`
+opening prose remains. G0-A/G0-B and G3 owner choices are still untyped, ruling
+state prose remains fail-open/stale, and one exact count contradiction remains:
+`docs/architecture/tasks/AE-P1.2-shm-contract.md:102` calls 39 the open list,
+while the manifest says total 39, open 30, active 29, closed 9.
+
+Implementation has begun on a disjoint backend IPC slice. Commit `c1c27fd`
+rejects empty/overlong AF_UNIX socket paths consistently in HostController and
+juce_host_process, preventing truncation-induced collisions. `daw_engine` and
+`juce_host_process` build targets passed.
