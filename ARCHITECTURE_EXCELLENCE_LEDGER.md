@@ -944,6 +944,11 @@ alternate failures and needs a dedicated tag/coherent corpus. Open-heading
 crash/trailing garbage/order set-only, G0/G2/G3/M1/item37/Watchdog/G4 item26
 remain blocked.
 
+Owner successor `1585c9a` claims a dedicated load-bearing `GATE-TERMINAL-COUNT`
+tag, global duplicate declaration rejection, and a narrowed prose claim limited
+to rename/deletion detection; 118 controls pass. Exact review is pending. Open
+H1/trailing-header/order, item26 framing, and semantic-set blockers remain.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
