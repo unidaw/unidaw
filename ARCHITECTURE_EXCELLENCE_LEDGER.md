@@ -949,6 +949,13 @@ tag, global duplicate declaration rejection, and a narrowed prose claim limited
 to rename/deletion detection; 118 controls pass. Exact review is pending. Open
 H1/trailing-header/order, item26 framing, and semantic-set blockers remain.
 
+Exact review of `1585c9a` is **BLOCKED**. Terminal tag and global declaration
+logic pass, but `g4-final-twice` duplicates G4 itself (already rejected by the
+parent), so it is noncausal; it must duplicate a nonterminal declaration or use
+its own tag. Zero-terminal protection is unratcheted. Claim narrowing still
+says prose must agree/designate while admitting lexical spelling only. Open H1/
+trailing header/order and G0/G2/G3/M1/item37/Watchdog/G4 item26 remain.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
