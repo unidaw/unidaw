@@ -1412,6 +1412,14 @@ One `engine_clip_helpers_tests` failure occurred during an interleaved restore/
 rebuild batch and passed after a clean rebuild; it is recorded as unexplained,
 not dismissed, and requires a clean reproducibility check.
 
+R11 route (a) completed compositionally as `a734960`: the causal test drives the
+production `recordActionFor` decision and then the real action sequence against a
+partial cursor snapshot whose plugin state is filled. `UndoPolicy::None` skips
+commit and preserves redo; the `Version` regression commits the differing snapshot
+and drops redo. Both arms run every time. Engine document-history, pure, and
+clip-helper tests pass. The host refusal-then-recovery trigger remains explicitly
+unproven because no fixture earns the filled blob.
+
 `P2-CTRL-01` protocol gate: refusal IDs alone are insufficient because unrelated
 version movement can satisfy a losing same-base command, and successful SetRowOps
 may emit no positive diff. The ticket is authorized to design an additive
