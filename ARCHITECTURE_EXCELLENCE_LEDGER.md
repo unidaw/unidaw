@@ -1753,6 +1753,12 @@ events at the four silent drop sites, with deterministic controls. The worker
 was re-assigned this corrected scope and must complete a host.gave_up inventory
 before proposing fatal play/start behavior.
 
+P2-WDOG-03 policy follow-on was recorded read-only at `b1124f72`. It captures
+four owner decisions (transport behavior on give-up, in-session recovery,
+pre-threshold failed-relaunch visibility, and UI presentation). No policy is
+invented prematurely; WDOG-02 observability must land first so the policy is
+verifiable.
+
 Independent HOST-01 Step 1 review is BLOCKED semantically (scaffolding/build
 passes). The accessor incorrectly maps `hostReady=true, mirrorPending=false`
 to `MirrorComplete`, despite restart publishing readiness before replay is
