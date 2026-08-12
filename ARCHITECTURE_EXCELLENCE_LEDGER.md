@@ -844,6 +844,13 @@ shadows and count phrases can decoy; member order/reasons are unbound and stale;
 the header is unanchored and multiple Open sections are accepted. G2-B, G3
 N/M1/item37/Watchdog, G4 planning, and G0-A/B remain blocked.
 
+Exact review of `3c41508` is **BLOCKED**. Column-zero section/header repairs
+pass, but CommonMark-valid indented sections remain invisible; header matching
+is prefix-only; zero sections crash without a named refusal; and the
+`header-not-first` control does not test the shadow implementation. G4
+missing-close/decoy list/count/order/reason checks remain fail-open with stale
+labels. G2-B, G3 N/M1/item37/Watchdog, G4 planning, and G0 remain blocked.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
