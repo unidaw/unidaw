@@ -1773,3 +1773,10 @@ asynchronous and send results are ignored. HOST-02a is paused. HOST-01 must
 rename the lower state, model replay/bypass ordering coherently, and add
 production-helper transition tests plus a swapped-order negative control
 before generation work resumes.
+
+The clip-helper diagnostic completed: 61 runs across four configurations,
+including the originating `084891f8` tree and a Debug build, all passed. The
+historical red is therefore NOT REPRODUCIBLE and remains unclassified; it must
+not be closed as a flake. The worker was automatically refilled with a
+read-only P2-G4 adjacent multi-plugin ownership inventory/design, with no
+product or SHM edits.
