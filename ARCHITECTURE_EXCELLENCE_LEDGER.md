@@ -970,6 +970,12 @@ control. Delta comments claim G3 while mutating G2-A, and lexical-boundary
 wording conflicts. Open H1/trailing-header/order, G0/G2/G3/M1/item37/Watchdog/
 G4 item26 remain.
 
+Owner successor `8832007` claims duplicate declarations now emit a dedicated
+`GATE-DECL-DUPLICATE` tag, with both nonterminal and terminal causal controls
+going blind when that branch is removed; comments and lexical-boundary wording
+are corrected. 120 controls pass. Exact review is pending. One-space H1,
+trailing header, G4 order, item26 framing, and semantic-set blockers remain.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
