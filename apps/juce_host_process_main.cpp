@@ -26,6 +26,7 @@
 
 #include "apps/audio_shm.h"
 #include "apps/event_payloads.h"
+#include "apps/host_chain_buffers.h"
 #include "apps/rt_thread.h"
 #include "apps/event_ring.h"
 #include "apps/ipc_protocol.h"
@@ -865,11 +866,16 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
     const uint32_t channelsOut = state.header->numChannelsOut;
     for (uint32_t index = segmentStart; index < segmentEnd; ++index) {
       auto& slot = state.plugins[index];
-      const bool isLast = (index + 1 == segmentEnd);
-      float* const* outputPtrs = isLast ? state.outputPtrs.data()
-                                        : ((index - segmentStart) % 2 == 0
-                                               ? state.chainPtrsA.data()
-                                               : state.chainPtrsB.data());
+      // THE SELECTION IS `daw::host::chainOutputFor` — see apps/host_chain_buffers.h. It used to
+      // be this expression inline, in a loop inside a binary no test links, so the property that
+      // makes the rebind at the bottom of this loop safe (output is never the buffer being read)
+      // could only be established by reading it. Same repair as the undo recording decision.
+      const daw::host::ChainBuffer outSel =
+          daw::host::chainOutputFor(index, segmentStart, segmentEnd);
+      float* const* outputPtrs =
+          outSel == daw::host::ChainBuffer::SegmentOutput ? state.outputPtrs.data()
+          : outSel == daw::host::ChainBuffer::A           ? state.chainPtrsA.data()
+                                                          : state.chainPtrsB.data();
       const int numOutputs = static_cast<int>(channelsOut);
       // A slot with a null instance is a plugin that failed to load; it stays in the
       // chain (as a placeholder) so device indices don't shift, and here it just
@@ -880,12 +886,13 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
           pluginInputs > 0 ? inputPtrs : nullptr;
       const int pluginInputCount =
           pluginInputPtrs ? std::min(pluginInputs, numInputs) : 0;
-      if (!isLast) {
-        if (((index - segmentStart) % 2) == 0) {
-          std::fill(state.chainBufferA.begin(), state.chainBufferA.end(), 0.0f);
-        } else {
-          std::fill(state.chainBufferB.begin(), state.chainBufferB.end(), 0.0f);
-        }
+      // CLEARS THE BUFFER ABOUT TO BE WRITTEN, from the same selection — so it can never zero
+      // the one about to be READ. Deriving it a second time from the parity was how those two
+      // could drift apart.
+      if (outSel == daw::host::ChainBuffer::A) {
+        std::fill(state.chainBufferA.begin(), state.chainBufferA.end(), 0.0f);
+      } else if (outSel == daw::host::ChainBuffer::B) {
+        std::fill(state.chainBufferB.begin(), state.chainBufferB.end(), 0.0f);
       }
       // v24 per-insert metering: amplitude -> dBFS MILLIBELS (0 = full scale), with an
       // explicit silence sentinel because 0.0 amplitude is -inf dB and must not render as

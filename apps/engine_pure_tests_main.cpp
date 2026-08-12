@@ -17,6 +17,7 @@
 //   - ensureDefaultModSet must NOT mint for a named-but-absent id
 #include "apps/engine_pure.h"
 #include "apps/engine_command_mutates.h"
+#include "apps/host_chain_buffers.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -592,6 +593,62 @@ static_assert(daw::engine::commandUndoPolicy(daw::UiCommandType::Redo) ==
 // The end-to-end version needs a plugin that refuses and then answers, which no fixture provides —
 // and reaching the bracket at all needed a 24-struct HandleUiEntryDeps. This is the route backend
 // chose over both.
+// THE CHAIN PING-PONG, which is what makes `inputPtrs = outputPtrs` safe.
+//
+// Adjacent hosted plugins hand audio along by REBINDING, not copying. That reads as in-place
+// aliasing and is not: the output alternates A/B by parity while the input is the PREVIOUS
+// iteration's output, of opposite parity. I raised the aliasing as a hazard in P2-G4-01 and it was
+// wrong; this pins the reason it is wrong, because the reason is arithmetic and a "simplification"
+// of the parity would still produce working audio for a TWO-plugin chain and break three.
+//
+// Tested over segment lengths 1..8 rather than one case, because the failure this guards against
+// appears at length 3 and not before.
+void testChainBuffersPingPong() {
+  using daw::host::ChainBuffer;
+  using daw::host::ChainInput;
+  using daw::host::chainInputFor;
+  using daw::host::chainOutputFor;
+  using daw::host::outputDiffersFromInput;
+
+  for (uint32_t len = 1; len <= 8; ++len) {
+    const uint32_t start = 3;  // non-zero, so the parity is relative to the SEGMENT and not to 0
+    const uint32_t end = start + len;
+    for (uint32_t i = start; i < end; ++i) {
+      // THE PROPERTY: a plugin never writes into the buffer it is reading.
+      CHECK(outputDiffersFromInput(i, start, end));
+      // AND THE PRE-CLEAR follows the same selection, so zeroing the output can never zero the
+      // input. Stated as its own assertion because they were two derivations of one parity until
+      // this commit, and two derivations of one fact is how they drift.
+      const ChainBuffer out = chainOutputFor(i, start, end);
+      const ChainInput in = chainInputFor(i, start, end);
+      if (out == ChainBuffer::A) CHECK(in != ChainInput::A);
+      if (out == ChainBuffer::B) CHECK(in != ChainInput::B);
+    }
+    // ONLY THE LAST writes the segment output, and it is the only one that does.
+    for (uint32_t i = start; i + 1 < end; ++i) {
+      CHECK(chainOutputFor(i, start, end) != ChainBuffer::SegmentOutput);
+    }
+    CHECK(chainOutputFor(end - 1, start, end) == ChainBuffer::SegmentOutput);
+    // THE FIRST reads the segment input and nobody else does.
+    CHECK(chainInputFor(start, start, end) == ChainInput::SegmentInput);
+    for (uint32_t i = start + 1; i < end; ++i) {
+      CHECK(chainInputFor(i, start, end) != ChainInput::SegmentInput);
+    }
+  }
+
+  // THE SHAPE, SPELLED OUT for a segment of four, so a reader can see the ping-pong rather than
+  // infer it from the loop above — and so a wrong-but-consistent selection cannot satisfy both.
+  const uint32_t s = 0, e = 4;
+  CHECK(chainOutputFor(0, s, e) == ChainBuffer::A);
+  CHECK(chainOutputFor(1, s, e) == ChainBuffer::B);
+  CHECK(chainOutputFor(2, s, e) == ChainBuffer::A);
+  CHECK(chainOutputFor(3, s, e) == ChainBuffer::SegmentOutput);
+  CHECK(chainInputFor(0, s, e) == ChainInput::SegmentInput);
+  CHECK(chainInputFor(1, s, e) == ChainInput::A);
+  CHECK(chainInputFor(2, s, e) == ChainInput::B);
+  CHECK(chainInputFor(3, s, e) == ChainInput::A);
+}
+
 void testRecordActionSkipsTheHistoryVerbs() {
   using daw::engine::RecordAction;
   using daw::engine::recordActionFor;
@@ -656,6 +713,7 @@ void testHistoryVerbsMutateButOpenNoStep() {
 }
 
 int main() {
+  testChainBuffersPingPong();
   testRecordActionSkipsTheHistoryVerbs();
   testHistoryVerbsMutateButOpenNoStep();
   testDocumentHasPerDeviceGraphs();

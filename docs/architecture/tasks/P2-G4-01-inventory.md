@@ -141,3 +141,28 @@ buffer about to be read. Cheap, needs no host fixture (the selection is arithmet
 `segmentStart` and `isLast`), and it pins the property that makes adjacency safe TODAY — which is
 what would silently break if someone "simplified" the parity away. **That is a better use of the
 effort than the multi-plugin fixture**, and it does not need HOST01 or HOST02 at all.
+
+## P2-G4-02 LANDED — the ping-pong is pinned
+
+`apps/host_chain_buffers.h`: `chainOutputFor`, `chainInputFor`, `outputDiffersFromInput`, all
+constexpr and pure. `juce_host_process_main.cpp` now calls the first for BOTH the output selection
+and the pre-clear — they were two derivations of one parity until this commit, which is how they
+could have drifted. `testChainBuffersPingPong` in `engine_pure_tests` covers segment lengths 1..8
+from a non-zero start, plus the shape spelled out for a four-plugin segment.
+
+**Negative controls: three, two fire.** Dropping the parity (always A) fails 44 assertions —
+that is the "simplification" this guard exists for, and note it would still produce working audio
+for a TWO-plugin chain. Swapping A and B fails 6.
+
+**The third does not fire, and that is correct.** Taking parity from the ABSOLUTE index rather than
+relative to the segment is equally safe: either form alternates, so neither ever lets a plugin write
+into the buffer it is reading. Only the buffer IDENTITY changes and nothing observes it. Recorded in
+the header so nobody widens the test until it fires and thereby pins an incidental choice as though
+it were the contract.
+
+## OUT OF SCOPE, FOLLOW-ON: the single-plugin segment
+
+When `segmentLength == 1` the only plugin writes the segment output and reads the segment input.
+Whether `state.inputPtrs` and `state.outputPtrs` can alias is an ENGINE-side question about how the
+planes are bound, not a host-side one, and **I have not checked it**. It is untouched by everything
+above, and a two-plugin fixture would never reach it. Stated, not speculated on.
