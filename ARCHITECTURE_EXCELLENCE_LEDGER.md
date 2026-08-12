@@ -1327,3 +1327,18 @@ choice parsing fixes case-insensitive abbreviation termination, negation, newlin
 sentence boundaries, and duplicate per-gate counts; declaration counting uses
 rendered text. It reports schema /7, epoch 3, and 173 controls. Carried semantic
 and state/content blockers remain. Exact audit pending.
+
+Exact audit of `2b5f074` is PASS. Production-bound schema refusal, scalar-list
+type proof, owner-choice negation/abbreviation/duplicate handling, rendered
+schema-source uniqueness, state proof, and all 173 controls pass. P1.2 is closed
+as a governance packet; remaining product findings are P2 implementation tickets.
+
+Idle fleet slots assigned:
+
+- `codex-worker-2` → `P2-CTRL-01` sender-minted command identity and real
+  SetRowOps base/current version, with concurrent/refusal tests.
+- `claude-worker-1` → `P2-WDOG-01` authoritative watchdog bound, static drift
+  check, and exact transition test.
+
+Both slices are disjoint from the SHM foundation and must return commit, tests,
+and build evidence.
