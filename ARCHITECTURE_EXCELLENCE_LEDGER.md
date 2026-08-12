@@ -1177,3 +1177,11 @@ Owner successor `a1f1a38` claims the 5ce findings closed: escaped-status,
 prefixed-section, and post-prose status parsing repaired; control-anchor
 ambiguity guard added; number-word table generated; count wording fixed; R1
 corrected; schema /7 retained; 154 controls pass. Exact audit is pending.
+
+Exact audit of `a1f1a38` is BLOCKED. Count wording, generated number table,
+anchor-cardinality, escape/section/status handling, and 154 controls pass. Two
+release blockers remain: R1/opening says G1-B has two drift detectors while S4
+still says they are unwritten and assigns item 33; and one G3 owner-choice marker
+still covers two independent choices, so the manifest omits the R16 resume
+mechanism. Fresh parser fail-opens also remain for fabricated delimiter parity,
+continuation-line parked status, duplicate allowed headings, and HTML entities.
