@@ -936,6 +936,14 @@ and two-terminal controls are live (117 controls). Exact review is pending. One-
 space heading, prefix header, G4 ordering/item26, and G0/G2/G3/M1/item37/
 Watchdog semantics remain open.
 
+Exact review of `753177c` is **BLOCKED**. Negation and terminal cardinality logic
+pass, but positive grammar accepts an explicit denial after `Final gate`; global
+uniqueness is not enforced because duplicate declarations on nonterminal gates
+are silently excluded. `g4-two-terminals` is blind to cardinality deletion due
+alternate failures and needs a dedicated tag/coherent corpus. Open-heading
+crash/trailing garbage/order set-only, G0/G2/G3/M1/item37/Watchdog/G4 item26
+remain blocked.
+
 `claude-worker-1` supplied a manifest-only provisional ticket for G2-A item 27:
 `P12-27-01` (sender-minted command identity on all refusal channels), based on
 product `75c6f064`. It is planning input, not implementation authorization.
