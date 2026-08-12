@@ -1599,3 +1599,14 @@ function binding is a real model gap even though it does not affect the current
 entry. Proposed rule change, not yet authorized: a verified entry must bind only
 within its cited script, with transitive source scanning enforced; otherwise it is
 unprovable and rejected. P0.3 remains BLOCKED pending review of this rule.
+
+P0.3 cross-file binding rule is drafted, no code/status change. Strict source
+closure inference would reject the sole current entry because `$SCRIPT_DIR` is
+dynamic, so the revised admissibility rule requires a human-declared transitive
+closure and machine-enforced completeness: R1 declared paths; R2 every source
+line accounted; R3 variable bound only at cited lines across closure (including
+function bodies); R4 `eval`/indirect assignment rejects; R5 unresolved closure
+rejects. Acceptance controls C1-C9 cover removed/unaccounted sources,
+cross-file/function bindings, eval/indirect, missing paths, current-entry cost,
+and closure floor. Design accepted in principle; independent review is required
+before implementation. P0.3 remains BLOCKED.
