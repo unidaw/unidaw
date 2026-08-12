@@ -1000,6 +1000,12 @@ Owner successor `d669217` claims indented H1 now exits with named
 question controls include unrelated diagnostics, the field-start arm is
 untested, and G4 ordering remains unbound. Exact review is pending.
 
+Exact review of `d669217` is **BLOCKED**. Header suffix repair and its causal
+control pass. Indented H1 now yields a named refusal, but its regression is not
+ratcheted: deleting the guard leaves the full sweep green, and direct exit
+bypasses the evaluator. The path needs structured failure recording/control.
+G0-A/B, G2-A/B, G3 N/M1/item37/Watchdog, and G4 item26 contradictions remain.
+
 Exact review of `01c86f7` is **BLOCKED**. Parent duplicate regression and
 zero-terminal coverage pass causally, but the duplicate branch itself is not
 isolated: deleting explicit duplicate failure leaves the control green via
