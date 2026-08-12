@@ -1,4 +1,4 @@
-# P2-HOST-R3 — the single writer already exists, and is written around
+# P2-HOST-R3 — the function shaped like a single writer does not promise to write
 
 **State** DESIGN, read-only. No product edit is made by this document. No implementation proposed.
 **Author** claude-worker-1 · 2026-08-12
@@ -42,7 +42,8 @@ caller proceeds, publishes `hostReady=false` and `active=false`, and queues the 
 by `std::function` into four dependency structs and called from `engine_consumer.cpp:843`,
 `engine_master_render.cpp:123` and `:134`, and `engine_track_setup.cpp:442`.
 
-**And its callers write around it.** `engine_master_render.cpp:121-122`:
+And at `engine_master_render.cpp:121-122` a caller writes two of the same fields immediately before
+calling it:
 
 ```
 masterTrack->hostReady.store(false, std::memory_order_release);
@@ -50,14 +51,22 @@ masterTrack->needsRestart.store(true, std::memory_order_release);
 scheduleHostRestart(*masterTrack);
 ```
 
-The caller publishes two thirds of a transition the writer owns, then calls the writer, which publishes
-`hostReady` again — and **`active` is never set false on this path** while every other death path sets
-it. Same at `:132-133`.
+**CORRECTED WHILE IMPLEMENTING R3a — the two sentences that stood here were wrong**, and the
+correction is a better finding than the claim. I wrote that `active` is never set false on this path:
+it is, by the callee. And I wrote that the callers bypass the writer through sloppiness. They do not.
 
-This reframes R3. The problem is not that no single writer exists; it is that one exists, is bypassed,
-and nothing detects the bypass. **A packed word with thirteen callers storing into it directly is the
-same defect with better alignment.** The word is worth having — it closes the torn read — but the
-enforcement is the part that has never existed, and it is cheaper and lands first.
+`scheduleHostRestart` **publishes state on one of four exit paths.** It returns early when
+`isAuxChild`, when `hostGaveUp`, and when the `restartInFlight` CAS fails, writing nothing on any of
+them. So no caller can rely on it, and `master_render:121`'s `hostReady.store(false)` is **the only
+write that survives a CAS failure** — remove it and a master host already mid-restart stays
+`hostReady=true` while unresponsive, with the audio callback still reading it. **A conditional writer
+is not a single writer**, and the writes around it are forced by its contract.
+
+This still reframes R3, more sharply. The problem is not that no single writer exists, nor that callers
+bypass one; it is that the function shaped like one **does not promise to write**. A packed
+`std::atomic<uint64_t>` behind a conditional publisher would be a transaction that is correct where it
+runs and absent where it returns early. So the enforcement lands first, and what it enforces is a
+protocol — every restart request is either a PUMP or a PUBLISHER — not merely a writer list.
 
 ## A live data race, whose comment denies it
 
@@ -91,7 +100,7 @@ The 55 writes are not 55 decisions. They are **thirteen transitions**, and this 
 | 3 | **eviction (watchdog)** | `track_setup:64-66` · `:409-411` · `restart_worker:89-91` | `hostReady=false`, `active=false`, `needsRestart=true` |
 | 4 | dispatch failed | `produce_block:1097-1099` | same triple as 3 |
 | 5 | chain reconcile failed | `chain_host:259-266` | + `hostGaveUp=false`, + the two non-atomic resets |
-| 6 | master send/timeout failed | `master_render:121-122` · `:132-133` | `hostReady=false`, `needsRestart=true` — **omits `active`** |
+| 6 | master send/timeout failed | `master_render:121-122` · `:132-133` | `hostReady=false`, `needsRestart=true`; `active=false` via the callee — and `hostReady` here is the only write that survives the callee's early returns |
 | 7 | restart requested | `daw_engine_main:1186-1191` | CAS `restartInFlight`, `hostReady=false`, `active=false` |
 | 8 | restart worker gave up | `restart_worker:54-58` | `hostGaveUp=true` + three clears |
 | 9 | restart complete | `restart_worker:110-111` | `needsRestart=false`, `restartInFlight=false` |
@@ -112,14 +121,14 @@ Five tickets. **R3a is the one that matters**, and it needs no layout change at 
 
 ### R3a — the writer allowlist, with no state change
 
-A `tools/readiness_writer_check.sh` in the shape of `tools/mirror_replay_check.sh`: every write to the
-six atomics and the two plain members occurs inside one of thirteen named transition functions, and
-nothing else writes them. `master_render:121-122` and `:132-133` fail it on day one, which is the point
-— the control's first act is to name the bypass already in the tree.
-
-*Acceptance*: the check fails on current `main` before the bypass is removed, and the removal is the
-fix rather than a widening of the allowlist. *Sabotage*: re-add a bare `hostReady.store(false)` at any
-caller; the check must name the file and line.
+**LANDED** as `tools/readiness_writer_check.sh`. It does **not** fail on `master_render` — that
+premise was wrong, see the correction above. It passes on current `main` at 55 writes across 11
+(file, top-level function) pairs, and enforces five rules: the allowlist with per-field counts, the
+PUMP-or-PUBLISHER protocol on every restart request, one writer-up on the `active` latch, generation
+bumps only beside a launch, and blindness floors including zero aliases.
+*Controls*: 11, each fired against a passing baseline. Four of them initially fired on the allowlist
+rather than the rule they targeted — rule 1 masks any sabotage that adds a write — so the controls for
+rules 2-4 are count-neutral by construction.
 *Depends on* nothing. **No SHM, no layout, no packed word, no behaviour change.**
 
 ### R3b — collapse 11 and 12, and 3's three copies
