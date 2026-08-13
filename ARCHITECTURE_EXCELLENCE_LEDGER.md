@@ -2777,3 +2777,26 @@ Selftest is now 23 refused for their named reason, 6 held. Sixth review pending.
 across five rounds: round 4 found five blockers, round 5 found five, but round 5's were
 smaller and three were missing ratchets rather than new fail-opens — and its own summary said
 the gap is "small and bounded", which round 4's did not.
+
+## Integration facts, measured (2026-08-13)
+
+Re-derived rather than assumed, since main has moved six commits since the T3 integration plan
+was written and I had been asserting the ordering from memory.
+
+**T3 still merges cleanly into today's product main** (`b7dfcf4d`, the six HOST-R3c commits).
+Verified with `git merge-tree`; no conflicts. A clean merge is not a working one, so:
+
+**The five headers T3 pins are** `apps/event_id.h`, `apps/event_payloads.h`,
+`apps/harmony_timeline.h`, `apps/patcher_abi.h`, `apps/shared_memory.h`.
+
+- `apps/engine_types.h` — which every HOST-R3c commit touched — is NOT among them. So that work
+  cannot stale T3's provenance and needs no bridge rebuild on merge. Previously assumed; now
+  measured.
+- `apps/event_payloads.h` — which CMD00 must change for all seven refusal payloads — IS among
+  them. So CMD00 will stale the sidecar and its layout assertions the moment it lands.
+
+That is the precise reason CMD00 stays queued behind T3, replacing the vaguer "both touch
+event_payloads.h and layout.rs" recorded earlier. Landing CMD00 first would mean its seven new
+payload identities are born outside the stronger check, and T3 would then have to be re-pinned
+against a wire it never saw. Landing T3 first means CMD00's changes are covered on their first
+commit, which is the whole point of the branch.
