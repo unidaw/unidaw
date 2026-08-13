@@ -2048,3 +2048,65 @@ future runtime behaviour; a script-execution harness is a separate ticket.
 
 No code and no status transition until that B1-B8 design review passes. Scope remains
 bounded to `ui-web/test/unit.mjs`.
+
+## HOST-R3c independent review (2026-08-13) — PASS with seven findings
+
+Reviewed by an independent subagent, read-only, against `/Users/jak/src/daw`
+HEAD `0753eb3b`, tree `dfa4ec746e5aec16728171bba43fe583cefb1b75`, clean.
+R3c had landed directly on `main` with no review; this supplies it after the fact.
+
+VERDICT: PASS. The race is closed, and the reviewer established it rather than
+accepting the commit message. Full-tree enumeration by construct finds all ten
+accesses to `restartAttempts`/`restartWindowStart` now inside `runRestartWorker`
+(`apps/engine_restart_worker.cpp`), which has exactly one call site and one
+thread (`apps/daw_engine_main.cpp:1251`). Three supporting conditions were
+checked rather than assumed: construction happens-before the worker's first read
+via `restartQueue` under `restartMutex`; the request is stored BEFORE
+`needsRestart` so the worker's acquire load sees it (reversed, this would be a
+real bug); and deferral is safe precisely because no reader outside the worker
+exists. The reproduction's offset 856 was recomputed from the struct layout and
+lands on `restartWindowStart` — the claim names the right field.
+
+The prior inventory's worry — that the fix would make a false comment true rather
+than correct the defect — is answered: the writer really did move, it was not
+merely re-described. See finding 4 for the half of that worry that survives.
+
+### Findings
+
+1. GATE 6 UNMET, and it is the commit's own gate. `restartWindowResetRequested`
+   was never added to `FIELDS` in `tools/readiness_writer_check.sh:65`, though
+   the task doc required it join the allowlist deliberately. A second
+   `exchange(false)` added elsewhere would steal the request and silently restore
+   the give-up bug, with no check firing: rule 1 cannot see the field and rule 2b
+   does not name it.
+2. Rule 2b is spelling-shaped, not structure-shaped. It catches `=`, `++`, `->`
+   and `.` forms and is blind to `+= 1`, reference aliases, `std::swap`, `memset`,
+   and a split-line assignment. Rule 5's alias scan is built from `FIELDS`, so it
+   does not cover the two plain members rule 2b guards.
+3. The TSan repro is a second copy bound to nothing. It hand-copies the two
+   sequences and references no production function, so it ships carrying the
+   FIXED code and cannot fail on a revert. It also escapes
+   `tools/check_registry_check.sh`, whose glob is `tools/*_check.sh`, so the
+   repo's own "either it runs or it is declared as not running" rule is satisfied
+   here only by a comment inside the artifact.
+4. GATE 5 UNMET and a superseded sentence survives. `apps/engine_types.h:357`
+   still says the field is "Cleared when the chain is rebuilt", which R3c made
+   false — the clear now happens on the worker's next pass. This is the exact line
+   the inventory named as describing the falsifying writer.
+5. "No semantic cost" is too strong: the reset is now an unbounded latch. If the
+   restart edge is lost, the request stays `true` indefinitely and is consumed by
+   the next unrelated restart, granting a fresh 5-restart budget to a flapping
+   episode that had no chain rebuild. Nothing clears it on teardown.
+6. Same rule, second site, now harder to fix. `tearDownHostState`
+   (`apps/engine_rt_helpers.cpp:67-72`) re-arms a track by clearing `hostGaveUp`
+   without resetting counter or window. Pre-existing, but R3c added exactly the
+   mechanism this site needs and did not apply it, and rule 2b now forbids the
+   inline fix.
+7. Evidence gaps: the TSan report names only one of the two fields the task doc
+   required, and "ctest 12/12" is unattributable when the file registers 224 tests
+   and the filter is unnamed.
+
+Findings 1 and 4 are undelivered gates from R3c's own task document, not new
+scope. They are the first repair queued. Findings 5 and 6 are bounded
+correctness defects worth their own tickets. Finding 3 says the repro should
+either be registered or declared, not deleted.
