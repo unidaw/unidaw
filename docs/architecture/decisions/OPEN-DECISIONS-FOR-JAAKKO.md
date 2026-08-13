@@ -101,3 +101,38 @@ claim. Otherwise **C**, which is honest about the boundary rather than quietly n
 
 **Cost if wrong:** none is risky. B and C both weaken what the check proves about one line;
 A costs you sixty seconds.
+
+
+---
+
+# NEW — decision 5 (2026-08-14)
+
+## Does giving an existing field a new meaning require a version bump?
+
+The tree holds two contradictory doctrines and they meet in CMD00 step 2.
+
+- **CMD00's own rule**, stated in three of its documents: *"Giving a reserved field a meaning IS a
+  wire change even though no size moves — that is precisely how a wire change lands without a
+  bump."*
+- **The tree's practice**, nine documented counter-precedents, e.g. `shared_memory.h:202`
+  *"Repurposed reserved slot — same offset, no kShmVersion bump"*, and five more in
+  `event_payloads.h`.
+
+Step 2 gives `EventEntry::sampleTime` a meaning on UI command entries. Technically **no bump is
+required** — nothing can observe it: `correlationLo` has no producer yet, and every shipped sender
+writes `sampleTime = 0`.
+
+**Options**
+- **A. Bump to 39 anyway**, folded into step 2, since that commit also gives `correlationLo` its
+  first producer — one coherent cutover.
+- **B. Do not bump**, following the nine precedents, since nothing can observe the change.
+
+**Recommendation: A** — and, separately from the choice, **write the rule down once**. Whichever you
+pick, the contradiction will otherwise be re-litigated at every reserved-field change; that recurring
+cost is larger than either option's.
+
+**Cost if wrong:** A costs one unnecessary version step and a coordinated six-file edit. B risks a
+future reader treating v38 and v39 wire images as identical when their field meanings differ.
+
+*(Independent note, not a decision: the ring-index scheme I proposed is refuted and your ruling 1 —
+the per-process nonce — stands unchanged. Recorded for information only.)*
