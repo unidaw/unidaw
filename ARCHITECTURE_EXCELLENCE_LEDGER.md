@@ -3366,3 +3366,31 @@ BARE filename. The lesson did not survive contact with the next command that had
 The fix that would actually hold is not a resolution: it is never mixing a `cd` into a command that
 also writes the ledger. Both stray commits were caught the same way — reading the commit output,
 where `create mode 100644` for a file that has existed for weeks is the tell.
+
+## AE-RING-01 — a live defect, ticketed not fixed (2026-08-14)
+
+A retired ring slot can be resurrected a lap later and its stale command dispatched. Verified by
+reading, not taken on report: `ringSkipStalledSlot` sets `ready = 0` and advances past the slot
+(`apps/event_ring.cpp:133-140`); a producer that is merely SLOW rather than dead then publishes
+`ready = 1` into that retired slot; one lap later `ringPeek` (`:110`) sees `ready != 0` and accepts
+it.
+
+The grace period at `apps/engine_ui_thread.cpp:50` is 2000ms and its comment says it exists for "a
+dead producer". **It only establishes that the producer is slow.** Nothing tells a late producer its
+slot was retired — `ringWrite` has no post-reservation validation.
+
+And the window is short rather than astronomical, because of the same fact that killed my carrier
+design: `writeIndex` is masked at capacity 1024, so a lap is 1023 commands — about one second at
+1,000/s. The skip path is instrumented (`ring.abandoned_slot`), which suggests it was built because
+it fires.
+
+The fix is a lap tag in the existing `uint32_t ready` — no layout change, no offset moves. But it
+changes what the field MEANS, and `ready` is read and written by two independent implementations
+(`apps/event_ring.cpp` and the Rust reimplementation in `control.rs`). By CMD00's stated doctrine
+that is a versioned change; by the tree's nine counter-precedents it is not. **That is owner
+decision 5, and this ticket deliberately does not pre-empt it by picking a side.**
+
+Ticketed at `docs/architecture/decisions/AE-RING-01-stale-replay.md` with the reproduction a control
+would need. Noted there as a separate question: whether `ringWrite` should validate its reservation
+before publishing, so a slow producer can DISCOVER it was retired rather than merely be prevented
+from doing harm.
