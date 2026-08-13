@@ -3249,3 +3249,85 @@ carrier question does not reopen it.
 Waiting on the full blocker text before implementing: I received only the addendum, which
 references blockers 1-8 without stating them, and I will not act on a partial verdict or
 reconstruct them by inference.
+
+## The full carrier verdict — my design was wrong on a fact I could have measured (2026-08-14)
+
+Eight blockers. Recorded in full because two are about my method, one is an independent live defect,
+and one is a genuine contradiction in the tree that only the owner can settle.
+
+### The decisive error was mine, and it was measurable
+
+My proposal rested on "`writeIndex` is a monotonic u32, so it wraps at 2³² — ~50 days at 1,000
+commands/second". **It is masked.** `apps/event_ring.cpp:79` is `next = (write + 1) & ring.mask`,
+with capacity **1024** (`apps/engine_startup.cpp:232`). Verified myself rather than taking it on
+report. So it wraps after **1023 commands — 1.02 seconds** at that rate, and my "correlation window
+of seconds" is longer than the id's uniqueness. The scheme is ambiguous inside the window it exists
+to disambiguate, roughly four orders of magnitude WORSE than the nonce it proposed to supersede, on
+that scheme's own metric.
+
+I reasoned about the ring from `RingHeader`'s field types and did not read the increment. The
+memory-shaped lesson: a field's TYPE does not tell you its arithmetic.
+
+### The other independently fatal ones
+
+- **Three sources, one dispatcher.** `engine_ui_thread.cpp:89-121` drains `ringUiEdit`, `ringUi` and
+  `ringUiAgent` into one `handleUiEntry`, deliberately erasing the distinction — so sidecar command
+  #7 and agent command #7 are the same id, systematically. And a UI edit batch carries up to 32 ops
+  under ONE index, which makes gate 6 ("a bulk of N reports WHICH command was refused")
+  unsatisfiable by construction.
+- **The engine zeroes the segment on start** (`engine_ui_shm.cpp:23,115,171`), so indices are
+  RE-ISSUED, not merely wrapped. My proposed "ring epoch" repair has nothing persistent to increment
+  from and would have to become a boot clock or pid — i.e. a per-process nonce, the ruled scheme
+  reintroduced as the repair for its own replacement.
+
+### An independent live defect, found while refuting me — worth its own ticket
+
+`ringSkipStalledSlot` retires an abandoned slot after 2s (`engine_ui_thread.cpp:50,76`). A SLOW
+producer — not a dead one — that publishes after the skip leaves `ready = 1` on a retired slot; a
+lap later `ringPeek` (`event_ring.cpp:109-115`) accepts it and **replays a stale command**. This is
+live today and independent of which id scheme wins. Needs a generation/lap tag so a late publish is
+rejected rather than resurrected.
+
+### Option E, and why it dominates
+
+12 bytes sit unused on every UI command entry, outside every payload struct: `sampleTime` (u64 at
+offset 0) and `blockId` (u32 at 12). Both senders write 0 (`control.rs:1912`,
+`daw-sidecar/src/main.rs:7337`) and the inbound path reads them ZERO times — verified myself:
+`grep -c 'sampleTime\|blockId'` returns 0 for both `engine_handle_ui_entry.cpp` and
+`engine_ui_thread.cpp`. `sampleTime` is 8-aligned at offset 0, so the inbound id needs no lo/hi
+split; the nonce and counter pack into it exactly as ruled.
+
+It also eliminates HALF the threading problem rather than paying it: `handleUiEntry` already
+receives the whole entry and is "the ONE place every UI command passes through". The outbound half
+(~8 sites ambient, 87 explicit) is identical for either scheme and is not what discriminates them.
+
+The ambient must be BRACKETED — set on entry to `handleUiEntry`, cleared to 0 on exit via a scope
+guard. Then `loadStartupProject`, which reaches `reportSamplerReject` with no causing command, reads
+0, which §6.1 already defines as "no id → Unknown". Unbracketed it would hand that startup refusal
+the PREVIOUS command's id — precisely this project's recorded defect where a failed sampler load is
+re-resolved on project load and poisons later verbs.
+
+### A finding about the check I shipped two hours ago
+
+Gate 9 ("mirror") is half-unmet and my own `tools/refusal_identity_check.sh` cannot see it: it pins
+the C++ population only. Verified: `layout.rs` carries `correlation_lo` in **5** structs against
+**7** in C++, because `UiRoutingErrorPayload` and `UiModErrorPayload` have no Rust mirror. I knew
+those two had no mirror and recorded it — and then wrote a population check that only counts one
+side of a two-language contract.
+
+### OWNER DECISION 5 — a real one, and not the one I expected
+
+The tree contains TWO contradictory doctrines about whether giving a field a meaning needs a version
+bump:
+
+- CMD00's own rule, stated three times: "Giving a reserved field a meaning IS a wire change even
+  though no size moves — that is precisely how a wire change lands without a bump."
+- The tree's practice, NINE documented counter-precedents: `shared_memory.h:202` "Repurposed reserved
+  slot — same offset, no kShmVersion bump"; `:406`, `:422`; `event_payloads.h:302, 1480, 1493, 1670,
+  1782` "no payload growth, no opcode, no kShmVersion bump".
+
+Technically no bump is required for Option E — `correlationLo` has no producer yet and `sampleTime`
+is 0 on every shipped UI command, so nothing can observe it. The reviewer recommends bumping to 39
+anyway and folding it into step 2, with the version-equality check landing BEFORE the bump rather
+than with it. **Which doctrine governs is the owner's call, and it should be settled once and
+written down, or it will be re-litigated at every reserved-field change.**
