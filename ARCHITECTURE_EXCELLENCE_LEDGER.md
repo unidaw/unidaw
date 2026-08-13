@@ -1860,3 +1860,33 @@ Combined HOST review is BLOCKED by replay re-entry/lifecycle loss,
 non-transactional mapping/generation publication, generation-wrap ABA,
 contradictory readiness prose, and non-causal controls. HOST follow-on work and
 CTRL02-B-1 are paused pending remediation design.
+
+## Current fleet snapshot (2026-08-13)
+
+Completed/review-gated implementation lines since the earlier entries:
+
+- HOST-R1 `c80adbb7`, HOST-R2 `c54c3888`, HOST-R3a `b2d77d90` plus attribution
+  tightening `43521663`, HOST-R3b `808d4c6a`, WDOG-04 `23ad7c81`.
+- SHM/T3 ABI line: T1/T5 `582a9827`, T4 `96800b16`/`df0ecc3d`/`29fb381e`,
+  T3-A `9c2e82c7`/`10307132`/`28e34d0c`, freshness depfile `5d3ea937`,
+  provenance `cdb25b08`, SHA-256 migration `bbe2f51e`.
+- CTRL02-A bridge liveness `4202fa06`.
+- CMD00 design revisions `1cec2680`, cleanup `8c6ee35c`, owner memo
+  `8554523f`; implementation remains blocked on nonce/producer identity and
+  commandType decisions.
+
+Current assignments and gates:
+
+- `claude-worker-1`: HOST-R3c read-only race inventory after WDOG-04; no R3c
+  implementation authorized.
+- `codex-worker-1`: exact HOST-R3b review, then sequential CMD00/CTRL02-A reviews;
+  no concurrent review assignments.
+- `codex-worker-2`: version-parity review now; prior dirty CTRL02 worktree is
+  quarantined and must not be edited or cleaned.
+- `claude-worker-2`: T3 integration audit; its T3 branch remains isolated and
+  unmerged pending independent review.
+
+Review/merge policy: a completion immediately receives a bounded next task;
+no idle slot is intentional. Dirty or overlapping worktrees are quarantined,
+never silently reverted. Every implementation claim requires exact commit,
+clean-tree, build/test evidence, and independent review before merge.
