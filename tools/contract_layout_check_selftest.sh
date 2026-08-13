@@ -866,6 +866,62 @@ else
   FAIL=$((FAIL+1))
 fi
 
+# 12b.depfile_respelled — THE FIRST CONTROL THAT VARIES THE DEPFILE RATHER THAN THE SOURCE.
+#
+# Every control before this one mutates layout.rs, a header, or the sidecar. The depfile was the one
+# input nothing perturbed, and it is now half the scope demand — so the seventh review found a
+# failure mode no control could see: if the depfile spells the roots differently from its transitive
+# entries (`/./`, `//`), the derived prefix matches only the roots, `dep_rel` collapses to exactly
+# those, and the emptiness guard cannot fire because the set is not empty. The depfile half then
+# silently degenerates to a subset of the closure it exists to correct.
+#
+# This re-spells the ROOTS only, then reuses 10b's macro-include defect — invisible to the closure
+# regex by construction — so a refusal can only come from a dep_rel that survived the re-spelling.
+RESPELL="$TMP/bind_respell"; mkdir -p "$RESPELL"
+cp "$REAL_BINDINGS" "$RESPELL/shm_sys.rs"
+cp "$REAL_PROVENANCE" "$RESPELL/shm_sys.provenance" 2>/dev/null
+D="$(stage respell)"
+if python3 - "$REAL_DEPFILE" "$RESPELL/shm_sys.d" "$D" "$RESPELL/shm_sys.provenance" <<'PY2'
+import os, re, sys, hashlib
+dep_src, dep_dst, d, prov = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+ROOTS = ('apps/shared_memory.h', 'apps/event_payloads.h', 'apps/patcher_abi.h')
+text = open(dep_src).read()
+n = 0
+for r in ROOTS:                       # re-spell ONLY the roots, leaving transitive entries alone
+    new, k = re.subn(re.escape('/' + r) + r'(?=\s|$)', '/./' + r, text)
+    text, n = new, n + k
+if n == 0:
+    raise SystemExit("  MUTATION DID NOT LAND: no root path in the depfile was re-spelled")
+open(dep_dst, 'w').write(text)
+
+TARGET = 'apps/harmony_timeline.h'
+abi = os.path.join(d, 'apps/patcher_abi.h')
+src = open(abi).read()
+quoted = '#include "%s"' % TARGET
+if quoted not in src:
+    raise SystemExit("  MUTATION DID NOT LAND: patcher_abi.h does not include the target")
+open(abi, 'w').write(src.replace(quoted, '#define DAW_HT_H "%s"\n#include DAW_HT_H' % TARGET))
+if re.search(r'(?m)^\s*#\s*include\s*["<]%s' % re.escape(TARGET), open(abi).read()):
+    raise SystemExit("  MUTATION DID NOT LAND: an include directive still names the target")
+out = []
+for l in [x for x in open(prov).read().splitlines() if x.strip()]:
+    h, sz, rel = l.split(None, 2)
+    if rel == TARGET:
+        continue
+    if rel == 'apps/patcher_abi.h':
+        b = open(os.path.join(d, rel), 'rb').read()
+        h, sz = hashlib.sha256(b).hexdigest(), str(len(b))
+    out.append("%s %s %s" % (h, sz, rel))
+if len(out) == len(open(prov).read().strip().splitlines()):
+    raise SystemExit("  MUTATION DID NOT LAND: %s is not in the sidecar" % TARGET)
+open(prov, 'w').write("\n".join(out) + "\n")
+PY2
+then
+  expect_refusal "12b.depfile_respelled" "$D" "does not record" "$RESPELL/shm_sys.rs"
+else
+  FAIL=$((FAIL+1))
+fi
+
 # ...and it must NOT fire for a header bindgen never parsed. apps/ holds far more than the five in
 # the closure, and a freshness check that trips on any of them would be one nobody keeps green.
 D="$(stage prov_unrelated)"

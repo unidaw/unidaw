@@ -278,7 +278,63 @@ dep_text = open(depfile_path).read()
 # as a whole path component. (A regex with a (?<![\w/]) lookbehind was the obvious way to write
 # this and is exactly wrong: it forbids the leading slash every absolute path has, so nothing
 # matched and the check refused all five. It failed loudly, which is the direction to be wrong in.)
-undeclared = sorted(r for r in wanted if ('/' + r) not in dep_text)
+# ESCAPE-AWARE, because the depfile is Makefile syntax and a checkout path containing a space is
+# written `has\ space`. A bare .split() turned every entry into two useless tokens, emptied
+# `dep_rel`, and refused on a perfectly good tree — the emptiness guard reached by a legitimate
+# repo rather than by a defect. build.rs already parses it properly; this now matches.
+dep_tokens = [re.sub(r'\\(.)', r'\1', t).strip()
+              for t in re.split(r'(?<!\\)\s+', dep_text)]
+# NORMALISED, both sides. The closure applies normpath and this did not, so a `../` include
+# entered as `apps/../apps/event_id.h` and produced a permanent refusal naming a header whose
+# bytes ARE recorded. It also makes the prefix match immune to a `/./` or `//` spelling, which
+# would otherwise collapse dep_rel to exactly the roots — non-empty, so the emptiness guard
+# below could not see it, and the depfile half would silently degenerate to a subset of the
+# closure it exists to correct.
+dep_abs = [os.path.normpath(t) for t in dep_tokens if t and os.path.isabs(t)]
+
+# THE PREFIX IS DERIVED FROM THE ROOTS, NOT GUESSED AND NOT TAKEN FROM OUTSIDE.
+#
+# Matching depfile entries by TAIL alone invents demands: this depfile carries ~750 SDK headers, so
+# a repo file at `sys/errno.h`, or a root-level file named `version` (53 extensionless libc++
+# basenames are in there), resolved by coincidence and produced a PERMANENT refusal naming a header
+# the roots do not include — a false refusal whose printed remedy cannot fix it.
+#
+# Identity by `samefile` is not the answer either: every selftest fixture points `src` at a staged
+# COPY while the depfile still names the real tree, so that test rejects every genuine entry and
+# empties the set.
+#
+# The depfile must contain the roots — bindgen was handed them. So the roots identify the prefix the
+# depfile itself uses for this repo, whatever that spelling is. Entries under that prefix are ours;
+# entries outside it are the SDK's. No repo root from the environment, so the silent zero that
+# caused this union to be deleted once cannot come back.
+dep_prefixes = {t[:-(len(r) + 1)] for r in roots for t in dep_abs if t.endswith('/' + r)}
+if len(dep_prefixes) != 1:
+    raise SystemExit("  FAIL: bindgen's depfile does not name the %d root header(s) under a single\n"
+                     "        directory (found %d candidate prefixes), so this check cannot tell its\n"
+                     "        in-repo entries from the SDK's. Rebuild the bridge:\n"
+                     "          cargo build --manifest-path ui/Cargo.toml -p daw-bridge"
+                     % (len(roots), len(dep_prefixes)))
+dep_prefix = next(iter(dep_prefixes)) + '/'
+dep_rel = {os.path.normpath(t[len(dep_prefix):]) for t in dep_abs if t.startswith(dep_prefix)}
+dep_rel = {r for r in dep_rel if os.path.isfile(os.path.join(src, r))}
+if not dep_rel:
+    raise SystemExit("  FAIL: no absolute entry in bindgen's depfile resolves under the source\n"
+                     "        root, so the compiler's own list of parsed headers is empty and the\n"
+                     "        demand below would rest on the include regex alone. That regex is a\n"
+                     "        lexical test and is known to miss macro and continued includes.\n"
+                     "        Rebuild the bridge:\n"
+                     "          cargo build --manifest-path ui/Cargo.toml -p daw-bridge")
+
+# ONE DERIVATION, NOT TWO. This asked `('/' + r) not in dep_text` — a raw substring test over the
+# unparsed depfile, which is a THIRD reading of the same artefact and disagreed with the other two:
+# it was blind to Makefile escaping, so an in-repo header whose filename contains a space produced
+# a permanent false refusal, and it was satisfied by any path merely ENDING in the header's
+# spelling, including a vendored copy under another root.
+#
+# `dep_rel` above already answers this question, parsed once and normalised once. The two sides of
+# the comparison are unchanged — the closure derived here versus the compiler's own list — so no
+# circularity is introduced; what goes away is the third spelling-based reading of the depfile.
+undeclared = sorted(wanted - dep_rel)
 if undeclared:
     raise SystemExit("  FAIL: bindgen's depfile does not name %d header(s) the roots include:\n"
                      "        %s\n"
@@ -418,46 +474,6 @@ if stale:
 # entry is resolved by the longest suffix that exists under `src`, which needs no root at all, and
 # an empty result REFUSES. Every other derived set in this file refuses when empty; this one now
 # does too, which is what it was missing the first time.
-# ESCAPE-AWARE, because the depfile is Makefile syntax and a checkout path containing a space is
-# written `has\ space`. A bare .split() turned every entry into two useless tokens, emptied
-# `dep_rel`, and refused on a perfectly good tree — the emptiness guard reached by a legitimate
-# repo rather than by a defect. build.rs already parses it properly; this now matches.
-dep_tokens = [re.sub(r'\\(.)', r'\1', t).strip()
-              for t in re.split(r'(?<!\\)\s+', dep_text)]
-dep_abs = [t for t in dep_tokens if t and os.path.isabs(t)]
-
-# THE PREFIX IS DERIVED FROM THE ROOTS, NOT GUESSED AND NOT TAKEN FROM OUTSIDE.
-#
-# Matching depfile entries by TAIL alone invents demands: this depfile carries ~750 SDK headers, so
-# a repo file at `sys/errno.h`, or a root-level file named `version` (53 extensionless libc++
-# basenames are in there), resolved by coincidence and produced a PERMANENT refusal naming a header
-# the roots do not include — a false refusal whose printed remedy cannot fix it.
-#
-# Identity by `samefile` is not the answer either: every selftest fixture points `src` at a staged
-# COPY while the depfile still names the real tree, so that test rejects every genuine entry and
-# empties the set.
-#
-# The depfile must contain the roots — bindgen was handed them. So the roots identify the prefix the
-# depfile itself uses for this repo, whatever that spelling is. Entries under that prefix are ours;
-# entries outside it are the SDK's. No repo root from the environment, so the silent zero that
-# caused this union to be deleted once cannot come back.
-dep_prefixes = {t[:-(len(r) + 1)] for r in roots for t in dep_abs if t.endswith('/' + r)}
-if len(dep_prefixes) != 1:
-    raise SystemExit("  FAIL: bindgen's depfile does not name the %d root header(s) under a single\n"
-                     "        directory (found %d candidate prefixes), so this check cannot tell its\n"
-                     "        in-repo entries from the SDK's. Rebuild the bridge:\n"
-                     "          cargo build --manifest-path ui/Cargo.toml -p daw-bridge"
-                     % (len(roots), len(dep_prefixes)))
-dep_prefix = next(iter(dep_prefixes)) + '/'
-dep_rel = {t[len(dep_prefix):] for t in dep_abs if t.startswith(dep_prefix)}
-dep_rel = {r for r in dep_rel if os.path.isfile(os.path.join(src, r))}
-if not dep_rel:
-    raise SystemExit("  FAIL: no absolute entry in bindgen's depfile resolves under the source\n"
-                     "        root, so the compiler's own list of parsed headers is empty and the\n"
-                     "        demand below would rest on the include regex alone. That regex is a\n"
-                     "        lexical test and is known to miss macro and continued includes.\n"
-                     "        Rebuild the bridge:\n"
-                     "          cargo build --manifest-path ui/Cargo.toml -p daw-bridge")
 missing_scope = sorted((wanted | dep_rel) - recorded)
 if missing_scope:
     raise SystemExit("  FAIL: shm_sys.provenance does not record %d header(s) the roots include:\n"
