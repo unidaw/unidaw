@@ -2353,3 +2353,40 @@ false printed count; `hand - gen` is unguarded so a `repr(C)` struct with no twi
 passes; the mtime rule survives in the selftest's own `ls -t | head -1`; and `build.rs`
 passes headers to bindgen by index while asserting over the whole array. Finding 6 is
 fixed. Finding 5 was the spelling predicate and is now closed as part of blocker 1.
+
+## HOST-R3c findings 2 and 3 closed (2026-08-13)
+
+Both in product `main`. R3c's review findings are now closed except 5 (needs a
+decision, ticketed above) and 7 (evidence gaps in a commit message already written).
+
+**Finding 2 — `37e1a52a`.** Rule 2b was blind to `restartAttempts += 1`, a reference
+alias, `std::swap`, `memset` on the field's address, and a split-line assignment. All
+five are writes from a foreign thread, which is the exact race the rule forbids, and
+all five passed. Rather than widen the pattern a fifth time, the rule now tests
+STRUCTURE: the invariant is not "these are not written in these ways" but "these belong
+to one thread", and outside the owner and the declaration the names do not occur at
+all. So the test is MENTION, and a read counts — reading a plain member another thread
+mutates races just as a write does. Verified against the pre-fix rule: all four probe
+shapes caught now, blind before. A mention inside a trailing comment does NOT fire, so
+the rule cannot be deleted for crying wolf.
+
+**Finding 3 — `76a43ae4`.** `check_registry_check.sh` enforces that every artifact
+claiming to establish something either runs in ctest or is declared with a reason. Its
+population was `tools/*_check.sh`, so the R3c TSan reproduction — a `.cpp` under
+`tools/tsan` — was never in scope and satisfied the rule only by a comment inside
+itself. Population widened, and the repro declared with the limit review gave it: it
+hand-copies the production sequences instead of calling them and ships carrying the
+FIXED versions, so reverting the fix does not change its outcome. Registering it as-is
+would add a test that passes whatever the engine does. The declaration records what
+would make it a gate. Control: an undeclared `.cpp` dropped into `tools/tsan` makes the
+check fail naming it.
+
+### The pattern across today's repairs, worth naming
+
+Three separate defects this session were the same shape — a check keyed on how
+something is SPELT or SHAPED rather than on what it structurally is. T3's include
+closure matched one include spelling; rule 2b matched a list of write spellings;
+`check_registry_check.sh` matched one filename shape. Each was blind to the instance
+that used the other form, and in each case widening the pattern would have left the
+next form open. The fix in all three was the same: state the property structurally and
+let the check derive the population.
