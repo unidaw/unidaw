@@ -138,7 +138,7 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //    tripped through save and reload and no UI could read it — and no command could write it
 //    (task #110). Publishing it is half the fix; SamplerSetSlotName (90) is the other half, and
 //    they land together because a field you can set and not see is not better than neither.
-constexpr uint16_t kShmVersion = 37;
+constexpr uint16_t kShmVersion = 38;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;

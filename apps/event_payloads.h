@@ -1522,7 +1522,15 @@ struct UiSamplerRejectPayload {
   uint16_t targetId = 0;
   uint32_t trackId = 0;
   uint32_t deviceId = 0;
-  uint32_t reserved[6]{};
+  uint32_t reserved[4]{};
+  // COMMAND IDENTITY, at offset 32 in every one of the seven refusal payloads — see
+  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t: a
+  // uint64_t member would raise this struct's alignof to 8, and EventEntry::payload sits
+  // at offset 20, so every reinterpret_cast of payload bytes to a payload struct would
+  // become undefined behaviour. sizeof stays 40 and memcpy readers keep working, so the
+  // only symptom would be UB at the cast sites — silent here, a fault on a strict target.
+  uint32_t correlationLo = 0;   // offset 32
+  uint32_t correlationHi = 0;   // offset 36
 };
 static_assert(sizeof(UiSamplerRejectPayload) <= 40,
               "UiSamplerRejectPayload must fit an EventEntry payload");
@@ -1575,7 +1583,15 @@ struct UiClipRejectPayload {
   uint32_t currentBase = 0;  // what the engine holds — the value to retry with
   uint16_t commandType = 0;  // UiCommandType that was refused
   uint16_t reserved = 0;
-  uint32_t reserved2[5]{};
+  uint32_t reserved2[3]{};
+  // COMMAND IDENTITY, at offset 32 in every one of the seven refusal payloads — see
+  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t: a
+  // uint64_t member would raise this struct's alignof to 8, and EventEntry::payload sits
+  // at offset 20, so every reinterpret_cast of payload bytes to a payload struct would
+  // become undefined behaviour. sizeof stays 40 and memcpy readers keep working, so the
+  // only symptom would be UB at the cast sites — silent here, a fault on a strict target.
+  uint32_t correlationLo = 0;   // offset 32
+  uint32_t correlationHi = 0;   // offset 36
 };
 static_assert(sizeof(UiClipRejectPayload) <= 40,
               "UiClipRejectPayload must fit an EventEntry payload");
@@ -1897,7 +1913,15 @@ struct UiChainErrorPayload {
   uint32_t deviceId = 0;
   uint32_t deviceKind = 0;
   uint32_t insertIndex = 0;
-  uint32_t reserved[5]{};
+  uint32_t reserved[3]{};
+  // COMMAND IDENTITY, at offset 32 in every one of the seven refusal payloads — see
+  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t: a
+  // uint64_t member would raise this struct's alignof to 8, and EventEntry::payload sits
+  // at offset 20, so every reinterpret_cast of payload bytes to a payload struct would
+  // become undefined behaviour. sizeof stays 40 and memcpy readers keep working, so the
+  // only symptom would be UB at the cast sites — silent here, a fault on a strict target.
+  uint32_t correlationLo = 0;   // offset 32
+  uint32_t correlationHi = 0;   // offset 36
 };
 
 static_assert(sizeof(UiChainErrorPayload) == 40,
@@ -1947,7 +1971,15 @@ struct UiRoutingErrorPayload {
   uint16_t diffType = static_cast<uint16_t>(UiDiffType::None);
   uint16_t errorCode = 0;
   uint32_t trackId = 0;
-  uint8_t reserved[32]{};
+  uint8_t reserved[24]{};
+  // COMMAND IDENTITY, at offset 32 in every one of the seven refusal payloads — see
+  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t: a
+  // uint64_t member would raise this struct's alignof to 8, and EventEntry::payload sits
+  // at offset 20, so every reinterpret_cast of payload bytes to a payload struct would
+  // become undefined behaviour. sizeof stays 40 and memcpy readers keep working, so the
+  // only symptom would be UB at the cast sites — silent here, a fault on a strict target.
+  uint32_t correlationLo = 0;   // offset 32
+  uint32_t correlationHi = 0;   // offset 36
 };
 
 static_assert(sizeof(UiRoutingErrorPayload) == 40,
@@ -2032,7 +2064,15 @@ struct UiModErrorPayload {
   uint16_t errorCode = 0;
   uint32_t trackId = 0;
   uint32_t linkId = 0;
-  uint8_t reserved[28]{};
+  uint8_t reserved[20]{};
+  // COMMAND IDENTITY, at offset 32 in every one of the seven refusal payloads — see
+  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t: a
+  // uint64_t member would raise this struct's alignof to 8, and EventEntry::payload sits
+  // at offset 20, so every reinterpret_cast of payload bytes to a payload struct would
+  // become undefined behaviour. sizeof stays 40 and memcpy readers keep working, so the
+  // only symptom would be UB at the cast sites — silent here, a fault on a strict target.
+  uint32_t correlationLo = 0;   // offset 32
+  uint32_t correlationHi = 0;   // offset 36
 };
 
 static_assert(sizeof(UiModErrorPayload) == 40,
@@ -2118,7 +2158,14 @@ struct UiPatcherGraphErrorPayload {
   uint32_t srcPortId = 0;
   uint32_t dstPortId = 0;
   uint32_t edgeKind = 0;
-  uint8_t reserved[8]{};
+  // COMMAND IDENTITY, at offset 32 in every one of the seven refusal payloads — see
+  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t: a
+  // uint64_t member would raise this struct's alignof to 8, and EventEntry::payload sits
+  // at offset 20, so every reinterpret_cast of payload bytes to a payload struct would
+  // become undefined behaviour. sizeof stays 40 and memcpy readers keep working, so the
+  // only symptom would be UB at the cast sites — silent here, a fault on a strict target.
+  uint32_t correlationLo = 0;   // offset 32
+  uint32_t correlationHi = 0;   // offset 36
 };
 
 static_assert(sizeof(UiPatcherGraphErrorPayload) == 40,
@@ -2145,8 +2192,14 @@ struct UiHarmonyDiffPayload {
   uint32_t scaleId = 0;
   uint32_t reserved0 = 0;
   uint32_t reserved1 = 0;
-  uint32_t reserved2 = 0;
-  uint32_t reserved3 = 0;
+  // COMMAND IDENTITY, at offset 32 in every one of the seven refusal payloads — see
+  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t: a
+  // uint64_t member would raise this struct's alignof to 8, and EventEntry::payload sits
+  // at offset 20, so every reinterpret_cast of payload bytes to a payload struct would
+  // become undefined behaviour. sizeof stays 40 and memcpy readers keep working, so the
+  // only symptom would be UB at the cast sites — silent here, a fault on a strict target.
+  uint32_t correlationLo = 0;   // offset 32
+  uint32_t correlationHi = 0;   // offset 36
 };
 
 struct UiChordDiffPayload {

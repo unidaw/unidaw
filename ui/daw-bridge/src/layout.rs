@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 37;
+pub const K_SHM_VERSION: u16 = 38;
 
 /// SetLaneQuantize carries swing through an unsigned field; this is the bias.
 pub const LANE_QUANTIZE_SWING_BIAS: u32 = 500;
@@ -1055,7 +1055,11 @@ pub struct UiPatcherGraphErrorPayload {
     pub src_port_id: u32,
     pub dst_port_id: u32,
     pub edge_kind: u32,
-    pub reserved: [u8; 8],
+    // Command identity, offset 32 in every refusal payload (P2-CMD-00). Two u32 and not
+    // a u64: EventEntry::payload sits at offset 20, so a u64 member would raise alignof
+    // to 8 and make the C++ cast sites undefined behaviour.
+    pub correlation_lo: u32,
+    pub correlation_hi: u32,
 }
 
 #[repr(C)]
@@ -1533,7 +1537,12 @@ pub struct UiSamplerRejectPayload {
     pub target_id: u16,
     pub track_id: u32,
     pub device_id: u32,
-    pub reserved: [u32; 6],
+    pub reserved: [u32; 4],
+    // Command identity, offset 32 in every refusal payload (P2-CMD-00). Two u32 and not
+    // a u64: EventEntry::payload sits at offset 20, so a u64 member would raise alignof
+    // to 8 and make the C++ cast sites undefined behaviour.
+    pub correlation_lo: u32,
+    pub correlation_hi: u32,
 }
 
 /// Why a clip edit was refused. The distinction matters because the fix differs: a
@@ -1575,7 +1584,12 @@ pub struct UiClipRejectPayload {
     pub current_base: u32,
     pub command_type: u16,
     pub reserved: u16,
-    pub reserved2: [u32; 5],
+    pub reserved2: [u32; 3],
+    // Command identity, offset 32 in every refusal payload (P2-CMD-00). Two u32 and not
+    // a u64: EventEntry::payload sits at offset 20, so a u64 member would raise alignof
+    // to 8 and make the C++ cast sites undefined behaviour.
+    pub correlation_lo: u32,
+    pub correlation_hi: u32,
 }
 
 #[repr(u16)]
@@ -2266,7 +2280,12 @@ pub struct UiChainErrorPayload {
     pub device_id: u32,
     pub device_kind: u32,
     pub insert_index: u32,
-    pub reserved: [u32; 5],
+    pub reserved: [u32; 3],
+    // Command identity, offset 32 in every refusal payload (P2-CMD-00). Two u32 and not
+    // a u64: EventEntry::payload sits at offset 20, so a u64 member would raise alignof
+    // to 8 and make the C++ cast sites undefined behaviour.
+    pub correlation_lo: u32,
+    pub correlation_hi: u32,
 }
 
 #[repr(C)]
@@ -2318,8 +2337,11 @@ pub struct UiHarmonyDiffPayload {
     pub scale_id: u32,
     pub reserved0: u32,
     pub reserved1: u32,
-    pub reserved2: u32,
-    pub reserved3: u32,
+    // Command identity, offset 32 in every refusal payload (P2-CMD-00). Two u32 and not
+    // a u64: EventEntry::payload sits at offset 20, so a u64 member would raise alignof
+    // to 8 and make the C++ cast sites undefined behaviour.
+    pub correlation_lo: u32,
+    pub correlation_hi: u32,
 }
 
 #[repr(C)]
