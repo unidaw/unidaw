@@ -3331,3 +3331,38 @@ is 0 on every shipped UI command, so nothing can observe it. The reviewer recomm
 anyway and folding it into step 2, with the version-equality check landing BEFORE the bump rather
 than with it. **Which doctrine governs is the owner's call, and it should be settled once and
 written down, or it will be re-litigated at every reserved-field change.**
+
+## Gate 9's other half closed — the check now spans both languages (`41de53d3`)
+
+`tools/refusal_identity_check.sh` counted the C++ population only, so it could not see that
+`layout.rs` carries the id in FIVE mirrors against SEVEN in C++.
+
+The failure worth recording is not that I missed the asymmetry. I RECORDED it, in the same commit
+that created it — "only five of the seven payloads have hand-written mirrors" — and then wrote a
+population check that counts one side of a contract whose entire purpose is that two sides agree.
+Knowing a fact and encoding it are different acts, and the ledger entry gave me the feeling of
+having handled it.
+
+The rule now: a carrier with no Rust mirror is fine — nothing in Rust reads those two, and
+`contract_layout_check` does not demand a mirror for every C++ struct. A mirror that EXISTS and
+omits the id is not, because a Rust reader then decodes a refusal without the field the design puts
+at offset 32. The two exceptions are named in the source rather than implied by their absence, and
+the mirrored count is pinned at 5.
+
+Controls: an existing mirror dropping the id fails naming the struct; a sixth mirror appearing fails
+on the count. Both verified. Full build clean, `ctest -R 'refusal|contract|registry|readiness|
+version_parity'` 11/11.
+
+CMD00 step 2 (Option E — the nonce carried in `EventEntry::sampleTime`, ambient bracketed to
+`handleUiEntry`) is ready to implement and waits only on owner decision 5, which decides whether it
+carries a version bump.
+
+Process note, third occurrence: the entry above was again first written into the PRODUCT repo. A
+leading `cd /Users/jak/src/daw` in the same compound command carried through to `cat >>` and
+`git add -A`, creating a second stray ledger there. Last time this happened I wrote that I would
+treat the ledger's absolute path as a signal that the git command needs one too — and then used a
+BARE filename. The lesson did not survive contact with the next command that had a `cd` in it.
+
+The fix that would actually hold is not a resolution: it is never mixing a `cd` into a command that
+also writes the ledger. Both stray commits were caught the same way — reading the commit output,
+where `create mode 100644` for a file that has existed for weeks is the tell.
