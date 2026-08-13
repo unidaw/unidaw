@@ -14,7 +14,7 @@ Baseline SHA:  7710401d72029482c8f3d15869d58dce7e246def
 Historical evidence SHA: 5bef283798b59c2c4f5720292554c7ab8c265be6
 Worktrees:     AE-P0.1 integration landed in /Users/jak/src/daw at 71758c0; review worktree preserved at /Users/jak/src/daw-ae-p0-followup
 Active tasks:  See the Ticket state table below; do not duplicate phase status or ownership in this summary
-File locks:    protocol hotspots frozen; root CMake reserved narrowly for AE-P0.1
+File locks:    See the Merge-hotspot ownership table below; do not restate a lock here
 Integration:   AE-P0.1 and AE-P0.2 evidence is recorded in the Ticket state table and historical activation record
 ```
 
@@ -2841,3 +2841,19 @@ Selftest is 25 refused for their named reason, 7 held. Seventh review pending.
 Process note: an anchor assertion caught an invalid negative control for the second time today —
 a `python3 -c` sabotage whose anchor had moved reported `ok` for a test that never applied. The
 assertion is the only reason that was visible.
+
+## A lock restated in the summary went stale within the hour (2026-08-14)
+
+When the merge-hotspot table was re-pointed from the dead `backend` to `lead`, the root CMake
+reservation was RELEASED there — AE-P0.1 is COMPLETE and the agent holding it no longer exists.
+The `Global state` block at the top of this file went on saying `root CMake reserved narrowly for
+AE-P0.1` for the rest of the session.
+
+The block already knew the rule. Two lines above, it says of tasks: "See the Ticket state table
+below; do not duplicate phase status or ownership in this summary." The same sentence needed to
+exist for locks and did not, so the one fact with two homes went stale in the newer one within the
+hour — by my own edit, in the session that has been recording this shape all day.
+
+Fixed the way the plan's duplicated phase table was fixed: the line now POINTS at the hotspot
+table rather than restating it. Syncing the wording would have bought agreement until the next
+lock changed.
