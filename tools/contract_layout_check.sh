@@ -126,10 +126,13 @@ BINDINGS="${DAW_CONTRACT_BINDINGS:-$(find "$ROOT/ui/target" -name shm_sys.rs 2>/
 selftest() { bash "$ROOT/tools/contract_layout_check_selftest.sh"; exit $?; }
 [ "${1:-}" = "--selftest" ] && selftest
 
-python3 - "$SRC" "$BINDINGS" <<'PY'
+python3 - "$SRC" "$BINDINGS" "$ROOT" <<'PY'
 import re, sys, os, hashlib
 src = sys.argv[1]
 candidates = [p for p in sys.argv[2].split('\n') if p.strip()]
+# The REAL repo root, which is where the depfile's absolute paths point even when `src` is a staged
+# fixture tree. Used only to make those paths repo-relative before they are looked up under `src`.
+repo_root = sys.argv[3] if len(sys.argv) > 3 else src
 
 # THE BINDINGS ARE CHOSEN BY WHAT THEY CONTAIN. Every type this run intends to compare must be
 # present WITH layout assertions in the file selected; a stale artefact missing seven of them is
@@ -355,7 +358,25 @@ if stale:
 #
 # `wanted` is derived here from the roots' include closure; the sidecar is written by the party
 # being checked. Comparing them is the difference between one fact and two.
-missing_scope = sorted(wanted - recorded)
+# THE DEMAND DOES NOT COME FROM A REGEX. Twice now the scope assertion has been narrowed by the way
+# an include happens to be SPELT: first it matched only `#include "apps/..."`, and the repair that
+# resolved paths instead still required double quotes and no space after the hash — so
+# `#include <apps/x.h>` and `#  include "apps/x.h"` both escaped, and deleting such a header's
+# record and editing it PASSED, which is the original fail-open verbatim. Each repair moved the
+# defect one token along, because each kept asking how the line looks.
+#
+# bindgen's depfile is clang's own answer to "what did this parse". It cannot be fooled by spelling,
+# conditionals or angle brackets, and it is written by the build rather than by this check. Unioning
+# its in-repo entries into the demand means the sidecar must account for every header the compiler
+# actually read, however the include was written.
+#
+# The regex closure is KEPT as the independent opinion for the depfile-completeness assertion above:
+# checking the depfile against itself would be circular. Here, where the question is "what must the
+# sidecar cover", the compiler's own list is the stronger authority.
+dep_rel = {os.path.relpath(t, repo_root) for t in dep_text.split() if os.path.isabs(t)}
+dep_rel = {r for r in dep_rel
+           if not r.startswith('..') and os.path.exists(os.path.join(src, r))}
+missing_scope = sorted((wanted | dep_rel) - recorded)
 if missing_scope:
     raise SystemExit("  FAIL: shm_sys.provenance does not record %d header(s) the roots include:\n"
                      "        %s\n"

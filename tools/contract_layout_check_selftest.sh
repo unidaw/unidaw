@@ -562,7 +562,12 @@ if len(keep) == len(lines):
 open(path, 'w').write("\n".join(keep) + "\n")
 PY
 then
-  expect_refusal "9.provenance_scope_narrowed" "$(stage prov_narrow)" "does not record.*shared_memory|shared_memory" "$NARROW"
+  # THE REASON REGEX IS NOT A PLACE TO BE GENEROUS. This briefly read
+  # "does not record.*shared_memory|shared_memory", and the bare second alternative matched ANY
+  # refusal naming that header — which every control does whenever shared_memory.h is dirty. With
+  # the scope assertion deleted outright and an unrelated refusal naming the file, the control still
+  # reported ok. A control that accepts a neighbour's refusal is not testing its own predicate.
+  expect_refusal "9.provenance_scope_narrowed" "$(stage prov_narrow)" "does not record" "$NARROW"
 else
   FAIL=$((FAIL+1))
 fi
@@ -601,6 +606,80 @@ open(path, 'w').write("\n".join(lines) + "\n")
 PY
 then
   expect_refusal "9.provenance_bad_hash_form" "$(stage prov_badhash)" "HASH_FORM" "$BADHASH"
+else
+  FAIL=$((FAIL+1))
+fi
+
+# 9.provenance_length_form — the Unicode-digit case. str.isdigit() is True for '²' and int() then
+# raises, so the guard admitted exactly the input it was added to reject and the check died with a
+# traceback instead of a diagnosis. The control asserts BOTH: the named reason, and no traceback.
+LENFORM="$(stage_bindings prov_lenform)"
+cp "$REAL_BINDINGS" "$LENFORM"
+if python3 - "$(dirname "$LENFORM")/shm_sys.provenance" <<'PY'
+import sys
+path = sys.argv[1]
+lines = [l for l in open(path).read().splitlines() if l.strip()]
+h, _n, rel = lines[0].split(None, 2)
+lines[0] = "%s ² %s" % (h, rel)      # SUPERSCRIPT TWO: isdigit() True, int() raises
+open(path, 'w', encoding='utf-8').write("\n".join(lines) + "\n")
+PY
+then
+  expect_refusal "9.provenance_length_form" "$(stage prov_lenform)" "LENGTH_FORM" "$LENFORM"
+  if DAW_CONTRACT_SRC="$(stage prov_lenform)" DAW_CONTRACT_BINDINGS="$LENFORM" \
+       bash "$CHECK" 2>&1 | grep -q 'Traceback'; then
+    echo "  FAIL: 9.provenance_length_form refused with a TRACEBACK — the guard is being bypassed,"
+    echo "        which is the defect this control exists for, not a passing refusal."
+    FAIL=$((FAIL+1))
+  fi
+else
+  FAIL=$((FAIL+1))
+fi
+
+# 10.scope_angle_include — THE SPELLING FAMILY, closed by not asking about spelling.
+# The scope demand was narrowed twice by how an include is written: first it matched only
+# `#include "apps/..."`, then only double-quoted forms with no space after the hash. In both cases
+# deleting a header's provenance record and editing that header PASSED — the original fail-open.
+# The demand now unions bindgen's depfile, which is clang's own answer to what it parsed and cannot
+# be spelt around. This control uses the form NO regex in the check matches.
+ANGLE="$(stage_bindings prov_angle)"
+cp "$REAL_BINDINGS" "$ANGLE"
+D="$(stage prov_angle)"
+if python3 - "$D" "$(dirname "$ANGLE")/shm_sys.provenance" <<'PY'
+import os, re, sys
+d, prov = sys.argv[1], sys.argv[2]
+TARGET = 'apps/harmony_timeline.h'
+abi = os.path.join(d, 'apps/patcher_abi.h')
+src = open(abi).read()
+quoted = '#include "%s"' % TARGET
+if quoted not in src:
+    raise SystemExit("  MUTATION DID NOT LAND: %s does not include %s the quoted way" % (abi, TARGET))
+open(abi, 'w').write(src.replace(quoted, '#include <%s>' % TARGET))
+# THE BLINDNESS PROOF, in the same spirit as LEGACY above: after this rewrite the double-quoted
+# spelling both previous demands keyed on does not occur, so neither could see this header at all.
+if re.search(r'#\s*include\s+"%s"' % re.escape(TARGET), open(abi).read()):
+    raise SystemExit("  MUTATION DID NOT LAND: the quoted spelling survived, so the control would "
+                     "pass against the old spelling-based demand and prove nothing")
+
+# RE-PIN THE PREREQUISITE. Rewriting the include changed patcher_abi.h's bytes, and patcher_abi.h
+# is itself pinned — so the staleness gate fires three checks earlier and this control refuses for
+# a reason that says nothing about scope. Every control here must re-pin what it disturbed, or it
+# measures the gate it tripped on the way rather than the one it names.
+import hashlib
+lines, out = [l for l in open(prov).read().splitlines() if l.strip()], []
+for l in lines:
+    h, n, rel = l.split(None, 2)
+    if rel == TARGET:
+        continue                     # THE DEFECT: this header's bytes are pinned by nothing
+    if rel == 'apps/patcher_abi.h':
+        data = open(os.path.join(d, rel), 'rb').read()
+        h, n = hashlib.sha256(data).hexdigest(), str(len(data))
+    out.append("%s %s %s" % (h, n, rel))
+if len(out) == len(lines):
+    raise SystemExit("  MUTATION DID NOT LAND: %s is not in the sidecar" % TARGET)
+open(prov, 'w').write("\n".join(out) + "\n")
+PY
+then
+  expect_refusal "10.scope_angle_include" "$D" "does not record" "$ANGLE"
 else
   FAIL=$((FAIL+1))
 fi
