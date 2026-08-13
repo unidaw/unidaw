@@ -2168,3 +2168,41 @@ reject absolute paths, `..`, and non-64-hex hashes at the point of entry.
 
 Blockers 1, 2 and finding 4 are all demonstrated fail-opens with concrete fixes
 and are the repair queue.
+
+## AE-P0.3 Option B design — BLOCKED and RETRACTED same day (2026-08-13)
+
+`lead` wrote an Option B design and submitted it to independent design review. The
+review returned BLOCKED with nine blockers, and the first one invalidates the
+document rather than amending it.
+
+A fully enumerated `B1`-`B8` had ALREADY been issued by an independent reviewer,
+conditionally passed twice, relayed as a pre-coding requirement, and written into
+the product checkout at `docs/architecture/tasks/AE-P0.3-optionB-review-checklist.md`
+on 2026-08-12. The new design reused the identifiers `B1`-`B8` and assigned
+different content to all eight. Its `B5` required an exact `===` count — the very
+thing the issued `B5` names as insufficient, because a count cannot catch same-count
+replacement, duplicate collapse, or extractor drift.
+
+Cause, recorded plainly: the design was written from THIS LEDGER'S prose summary of
+the Option B decision without searching the repository for the conditions that
+summary referred to. "Acceptance controls B1-B8" was read as a label to fill in
+rather than a document to find. A single grep would have produced it. The ledger is
+a record of decisions, not a substitute for the artifacts they produced, and a
+summary that names a deliverable is a pointer to go and read it.
+
+The design's only worked example cited `tools/webstack.sh --dry-run`. That flag does
+not exist. AE-P0.3 exists to catch documents that quote output nobody produced, and
+the design of that check quoted a command nobody could run — and would have passed
+its own `B4`, which checked `command` for presence only.
+
+Verified before acting on the review rather than taken on faith: the checklist file
+exists and predates the design, its `B1`-`B8` differ, and `webstack.sh` contains no
+`--dry-run`.
+
+Status: the design is RETRACTED in place, kept as evidence rather than deleted. The
+authority for Option B is the issued checklist. Two results are carried forward — the
+verbatim-match path is dropped (measured: it accepts 0 of the 1 line currently
+quoted, while admitting comments and unreachable branches), and the three open
+questions are decided in the retraction. AE-P0.3 remains BLOCKED, now against the
+issued conditions, and the standing instruction is to implement them rather than to
+write a fifth narrowing.
