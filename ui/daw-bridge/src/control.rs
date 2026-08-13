@@ -1,10 +1,24 @@
 //! Attaching to a running engine's shared memory to query it, and to send it
 //! the same `UiCommand` payloads the UI sends.
 //!
-//! Single-producer constraint: the UI command ring is SPSC. The engine is the
-//! only consumer, and exactly one process may be the producer. While the UI app
-//! is running it *is* that producer, so a second writer would corrupt the ring.
-//! Reading is always safe; writing is the caller's responsibility to serialise.
+//! MULTI-PRODUCER since M2.18. The engine is the only consumer, but any number of
+//! processes may produce: `write_entry` CAS-reserves a slot on `write_index`, fills
+//! it, and only then publishes it by storing `ready` — see the comment at that call
+//! site, which is the authority for the protocol. Reading is always safe, and
+//! writing needs no external serialisation.
+//!
+//! THIS PARAGRAPH SAID THE OPPOSITE UNTIL 2026-08-14, and it mattered. It read
+//! "the UI command ring is SPSC … exactly one process may be the producer", which
+//! was true before M2.18 and describes the world in which `daw-cli do` needed
+//! `--force`. The implementation below has carried a comment saying MULTI-PRODUCER
+//! since that change landed, so this file contradicted itself across 1,900 lines,
+//! with the false half at the top where a reader starts.
+//!
+//! It was not harmless. The P2-CMD-00 design reasoned from this paragraph about
+//! whether a command identity needs to be unique across concurrent producers, and
+//! flagged it as a documentation defect it could not fix while read-only. A stale
+//! rule stated where a reader begins outranks a correct one stated where the code
+//! is.
 
 use std::ffi::CString;
 use std::fs::File;

@@ -260,7 +260,9 @@ Musical engine core:
 - Note-on/off scheduling with durations.
 - PST0 param mirror replay with synchronous gating.
 - UI projection fields in SHM with seqlock versioning.
-- UI command ring reserved (SPSC).
+- UI command ring reserved (SPSC **at the time**; superseded by M2.18, which made the UI
+  command rings multi-producer via CAS slot reservation — see `apps/event_ring.cpp` and
+  `ui/daw-bridge/src/control.rs`. Left as the record of what this milestone shipped).
 
 ### Milestone 4 (in progress)
 Rust/GPUI projection UI:

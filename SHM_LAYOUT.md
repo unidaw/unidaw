@@ -119,7 +119,10 @@ Rust UI must:
 
 ## Rings
 
-Each ring is an SPSC ring with cache-line entries.
+Each ring has cache-line entries. The audio-side rings are SPSC; the UI COMMAND rings
+(`ringUi`, `ringUiAgent`, `ringUiEdit`) are MULTI-PRODUCER since M2.18 — a producer
+CAS-reserves a slot on `writeIndex`, fills it, then publishes with `ready`. This line
+said "each ring is an SPSC ring" without qualification, which stopped being true then.
 
 - Standard Ring: MIDI/Param events
 - Control Ring: Transport events

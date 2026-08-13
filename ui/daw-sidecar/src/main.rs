@@ -1508,7 +1508,11 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
 /// editing is: render locally, send with base_version N, reconcile when a frame
 /// with N+1 arrives.
 ///
-/// The ring is SPSC, so exactly one producer may write. That is this thread.
+/// The ring is MULTI-PRODUCER since M2.18: `write_entry` CAS-reserves a slot before
+/// filling it, so this thread does not need to be the only writer and the CLI and
+/// agent rings may produce concurrently. This comment claimed the opposite — "SPSC,
+/// so exactly one producer may write, that is this thread" — which was true before
+/// M2.18 and is the world in which `daw-cli do` needed `--force`.
 ///
 ///   {"type":"play"}
 ///   {"type":"note","track":0,"pitch":60,"tick":0,"dur":960000,"vel":100,"base":7}
