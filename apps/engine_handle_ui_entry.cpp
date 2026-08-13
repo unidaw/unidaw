@@ -406,8 +406,11 @@ void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
       daw::engine::handleDeleteAutomationPoint(automationCommandDeps, entry, header, commandType);
       return;
     }
-    // M3.23 SECTION ops. All five are SONG-scoped: the spine belongs to no track, and
-    // SetSectionLength moves placements on every track at once.
+    // M3.23 SECTION ops are RETIRED. This opened "All five are SONG-scoped: the spine belongs
+    // to no track, and SetSectionLength moves placements on every track at once" — true until
+    // v29 deleted the Section spine (`bb0471bb`). Opcodes 54-58 are retired and deliberately not
+    // reused; a retired number returns `op:unknown` and is refused
+    // (apps/event_payloads.h:166-173). What replaced them is below, and the split is the point.
     // v29 MARKER ops — naming a position. TOTAL: they move no material, so there is nothing to
     // plan, refuse or undo beyond the list itself. That separation is the whole design: every
     // section op used to have two possible meanings (re-partition the labels, or insert and remove

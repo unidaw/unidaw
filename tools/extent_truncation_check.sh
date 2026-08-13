@@ -11,10 +11,13 @@
 # song whose later clips have no boxes and no reason, and the natural conclusion is that the
 # clips are gone — which is exactly the wrong place to start looking.
 #
-# The audio-clip table has the same shape and a worse version of it: kUiMaxAudioClips is 64 while
-# the extent list holds 256, and its comment claimed the two were equal. So a project between
-# those numbers publishes complete rails with waveform data missing from the tail — boxes with
-# nothing in them.
+# The audio-clip table had the same shape and a worse version of it: kUiMaxAudioClips was 64 while
+# the extent list held 256, and its comment claimed the two were equal. A project between those
+# numbers published complete rails with waveform data missing from the tail — boxes with nothing in
+# them. THAT GAP IS CLOSED BY DEFINITION NOW: `kUiMaxAudioClips = kUiMaxClipExtents`
+# (apps/shared_memory.h:798), so the two cannot drift. The paragraph is kept as a disavowal because
+# this file is cited as the coverage for that defect, and a coverage note that still describes the
+# defect as live is how a reader concludes the wrong thing about what is checked.
 #
 # Needs a real audio device (non-test mode) + the C++ and daw-cli targets built.
 #   tools/extent_truncation_check.sh

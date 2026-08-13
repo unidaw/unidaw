@@ -189,9 +189,14 @@ void publishAudioClipTable(AudioClipTableDeps& deps) {
         return;
       }
       published.push_back(c.id);
-      // kUiMaxAudioClips is 64 while the extent list holds 256, so this cap can be reached
-      // while the rails look complete — a box with no waveform in it and nothing saying why.
-      // Count the shortfall and keep going so the number is the real total.
+      // kUiMaxAudioClips IS kUiMaxClipExtents — `constexpr uint32_t kUiMaxAudioClips =
+      // kUiMaxClipExtents;` (apps/shared_memory.h:798), so the two cannot drift apart. This
+      // comment used to read "kUiMaxAudioClips is 64 while the extent list holds 256", which was
+      // the defect: the cap could be reached while the rails looked complete, giving a box with
+      // no waveform in it and nothing saying why. The raise to 256 is recorded at
+      // apps/shared_memory.h:100. The shortfall count below is kept because the cap can still be
+      // reached — by a project with more than 256 clips — and the number should be the real
+      // total when it is.
       if (clipCount >= daw::kUiMaxAudioClips) {
         ++audioClipsDropped;
         return;

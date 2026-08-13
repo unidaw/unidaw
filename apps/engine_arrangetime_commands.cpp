@@ -260,12 +260,19 @@ void handleArrangeTime(ArrangeTimeCommandDeps& deps,
         // the modulation firing in the middle of what used to follow them. The comment on the
         // automation ripple makes exactly this argument; it simply was not applied here.
         //
-        // THE METER NEEDS NO RIPPLE AT ALL. It used to be the open question here — a
-        // tick-keyed map meant a section's length was computed THROUGH the meter, so moving
-        // meter points changed the very delta derived from them, and whether a meter change
-        // belonged to the section or to the timeline decided the answer. The meter now lives ON
-        // the section, so a section carries its meter with it by construction and there is
-        // nothing to move. The question is not answered, it is dissolved.
+        // THE METER IS RIPPLED, twenty-seven lines above this comment. That is worth stating
+        // here because this paragraph used to say the opposite — "THE METER NEEDS NO RIPPLE AT
+        // ALL … the meter now lives ON the section, so a section carries its meter with it by
+        // construction and there is nothing to move. The question is not answered, it is
+        // dissolved." That was true of the Section spine, and the spine was deleted in v29
+        // (`bb0471bb`): the meter is now an authoritative tick-keyed map, so inserting bars
+        // before a meter change has to carry it exactly as it carries a tempo change.
+        //
+        // The stale sentence survived inside the very function that refutes it, and the loop
+        // that does the rippling says so in its own comment — "the spine could not have this
+        // bug … and could not have the capability either". A superseded rule left standing next
+        // to its replacement is the shape this project keeps paying for; it is kept here as a
+        // disavowal rather than deleted, so a reader who learnt the old rule sees it retired.
         uint32_t tempoMoved = 0;
         for (auto& pt : loadedTempoMap) {
           // Never the anchor at 0: a tempo map without a point at the origin has no tempo
