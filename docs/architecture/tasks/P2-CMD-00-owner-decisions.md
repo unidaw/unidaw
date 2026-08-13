@@ -120,8 +120,31 @@ almost four times — worth knowing before anyone estimates this.
 1. **one bump, 37 → 38**, carrying all seven payload changes, both correlation fields, and the
    `SHM_LAYOUT.md` update in a single changeset. Giving a reserved field a meaning is a wire change
    even though no size moves — that is exactly how a wire change lands without a bump.
-2. **the mirror moves in the same commit.** `tools/contract_layout_check.sh` exists to catch the two
-   sides disagreeing; it should fail on a split changeset, and if it does not, that is a finding.
+2. **the mirror moves in the same commit — and NOTHING ENFORCES THAT.** I wrote in the first draft
+   that `tools/contract_layout_check.sh` should fail on a split changeset "and if it does not, that
+   is a finding". Measured, and it is the finding:
+
+   | experiment | `contract_layout_check` | `contract_freshness_check` |
+   |---|---|---|
+   | C++ → 38, Rust stays 37 (the split) | **PASS** | fail |
+   | both → 38 (the *correct* changeset) | pass | **fail** |
+   | Rust → 38, C++ stays 37 | pass | fail |
+
+   `contract_layout_check` pins struct *layouts* to generated twins and never looks at the version
+   constant, so a split passes it. `contract_freshness_check` fails on **every** edit to these files
+   — including a correct coordinated bump — because it detects that generated bindings are stale, not
+   that the two constants disagree. It nags until bindings are regenerated, after which the question
+   is open again.
+
+   Confirmed from the other direction: **no file in `tools/` mentions both `kShmVersion` and
+   `K_SHM_VERSION`**, and no Rust assertion compares `K_SHM_VERSION` to the C++ value. The mirror at
+   `layout.rs:7` is a hand-typed 37 that nothing checks.
+
+   **So gate 2 needs a check that does not exist**, and it is three lines: read `kShmVersion` from
+   `apps/shared_memory.h`, read `K_SHM_VERSION` from `ui/daw-bridge/src/layout.rs`, fail if they
+   differ. Cheaper than the bump it guards. Whether to write it before or with the bump is an owner
+   call; doing the bump without it means the single most likely migration error — editing one side —
+   is caught by nothing.
 3. **28 new `static_assert`s** (four per payload: two offsets, `alignof == 4`, `sizeof == 40`), plus
    the same offsets on the Rust side. The `alignof` one is the assertion that catches the mistake §2
    of the revision describes, and nothing in the tree catches it today.
