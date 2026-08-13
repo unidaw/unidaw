@@ -137,10 +137,29 @@ mistake in §2, and no assertion in the tree today would have.
   meaning *is* a wire change even though no size moves — that is precisely how a wire change lands
   without a bump.
 - **`correlationLo == 0 && correlationHi == 0` means "no id"**: a sender that predates 38. A reader
-  must report `Unknown`, never a match. Zero is a safe sentinel only if the ring's payload bytes are
-  zero-initialised for these fields — **unverified, and it is the one input to this design I have not
-  measured.** If refusal payloads are constructed with `{}` the reserved bytes are zeroed; a
-  partially-filled payload reusing a slot would not be. Verify before implementation.
+  must report `Unknown`, never a match.
+
+  **Measured, since this was the one input left open.** The sentinel is safe *for refusal payloads*:
+  all nine emit sites construct the struct `{}`-initialised (`engine_ui_publish.cpp:237, 280, 359,
+  396, 423, 442` and `engine_harmony_timeline.cpp:58, 102, 118`), every one of the seven is exactly
+  40 bytes so the `memcpy` covers the whole `payload[40]`, and `ringWrite` assigns the **whole**
+  `EventEntry` into the slot (`event_ring.cpp`), so nothing survives from a slot's previous occupant.
+
+  **But the id must never be read without dispatching first**, because one publisher does emit
+  uninitialised payload bytes: `engine_ui_publish.cpp:145` declares `daw::EventEntry gateEntry;`
+  without `{}`, sets `sampleTime`/`blockId`/`type`/`size = 0`, never touches `payload`, and calls
+  `ringWrite`. Forty bytes of engine stack are published into a segment other processes read. For that
+  entry, bytes 32–40 are garbage that can look like a valid non-zero id.
+
+  So the reader rule is: **read the id only after dispatching on `type`, and only when `size` covers
+  offset 40.** That is required regardless of whether `gateEntry` is fixed, because a reader must not
+  depend on a publisher's initialisation discipline.
+
+  `gateEntry` is a defect in its own right — an information leak and a source of ring nondeterminism —
+  and is reported separately rather than fixed here. It is the only such site: sixteen `EventEntry`
+  declarations exist and **none** is `{}`-initialised, but the other fifteen either `memcpy` a full
+  40-byte payload or are `ringPop`/`ringPeek` destinations, which are filled by the ring rather than
+  published from the stack.
 - readers on 38 must not assume a 37 engine's `reserved` bytes are zero.
 
 ## 7. Acceptance gates
