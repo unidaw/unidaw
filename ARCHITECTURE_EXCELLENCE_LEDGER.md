@@ -3083,3 +3083,53 @@ the gate, not to undo the work.
 RE-PRIORITISED. The next CMD00 work is the twelve acceptance gates — the production-bound tests —
 NOT step 2 (dropping `commandType`). No further wire edit until they exist and the pending review of
 step 1 returns.
+
+## CMD00 step 1 reviewed, and its two blockers closed (2026-08-14)
+
+The review I should have run before pushing found the wire change SAFE — probes against both
+revisions confirm no pre-existing field moved in any of the seven, no reserved byte was live in
+either language, and no Rust byte-offset reader touches 32-39. It also found two blockers.
+
+### B1 — the design required 28 assertions and I added zero. `7b7b7b24`
+
+The reviewer's answer to "what in this tree would fail if the id moved off offset 32" was: nothing.
+- bindgen's offset assertions are GENERATED FROM the header, so they re-emit whatever offset they
+  find. Self-certifying, blind to a move by construction.
+- `same!` compares size and alignment only.
+- `contract_layout_check` compares a mirror to its twin, and `UiRoutingErrorPayload` and
+  `UiModErrorPayload` have no mirror at all.
+
+All 28 added and proven: moving the id to offset 24 inside `UiModErrorPayload` — deliberately the
+one with no mirror — fires the assertion by name while the layout check stays blind.
+
+### B2 — my stated justification was FALSE, replicated in seven places. `7b7b7b24`
+
+I wrote that a `uint64_t` would break "four reinterpret_cast sites in juce_host_process_main.cpp".
+Those four cast a `std::vector<uint8_t>` read off the host control socket — max-aligned by
+`operator new`, and not an `EventEntry`. **There is no reinterpret_cast of `EventEntry::payload`
+anywhere in the tree**; every access is `memcpy`. And "no payload exceeds alignof 4" is not a
+property of that file: `TransportPayload`, `UiAudioClipFieldPayload`,
+`UiDeviceEuclideanConfigPayload`, `UiSamplerEmitRowsPayload` and `UiSamplerMarkerPayload` are
+alignof 8 today and ship that way.
+
+The decision stands for the real reason — `EventEntry` is `alignas(64)` with `payload` at offset 20,
+so that address is 4-aligned and never 8-aligned — and the comment now records what it used to say
+and why that was wrong, because the next reader would otherwise inherit an inventory that does not
+exist and an invariant five structs already break.
+
+### And the omission the assertions cannot see. `ba4f1b1c`
+
+Assertions notice a MOVE, not an OMISSION: an eighth refusal payload with no id, or a carrier whose
+four lines were forgotten, leaves every existing assertion green. `tools/refusal_identity_check.sh`
+pins two derived populations — structs carrying `correlationLo` (7) and refusal variants of
+`UiDiffType` (6) — and requires them to move together, with exact counts rather than floors,
+because a floor survives the mutation it exists to catch.
+
+It deliberately does NOT map diff type to struct. That needs a name rule and there isn't one:
+`ChainError` -> `UiChainErrorPayload`, but `ClipRejected` -> `UiClipRejectPayload`. Four of six are
+mechanical and two are not, so such a rule is a proxy blind to the member that spells itself
+differently. Three controls verified: a carrier losing an assertion, an eighth carrier, a new
+refusal variant with no payload.
+
+Gates 9, 10 and 11 of the design's twelve are now satisfied. The remaining eight need the minter
+and the reader, which is step 2.
