@@ -2905,3 +2905,50 @@ drove this whole sequence.
 
 RULING: T3 is APPROVED to merge. The standing rule that shared-memory/ABI/bridge changes never
 merge without exact independent review is satisfied — seven times over.
+
+## T3 MERGED and pushed — `d0e0ad0a` on `origin/main` (2026-08-14)
+
+Seven review rounds approved it; verifying the merge found an eighth defect that no review
+could have, because none of them merged.
+
+### The merge found what seven reviews could not
+
+`main <- t3a-probe` is clean, so I merged, rebuilt the bridge and ran the check. It REFUSED:
+`every candidate bindings file is incomplete … missing layout assertions for: UiArrangeSection`.
+
+`UiArrangeSection` does not exist. It appears in `apps/shared_memory.h` only in PROSE — two
+comments describing a struct that was removed ("the same 56 bytes UiArrangeSection was"). Bindgen
+emits nothing for it, correctly. The name survived in ONE two-week-old RELEASE build directory,
+and `offered` unioned the assertions of every candidate — so a deleted struct became permanently
+required, and the printed remedy could not fix it: rebuilding does not remove old build
+directories, and `cargo clean -p daw-bridge` removed 2.2GB without touching the release one.
+
+The discriminator was already written in the file, one refusal below: a candidate missing the
+patcher types "was generated before patcher_abi.h joined build.rs; it is not an older answer to
+this question, it is an answer to a different one." That governed which candidate gets CHOSEN and
+not which candidates may RAISE THE BAR. It now governs both. Fixed at `21610507`, with control 12,
+which goes FALSE POSITIVE against the union — the newest machinery shipped WITH its control this
+time, which is the discipline the last four commits missed.
+
+The local merge was reset before this fix rather than repaired forward, so `main` never carries a
+commit whose own check refuses.
+
+### Merge evidence
+
+- `contract_layout_check` PASS: 69/69 mirrors pinned, 650 bridge fields and 59 patcher fields at
+  the offsets the C++ gives them.
+- `contract_layout_check_selftest` PASS: 25 refused for their named reason, 8 held.
+- Full CMake build clean. `ctest -R 'contract|readiness|registry|freshness'` 9/9 after rebuilding
+  `daw-cli`, which `contract_freshness` correctly reported stale against the merged `layout.rs` —
+  the freshness check doing its job on its first live subject.
+- `ctest -R 'phase3|watchdog|host_generation|host_stall'` 25/25. Registered tests 224 → 225.
+
+### What this unblocks
+
+CMD00 is no longer queued: `apps/event_payloads.h` is inside T3's pinned closure, so CMD00's seven
+refusal payloads are now born under the stronger check rather than needing to be re-pinned against
+a wire it never saw. That was the whole reason for the ordering.
+
+Still open on T3, as a follow-up rather than a blocker: collapse the depfile's two parse sites into
+`undeclared = wanted - dep_rel` with `normpath`, which kills carried findings 2 and 3 outright, and
+ship it with a control that varies the DEPFILE rather than the source.
