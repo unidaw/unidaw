@@ -2629,3 +2629,34 @@ review. Each round has found real defects; the trend is that the last one found 
 classes and more instances of classes already named, which is the shape of converging
 rather than thrashing — but it has not converged yet and must not merge until a review
 returns PASS.
+
+## CORRECTION — lead's AE-P0.3 decision 3 was WRONG and is reversed (2026-08-13)
+
+I ruled that `docs/DEMO.md` should change to quote the DEFAULT branch's line, on the
+grounds that the runbook quoted output only the non-default invocation produces and "a
+reader following it sees a different line". That reasoning was false, and checking the
+document would have shown it in four lines.
+
+`docs/DEMO.md:58-70` presents the credentialed invocation —
+`DAW_WEBSTACK_ALLOW_CREDENTIALS=1 DAW_ENV_FILE=... tools/webstack.sh` — and then says
+"Check the line it prints about the credential boundary" immediately above the quote. The
+quoted line IS the output of the command the runbook documents. Nothing is wrong with the
+doc; a reader following it sees exactly that line.
+
+REVERSED. The correct answer is the one the checklist itself recommended in its §2 and
+offered as the first option in §5: the run record PINS `DAW_WEBSTACK_ALLOW_CREDENTIALS=1`
+explicitly, and a control shows that flipping it to `0` fails with the marker/payload
+error rather than passing. The scenario is part of the observation, and an attestation
+that does not carry it is attesting a run nobody can reproduce.
+
+How this happened, since it is the session's recurring shape and I have now done it twice
+in one day. The checklist's §2 states the gap as "a reviewer who runs `tools/webstack.sh`
+with nothing set takes the `0` branch" — which is TRUE of the bare command and irrelevant
+to the documented one. I decided from that sentence without reading the document it
+describes, exactly as the retracted Option B design was written from this ledger's prose
+summary without reading the checklist it referred to. A summary of a document is not the
+document, and the disproof was four lines from the quote it discussed.
+
+The other two decisions are unaffected and stand: `> ` remains a documented marker with a
+versioned mapping, and attestations pin a historical tree with selective current-blob
+validation. Neither rested on a claim about DEMO.md's content.
