@@ -2733,3 +2733,47 @@ together, which is the failure mode this ledger keeps recording.
 
 Nothing merged and nothing resolved yet; T3 must pass review first. Recorded now so the
 integration is a decision already made rather than one taken under merge pressure.
+
+## T3 fifth review — NOT SAFE TO MERGE, repaired at `9a1081ee` (2026-08-13)
+
+Five blockers. The one that matters: **deleting the depfile union re-opened the fail-open it
+was supposed to close**, and my reasoning for deleting it was wrong in a way worth recording.
+
+I argued the union "equals `recorded` by construction, so it was never an independent
+opinion". True — and irrelevant. They are equal on a CORRECT tree, which is precisely the
+tree where no assertion needs to fire. On the defective tree the sidecar has a record removed
+and the depfile does not, and that difference IS the guard. Judging a derivation by comparing
+it to the artefact it exists to contradict is verifying it against itself, which this ledger
+already has a name for.
+
+Review defeated the regex-only demand with three spellings no lexical test can see — a macro
+include, a line continuation, and a comment between `include` and the delimiter. All three
+PASSED at the previous commit and REFUSE now.
+
+The union is back WITHOUT the silent zero that justified removing it. Its paths resolve by
+longest existing suffix under the source root, which needs no repo root at all, and an empty
+result REFUSES — every other derived set in the file already did. Verified path-insensitive
+across canonical, symlink and `/tmp`-alias invocations on both clean and defective fixtures.
+So the answer was neither "keep the accretion" nor "delete it" but "keep it and remove the
+thing that made it fragile".
+
+Also closed:
+
+- **Control 3 accepted its own check's PASS line.** Its reason regex was `payload extent`, a
+  substring of the success message, so it reported ok for any refusal anywhere. Deleting the
+  ENTIRE patcher EventEntry comparison left the suite 21/5 green on a refusal from a different
+  type in a different file. This is the exact defect fixed for control 9 two commits earlier,
+  still live one control away.
+- **Both repairs the previous commit shipped reverted GREEN.** Nothing in the suite had ever
+  seen either work. Three controls added, two proven BLIND against the reverted code.
+- **The untwinned print exited 0** — the "two numbers a reader must subtract" defect moved one
+  line lower, on a run whose last line said PASS. It refuses now, and the exemption for a type
+  that never crosses SHM is declared WHERE THE TYPE IS, with a required reason, so the claim
+  faces whoever edits `layout.rs` instead of hiding in the checker.
+- Prose describing the deleted mechanism as current, and a control header claiming to ratchet
+  the depfile when it ratchets the regex. Plus two traceback paths.
+
+Selftest is now 23 refused for their named reason, 6 held. Sixth review pending. The trend
+across five rounds: round 4 found five blockers, round 5 found five, but round 5's were
+smaller and three were missing ratchets rather than new fail-opens — and its own summary said
+the gap is "small and bounded", which round 4's did not.
