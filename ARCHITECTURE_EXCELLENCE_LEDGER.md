@@ -36,9 +36,19 @@ The owner-authorized activation trigger has been satisfied:
 
 ## Bootstrap roster
 
-| Handle | Kind | Initial pairing | State |
+FLEET DISSOLVED 2026-08-13. Every handle below is DEAD — no process, no watcher.
+Verified: zero `codex … resume` processes, zero worker watcher pidfiles, and the
+`backend` orchestrator session `019fdc27-4c30-…` has no process either. Do not
+assign to, wait on, or attempt to revive any of them; do not read their `State`
+column as current. Ownership of all open tickets transfers to `lead`, which works
+the items directly and uses review subagents in place of the cross-model worker
+pairing described below. The pairing rules still express the intent — a reviewer
+independent of the author — and that intent is now met by an independent subagent
+rather than a peer worker.
+
+| Handle | Kind | Initial pairing | State (historical, fleet dissolved) |
 |---|---|---|---|
-| `backend` | Codex | Orchestrator/integrator; current lane per Ticket state table | `ACTIVE` |
+| `backend` | Codex | Orchestrator/integrator; current lane per Ticket state table | `DEAD` (was `ACTIVE`) |
 | `codex-worker-1` | Codex | Lane A implementation owner first | `COMPLETE: final repair chain delivered; original lane clean at 2f7aa93` |
 | `claude-worker-1` | Claude | Lane A independent reviewer first | `APPROVED: e4e08de exact; wrapper-only successor 0f48f69 documented` |
 | `claude-worker-2` | Claude | Lane B discovery owner first | `HOLD: evidence and current-main delta delivered` |
@@ -91,7 +101,7 @@ watcher:  none (required for Codex)
 | `AE-P0.2 discovery` | `ESCALATED_TO_ADR` | frozen baseline + packet | `claude-worker-2` | `codex-worker-2` | read-only root | four rejected designs; evidence complete |
 | `AE-P0.2 ADR` | `APPROVED` | current-main inventory + exact review | `backend` | `codex-worker-2` | root | exact SHA `7dff997`; approval received |
 | `AE-P0.2 implementation` | `COMPLETE` | packet `6287ffd` approved + AE-P0.1 integration | codex-worker-2 | claude-worker-2 | `/Users/jak/src/daw-ae-p0-2-lane0` | product main `75c6f06`; final corrective candidate independently approved |
-| `AE-P0.3` | `BLOCKED` | AE-P0.1 review + frontend ownership release | unassigned | unassigned | none | packet ready |
+| `AE-P0.3` | `BLOCKED` | B1-B8 design review of Option B (see 2026-08-13 re-derivation) | `lead` | unassigned | none | last impl `02eb2d65`, review BLOCKED |
 | `AE-P1.1` | `FROZEN` | `AE-P0` | claude-worker-2 | codex-worker-1 | `/Users/jak/src/daw-ae-p1-1-packet` | `ba88bcb4657b62bdfc752d338d877e139e212ca6`; independent PASS; successor-only |
 | `AE-P1.2` | `ACTIVE` | `AE-P1.1` | claude-worker-2 | codex-worker-1 | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; 19 open items; G4 not decidable |
 | `AE-P1.3` | `BLOCKED` | `AE-P1.2` | unassigned | unassigned | none | none |
@@ -1994,3 +2004,47 @@ signals rather than on what the worker claims: whether it is WORKING (watcher al
 correctly parented for Claude; last rollout event not `task_complete` for codex) and whether
 it HAS WORK (last sent versus last received assignment on the bus). A worker whose last send
 predates its last assignment is a silent reviewer and is treated as stopped.
+
+## Working mode change and AE-P0.3 re-derivation (2026-08-13)
+
+The worker fleet is dissolved and dead (see the roster note). `lead` now works the
+items directly and sends reviews to independent subagents. The rule that an author
+may not be their own reviewer is unchanged; only the reviewer's substrate changed.
+
+### AE-P0.3 was carrying a stale blocked-reason
+
+The `Ticket state` row read `BLOCKED | AE-P0.1 review + frontend ownership release`.
+Both of those dissolved long ago: `AE-P0.1` is `COMPLETE` with an independent review
+in the same table, and the `frontend` agent is dead, so there is no ownership left to
+release. Neither was the real blocker, and the row had been repeating them while the
+actual work moved through at least six commits.
+
+Re-derived from the evidence log, the true chain is a textbook case of a pattern that
+kept being widened instead of being replaced:
+
+- `6a34abe0` — narrow control passes, but `scriptPrints` accepts any value appearing
+  anywhere in the concatenated corpus. Forged `CREDENTIAL_MODE=PASS` accepted.
+- `e03c3c07` — per-script/per-variable binding. Closes only the cross-script hole;
+  flow-insensitive whole-file assignments, comments-as-output, unconditional empty
+  slots and `${MODE:-fallback}` remain open.
+- `a7c9bc19` — abandons shell inference for a `VERIFIED_EXPANSIONS` allowlist. Still
+  global by variable name, lacking exact equality.
+- `02eb2d65` — full closed-world attempt. Review decisively BLOCKED: same-line second
+  bindings bypass provenance, closure is a declared-path union rather than
+  reachability, output identity is raw substring rather than an executable emitter
+  site, and controls cover only a subset of branches.
+
+Each repair moved the defect one property along rather than removing the surface. The
+standing ruling is that P0.3 stops incremental regex repair.
+
+### The actual gate
+
+Option B is approved IN PRINCIPLE and implementation is gated on an independent design
+review of acceptance controls B1-B8. Option B replaces shell-semantic inference with an
+explicit allowlist of exact observed output lines, each attested by reviewer/date/command,
+with blob pins for every executed script. It deliberately proves only attested
+observations against exact bytes, and explicitly does NOT claim anything about arbitrary
+future runtime behaviour; a script-execution harness is a separate ticket.
+
+No code and no status transition until that B1-B8 design review passes. Scope remains
+bounded to `ui-web/test/unit.mjs`.
