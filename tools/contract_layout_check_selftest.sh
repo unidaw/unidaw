@@ -625,8 +625,15 @@ open(path, 'w', encoding='utf-8').write("\n".join(lines) + "\n")
 PY
 then
   expect_refusal "9.provenance_length_form" "$(stage prov_lenform)" "LENGTH_FORM" "$LENFORM"
-  if DAW_CONTRACT_SRC="$(stage prov_lenform)" DAW_CONTRACT_BINDINGS="$LENFORM" \
-       bash "$CHECK" 2>&1 | grep -q 'Traceback'; then
+  # CAPTURE FIRST, THEN GREP. This piped the check straight into `grep -q` under `set -o pipefail`,
+  # so the pipeline's status was the CHECK's — and the fixture is built to make the check refuse, so
+  # the status was always 1 and this branch never ran whatever grep found. Verified against a
+  # version with no LENGTH_FORM guard: the traceback WAS in the output and this said nothing. Half
+  # the control that was added to ratchet the length guard had never executed. Every other place in
+  # this file pipes a `printf`, which is why they are fine.
+  lf_out="$(DAW_CONTRACT_SRC="$(stage prov_lenform)" DAW_CONTRACT_BINDINGS="$LENFORM" \
+              bash "$CHECK" 2>&1)"
+  if printf '%s' "$lf_out" | grep -q 'Traceback'; then
     echo "  FAIL: 9.provenance_length_form refused with a TRACEBACK — the guard is being bypassed,"
     echo "        which is the defect this control exists for, not a passing refusal."
     FAIL=$((FAIL+1))

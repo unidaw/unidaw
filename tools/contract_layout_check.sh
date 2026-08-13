@@ -126,13 +126,10 @@ BINDINGS="${DAW_CONTRACT_BINDINGS:-$(find "$ROOT/ui/target" -name shm_sys.rs 2>/
 selftest() { bash "$ROOT/tools/contract_layout_check_selftest.sh"; exit $?; }
 [ "${1:-}" = "--selftest" ] && selftest
 
-python3 - "$SRC" "$BINDINGS" "$ROOT" <<'PY'
+python3 - "$SRC" "$BINDINGS" <<'PY'
 import re, sys, os, hashlib
 src = sys.argv[1]
 candidates = [p for p in sys.argv[2].split('\n') if p.strip()]
-# The REAL repo root, which is where the depfile's absolute paths point even when `src` is a staged
-# fixture tree. Used only to make those paths repo-relative before they are looked up under `src`.
-repo_root = sys.argv[3] if len(sys.argv) > 3 else src
 
 # THE BINDINGS ARE CHOSEN BY WHAT THEY CONTAIN. Every type this run intends to compare must be
 # present WITH layout assertions in the file selected; a stale artefact missing seven of them is
@@ -238,7 +235,13 @@ def closure(rel, seen):
     # A predicate keyed on how an include is SPELT cannot see the include that spells it the other
     # way. Resolving the target against the including file's directory and against the repo root,
     # and keeping whichever exists, is the same rule stated structurally.
-    for inc in re.findall(r'(?m)^\s*#include\s+"([^"]+)"', open(p).read()):
+    # MATCH THE DIRECTIVE, NOT THE DELIMITER. Three revisions keyed this on how the include is
+    # WRITTEN and each was defeated by the next spelling: `apps/`-prefixed only, then double-quoted
+    # only, then double-quoted-with-no-space-after-the-hash only. `#include <apps/x.h>` and
+    # `#  include "apps/x.h"` are the same instruction to the compiler — build.rs passes -I{repo},
+    # so both name the identical file — and the family closes only when the check stops reading the
+    # punctuation and reads the directive.
+    for inc in re.findall(r'(?m)^\s*#\s*include\s*[<"]([^>"]+)[>"]', open(p).read()):
         for cand in ([os.path.normpath(os.path.join(base, inc))] if base else []) + [os.path.normpath(inc)]:
             # Non-existent candidates are system/third-party includes reached by <> semantics or
             # by an include path this check does not model; they are not in-repo headers.
@@ -373,10 +376,28 @@ if stale:
 # The regex closure is KEPT as the independent opinion for the depfile-completeness assertion above:
 # checking the depfile against itself would be circular. Here, where the question is "what must the
 # sidecar cover", the compiler's own list is the stronger authority.
-dep_rel = {os.path.relpath(t, repo_root) for t in dep_text.split() if os.path.isabs(t)}
-dep_rel = {r for r in dep_rel
-           if not r.startswith('..') and os.path.exists(os.path.join(src, r))}
-missing_scope = sorted((wanted | dep_rel) - recorded)
+# THE UNION IS GONE, AND ITS REMOVAL IS THE FIX RATHER THAN A RETREAT.
+#
+# The previous revision answered the spelling problem by adding a SECOND derivation — the depfile's
+# in-repo entries — and unioning it into the demand. Independent review found three things wrong
+# with that, and together they say the derivation was never earning its place:
+#
+#   - It had a SILENT ZERO. `os.path.relpath` against $ROOT, which bash computes with a logical
+#     `cd`+`pwd`, while build.rs canonicalises. Invoke the gate through a symlinked path — /tmp on
+#     macOS, which is exactly how this repo runs gates in temp worktrees — and every entry relpaths
+#     to `../…`, is dropped, and the demand degrades to the old behaviour with no message and no
+#     change to any printed line. Every other derived set in this file refuses when empty; this one,
+#     the one the repair rested on, did not.
+#   - It is EQUAL TO `recorded` by construction on a correct tree, because build.rs writes the
+#     sidecar from the same in-repo list the depfile came from. So it was never an independent
+#     opinion about scope — only about a sidecar edited after the build, which is what the controls
+#     already cover through `wanted`.
+#   - It left the DEPFILE-COMPLETENESS demand above still keyed on the spelling, so the defect
+#     simply moved from scope to declaration.
+#
+# One structural closure now answers both questions, which is the thing three revisions kept failing
+# to do in one place.
+missing_scope = sorted(wanted - recorded)
 if missing_scope:
     raise SystemExit("  FAIL: shm_sys.provenance does not record %d header(s) the roots include:\n"
                      "        %s\n"
@@ -463,6 +484,28 @@ pinned = set(re.findall(r'same!\(\s*([A-Za-z0-9_]+)\s*,', layout))
 
 mirrored = set(hand) & gen
 missing = sorted(mirrored - pinned)
+
+# AND THE OTHER DIRECTION, on the BRIDGE side this time. The argument twenty lines from the end of
+# this file — that checking only the named direction catches renames and deletions but cannot catch
+# an ADDITION, "precisely the failure this file was written to end" — is made for patcher_rust and
+# was never applied to the larger population it describes. Appending a `#[repr(C)] pub struct`
+# with no generated twin to layout.rs passed: the only signal was two printed numbers a reader had
+# to subtract, and nothing asserted their difference.
+#
+# A mirror outside `gen` is not automatically wrong — an internal repr(C) type with no C++ twin is
+# legitimate — so this NAMES them rather than refusing outright, which is the honest strength of the
+# claim. What it ends is the silence.
+untwinned = sorted(set(hand) - gen)
+if untwinned:
+    print("  %d hand-written repr(C) mirror(s) have NO generated twin and are therefore compared"
+          " against nothing:" % len(untwinned))
+    for n in untwinned[:8]:
+        print("        %s" % n)
+    if len(untwinned) > 8:
+        print("        ... and %d more" % (len(untwinned) - 8))
+    print("        If one of these mirrors a C++ struct, its header is not in the bindgen roots and")
+    print("        this check cannot see it. If it is internal to Rust, it belongs outside the")
+    print("        repr(C) population or wants a comment saying why it is exempt.")
 
 print("  %d hand-written repr(C) mirrors, %d generated from the C++ headers"
       % (len(hand), len(gen)))
@@ -721,7 +764,14 @@ drift, blocked, fields_compared = [], [], 0
 for n in sorted(mirrored):
     cpp_off, cpp_size = bindgen_layout(n)
     if not cpp_off or cpp_size is None:
-        continue                       # no per-field assertions to compare against
+        # UNCOMPUTABLE IS A REFUSAL, NOT A SKIP — this section's own stated rule, which it was not
+        # following. A mirror whose twin carries no offset assertions was silently dropped from the
+        # comparison while the line below still printed `len(mirrored)`, so stripping the
+        # offset_of! calls for one struct left it uncovered AND reported as covered. The patcher
+        # loop twenty lines down does the opposite for the identical condition. One rule, two
+        # sites, opposite policies; this is the one that was wrong.
+        blocked.append("%s: the bindings carry no layout assertions for daw_%s" % (n, n))
+        continue
     got = layout_of(n)
     if isinstance(got, str):
         blocked.append("%s: %s" % (n, got))
