@@ -1141,6 +1141,11 @@ add_test(NAME version_parity_check
 )
 set_tests_properties(version_parity_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+add_test(NAME refusal_identity_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/refusal_identity_check.sh
+)
+set_tests_properties(refusal_identity_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 add_test(NAME watchdog_placement_check
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/watchdog_placement_check.sh
 )
