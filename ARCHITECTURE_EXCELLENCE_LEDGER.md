@@ -2695,3 +2695,41 @@ showed that.
 **DECISION #4 FOR THE OWNER — written up in
 `docs/architecture/decisions/OPEN-DECISIONS-FOR-JAAKKO.md`.** AE-P0.3 implementation is
 blocked until it is answered. Everything else on the ticket is ready.
+
+## T3 integration plan — the three conflicts are ONE semantic collision (2026-08-13)
+
+Prepared while T3 is in review, because when it passes I resolve these myself: the author of
+`ae/impl-engine-001` no longer exists, and the earlier audit routed the conflicts to them.
+
+Confirmed by `git merge-tree`, matching the earlier audit exactly: `main <- impl-engine-001`
+is CLEAN, and the conflicts are `impl-engine-001` versus `p2/ctrl-02-worker2` in
+`apps/daw_engine_main.cpp`, `apps/engine_rowops_commands.cpp` and `.h`. They are small —
+5/6, 41/21 and 47/9 lines a side against base `7710401d`.
+
+They are not three conflicts. They are one collision appearing three times.
+
+**Both branches add a "what version does this track hold" helper to the same struct, with
+different signatures and different expressive power.**
+
+- `p2/ctrl-02-worker2`: `std::function<uint32_t(uint32_t)> currentClipVersionForTrack`, used
+  as `const uint32_t currentBase = currentClipVersionForTrack(p.trackId);`. It cannot express
+  "there is no such track", so a missing track and a track genuinely at version 0 are the same
+  answer — which is the exact defect the other branch exists to fix.
+- `ae/impl-engine-001`: `std::function<bool(uint32_t, uint32_t&)> currentTrackClipVersion`,
+  which returns false when the track is gone.
+
+**Resolution: ONE helper, the `bool` one, with ctrl-02's three call sites adapted.** Taking
+both would put two functions behind one question, and the one that survives must be the one
+that can say "no answer". This also closes the reopened `AE-IMPL-ENGINE-001` finding in the
+same edit: that ticket was reopened because "the handler ignores the helper's false result",
+and the merge is where the call sites are being rewritten anyway.
+
+**A second divergence that would otherwise merge into a false comment.** `impl-engine-001`
+passes `/*sentBase=*/0` with a comment stating that this is 0 BY CONTRACT because
+"`UiSetRowOpsPayload` carries no base version, because a row-op edit is not version-gated".
+`ctrl-02` adds `header.baseVersion` and gates SetRowOps on it. After the merge that comment is
+false and the value must become `header.baseVersion` — the sentence and the code have to move
+together, which is the failure mode this ledger keeps recording.
+
+Nothing merged and nothing resolved yet; T3 must pass review first. Recorded now so the
+integration is a decision already made rather than one taken under merge pressure.
