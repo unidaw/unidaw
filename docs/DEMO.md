@@ -413,7 +413,7 @@ DAW_PROJECT_DIR=<the project dir> ./daw_engine --project <name> --render take --
    `slot <track> <device> <slot> gate 1` changes one that already exists. Both are in the app.
 
    (I had this in here as "do not build a demo moment on note length" — wrong, and it would have
-   talked you out of something you can do. `apps/sampler_engine.h:309`.)
+   talked you out of something you can do. `apps/sampler_engine.h`, the one-shot gate check — a slot with `gate == 0` ignores note-off, which is the difference between a drum and a pad.)
 4. The AI takes 5–25 seconds to answer. It streams; wait for it to stop before typing again.
 
 ---

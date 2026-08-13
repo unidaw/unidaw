@@ -254,8 +254,8 @@ def closure(rel, seen):
     # and keeping whichever exists, is the same rule stated structurally.
     # MATCH THE DIRECTIVE, NOT THE DELIMITER. Three revisions keyed this on how the include is
     # WRITTEN and each was defeated by the next spelling: `apps/`-prefixed only, then double-quoted
-    # only, then double-quoted-with-no-space-after-the-hash only. `#include <apps/x.h>` and
-    # `#  include "apps/x.h"` are the same instruction to the compiler — build.rs passes -I{repo},
+    # only, then double-quoted-with-no-space-after-the-hash only. `#include <apps/event_id.h>` and
+    # `#  include "apps/event_id.h"` are the same instruction to the compiler — build.rs passes -I{repo},
     # so both name the identical file — and the family closes only when the check stops reading the
     # punctuation and reads the directive.
     for inc in re.findall(r'(?m)^\s*#\s*include\s*[<"]([^>"]+)[>"]',
@@ -438,7 +438,7 @@ if stale:
 # THE DEMAND DOES NOT COME FROM A REGEX. Twice now the scope assertion has been narrowed by the way
 # an include happens to be SPELT: first it matched only `#include "apps/..."`, and the repair that
 # resolved paths instead still required double quotes and no space after the hash — so
-# `#include <apps/x.h>` and `#  include "apps/x.h"` both escaped, and deleting such a header's
+# `#include <apps/event_id.h>` and `#  include "apps/event_id.h"` both escaped, and deleting such a header's
 # record and editing it PASSED, which is the original fail-open verbatim. Each repair moved the
 # defect one token along, because each kept asking how the line looks.
 #
