@@ -356,8 +356,18 @@ struct TrackRuntime {
   // give up on this track — it goes dead but the engine stays up and keeps
   // publishing. Cleared when the chain is rebuilt (the user swaps the plugin).
   // restartAttempts/restartWindowStart are touched only by the restart worker.
+  //
+  // THAT SENTENCE USED TO BE FALSE. engine_chain_host.cpp cleared both from the UI/command thread
+  // while the worker read-modify-wrote them, with no shared lock — TSan reports the race on
+  // restartWindowStart (offset 856, size 8) when the two production statement sequences are run
+  // against a real TrackRuntime. HOST-R3c did not make the fields atomic; it moved the clear to the
+  // owner, so the sentence is now true by construction rather than by hope.
   uint32_t restartAttempts = 0;
   std::chrono::steady_clock::time_point restartWindowStart{};
+  // Set by whoever rebuilds the chain, consumed and cleared by the restart worker. One atomic bool
+  // replaces two unsynchronised writes, and the deferral costs nothing: the counter is read ONLY
+  // inside the worker, so it is fresh at exactly the moment it is consulted.
+  std::atomic<bool> restartWindowResetRequested{false};
   std::atomic<bool> hostGaveUp{false};
   std::unique_ptr<daw::Watchdog> watchdog;
   std::map<std::array<uint8_t, 16>, ParamMirrorEntry, ParamKeyLess> paramMirror;

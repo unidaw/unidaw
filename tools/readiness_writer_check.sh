@@ -253,6 +253,39 @@ else:
             'the promise is interesting precisely because those paths exist and publish anyway;',
             'if they are gone, re-derive this rule rather than deleting it.')
 
+# ---- rule 2b: the flapping guard belongs to the restart worker ------------------------------
+# HOST-R3c. restartAttempts and restartWindowStart are PLAIN MEMBERS, so the atomic-write rules above
+# cannot see them — and engine_types.h has always claimed they are "touched only by the restart
+# worker". That sentence was false: engine_chain_host.cpp cleared both from the UI/command thread,
+# and TSan reports the race on restartWindowStart. R3c moved the clear to the owner behind a request
+# flag, which makes the sentence true. This keeps it true.
+FLAPPING = ('restartAttempts', 'restartWindowStart')
+OWNER = 'apps/engine_restart_worker.cpp'
+for f in files:
+    if f in (OWNER, 'apps/engine_types.h'):
+        continue                      # the owner, and the declaration itself
+    for i, l in enumerate(src[f], 1):
+        if l.strip().startswith('//'):
+            continue
+        for fld in FLAPPING:
+            if re.search(rf'\b{fld}\s*(=[^=]|\+\+)|\+\+\s*[\w.>-]*\b{fld}\b', l):
+                bad(f'FLAPPING GUARD WRITTEN OUTSIDE ITS OWNER: {f}:{i} writes {fld}',
+                    'these two are plain members owned by the restart worker thread. A write from any',
+                    'other thread is a data race — TSan reported exactly that on restartWindowStart.',
+                    'Set restartWindowResetRequested instead; the worker consumes it and clears them.')
+
+owner_writes = sum(1 for l in src.get(OWNER, [])
+                   if not l.strip().startswith('//')
+                   and any(re.search(rf'\b{fld}\s*(=[^=]|\+\+)|\+\+\s*[\w.>-]*\b{fld}\b', l)
+                           for fld in FLAPPING))
+if owner_writes < 5:
+    # PINNED TO THE MEASURED COUNT, not a loose floor. My first version used >= 3, and deleting two
+    # of the owner's writes still left three — so the control for this rule did not fire. A floor
+    # that survives the mutation it exists to catch is not a floor.
+    bad(f'the restart worker writes the flapping guard {owner_writes} times, expected >= 5',
+        'the fields may have been renamed or moved, in which case rule 2b is blind and the',
+        'ownership it enforces is no longer being enforced at all')
+
 # ---- rule 3: active.store(true) has exactly one site --------------------------------------------
 ups = [(f, ln) for f, ln, fld, fn in writes
        if fld == 'active' and re.search(r'active\.store\(\s*true', src[f][ln - 1])]

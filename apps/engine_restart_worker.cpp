@@ -44,6 +44,13 @@ void runRestartWorker(RestartWorkerDeps& deps) {
       constexpr uint32_t kMaxRestartsPerWindow = 5;
       constexpr auto kRestartWindow = std::chrono::seconds(10);
       const auto nowRestart = std::chrono::steady_clock::now();
+      // The chain was rebuilt since we last looked, so this plugin gets a fresh budget. Consumed
+      // with exchange so the request is taken exactly once, and applied HERE because these two
+      // fields are this thread's alone — see engine_types.h.
+      if (runtime->restartWindowResetRequested.exchange(false, std::memory_order_acq_rel)) {
+        runtime->restartAttempts = 0;
+        runtime->restartWindowStart = {};
+      }
       if (runtime->restartWindowStart.time_since_epoch().count() == 0 ||
           nowRestart - runtime->restartWindowStart > kRestartWindow) {
         runtime->restartWindowStart = nowRestart;

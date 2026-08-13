@@ -261,8 +261,9 @@ void rebuildHostForChain(ChainHostDeps& deps, TrackRuntime& runtime) {
       // The chain changed (user action), so retry even a track we'd given up on:
       // clear the flapping guard and re-arm.
       runtime.hostGaveUp.store(false, std::memory_order_release);
-      runtime.restartAttempts = 0;
-      runtime.restartWindowStart = {};
+      // REQUEST, do not clear. These two fields belong to the restart worker thread; writing them
+      // from here (the UI/command thread) was the data race TSan reports on restartWindowStart.
+      runtime.restartWindowResetRequested.store(true, std::memory_order_release);
       runtime.needsRestart.store(true, std::memory_order_release);
       daw::LogLine() << "Engine: queued host restart for track "
                 << runtime.trackId << std::endl;
