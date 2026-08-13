@@ -66,7 +66,8 @@ python3 - "$ROOT" <<'PYEOF'
 import re, subprocess, sys, collections
 
 ROOT = sys.argv[1]
-FIELDS = ['hostReady', 'active', 'hostGeneration', 'needsRestart', 'restartInFlight', 'hostGaveUp']
+FIELDS = ['hostReady', 'active', 'hostGeneration', 'needsRestart', 'restartInFlight', 'hostGaveUp',
+          'restartWindowResetRequested']
 WRITE = re.compile(r'\b(' + '|'.join(FIELDS) + r')\.(?:store|exchange|fetch_\w+|compare_exchange\w*)\s*\(')
 SIG = re.compile(r'^([A-Za-z_][\w:<>,*&\s]*?\b)?([A-Za-z_]\w*)\s*\(')
 NOT_A_FN = {'if', 'for', 'while', 'switch', 'return', 'sizeof', 'catch'}
@@ -164,7 +165,8 @@ ALLOW = {
   ('apps/daw_engine_main.cpp', 'main::scheduleHostRestart'):
       {'active': 1, 'hostReady': 1, 'restartInFlight': 1},                 # restart requested
   ('apps/engine_chain_host.cpp', 'rebuildHostForChain'):
-      {'active': 1, 'hostGaveUp': 1, 'hostReady': 1, 'needsRestart': 1},   # reconcile failed
+      {'active': 1, 'hostGaveUp': 1, 'hostReady': 1, 'needsRestart': 1,
+       'restartWindowResetRequested': 1},                                  # reconcile failed + R3c request
   ('apps/engine_master_render.cpp', 'runMasterRenderThread'):
       {'needsRestart': 2},                                                 # master send / timeout
   ('apps/engine_produce_block.cpp', 'produceBlock::processTrack'):
@@ -173,7 +175,8 @@ ALLOW = {
       {'active': 1},                                                       # progress observed
   ('apps/engine_restart_worker.cpp', 'runRestartWorker'):
       {'active': 2, 'hostGaveUp': 1, 'hostGeneration': 1, 'hostReady': 3,
-       'needsRestart': 2, 'restartInFlight': 4},                           # launch / gave up / done
+       'needsRestart': 2, 'restartInFlight': 4,
+       'restartWindowResetRequested': 1},                                  # launch / gave up / done + R3c consume
   ('apps/engine_rt_helpers.cpp', 'evictHostForWatchdog'):
       {'active': 1, 'hostReady': 1, 'needsRestart': 1},                    # HOST-R3b: was 3 lambdas
   ('apps/engine_rt_helpers.cpp', 'tearDownHostState'):

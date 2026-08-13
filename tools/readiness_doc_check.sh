@@ -23,6 +23,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 H="$ROOT/apps/engine_readiness_level.h"
+T="$ROOT/apps/engine_types.h"
 fail=0
 note() { printf '  %s\n' "$*"; }
 
@@ -45,16 +46,37 @@ note() { printf '  %s\n' "$*"; }
 # nothing here parses English — and the honest limit is that a sentence could say NOT and then
 # assert it anyway. It is bounded and checkable, which the bare word ban was not.
 DISAVOWAL='NOT |not |previously|withdrawn|WITHDRAWN|first version|superseded|no longer'
-while IFS='|' read -r pattern why; do
-  [ -n "$pattern" ] || continue
-  bare="$(grep -nE "$pattern" "$H" | grep -vE "$DISAVOWAL" || true)"
-  if [ -n "$bare" ]; then
-    fail=1
-    note "FAIL  superseded wording ASSERTED (not disavowed): /$pattern/"
-    note "      $why"
-    printf '%s\n' "$bare" | head -3 | sed 's/^/        /'
-  fi
-done <<'EOF'
+
+# The two rules are FUNCTIONS because a second file now needs them. Re-typing the loop for
+# apps/engine_types.h would put the same rule in two places, which is the defect this file exists
+# to catch, committed inside the check written to catch it.
+absent_from() {
+  local target="$1"
+  while IFS='|' read -r pattern why; do
+    [ -n "$pattern" ] || continue
+    bare="$(grep -nE "$pattern" "$target" | grep -vE "$DISAVOWAL" || true)"
+    if [ -n "$bare" ]; then
+      fail=1
+      note "FAIL  superseded wording ASSERTED (not disavowed) in ${target##*/}: /$pattern/"
+      note "      $why"
+      printf '%s\n' "$bare" | head -3 | sed 's/^/        /'
+    fi
+  done
+}
+
+present_in() {
+  local target="$1"
+  while IFS='|' read -r pattern why; do
+    [ -n "$pattern" ] || continue
+    if ! grep -qE "$pattern" "$target"; then
+      fail=1
+      note "FAIL  replacement wording missing in ${target##*/}: /$pattern/"
+      note "      $why"
+    fi
+  done
+}
+
+absent_from "$H" <<'EOF'
 MappedAndBypassed|bypass is fire-and-forget (host_controller.cpp:595-601), so the engine never learns a plugin was bypassed; the level cannot assert it
 MirrorComplete = [0-9]|the level was withdrawn, not renamed — a numbered enumerator reintroduces it
 meant MAPPED-AND-BYPASSED|states that hostReady means bypassed, which the engine cannot observe
@@ -62,19 +84,31 @@ TWO-LEVEL HOST READINESS|the header models one readiness level plus a separate m
 EOF
 
 # ---- the replacement wording must be PRESENT ------------------------------------------------
-while IFS='|' read -r pattern why; do
-  [ -n "$pattern" ] || continue
-  if ! grep -qE "$pattern" "$H"; then
-    fail=1
-    note "FAIL  replacement wording missing: /$pattern/"
-    note "      $why"
-  fi
-done <<'EOF'
+present_in "$H" <<'EOF'
 MappedAndDispatchable|the level's current name, and the only claim about it the engine can observe
 render_track.cpp:554|the re-arming site that makes a startup-sequence model wrong; without it the withdrawal has no reason
 KNOWN LIMITS|the header must disclose what it does not model, or it reads as complete
 HOST-R3|the non-atomic publication of generation/mapping/readiness must stay named
 HOST-R4|the ABA limit of a 32-bit generation must stay named
+EOF
+
+# ---- HOST-R3c: the flapping guard's comment in apps/engine_types.h --------------------------
+# GATE 5 of docs/architecture/tasks/P2-HOST-R3c-flapping-guard-race.md, delivered late: R3c moved
+# the clear to the restart worker and left the comment saying the chain rebuild does it. The prior
+# inventory had named that exact sentence as the one describing the falsifying writer, so the fix
+# landed while the line that motivated it stayed wrong.
+#
+# Both halves again, for the same reason as above: asserting only the new sentence is satisfied by
+# a comment that says both things, which is precisely how the stale prologue survived.
+[ -f "$T" ] || { echo "readiness_doc_check: FAILED — $T does not exist"; exit 1; }
+
+absent_from "$T" <<'EOF'
+Cleared when the chain is rebuilt|R3c moved the clear to the restart worker; the rebuild only REQUESTS a reset, and this sentence names the writer the race was about
+EOF
+
+present_in "$T" <<'EOF'
+REQUESTS a reset|the rebuild's actual role after R3c — it asks, it does not clear
+restart worker performs the clear|the owner of the two plain fields must stay named, since rule 2b of readiness_writer_check.sh enforces exactly that ownership
 EOF
 
 if [ "$fail" -ne 0 ]; then

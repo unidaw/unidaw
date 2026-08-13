@@ -354,7 +354,8 @@ struct TrackRuntime {
   // restart worker forever, spawning host after host until the machine (or the
   // engine) falls over. Count restarts inside a rolling window; past the limit,
   // give up on this track — it goes dead but the engine stays up and keeps
-  // publishing. Cleared when the chain is rebuilt (the user swaps the plugin).
+  // publishing. A chain rebuild (the user swaps the plugin) REQUESTS a reset; the
+  // restart worker performs the clear itself, on its next pass.
   // restartAttempts/restartWindowStart are touched only by the restart worker.
   //
   // THAT SENTENCE USED TO BE FALSE. engine_chain_host.cpp cleared both from the UI/command thread
