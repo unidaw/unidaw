@@ -14,9 +14,16 @@ fn main() {
     // one form of mirror that goes stale in silence: the person who changes the C++ struct is the
     // same person who has to remember the number. Every opcode payload added in the sampler work
     // was in that state.
+    // ...and patcher_abi.h, which is the third. It is the call-frame ABI rather than a published
+    // region: C++ fills a PatcherContext and hands it to the Rust node per block, on the audio
+    // thread. Seven of patcher_rust's eight repr(C) types mirror this header and harmony_timeline.h
+    // (which it includes), and until now not one of them had a generated twin to be pinned to —
+    // PatcherContext least of all, whose members are mostly POINTERS, where a layout disagreement
+    // is a wrong address rather than a wrong number.
     let headers = [
         repo.join("apps/shared_memory.h"),
         repo.join("apps/event_payloads.h"),
+        repo.join("apps/patcher_abi.h"),
     ];
     for h in &headers {
         println!("cargo:rerun-if-changed={}", h.display());
@@ -26,6 +33,7 @@ fn main() {
     let bindings = bindgen::Builder::default()
         .header(headers[0].to_str().unwrap())
         .header(headers[1].to_str().unwrap())
+        .header(headers[2].to_str().unwrap())
         .clang_args([
             "-x",
             "c++",
@@ -39,6 +47,9 @@ fn main() {
         .allowlist_type("daw::Ui.*")
         .allowlist_type("daw::EventEntry")
         .allowlist_type("daw::BlockMailbox")
+        .allowlist_type("daw::Patcher.*")
+        .allowlist_type("daw::MusicalLogicPayload")
+        .allowlist_type("daw::HarmonyEvent")
         .allowlist_var("daw::kUi.*")
         .allowlist_var("daw::kShm.*")
         .derive_default(true)
