@@ -219,8 +219,13 @@ if len(pr) < 6:
                      "                 are unaffected" % len(pr))
 PY
 then
+  # NOT "payload extent": that phrase also appears in the check's own SUCCESS line
+  # ("patcher EventEntry: ... payload extent agree with the C++"), so this control reported ok for
+  # ANY refusal from ANY section, as long as the patcher section had printed its pass line first.
+  # Deleting the entire patcher EventEntry comparison left the suite reporting 21/5 green, with the
+  # accepted refusal coming from the BRIDGE's EventEntry in a different section and a different file.
   expect_refusal "3 C++ payload shrink is caught" "$D" \
-                 "payload extent|EventEntry disagrees" "$MUT"
+                 "the patcher mirror declares|EventEntry disagrees" "$MUT"
 else
   FAIL=$((FAIL+1))
 fi
@@ -646,8 +651,15 @@ fi
 # The scope demand was narrowed twice by how an include is written: first it matched only
 # `#include "apps/..."`, then only double-quoted forms with no space after the hash. In both cases
 # deleting a header's provenance record and editing that header PASSED — the original fail-open.
-# The demand now unions bindgen's depfile, which is clang's own answer to what it parsed and cannot
-# be spelt around. This control uses the form NO regex in the check matches.
+# The demand is now the UNION of the include closure and bindgen's depfile — clang's own answer to
+# what it parsed, which cannot be spelt around.
+#
+# WHAT THIS CONTROL ACTUALLY RATCHETS, stated exactly, because a wrong word here sends the next
+# reader to the wrong mechanism: the check's regex DOES match the angle form, so this fires through
+# the closure, not through the depfile. It ratchets the DIRECTIVE regex. The depfile half is what
+# catches the spellings no regex can see — a macro include, a line continuation, a comment between
+# `include` and the delimiter — and those are not exercised here; they were verified by hand against
+# this commit and are the reason the union exists at all.
 ANGLE="$(stage_bindings prov_angle)"
 cp "$REAL_BINDINGS" "$ANGLE"
 D="$(stage prov_angle)"
@@ -687,6 +699,62 @@ open(prov, 'w').write("\n".join(out) + "\n")
 PY
 then
   expect_refusal "10.scope_angle_include" "$D" "does not record" "$ANGLE"
+else
+  FAIL=$((FAIL+1))
+fi
+
+# 11.* — RATCHETS FOR TWO REPAIRS THAT SHIPPED WITHOUT ONE.
+# Independent review ran an assertion-deletion sweep and found both of the previous commit's fixes
+# reverted GREEN: nothing in this suite had ever seen either work. A hand-verification that leaves
+# no control behind is the state the three repairs before it were in when they regressed.
+
+# A mirror whose twin carries no offset assertions was silently skipped while the summary still
+# counted it, so it was uncovered AND reported as covered.
+NOOFF="$(stage_bindings no_offsets)"
+if python3 - "$REAL_BINDINGS" "$NOOFF" <<'PY2'
+import re, sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src).read()
+n = len(re.findall(r'offset_of!\(daw_UiBulkChunkPayload,', s))
+if n == 0:
+    raise SystemExit("  MUTATION DID NOT LAND: no offset assertions for daw_UiBulkChunkPayload")
+out = re.sub(r'[^\n]*offset_of!\(daw_UiBulkChunkPayload,[^\n]*\n', '', s)
+if 'size_of::<daw_UiBulkChunkPayload>' not in out:
+    raise SystemExit("  MUTATION DID NOT LAND: the size assertion went too; this would refuse for"
+                     " a different reason")
+open(dst, 'w').write(out)
+PY2
+then
+  expect_refusal "11.mirror_without_offsets" "$(stage no_offsets)" \
+                 "can no longer be laid out|UiBulkChunkPayload" "$NOOFF"
+else
+  FAIL=$((FAIL+1))
+fi
+
+# A repr(C) mirror with no generated twin is compared against nothing. It used to PRINT and exit 0.
+D="$(stage untwinned)"
+if python3 - "$D/ui/daw-bridge/src/layout.rs" <<'PY2'
+import sys
+p = sys.argv[1]
+open(p, 'a').write("\n#[repr(C)]\npub struct UiTotallyInternalThing { pub a: u32, pub b: u64 }\n")
+PY2
+then
+  expect_refusal "11.mirror_without_twin" "$D" "NO generated twin|UiTotallyInternalThing"
+else
+  FAIL=$((FAIL+1))
+fi
+
+# ...and the declared exemption must actually work, or the refusal above is a wall with no door.
+# It must also REQUIRE a reason: a bare marker is a way to silence the check without saying why.
+D="$(stage untwinned_exempt)"
+if python3 - "$D/ui/daw-bridge/src/layout.rs" <<'PY2'
+import sys
+p = sys.argv[1]
+open(p, 'a').write("\n// not-a-c++-mirror: internal to the bridge, never crosses shared memory\n"
+                   "#[repr(C)]\npub struct UiTotallyInternalThing { pub a: u32, pub b: u64 }\n")
+PY2
+then
+  expect_pass "11.exemption_is_honoured" "$D"
 else
   FAIL=$((FAIL+1))
 fi

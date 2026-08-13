@@ -241,13 +241,14 @@ def closure(rel, seen):
     # `#  include "apps/x.h"` are the same instruction to the compiler — build.rs passes -I{repo},
     # so both name the identical file — and the family closes only when the check stops reading the
     # punctuation and reads the directive.
-    for inc in re.findall(r'(?m)^\s*#\s*include\s*[<"]([^>"]+)[>"]', open(p).read()):
+    for inc in re.findall(r'(?m)^\s*#\s*include\s*[<"]([^>"]+)[>"]',
+                          open(p, encoding='utf-8', errors='replace').read()):
         for cand in ([os.path.normpath(os.path.join(base, inc))] if base else []) + [os.path.normpath(inc)]:
             # Non-existent candidates are system/third-party includes reached by <> semantics or
             # by an include path this check does not model; they are not in-repo headers.
             if cand.startswith('..') or os.path.isabs(cand):
                 continue
-            if os.path.exists(os.path.join(src, cand)):
+            if os.path.isfile(os.path.join(src, cand)):
                 closure(cand, seen)
                 break
 
@@ -376,28 +377,48 @@ if stale:
 # The regex closure is KEPT as the independent opinion for the depfile-completeness assertion above:
 # checking the depfile against itself would be circular. Here, where the question is "what must the
 # sidecar cover", the compiler's own list is the stronger authority.
-# THE UNION IS GONE, AND ITS REMOVAL IS THE FIX RATHER THAN A RETREAT.
+# TWO DERIVATIONS, BECAUSE ONE OF THEM IS A LEXICAL TEST AND CANNOT BE TRUSTED ALONE.
 #
-# The previous revision answered the spelling problem by adding a SECOND derivation — the depfile's
-# in-repo entries — and unioning it into the demand. Independent review found three things wrong
-# with that, and together they say the derivation was never earning its place:
+# The demand is the union of the include closure derived above and the headers bindgen actually
+# parsed. The history of this line is the argument for both halves:
 #
-#   - It had a SILENT ZERO. `os.path.relpath` against $ROOT, which bash computes with a logical
-#     `cd`+`pwd`, while build.rs canonicalises. Invoke the gate through a symlinked path — /tmp on
-#     macOS, which is exactly how this repo runs gates in temp worktrees — and every entry relpaths
-#     to `../…`, is dropped, and the demand degrades to the old behaviour with no message and no
-#     change to any printed line. Every other derived set in this file refuses when empty; this one,
-#     the one the repair rested on, did not.
-#   - It is EQUAL TO `recorded` by construction on a correct tree, because build.rs writes the
-#     sidecar from the same in-repo list the depfile came from. So it was never an independent
-#     opinion about scope — only about a sidecar edited after the build, which is what the controls
-#     already cover through `wanted`.
-#   - It left the DEPFILE-COMPLETENESS demand above still keyed on the spelling, so the defect
-#     simply moved from scope to declaration.
+#   Three revisions keyed the demand on how an include is SPELT — `apps/`-prefixed, then
+#   double-quoted, then double-quoted-with-no-space — and each was defeated by the next spelling.
+#   The current regex matches the DIRECTIVE and closes every spelling those three missed, but it is
+#   still a lexical test: independent review defeated it with a macro include, a line continuation,
+#   and a comment between `include` and the delimiter. A regex on the include line is always one
+#   shape away from the next miss.
 #
-# One structural closure now answers both questions, which is the thing three revisions kept failing
-# to do in one place.
-missing_scope = sorted(wanted - recorded)
+#   The previous revision added the depfile and then DELETED it again, on the reasoning that it
+#   equals `recorded` by construction so it was never an independent opinion. That reasoning was
+#   wrong in a way worth naming: the two are equal on a CORRECT tree, which is precisely the tree
+#   where no assertion needs to fire. On the defective tree the sidecar has a record removed and the
+#   depfile does not, and that difference IS the guard. Judging a derivation by comparing it to the
+#   artefact it exists to contradict is the "verified against itself" shape.
+#
+# The depfile's silent zero — the reason it was deleted — was caused by anchoring its paths to a
+# repo root computed one way here and another way in build.rs. That anchoring is gone: each absolute
+# entry is resolved by the longest suffix that exists under `src`, which needs no root at all, and
+# an empty result REFUSES. Every other derived set in this file refuses when empty; this one now
+# does too, which is what it was missing the first time.
+dep_rel = set()
+for t in dep_text.split():
+    if not os.path.isabs(t):
+        continue
+    parts = os.path.normpath(t).split('/')
+    for i in range(1, len(parts)):
+        cand = '/'.join(parts[i:])
+        if os.path.isfile(os.path.join(src, cand)):
+            dep_rel.add(cand)
+            break
+if not dep_rel:
+    raise SystemExit("  FAIL: no absolute entry in bindgen's depfile resolves under the source\n"
+                     "        root, so the compiler's own list of parsed headers is empty and the\n"
+                     "        demand below would rest on the include regex alone. That regex is a\n"
+                     "        lexical test and is known to miss macro and continued includes.\n"
+                     "        Rebuild the bridge:\n"
+                     "          cargo build --manifest-path ui/Cargo.toml -p daw-bridge")
+missing_scope = sorted((wanted | dep_rel) - recorded)
 if missing_scope:
     raise SystemExit("  FAIL: shm_sys.provenance does not record %d header(s) the roots include:\n"
                      "        %s\n"
@@ -422,6 +443,10 @@ ATTR    = re.compile(r'\s*#\[')
 REPR_C  = re.compile(r'\s*#\[repr\(C')
 ITEM    = re.compile(r'\s*pub (struct|enum|union) ([A-Za-z0-9_]+)')
 
+# The declared exemption. A reason is REQUIRED after the colon: a bare marker would be a way to
+# silence the check without saying why, which is the omission this file exists to end.
+EXEMPT_MARK = re.compile(r'not-a-c\+\+-mirror:\s*\S')
+
 def repr_c_structs(text):
     """Every `pub struct` whose attribute block carries repr(C), and every repr(C) that reached no
     item at all.
@@ -436,7 +461,7 @@ def repr_c_structs(text):
     unattributed attribute means the parse has drifted and the caller refuses rather than
     comparing a set it can no longer trust.
     """
-    structs, pending, orphaned = {}, [], []
+    structs, pending, orphaned, exempt, notes = {}, [], [], set(), []
     for n, raw in enumerate(text.split('\n'), 1):
         line = raw.rstrip()
         item = ITEM.match(line)
@@ -449,27 +474,35 @@ def repr_c_structs(text):
                     if g:
                         forced = int(g.group(1))
                 structs.setdefault(name, (n, forced))
-            pending = []
+                # THE EXEMPTION IS DECLARED WHERE THE TYPE IS, not by an omission in this checker.
+                # A repr(C) mirror with no generated twin is refused below; a type that genuinely
+                # never crosses SHM says so here, in front of the person editing layout.rs, and the
+                # claim is greppable.
+                if any(EXEMPT_MARK.search(c) for c in notes):
+                    exempt.add(name)
+            pending, notes = [], []
             continue
         if ATTR.match(line):
             pending.append(line)
             continue
         stripped = line.strip()
         if stripped == '' or stripped.startswith(('//', '/*', '*')):
+            notes.append(stripped)       # kept: the exemption marker lives in this block
             continue                     # comments and blanks do not break the block
         for a in pending:                # a repr(C) that never reached an item
             if REPR_C.match(a):
                 orphaned.append(n)
-        pending = []
-    return structs, orphaned
+        pending, notes = [], []
+    return structs, orphaned, exempt
 
-hand, dangling = {}, []
+hand, dangling, hand_exempt = {}, [], set()
 for f in ("ui/daw-bridge/src/layout.rs", "ui/daw-bridge/src/control.rs"):
     p = os.path.join(src, f)
     if os.path.exists(p):
-        s, o = repr_c_structs(open(p).read())
+        s, o, e = repr_c_structs(open(p).read())
         hand.update(s)
         dangling += [(f, n) for n in o]
+        hand_exempt |= e
 
 if dangling:
     print("  FAIL: %d repr(C) attribute(s) reached no item, so the parse has drifted and the"
@@ -495,17 +528,27 @@ missing = sorted(mirrored - pinned)
 # A mirror outside `gen` is not automatically wrong — an internal repr(C) type with no C++ twin is
 # legitimate — so this NAMES them rather than refusing outright, which is the honest strength of the
 # claim. What it ends is the silence.
-untwinned = sorted(set(hand) - gen)
+# IT REFUSES. This printed the names and exited 0, which independent review correctly called the
+# "two numbers a reader must subtract" defect moved one line lower: a green run, a PASS on the last
+# line, and no control had ever seen the text. This file's own header says a limitation notice
+# nobody re-tests outlives the limitation, and an unasserted print is that notice.
+untwinned = sorted(set(hand) - gen - hand_exempt)
 if untwinned:
-    print("  %d hand-written repr(C) mirror(s) have NO generated twin and are therefore compared"
-          " against nothing:" % len(untwinned))
+    print()
+    print("  FAIL: %d hand-written repr(C) mirror(s) have NO generated twin, so nothing compares"
+          % len(untwinned))
+    print("        them to any C++ struct:")
     for n in untwinned[:8]:
         print("        %s" % n)
     if len(untwinned) > 8:
         print("        ... and %d more" % (len(untwinned) - 8))
-    print("        If one of these mirrors a C++ struct, its header is not in the bindgen roots and")
-    print("        this check cannot see it. If it is internal to Rust, it belongs outside the")
-    print("        repr(C) population or wants a comment saying why it is exempt.")
+    print("        If one mirrors a C++ struct, its header is not in the bindgen roots and this")
+    print("        check cannot see it — add the header. If it is internal to the bridge and never")
+    print("        crosses shared memory, say so where it is declared, in its attribute block:")
+    print("            // not-a-c++-mirror: <why it never crosses SHM>")
+    print("        A reason is required. Exempting it here instead would put the claim in the")
+    print("        checker, where the person editing layout.rs will never read it.")
+    raise SystemExit(1)
 
 print("  %d hand-written repr(C) mirrors, %d generated from the C++ headers"
       % (len(hand), len(gen)))
@@ -822,7 +865,7 @@ print("  field order: %d fields across %d mirrors lie at the offsets the C++ giv
 # carried any assertion. Same engine, same authority; the only new vocabulary is the pointer.
 patcher_path = os.path.join(src, "patcher_rust/src/lib.rs")
 patcher_src = open(patcher_path).read() if os.path.exists(patcher_path) else ""
-patcher_hand, patcher_dangling = repr_c_structs(patcher_src)
+patcher_hand, patcher_dangling, _patcher_exempt = repr_c_structs(patcher_src)
 if patcher_dangling:
     raise SystemExit("  FAIL: %d repr(C) attribute(s) in patcher_rust/src/lib.rs reached no item,\n"
                      "        so its population cannot be trusted either" % len(patcher_dangling))
