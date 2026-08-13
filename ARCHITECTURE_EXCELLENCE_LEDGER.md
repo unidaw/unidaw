@@ -2472,3 +2472,38 @@ are not to be re-litigated without a new ruling.
 CMD00 implementation is unblocked by 1 and 2. It touches the wire, so it remains gated on
 a focused design review and a production-bound test before any cutover, per the P1.2 exit
 criteria. Ruling 3 is a bounded engine change and is implemented next.
+
+## Ruling 3 implemented — HOST-R3c finding 5 closed at `7ab2fa18` (2026-08-13)
+
+The flapping-reset request now carries a time and expires with the guard's own 10s
+window, per the owner ruling. `restartWindowResetRequestedAt` (a `uint64_t` tick count,
+0 meaning no request) replaces the bool. The worker takes it either way, so a stale
+request cannot accumulate, and applies it only when younger than `kRestartWindow` — the
+expiry rule is the guard's existing constant rather than a second one to keep in step.
+
+Both re-arm sites now call one helper, `requestFlappingBudgetReset`. That is not tidiness:
+rule 2c grepped for `restartWindowResetRequested.store(true` and would have gone BLIND
+the moment the flag became a timestamp, which is precisely the change the ruling
+ordered. A rule that names a store spelling cannot survive its own subject changing
+shape; a rule that names a CALL can. The refactor also made the rule's control naturally
+count-neutral, because the write now lives in the helper and removing a call site no
+longer shifts rule 1's totals — the masking problem solved by construction rather than
+by choosing the mutation carefully.
+
+Evidence: removing the request from `tearDownHostState` fires rule 2c ALONE with no
+COUNT DRIFT masking it; full build clean; `ctest -R 'readiness|registry'` 6/6;
+watchdog/host/phase3 25/25. The unregistered TSan repro was updated to follow the rename
+so it does not rot into uncompilable dead code.
+
+Stated limit: no control exercises the EXPIRY itself — that a stale request is discarded
+and a fresh one applied. That is the property the ruling was about, and it is currently
+argued from the code rather than demonstrated. Sent for independent review.
+
+## CMD00 unblocked, still gated
+
+Rulings 1 and 2 remove the two blockers CMD00 has been waiting on. It touches the wire,
+so per the P1.2 exit criteria no cutover is authorized until its ticket has a focused
+design review and a production-bound test. The next CMD00 step is that design, covering:
+per-process nonce minting and its collision behaviour, removal of `commandType` from the
+payload and what the receiver correlates on instead, and the migration/version-gate plan
+the memo already priced at one bump, six files, 28 assertions.
