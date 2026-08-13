@@ -2507,3 +2507,37 @@ design review and a production-bound test. The next CMD00 step is that design, c
 per-process nonce minting and its collision behaviour, removal of `commandType` from the
 payload and what the receiver correlates on instead, and the migration/version-gate plan
 the memo already priced at one bump, six files, 28 assertions.
+
+## CMD00 is fully specified and authorized to implement (2026-08-13)
+
+Checked before assuming, having just been burned by the opposite on AE-P0.3: the CMD00
+design already exists and is twice-revised at
+`docs/architecture/tasks/P2-CMD-00-revised.md` in the product checkout, alongside its
+review and the owner memo. It is not to be rewritten, and no second design is to be
+produced. The two items its §8 lists as open are EXACTLY the two Jaakko ruled on, and the
+design's own recommendations match both rulings — nonce, and drop `commandType`. So the
+ruling closes §8 rather than changing the design.
+
+What that leaves is implementation against the design's §7, which is already a precise
+spec: twelve acceptance gates, each with a named sabotage that must fire it and leave the
+others green. Four are worth restating because they are the ones a partial implementation
+would silently skip:
+
+- **legacy** — an all-zero id reports `Unknown`, never `Applied`. The design names four
+  live arms in `main.rs` that must change, not a comment to update.
+- **alignment** — every refusal payload stays `alignof == 4`; the sabotage changes one
+  half to a `uint64_t`, which moves no size or offset.
+- **uniformity** — the id sits at offset 32 in all seven payloads; the sabotage moves one
+  to 24 and every other gate still passes.
+- **dispatch** — a `ReplayComplete` gate must yield NO outcome rather than `Unknown`; the
+  sabotage drops the `size >= 40` check and the zeroed bytes read as an uncorrelated
+  refusal.
+
+Scope is seven payloads at one offset, a coordinated version bump, and the mirror. The
+memo priced the migration at one bump, six files, 28 assertions — a figure that had been
+overstated fourfold in every earlier discussion including the memo author's own.
+
+Sequencing note: this touches `apps/event_payloads.h` and `ui/daw-bridge/src/layout.rs`,
+which are merge hotspots and are also the files T3 pins. T3 must settle first, or the two
+will fight over the same layout assertions. Implementation is therefore queued behind T3's
+outstanding review rather than started now.
