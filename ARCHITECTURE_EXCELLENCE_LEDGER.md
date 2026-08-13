@@ -3394,3 +3394,37 @@ Ticketed at `docs/architecture/decisions/AE-RING-01-stale-replay.md` with the re
 would need. Noted there as a separate question: whether `ringWrite` should validate its reservation
 before publishing, so a slow producer can DISCOVER it was retired rather than merely be prevented
 from doing harm.
+
+## The SPSC claim was wrong in four places — `7f3ce722` (2026-08-14)
+
+`ui/daw-bridge/src/control.rs` **contradicted itself across 1,900 lines**. Its module header — where
+a reader starts — said "the UI command ring is SPSC … exactly one process may be the producer",
+while `write_entry` has carried a comment saying MULTI-PRODUCER since M2.18 and does exactly that:
+CAS-reserve the slot on `write_index`, fill it, publish with `ready`. I verified the implementation
+before rewriting the header, so as not to replace one false claim with another.
+
+It was not harmless. The P2-CMD-00 design reasoned FROM that paragraph about whether a command
+identity must be unique across concurrent producers, and flagged it as a documentation defect it
+could not fix while read-only. **A stale rule stated where a reader begins outranks a correct one
+stated where the code is.**
+
+And fixing one statement left three, which is the shape this ledger has recorded before under
+"changing a rule means changing every sentence that states it":
+
+- `ui/daw-sidecar/src/main.rs` asserted "the ring is SPSC, so exactly one producer may write. That
+  is this thread." A false exclusivity in PRODUCTION CODE, while the CLI and agent rings produce
+  concurrently.
+- `SHM_LAYOUT.md` said "each ring is an SPSC ring" with no qualification. The audio-side rings still
+  are; the three UI command rings stopped being so at M2.18.
+- `AGENTS.md`'s milestone list recorded "UI command ring reserved (SPSC)". Left as the record of
+  what that milestone shipped and marked superseded rather than rewritten — it was true when
+  written, and rewriting it would falsify history.
+
+Each correction keeps the superseded phrasing beside it, so a reader who learnt the old rule sees it
+retired rather than silently absent. The one surviving assertive mention is in
+`ARCHITECTURE_REVIEW.md`, which proposes "an MPSC ring so the SPSC invariant holds per producer" as
+FUTURE work that M2.18 has since delivered — a stale "what's missing" claim in a document already
+known to carry several, and not this ticket's to rewrite.
+
+Verified: cargo build clean, `ctest` 11/11 after rebuilding `daw-cli`, which `contract_freshness`
+correctly reported stale against the changed `control.rs`.
