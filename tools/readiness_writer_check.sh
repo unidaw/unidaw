@@ -265,17 +265,33 @@ else:
 # flag, which makes the sentence true. This keeps it true.
 FLAPPING = ('restartAttempts', 'restartWindowStart')
 OWNER = 'apps/engine_restart_worker.cpp'
+# THE RULE IS OWNERSHIP, SO THE TEST IS MENTION — NOT A LIST OF WRITE SPELLINGS. This matched
+# `= `, `++`, `->` and `.` forms and was blind to `restartAttempts += 1`, to `uint32_t& a =
+# runtime.restartAttempts`, to std::swap, to memset(&rt->restartWindowStart, ...), and to an
+# assignment split across two lines. Each of those is a write, and each would have passed.
+#
+# Widening the pattern is the move that never ends: three malformed-token shapes elsewhere in this
+# repo took three successively wider regexes and each was followed by a shape outside the new one.
+# The invariant here is not "these are not written in these ways" but "these belong to one thread",
+# and that is decidable by structure: outside the owner and the declaration, the names do not
+# appear at all. A read is as much a violation as a write — reading a plain member another thread
+# mutates is the same race — so the rule needs no notion of which side of an `=` the name is on.
+#
+# Verified against the tree when this was tightened: the only mentions outside the two exempt files
+# are comments, including one describing this very rule.
 for f in files:
     if f in (OWNER, 'apps/engine_types.h'):
         continue                      # the owner, and the declaration itself
     for i, l in enumerate(src[f], 1):
-        if l.strip().startswith('//'):
+        code = l.split('//', 1)[0]    # trailing comments too, not just whole-line ones
+        if not code.strip():
             continue
         for fld in FLAPPING:
-            if re.search(rf'\b{fld}\s*(=[^=]|\+\+)|\+\+\s*[\w.>-]*\b{fld}\b', l):
-                bad(f'FLAPPING GUARD WRITTEN OUTSIDE ITS OWNER: {f}:{i} writes {fld}',
-                    'these two are plain members owned by the restart worker thread. A write from any',
-                    'other thread is a data race — TSan reported exactly that on restartWindowStart.',
+            if re.search(rf'\b{fld}\b', code):
+                bad(f'FLAPPING GUARD NAMED OUTSIDE ITS OWNER: {f}:{i} mentions {fld}',
+                    'these two are plain members owned by the restart worker thread. Touching them',
+                    'from any other thread is a data race — TSan reported exactly that on',
+                    'restartWindowStart — and a read races just as a write does.',
                     'Set restartWindowResetRequested instead; the worker consumes it and clears them.')
 
 owner_writes = sum(1 for l in src.get(OWNER, [])
