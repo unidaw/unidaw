@@ -288,9 +288,16 @@ PY
 }
 
 # expect_pass <name> <dir> — the check must pass AND must have run the field-order section
+# expect_pass <name> <dir> [bindings]
+# The third argument is optional and must stay optional: with it unset the check DISCOVERS its own
+# candidates, which is what every pass-control before 12 relies on.
 expect_pass() {
-  local name="$1" dir="$2" out rc
-  out="$(DAW_CONTRACT_SRC="$dir" bash "$CHECK" 2>&1)"; rc=$?
+  local name="$1" dir="$2" binds="${3:-}" out rc
+  if [ -n "$binds" ]; then
+    out="$(DAW_CONTRACT_SRC="$dir" DAW_CONTRACT_BINDINGS="$binds" bash "$CHECK" 2>&1)"; rc=$?
+  else
+    out="$(DAW_CONTRACT_SRC="$dir" bash "$CHECK" 2>&1)"; rc=$?
+  fi
   if [ $rc -ne 0 ]; then
     echo "  FALSE POSITIVE: $name — the check refused something that moves no byte:"
     printf '%s\n' "$out" | sed 's/^/           /' | tail -6
@@ -823,6 +830,38 @@ open(sys.argv[1], 'a').write("\n// not-a-c++-mirror: scratch state, never crosse
 PY2
 then
   expect_pass "11c.patcher_exemption_is_honoured" "$D"
+else
+  FAIL=$((FAIL+1))
+fi
+
+# 12.stale_candidate_cannot_raise_the_bar — FOUND BY MERGING, NOT BY REVIEWING.
+# `offered` unioned the assertions of every candidate, so a struct DELETED from the C++ stayed
+# required forever if any old build directory still asserted it. On main, `UiArrangeSection` had
+# been removed from shared_memory.h and survived in a two-week-old release build dir; every current
+# bindings file was therefore "incomplete" for a type that no longer exists, and the printed remedy
+# could not fix it — rebuilding does not delete old build directories and `cargo clean -p` did not
+# either. Seven review rounds did not find this because none of them merged the branch.
+GHOST="$TMP/ghost"; mkdir -p "$GHOST"
+cp "$REAL_DEPFILE" "$GHOST/shm_sys.d" 2>/dev/null
+cp "$REAL_PROVENANCE" "$GHOST/shm_sys.provenance" 2>/dev/null
+if python3 - "$REAL_BINDINGS" "$GHOST/shm_sys.rs" <<'PY2'
+import re, sys
+src, dst = sys.argv[1], sys.argv[2]
+t = open(src).read()
+# A file from before patcher_abi.h joined build.rs: strip every patcher assertion...
+for n in ('MusicalLogicPayload', 'PatcherEuclideanConfig', 'PatcherSliceSelectConfig',
+          'PatcherRandomDegreeConfig', 'PatcherLfoConfig', 'HarmonyEvent', 'PatcherContext'):
+    t = re.sub(r'[^\n]*daw_%s[^\n]*\n' % n, '', t)
+if 'daw_PatcherContext' in t:
+    raise SystemExit("  MUTATION DID NOT LAND: patcher assertions survived the strip")
+# ...and have it assert a type the C++ no longer defines.
+t += "\nconst _GHOST: usize = size_of::<daw_UiRemovedLongAgo>() - 8usize;\n"
+open(dst, 'w').write(t)
+PY2
+then
+  # The ghost file is offered FIRST, as the newest candidate would be.
+  expect_pass "12.stale_candidate_cannot_raise_the_bar" "$(stage ghost)" \
+              "$(printf '%s\n%s' "$GHOST/shm_sys.rs" "$REAL_BINDINGS")"
 else
   FAIL=$((FAIL+1))
 fi

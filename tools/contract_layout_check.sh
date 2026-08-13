@@ -157,7 +157,24 @@ if not from_files:
     raise SystemExit("  FAIL: no candidate bindings carry any layout assertions. bindgen produced\n"
                      "        an empty or testless module, which would make every check below\n"
                      "        vacuously pass")
-offered = from_files | set(PATCHER)
+# A CANDIDATE THAT DOES NOT ANSWER THIS QUESTION MAY NOT DEFINE ITS ANSWER.
+#
+# `offered` used to union the assertions of EVERY candidate, and that made a deleted struct
+# permanent: `UiArrangeSection` was removed from shared_memory.h, survives only in a two-week-old
+# release build directory, and its presence there made every current bindings file "incomplete"
+# for a type that no longer exists. The printed remedy — rebuild the bridge — cannot fix that,
+# because rebuilding does not remove old build directories and `cargo clean -p` did not either.
+# Found by merging this branch into main and running the check, which is the step nobody had done.
+#
+# The discriminator is the one this file already states in the refusal below: a file missing the
+# patcher types "was generated before patcher_abi.h joined build.rs; it is not an older answer to
+# this question, it is an answer to a different one." That sentence was already the rule for
+# CHOOSING a candidate; it now also governs which candidates may raise the bar. If none qualify,
+# `offered` is PATCHER alone and the selection below refuses with exactly that message.
+qualified = [(p, t) for p, t in pool if set(PATCHER) <= asserted_types(t)]
+offered = set(PATCHER)
+for _, t in qualified:
+    offered |= asserted_types(t)
 
 bindings, binds = None, None
 for p, t in pool:                        # newest first
