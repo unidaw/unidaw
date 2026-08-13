@@ -243,6 +243,24 @@ void runProducerThread(ProducerThreadDeps& deps) {
             continue;
           }
           completed = mailbox->completedBlockId.load(std::memory_order_acquire);
+
+          // WDOG-04: THE WATCHDOG'S ONLY PRODUCTION CALL SITE, and it is inside this try_to_lock
+          // deliberately.
+          //
+          // Instantiating a VST holds this same controllerMutex for a blocking round-trip, and for
+          // those 4-7 blocks engine_produce_block.cpp try_locks it, fails, and returns without
+          // sending. kHostLateObservationsBeforeEviction is 3. If the watchdog observed from outside
+          // the lock, a plugin load would evict its own host mid-load and the relaunch would restart
+          // the load. Observing from INSIDE means the mutex that blocks the dispatch also blocks the
+          // observation, so that case cannot accrue lateness at all — by construction, not by luck.
+          //
+          // lastDispatchedBlockId, never nextBlockId: the question is whether this host still owes
+          // us work and stopped moving. See Watchdog::check for why "is it behind" is unanswerable —
+          // the producer runs ahead by design, so a healthy host trails its last dispatch forever.
+          if (runtime->watchdog) {
+            runtime->watchdog->check(
+                runtime->lastDispatchedBlockId.load(std::memory_order_acquire));
+          }
         }
         if (completed > 0) {
           runtime->active.store(true, std::memory_order_release);
