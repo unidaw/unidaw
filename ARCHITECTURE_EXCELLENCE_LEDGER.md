@@ -96,14 +96,14 @@ watcher:  none (required for Codex)
 
 | Ticket | State | Dependency | Owner | Reviewer | Worktree | Commit |
 |---|---|---|---|---|---|---|
-| `AE-P0` | `ACTIVE` | current-main rebaseline + formal review | `backend` | unassigned | root | `62bafdc` execution baseline |
+| `AE-P0` | `ACTIVE` | current-main rebaseline + formal review | `lead` | independent subagent | root | `62bafdc` execution baseline |
 | `AE-P0.1` | `COMPLETE` | packet `258f423` + independent review | `codex-worker-1` | `claude-worker-1` | `/Users/jak/src/daw-ae-p0-followup` | product main `71758c0`; final chain ends `3b53a29` |
 | `AE-P0.2 discovery` | `ESCALATED_TO_ADR` | frozen baseline + packet | `claude-worker-2` | `codex-worker-2` | read-only root | four rejected designs; evidence complete |
 | `AE-P0.2 ADR` | `APPROVED` | current-main inventory + exact review | `backend` | `codex-worker-2` | root | exact SHA `7dff997`; approval received |
 | `AE-P0.2 implementation` | `COMPLETE` | packet `6287ffd` approved + AE-P0.1 integration | codex-worker-2 | claude-worker-2 | `/Users/jak/src/daw-ae-p0-2-lane0` | product main `75c6f06`; final corrective candidate independently approved |
 | `AE-P0.3` | `BLOCKED` | B1-B8 design review of Option B (see 2026-08-13 re-derivation) | `lead` | unassigned | none | last impl `02eb2d65`, review BLOCKED |
 | `AE-P1.1` | `FROZEN` | `AE-P0` | claude-worker-2 | codex-worker-1 | `/Users/jak/src/daw-ae-p1-1-packet` | `ba88bcb4657b62bdfc752d338d877e139e212ca6`; independent PASS; successor-only |
-| `AE-P1.2` | `ACTIVE` | `AE-P1.1` | claude-worker-2 | codex-worker-1 | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; 19 open items; G4 not decidable |
+| `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; 19 open items; G4 not decidable |
 | `AE-P1.3` | `BLOCKED` | `AE-P1.2` | unassigned | unassigned | none | none |
 | `AE-P1.4` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P1.5` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
@@ -113,6 +113,23 @@ watcher:  none (required for Codex)
 | `AE-P4.*` | `BLOCKED` | Phase 2 transactions | unassigned | unassigned | none | none |
 | `AE-P5.*` | `BLOCKED` | replacement behavior gated | unassigned | unassigned | none | none |
 
+## Ownership after the fleet dissolved — read this before "fixing" a name
+
+Two kinds of name appear in the tables below, and they must not be edited alike.
+
+- On a `COMPLETE`, `FROZEN` or `APPROVED` row, the owner and reviewer are a HISTORICAL
+  FACT: they record who did the work and who independently checked it. Those names stay
+  as they are even though the agents are gone. Rewriting them to `lead` would falsify the
+  record and, worse, would erase the evidence that the work HAD an independent reviewer.
+- On an `ACTIVE` or `BLOCKED` row, and on every merge-hotspot lock, the name is a LIVE
+  ASSIGNMENT. Those were re-pointed to `lead` on 2026-08-13 because the agents holding
+  them no longer exist, and a lock held by a dead agent is not a lock — it is an
+  unattended file that reads as guarded.
+
+Reviewer on a live row now reads `independent subagent`: the rule that an author may not
+review their own work is unchanged, and is met by dispatching the review rather than by a
+peer worker.
+
 ## Merge-hotspot ownership
 
 During AE-P0, `backend` is the sole integration owner for every merge hotspot.
@@ -120,12 +137,12 @@ Task-specific ownership is assigned before any Phase 1 worktree is created:
 
 | Hotspot | Owner | Lock state |
 |---|---|---|
-| `apps/shared_memory.h`, generated wire headers, protocol version | `backend` | `FROZEN: AE-P0` |
-| `apps/event_payloads.h`, command registry/schema | `backend` | `FROZEN: AE-P0` |
-| `ui/daw-bridge/src/layout.rs`, generated Rust wire types | `backend` | `FROZEN: AE-P0` |
-| `ui/daw-bridge/src/control.rs` | `backend` | `FROZEN: AE-P0` |
-| `apps/engine_types.h`, `apps/daw_engine_main.cpp` | `backend` | `FROZEN: AE-P0` |
-| root CMake/test registration | `codex-worker-1` | `RESERVED: AE-P0.1 test registration only` |
+| `apps/shared_memory.h`, generated wire headers, protocol version | `lead` | `FROZEN: AE-P0` |
+| `apps/event_payloads.h`, command registry/schema | `lead` | `FROZEN: AE-P0`; CMD00 and T3 both target it — T3 first |
+| `ui/daw-bridge/src/layout.rs`, generated Rust wire types | `lead` | `FROZEN: AE-P0`; CMD00 and T3 both target it — T3 first |
+| `ui/daw-bridge/src/control.rs` | `lead` | `FROZEN: AE-P0` |
+| `apps/engine_types.h`, `apps/daw_engine_main.cpp` | `lead` | `FROZEN: AE-P0` |
+| root CMake/test registration | `lead` | `RELEASED` — reserved for AE-P0.1, which is COMPLETE, by an agent that no longer exists |
 
 ## Bus state protocol
 
