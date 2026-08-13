@@ -1524,14 +1524,33 @@ struct UiSamplerRejectPayload {
   uint32_t deviceId = 0;
   uint32_t reserved[4]{};
   // COMMAND IDENTITY, at offset 32 in every one of the seven refusal payloads — see
-  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t: a
-  // uint64_t member would raise this struct's alignof to 8, and EventEntry::payload sits
-  // at offset 20, so every reinterpret_cast of payload bytes to a payload struct would
-  // become undefined behaviour. sizeof stays 40 and memcpy readers keep working, so the
-  // only symptom would be UB at the cast sites — silent here, a fault on a strict target.
+  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t, because
+  // EventEntry is alignas(64) with `payload` at offset 20: `&entry.payload` is therefore
+  // 4-aligned and never 8-aligned. A uint64_t member would raise this struct's alignof to 8,
+  // which no reader could satisfy at that address and which would silently add padding.
+  //
+  // AN EARLIER VERSION OF THIS COMMENT JUSTIFIED THAT WITH A CAST-SITE INVENTORY THAT DOES NOT
+  // EXIST. It cited four reinterpret_casts in juce_host_process_main.cpp; those cast a
+  // std::vector<uint8_t> read off the host control socket, whose buffer is max-aligned, and none
+  // of them touches an EventEntry. There is no reinterpret_cast of EventEntry::payload anywhere
+  // in the tree — every access is memcpy. Nor is "no payload exceeds alignof 4" a property of
+  // this file: TransportPayload, UiAudioClipFieldPayload, UiDeviceEuclideanConfigPayload,
+  // UiSamplerEmitRowsPayload and UiSamplerMarkerPayload are alignof 8 today and ship that way.
+  // The reason above is the real one, and it is about these seven.
   uint32_t correlationLo = 0;   // offset 32
   uint32_t correlationHi = 0;   // offset 36
 };
+// P2-CMD-00 §5: the command identity is at ONE offset in every refusal payload, and this is
+// the only thing in the tree that says so. bindgen's assertions are GENERATED FROM this
+// header, so they re-emit whatever offset they find and are blind to a move by
+// construction; layout.rs's same! compares size and align only; and contract_layout_check
+// compares a mirror to its twin, which cannot see UiSamplerRejectPayload at all — it has no
+// hand-written mirror. Without these four lines a later re-pack could move the id and
+// every other check would stay green.
+static_assert(offsetof(UiSamplerRejectPayload, correlationLo) == 32, "P2-CMD-00: the id is at offset 32 in every refusal payload");
+static_assert(offsetof(UiSamplerRejectPayload, correlationHi) == 36, "P2-CMD-00: the id's high half is at offset 36");
+static_assert(alignof(UiSamplerRejectPayload) == 4, "EventEntry::payload is 4-aligned at offset 20; this struct may not need more");
+static_assert(sizeof(UiSamplerRejectPayload) == 40, "the refusal payloads are 40 bytes and the id must fit inside that");
 static_assert(sizeof(UiSamplerRejectPayload) <= 40,
               "UiSamplerRejectPayload must fit an EventEntry payload");
 static_assert(offsetof(UiSamplerRejectPayload, diffType) == 0,
@@ -1585,14 +1604,33 @@ struct UiClipRejectPayload {
   uint16_t reserved = 0;
   uint32_t reserved2[3]{};
   // COMMAND IDENTITY, at offset 32 in every one of the seven refusal payloads — see
-  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t: a
-  // uint64_t member would raise this struct's alignof to 8, and EventEntry::payload sits
-  // at offset 20, so every reinterpret_cast of payload bytes to a payload struct would
-  // become undefined behaviour. sizeof stays 40 and memcpy readers keep working, so the
-  // only symptom would be UB at the cast sites — silent here, a fault on a strict target.
+  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t, because
+  // EventEntry is alignas(64) with `payload` at offset 20: `&entry.payload` is therefore
+  // 4-aligned and never 8-aligned. A uint64_t member would raise this struct's alignof to 8,
+  // which no reader could satisfy at that address and which would silently add padding.
+  //
+  // AN EARLIER VERSION OF THIS COMMENT JUSTIFIED THAT WITH A CAST-SITE INVENTORY THAT DOES NOT
+  // EXIST. It cited four reinterpret_casts in juce_host_process_main.cpp; those cast a
+  // std::vector<uint8_t> read off the host control socket, whose buffer is max-aligned, and none
+  // of them touches an EventEntry. There is no reinterpret_cast of EventEntry::payload anywhere
+  // in the tree — every access is memcpy. Nor is "no payload exceeds alignof 4" a property of
+  // this file: TransportPayload, UiAudioClipFieldPayload, UiDeviceEuclideanConfigPayload,
+  // UiSamplerEmitRowsPayload and UiSamplerMarkerPayload are alignof 8 today and ship that way.
+  // The reason above is the real one, and it is about these seven.
   uint32_t correlationLo = 0;   // offset 32
   uint32_t correlationHi = 0;   // offset 36
 };
+// P2-CMD-00 §5: the command identity is at ONE offset in every refusal payload, and this is
+// the only thing in the tree that says so. bindgen's assertions are GENERATED FROM this
+// header, so they re-emit whatever offset they find and are blind to a move by
+// construction; layout.rs's same! compares size and align only; and contract_layout_check
+// compares a mirror to its twin, which cannot see UiClipRejectPayload at all — it has no
+// hand-written mirror. Without these four lines a later re-pack could move the id and
+// every other check would stay green.
+static_assert(offsetof(UiClipRejectPayload, correlationLo) == 32, "P2-CMD-00: the id is at offset 32 in every refusal payload");
+static_assert(offsetof(UiClipRejectPayload, correlationHi) == 36, "P2-CMD-00: the id's high half is at offset 36");
+static_assert(alignof(UiClipRejectPayload) == 4, "EventEntry::payload is 4-aligned at offset 20; this struct may not need more");
+static_assert(sizeof(UiClipRejectPayload) == 40, "the refusal payloads are 40 bytes and the id must fit inside that");
 static_assert(sizeof(UiClipRejectPayload) <= 40,
               "UiClipRejectPayload must fit an EventEntry payload");
 static_assert(offsetof(UiClipRejectPayload, diffType) == 0,
@@ -1915,14 +1953,33 @@ struct UiChainErrorPayload {
   uint32_t insertIndex = 0;
   uint32_t reserved[3]{};
   // COMMAND IDENTITY, at offset 32 in every one of the seven refusal payloads — see
-  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t: a
-  // uint64_t member would raise this struct's alignof to 8, and EventEntry::payload sits
-  // at offset 20, so every reinterpret_cast of payload bytes to a payload struct would
-  // become undefined behaviour. sizeof stays 40 and memcpy readers keep working, so the
-  // only symptom would be UB at the cast sites — silent here, a fault on a strict target.
+  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t, because
+  // EventEntry is alignas(64) with `payload` at offset 20: `&entry.payload` is therefore
+  // 4-aligned and never 8-aligned. A uint64_t member would raise this struct's alignof to 8,
+  // which no reader could satisfy at that address and which would silently add padding.
+  //
+  // AN EARLIER VERSION OF THIS COMMENT JUSTIFIED THAT WITH A CAST-SITE INVENTORY THAT DOES NOT
+  // EXIST. It cited four reinterpret_casts in juce_host_process_main.cpp; those cast a
+  // std::vector<uint8_t> read off the host control socket, whose buffer is max-aligned, and none
+  // of them touches an EventEntry. There is no reinterpret_cast of EventEntry::payload anywhere
+  // in the tree — every access is memcpy. Nor is "no payload exceeds alignof 4" a property of
+  // this file: TransportPayload, UiAudioClipFieldPayload, UiDeviceEuclideanConfigPayload,
+  // UiSamplerEmitRowsPayload and UiSamplerMarkerPayload are alignof 8 today and ship that way.
+  // The reason above is the real one, and it is about these seven.
   uint32_t correlationLo = 0;   // offset 32
   uint32_t correlationHi = 0;   // offset 36
 };
+// P2-CMD-00 §5: the command identity is at ONE offset in every refusal payload, and this is
+// the only thing in the tree that says so. bindgen's assertions are GENERATED FROM this
+// header, so they re-emit whatever offset they find and are blind to a move by
+// construction; layout.rs's same! compares size and align only; and contract_layout_check
+// compares a mirror to its twin, which cannot see UiChainErrorPayload at all — it has no
+// hand-written mirror. Without these four lines a later re-pack could move the id and
+// every other check would stay green.
+static_assert(offsetof(UiChainErrorPayload, correlationLo) == 32, "P2-CMD-00: the id is at offset 32 in every refusal payload");
+static_assert(offsetof(UiChainErrorPayload, correlationHi) == 36, "P2-CMD-00: the id's high half is at offset 36");
+static_assert(alignof(UiChainErrorPayload) == 4, "EventEntry::payload is 4-aligned at offset 20; this struct may not need more");
+static_assert(sizeof(UiChainErrorPayload) == 40, "the refusal payloads are 40 bytes and the id must fit inside that");
 
 static_assert(sizeof(UiChainErrorPayload) == 40,
               "UiChainErrorPayload must fit EventEntry payload");
@@ -1973,14 +2030,33 @@ struct UiRoutingErrorPayload {
   uint32_t trackId = 0;
   uint8_t reserved[24]{};
   // COMMAND IDENTITY, at offset 32 in every one of the seven refusal payloads — see
-  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t: a
-  // uint64_t member would raise this struct's alignof to 8, and EventEntry::payload sits
-  // at offset 20, so every reinterpret_cast of payload bytes to a payload struct would
-  // become undefined behaviour. sizeof stays 40 and memcpy readers keep working, so the
-  // only symptom would be UB at the cast sites — silent here, a fault on a strict target.
+  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t, because
+  // EventEntry is alignas(64) with `payload` at offset 20: `&entry.payload` is therefore
+  // 4-aligned and never 8-aligned. A uint64_t member would raise this struct's alignof to 8,
+  // which no reader could satisfy at that address and which would silently add padding.
+  //
+  // AN EARLIER VERSION OF THIS COMMENT JUSTIFIED THAT WITH A CAST-SITE INVENTORY THAT DOES NOT
+  // EXIST. It cited four reinterpret_casts in juce_host_process_main.cpp; those cast a
+  // std::vector<uint8_t> read off the host control socket, whose buffer is max-aligned, and none
+  // of them touches an EventEntry. There is no reinterpret_cast of EventEntry::payload anywhere
+  // in the tree — every access is memcpy. Nor is "no payload exceeds alignof 4" a property of
+  // this file: TransportPayload, UiAudioClipFieldPayload, UiDeviceEuclideanConfigPayload,
+  // UiSamplerEmitRowsPayload and UiSamplerMarkerPayload are alignof 8 today and ship that way.
+  // The reason above is the real one, and it is about these seven.
   uint32_t correlationLo = 0;   // offset 32
   uint32_t correlationHi = 0;   // offset 36
 };
+// P2-CMD-00 §5: the command identity is at ONE offset in every refusal payload, and this is
+// the only thing in the tree that says so. bindgen's assertions are GENERATED FROM this
+// header, so they re-emit whatever offset they find and are blind to a move by
+// construction; layout.rs's same! compares size and align only; and contract_layout_check
+// compares a mirror to its twin, which cannot see UiRoutingErrorPayload at all — it has no
+// hand-written mirror. Without these four lines a later re-pack could move the id and
+// every other check would stay green.
+static_assert(offsetof(UiRoutingErrorPayload, correlationLo) == 32, "P2-CMD-00: the id is at offset 32 in every refusal payload");
+static_assert(offsetof(UiRoutingErrorPayload, correlationHi) == 36, "P2-CMD-00: the id's high half is at offset 36");
+static_assert(alignof(UiRoutingErrorPayload) == 4, "EventEntry::payload is 4-aligned at offset 20; this struct may not need more");
+static_assert(sizeof(UiRoutingErrorPayload) == 40, "the refusal payloads are 40 bytes and the id must fit inside that");
 
 static_assert(sizeof(UiRoutingErrorPayload) == 40,
               "UiRoutingErrorPayload must fit EventEntry payload");
@@ -2066,14 +2142,33 @@ struct UiModErrorPayload {
   uint32_t linkId = 0;
   uint8_t reserved[20]{};
   // COMMAND IDENTITY, at offset 32 in every one of the seven refusal payloads — see
-  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t: a
-  // uint64_t member would raise this struct's alignof to 8, and EventEntry::payload sits
-  // at offset 20, so every reinterpret_cast of payload bytes to a payload struct would
-  // become undefined behaviour. sizeof stays 40 and memcpy readers keep working, so the
-  // only symptom would be UB at the cast sites — silent here, a fault on a strict target.
+  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t, because
+  // EventEntry is alignas(64) with `payload` at offset 20: `&entry.payload` is therefore
+  // 4-aligned and never 8-aligned. A uint64_t member would raise this struct's alignof to 8,
+  // which no reader could satisfy at that address and which would silently add padding.
+  //
+  // AN EARLIER VERSION OF THIS COMMENT JUSTIFIED THAT WITH A CAST-SITE INVENTORY THAT DOES NOT
+  // EXIST. It cited four reinterpret_casts in juce_host_process_main.cpp; those cast a
+  // std::vector<uint8_t> read off the host control socket, whose buffer is max-aligned, and none
+  // of them touches an EventEntry. There is no reinterpret_cast of EventEntry::payload anywhere
+  // in the tree — every access is memcpy. Nor is "no payload exceeds alignof 4" a property of
+  // this file: TransportPayload, UiAudioClipFieldPayload, UiDeviceEuclideanConfigPayload,
+  // UiSamplerEmitRowsPayload and UiSamplerMarkerPayload are alignof 8 today and ship that way.
+  // The reason above is the real one, and it is about these seven.
   uint32_t correlationLo = 0;   // offset 32
   uint32_t correlationHi = 0;   // offset 36
 };
+// P2-CMD-00 §5: the command identity is at ONE offset in every refusal payload, and this is
+// the only thing in the tree that says so. bindgen's assertions are GENERATED FROM this
+// header, so they re-emit whatever offset they find and are blind to a move by
+// construction; layout.rs's same! compares size and align only; and contract_layout_check
+// compares a mirror to its twin, which cannot see UiModErrorPayload at all — it has no
+// hand-written mirror. Without these four lines a later re-pack could move the id and
+// every other check would stay green.
+static_assert(offsetof(UiModErrorPayload, correlationLo) == 32, "P2-CMD-00: the id is at offset 32 in every refusal payload");
+static_assert(offsetof(UiModErrorPayload, correlationHi) == 36, "P2-CMD-00: the id's high half is at offset 36");
+static_assert(alignof(UiModErrorPayload) == 4, "EventEntry::payload is 4-aligned at offset 20; this struct may not need more");
+static_assert(sizeof(UiModErrorPayload) == 40, "the refusal payloads are 40 bytes and the id must fit inside that");
 
 static_assert(sizeof(UiModErrorPayload) == 40,
               "UiModErrorPayload must fit EventEntry payload");
@@ -2159,14 +2254,33 @@ struct UiPatcherGraphErrorPayload {
   uint32_t dstPortId = 0;
   uint32_t edgeKind = 0;
   // COMMAND IDENTITY, at offset 32 in every one of the seven refusal payloads — see
-  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t: a
-  // uint64_t member would raise this struct's alignof to 8, and EventEntry::payload sits
-  // at offset 20, so every reinterpret_cast of payload bytes to a payload struct would
-  // become undefined behaviour. sizeof stays 40 and memcpy readers keep working, so the
-  // only symptom would be UB at the cast sites — silent here, a fault on a strict target.
+  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t, because
+  // EventEntry is alignas(64) with `payload` at offset 20: `&entry.payload` is therefore
+  // 4-aligned and never 8-aligned. A uint64_t member would raise this struct's alignof to 8,
+  // which no reader could satisfy at that address and which would silently add padding.
+  //
+  // AN EARLIER VERSION OF THIS COMMENT JUSTIFIED THAT WITH A CAST-SITE INVENTORY THAT DOES NOT
+  // EXIST. It cited four reinterpret_casts in juce_host_process_main.cpp; those cast a
+  // std::vector<uint8_t> read off the host control socket, whose buffer is max-aligned, and none
+  // of them touches an EventEntry. There is no reinterpret_cast of EventEntry::payload anywhere
+  // in the tree — every access is memcpy. Nor is "no payload exceeds alignof 4" a property of
+  // this file: TransportPayload, UiAudioClipFieldPayload, UiDeviceEuclideanConfigPayload,
+  // UiSamplerEmitRowsPayload and UiSamplerMarkerPayload are alignof 8 today and ship that way.
+  // The reason above is the real one, and it is about these seven.
   uint32_t correlationLo = 0;   // offset 32
   uint32_t correlationHi = 0;   // offset 36
 };
+// P2-CMD-00 §5: the command identity is at ONE offset in every refusal payload, and this is
+// the only thing in the tree that says so. bindgen's assertions are GENERATED FROM this
+// header, so they re-emit whatever offset they find and are blind to a move by
+// construction; layout.rs's same! compares size and align only; and contract_layout_check
+// compares a mirror to its twin, which cannot see UiPatcherGraphErrorPayload at all — it has no
+// hand-written mirror. Without these four lines a later re-pack could move the id and
+// every other check would stay green.
+static_assert(offsetof(UiPatcherGraphErrorPayload, correlationLo) == 32, "P2-CMD-00: the id is at offset 32 in every refusal payload");
+static_assert(offsetof(UiPatcherGraphErrorPayload, correlationHi) == 36, "P2-CMD-00: the id's high half is at offset 36");
+static_assert(alignof(UiPatcherGraphErrorPayload) == 4, "EventEntry::payload is 4-aligned at offset 20; this struct may not need more");
+static_assert(sizeof(UiPatcherGraphErrorPayload) == 40, "the refusal payloads are 40 bytes and the id must fit inside that");
 
 static_assert(sizeof(UiPatcherGraphErrorPayload) == 40,
               "UiPatcherGraphErrorPayload must fit EventEntry payload");
@@ -2193,14 +2307,33 @@ struct UiHarmonyDiffPayload {
   uint32_t reserved0 = 0;
   uint32_t reserved1 = 0;
   // COMMAND IDENTITY, at offset 32 in every one of the seven refusal payloads — see
-  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t: a
-  // uint64_t member would raise this struct's alignof to 8, and EventEntry::payload sits
-  // at offset 20, so every reinterpret_cast of payload bytes to a payload struct would
-  // become undefined behaviour. sizeof stays 40 and memcpy readers keep working, so the
-  // only symptom would be UB at the cast sites — silent here, a fault on a strict target.
+  // docs/architecture/tasks/P2-CMD-00-revised.md. Two uint32_t and NOT a uint64_t, because
+  // EventEntry is alignas(64) with `payload` at offset 20: `&entry.payload` is therefore
+  // 4-aligned and never 8-aligned. A uint64_t member would raise this struct's alignof to 8,
+  // which no reader could satisfy at that address and which would silently add padding.
+  //
+  // AN EARLIER VERSION OF THIS COMMENT JUSTIFIED THAT WITH A CAST-SITE INVENTORY THAT DOES NOT
+  // EXIST. It cited four reinterpret_casts in juce_host_process_main.cpp; those cast a
+  // std::vector<uint8_t> read off the host control socket, whose buffer is max-aligned, and none
+  // of them touches an EventEntry. There is no reinterpret_cast of EventEntry::payload anywhere
+  // in the tree — every access is memcpy. Nor is "no payload exceeds alignof 4" a property of
+  // this file: TransportPayload, UiAudioClipFieldPayload, UiDeviceEuclideanConfigPayload,
+  // UiSamplerEmitRowsPayload and UiSamplerMarkerPayload are alignof 8 today and ship that way.
+  // The reason above is the real one, and it is about these seven.
   uint32_t correlationLo = 0;   // offset 32
   uint32_t correlationHi = 0;   // offset 36
 };
+// P2-CMD-00 §5: the command identity is at ONE offset in every refusal payload, and this is
+// the only thing in the tree that says so. bindgen's assertions are GENERATED FROM this
+// header, so they re-emit whatever offset they find and are blind to a move by
+// construction; layout.rs's same! compares size and align only; and contract_layout_check
+// compares a mirror to its twin, which cannot see UiHarmonyDiffPayload at all — it has no
+// hand-written mirror. Without these four lines a later re-pack could move the id and
+// every other check would stay green.
+static_assert(offsetof(UiHarmonyDiffPayload, correlationLo) == 32, "P2-CMD-00: the id is at offset 32 in every refusal payload");
+static_assert(offsetof(UiHarmonyDiffPayload, correlationHi) == 36, "P2-CMD-00: the id's high half is at offset 36");
+static_assert(alignof(UiHarmonyDiffPayload) == 4, "EventEntry::payload is 4-aligned at offset 20; this struct may not need more");
+static_assert(sizeof(UiHarmonyDiffPayload) == 40, "the refusal payloads are 40 bytes and the id must fit inside that");
 
 struct UiChordDiffPayload {
   uint16_t diffType = static_cast<uint16_t>(UiChordDiffType::None);
