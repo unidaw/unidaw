@@ -6,10 +6,12 @@
 # non-zero, because a check can fail for a syntax error, a missing file or an unrelated assertion
 # and look identical in a log.
 #
-# FOUR OF THEM REQUIRE A PASS INSTEAD, and they are not filler. A check that reconstructs layout can
+# FIVE OF THEM REQUIRE A PASS INSTEAD, and they are not filler. A check that reconstructs layout can
 # start refusing things that are not defects, and the shapes most likely to do that are a rename,
 # which moves no byte; a same-width swap; a narrowing absorbed by the next field's alignment; and a
-# stale bindings file sitting beside a good one. Those four assert the check STAYS QUIET — and
+# stale bindings file sitting beside a good one; and an edit to a header bindgen never parsed,
+# since apps/ holds far more than the five in the closure and a freshness check that trips on any
+# of them is one nobody keeps green. Those five assert the check STAYS QUIET — and
 # additionally that BOTH reconstructing sections actually ran, so none can be satisfied by a
 # section having quietly stopped looking.
 #
@@ -53,6 +55,7 @@ trap 'rm -rf "$TMP"' EXIT
 LEGACY='#\[repr\(C[^\]]*\)\][\s\S]{0,200}?pub struct ([A-Za-z0-9_]+)'
 
 REAL_DEPFILE="$(dirname "$REAL_BINDINGS")/shm_sys.d"
+REAL_PROVENANCE="$(dirname "$REAL_BINDINGS")/shm_sys.provenance"
 
 stage() {                       # stage <dir> — a fresh copy of the sources the check reads
   local d="$TMP/$1"
@@ -76,6 +79,11 @@ stage_bindings() {
   local d="$TMP/bind_$1"
   mkdir -p "$d"
   cp "$REAL_DEPFILE" "$d/shm_sys.d" 2>/dev/null
+  # ...and the provenance sidecar, for the same reason: the check reads BOTH from the chosen
+  # bindings' directory, so a control that supplies one file supplies a tree the real check never
+  # sees, and refuses for housekeeping instead of for its subject.
+  [ "${2:-with_provenance}" = "with_provenance" ] && \
+    cp "$REAL_PROVENANCE" "$d/shm_sys.provenance" 2>/dev/null
   echo "$d/shm_sys.rs"
 }
 
@@ -468,6 +476,77 @@ open(path, 'w').write(out)
 PY
 then
   expect_refusal "7.depfile_gap" "$(stage depgap)" "does not name .* header" "$DEPGAP"
+else
+  FAIL=$((FAIL+1))
+fi
+
+# ============================================================ PROVENANCE: THE BYTES, NOT THE RULE
+#
+# The depfile control above proves cargo was TOLD to watch a header. These prove the bindings on
+# disk were actually generated from the headers as they stand — cargo being told is not cargo
+# having acted, and the gap between those two is where a checkout, an interrupted build or a copied
+# artefact lives.
+#
+# 8.header_edited is the subject. The other two are about failing CLOSED, which for a freshness
+# check is the whole question: evidence that is absent must not read as evidence that is good.
+D="$(stage prov_edit)"
+if python3 - "$D/apps/harmony_timeline.h" <<'PY'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+anchor = "struct HarmonyEvent {"
+if src.count(anchor) != 1:
+    raise SystemExit("  MUTATION DID NOT LAND: %d occurrence(s) of the anchor" % src.count(anchor))
+# A comment, deliberately: this must be caught even though it changes no declaration, because the
+# check compares BYTES and cannot know which bytes matter. That is stated in the header as the
+# accepted cost of not parsing C++.
+open(path, 'w').write(src.replace(anchor, "// edited after the bindings were generated\n" + anchor, 1))
+PY
+then
+  expect_refusal "8.header_edited" "$D" "have changed since these bindings were generated"
+else
+  FAIL=$((FAIL+1))
+fi
+
+NOPROV="$(stage_bindings noprov without_provenance)"
+cp "$REAL_BINDINGS" "$NOPROV"
+if [ -f "$(dirname "$NOPROV")/shm_sys.provenance" ]; then
+  echo "  MUTATION DID NOT LAND: 8.provenance_missing — the sidecar is still there"; FAIL=$((FAIL+1))
+else
+  expect_refusal "8.provenance_missing" "$(stage noprov)" "no shm_sys.provenance beside" "$NOPROV"
+fi
+
+FOREIGN="$(stage_bindings foreign)"
+cp "$REAL_BINDINGS" "$FOREIGN"
+if python3 - "$(dirname "$FOREIGN")/shm_sys.provenance" <<'PY'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+if not src.strip():
+    raise SystemExit("  MUTATION DID NOT LAND: the provenance copy is empty to begin with")
+# A header from a tree this is not. Records that name files nobody has are how an artefact copied
+# between checkouts announces itself, and the check must refuse rather than skip the entry.
+open(path, 'w').write(src + "0123456789abcdef 42 apps/not_in_this_tree.h\n")
+PY
+then
+  expect_refusal "8.provenance_foreign" "$(stage foreign)" "not present here" "$FOREIGN"
+else
+  FAIL=$((FAIL+1))
+fi
+
+# ...and it must NOT fire for a header bindgen never parsed. apps/ holds far more than the five in
+# the closure, and a freshness check that trips on any of them would be one nobody keeps green.
+D="$(stage prov_unrelated)"
+if python3 - "$D/apps/engine_types.h" <<'PY'
+import sys, os
+path = sys.argv[1]
+if not os.path.exists(path):
+    raise SystemExit("  UNRUNNABLE: apps/engine_types.h is not staged, so this proves nothing")
+src = open(path).read()
+open(path, 'w').write("// edited, and not a header bindgen parses\n" + src)
+PY
+then
+  expect_pass "8.unrelated_header_edit" "$D"
 else
   FAIL=$((FAIL+1))
 fi

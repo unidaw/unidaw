@@ -104,14 +104,48 @@ fn main() {
     // Only what lives in this repo. System headers appear in the depfile too, and declaring a path
     // that may not exist on the next machine makes cargo re-run this script unconditionally — a
     // build that always rebuilds is its own kind of broken, and libc++ is not the contract.
-    let mut declared = 0usize;
+    let mut in_repo: Vec<PathBuf> = Vec::new();
     for d in &deps {
         let path = PathBuf::from(d);
         if path.starts_with(&repo) && path.exists() {
             println!("cargo:rerun-if-changed={}", path.display());
-            declared += 1;
+            in_repo.push(path);
         }
     }
+    in_repo.sort();
+    in_repo.dedup();
+    let declared = in_repo.len();
+
+    // PROVENANCE: WHICH BYTES THESE BINDINGS WERE GENERATED FROM.
+    //
+    // The rerun-if-changed lines above tell cargo when to regenerate. They do not tell a READER
+    // whether it did — a checkout that rewrites a header, a build interrupted, an artefact copied
+    // between trees, and the bindings on disk answer a question nobody asked any more. So each
+    // parsed in-repo header is recorded here with a fingerprint of its contents, and the check
+    // re-reads the headers and compares.
+    //
+    // FNV-1a, and length beside it, rather than SHA-256 from a crate. Adding a build dependency to
+    // something linked into this build is a real cost, and the threat here is a header that moved
+    // on, not an adversary constructing a collision — for which a 64-bit hash plus an exact byte
+    // count is comfortably enough. If this ever needs to resist intent rather than accident, that
+    // is a different requirement and should be argued on its own terms, not inherited from here.
+    //
+    // Paths are REPO-RELATIVE. The absolute ones are meaningless across trees: this repo's own
+    // build directories still hold entries pointing at /private/tmp worktrees that no longer exist.
+    let mut provenance = String::new();
+    for path in &in_repo {
+        let bytes = std::fs::read(path)
+            .unwrap_or_else(|e| panic!("cannot read {} for provenance: {}", path.display(), e));
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in &bytes {
+            hash ^= *b as u64;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        let rel = path.strip_prefix(&repo).unwrap_or(path);
+        provenance.push_str(&format!("{:016x} {} {}\n", hash, bytes.len(), rel.display()));
+    }
+    std::fs::write(out.join("shm_sys.provenance"), &provenance)
+        .expect("write shm_sys.provenance");
 
     // FAIL CLOSED. If depfile support ever goes away, or the parse above stops matching, the loop
     // declares nothing and cargo silently stops rebuilding on header edits — the exact hole this

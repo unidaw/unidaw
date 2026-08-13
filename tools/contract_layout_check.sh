@@ -75,20 +75,24 @@
 #   3. `__bindgen_padding_*` names explicit padding and is dropped from the C++ side. Not guarded
 #      directly, but the failure is safe: a renamed padding field is treated as a member and the
 #      offsets stop matching. Exactly one struct is affected today (UiEditBatchEntry).
-#   4. FRESHNESS IS HALF CLOSED. What is fixed: bindgen now declares every header it PARSED, so a
-#      change to any of them — including the two transitive ones nobody had listed — re-runs the
-#      build script, and the section below refuses if that declaration ever stops being complete.
-#      What remains open: nothing verifies that the bindings on disk were generated from the
-#      headers as they stand NOW. Cargo is trusted to have acted on the declaration it was given.
-#      A content fingerprint would close it; that is a separate step and until it lands, this is
-#      the seam. tools/contract_freshness_check.sh covers binaries against sources, which is the
-#      neighbouring question, not this one.
+#   4. FRESHNESS IS CHECKED, in two independent ways, because being TOLD to rebuild and HAVING
+#      rebuilt are different facts. bindgen declares every header it parsed, so a change to any of
+#      them — including the two transitive ones nobody had listed — re-runs the build script; and
+#      a provenance sidecar records each parsed header's bytes, which the check re-reads and
+#      compares. Cargo is no longer trusted to have acted on the declaration it was given.
+#      Residual, stated rather than implied: the fingerprint is 64-bit FNV-1a with the byte count
+#      beside it, chosen over a crate dependency in something linked into this build. That catches
+#      a header that moved on; it is not built to resist an adversary constructing a collision,
+#      and if it ever needs to, that is a different requirement argued on its own terms. Only
+#      in-repo headers are fingerprinted — a libc++ change is not covered and is not the contract.
+#      tools/contract_freshness_check.sh covers binaries against sources, the neighbouring
+#      question, not this one.
 #   5. The pointer width solved from daw_PatcherContext is applied to patcher_rust, which holds
 #      only while both target the same platform. True here, not asserted; a cross-compile is where
 #      it would break.
 #
 #   tools/contract_layout_check.sh              the check
-#   tools/contract_layout_check.sh --selftest   its seventeen controls: thirteen refusals, four
+#   tools/contract_layout_check.sh --selftest   its twenty-one controls: sixteen refusals, five
 #                                               that must NOT fire
 #
 set -uo pipefail
@@ -233,6 +237,69 @@ if undeclared:
                      % (len(undeclared), " ".join(undeclared)))
 print("  depend set: %d headers reachable from %d root(s), all declared by bindgen"
       % (len(wanted), len(roots)))
+
+# ---------------------------------------------------------------------------------------------
+# AND WHETHER THESE BINDINGS WERE GENERATED FROM THE HEADERS AS THEY STAND NOW.
+#
+# The section above proves cargo was TOLD to watch every parsed header. It does not prove cargo
+# acted: a checkout that rewrites a header, an interrupted build, an artefact copied between trees,
+# and the bindings on disk answer a question nobody is asking any more. build.rs records a
+# fingerprint of each parsed header beside the bindings; this re-reads the headers and compares.
+#
+# ABSENCE IS NOT FRESHNESS. A missing sidecar means nobody can say what these bindings came from,
+# which is the same standing as a mismatch — so it refuses rather than skipping, because a check
+# that quietly does nothing when its evidence is absent is worse than one that was never written.
+prov_path = os.path.join(os.path.dirname(bindings), 'shm_sys.provenance')
+if not os.path.exists(prov_path):
+    raise SystemExit("  FAIL: no shm_sys.provenance beside the chosen bindings.\n"
+                     "        %s\n"
+                     "        Nothing records which header bytes these were generated from, so\n"
+                     "        freshness cannot be established. Rebuild the bridge." % prov_path)
+
+def fnv1a(data):
+    # The same 64-bit FNV-1a build.rs writes. Two implementations of one function is a seam, and
+    # the controls exist partly to keep them honest about each other.
+    h = 0xcbf29ce484222325
+    for b in data:
+        h ^= b
+        h = (h * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+stale, unreadable, entries = [], [], 0
+for line in open(prov_path).read().splitlines():
+    if not line.strip():
+        continue
+    parts = line.split(None, 2)
+    if len(parts) != 3:
+        raise SystemExit("  FAIL: shm_sys.provenance line is not <hash> <bytes> <path>:\n"
+                         "        %r\n"
+                         "        A record this check cannot read is one it cannot enforce." % line)
+    want_hash, want_len, rel = parts[0], int(parts[1]), parts[2]
+    entries += 1
+    p = os.path.join(src, rel)
+    if not os.path.exists(p):
+        unreadable.append(rel)
+        continue
+    data = open(p, 'rb').read()
+    if len(data) != want_len or '%016x' % fnv1a(data) != want_hash:
+        stale.append("%s: recorded %s bytes/%s, on disk %d bytes/%016x"
+                     % (rel, want_len, want_hash, len(data), fnv1a(data)))
+
+if not entries:
+    raise SystemExit("  FAIL: shm_sys.provenance is empty, so it agrees with every possible tree")
+if unreadable:
+    raise SystemExit("  FAIL: shm_sys.provenance names %d header(s) not present here:\n"
+                     "        %s\n"
+                     "        The bindings were generated from a tree this is not."
+                     % (len(unreadable), " ".join(unreadable)))
+if stale:
+    raise SystemExit("  FAIL: %d header(s) have changed since these bindings were generated:\n"
+                     "        %s\n"
+                     "        Every comparison below would run against a twin built from bytes\n"
+                     "        that no longer exist. Rebuild the bridge:\n"
+                     "          cargo build --manifest-path ui/Cargo.toml -p daw-bridge"
+                     % (len(stale), "\n        ".join(stale)))
+print("  provenance: %d header(s) unchanged since these bindings were generated" % entries)
 
 gen = set(re.findall(r'pub struct daw_([A-Za-z0-9_]+)', binds))
 if not gen:
