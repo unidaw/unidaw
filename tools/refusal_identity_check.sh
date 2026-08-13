@@ -71,6 +71,49 @@ for n in sorted(carriers):
         if not re.search(pat % re.escape(n), text):
             fail.append("%s carries the id but has no `%s` assertion" % (n, label))
 
+# ---- the RUST side of a two-language contract -------------------------------------------------
+# This check pinned the C++ population only, and independent review found the asymmetry it could not
+# see: `layout.rs` carries the id in FIVE mirrors against SEVEN in C++. I had recorded that
+# UiRoutingErrorPayload and UiModErrorPayload have no Rust mirror and then wrote a population check
+# that counts one side of a contract whose whole point is that two sides agree.
+#
+# Having no mirror is legitimate — nothing in Rust reads those two, and contract_layout_check does
+# not require every C++ struct to have one. What is NOT legitimate is a mirror that exists and omits
+# the id, because then a Rust reader decodes a refusal without the field the design puts at offset
+# 32. So: every carrier that HAS a mirror must carry the id in it, and the mirrored count is pinned.
+LAYOUT = 'ui/daw-bridge/src/layout.rs'
+EXPECTED_MIRRORED_CARRIERS = 5      # seven C++ carriers minus the two with no Rust mirror at all
+NO_MIRROR = {'UiRoutingErrorPayload', 'UiModErrorPayload'}
+
+rust = open(LAYOUT).read()
+rust_structs = {}
+for m in re.finditer(r'^pub struct (\w+)\s*\{', rust, re.M):
+    name, start = m.group(1), m.end()
+    depth, i = 1, start
+    while i < len(rust) and depth:
+        if rust[i] == '{': depth += 1
+        elif rust[i] == '}': depth -= 1
+        i += 1
+    rust_structs[name] = rust[start:i]
+
+mirrored = 0
+for n in sorted(carriers):
+    if n not in rust_structs:
+        if n not in NO_MIRROR:
+            fail.append("%s carries the id in C++ but has no Rust mirror, and is not one of the two"
+                        " recorded as having none" % n)
+        continue
+    mirrored += 1
+    if not re.search(r'\bcorrelation_lo\b', rust_structs[n]):
+        fail.append("%s has a Rust mirror that does NOT carry correlation_lo — a reader decoding"
+                    " that refusal cannot see the id the C++ puts at offset 32" % n)
+
+if mirrored != EXPECTED_MIRRORED_CARRIERS:
+    fail.append("%d carrier(s) have a Rust mirror, expected exactly %d"
+                % (mirrored, EXPECTED_MIRRORED_CARRIERS))
+    fail.append("  If a mirror was ADDED for one of the two that had none, give it the id and raise")
+    fail.append("  this number. Gate 9 of the design is about both sides agreeing, not one.")
+
 # ---- population 2: refusal variants of UiDiffType ---------------------------------------------
 # Structural: a variant whose name ends in Error or Rejected. Comments are stripped first so a
 # variant named only in prose cannot inflate the count.
@@ -100,6 +143,7 @@ if fail:
 
 print("  PASS  %d payloads carry the command identity at offset 32, each with its four assertions;"
       % len(carriers))
+print("        %d of them have a Rust mirror and it carries the id too;" % mirrored)
 print("        %d refusal variants in UiDiffType, both populations pinned" % len(variants))
 PYEOF
 rc=$?
