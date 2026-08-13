@@ -2296,3 +2296,60 @@ Not patched, deliberately: the question is when a pending request should expire,
 every cheap answer (clear on teardown, timestamp it, clear on give-up) changes which
 legitimate rebuild loses its reset. Bounded to a wrong flapping count in both
 directions. Ticket it as its own change with its own reproduction.
+
+## T3 repair re-review (2026-08-13) — BLOCKED, then repaired at `f942b32d`
+
+The first repair `6cd1336e` went to independent re-review and was BLOCKED on two
+counts. Both are now fixed and the fix is verified; T3 needs one more review pass
+before it can merge.
+
+### The finding worth keeping
+
+Blocker 1 was NARROWED, not closed, and the repair is what made it dangerous. The new
+scope assertion compares the sidecar against `wanted`, but `wanted` came from a regex
+matching only the `apps/`-prefixed include spelling — and the BARE form is 207 of 448
+quoted includes under `apps/`, the dominant house style. For any header included the
+bare way the original fail-open reproduced verbatim: delete its record, edit it, PASS.
+
+The prior review had listed that predicate as an advisory non-blocking finding. Building
+the headline assertion on top of it promoted an advisory weakness to the authority for
+the whole claim. That is the defect moving one property along instead of being removed,
+and it is the second time in this session a repair has done that — the first was a
+negative control that failed for a condition the author created.
+
+Includes are now RESOLVED rather than spelled: each `#include "..."` is resolved against
+the including file's directory and against the repo root, keeping whichever exists.
+Verified by construction — the old predicate reported "5 headers, all declared" for a
+tree containing a bare-included header, while the new one sees it and refuses.
+
+Blocker 2: `str.isdigit()` is True for Unicode digit characters `int()` rejects, so a
+byte count of `²` still raised the exact ValueError the validation was added to replace.
+Now an ASCII-only fullmatch, verified.
+
+### Confirmed sound by the re-review
+
+The fixture edit to `8.provenance_foreign` was legitimate, not green-keeping: the
+reviewer re-ran the repaired check against the OLD fixture and the suite goes RED, so
+there was no green to protect. The three new controls are real ratchets — verified
+independently against the pre-repair check, where one goes BLIND and two refuse for the
+wrong reason. Validation sits at the single entry point with no path reaching
+`os.path.join` unvalidated.
+
+### Also applied from the review
+
+Each malformed constraint now names its own reason code (`HASH_FORM`, `LENGTH_FORM`,
+`PATH_ABSOLUTE`, `PATH_TRAVERSAL`), because one shared message meant a control could
+pass on a neighbour's branch. The scope control selects its target by name rather than
+by index — positional selection would have gone blind if the sidecar's order changed,
+which is exactly the bare-include case. The provenance line prints the derived closure
+size beside the sidecar's own count, since reporting the latter alone is a count
+agreeing with itself. The header's hand-maintained "twenty-one controls" tally is
+replaced by a pointer to the tally the suite emits.
+
+### Still open on T3, unchanged by this repair
+
+Prior findings 3, 4, 7 and 8 are untouched: the two field-order loops disagree with a
+false printed count; `hand - gen` is unguarded so a `repr(C)` struct with no twin
+passes; the mtime rule survives in the selftest's own `ls -t | head -1`; and `build.rs`
+passes headers to bindgen by index while asserting over the whole array. Finding 6 is
+fixed. Finding 5 was the spelling predicate and is now closed as part of blocker 1.
