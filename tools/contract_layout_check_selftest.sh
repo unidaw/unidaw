@@ -18,6 +18,11 @@
 #   THE MUTATION LANDED. A sabotage that silently does not apply prints exactly like a passing
 #   check. Every control asserts its anchor was found and the text actually changed.
 #
+#   IT IS DERIVED, NOT LISTED, WHEREVER POSSIBLE. Control 5.add_struct exists because the patcher
+#   population is the one place this check still names its members, and a named list cannot notice
+#   an addition — the failure the whole file was written to end. The control adds a repr(C) mirror
+#   nobody declared and requires a refusal.
+#
 #   IT RATCHETS. "It fires" is not "it catches what it was written for". Controls 1 and 2 assert
 #   that the PARSER THIS REPLACED — the 200-character window — is BLIND to their mutation, and
 #   control 3 asserts that the six offset assertions still agree, so nothing but the new extent
@@ -308,7 +313,15 @@ def inside(struct, old, new):
                          % (body.count(old), struct))
     return src[:m.start()] + body.replace(old, new, 1) + src[m.end():]
 
-if which == 'ptr_insert':       # a u32 into the padding before a pointer; total may not move
+if which == 'add_struct':
+    # A NEW repr(C) mirror nobody added to the declared set. The check must refuse rather than
+    # quietly not compare it — listing what to check is how a check decays by addition, and this
+    # control is the reason the declared list cannot silently fall behind the source.
+    if 'PatcherNewlyAddedConfig' in src:
+        raise SystemExit("  MUTATION DID NOT LAND: the fixture name already exists")
+    out = src + ("\n#[repr(C)]\npub struct PatcherNewlyAddedConfig {\n"
+                 "    pub a: u32,\n    pub b: *mut u32,\n}\n")
+elif which == 'ptr_insert':     # a u32 into the padding before a pointer; total may not move
     out = inside('PatcherContext', "    pub event_buffer: *mut EventEntry,",
                  "    pub inserted: u32,\n    pub event_buffer: *mut EventEntry,")
 elif which == 'ptr_narrow':     # a pointer field that stopped being pointer-sized, where the
@@ -329,7 +342,8 @@ open(path, 'w').write(out)
 PY
 }
 
-for c in "ptr_insert:refuse:PatcherContext: this mirror lays fields at" \
+for c in "add_struct:refuse:PatcherNewlyAddedConfig" \
+         "ptr_insert:refuse:PatcherContext: this mirror lays fields at" \
          "ptr_narrow:refuse:PatcherContext: this mirror lays fields at" \
          "ptr_narrow_absorbed:pass:"; do
   name="${c%%:*}"; rest="${c#*:}"; mode="${rest%%:*}"; want="${rest#*:}"
@@ -387,6 +401,29 @@ $REAL_BINDINGS" bash "$CHECK" 2>&1)"
   D="$(stage stale_only)"
   expect_refusal "5.stale_only" "$D" "no layout assertions for daw_PatcherContext|missing layout" \
                  "$STALE"
+fi
+
+# ---- the bindgen version coupling. Everything here parses two textual forms; if a release
+# changed the offset form, every field comparison would compare an empty set and pass. The size
+# form already has a reflex (asserted_types reads it, and empty refuses); this gives the offset
+# form one too, by producing bindings that keep every size assertion and no offsets.
+NOOFF="$TMP/nooffsets_shm_sys.rs"
+if python3 - "$REAL_BINDINGS" "$NOOFF" <<'PY'
+import re, sys
+src = open(sys.argv[1]).read()
+out = re.sub(r'[^\n]*offset_of!\(daw_\w+,[^\n]*\n', '', src)
+if 'offset_of!(daw_' in out:
+    raise SystemExit("  MUTATION DID NOT LAND: offset assertions survived the strip")
+if 'size_of::<daw_' not in out:
+    raise SystemExit("  MUTATION IS NOT THE DEFECT: the size assertions went too, so a refusal\n"
+                     "                             would prove nothing about the offset form")
+open(sys.argv[2], 'w').write(out)
+PY
+then
+  expect_refusal "6.bindgen_form" "$(stage form)" \
+                 "no field-offset assertions in|form this check parses" "$NOOFF"
+else
+  FAIL=$((FAIL+1))
 fi
 
 echo

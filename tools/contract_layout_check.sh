@@ -63,8 +63,29 @@
 #   watching it come back BLIND, which is the only way this kind of hole announces itself; it is
 #   pinned now as 5.ptr_narrow_absorbed, a control that must NOT fire.
 #
+# WHAT THIS CHECK ASSUMES ABOUT THE GENERATED BINDINGS, since everything above rests on them.
+# Written down because an assumption nobody states is indistinguishable from a guarantee:
+#
+#   1. bindgen's layout numbers are the C++ compiler's. Assumed, not guarded — it is the authority
+#      and there is no third opinion to check it against. Everything else here is downstream.
+#   2. The two textual forms `size_of::<daw_X>() - N usize` and `offset_of!(daw_X, f) - N usize`.
+#      GUARDED both ways: an unparseable size form empties the candidate set and refuses, and a
+#      missing offset form refuses explicitly. A bindgen release changing either is a real
+#      possibility and the failure would otherwise be a vacuous pass. Control 6.bindgen_form.
+#   3. `__bindgen_padding_*` names explicit padding and is dropped from the C++ side. Not guarded
+#      directly, but the failure is safe: a renamed padding field is treated as a member and the
+#      offsets stop matching. Exactly one struct is affected today (UiEditBatchEntry).
+#   4. FRESHNESS IS NOT CHECKED and deliberately out of scope here. Selection proves the bindings
+#      CONTAIN every type being compared, not that they were generated from the current headers —
+#      a complete file built from an older patcher_abi.h passes. tools/contract_freshness_check.sh
+#      covers binaries against sources; bindings-against-header is covered by neither, and saying
+#      so is the point of this paragraph.
+#   5. The pointer width solved from daw_PatcherContext is applied to patcher_rust, which holds
+#      only while both target the same platform. True here, not asserted; a cross-compile is where
+#      it would break.
+#
 #   tools/contract_layout_check.sh              the check
-#   tools/contract_layout_check.sh --selftest   its fourteen controls: ten refusals, four that
+#   tools/contract_layout_check.sh --selftest   its sixteen controls: twelve refusals, four that
 #                                               must NOT fire
 #
 set -uo pipefail
@@ -140,6 +161,16 @@ if bindings is None:
 if len(pool) > 1:
     print("  bindings: %s (chosen by content from %d candidates)"
           % (os.path.basename(os.path.dirname(os.path.dirname(bindings))), len(pool)))
+
+# The version coupling, made loud. Everything below parses two textual forms bindgen emits; a
+# release that changes either makes types look assertion-less. The size form is already guarded —
+# it is what asserted_types reads, and an empty result refuses above — but the OFFSET form has no
+# such reflex, and losing it silently would turn every field comparison into a vacuous pass.
+if not re.search(r'offset_of!\(daw_\w+,\s*\w+\)\s*-\s*\d+usize', binds):
+    raise SystemExit("  FAIL: the bindings carry size assertions but no field-offset assertions in\n"
+                     "        the form this check parses. Either layout_tests were narrowed, or a\n"
+                     "        bindgen release changed the emitted shape — in which case the parsing\n"
+                     "        below needs updating, NOT this guard removing.")
 
 gen = set(re.findall(r'pub struct daw_([A-Za-z0-9_]+)', binds))
 if not gen:
@@ -532,6 +563,21 @@ if absent:
                      "        renamed, rename them here; if they were deleted, delete them here —\n"
                      "        but a list that silently stops matching is how this check dies."
                      % ", ".join(absent))
+
+# AND THE OTHER DIRECTION, which is the one that actually decays. Checking only that every NAMED
+# mirror still exists catches a rename or a deletion — the loud edits. It cannot catch an ADDITION,
+# so a new repr(C) struct in patcher_rust would never be compared and this check would stay green
+# while a fresh ABI type crossed the boundary unpinned. That is precisely the failure this file was
+# written to end, and I reintroduced it here by listing what to check instead of deriving it.
+# EventEntry is excluded because the section above compares it against the C++ in its own right.
+unlisted = sorted(n for n in patcher_hand if n not in PATCHER and n != 'EventEntry')
+if unlisted:
+    raise SystemExit("  FAIL: patcher_rust defines %d repr(C) mirror(s) this check does not compare:\n"
+                     "        %s\n"
+                     "        Add them to PATCHER above — and if a type genuinely does not cross the\n"
+                     "        boundary, say so where it is declared rather than leaving it to be\n"
+                     "        inferred from an omission here."
+                     % (len(unlisted), " ".join(unlisted)))
 
 patcher_consts = {m: int(v) for m, v in
                   re.findall(r'pub const ([A-Z_0-9]+):\s*[a-z0-9]+\s*=\s*(\d+);', patcher_src)}
