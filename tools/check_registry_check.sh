@@ -49,6 +49,18 @@ cmake = (root / "CMakeLists.txt").read_text()
 # Note the reasons are all about the SUBJECT of the check, never about it being slow, awkward or
 # occasionally flaky. A reason that could excuse anything excuses everything.
 DECLARED_UNREGISTERED = {
+    "tsan/flapping_guard_race_repro.cpp":
+        "EVIDENCE, NOT A GATE, and it must not be mistaken for one. It reproduced the HOST-R3c "
+        "race by running the two production statement sequences against a real TrackRuntime under "
+        "TSan, which is how the race at restartWindowStart (offset 856) was confirmed rather than "
+        "argued. It is not registered because it needs a TSan build this project does not wire, "
+        "and CMakeLists names nothing under tools/tsan at all. "
+        "ITS REAL LIMIT, named by independent review: it HAND-COPIES the two sequences instead of "
+        "calling production code, and it ships carrying the FIXED versions — so reverting "
+        "engine_chain_host.cpp changes its outcome not at all, and it cannot fail on a regression. "
+        "Registering it as-is would add a test that passes whatever the engine does. To make it a "
+        "gate it must call the production path, and then reverting the fix must make it FAIL; "
+        "until someone does that, it is a record of one investigation and is declared as such.",
     # EMPTY, AND THAT IS THE POINT OF THE LIST.
     #
     # It held six capture-dependent checks — level_match_bypass, master_fx, midi_per_bus, panic,
@@ -81,6 +93,16 @@ checks = sorted(p.name for p in (root / "tools").glob("*_check.sh"))
 if not checks:
     print("  FAIL (setup): no *_check.sh found in tools/ — this assertion is measuring nothing")
     raise SystemExit(1)
+
+# TSan REPRODUCTIONS ARE IN SCOPE, because the rule at the top of this file is about artifacts that
+# claim to establish something. HOST-R3c shipped tools/tsan/flapping_guard_race_repro.cpp as
+# evidence for a race, and independent review pointed out it sat outside this glob entirely: not
+# registered, not declared, and satisfying the repo's own either-it-runs-or-it-says-why-not rule
+# only by a comment inside itself. A population defined by one filename shape cannot see the
+# artifact that has a different one, which is the same defect this file has now been bitten by
+# three times over names.
+checks += sorted(str(p.relative_to(root / "tools"))
+                 for p in (root / "tools" / "tsan").glob("*.cpp"))
 
 # REGISTERED means CMakeLists names the SCRIPT, not that some test happens to share its stem.
 # Matching on the stem would count `lane_quantize` (a unit binary) as registering
