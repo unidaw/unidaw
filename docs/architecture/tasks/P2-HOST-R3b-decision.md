@@ -20,7 +20,7 @@ case the value is already false.**
 
 | early return | why publishing is inert |
 |---|---|
-| `isAuxChild` | a child never launched a host. And it does not even read its own field: for an aux child, `TrackInfo`'s `shmView/header/completedBlockId/hostReady/active` **all point at the parent's** (`engine_audio_callback.h:64-66`), so the child's own `hostReady` is not what the mixer consults. |
+| `isAuxChild` | a child never launched a host. And it does not even read its own field: for an aux child, `TrackInfo`'s `shmView/header/completedBlockId/hostReady/active` **all point at the parent's** (`engine_audio_callback.h:65`), so the child's own `hostReady` is not what the mixer consults. |
 | `hostGaveUp` | the give-up path already stored `hostReady=false` and `active=false` (`engine_restart_worker.cpp:55-56`) before setting `hostGaveUp=true`. |
 | CAS lost | the winner of the CAS published exactly these two stores (`daw_engine_main.cpp:1190-1191`). Losing means somebody else already did it. |
 
