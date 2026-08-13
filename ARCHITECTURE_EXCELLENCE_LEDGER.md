@@ -2857,3 +2857,51 @@ hour — by my own edit, in the session that has been recording this shape all d
 Fixed the way the plan's duplicated phase table was fixed: the line now POINTS at the hotspot
 table rather than restating it. Syncing the wording would have bought agreement until the next
 lock changed.
+
+## T3 seventh review — PASS (2026-08-14)
+
+First PASS in seven rounds, and argued rather than asserted: seven PARTIAL reverts each caught by
+exactly the control naming it and no neighbour, four unspellable-include fixtures each refusing at
+HEAD and going fail-open when `| dep_rel` is deleted, the silent zero absent across six invocation
+spellings, and the exemption unable to silence a struct that crosses SHM under four separate
+fixtures.
+
+Convergence, measured on one control set — controls failing per version:
+
+    original 10 → r1 9 → r2 6 → r3 6 → r4 4 → r5 1 → r6/HEAD 0
+
+The severity class moved with it: round one found live fail-opens (a deleted provenance record
+passing), round six found false refusals on legitimate trees, round seven finds only latent
+fragility in input handling that no current build can produce. The reviewer's three product
+findings are ONE defect, not three: the depfile is parsed by spelling at two sites and normalised
+at neither.
+
+### Carried findings — all latent, none reachable through today's build.rs
+
+1. The silent zero became a silent PARTIAL. If the depfile ever spells the roots differently from
+   the transitive entries (`/./`, `//`), `dep_rel` collapses to exactly the roots — non-empty, so
+   the emptiness guard cannot fire — and the depfile half degenerates to a subset of the closure.
+   Unreachable today because `build.rs:10` canonicalises once and both `.header()` and `-I{repo}`
+   derive from that string. The commit message's "the silent zero cannot come back" is true only
+   of the ZERO.
+2. `dep_rel` is not normalised while the closure is, so a `../` include would enter as
+   `apps/../apps/event_id.h` and produce a permanent false refusal naming a header whose bytes ARE
+   recorded. One rule, two sites, opposite policies — the shape this file's own comment names.
+3. The escape-aware repair landed at one of the depfile's TWO parse sites. `:264` still tests raw
+   text, so an in-repo header with a space in its name yields a false refusal. Pre-existing and
+   byte-identical in all six versions, but the commit message over-claimed: the fail-open is
+   closed, the neighbouring false refusal is not.
+
+### The meta-finding, which is about me and not the file
+
+For the FOURTH commit running, the newest machinery shipped with no control. That is what generated
+three of the six repairs. The reviewer's recommendation is therefore not "review again" — it puts
+another round at roughly a 50% chance of ADDING a defect, on this branch's own base rate, to retire
+a hazard no current build can reach. It is: merge, then land ONE follow-up containing the
+`undeclared = wanted - dep_rel` collapse with `normpath` (one derivation replacing two, killing
+findings 2 and 3 outright), and ONE control that varies the DEPFILE rather than the source — the
+control that would have caught finding 1, and the missing piece in the ratchet discipline that
+drove this whole sequence.
+
+RULING: T3 is APPROVED to merge. The standing rule that shared-memory/ABI/bridge changes never
+merge without exact independent review is satisfied — seven times over.
