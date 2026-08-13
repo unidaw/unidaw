@@ -2952,3 +2952,39 @@ a wire it never saw. That was the whole reason for the ordering.
 Still open on T3, as a follow-up rather than a blocker: collapse the depfile's two parse sites into
 `undeclared = wanted - dep_rel` with `normpath`, which kills carried findings 2 and 3 outright, and
 ship it with a control that varies the DEPFILE rather than the source.
+
+## T3 follow-up landed — `54f3d460`, depfile parsed once (2026-08-14)
+
+The seventh review's one recommended follow-up, shipped with the condition it attached: a control
+that varies the DEPFILE rather than the source.
+
+The depfile had been read THREE ways — a raw substring test for the completeness assertion, a
+tokenised derivation for the scope demand, and neither normalised. The substring test is gone;
+`undeclared` now derives from the same parsed, normalised `dep_rel` the scope demand uses. The two
+sides being compared are unchanged (the closure versus the compiler's own list), so no circularity
+is introduced; what goes away is a third spelling-based reading that was blind to Makefile escaping
+and satisfied by any path merely ENDING in a header's spelling.
+
+That closes carried findings 2 and 3 outright. Normalising both sides also closes finding 1: a
+depfile spelling the roots with `/./` collapsed `dep_rel` to exactly the roots — non-empty, so the
+emptiness guard could not see it — and the depfile half degenerated to a subset of the closure it
+exists to correct. All three carried findings are now closed rather than carried.
+
+`12b.depfile_respelled` is the FIRST control in this suite to mutate the depfile. Every control
+before it varied layout.rs, a header, or the sidecar; the depfile was the one input nothing
+perturbed, and it had become half the scope demand — which is exactly why a failure mode lived
+there that no control could see.
+
+Worth recording: without the normalisation, 12b reports WRONG REASON rather than BLIND, because
+with one derivation the collapse now trips the completeness assertion first. The two repairs
+reinforce — that collapse can no longer be silent at all, only loud in one of two ways.
+
+Evidence: check PASS, selftest 26 refused for their named reason and 8 held, `ctest -R
+'contract|readiness|registry|freshness'` 9/9. Pushed.
+
+Process note: the entry above was first appended in the WRONG REPOSITORY. A `cd /Users/jak/src/daw`
+earlier in the same command left the shell in the product checkout, so `cat >> ARCHITECTURE_
+EXCELLENCE_LEDGER.md` CREATED a 29-line file there instead of appending to this 2,700-line one, and
+committed it. Caught by reading the commit output — `create mode 100644` for a file that has existed
+for weeks is the tell. Reset (it was unpushed) and re-applied here. The same shape as yesterday's
+`git add -A` incident: the commit's own output named the problem and only reading it caught it.
