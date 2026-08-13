@@ -2257,3 +2257,42 @@ T3's blocker repair is in independent re-review. HOST-R3c findings 5 (the reset 
 unbounded latch) and 6 (`tearDownHostState` re-arms a track without resetting the
 counter or window) are bounded correctness defects that need tickets and neither
 needs an owner call to start.
+
+## HOST-R3c finding 6 closed; finding 5 ticketed (2026-08-13)
+
+Finding 6 is fixed in product `main` at `a0df111d`. `tearDownHostState` cleared
+`hostGaveUp` — re-arming the track — while `restartAttempts`/`restartWindowStart`
+survived, so a track given up on at 6 attempts, removed and re-added inside the 10s
+window was disabled again on the new host's FIRST crash. Reached from RemoveTrack and
+from project load. The site now REQUESTS a reset, since rule 2b forbids writing the
+two counters outside their owner; that request is the mechanism R3c introduced and
+applied at only one of its two re-arm sites.
+
+Rule 2c pins the rule, not the site: it keys on the construct (a store of `false` to
+`hostGaveUp`) rather than a list of function names, so a third re-arm site is covered
+the day it appears, and it refuses outright if no such site exists rather than passing
+vacuously after a rename.
+
+The control had to be redone. The obvious mutation — deleting the request — also
+tripped rule 1's COUNT DRIFT, and this check's own header warns that rule 1 masks
+rules 2-4 and that a new rule must be proven with a mutation rule 1 cannot see. The
+count-neutral mutation is flipping the request from `true` to `false`: the field is
+still written once, rule 1 sees nothing, and only rule 2c fires. This is the same trap
+the P0.3 checklist names in §4, met independently in a different file the same day.
+
+Evidence: full CMake build clean, `ctest -R 'readiness|registry'` 6/6 including
+`engine_readiness`. NOT established: the runtime behaviour. This is a static rule, and
+reproducing the scenario needs a plugin that crashes on load.
+
+### Finding 5 remains open, and needs a decision rather than a patch
+
+The reset request is an unbounded latch. If the restart edge is lost — `rebuildHostForChain`
+sets the request and `needsRestart` while `scheduleHostRestart`'s CAS fails and never
+enqueues — the request stays `true` indefinitely and is consumed by the NEXT, unrelated
+restart, granting a fresh 5-restart budget to a flapping episode that had no chain
+rebuild. The early return and the give-up branch also leave it latched.
+
+Not patched, deliberately: the question is when a pending request should expire, and
+every cheap answer (clear on teardown, timestamp it, clear on give-up) changes which
+legitimate rebuild loses its reset. Bounded to a wrong flapping count in both
+directions. Ticket it as its own change with its own reproduction.
