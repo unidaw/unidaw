@@ -2110,3 +2110,61 @@ Findings 1 and 4 are undelivered gates from R3c's own task document, not new
 scope. They are the first repair queued. Findings 5 and 6 are bounded
 correctness defects worth their own tickets. Finding 3 says the repro should
 either be registered or declared, not deleted.
+
+## T3 independent review (2026-08-13) — BLOCKED, 2 merge-blocking
+
+Independent read-only review at `bbe2f51e`, tree `37b0f8050966cac7d90d484d83de2103e34b67ce`.
+T3 does NOT merge. The hold placed earlier today was correct on the merits, not
+merely on procedure.
+
+What the review confirmed as genuinely sound, having tried to break it:
+69/69 is a real identity — the reviewer enumerated `repr(C)` by construct across
+every tracked `.rs` and found the complement empty; the provenance hash is
+computed from the headers on disk, not from the checked party's own output; the
+cargo rebuild trigger is closed rather than relocated; and the central new
+control `5.add_struct` is a TRUE ratchet, verified by reverting the fix and
+watching the check pass with the mutation present. Five non-firing controls are
+each paired with a firing sibling, so none is silent because it is unfireable.
+
+### Blocker 1 — the sidecar declares its own scope
+
+`tools/contract_layout_check.sh:260-297` iterates only the lines the sidecar
+contains; the derived `wanted` set and the sidecar's line set are never compared.
+Demonstrated: delete one line from the sidecar, edit that header, and the check
+reports "4 header(s) unchanged" and PASSES. The `8.header_edited` control refuses
+only because the sidecar happens to name the header it edits. One fact — which
+headers matter — derived from two sources that can disagree, with the checked
+party authoring one of them. Fix: assert `wanted` is a subset of the sidecar's
+paths.
+
+### Blocker 2 — the path field is not validated where it enters
+
+Same file, `:264-271`. Field COUNT is validated; the path is not. An absolute
+`rel` silently discards `src` in `os.path.join`, so the check verifies a header in
+a different tree and defeats the `DAW_CONTRACT_SRC` isolation the whole selftest
+rests on. A non-numeric byte count raises an uncaught `ValueError` past the
+refusal one line above. Normalisation upstream of the validator, again. Fix:
+reject absolute paths, `..`, and non-64-hex hashes at the point of entry.
+
+### Ranked non-blocking findings
+
+3. The bridge and patcher field-order loops implement one rule and disagree: the
+   bridge silently `continue`s a mirror with no offset assertions where the
+   patcher refuses, and the printed count says 69 while 68 were compared. The
+   reviewer induced the trigger and states plainly that no such type exists today.
+4. `hand - gen` is unguarded and the selector is a name match: appending a
+   `repr(C)` struct to `layout.rs` yields "70 mirrors ... 69 have a generated
+   twin" and PASSES. `5.add_struct` closes exactly this direction for the patcher
+   and is absent for the bridge. Demonstrated.
+5. The include-closure predicate matches only the `apps/`-prefixed spelling, while
+   the bare form is the more common house style across `apps/*.h` (29 vs 26).
+6. A superseded 16-hex sidecar format is diagnosed as "5 header(s) have changed"
+   with identical byte counts printed on both sides — the message's own evidence
+   refutes the cause it names.
+7. The mtime rule this branch removed survives in
+   `contract_layout_check_selftest.sh:46` (`ls -t | head -1`).
+8. `build.rs` passes headers to bindgen by index but asserts over the whole array,
+   so a fourth entry would be asserted on without being a root.
+
+Blockers 1, 2 and finding 4 are all demonstrated fail-opens with concrete fixes
+and are the repair queue.
