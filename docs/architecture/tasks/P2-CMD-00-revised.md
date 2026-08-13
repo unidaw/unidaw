@@ -145,32 +145,39 @@ mistake in §2, and no assertion in the tree today would have.
   meaning *is* a wire change even though no size moves — that is precisely how a wire change lands
   without a bump.
 - **`correlationLo == 0 && correlationHi == 0` means "no id"**: a sender that predates 38. A reader
-  must report `Unknown`, never a match.
+  must report `Unknown`, never a match, and never `Applied`.
+- readers on 38 must not assume a 37 engine's `reserved` bytes carry anything.
 
-  **Measured, since this was the one input left open.** The sentinel is safe *for refusal payloads*:
-  all nine emit sites construct the struct `{}`-initialised (`engine_ui_publish.cpp:237, 280, 359,
-  396, 423, 442` and `engine_harmony_timeline.cpp:58, 102, 118`), every one of the seven is exactly
-  40 bytes so the `memcpy` covers the whole `payload[40]`, and `ringWrite` assigns the **whole**
-  `EventEntry` into the slot (`event_ring.cpp`), so nothing survives from a slot's previous occupant.
+### 6.1 The reader rule (normative)
 
-  **WITHDRAWN — I claimed a stack leak here and it does not exist.** I wrote that
-  `engine_ui_publish.cpp:145` declares `daw::EventEntry gateEntry;` without `{}`, never writes
-  `payload`, and therefore publishes 40 bytes of engine stack into shared memory. That is **false**.
-  `EventEntry` (`apps/shared_memory.h:433`) gives **every** member a default member initialiser,
-  including `uint8_t payload[40]{}`, so a default-declared entry is fully zeroed. Verified by
-  compiling a probe that dirties the stack frame first: 0 of 40 payload bytes non-zero, `flags` zero,
-  and the `{}` form byte-identical to the default form.
+**Dispatch first, then read the id.** In order:
 
-  I inferred "no `{}` means uninitialised" from C rules without reading the struct — which sits five
-  lines from code I had already read in the same file. It was the one claim in this document I did
-  not compile, and it was the one that was wrong.
+1. the entry's `type` names a payload that carries a correlation id — one of the seven in §1;
+2. the entry's `size` is ≥ 40, so offset 32 lies inside the payload the publisher actually wrote;
+3. only then read `correlationLo`/`correlationHi` at offsets 32 and 36;
+4. all-zero means **no id** → `Unknown`. Never a match, never `Applied`.
 
-  **The reader rule survives the withdrawal, for a different reason.** Read the id only after
-  dispatching on `type` and confirming `size` covers offset 40 — not because a publisher leaks stack,
-  but because `gateEntry` legitimately carries `size = 0` with a zeroed payload. Its bytes 32–40 are
-  zero, which is the *legacy sentinel*, so a reader that skips the dispatch would read a
-  `ReplayComplete` gate as an un-correlated refusal. A reader must not infer a payload's shape from
-  its offsets alone.
+**Step 2 is the one that is easy to skip and the reason this is normative.** `engine_ui_publish.cpp`
+publishes a `ReplayComplete` gate with `size = 0` and a **zeroed** payload. Its bytes 32–40 are
+therefore all zero — which is exactly the legacy sentinel. A reader that indexed straight to offset 32
+would read a transport gate as an un-correlated refusal and report `Unknown` for a command nobody
+refused. **A reader must not infer a payload's shape from its offsets alone**, because a zeroed
+payload is indistinguishable from a legacy one at the byte level. The dispatch is what separates them.
+
+### 6.2 Is the sentinel safe? Measured, and one claim withdrawn
+
+Yes, for refusal payloads: all nine emit sites construct the struct `{}`-initialised
+(`engine_ui_publish.cpp:237, 280, 359, 396, 423, 442`, `engine_harmony_timeline.cpp:58, 102, 118`),
+all seven are exactly 40 bytes so the `memcpy` covers the whole `payload[40]`, and `ringWrite` assigns
+the **whole** `EventEntry` into the slot, so nothing survives from a slot's previous occupant.
+
+**Withdrawn:** an earlier revision of this section claimed `daw::EventEntry gateEntry;` publishes 40
+bytes of engine stack because it lacks `{}`. False — `EventEntry` (`apps/shared_memory.h:433`) gives
+every member a default member initialiser including `uint8_t payload[40]{}`, verified by a probe that
+dirties the frame first (0 of 40 bytes non-zero; the `{}` form byte-identical). I inferred it from C
+rules without reading the struct, which sits five lines from code already quoted elsewhere in this
+document. It was the one claim here not produced by a compiled program, and it was the one that was
+wrong. **No product change is needed, and none was made.**
 
 ## 7. Acceptance gates
 
@@ -193,6 +200,10 @@ change:
     `uint64_t`; sizes and offsets are unchanged and only this gate fires.
 11. **uniformity (new)** — the id is at offset 32 in all seven. Sabotage: move one to 24; every other
     gate passes.
+12. **dispatch (new)** — a `ReplayComplete` gate (`size = 0`, zeroed payload) in the reader's window
+    must yield *no outcome at all*, not `Unknown`. Sabotage: drop the `size >= 40` check from §6.1
+    and the gate is read as an un-correlated refusal; every other gate still passes, because the
+    bytes it reads are legitimately zero.
 
 ## 8. Owner decisions still open
 
@@ -200,8 +211,15 @@ change:
 2. **Whether `commandType` goes on the wire at all.** The review argued it is redundant against a
    unique id and does not fit `UiPatcherGraphErrorPayload` alongside one. This revision drops it; four
    of seven payloads have no `commandType` today and gain nothing from one.
-3. **Zero-initialisation of reserved payload bytes** (§6) — a measurement, not a preference, and it
-   must be made before implementation.
+3. ~~Zero-initialisation of reserved payload bytes~~ — **answered by measurement in §6.2, not an open
+   decision.** The sentinel is safe and no product change is required. Listed here struck through
+   rather than deleted, because it was carried to backend as an open item and a reader of the earlier
+   revision needs to see that it closed.
+
+**Two remain, and both are genuinely owner calls**: the minting scheme (1) and whether `commandType`
+rides the wire (2). Neither can be settled by measurement — the first trades a probability against a
+wire change, the second trades wire bytes against a reader's lookup — which is why they are here and
+not decided above.
 
 ## 9. What this still does not do
 
