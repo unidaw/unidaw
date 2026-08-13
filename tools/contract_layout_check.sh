@@ -80,11 +80,12 @@
 #      them — including the two transitive ones nobody had listed — re-runs the build script; and
 #      a provenance sidecar records each parsed header's bytes, which the check re-reads and
 #      compares. Cargo is no longer trusted to have acted on the declaration it was given.
-#      Residual, stated rather than implied: the fingerprint is 64-bit FNV-1a with the byte count
-#      beside it, chosen over a crate dependency in something linked into this build. That catches
-#      a header that moved on; it is not built to resist an adversary constructing a collision,
-#      and if it ever needs to, that is a different requirement argued on its own terms. Only
-#      in-repo headers are fingerprinted — a libc++ change is not covered and is not the contract.
+#      The fingerprint is SHA-256 with the byte count beside it — build.rs via the sha2 crate,
+#      this check via hashlib, two standard implementations of one published function rather than
+#      the same hash hand-written twice in two languages and required to agree bit for bit. It is
+#      NOT here to resist an adversary: the sidecar is a build artefact in an ignored directory, so
+#      anyone who can edit a header can rewrite it, and collision resistance defends against an
+#      actor who cannot. Only in-repo headers are fingerprinted — libc++ is not the contract.
 #      tools/contract_freshness_check.sh covers binaries against sources, the neighbouring
 #      question, not this one.
 #   5. The pointer width solved from daw_PatcherContext is applied to patcher_rust, which holds
@@ -118,7 +119,7 @@ selftest() { bash "$ROOT/tools/contract_layout_check_selftest.sh"; exit $?; }
 [ "${1:-}" = "--selftest" ] && selftest
 
 python3 - "$SRC" "$BINDINGS" <<'PY'
-import re, sys, os
+import re, sys, os, hashlib
 src = sys.argv[1]
 candidates = [p for p in sys.argv[2].split('\n') if p.strip()]
 
@@ -256,15 +257,6 @@ if not os.path.exists(prov_path):
                      "        Nothing records which header bytes these were generated from, so\n"
                      "        freshness cannot be established. Rebuild the bridge." % prov_path)
 
-def fnv1a(data):
-    # The same 64-bit FNV-1a build.rs writes. Two implementations of one function is a seam, and
-    # the controls exist partly to keep them honest about each other.
-    h = 0xcbf29ce484222325
-    for b in data:
-        h ^= b
-        h = (h * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
-    return h
-
 stale, unreadable, entries = [], [], 0
 for line in open(prov_path).read().splitlines():
     if not line.strip():
@@ -281,9 +273,12 @@ for line in open(prov_path).read().splitlines():
         unreadable.append(rel)
         continue
     data = open(p, 'rb').read()
-    if len(data) != want_len or '%016x' % fnv1a(data) != want_hash:
-        stale.append("%s: recorded %s bytes/%s, on disk %d bytes/%016x"
-                     % (rel, want_len, want_hash, len(data), fnv1a(data)))
+    # hashlib against the sha2 crate: both standard implementations of one published function,
+    # rather than the same hash hand-written twice and required to agree bit for bit.
+    got = hashlib.sha256(data).hexdigest()
+    if len(data) != want_len or got != want_hash:
+        stale.append("%s: recorded %s bytes/%s, on disk %d bytes/%s"
+                     % (rel, want_len, want_hash[:16] + '...', len(data), got[:16] + '...'))
 
 if not entries:
     raise SystemExit("  FAIL: shm_sys.provenance is empty, so it agrees with every possible tree")

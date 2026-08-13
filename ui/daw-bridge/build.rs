@@ -2,6 +2,7 @@
 // is a single source of truth instead of a hand-written duplicate. The header is
 // parsed with -DSHM_BINDGEN, which turns the std::atomic fields into plain
 // integers (identical byte layout) that bindgen understands.
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 fn main() {
@@ -124,11 +125,12 @@ fn main() {
     // parsed in-repo header is recorded here with a fingerprint of its contents, and the check
     // re-reads the headers and compares.
     //
-    // FNV-1a, and length beside it, rather than SHA-256 from a crate. Adding a build dependency to
-    // something linked into this build is a real cost, and the threat here is a header that moved
-    // on, not an adversary constructing a collision — for which a 64-bit hash plus an exact byte
-    // count is comfortably enough. If this ever needs to resist intent rather than accident, that
-    // is a different requirement and should be argued on its own terms, not inherited from here.
+    // SHA-256, and the byte count beside it. The fingerprint is NOT here to resist an adversary:
+    // this sidecar is a build artefact in an ignored directory, so anyone who can edit a header can
+    // rewrite it, and collision resistance defends against an actor who cannot. It is standard
+    // because the checker recomputes it in Python, and a hash hand-written twice in two languages
+    // is two implementations that must agree bit for bit — a seam worth one crate to remove. The
+    // length stays because it costs nothing and makes a mismatch legible at a glance.
     //
     // Paths are REPO-RELATIVE. The absolute ones are meaningless across trees: this repo's own
     // build directories still hold entries pointing at /private/tmp worktrees that no longer exist.
@@ -136,13 +138,16 @@ fn main() {
     for path in &in_repo {
         let bytes = std::fs::read(path)
             .unwrap_or_else(|e| panic!("cannot read {} for provenance: {}", path.display(), e));
-        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-        for b in &bytes {
-            hash ^= *b as u64;
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let digest = hasher.finalize();
+        let hex = digest.iter().fold(String::new(), |mut acc, b| {
+            use std::fmt::Write;
+            let _ = write!(acc, "{:02x}", b);
+            acc
+        });
         let rel = path.strip_prefix(&repo).unwrap_or(path);
-        provenance.push_str(&format!("{:016x} {} {}\n", hash, bytes.len(), rel.display()));
+        provenance.push_str(&format!("{} {} {}\n", hex, bytes.len(), rel.display()));
     }
     std::fs::write(out.join("shm_sys.provenance"), &provenance)
         .expect("write shm_sys.provenance");
