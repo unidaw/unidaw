@@ -153,22 +153,24 @@ mistake in §2, and no assertion in the tree today would have.
   40 bytes so the `memcpy` covers the whole `payload[40]`, and `ringWrite` assigns the **whole**
   `EventEntry` into the slot (`event_ring.cpp`), so nothing survives from a slot's previous occupant.
 
-  **But the id must never be read without dispatching first**, because one publisher does emit
-  uninitialised payload bytes: `engine_ui_publish.cpp:145` declares `daw::EventEntry gateEntry;`
-  without `{}`, sets `sampleTime`/`blockId`/`type`/`size = 0`, never touches `payload`, and calls
-  `ringWrite`. Forty bytes of engine stack are published into a segment other processes read. For that
-  entry, bytes 32–40 are garbage that can look like a valid non-zero id.
+  **WITHDRAWN — I claimed a stack leak here and it does not exist.** I wrote that
+  `engine_ui_publish.cpp:145` declares `daw::EventEntry gateEntry;` without `{}`, never writes
+  `payload`, and therefore publishes 40 bytes of engine stack into shared memory. That is **false**.
+  `EventEntry` (`apps/shared_memory.h:433`) gives **every** member a default member initialiser,
+  including `uint8_t payload[40]{}`, so a default-declared entry is fully zeroed. Verified by
+  compiling a probe that dirties the stack frame first: 0 of 40 payload bytes non-zero, `flags` zero,
+  and the `{}` form byte-identical to the default form.
 
-  So the reader rule is: **read the id only after dispatching on `type`, and only when `size` covers
-  offset 40.** That is required regardless of whether `gateEntry` is fixed, because a reader must not
-  depend on a publisher's initialisation discipline.
+  I inferred "no `{}` means uninitialised" from C rules without reading the struct — which sits five
+  lines from code I had already read in the same file. It was the one claim in this document I did
+  not compile, and it was the one that was wrong.
 
-  `gateEntry` is a defect in its own right — an information leak and a source of ring nondeterminism —
-  and is reported separately rather than fixed here. It is the only such site: sixteen `EventEntry`
-  declarations exist and **none** is `{}`-initialised, but the other fifteen either `memcpy` a full
-  40-byte payload or are `ringPop`/`ringPeek` destinations, which are filled by the ring rather than
-  published from the stack.
-- readers on 38 must not assume a 37 engine's `reserved` bytes are zero.
+  **The reader rule survives the withdrawal, for a different reason.** Read the id only after
+  dispatching on `type` and confirming `size` covers offset 40 — not because a publisher leaks stack,
+  but because `gateEntry` legitimately carries `size = 0` with a zeroed payload. Its bytes 32–40 are
+  zero, which is the *legacy sentinel*, so a reader that skips the dispatch would read a
+  `ReplayComplete` gate as an un-correlated refusal. A reader must not infer a payload's shape from
+  its offsets alone.
 
 ## 7. Acceptance gates
 
