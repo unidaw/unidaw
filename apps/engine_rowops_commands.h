@@ -28,6 +28,12 @@ struct RowopsCommandDeps {
                            bool, daw::UiClipRejectReason&)> applySetRowOps;
   std::function<void(daw::UiClipRejectReason, uint32_t, uint32_t, uint32_t,
                            daw::UiCommandType)> emitClipReject;
+  // WHAT THE ENGINE HOLDS FOR THIS TRACK. The refusal below rides `ClipRejected`, whose
+  // `currentBase` its own payload comment calls "the value to retry with" — and this site passed a
+  // literal 0. Zero is a LIVE value: `clipVersion` initialises to 0, so a consumer could not tell a
+  // fabricated 0 from a genuine base on a fresh track. Returns false when the track is gone, which
+  // is the one case where there is no value to report.
+  std::function<bool(uint32_t, uint32_t&)> currentTrackClipVersion;
 };
 
 void handleSetRowOps(RowopsCommandDeps& deps,

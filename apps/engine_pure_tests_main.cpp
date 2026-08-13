@@ -16,6 +16,8 @@
 //   - findOrMintEnvelope must not match an LFO that shares the target
 //   - ensureDefaultModSet must NOT mint for a named-but-absent id
 #include "apps/engine_pure.h"
+#include "apps/engine_command_mutates.h"
+#include "apps/host_chain_buffers.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -556,7 +558,164 @@ void testPlacementReachSaturates() {
 
 }  // namespace
 
+// THE HISTORY VERBS: what they CHANGE and whether they open a STEP are two questions, and one
+// bool was answering both by lying about the first.
+//
+// `commandMutatesDocument(Undo)` returned false with the comment "no document state" while
+// `handleUndo` calls `applyDocument` and replaces the entire ProjectDocument. G2-A's arbitrated
+// population is derived from that predicate, so the inconsistency was in the thing the gate
+// depends on. Open item 32, RULED (R11).
+//
+// THESE ARE constexpr, so the assertions are also static_asserts — a regression cannot compile.
+// Written as CHECKs too, because a static_assert that someone deletes leaves nothing behind, and
+// the run reports which pairing broke rather than which line failed to compile.
+static_assert(daw::engine::commandMutatesDocument(daw::UiCommandType::Undo),
+              "Undo replaces the document via applyDocument");
+static_assert(daw::engine::commandMutatesDocument(daw::UiCommandType::Redo),
+              "Redo replaces the document exactly as Undo does");
+static_assert(daw::engine::commandUndoPolicy(daw::UiCommandType::Undo) ==
+                  daw::engine::UndoPolicy::None,
+              "a step for the undo is how a history eats itself");
+static_assert(daw::engine::commandUndoPolicy(daw::UiCommandType::Redo) ==
+                  daw::engine::UndoPolicy::None,
+              "same for redo");
+
+// THE CAUSAL LINK R11 WAS MISSING. My negative control showed the policy guard is inert on the
+// happy path and I wrote that it is not load-bearing — a universal claim from one path.
+// codex-worker-1 refuted it: `commit` appends when the document OR THE PLUGIN SNAPSHOT differs, so
+// where the cursor's snapshot is PARTIAL and a later capture fills it in, a policy of Version would
+// append an Undo-labelled version and DESTROY THE REDO TAIL. UndoPolicy::None prevents that by
+// never reaching `commit` at all.
+//
+// TWO LINKS, EACH TESTABLE, TOGETHER CAUSAL:
+//   here            None -> Skip, so `commit` is never called
+//   history tests   a partial-snapshot difference alone makes `commit` append and truncate
+// The end-to-end version needs a plugin that refuses and then answers, which no fixture provides —
+// and reaching the bracket at all needed a 24-struct HandleUiEntryDeps. This is the route backend
+// chose over both.
+// THE CHAIN PING-PONG, which is what makes `inputPtrs = outputPtrs` safe.
+//
+// Adjacent hosted plugins hand audio along by REBINDING, not copying. That reads as in-place
+// aliasing and is not: the output alternates A/B by parity while the input is the PREVIOUS
+// iteration's output, of opposite parity. I raised the aliasing as a hazard in P2-G4-01 and it was
+// wrong; this pins the reason it is wrong, because the reason is arithmetic and a "simplification"
+// of the parity would still produce working audio for a TWO-plugin chain and break three.
+//
+// Tested over segment lengths 1..8 rather than one case, because the failure this guards against
+// appears at length 3 and not before.
+void testChainBuffersPingPong() {
+  using daw::host::ChainBuffer;
+  using daw::host::ChainInput;
+  using daw::host::chainInputFor;
+  using daw::host::chainOutputFor;
+  using daw::host::outputDiffersFromInput;
+
+  for (uint32_t len = 1; len <= 8; ++len) {
+    const uint32_t start = 3;  // non-zero, so the parity is relative to the SEGMENT and not to 0
+    const uint32_t end = start + len;
+    for (uint32_t i = start; i < end; ++i) {
+      // THE PROPERTY: a plugin never writes into the buffer it is reading.
+      CHECK(outputDiffersFromInput(i, start, end));
+      // AND THE PRE-CLEAR follows the same selection, so zeroing the output can never zero the
+      // input. Stated as its own assertion because they were two derivations of one parity until
+      // this commit, and two derivations of one fact is how they drift.
+      const ChainBuffer out = chainOutputFor(i, start, end);
+      const ChainInput in = chainInputFor(i, start, end);
+      if (out == ChainBuffer::A) CHECK(in != ChainInput::A);
+      if (out == ChainBuffer::B) CHECK(in != ChainInput::B);
+    }
+    // ONLY THE LAST writes the segment output, and it is the only one that does.
+    for (uint32_t i = start; i + 1 < end; ++i) {
+      CHECK(chainOutputFor(i, start, end) != ChainBuffer::SegmentOutput);
+    }
+    CHECK(chainOutputFor(end - 1, start, end) == ChainBuffer::SegmentOutput);
+    // THE FIRST reads the segment input and nobody else does.
+    CHECK(chainInputFor(start, start, end) == ChainInput::SegmentInput);
+    for (uint32_t i = start + 1; i < end; ++i) {
+      CHECK(chainInputFor(i, start, end) != ChainInput::SegmentInput);
+    }
+  }
+
+  // THE SHAPE, SPELLED OUT for a segment of four, so a reader can see the ping-pong rather than
+  // infer it from the loop above — and so a wrong-but-consistent selection cannot satisfy both.
+  const uint32_t s = 0, e = 4;
+  CHECK(chainOutputFor(0, s, e) == ChainBuffer::A);
+  CHECK(chainOutputFor(1, s, e) == ChainBuffer::B);
+  CHECK(chainOutputFor(2, s, e) == ChainBuffer::A);
+  CHECK(chainOutputFor(3, s, e) == ChainBuffer::SegmentOutput);
+  CHECK(chainInputFor(0, s, e) == ChainInput::SegmentInput);
+  CHECK(chainInputFor(1, s, e) == ChainInput::A);
+  CHECK(chainInputFor(2, s, e) == ChainInput::B);
+  CHECK(chainInputFor(3, s, e) == ChainInput::A);
+}
+
+void testRecordActionSkipsTheHistoryVerbs() {
+  using daw::engine::RecordAction;
+  using daw::engine::recordActionFor;
+  using daw::engine::UndoPolicy;
+
+  // THE LINK ITSELF: a history verb never reaches `commit`, whatever the snapshot holds, and
+  // whatever a gesture is doing. `commit` is where a partial snapshot would append.
+  for (bool gesture : {false, true}) {
+    CHECK(recordActionFor(UndoPolicy::None, /*haveHistory=*/true, /*haveCapture=*/true, gesture) ==
+          RecordAction::Skip);
+  }
+  // AND THE SABOTAGE ARM: with the history verbs mapped to Version — the change a bare bool-flip
+  // of commandMutatesDocument would have made — the same inputs reach Commit, which is the call
+  // that appends and truncates.
+  CHECK(recordActionFor(UndoPolicy::Version, true, true, /*amendForGesture=*/false) ==
+        RecordAction::Commit);
+
+  // THE REST OF THE TABLE, so the assertion above is about the POLICY and not about the function
+  // returning Skip broadly.
+  CHECK(recordActionFor(UndoPolicy::Version, true, true, /*amendForGesture=*/true) ==
+        RecordAction::Amend);
+  CHECK(recordActionFor(UndoPolicy::Amend, true, true, false) == RecordAction::Amend);
+  CHECK(recordActionFor(UndoPolicy::Amend, true, true, true) == RecordAction::Amend);
+  // NO HISTORY OR NO CAPTURE IS ALSO SKIP — the two null guards the destructor had inline, kept
+  // in the decision rather than left behind in the caller where a second reader would re-derive.
+  CHECK(recordActionFor(UndoPolicy::Version, /*haveHistory=*/false, true, false) ==
+        RecordAction::Skip);
+  CHECK(recordActionFor(UndoPolicy::Version, true, /*haveCapture=*/false, false) ==
+        RecordAction::Skip);
+
+  // AND THE POLICY THE HISTORY VERBS ACTUALLY HAVE, so this test fails if someone maps them to
+  // Version — which is the regression the whole of R11 is about.
+  CHECK(daw::engine::commandUndoPolicy(daw::UiCommandType::Undo) == UndoPolicy::None);
+  CHECK(daw::engine::commandUndoPolicy(daw::UiCommandType::Redo) == UndoPolicy::None);
+}
+
+void testHistoryVerbsMutateButOpenNoStep() {
+  using daw::engine::commandMutatesDocument;
+  using daw::engine::commandUndoPolicy;
+  using daw::engine::UndoPolicy;
+
+  // THE PREDICATE NOW SAYS WHAT IT NAMES.
+  CHECK(commandMutatesDocument(daw::UiCommandType::Undo));
+  CHECK(commandMutatesDocument(daw::UiCommandType::Redo));
+
+  // AND BEHAVIOUR IS UNCHANGED, which is the whole point of the separation: the history verbs
+  // still open no step. If flipping the bool had been the whole change, Ctrl-Z would have started
+  // pushing a step for itself and this is the assertion that would have caught it.
+  CHECK(commandUndoPolicy(daw::UiCommandType::Undo) == UndoPolicy::None);
+  CHECK(commandUndoPolicy(daw::UiCommandType::Redo) == UndoPolicy::None);
+
+  // THE THREE OTHER ANSWERS STILL LAND WHERE THEY DID, so this change is bounded to the two verbs:
+  //   a command that changes nothing saved                     -> None
+  //   a command that changes what EXISTS                       -> Version
+  //   the audition swap, which changes only what you are hearing -> Amend
+  CHECK(!commandMutatesDocument(daw::UiCommandType::TogglePlay));
+  CHECK(commandUndoPolicy(daw::UiCommandType::TogglePlay) == UndoPolicy::None);
+  CHECK(commandMutatesDocument(daw::UiCommandType::WriteNote));
+  CHECK(commandUndoPolicy(daw::UiCommandType::WriteNote) == UndoPolicy::Version);
+  CHECK(commandMutatesDocument(daw::UiCommandType::SwapPlacementClip));
+  CHECK(commandUndoPolicy(daw::UiCommandType::SwapPlacementClip) == UndoPolicy::Amend);
+}
+
 int main() {
+  testChainBuffersPingPong();
+  testRecordActionSkipsTheHistoryVerbs();
+  testHistoryVerbsMutateButOpenNoStep();
   testDocumentHasPerDeviceGraphs();
   testSamplerReasonFor();
   testErrorScopeName();

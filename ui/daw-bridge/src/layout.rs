@@ -2430,6 +2430,18 @@ mod tests {
         same!(UiTimeSigPoint, sys::daw_UiTimeSigPoint);
         same!(UiTrackRoutingPayload, sys::daw_UiTrackRoutingPayload);
         same!(UiWaveformRequestPayload, sys::daw_UiWaveformRequestPayload);
+        // These six were pinned only by a size number typed into
+        // `command_payload_sizes_match_the_engine` below. That assertion catches an edit to the
+        // RUST struct and cannot see an edit to the C++ at all — backwards, since the header is
+        // the authority and the side that drifts unseen. They were invisible to
+        // tools/contract_layout_check.sh because its population regex allowed 200 characters
+        // between `#[repr(C)]` and `pub struct`, and each of these carries a longer doc comment.
+        same!(UiBulkChunkPayload, sys::daw_UiBulkChunkPayload);
+        same!(UiClipTextHeader, sys::daw_UiClipTextHeader);
+        same!(UiEnvPointWire, sys::daw_UiEnvPointWire);
+        same!(UiSamplerEnvelopePayload, sys::daw_UiSamplerEnvelopePayload);
+        same!(UiSamplerLfoPayload, sys::daw_UiSamplerLfoPayload);
+        same!(UiSetRowOpsPayload, sys::daw_UiSetRowOpsPayload);
     }
 
     #[test]

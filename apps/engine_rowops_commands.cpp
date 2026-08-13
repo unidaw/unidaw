@@ -19,6 +19,7 @@ void handleSetRowOps(RowopsCommandDeps& deps,
             daw::UiCommandType commandType) {
   const auto& applySetRowOps = deps.applySetRowOps;
   const auto& emitClipReject = deps.emitClipReject;
+  const auto& currentTrackClipVersion = deps.currentTrackClipVersion;
   {
   daw::UiSetRowOpsPayload p{};
   std::memcpy(&p, entry.payload, sizeof(p));
@@ -46,7 +47,26 @@ void handleSetRowOps(RowopsCommandDeps& deps,
   if (!applySetRowOps(p.trackId, p.clipId, noteId, edit, /*recordUndo=*/true,
                       rejectReason) &&
       rejectReason != daw::UiClipRejectReason::None) {
-    emitClipReject(rejectReason, p.trackId, /*sentBase=*/0, /*currentBase=*/0,
+    // SAY WHAT THE ENGINE HOLDS. Both figures were literal zeros here while every other
+    // emit site passes real ones, and `currentBase` is the field the payload calls "the
+    // value to retry with" — so a refusal on a track at version 7 told the caller 0, which
+    // is indistinguishable from a genuine base on a fresh track because `clipVersion`
+    // initialises to 0. Measured at the frozen product by claude-worker-1 (open item 29).
+    //
+    // `sentBase` STAYS 0 AND IS 0 BY CONTRACT, not by omission: `UiSetRowOpsPayload` carries
+    // no base version, because a row-op edit is not version-gated. A consumer correlating on
+    // (track, commandType, sentBase) therefore has an inert third key for SetRowOps — which
+    // is latent rather than live, since nothing awaits a SetRowOps refusal at this SHA, and
+    // is item 29's remaining half rather than something this change can invent a value for.
+    // THE HELPER ALWAYS ANSWERS, so there is no false path that leaves this at an initialiser —
+    // which is what the first version of this fix did, and it fabricated a 0 on exactly the
+    // MISSING-track refusal that `UnknownTrack` names. The dep is checked for emptiness only
+    // because a default-constructed std::function would throw; a wired one cannot fail to set it.
+    uint32_t currentBase = 0;
+    if (currentTrackClipVersion) {
+      currentTrackClipVersion(p.trackId, currentBase);
+    }
+    emitClipReject(rejectReason, p.trackId, /*sentBase=*/0, currentBase,
                    daw::UiCommandType::SetRowOps);
   }
   return;

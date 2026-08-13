@@ -26,6 +26,9 @@
 //   placement's own localEdits flag — the same placement the edit will target, so the scope
 //   decision and the target decision cannot disagree.
 #include "apps/engine_clip_edit.h"
+#include "apps/engine_rowops_commands.h"
+
+#include <cstring>
 
 #include <atomic>
 #include <cstdio>
@@ -67,6 +70,14 @@ struct Fixture {
                           daw::UiCommandType) {};
   std::function<void(const char*, const char*, uint32_t, uint32_t, const std::string&)>
       historyAppend = [](const char*, const char*, uint32_t, uint32_t, const std::string&) {};
+  // NOT EMPTY, and the reason is a negative control that fired for the wrong reason. With this
+  // left default-constructed, reverting `liveTrackAt` to `trackAt` made the removed-track case
+  // throw std::bad_function_call at engine_clip_edit.cpp:339 — before the search could reach the
+  // UnknownNote it was supposed to demonstrate. The test DID fail, so the control looked green,
+  // and it was not discriminating: it proved an empty std::function throws, not that the reason
+  // is wrong. codex-worker-1 caught it. A harmless stub lets the old path run to its real answer.
+  std::function<TrackStoreState(const TrackRuntime&)> snapshotTrackStore =
+      [](const TrackRuntime&) { return TrackStoreState{}; };
 
   ClipEditDeps deps() {
     return ClipEditDeps{engineState,      // engineState
@@ -83,7 +94,7 @@ struct Fixture {
                         0,                // patternTicks
                         {},               // pushStructuralUndo
                         {},               // rebuildFlatAndPublish
-                        {},               // snapshotTrackStore
+                        snapshotTrackStore,  // snapshotTrackStore
                         emitClipReject,   // emitClipReject
                         historyAppend};   // historyAppend
   }
@@ -302,6 +313,159 @@ void testEditScope() {
   CHECK(!editIsLocalScope(d, 999, 100, 0));
 }
 
+// WHAT THE ENGINE HOLDS, for a caller that is NOT version-gated.
+//
+// `handleSetRowOps` passed a literal 0 as `ClipRejected.currentBase` — the field the payload calls
+// "the value to retry with" — while every other emit site passes a real figure. Zero is a LIVE
+// value: `clipVersion` initialises to 0, so a refusal on a track at version 7 was indistinguishable
+// from a genuine base on a fresh track. Open item 29, measured at the frozen product.
+//
+// The read lived INSIDE the version gate, which a row-op edit never calls, so this asserts the
+// extracted helper directly: the negative control is that a track at a NON-ZERO version must report
+// that version, which is exactly the case a hardcoded 0 satisfies by accident when the version is 0.
+void testCurrentClipVersionForReportsTheTrackCounter() {
+  Fixture f;
+  auto deps = f.deps();
+  TrackRuntime& rt = f.addTrack(3);
+  rt.trackClipVersion.store(7, std::memory_order_release);
+  f.clipVersion.store(41, std::memory_order_release);
+
+  uint32_t out = 999;
+  CHECK(currentClipVersionFor(deps, daw::UiCommandType::SetRowOps, 3, out));
+  CHECK(out == 7u);        // the TRACK's counter, not the global one and not a literal 0
+
+  // A GLOBAL-SCOPE command rides the engine counter, because an undo can touch any track.
+  out = 999;
+  CHECK(currentClipVersionFor(deps, daw::UiCommandType::Undo, 3, out));
+  CHECK(out == 41u);
+
+  // A MISSING TRACK STILL GETS A REAL FIGURE — the engine's GLOBAL counter — and the bool says it
+  // is not the track's own. THIS ASSERTED `out == 999` (untouched) IN THE FIRST VERSION, and that
+  // was the wrong contract: it made "no answer" indistinguishable from the caller's initialiser,
+  // and the caller's initialiser was 0. backend caught the consequence at the handler.
+  out = 999;
+  CHECK(!currentClipVersionFor(deps, daw::UiCommandType::SetRowOps, 9, out));
+  CHECK(out == 41u);
+
+  // A REMOVED track is gone for this purpose too — the version gate has always treated it so,
+  // and the extraction has to keep that or the two callers disagree about what "present" means.
+  rt.removed.store(true, std::memory_order_release);
+  out = 999;
+  CHECK(!currentClipVersionFor(deps, daw::UiCommandType::SetRowOps, 3, out));
+  CHECK(out == 41u);
+}
+
+// THE REFUSAL ITSELF, through handleSetRowOps, so the wiring is covered and not just the helper.
+// A test of the helper alone would stay green if the row-op site kept its hardcoded 0.
+// EVERY REFUSAL REASON, AND BOTH TRACK STATES. The first version of this test drove ONE reason on a
+// track its own fixture had ADDED — so the `UnknownTrack` case ran with the track PRESENT, which is
+// the one thing that case does not have. It passed while the handler still fabricated a 0 on the
+// real missing-track path, because the fixture supplied the precondition the failing case lacks.
+// backend found the hole. The refusal is driven per reason, and the track is present or absent as
+// the reason implies.
+void runRowOpsRefusal(Fixture& f, ClipEditDeps& deps, uint32_t trackId,
+                      daw::UiClipRejectReason reason, uint32_t& sawCurrent, uint32_t& sawSent,
+                      daw::UiClipRejectReason& sawReason) {
+  sawCurrent = 999;
+  sawSent = 999;
+  sawReason = daw::UiClipRejectReason::None;
+  daw::engine::RowopsCommandDeps rowops{
+      [reason](uint32_t, uint32_t, daw::EventId, const daw::RowOpEdit&, bool,
+               daw::UiClipRejectReason& out) {
+        out = reason;
+        return false;
+      },
+      [&](daw::UiClipRejectReason r, uint32_t, uint32_t sentBase, uint32_t currentBase,
+          daw::UiCommandType) {
+        sawReason = r;
+        sawSent = sentBase;
+        sawCurrent = currentBase;
+      },
+      [&](uint32_t t, uint32_t& out) {
+        return currentClipVersionFor(deps, daw::UiCommandType::SetRowOps, t, out);
+      }};
+
+  daw::UiSetRowOpsPayload p{};
+  p.trackId = trackId;
+  p.clipId = 1;
+  daw::EventEntry entry{};
+  std::memcpy(entry.payload, &p, sizeof(p));
+  daw::UiCommandPayload header{};
+  handleSetRowOps(rowops, entry, header, daw::UiCommandType::SetRowOps);
+}
+
+// THE REFUSAL REASON FROM PRODUCTION, not injected. The tests below stubbed applySetRowOps and
+// handed it the reason they wanted — so they asserted what the HANDLER does with a reason and never
+// what the ENGINE decides one is. That hid the tombstone defect completely: a removed track really
+// yields UnknownNote from production, because `trackAt` returns the tombstone and the search over
+// the cleared runtime finds nothing, while the injected test said UnknownTrack. codex-worker-1 and
+// backend both named it. This drives the real applySetRowOps.
+void testRowOpsReasonsComeFromProduction() {
+  Fixture f;
+  auto deps = f.deps();
+  TrackRuntime& rt = f.addTrack(2);
+  rt.trackClipVersion.store(5, std::memory_order_release);
+
+  daw::RowOpEdit edit{};
+  daw::UiClipRejectReason reason = daw::UiClipRejectReason::None;
+
+  // A TRACK THAT WAS NEVER ADDED.
+  reason = daw::UiClipRejectReason::None;
+  CHECK(!applySetRowOps(deps, /*trackId=*/9, /*clipId=*/1, /*noteId=*/1, edit,
+                        /*recordUndo=*/false, reason));
+  CHECK(reason == daw::UiClipRejectReason::UnknownTrack);
+
+  // A REMOVED TRACK. Its slot is TOMBSTONED and kept, so `trackAt` hands back a live pointer to a
+  // cleared runtime — this reported UnknownNote before `liveTrackAt`, telling the caller their
+  // note was gone when what was gone was the track.
+  rt.removed.store(true, std::memory_order_release);
+  reason = daw::UiClipRejectReason::None;
+  CHECK(!applySetRowOps(deps, /*trackId=*/2, /*clipId=*/1, /*noteId=*/1, edit,
+                        /*recordUndo=*/false, reason));
+  CHECK(reason == daw::UiClipRejectReason::UnknownTrack);
+}
+
+void testRowOpsRefusalReportsTheEngineVersion() {
+  Fixture f;
+  auto deps = f.deps();
+  TrackRuntime& rt = f.addTrack(2);
+  rt.trackClipVersion.store(5, std::memory_order_release);
+  f.clipVersion.store(41, std::memory_order_release);
+
+  uint32_t sawCurrent = 999, sawSent = 999;
+  daw::UiClipRejectReason sawReason = daw::UiClipRejectReason::None;
+
+  // A PRESENT TRACK reports its OWN counter, whatever the reason is.
+  for (auto reason : {daw::UiClipRejectReason::UnknownNote,
+                      daw::UiClipRejectReason::ValueOutOfRange}) {
+    runRowOpsRefusal(f, deps, 2, reason, sawCurrent, sawSent, sawReason);
+    CHECK(sawReason == reason);
+    CHECK(sawCurrent == 5u);   // was a literal 0 before this change
+    CHECK(sawSent == 0u);
+  }
+
+  // A MISSING TRACK — the case `UnknownTrack` actually names, and the one the first fix still
+  // fabricated a 0 for because the handler ignored the helper's false. Track 9 was never added.
+  runRowOpsRefusal(f, deps, 9, daw::UiClipRejectReason::UnknownTrack, sawCurrent, sawSent,
+                   sawReason);
+  CHECK(sawReason == daw::UiClipRejectReason::UnknownTrack);
+  CHECK(sawCurrent == 41u);    // the engine's global counter, and NOT a fabricated 0
+  CHECK(sawSent == 0u);
+
+  // A REMOVED TRACK is the same case arriving a different way, and it is the one a live session
+  // reaches: the track existed when the edit was sent and was gone by the time it landed.
+  rt.removed.store(true, std::memory_order_release);
+  runRowOpsRefusal(f, deps, 2, daw::UiClipRejectReason::UnknownTrack, sawCurrent, sawSent,
+                   sawReason);
+  CHECK(sawCurrent == 41u);
+  CHECK(sawSent == 0u);
+
+  // `sentBase` is 0 BY CONTRACT throughout: UiSetRowOpsPayload carries no base version, because a
+  // row-op edit is not version-gated. Asserted so that giving it an invented value is a test
+  // failure and not a quiet improvement — item 29's remaining half is that the correlation key is
+  // inert, which is a decision about the wire and not something this site may make up.
+}
+
 }  // namespace
 
 int main() {
@@ -313,6 +477,9 @@ int main() {
   testEnsurePlacementIds();
   testForkOwnedClip();
   testEditScope();
+  testCurrentClipVersionForReportsTheTrackCounter();
+  testRowOpsReasonsComeFromProduction();
+  testRowOpsRefusalReportsTheEngineVersion();
 
   if (g_fail != 0) {
     std::printf("engine_clip_helpers_tests: FAIL (%d)\n", g_fail);

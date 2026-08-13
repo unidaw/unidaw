@@ -160,7 +160,13 @@ void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
         return d.capturePluginState(previous, /*onlyDirty=*/true);
       }
       ~RecordVersion() {
-        if (policy == UndoPolicy::None || d.documentHistory == nullptr || !d.captureDocument) {
+        // THE DECISION IS `recordActionFor`, in engine_command_mutates.h beside the policy it reads
+        // — extracted so a test can ask it without constructing this destructor's 24-struct world.
+        // The BRANCHES here are unchanged; only the choosing moved.
+        const RecordAction action = recordActionFor(
+            policy, d.documentHistory != nullptr, static_cast<bool>(d.captureDocument),
+            amendForGesture);
+        if (action == RecordAction::Skip) {
           return;
         }
         // AN AUDITION KEEPS THE HISTORY HONEST WITHOUT ADDING TO IT. See commandUndoPolicy: the
@@ -169,11 +175,11 @@ void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
         // MID-GESTURE COMMANDS AMEND. The drag's first command opened the step; every one after
         // it rewrites that step instead of adding another, so a 1000-command knob drag is ONE undo
         // step holding the final value. Inert until a client sets the flags.
-        if (policy == UndoPolicy::Version && amendForGesture) {
+        if (action == RecordAction::Amend && policy == UndoPolicy::Version) {
           d.documentHistory->amend(d.captureDocument(), capture());
           return;
         }
-        if (policy == UndoPolicy::Amend) {
+        if (action == RecordAction::Amend) {
           d.documentHistory->amend(d.captureDocument(), capture());
           DAW_EVENT("undo.version_amended")
               .field("label", std::string(label))

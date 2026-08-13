@@ -1971,7 +1971,14 @@ int main(int argc, char** argv) {
       refreshSamplerForTrackFn2
   };
 
-  daw::engine::RowopsCommandDeps rowopsCommandDeps{applySetRowOps, emitClipReject};
+  // ONE READ, shared with the version gate rather than re-implemented here — see
+  // engine_clip_edit.h. SetRowOps is track-scoped, so this is the track's own counter.
+  auto currentTrackClipVersion = [&](uint32_t trackId, uint32_t& out) {
+    return daw::engine::currentClipVersionFor(clipEditDeps, daw::UiCommandType::SetRowOps,
+                                              trackId, out);
+  };
+  daw::engine::RowopsCommandDeps rowopsCommandDeps{applySetRowOps, emitClipReject,
+                                                   currentTrackClipVersion};
 
   daw::engine::RequestCommandDeps requestCommandDeps{
      engineState, uiShm, waveformStore, resolveSourcePath, resolveDevicePluginPath,
@@ -2017,7 +2024,7 @@ int main(int argc, char** argv) {
   };
   daw::engine::UndoCommandDeps undoCommandDeps{
      engineState, applyUndoEntry, restoreSongStore, restoreTrackStore,
-      requireMatchingClipVersion, applyDocument, restorePluginState
+      applyDocument, restorePluginState
   };
 
   daw::engine::DeviceCommandDeps deviceCommandDeps{

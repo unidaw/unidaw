@@ -314,7 +314,12 @@ bool applySetRowOps(ClipEditDeps& deps, uint32_t trackId, uint32_t clipId, daw::
   auto& tracks = deps.engineState.trackTable.tracks;
   auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
 
-    TrackRuntime* runtime = daw::engine::trackAt(tracks, tracksMutex, trackId);
+    // `liveTrackAt`, not `trackAt`: a REMOVED track is tombstoned and its slot kept, so `trackAt`
+    // returns a pointer to a cleared runtime. This searched it, found no note, and reported
+    // UnknownNote — telling the caller their note is gone when what is gone is the track. It also
+    // put this path at odds with `currentClipVersionFor` and `requireMatchingClipVersion`, which
+    // both treat removed as absent, so one command had two answers to "is this track there".
+    TrackRuntime* runtime = daw::engine::liveTrackAt(tracks, tracksMutex, trackId);
     if (!runtime) {
       DAW_EVENT("rowops.rejected")
           .field("track", trackId)
@@ -929,28 +934,39 @@ bool applyRemoveChordAt(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick,
     return emitRemoveChordDiff(deps, trackId, *removed, absTick);
 }
 
+// See the header. The read the version gate used to do inline, so a caller that is not
+// version-gated can still say what the engine holds.
+bool currentClipVersionFor(ClipEditDeps& deps, daw::UiCommandType commandType, uint32_t trackId,
+                           uint32_t& out) {
+  auto& tracks = deps.engineState.trackTable.tracks;
+  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
+  // THE GLOBAL FIRST, so `out` holds a real figure on every path out of here — see the header.
+  // Leaving it untouched on the absent-track path made "no answer" indistinguishable from "the
+  // caller's initialiser", and the caller's initialiser was 0.
+  out = deps.clipVersion.load(std::memory_order_acquire);
+  // Undo/Redo (and the other global-scope ops) can touch ANY track, so they are
+  // gated on the global counter — comparing them against the caller's incidental
+  // trackId would let an undo of a track-3 edit ride on track 0's version.
+  if (daw::uiCommandIsGlobalScope(commandType)) {
+    return true;
+  }
+  std::lock_guard<std::mutex> lock(tracksMutex);
+  if (trackId < tracks.size() && tracks[trackId] &&
+      !tracks[trackId]->removed.load(std::memory_order_acquire)) {
+    out = tracks[trackId]->trackClipVersion.load(std::memory_order_acquire);
+    return true;
+  }
+  return false;
+}
+
 bool requireMatchingClipVersion(ClipEditDeps& deps, uint32_t baseVersion, daw::UiCommandType commandType, uint32_t trackId) {
-  auto& clipVersion = deps.clipVersion;
   auto& emitClipReject = deps.emitClipReject;
   auto& emitUiDiff = deps.emitUiDiff;
   auto& historyAppend = deps.historyAppend;
-  auto& tracks = deps.engineState.trackTable.tracks;
-  auto& tracksMutex = deps.engineState.trackTable.tracksMutex;
 
-    uint32_t current = clipVersion.load(std::memory_order_acquire);
-    // Undo/Redo (and the other global-scope ops) can touch ANY track, so they are
-    // gated on the global counter — comparing them against the caller's incidental
-    // trackId would let an undo of a track-3 edit ride on track 0's version.
-    if (!daw::uiCommandIsGlobalScope(commandType)) {
-      bool haveTrack = false;
-      {
-        std::lock_guard<std::mutex> lock(tracksMutex);
-        if (trackId < tracks.size() && tracks[trackId] &&
-            !tracks[trackId]->removed.load(std::memory_order_acquire)) {
-          current = tracks[trackId]->trackClipVersion.load(std::memory_order_acquire);
-          haveTrack = true;
-        }
-      }
+    uint32_t current = 0;
+    {
+      const bool haveTrack = currentClipVersionFor(deps, commandType, trackId, current);
       if (!haveTrack) {
         // A track-scoped edit naming a track that is not there used to fall through to
         // the global counter, get ACCEPTED, and then quietly do nothing when the edit

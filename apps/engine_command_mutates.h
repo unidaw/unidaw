@@ -39,6 +39,43 @@ namespace daw::engine {
 // document still has to be captured; what changes is whether a new step appears.
 enum class UndoPolicy { None, Version, Amend };
 
+// WHAT THE RECORDING BRACKET DOES WITH A POLICY — extracted so it can be ASKED.
+//
+// This decision lived inside the destructor of a `struct RecordVersion` declared local to
+// handleUiEntry, so nothing could construct it and nothing could test it. That mattered when
+// codex-worker-1 refuted my account of R11: I could show the policy is inert on the happy path
+// (delete the guard, the ratchet check still passes) and could NOT show the path where it is not,
+// because reaching the bracket meant building HandleUiEntryDeps — 24 sub-dependency structs, no
+// fixture in the tree. backend chose extraction over building that fixture.
+//
+// A PURE FUNCTION OF FOUR INPUTS, so the causal chain is two testable links instead of one
+// end-to-end run nobody can arrange:
+//   Skip   -> `commit` is NEVER CALLED, so no version appends and no redo tail is truncated.
+//   Commit -> `commit` decides, and it appends when the document OR THE PLUGIN SNAPSHOT differs
+//             (engine_document_history_tests proves that half).
+// Together those say what the end-to-end test would: with UndoPolicy::None a partial snapshot that
+// later fills in cannot append an Undo-labelled version, and with Version it can.
+enum class RecordAction { Skip, Amend, Commit };
+
+constexpr RecordAction recordActionFor(UndoPolicy policy, bool haveHistory, bool haveCapture,
+                                       bool amendForGesture) {
+  if (policy == UndoPolicy::None || !haveHistory || !haveCapture) {
+    return RecordAction::Skip;
+  }
+  // MID-GESTURE COMMANDS AMEND: the drag's first command opened the step and every one after it
+  // rewrites that step, so a 1000-command knob drag is ONE undo step holding the final value.
+  if (policy == UndoPolicy::Version && amendForGesture) {
+    return RecordAction::Amend;
+  }
+  // AN AUDITION KEEPS THE HISTORY HONEST WITHOUT ADDING TO IT: the swap must not consume a step,
+  // but the cursor's version still has to follow the live document or the next undo flips the
+  // placement back as collateral.
+  if (policy == UndoPolicy::Amend) {
+    return RecordAction::Amend;
+  }
+  return RecordAction::Commit;
+}
+
 // The audition swap is the only Amend today. Kept as its own function rather than a second
 // switch-complete classification, so there is one place that decides and nothing to drift apart.
 constexpr UndoPolicy commandUndoPolicy(daw::UiCommandType type);
@@ -55,8 +92,18 @@ constexpr bool commandMutatesDocument(daw::UiCommandType type) {
       return false;
     case daw::UiCommandType::DeleteNote:
       return true;
-    case daw::UiCommandType::Undo:  // no document state
-      return false;
+    // UNDO AND REDO REPLACE THE WHOLE DOCUMENT, so they are not "no document state" — `handleUndo`
+    // calls `applyDocument`. This said false with that comment while doing exactly the opposite of
+    // what the comment claimed, and G2-A's arbitrated population is derived from this predicate, so
+    // it was a live inconsistency in the thing the gate depends on rather than a misleading name.
+    // Open item 32, RULED (R11).
+    //
+    // BEHAVIOUR IS UNCHANGED, and it is `commandUndoPolicy` that holds it: a history verb mutates
+    // the document and must NOT open a step, which is exactly the case the enum below exists for
+    // and which a bool could never express. Every consumer goes through the policy; nothing reads
+    // this bool directly.
+    case daw::UiCommandType::Undo:
+      return true;
     case daw::UiCommandType::WriteHarmony:
       return true;
     case daw::UiCommandType::DeleteHarmony:
@@ -67,8 +114,8 @@ constexpr bool commandMutatesDocument(daw::UiCommandType type) {
       return true;
     case daw::UiCommandType::SetTrackHarmonyQuantize:
       return true;
-    case daw::UiCommandType::Redo:  // no document state
-      return false;
+    case daw::UiCommandType::Redo:  // replaces the document, exactly as Undo does — see above
+      return true;
     case daw::UiCommandType::SetLoopRange:  // no document state
       return false;
     case daw::UiCommandType::SetAutomationTarget:
@@ -342,6 +389,14 @@ constexpr const char* commandLabel(daw::UiCommandType type) {
 // it is on the audition list.
 constexpr UndoPolicy commandUndoPolicy(daw::UiCommandType type) {
   if (!commandMutatesDocument(type)) {
+    return UndoPolicy::None;
+  }
+  // THE HISTORY VERBS THEMSELVES. Undo and Redo replace the document — so the predicate above says
+  // true, which is what it names — and they must not open a step, because a step for the undo is
+  // how a history eats itself. They were kept out by CLAIMING not to mutate, which put the
+  // behaviour and the classification in one bool and made the bool lie; the separation is the
+  // same one the audition swap already needed.
+  if (type == daw::UiCommandType::Undo || type == daw::UiCommandType::Redo) {
     return UndoPolicy::None;
   }
   // SwapPlacementClip alone. Fork and ClearPlacementAlternate create and destroy drafts, which is

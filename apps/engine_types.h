@@ -709,6 +709,29 @@ inline TrackRuntime* trackAt(std::vector<std::unique_ptr<TrackRuntime>>& tracks,
   return nullptr;
 }
 
+// A TOMBSTONE IS NOT A TRACK TO EDIT, and `trackAt` deliberately hands one back — see above: the
+// slot must stay so a pointer taken here outlives the lock. So every caller that means "a track I
+// may act on" has to say `!rt || rt->removed.load(acquire)`, and `applySetRowOps` did not: it
+// null-checked only, searched the cleared tombstone, found no note, and reported UnknownNote. A
+// removed track and a note that never existed are different refusals, and the caller acting on
+// them wants different things. Open item 29, found by codex-worker-1 and backend after the first
+// fix closed the fabricated-version half.
+//
+// GIVEN ONE HOME rather than an eighth copy. That predicate is hand-written at SEVEN other sites
+// today (engine_arrangetime_commands x3, engine_patcher_assemble, engine_song_extent,
+// engine_song_store, engine_track_commands) and they all agree — which is exactly the state a
+// duplicated rule is in right up until one of them does not. Those are NOT converted here: this
+// change is scoped to the row-op refusal, and widening it by hand is how a narrow finding turns
+// into an unreviewable diff. They are named so the next person can convert them deliberately.
+inline TrackRuntime* liveTrackAt(std::vector<std::unique_ptr<TrackRuntime>>& tracks,
+                                 std::mutex& tracksMutex, uint32_t trackId) {
+  TrackRuntime* rt = trackAt(tracks, tracksMutex, trackId);
+  if (rt == nullptr || rt->removed.load(std::memory_order_acquire)) {
+    return nullptr;
+  }
+  return rt;
+}
+
 
 // AN OUTBOUND UI DIFF, with its size taken from the payload it carries.
 //

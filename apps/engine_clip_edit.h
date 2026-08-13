@@ -109,6 +109,31 @@ bool applyRemoveChordAt(ClipEditDeps& deps, uint32_t trackId, uint64_t nanotick,
 // against; if the engine has moved on, the edit is REFUSED rather than applied to a document the
 // caller has not seen. That refusal goes to the UI and to the journal, which is why this needs
 // both emitClipReject and historyAppend.
+// THE COUNTER A COMMAND IS GATED ON, and whether its track is there — one read, two callers.
+//
+// Track-scoped commands are gated on the track's own `trackClipVersion`; global-scope ones on the
+// engine's `clipVersion`, because an undo can touch ANY track and comparing it against the caller's
+// incidental trackId would let it ride on track 0's version. Reading that took a mutex and a
+// removed-flag check, and it lived INSIDE the version gate — so the row-op refusal, which is not
+// version-gated and therefore never calls the gate, had no way to say what the engine holds and
+// reported a literal 0 instead. Extracted rather than copied: a second implementation of a read
+// under a lock is how the two answers start to disagree.
+//
+// `out` IS ALWAYS SET TO A REAL VALUE, and that is the whole point of the contract rather than a
+// convenience. The first version left `out` untouched when the track was absent and returned false
+// — which put the burden on every caller to notice, and the first caller written against it did
+// not: it kept its own initialiser of 0 and emitted that, so the MISSING-track refusal reported a
+// fabricated 0, which is the defect this function was extracted to end. backend caught it.
+//
+// When there is no per-track counter the answer is the engine's GLOBAL `clipVersion`, which is what
+// the two sibling emit sites in this file have always reported in that case. It is a real figure
+// the engine holds, and reporting it is not the same claim as reporting a track's own.
+//
+// The bool says WHICH counter `out` came from: true = the track's own, false = the global, because
+// the track is absent or removed. A caller that ignores it still cannot fabricate.
+bool currentClipVersionFor(ClipEditDeps& deps, daw::UiCommandType commandType, uint32_t trackId,
+                           uint32_t& out);
+
 bool requireMatchingClipVersion(ClipEditDeps& deps, uint32_t baseVersion, daw::UiCommandType commandType, uint32_t trackId);
 
 // Which placement covers this tick on this track, if any. The one answer to a question that used

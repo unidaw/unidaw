@@ -102,8 +102,6 @@ mutate() {
 
 # --- not document state -----------------------------------------------------------------------
 skip None                  "not a command"
-skip Undo                  "undo itself"
-skip Redo                  "redo itself"
 skip TogglePlay            "transport, never persisted"
 skip Stop                  "transport"
 skip SetPosition           "transport"
@@ -126,6 +124,24 @@ skip RequestSamplerEnvelope "query"
 skip BulkChunk             "transport frame for a larger payload, not a command"
 skip SetLoopRange          "transport state, re-derived at load (audit: correctly excluded)"
 skip SetModSourceValue     "session-only: modSources is never serialised"
+
+# --- document state, but NOT undoable BY THE THREE ASSERTIONS ---------------------------------
+# THE HISTORY VERBS ARE NOT "not document state", and saying so put this table at odds with the
+# engine. `commandMutatesDocument(Undo)` returns TRUE — handleUndo calls applyDocument and replaces
+# the entire ProjectDocument — and the engine keeps them out of the history by POLICY
+# (commandUndoPolicy -> None) rather than by pretending they change nothing. Open item 32, RULED
+# (R11); this table said "undo itself"/"redo itself" under a heading that claims neither touches
+# document state, which is the same conflation the bool used to carry.
+#
+# They stay OUT OF `mutate` because the three assertions cannot express them: assertion 1 wants the
+# command to change the document and then wants UNDO to put it back — and undoing an undo is a
+# redo, so the harness would be asserting that undo is its own inverse, which is not the contract.
+# Their behaviour is what assertions 2 and 3 of EVERY OTHER ROW exercise: each `mutate` row above
+# drives `do undo` and `do redo` and compares bytes, so a history verb that opened a step for
+# itself would break every one of them at once. See also the end-to-end assertion below, which
+# tests the property those rows cannot: that undo does NOT consume a step for itself.
+skip Undo   "replaces the document (commandMutatesDocument=true); kept out of the history by policy, exercised by every mutate row"
+skip Redo   "replaces the document (commandMutatesDocument=true); kept out of the history by policy, exercised by every mutate row"
 
 # --- document state: must be undoable ---------------------------------------------------------
 # setup runs BEFORE the baseline save, so the command under test has something to act on.
@@ -322,6 +338,63 @@ done
 
 echo "  exercised ${#MUT_NAME[@]} command(s): $PASS fully undoable, $FAILED not"
 for line in "${FAIL_LINES[@]:-}"; do [ -n "$line" ] && echo "      - $line"; done
+
+# ---------------------------------------------------------------------------------------------
+# THE HISTORY VERBS THEMSELVES: undo must NOT consume a step for itself.
+#
+# The rows above prove each command survives one undo and one redo. None of them can see the
+# property that keeps the history usable at all — that pressing undo does not ITSELF push a step,
+# so a second undo reaches the edit BEFORE the first one rather than undoing the undo. That is
+# `commandUndoPolicy(Undo) == None`, and it is the reason the classifier could not simply be
+# flipped to true when open item 32 (R11) corrected it: mutating and step-opening are two answers.
+#
+# TWO EDITS, TWO UNDOS. If undo opened a step, the second undo would reverse the FIRST undo and
+# land back at the one-edit state — which is byte-identical to `after1`, so the assertion is
+# exactly the one that separates the two behaviours. Then two redos must return to `after2`.
+after_command "$TMP" cli do load base --force >/dev/null 2>&1 || true
+h_base="$(snap "hist_base")"
+after_command "$TMP" cli do note --track 0 --nanotick 0 --pitch 60 --duration $Q --column 0 >/dev/null 2>&1 || true
+h_after1="$(snap "hist_after1")"
+after_command "$TMP" cli do note --track 0 --nanotick $Q --pitch 64 --duration $Q --column 0 >/dev/null 2>&1 || true
+h_after2="$(snap "hist_after2")"
+
+HIST_FAIL=0
+if cmp -s "$h_base" "$h_after1" || cmp -s "$h_after1" "$h_after2"; then
+  echo "  FAIL: the two setup edits did not both change the document — the history assertions below"
+  echo "        would pass vacuously, which is the shape this check exists to refuse."
+  HIST_FAIL=1
+else
+  after_command "$TMP" cli do undo >/dev/null 2>&1 || true
+  u1="$(snap "hist_undo1")"
+  after_command "$TMP" cli do undo >/dev/null 2>&1 || true
+  u2="$(snap "hist_undo2")"
+
+  if ! cmp -s "$h_after1" "$u1"; then
+    echo "  FAIL: one undo did not reach the one-edit state"; HIST_FAIL=1
+  fi
+  # THE ASSERTION THAT NAMES THE DEFECT. An undo that opened a step for itself would make the
+  # SECOND undo reverse the first one, landing on after1 again instead of on base.
+  if cmp -s "$h_after1" "$u2"; then
+    echo "  FAIL: the second undo landed back on the ONE-EDIT state — undo consumed a step for"
+    echo "        itself, so the history reverses its own moves instead of the user's edits."
+    HIST_FAIL=1
+  elif ! cmp -s "$h_base" "$u2"; then
+    echo "  FAIL: two undos did not reach the pre-edit document"; HIST_FAIL=1
+  fi
+
+  after_command "$TMP" cli do redo >/dev/null 2>&1 || true
+  after_command "$TMP" cli do redo >/dev/null 2>&1 || true
+  r2="$(snap "hist_redo2")"
+  if ! cmp -s "$h_after2" "$r2"; then
+    echo "  FAIL: two redos did not re-reach the two-edit document"; HIST_FAIL=1
+  fi
+fi
+if [ "$HIST_FAIL" -eq 0 ]; then
+  echo "  history verbs: undo does not consume a step for itself; two undos and two redos round-trip"
+else
+  echo "undo_ratchet_check: FAIL"
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------------------------
 # THE RATCHET

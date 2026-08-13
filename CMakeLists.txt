@@ -85,7 +85,7 @@ target_link_libraries(juce_host_process PRIVATE platform_juce)
 # pre-extraction file so they were dead before the move rather than broken by it. main.cpp had
 # three more. A warning that does not fail is a comment, and this repo has spent the night
 # finding out what comments are worth.
-set(engine_commands_warnings -Werror=unused-variable)
+set(engine_commands_warnings -Werror=unused-variable -Werror=switch)
 file(GLOB _engine_command_sources ${CMAKE_CURRENT_SOURCE_DIR}/apps/engine_*_commands.cpp)
 set_source_files_properties(apps/engine_render_track.cpp apps/engine_save_project.cpp
                             apps/engine_handle_ui_entry.cpp
@@ -107,7 +107,7 @@ set_source_files_properties(apps/engine_render_track.cpp apps/engine_save_projec
                             apps/engine_history_journal.cpp
                             apps/engine_song_store.cpp
                             apps/engine_consumer.cpp
-                            PROPERTIES COMPILE_OPTIONS -Werror=unused-variable)
+                            PROPERTIES COMPILE_OPTIONS "-Werror=unused-variable;-Werror=switch")
 set_source_files_properties(${_engine_command_sources}
   PROPERTIES COMPILE_OPTIONS "${engine_commands_warnings}")
 
@@ -210,7 +210,7 @@ target_link_libraries(engine_commands PUBLIC engine_core)
 add_executable(daw_engine
   apps/daw_engine_main.cpp
 )
-target_compile_options(daw_engine PRIVATE -Werror=unused-variable)
+target_compile_options(daw_engine PRIVATE -Werror=unused-variable -Werror=switch)
 
 # The host processes get the same gate as the engine. Dead code hid in main.cpp for as long as it
 # did because that file was never compiled with this warning; leaving the two hosts uncovered
@@ -905,10 +905,22 @@ add_test(NAME contract_layout
 )
 set_tests_properties(contract_layout PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# ...and the nine controls that prove it still refuses what it was written to refuse — and, for
+# two of them, that it still stays quiet about what is not a defect.
+# Registered separately rather than folded into the check above so that a control going blind is
+# its own red test with its own name, instead of one line inside a passing check's output. Note
+# the file is *_selftest.sh, which check_registry_check's *_check.sh glob does not select — it is
+# wired up here deliberately and not by falling outside the pattern.
+add_test(NAME contract_layout_selftest
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/contract_layout_check_selftest.sh
+)
+set_tests_properties(contract_layout_selftest PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 # THE RUST SIDE'S OWN TESTS, which had never run here. contract_layout proves every mirror is
-# LISTED in bindgen_matches_hand_written; that test is what actually compares the bytes, and it
-# only ever ran under `cargo test`. So the byte-level guard was absent from the suite that gates
-# every commit — the list was checked and the thing the list points at was not.
+# LISTED in bindgen_matches_hand_written, and now reconstructs each mirror's offsets itself; that
+# test is what compares the sizes as the COMPILER sees them rather than as a script computes them,
+# and it only ever ran under `cargo test`. So the compiled guard was absent from the suite that
+# gates every commit — the list was checked and the thing the list points at was not.
 add_test(NAME bridge_layout
   COMMAND cargo test --manifest-path ${CMAKE_CURRENT_SOURCE_DIR}/ui/Cargo.toml -p daw-bridge
 )
@@ -1534,7 +1546,8 @@ set_tests_properties(block_edge_note PROPERTIES
 # THE COMMAND ENUM IS WRITTEN TWICE, IN TWO LANGUAGES. The Rust value is what goes on the wire and
 # the C++ value is what the engine switches on, so a disagreement is not a build error — it is a
 # command that silently does something else. contract_freshness_check says outright that it does
-# NOT check the mirrors agree; contract_layout_check pins sizes only; op_registry_check reads a
+# NOT check the mirrors agree; contract_layout_check pins layout, not meaning, and an enumerator
+# is meaning; op_registry_check reads a
 # different file. This is the pair every feature commit touches.
 # TRACK-TO-TRACK MIDI ROUTING, IN BOTH DIRECTIONS. The receive path had NO fixture at all — an
 # abort() at the top of the destination's inbound drain did not fire in any of the 189 registered

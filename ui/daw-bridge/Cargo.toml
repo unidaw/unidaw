@@ -11,6 +11,11 @@ memoffset = "0.9"
 
 [build-dependencies]
 bindgen = "0.70"
+# For the provenance sidecar build.rs writes beside the generated bindings. A standard
+# implementation rather than a hand-rolled one: the checker reads the same fingerprint from
+# Python's hashlib, and two hand-written hashes that must agree bit for bit is a seam worth
+# one crate to remove. Every dependency of sha2 was already in this lock.
+sha2 = "0.10"
 
 [lib]
 name = "daw_bridge"
