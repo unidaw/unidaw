@@ -2206,3 +2206,54 @@ quoted, while admitting comments and unreachable branches), and the three open
 questions are decided in the retraction. AE-P0.3 remains BLOCKED, now against the
 issued conditions, and the standing instruction is to implement them rather than to
 write a fifth narrowing.
+
+## Owner decisions blocking progress (2026-08-13) — consolidated for Jaakko
+
+Re-derived rather than carried. Five decisions across two tickets. Each is recorded
+with where it lives, why it is not decidable by measurement, and a recommendation
+where there are grounds for one. None of these is a status question; each one
+changes what gets built.
+
+### AE-P0.3 — all three from `docs/architecture/tasks/AE-P0.3-optionB-review-checklist.md` §5
+
+That checklist is explicitly REVIEW PREP and NOT an approval: the B1-B8 conditions
+were issued and conditionally passed, and they are "issued, not yet met". The
+implementation cannot start because decisions 1 and 3 determine the record's shape.
+
+1. **Marker mapping, or a raw-output fence.** `docs/DEMO.md:70` starts with `3e 20`
+   (`"> "`), the transcript line starts with `20 20` (two spaces from `say()`'s
+   `printf`). Either `> ` is a documentation marker with an explicit versioned
+   mapping (`demo-blockquote-to-observed-v1`), or DEMO.md changes to carry raw output
+   bytes. The review is explicit that silent trimming may NOT be called "exact",
+   which is what today's `.trim()` does. LEAN: the versioned mapping, because the
+   `> ` convention is used throughout the runbook and the mapping is exactly
+   specified already — but a raw fence is the only option that removes the
+   normalisation class entirely, and that is a real argument.
+2. **`observedTree` versus current HEAD.** Requiring equality invalidates every
+   attestation the moment an unrelated commit lands. LEAN: historical tree plus
+   selective current-blob validation, which is what the reviewer prefers.
+3. **Pin the branch variable, or change the doc.** The quoted line is produced ONLY
+   by `tools/webstack.sh:396`, the non-default branch, selected by
+   `DAW_WEBSTACK_ALLOW_CREDENTIALS=1`. A reviewer running the documented command with
+   nothing set takes the `:392` branch and sees a different 91-byte line. So either
+   the record pins that variable, or DEMO.md is changed to quote the DEFAULT
+   branch's line. LEAN: change the doc — it is cheaper and it makes the attested
+   scenario the one a reader actually runs, which is the entire point of the runbook.
+
+### P2-CMD-00 — from `docs/architecture/tasks/P2-CMD-00-owner-decisions.md`
+
+The memo states plainly that these two "are genuinely yours — neither is decidable by
+measurement, which is why they are here". Its third item is a plan, not a choice.
+
+4. **Minting: per-process nonce, or an allocated producer id.** Memo recommends the
+   per-process nonce; cost if wrong is a 1.2e-4 chance a client adopts another's
+   refusal, self-correcting on the next read.
+5. **Does `commandType` ride the wire.** Memo recommends dropping it; cost if wrong
+   is that a human reading a raw ring dump must consult the sender's log for the verb.
+
+### What is NOT blocked on these
+
+T3's blocker repair is in independent re-review. HOST-R3c findings 5 (the reset is an
+unbounded latch) and 6 (`tearDownHostState` re-arms a track without resetting the
+counter or window) are bounded correctness defects that need tickets and neither
+needs an owner call to start.
