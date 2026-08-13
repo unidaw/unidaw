@@ -656,13 +656,19 @@ Required independent sign-offs:
 
 ## Program state
 
-```text
-AE-P0    ACTIVE -- baseline build/provenance verification
-AE-P1.*  BLOCKED by AE-P0
-AE-P2.*  BLOCKED by AE-P1
-AE-P3.*  BLOCKED by AE-P1/P2 HostSession and contract stability
-AE-P4.*  BLOCKED by AE-P2 transaction semantics
-AE-P5.*  BLOCKED until replacement behavior is protected by gates
-```
+Phase status is NOT recorded here. The single authority is the `Ticket state`
+table in `ARCHITECTURE_EXCELLENCE_LEDGER.md`, which that ledger's `Global state`
+block already names as authoritative.
+
+This section previously carried its own copy of the phase table. The copy went
+stale and contradicted the ledger: it still read `AE-P1.* BLOCKED by AE-P0`
+while the ledger recorded `AE-P1.1` frozen with an independent PASS and
+`AE-P1.2` active with 19 open items. Both statements could not be true, and the
+duplicate is what allowed one of them to rot unnoticed — a fact stated in two
+places has two chances to be wrong and no mechanism to notice the disagreement.
+
+Restating the table here again, even correctly, would only reset that clock.
+Read the ledger for status; this document defines the phases, their gates, and
+their dependencies, which is what does not change every day.
 
 No implementation is authorized by this document alone.

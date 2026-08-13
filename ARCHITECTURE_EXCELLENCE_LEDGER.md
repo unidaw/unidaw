@@ -1970,13 +1970,22 @@ a notification plane and not a source of truth:
 - No dirty CTRL02 work exists in any checkout. `backend` twice believed otherwise; that belief
   is not carried forward.
 
-### Plan/ledger contradiction, unresolved
+### Plan/ledger contradiction, RESOLVED by deleting the duplicate
 
-`ARCHITECTURE_EXCELLENCE_PLAN.md` still states `AE-P0 ACTIVE` and `AE-P1.* BLOCKED by AE-P0`,
-while this ledger records AE-P1.1 and AE-P1.2 frozen and P2 work in flight. One of the two is
-wrong. Flagged, not silently patched: the plan's program state is the orchestrator's to
-maintain, and it needs a deliberate re-derivation rather than an edit that makes the sentence
-agree with the newest entry.
+`ARCHITECTURE_EXCELLENCE_PLAN.md` carried its own `Program state` block reading
+`AE-P0 ACTIVE` and `AE-P1.* BLOCKED by AE-P0`, while the `Ticket state` table here records
+`AE-P1.1` FROZEN with an independent PASS and `AE-P1.2` ACTIVE with 19 open items. (An earlier
+version of this entry said both were frozen; that was wrong — P1.2 is active.)
+
+Resolved by removing the plan's copy rather than correcting it. Syncing the two would have
+restored agreement for exactly as long as it took the next ticket to land: a fact stated in two
+places has two chances to be wrong and no mechanism to notice when they disagree, which is how
+this one rotted unnoticed in the first place. The plan now points at this ledger's table, which
+its own `Global state` block already declared the single authority for phase status. The plan
+keeps what does not change daily — phase definitions, gates, dependencies.
+
+Verified after the edit: the superseded phrasing appears nowhere in the plan, and no third copy
+of the phase table exists in any tracked markdown.
 
 ### Standing fleet policy
 
