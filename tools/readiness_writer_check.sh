@@ -281,13 +281,27 @@ OWNER = 'apps/engine_restart_worker.cpp'
 #
 # Verified against the tree when this was tightened: the only mentions outside the two exempt files
 # are comments, including one describing this very rule.
+# THE HEADER IS NO LONGER EXEMPT, because it is no longer only declarations. This skipped
+# apps/engine_types.h whole, and that was true right up until requestFlappingBudgetReset was added
+# to it — the first requester-thread CODE in the exempt file. Putting
+# `runtime.restartAttempts = 0;` in that helper's body reinstates the exact HOST-R3c race, inside
+# the very function this rule's own failure message tells you to call, and the check passed.
+#
+# An exemption granted to a file because of what it contained does not notice the file changing.
+# So the exemption is now the two DECLARATION LINES themselves, which is what was actually meant.
+DECL_LINES = {
+    'uint32_t restartAttempts = 0;',
+    'std::chrono::steady_clock::time_point restartWindowStart{};',
+}
 for f in files:
-    if f in (OWNER, 'apps/engine_types.h'):
-        continue                      # the owner, and the declaration itself
+    if f == OWNER:
+        continue                      # the owner thread's own file
     for i, l in enumerate(src[f], 1):
         code = l.split('//', 1)[0]    # trailing comments too, not just whole-line ones
         if not code.strip():
             continue
+        if f == 'apps/engine_types.h' and code.strip() in DECL_LINES:
+            continue                  # declaring them is not touching them
         for fld in FLAPPING:
             if re.search(rf'\b{fld}\b', code):
                 bad(f'FLAPPING GUARD NAMED OUTSIDE ITS OWNER: {f}:{i} mentions {fld}',
@@ -323,20 +337,49 @@ rearm = [(f, ln, fn) for f, ln, fld, fn in writes
 if not rearm:
     bad('no site clears hostGaveUp, so rule 2c is blind',
         'the field may have been renamed; re-arm sites are no longer being checked at all')
+def executable(line):
+    """Code with comments and string literals removed.
+
+    Rule 2b strips trailing comments; this rule did not follow it, so a re-arm site could satisfy
+    the rule with a line that merely NAMES the helper — a trailing comment saying
+    `// requestFlappingBudgetReset(runtime) is the caller's job`, or a log message containing the
+    token. Both were verified to pass with the real call deleted. A rule that a comment can satisfy
+    is retired by the next person who explains it.
+    """
+    return re.sub(r'"[^"]*"', '""', line.split('//', 1)[0])
+
 for f, ln, fn in rearm:
-    # The enclosing span, recomputed the same way the write scan attributes names, so "in the same
-    # function" means the same thing to both rules.
-    body = []
-    for start, end, _name in top_level_spans(src[f]):
-        if start <= ln <= end:
-            body = src[f][start - 1:end]
-            break
+    # THE NARROWEST enclosing span, from top-level functions AND named lambdas — the same
+    # attribution the write scan uses. This took top_level_spans alone while claiming in a comment
+    # that the two matched. They did not: rule 1 attributes to `main::scheduleHostRestart`, a
+    # 41-line span, while this scanned `main` — 1,984 lines containing 87 named lambdas. A call in
+    # any one of them, on any object, 988 lines away, satisfied the rule. That is precisely the
+    # coarse-grain defect this file's own header says named_lambda_spans was added to end,
+    # surviving inside a rule written afterwards.
+    body, best = [], None
+    for start, end, _name in top_level_spans(src[f]) + named_lambda_spans(src[f]):
+        if start <= ln <= end and (best is None or (end - start) < (best[1] - best[0])):
+            best = (start, end)
+    if best:
+        body = src[f][best[0] - 1:best[1]]
+
     # THE CALL, NOT THE STORE. This grepped for a particular store spelling and would have gone
     # blind the moment the request became a timestamp rather than a flag — which is exactly what
     # the owner ruling then made it. One named function is the structural fact; how it writes the
     # field is its own business.
-    requests = any('requestFlappingBudgetReset(' in l
-                   for l in body if not l.strip().startswith('//'))
+    #
+    # AND ON THE SAME OBJECT. Presence of the token said nothing about its argument, so a site that
+    # re-armed `runtime` and reset `unrelated` passed — the re-armed track keeping its spent budget
+    # while some other track got a free one, blessed by the rule meant to forbid exactly that.
+    recv = re.match(r'\s*([A-Za-z_][\w.>()*&-]*?)\s*(?:->|\.)hostGaveUp\.store', src[f][ln - 1])
+    if not recv:
+        bad(f'RE-ARM RECEIVER UNREADABLE: {f}:{ln}',
+            'rule 2c cannot tell which object is being re-armed, so it cannot check that the same',
+            'one gets its budget reset. Rewrite the store so the receiver is a plain expression.')
+        continue
+    want = re.compile(r'requestFlappingBudgetReset\s*\(\s*\*?\s*'
+                      + re.escape(recv.group(1)) + r'\s*\)')
+    requests = any(want.search(executable(l)) for l in body)
     if not requests:
         bad(f'RE-ARM WITHOUT A BUDGET RESET: {f}:{ln} clears hostGaveUp inside {fn}()',
             'the track is re-armed but restartAttempts/restartWindowStart survive, so the next',

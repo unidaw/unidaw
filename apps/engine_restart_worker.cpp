@@ -56,10 +56,21 @@ void runRestartWorker(RestartWorkerDeps& deps) {
       // cannot accumulate.
       const uint64_t resetRequestedAt =
           runtime->restartWindowResetRequestedAt.exchange(0, std::memory_order_acq_rel);
-      if (resetRequestedAt != 0) {
+      if (flappingResetRequestIsFresh(resetRequestedAt, nowRestart, kRestartWindow)) {
         const auto requestAge = nowRestart.time_since_epoch()
                                 - std::chrono::steady_clock::duration(
                                       static_cast<std::chrono::steady_clock::rep>(resetRequestedAt));
+        // WHY EXPIRY LOSES NOTHING, which is the question the ruling actually turned on and was
+        // missing here. Let W be restartWindowStart, T1 the request, T2 this pass.
+        //   - The request only MATTERS when T2 - W <= window; past that, the branch below zeroes
+        //     restartAttempts anyway and the request is redundant.
+        //   - W <= T1 for any pending request, because W is only assigned from `nowRestart`, which
+        //     is captured above the exchange in this same pass — so a request already stored is
+        //     consumed before W moves, and one stored later is stored after that capture.
+        //   - Therefore requestAge = T2 - T1 <= T2 - W <= window, and it is applied.
+        // The two boundaries complement rather than overlap: the branch below uses a STRICT
+        // `> kRestartWindow`, this one `<=`, so exactly-at-the-window falls through one and is
+        // caught by the other with no gap.
         if (requestAge <= kRestartWindow) {
           runtime->restartAttempts = 0;
           runtime->restartWindowStart = {};

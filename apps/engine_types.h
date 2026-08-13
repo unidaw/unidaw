@@ -525,6 +525,24 @@ inline void requestFlappingBudgetReset(TrackRuntime& runtime) {
                                               std::memory_order_release);
 }
 
+// ...and the consume side's decision, extracted so it can be TESTED. It was three lines inside the
+// restart worker's loop, reachable only by running an engine with a plugin that crashes on load —
+// which is why the expiry, the whole point of the owner ruling, had no control at all and was
+// argued from reading the code. Pure arithmetic over one value has no business being untestable.
+//
+// `requestedAt` is a steady_clock tick count; 0 means no request.
+inline bool flappingResetRequestIsFresh(uint64_t requestedAt,
+                                        std::chrono::steady_clock::time_point now,
+                                        std::chrono::steady_clock::duration window) {
+  if (requestedAt == 0) {
+    return false;
+  }
+  const auto age = now.time_since_epoch()
+                   - std::chrono::steady_clock::duration(
+                         static_cast<std::chrono::steady_clock::rep>(requestedAt));
+  return age <= window;
+}
+
 // What was AUTHORED ON A STEM, parked between the load and the derivation.
 //
 // A child lane does not exist when the project is parsed: it appears only after the

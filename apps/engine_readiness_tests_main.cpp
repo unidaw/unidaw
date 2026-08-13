@@ -378,6 +378,63 @@ void testAckRetiresOnlyTheObservedCausesAndReuseStartsClean() {
 
 }  // namespace
 
+// ---------------------------------------------------------------- the flapping-reset expiry
+//
+// HOST-R3c finding 5, owner ruling 2026-08-13. A chain rebuild asks the restart worker to reset a
+// track's crash budget. As a bare flag that request was an unbounded latch: if the restart it
+// belonged to never happened, it sat set until some LATER, unrelated crash storm consumed it and
+// was handed a fresh budget it had not earned. It now carries a time and expires with the same
+// window the guard itself uses.
+//
+// THESE ARE THE ONLY THINGS THAT EXERCISE THE EXPIRY. Independent review pointed out that the
+// change shipped with a rule enforcing that the request is MADE and nothing at all checking that a
+// stale one is DISCARDED — which is the entire property the ruling was about.
+static void testAStaleResetRequestIsDiscarded() {
+  const auto now = std::chrono::steady_clock::now();
+  const auto window = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::seconds(10));
+  const auto stale = static_cast<uint64_t>(
+      (now.time_since_epoch() - std::chrono::seconds(11)).count());
+  CHECK(!daw::engine::flappingResetRequestIsFresh(stale, now, window));
+}
+
+static void testAFreshResetRequestIsApplied() {
+  const auto now = std::chrono::steady_clock::now();
+  const auto window = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::seconds(10));
+  const auto fresh = static_cast<uint64_t>(
+      (now.time_since_epoch() - std::chrono::seconds(1)).count());
+  CHECK(daw::engine::flappingResetRequestIsFresh(fresh, now, window));
+}
+
+static void testNoRequestIsNotAReset() {
+  // Zero is "nobody asked". A monotonic clock cannot encode it, so the sentinel is unambiguous —
+  // and without this the absence of a request would read as a request from the epoch.
+  const auto now = std::chrono::steady_clock::now();
+  CHECK(!daw::engine::flappingResetRequestIsFresh(0, now, std::chrono::seconds(10)));
+}
+
+static void testTheWindowBoundaryIsInclusiveAndComplementsTheGuard() {
+  // The worker's other branch uses a STRICT `> window` to start a fresh count, so this one must be
+  // inclusive or exactly-at-the-window falls through both and the reset is silently lost.
+  const auto now = std::chrono::steady_clock::now();
+  const auto window = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::seconds(10));
+  const auto exactly = static_cast<uint64_t>((now.time_since_epoch() - window).count());
+  CHECK(daw::engine::flappingResetRequestIsFresh(exactly, now, window));
+}
+
+static void testARequestFromTheFutureIsFresh() {
+  // Reachable: the worker captures `now` before it exchanges the request, so a request stored in
+  // between is newer than the reference. A brand-new request must be applied, not discarded.
+  const auto now = std::chrono::steady_clock::now();
+  const auto window = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::seconds(10));
+  const auto future = static_cast<uint64_t>(
+      (now.time_since_epoch() + std::chrono::milliseconds(5)).count());
+  CHECK(daw::engine::flappingResetRequestIsFresh(future, now, window));
+}
+
 int main() {
   testOverflowDuringPrimedRelaunchReplayIsNotDropped();
   testAStaleAckCannotAnswerAReArmedReplay();
@@ -398,6 +455,11 @@ int main() {
   testAllWaitsForTheHostAsWellAsProduction();
   testMutedTracksAreNotWaitedFor();
   testRequireActiveFalseIgnoresProduction();
+  testAStaleResetRequestIsDiscarded();
+  testAFreshResetRequestIsApplied();
+  testNoRequestIsNotAReset();
+  testTheWindowBoundaryIsInclusiveAndComplementsTheGuard();
+  testARequestFromTheFutureIsFresh();
 
   if (g_fail != 0) {
     std::printf("engine_readiness_tests: FAIL (%d)\n", g_fail);
