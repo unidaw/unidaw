@@ -726,7 +726,7 @@ open(dst, 'w').write(out)
 PY2
 then
   expect_refusal "11.mirror_without_offsets" "$(stage no_offsets)" \
-                 "can no longer be laid out|UiBulkChunkPayload" "$NOOFF"
+                 "can no longer be laid out" "$NOOFF"
 else
   FAIL=$((FAIL+1))
 fi
@@ -739,7 +739,7 @@ p = sys.argv[1]
 open(p, 'a').write("\n#[repr(C)]\npub struct UiTotallyInternalThing { pub a: u32, pub b: u64 }\n")
 PY2
 then
-  expect_refusal "11.mirror_without_twin" "$D" "NO generated twin|UiTotallyInternalThing"
+  expect_refusal "11.mirror_without_twin" "$D" "NO generated twin"
 else
   FAIL=$((FAIL+1))
 fi
@@ -755,6 +755,74 @@ open(p, 'a').write("\n// not-a-c++-mirror: internal to the bridge, never crosses
 PY2
 then
   expect_pass "11.exemption_is_honoured" "$D"
+else
+  FAIL=$((FAIL+1))
+fi
+
+# 10b — THE UNION ITSELF, ratcheted. Control 10 fires through the closure regex, which matches the
+# angle form; the depfile half is what catches the spellings no regex can see. That half was
+# verified by hand twice and by a control never, which is the state the two repairs before it were
+# in when they regressed. A macro include is invisible to any lexical test by construction.
+MACRO="$(stage_bindings prov_macro)"
+cp "$REAL_BINDINGS" "$MACRO"
+D="$(stage prov_macro)"
+if python3 - "$D" "$(dirname "$MACRO")/shm_sys.provenance" <<'PY2'
+import os, re, sys, hashlib
+d, prov = sys.argv[1], sys.argv[2]
+TARGET = 'apps/harmony_timeline.h'
+abi = os.path.join(d, 'apps/patcher_abi.h')
+src = open(abi).read()
+quoted = '#include "%s"' % TARGET
+if quoted not in src:
+    raise SystemExit("  MUTATION DID NOT LAND: %s does not include %s the quoted way" % (abi, TARGET))
+open(abi, 'w').write(src.replace(quoted, '#define DAW_HT_H "%s"\n#include DAW_HT_H' % TARGET))
+# THE BLINDNESS PROOF: no lexical include matcher can see this, so a refusal cannot be coming from
+# the closure. If this ever matches, the control has stopped testing the depfile half.
+if re.search(r'(?m)^\s*#\s*include\s*["<]%s' % re.escape(TARGET), open(abi).read()):
+    raise SystemExit("  MUTATION DID NOT LAND: an include directive still names the target")
+out = []
+for l in [x for x in open(prov).read().splitlines() if x.strip()]:
+    h, n, rel = l.split(None, 2)
+    if rel == TARGET:
+        continue                      # THE DEFECT: its bytes are pinned by nothing
+    if rel == 'apps/patcher_abi.h':   # re-pin what the rewrite disturbed
+        b = open(os.path.join(d, rel), 'rb').read()
+        h, n = hashlib.sha256(b).hexdigest(), str(len(b))
+    out.append("%s %s %s" % (h, n, rel))
+if len(out) == len(open(prov).read().strip().splitlines()):
+    raise SystemExit("  MUTATION DID NOT LAND: %s is not in the sidecar" % TARGET)
+open(prov, 'w').write("\n".join(out) + "\n")
+PY2
+then
+  expect_refusal "10b.scope_macro_include" "$D" "does not record" "$MACRO"
+else
+  FAIL=$((FAIL+1))
+fi
+
+# 11b — the exemption must REQUIRE a reason. "A reason is required" is asserted in two comments and
+# was tested nowhere; relaxing the marker to accept a bare token left the suite green.
+D="$(stage exempt_noreason)"
+if python3 - "$D/ui/daw-bridge/src/layout.rs" <<'PY2'
+import sys
+open(sys.argv[1], 'a').write("\n// not-a-c++-mirror:\n#[repr(C)]\n"
+                             "pub struct UiTotallyInternalThing { pub a: u32, pub b: u64 }\n")
+PY2
+then
+  expect_refusal "11b.exemption_needs_a_reason" "$D" "NO generated twin"
+else
+  FAIL=$((FAIL+1))
+fi
+
+# 11c — and the patcher side must have the same door, or its refusal advises a mechanism that does
+# nothing and an internal repr(C) type cannot be added to patcher_rust at all.
+D="$(stage patcher_exempt)"
+if python3 - "$D/patcher_rust/src/lib.rs" <<'PY2'
+import sys
+open(sys.argv[1], 'a').write("\n// not-a-c++-mirror: scratch state, never crosses the C ABI\n"
+                             "#[repr(C)]\npub struct PatcherPrivateScratch { pub a: u32 }\n")
+PY2
+then
+  expect_pass "11c.patcher_exemption_is_honoured" "$D"
 else
   FAIL=$((FAIL+1))
 fi

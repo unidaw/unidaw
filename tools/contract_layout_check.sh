@@ -401,16 +401,39 @@ if stale:
 # entry is resolved by the longest suffix that exists under `src`, which needs no root at all, and
 # an empty result REFUSES. Every other derived set in this file refuses when empty; this one now
 # does too, which is what it was missing the first time.
-dep_rel = set()
-for t in dep_text.split():
-    if not os.path.isabs(t):
-        continue
-    parts = os.path.normpath(t).split('/')
-    for i in range(1, len(parts)):
-        cand = '/'.join(parts[i:])
-        if os.path.isfile(os.path.join(src, cand)):
-            dep_rel.add(cand)
-            break
+# ESCAPE-AWARE, because the depfile is Makefile syntax and a checkout path containing a space is
+# written `has\ space`. A bare .split() turned every entry into two useless tokens, emptied
+# `dep_rel`, and refused on a perfectly good tree — the emptiness guard reached by a legitimate
+# repo rather than by a defect. build.rs already parses it properly; this now matches.
+dep_tokens = [re.sub(r'\\(.)', r'\1', t).strip()
+              for t in re.split(r'(?<!\\)\s+', dep_text)]
+dep_abs = [t for t in dep_tokens if t and os.path.isabs(t)]
+
+# THE PREFIX IS DERIVED FROM THE ROOTS, NOT GUESSED AND NOT TAKEN FROM OUTSIDE.
+#
+# Matching depfile entries by TAIL alone invents demands: this depfile carries ~750 SDK headers, so
+# a repo file at `sys/errno.h`, or a root-level file named `version` (53 extensionless libc++
+# basenames are in there), resolved by coincidence and produced a PERMANENT refusal naming a header
+# the roots do not include — a false refusal whose printed remedy cannot fix it.
+#
+# Identity by `samefile` is not the answer either: every selftest fixture points `src` at a staged
+# COPY while the depfile still names the real tree, so that test rejects every genuine entry and
+# empties the set.
+#
+# The depfile must contain the roots — bindgen was handed them. So the roots identify the prefix the
+# depfile itself uses for this repo, whatever that spelling is. Entries under that prefix are ours;
+# entries outside it are the SDK's. No repo root from the environment, so the silent zero that
+# caused this union to be deleted once cannot come back.
+dep_prefixes = {t[:-(len(r) + 1)] for r in roots for t in dep_abs if t.endswith('/' + r)}
+if len(dep_prefixes) != 1:
+    raise SystemExit("  FAIL: bindgen's depfile does not name the %d root header(s) under a single\n"
+                     "        directory (found %d candidate prefixes), so this check cannot tell its\n"
+                     "        in-repo entries from the SDK's. Rebuild the bridge:\n"
+                     "          cargo build --manifest-path ui/Cargo.toml -p daw-bridge"
+                     % (len(roots), len(dep_prefixes)))
+dep_prefix = next(iter(dep_prefixes)) + '/'
+dep_rel = {t[len(dep_prefix):] for t in dep_abs if t.startswith(dep_prefix)}
+dep_rel = {r for r in dep_rel if os.path.isfile(os.path.join(src, r))}
 if not dep_rel:
     raise SystemExit("  FAIL: no absolute entry in bindgen's depfile resolves under the source\n"
                      "        root, so the compiler's own list of parsed headers is empty and the\n"
@@ -865,7 +888,7 @@ print("  field order: %d fields across %d mirrors lie at the offsets the C++ giv
 # carried any assertion. Same engine, same authority; the only new vocabulary is the pointer.
 patcher_path = os.path.join(src, "patcher_rust/src/lib.rs")
 patcher_src = open(patcher_path).read() if os.path.exists(patcher_path) else ""
-patcher_hand, patcher_dangling, _patcher_exempt = repr_c_structs(patcher_src)
+patcher_hand, patcher_dangling, patcher_exempt = repr_c_structs(patcher_src)
 if patcher_dangling:
     raise SystemExit("  FAIL: %d repr(C) attribute(s) in patcher_rust/src/lib.rs reached no item,\n"
                      "        so its population cannot be trusted either" % len(patcher_dangling))
@@ -883,7 +906,13 @@ if absent:
 # while a fresh ABI type crossed the boundary unpinned. That is precisely the failure this file was
 # written to end, and I reintroduced it here by listing what to check instead of deriving it.
 # EventEntry is excluded because the section above compares it against the C++ in its own right.
-unlisted = sorted(n for n in patcher_hand if n not in PATCHER and n != 'EventEntry')
+# ...and the same door the bridge side has. This refusal ADVISES saying so where the type is
+# declared, and until now that advice pointed at a mechanism whose result was thrown away:
+# a marker here did nothing, and adding the type to PATCHER refused for a missing twin that
+# can never exist. An internal repr(C) type could not be added to patcher_rust at all — a
+# bootstrap problem, and exactly what the exemption was introduced to prevent on the bridge.
+unlisted = sorted(n for n in patcher_hand
+                  if n not in PATCHER and n != 'EventEntry' and n not in patcher_exempt)
 if unlisted:
     raise SystemExit("  FAIL: patcher_rust defines %d repr(C) mirror(s) this check does not compare:\n"
                      "        %s\n"
