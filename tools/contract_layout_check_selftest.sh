@@ -6,11 +6,12 @@
 # non-zero, because a check can fail for a syntax error, a missing file or an unrelated assertion
 # and look identical in a log.
 #
-# TWO OF THEM REQUIRE A PASS INSTEAD, and they are not filler. A check that reconstructs layout can
-# start refusing things that are not defects, and the two shapes most likely to do that are a
-# rename, which moves no byte, and a same-width swap, which is the limitation the design knowingly
-# accepts. Those two assert the check STAYS QUIET — and additionally that the section under test
-# actually ran, so neither can be satisfied by the check having quietly stopped looking.
+# FOUR OF THEM REQUIRE A PASS INSTEAD, and they are not filler. A check that reconstructs layout can
+# start refusing things that are not defects, and the shapes most likely to do that are a rename,
+# which moves no byte; a same-width swap; a narrowing absorbed by the next field's alignment; and a
+# stale bindings file sitting beside a good one. Those four assert the check STAYS QUIET — and
+# additionally that BOTH reconstructing sections actually ran, so none can be satisfied by a
+# section having quietly stopped looking.
 #
 # TWO PROPERTIES EACH CONTROL MUST HAVE, both learned the hard way in this repo:
 #
@@ -259,8 +260,11 @@ expect_pass() {
     printf '%s\n' "$out" | sed 's/^/           /' | tail -6
     FAIL=$((FAIL+1)); return
   fi
-  if ! printf '%s' "$out" | grep -q "field order: .* fields across"; then
-    echo "  VACUOUS: $name — the check passed without running the field-order section at all"
+  if ! printf '%s' "$out" | grep -qE "field order: .* fields across" \
+     || ! printf '%s' "$out" | grep -qE "patcher ABI: .* fields across"; then
+    echo "  VACUOUS: $name — the check passed without running one of the sections under test."
+    echo "         Both the field-order and patcher-ABI lines must appear; a pass-control that"
+    echo "         does not check this is satisfied by the section having stopped running."
     FAIL=$((FAIL+1)); return
   fi
   echo "  ok — $name"; HELD=$((HELD+1))
@@ -283,6 +287,107 @@ for c in "permute:refuse:EventEntry: this mirror lays fields at" \
     FAIL=$((FAIL+1))
   fi
 done
+
+# ====================================================== THE PATCHER ABI AND THE BINDINGS CHOICE
+#
+# Two shapes here. The first two mutate patcher_rust, whose fields are POINTERS — a drift there is
+# dereferenced on the audio thread rather than displayed. The last two attack the check's INPUT
+# rather than its subject: it must not be satisfiable by handing it the wrong bindings.
+mutate_patcher() {              # mutate_patcher <dir> <control>
+  python3 - "$1/patcher_rust/src/lib.rs" "$2" <<'PY'
+import re, sys
+path, which = sys.argv[1], sys.argv[2]
+src = open(path).read()
+def inside(struct, old, new):
+    m = re.search(r'pub struct %s \{.*?\n\}' % struct, src, re.S)
+    if not m:
+        raise SystemExit("  MUTATION DID NOT LAND: no struct %s" % struct)
+    body = m.group(0)
+    if body.count(old) != 1:
+        raise SystemExit("  MUTATION DID NOT LAND: %d occurrence(s) inside %s, wanted exactly 1"
+                         % (body.count(old), struct))
+    return src[:m.start()] + body.replace(old, new, 1) + src[m.end():]
+
+if which == 'ptr_insert':       # a u32 into the padding before a pointer; total may not move
+    out = inside('PatcherContext', "    pub event_buffer: *mut EventEntry,",
+                 "    pub inserted: u32,\n    pub event_buffer: *mut EventEntry,")
+elif which == 'ptr_narrow':     # a pointer field that stopped being pointer-sized, where the
+                                # NEXT field is a u32 and therefore actually moves
+    out = inside('PatcherContext', "    pub event_buffer: *mut EventEntry,",
+                 "    pub event_buffer: u32,")
+elif which == 'ptr_narrow_absorbed':
+    # The same narrowing where the next member is itself pointer-aligned: the four freed bytes
+    # become padding, every offset and the total are UNCHANGED, and no layout comparison can see
+    # it. Found by writing ptr_narrow against this field and watching the control come back BLIND.
+    out = inside('PatcherContext', "    pub last_overflow_tick: *mut u64,",
+                 "    pub last_overflow_tick: u32,")
+else:
+    raise SystemExit("  unknown control %s" % which)
+if out == src:
+    raise SystemExit("  MUTATION DID NOT LAND: the text is unchanged")
+open(path, 'w').write(out)
+PY
+}
+
+for c in "ptr_insert:refuse:PatcherContext: this mirror lays fields at" \
+         "ptr_narrow:refuse:PatcherContext: this mirror lays fields at" \
+         "ptr_narrow_absorbed:pass:"; do
+  name="${c%%:*}"; rest="${c#*:}"; mode="${rest%%:*}"; want="${rest#*:}"
+  D="$(stage "pa_$name")"
+  if mutate_patcher "$D" "$name"; then
+    case "$mode" in
+      refuse) expect_refusal "5.$name" "$D" "$want" ;;
+      pass)   expect_pass    "5.$name" "$D" ;;
+    esac
+  else
+    FAIL=$((FAIL+1))
+  fi
+done
+
+# ---- the input, not the subject. A stale shm_sys.rs is not an older answer to the same question,
+# it is an answer to a different one: generated from a build.rs that never saw patcher_abi.h, it
+# carries no patcher types at all, and a check that selects it compares seven mirrors against
+# nothing and says PASS. cargo keeps one output directory per build-script fingerprint, so stale
+# siblings are normal, and whichever branch was built last owns the newest mtime.
+STALE="$TMP/stale_shm_sys.rs"
+python3 - "$REAL_BINDINGS" "$STALE" <<'PY'
+import re, sys
+src = open(sys.argv[1]).read()
+# Strip the patcher types back out — exactly what the pre-patcher_abi.h build.rs produced.
+names = ['MusicalLogicPayload', 'PatcherEuclideanConfig', 'PatcherSliceSelectConfig',
+         'PatcherRandomDegreeConfig', 'PatcherLfoConfig', 'HarmonyEvent', 'PatcherContext']
+out = src
+for n in names:
+    out = re.sub(r'pub struct daw_%s \{.*?\n\}' % n, '', out, flags=re.S)
+    out = re.sub(r'[^\n]*daw_%s[^\n]*\n' % n, '', out)
+still = [n for n in names if re.search(r'daw_%s\b' % n, out)]
+if still:
+    raise SystemExit("  MUTATION DID NOT LAND: %s survived the strip" % ", ".join(still))
+if len(out) >= len(src):
+    raise SystemExit("  MUTATION DID NOT LAND: the stale file is not smaller than the real one")
+open(sys.argv[2], 'w').write(out)
+PY
+if [ $? -ne 0 ]; then echo "  MUTATION DID NOT LAND: 5.stale bindings"; FAIL=$((FAIL+1)); else
+  # Listed FIRST, i.e. in the position the old mtime rule would have taken. The check must reach
+  # past it to the complete file — that is the whole repair, so the control asserts the outcome
+  # AND that the complete file was the one used.
+  D="$(stage stale_pref)"
+  out="$(DAW_CONTRACT_SRC="$D" DAW_CONTRACT_BINDINGS="$STALE
+$REAL_BINDINGS" bash "$CHECK" 2>&1)"
+  if [ $? -ne 0 ]; then
+    echo "  FALSE POSITIVE: 5.stale_preferred — a complete file was available and it refused:"
+    printf '%s\n' "$out" | sed 's/^/           /' | tail -5; FAIL=$((FAIL+1))
+  elif ! printf '%s' "$out" | grep -q "patcher ABI: .* fields across"; then
+    echo "  VACUOUS: 5.stale_preferred — passed without comparing the patcher mirrors at all"
+    FAIL=$((FAIL+1))
+  else
+    echo "  ok — 5.stale_preferred"; HELD=$((HELD+1))
+  fi
+  # And with ONLY the stale file, silence is the wrong answer: it must say what is missing.
+  D="$(stage stale_only)"
+  expect_refusal "5.stale_only" "$D" "no layout assertions for daw_PatcherContext|missing layout" \
+                 "$STALE"
+fi
 
 echo
 if [ $FAIL -eq 0 ]; then

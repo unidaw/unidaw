@@ -52,12 +52,19 @@
 # place, which is another list to forget"; that premise was simply wrong, and a limitation notice
 # nobody re-tests outlives the limitation.
 #
-# WHAT IS STILL NOT PROVEN: two fields of the SAME WIDTH swapped. Their offsets are identical, so
-# no layout check can see it — it is a semantic swap, and only comparing names would catch it.
-# Names are deliberately not compared; see the third section for why that trade was taken.
+# WHAT IS STILL NOT PROVEN, and both are the same shape — a change that moves no byte:
+#
+#   Two fields of the SAME WIDTH swapped. Offsets identical; a semantic swap, and only comparing
+#   names would catch it. Names are deliberately not compared; the third section says why.
+#
+#   A field NARROWED where the next member is more strictly aligned — a pointer becoming a u32
+#   ahead of another pointer. The four freed bytes become padding, every offset and the total are
+#   unchanged, and nothing about layout can distinguish it. Found by writing that control and
+#   watching it come back BLIND, which is the only way this kind of hole announces itself; it is
+#   pinned now as 5.ptr_narrow_absorbed, a control that must NOT fire.
 #
 #   tools/contract_layout_check.sh              the check
-#   tools/contract_layout_check.sh --selftest   its nine controls: seven refusals, two that
+#   tools/contract_layout_check.sh --selftest   its fourteen controls: ten refusals, four that
 #                                               must NOT fire
 #
 set -uo pipefail
@@ -71,7 +78,11 @@ fail() { echo "  FAIL: $*"; exit 1; }
 # The generated bindings are a build artefact, so they only exist once the bridge has been built.
 # They are always the REAL ones: they are the C++ authority, and a control mutating a header proves
 # nothing if it also gets to regenerate what it is checked against.
-BINDINGS="${DAW_CONTRACT_BINDINGS:-$(find "$ROOT/ui/target" -name shm_sys.rs 2>/dev/null | xargs ls -t 2>/dev/null | head -1)}"
+# ALL of them, newest first — the choice is made below by CONTENT, not by position. cargo keeps one
+# output directory per build-script fingerprint, so several shm_sys.rs coexist and the newest is
+# whichever branch was built last. Picking by mtime once handed me bindings generated from a
+# different build.rs, and everything downstream compared cleanly against the wrong file.
+BINDINGS="${DAW_CONTRACT_BINDINGS:-$(find "$ROOT/ui/target" -name shm_sys.rs 2>/dev/null | xargs ls -t 2>/dev/null)}"
 [ -n "$BINDINGS" ] || fail "no generated bindings found. Build the bridge first:
         cargo build --manifest-path ui/Cargo.toml -p daw-bridge"
 
@@ -80,8 +91,55 @@ selftest() { bash "$ROOT/tools/contract_layout_check_selftest.sh"; exit $?; }
 
 python3 - "$SRC" "$BINDINGS" <<'PY'
 import re, sys, os
-src, bindings = sys.argv[1], sys.argv[2]
-binds = open(bindings).read()
+src = sys.argv[1]
+candidates = [p for p in sys.argv[2].split('\n') if p.strip()]
+
+# THE BINDINGS ARE CHOSEN BY WHAT THEY CONTAIN. Every type this run intends to compare must be
+# present WITH layout assertions in the file selected; a stale artefact missing seven of them is
+# not "a slightly older answer", it is a different question, and comparing against it passes.
+# The required set has two halves: the patcher types, which are named below because the SOURCE
+# says this run compares them, and whatever else any candidate can supply — so a name nothing can
+# provide does not deadlock the check, while a name something provides cannot be quietly dropped.
+def asserted_types(t):
+    return set(re.findall(r'size_of::<daw_([A-Za-z0-9_]+)>', t))
+
+# The patcher mirrors this run intends to compare. Named here rather than inferred from the
+# candidates, because "what the bindings happen to contain" cannot answer whether they are the
+# RIGHT bindings — a file generated before patcher_abi.h joined build.rs is complete on its own
+# terms and useless for this question.
+PATCHER = ['MusicalLogicPayload', 'PatcherEuclideanConfig', 'PatcherSliceSelectConfig',
+           'PatcherRandomDegreeConfig', 'PatcherLfoConfig', 'HarmonyEvent', 'PatcherContext']
+
+pool = [(p, open(p).read()) for p in candidates]
+from_files = set()
+for _, t in pool:
+    from_files |= asserted_types(t)
+# Guard the CANDIDATES' contribution, not the union — adding the source-side names to the union
+# first would make this test a constant, and a guard that cannot fire reads as coverage.
+if not from_files:
+    raise SystemExit("  FAIL: no candidate bindings carry any layout assertions. bindgen produced\n"
+                     "        an empty or testless module, which would make every check below\n"
+                     "        vacuously pass")
+offered = from_files | set(PATCHER)
+
+bindings, binds = None, None
+for p, t in pool:                        # newest first
+    missing = offered - asserted_types(t)
+    if not missing:
+        bindings, binds = p, t
+        break
+if bindings is None:
+    best = max(pool, key=lambda pt: len(asserted_types(pt[1])))
+    raise SystemExit("  FAIL: every candidate bindings file is incomplete. The best of %d is\n"
+                     "        %s,\n        and it is missing layout assertions for: %s\n"
+                     "        Rebuild the bridge. A file missing the patcher types was generated\n"
+                     "        before patcher_abi.h joined build.rs; it is not an older answer to\n"
+                     "        this question, it is an answer to a different one."
+                     % (len(pool), best[0],
+                        " ".join(sorted(offered - asserted_types(best[1]))[:8])))
+if len(pool) > 1:
+    print("  bindings: %s (chosen by content from %d candidates)"
+          % (os.path.basename(os.path.dirname(os.path.dirname(bindings))), len(pool)))
 
 gen = set(re.findall(r'pub struct daw_([A-Za-z0-9_]+)', binds))
 if not gen:
@@ -314,54 +372,99 @@ all_src = "\n".join(sources.values())
 CONST = {m: int(v) for m, v in
          re.findall(r'pub const ([A-Z_0-9]+):\s*[a-z0-9]+\s*=\s*(\d+);', all_src)}
 
-def fields_of(name):
-    m = re.search(r'pub struct %s \{(.*?)\n\}' % re.escape(name), all_src, re.S)
+PTR = re.compile(r'^\*\s*(?:mut|const)\b')
+
+def engine(text, registry, consts, ptr_width):
+    """A layout calculator bound to one set of sources.
+
+    Parameterised because there are two populations with different vocabularies: the bridge's
+    mirrors are integers and arrays, and the patcher's are those plus raw POINTERS. One shared
+    engine keeps the C layout rule in a single place — the alternative is a second implementation
+    of the same arithmetic, differing eventually.
+    """
+    def fields_of(name):
+        m = re.search(r'pub struct %s \{(.*?)\n\}' % re.escape(name), text, re.S)
+        if not m:
+            return None
+        return [(f, t.strip()) for f, t in
+                re.findall(r'(?m)^\s*pub (\w+):\s*([^,\n]+),', m.group(1))]
+
+    def size_align(t, seen):
+        """(size, alignment) of a type, or a string saying why it could not be determined."""
+        t = t.strip()
+        if t in PRIM:
+            return PRIM[t]
+        if PTR.match(t):
+            # Every pointer is one word regardless of what it points at, so `*mut *mut f32` and
+            # `*const c_void` need no knowledge of the pointee — which is what keeps this from
+            # needing to model C++ types it never sees.
+            return (ptr_width, ptr_width)
+        arr = re.match(r'\[(.+);\s*(.+)\]$', t)
+        if arr:
+            count = arr.group(2).strip()
+            n = int(count) if count.isdigit() else consts.get(count)
+            if n is None:
+                return "array length %s is not an integer constant in these sources" % count
+            elem = size_align(arr.group(1), seen)
+            if isinstance(elem, str):
+                return elem
+            return (elem[0] * n, elem[1])
+        if t in registry and t not in seen:
+            inner = layout_of(t, seen + (t,))
+            if isinstance(inner, str):
+                return inner
+            return (inner[1], inner[2])
+        return "no size is known for the type %s" % t
+
+    def layout_of(name, seen=()):
+        """(offsets, size, alignment) by the C rule, or a string saying what stopped it."""
+        flds = fields_of(name)
+        if flds is None:
+            return "its definition could not be read"
+        off, widest, offsets = 0, 1, []
+        for f, t in flds:
+            sa = size_align(t, seen)
+            if isinstance(sa, str):
+                return "field %s: %s" % (f, sa)
+            size_, align_ = sa
+            off = (off + align_ - 1) // align_ * align_
+            offsets.append(off)
+            off += size_
+            widest = max(widest, align_)
+        forced = registry.get(name, (0, None))[1]
+        if forced:
+            widest = max(widest, forced)
+        return offsets, (off + widest - 1) // widest * widest, widest
+    return layout_of
+
+# THE POINTER WIDTH IS SOLVED FOR, NOT TYPED. An 8 written into this script is a number a human
+# put here after knowing the target — the one kind of constant this whole file exists to remove,
+# and wrong the day anything cross-compiles. bindgen's twin already encodes the answer: only one
+# width reproduces the offsets the C++ compiler asserted for a struct full of pointers. If none
+# does, or more than one does, the check has no business guessing.
+def solve_pointer_width(twin):
+    m = re.search(r'pub struct daw_%s \{(.*?)\n\}' % twin, binds, re.S)
     if not m:
-        return None
-    return [(f, t.strip()) for f, t in
-            re.findall(r'(?m)^\s*pub (\w+):\s*([^,\n]+),', m.group(1))]
+        return None, "the bindings carry no daw_%s to solve against" % twin
+    want, _ = bindgen_layout(twin)
+    if not want:
+        return None, "daw_%s has no field offsets to solve against" % twin
+    twin_reg = {'daw_%s' % twin: (0, None)}
+    fits = []
+    for w in (2, 4, 8, 16):
+        lay = engine(binds, twin_reg, {}, w)('daw_%s' % twin)
+        if not isinstance(lay, str) and sorted(lay[0]) == sorted(want.values()):
+            fits.append(w)
+    if len(fits) != 1:
+        return None, ("%d pointer widths reproduce daw_%s's offsets (%s); the twin does not "
+                      "determine it" % (len(fits), twin, fits or 'none'))
+    return fits[0], None
 
-def size_align(t, seen):
-    """(size, alignment) of a Rust type, or a string saying why it could not be determined."""
-    t = t.strip()
-    if t in PRIM:
-        return PRIM[t]
-    arr = re.match(r'\[(.+);\s*(.+)\]$', t)
-    if arr:
-        count = arr.group(2).strip()
-        n = int(count) if count.isdigit() else CONST.get(count)
-        if n is None:
-            return "array length %s is not an integer constant in these sources" % count
-        elem = size_align(arr.group(1), seen)
-        if isinstance(elem, str):
-            return elem
-        return (elem[0] * n, elem[1])
-    if t in hand and t not in seen:
-        inner = layout_of(t, seen + (t,))
-        if isinstance(inner, str):
-            return inner
-        return (inner[1], inner[2])
-    return "no size is known for the type %s" % t
+PTR_WIDTH, why = solve_pointer_width('PatcherContext')
+if PTR_WIDTH is None:
+    raise SystemExit("  FAIL: could not derive the pointer width — %s" % why)
 
-def layout_of(name, seen=()):
-    """(offsets, size, alignment) laid out by the C rule, or a string saying what stopped it."""
-    flds = fields_of(name)
-    if flds is None:
-        return "its definition could not be read"
-    off, widest, offsets = 0, 1, []
-    for f, t in flds:
-        sa = size_align(t, seen)
-        if isinstance(sa, str):
-            return "field %s: %s" % (f, sa)
-        size_, align_ = sa
-        off = (off + align_ - 1) // align_ * align_
-        offsets.append(off)
-        off += size_
-        widest = max(widest, align_)
-    forced = hand.get(name, (0, None))[1]
-    if forced:
-        widest = max(widest, forced)
-    return offsets, (off + widest - 1) // widest * widest, widest
+layout_of = engine(all_src, hand, CONST, PTR_WIDTH)
 
 drift, blocked, fields_compared = [], [], 0
 for n in sorted(mirrored):
@@ -404,6 +507,70 @@ if drift:
     raise SystemExit(1)
 print("  field order: %d fields across %d mirrors lie at the offsets the C++ gives them"
       % (fields_compared, len(mirrored)))
+
+# ---------------------------------------------------------------------------------------------
+# THE PATCHER'S OTHER SEVEN, which are a different ABI in the same repo.
+#
+# These do not live in shared memory. C++ fills a PatcherContext and hands it to the Rust node per
+# block, on the audio thread — a call-frame contract rather than a published region. That makes the
+# consequence of drift worse, not better: 192 bytes of mostly POINTERS, so a disagreement is a
+# wrong address rather than a wrong number, and `num_frames` is a u32 at 40 with the next member at
+# 48, which is four bytes of padding an inserted field can occupy while the total stays put.
+#
+# Until patcher_abi.h was added to build.rs these had no generated twin at all, and only EventEntry
+# carried any assertion. Same engine, same authority; the only new vocabulary is the pointer.
+patcher_path = os.path.join(src, "patcher_rust/src/lib.rs")
+patcher_src = open(patcher_path).read() if os.path.exists(patcher_path) else ""
+patcher_hand, patcher_dangling = repr_c_structs(patcher_src)
+if patcher_dangling:
+    raise SystemExit("  FAIL: %d repr(C) attribute(s) in patcher_rust/src/lib.rs reached no item,\n"
+                     "        so its population cannot be trusted either" % len(patcher_dangling))
+
+absent = [n for n in PATCHER if n not in patcher_hand]
+if absent:
+    raise SystemExit("  FAIL: patcher_rust no longer defines %s as repr(C) mirrors. If they were\n"
+                     "        renamed, rename them here; if they were deleted, delete them here —\n"
+                     "        but a list that silently stops matching is how this check dies."
+                     % ", ".join(absent))
+
+patcher_consts = {m: int(v) for m, v in
+                  re.findall(r'pub const ([A-Z_0-9]+):\s*[a-z0-9]+\s*=\s*(\d+);', patcher_src)}
+patcher_layout = engine(patcher_src, patcher_hand, patcher_consts, PTR_WIDTH)
+
+pdrift, pblocked, pfields = [], [], 0
+for n in PATCHER:
+    cpp_off, cpp_size = bindgen_layout(n)
+    if not cpp_off or cpp_size is None:
+        pblocked.append("%s: the bindings carry no layout assertions for daw_%s" % (n, n))
+        continue
+    got = patcher_layout(n)
+    if isinstance(got, str):
+        pblocked.append("%s: %s" % (n, got))
+        continue
+    offsets, total, _ = got
+    want = sorted(v for k, v in cpp_off.items() if not k.startswith('__bindgen_padding'))
+    pfields += len(offsets)
+    if sorted(offsets) != want or total != cpp_size:
+        pdrift.append("%s: this mirror lays fields at %s (size %d); the C++ puts them at %s "
+                      "(size %d)" % (n, sorted(offsets)[:9], total, want[:9], cpp_size))
+
+if pblocked:
+    print()
+    print("  FAIL: %d patcher mirror(s) could not be compared:" % len(pblocked))
+    for b in pblocked:
+        print("        %s" % b)
+    raise SystemExit(1)
+if pdrift:
+    print()
+    print("  FAIL: %d patcher mirror(s) disagree with the C++ they mirror:" % len(pdrift))
+    for d in pdrift:
+        print("        %s" % d)
+    print()
+    print("        These cross on the audio thread, and PatcherContext is mostly pointers — a")
+    print("        disagreement there is dereferenced, not merely displayed.")
+    raise SystemExit(1)
+print("  patcher ABI: %d fields across %d mirrors agree, pointers %d bytes wide (derived)"
+      % (pfields, len(PATCHER), PTR_WIDTH))
 
 print("contract_layout_check: PASS — every mirrored struct is pinned to its generated twin")
 PY
