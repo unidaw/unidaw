@@ -549,14 +549,20 @@ if python3 - "$(dirname "$NARROW")/shm_sys.provenance" <<'PY'
 import sys
 path = sys.argv[1]
 lines = [l for l in open(path).read().splitlines() if l.strip()]
-if len(lines) < 2:
-    raise SystemExit("  MUTATION DID NOT LAND: fewer than two records to narrow")
-# Drop one record. The sidecar then agrees with every possible tree for the header it no longer
-# mentions — the check used to iterate only what the sidecar contained, so this PASSED.
-open(path, 'w').write("\n".join(lines[1:]) + "\n")
+# SELECTED BY NAME, NOT BY INDEX. Dropping lines[0] assumed the first record is one the closure
+# demands; if the sidecar's order ever changed so that a header outside `wanted` came first, this
+# control would go BLIND while still looking like it ran.
+TARGET = 'apps/shared_memory.h'
+keep = [l for l in lines if l.split(None, 2)[2] != TARGET]
+if len(keep) == len(lines):
+    raise SystemExit("  MUTATION DID NOT LAND: %s is not in the sidecar, so nothing was narrowed"
+                     % TARGET)
+# The sidecar now agrees with every possible tree for the header it no longer mentions — the check
+# used to iterate only what the sidecar contained, so this PASSED.
+open(path, 'w').write("\n".join(keep) + "\n")
 PY
 then
-  expect_refusal "9.provenance_scope_narrowed" "$(stage prov_narrow)" "does not record" "$NARROW"
+  expect_refusal "9.provenance_scope_narrowed" "$(stage prov_narrow)" "does not record.*shared_memory|shared_memory" "$NARROW"
 else
   FAIL=$((FAIL+1))
 fi
@@ -575,7 +581,7 @@ lines[0] = "%s %s /etc/hosts" % (h, n)
 open(path, 'w').write("\n".join(lines) + "\n")
 PY
 then
-  expect_refusal "9.provenance_absolute_path" "$(stage prov_abs)" "malformed" "$ABSPATH"
+  expect_refusal "9.provenance_absolute_path" "$(stage prov_abs)" "PATH_ABSOLUTE" "$ABSPATH"
 else
   FAIL=$((FAIL+1))
 fi
@@ -594,7 +600,7 @@ lines[0] = "0123456789abcdef %s %s" % (n, rel)
 open(path, 'w').write("\n".join(lines) + "\n")
 PY
 then
-  expect_refusal "9.provenance_bad_hash_form" "$(stage prov_badhash)" "malformed" "$BADHASH"
+  expect_refusal "9.provenance_bad_hash_form" "$(stage prov_badhash)" "HASH_FORM" "$BADHASH"
 else
   FAIL=$((FAIL+1))
 fi

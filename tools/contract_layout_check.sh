@@ -75,11 +75,15 @@
 #   3. `__bindgen_padding_*` names explicit padding and is dropped from the C++ side. Not guarded
 #      directly, but the failure is safe: a renamed padding field is treated as a member and the
 #      offsets stop matching. Exactly one struct is affected today (UiEditBatchEntry).
-#   4. FRESHNESS IS CHECKED, in two independent ways, because being TOLD to rebuild and HAVING
+#   4. FRESHNESS IS CHECKED, in three independent ways, because being TOLD to rebuild and HAVING
 #      rebuilt are different facts. bindgen declares every header it parsed, so a change to any of
-#      them — including the two transitive ones nobody had listed — re-runs the build script; and
-#      a provenance sidecar records each parsed header's bytes, which the check re-reads and
-#      compares. Cargo is no longer trusted to have acted on the declaration it was given.
+#      them — including the two transitive ones nobody had listed — re-runs the build script; a
+#      provenance sidecar records each parsed header's bytes, which the check re-reads and
+#      compares; and the sidecar's SCOPE is compared against the include closure derived here, so
+#      the artefact being checked cannot decide which headers it will be held to. Without that
+#      third property, deleting one record made the sidecar agree with every tree for the header it
+#      no longer mentioned. Cargo is no longer trusted to have acted on the declaration it was
+#      given, and the sidecar is no longer trusted to declare its own coverage.
 #      The fingerprint is SHA-256 with the byte count beside it — build.rs via the sha2 crate,
 #      this check via hashlib, two standard implementations of one published function rather than
 #      the same hash hand-written twice in two languages and required to agree bit for bit. It is
@@ -93,8 +97,12 @@
 #      it would break.
 #
 #   tools/contract_layout_check.sh              the check
-#   tools/contract_layout_check.sh --selftest   its twenty-one controls: sixteen refusals, five
-#                                               that must NOT fire
+#   tools/contract_layout_check.sh --selftest   its controls; the suite PRINTS its own tally of
+#                                               refusals and holds, so read that rather than a
+#                                               number maintained here. This line used to carry
+#                                               the count and went stale the first time a control
+#                                               was added — a derived number stated beside its
+#                                               source has no mechanism to notice it disagreed.
 #
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -203,22 +211,39 @@ if not os.path.exists(depfile_path):
 
 # The roots come from build.rs, which is the authority on what bindgen is handed.
 buildrs = os.path.join(src, "ui/daw-bridge/build.rs")
-roots = (re.findall(r'repo\.join\("(apps/[^"]+\.h)"\)', open(buildrs).read())
+roots = (re.findall(r'repo\.join\("([^"]+\.h)"\)', open(buildrs).read())
          if os.path.exists(buildrs) else [])
 if not roots:
     raise SystemExit("  FAIL: could not read the header list out of ui/daw-bridge/build.rs, so the\n"
                      "        closure below would be empty and would agree with anything")
 
 def closure(rel, seen):
-    # Every apps/ header reachable from `rel` by #include, itself included.
+    # Every in-repo header reachable from `rel` by #include, itself included.
     if rel in seen:
         return
     seen.add(rel)
     p = os.path.join(src, rel)
     if not os.path.exists(p):
         return
-    for inc in re.findall(r'(?m)^\s*#include\s+"(apps/[^"]+)"', open(p).read()):
-        closure(inc, seen)
+    base = os.path.dirname(rel)
+    # RESOLVED, NOT SPELT. This matched only `#include "apps/..."` — and the BARE form is the more
+    # common house style in this tree (207 of 448 quoted includes under apps/). Every header reached
+    # the bare way fell out of `wanted`, and since `wanted` is the authority for both the depfile
+    # assertion and the sidecar-scope assertion, both narrowed silently with it: independent review
+    # deleted such a header's provenance record, edited the header, and this check still PASSED.
+    #
+    # A predicate keyed on how an include is SPELT cannot see the include that spells it the other
+    # way. Resolving the target against the including file's directory and against the repo root,
+    # and keeping whichever exists, is the same rule stated structurally.
+    for inc in re.findall(r'(?m)^\s*#include\s+"([^"]+)"', open(p).read()):
+        for cand in ([os.path.normpath(os.path.join(base, inc))] if base else []) + [os.path.normpath(inc)]:
+            # Non-existent candidates are system/third-party includes reached by <> semantics or
+            # by an include path this check does not model; they are not in-repo headers.
+            if cand.startswith('..') or os.path.isabs(cand):
+                continue
+            if os.path.exists(os.path.join(src, cand)):
+                closure(cand, seen)
+                break
 
 wanted = set()
 for r in roots:
@@ -273,15 +298,26 @@ for line in open(prov_path).read().splitlines():
     # the DAW_CONTRACT_SRC isolation every selftest fixture rests on. `..` escapes the same way. And
     # int() on a non-numeric length raised an uncaught ValueError straight past the refusal three
     # lines above — failing closed, but with a traceback instead of a diagnosis.
-    if (not re.fullmatch(r'[0-9a-f]{64}', want_hash)
-            or not want_len_text.isdigit()
-            or os.path.isabs(rel)
-            or '..' in rel.split('/')):
-        raise SystemExit("  FAIL: shm_sys.provenance record is malformed:\n"
+    # EACH CONSTRAINT NAMES ITSELF. One shared "malformed" message meant a control asserting on it
+    # could not prove WHICH constraint fired, so a control could pass on a neighbour's branch —
+    # the same wrong-reason defect the selftest exists to refuse.
+    #
+    # NOT .isdigit() for the length: that is True for Unicode digit characters int() rejects, so a
+    # byte count of '²' passed the guard and raised the very ValueError this validation replaced.
+    reason = None
+    if not re.fullmatch(r'[0-9a-f]{64}', want_hash):
+        reason = 'HASH_FORM: expected 64 lowercase hex digits'
+    elif not re.fullmatch(r'[0-9]+', want_len_text):
+        reason = 'LENGTH_FORM: expected ASCII digits only'
+    elif os.path.isabs(rel):
+        reason = 'PATH_ABSOLUTE: os.path.join would discard the source root and read another tree'
+    elif '..' in rel.split('/'):
+        reason = 'PATH_TRAVERSAL: a parent-directory component escapes the source root'
+    if reason:
+        raise SystemExit("  FAIL: shm_sys.provenance record is malformed — %s\n"
                          "        %r\n"
-                         "        The hash must be 64 lowercase hex, the length a number, and the\n"
-                         "        path repo-relative with no parent traversal. A record this check\n"
-                         "        cannot trust is one it cannot enforce." % line)
+                         "        A record this check cannot trust is one it cannot enforce."
+                         % (reason, line))
     want_len = int(want_len_text)
     entries += 1
     recorded.add(rel)
@@ -329,7 +365,11 @@ if missing_scope:
                      "          cargo build --manifest-path ui/Cargo.toml -p daw-bridge"
                      % (len(missing_scope), " ".join(missing_scope)))
 
-print("  provenance: %d header(s) unchanged since these bindings were generated" % entries)
+# BOTH NUMBERS, because `entries` is the sidecar's own line count and reporting it alone is a count
+# agreeing with itself. Printing the independently derived closure size beside it makes a narrowed
+# sidecar visible in the output even to a reader who is not running the assertion above.
+print("  provenance: %d header(s) unchanged since these bindings were generated"
+      " (%d in the derived closure)" % (entries, len(wanted)))
 
 gen = set(re.findall(r'pub struct daw_([A-Za-z0-9_]+)', binds))
 if not gen:
