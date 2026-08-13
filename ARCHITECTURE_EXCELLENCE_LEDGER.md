@@ -2451,3 +2451,24 @@ Three decisions remain genuinely open and are written up for the owner in
 `commandType` on the wire, and when a pending flapping-reset request should expire. The
 first two the CMD00 memo explicitly reserves to the owner; the third is a design choice
 whose every option is bounded to a wrong flapping count.
+
+## OWNER RULINGS — 2026-08-13, all three answered
+
+Jaakko ruled on the three decisions reserved for the owner. These are now settled and
+are not to be re-litigated without a new ruling.
+
+1. **CMD00 sender identity: PER-PROCESS NONCE.** Each process mints a random id at
+   startup; no allocation path, no recycling rule. Accepted cost: a 1.2e-4 chance a
+   client adopts another's refusal, self-correcting on the next read.
+2. **CMD00 `commandType` does NOT ride the wire.** The receiver knows the verb from the
+   command it is answering. Accepted cost: a human reading a raw ring dump consults the
+   sender's log for the verb. This removes a field that could disagree with the message
+   describing it.
+3. **HOST-R3c finding 5: the flapping-reset request is TIMESTAMPED and expires with the
+   same 10-second window the guard already uses.** A request older than the window is
+   ignored rather than consumed, so a later unrelated crash storm cannot inherit a reset
+   it did not earn.
+
+CMD00 implementation is unblocked by 1 and 2. It touches the wire, so it remains gated on
+a focused design review and a production-bound test before any cutover, per the P1.2 exit
+criteria. Ruling 3 is a bounded engine change and is implemented next.

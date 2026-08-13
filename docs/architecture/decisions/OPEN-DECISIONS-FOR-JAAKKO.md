@@ -1,7 +1,15 @@
-# Open decisions — 3 questions
+# Open decisions — ALL ANSWERED 2026-08-13
 
-Each is a real fork I should not pick for you. Recommendation given; say "yes to all
-recommendations" if you agree and I will proceed.
+**Jaakko ruled: go with the recommendations, all three.** Kept as the record of what was
+asked and decided; do not re-open without a new decision.
+
+| # | Question | RULED |
+|---|---|---|
+| 1 | CMD00 sender identity | **per-process nonce** |
+| 2 | `commandType` on the wire | **dropped** |
+| 3 | pending flapping-reset expiry | **timestamped, expires with the 10s window** |
+
+The original write-up follows.
 
 ---
 
