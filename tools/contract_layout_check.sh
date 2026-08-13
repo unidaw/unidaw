@@ -258,6 +258,7 @@ if not os.path.exists(prov_path):
                      "        freshness cannot be established. Rebuild the bridge." % prov_path)
 
 stale, unreadable, entries = [], [], 0
+recorded = set()
 for line in open(prov_path).read().splitlines():
     if not line.strip():
         continue
@@ -266,8 +267,24 @@ for line in open(prov_path).read().splitlines():
         raise SystemExit("  FAIL: shm_sys.provenance line is not <hash> <bytes> <path>:\n"
                          "        %r\n"
                          "        A record this check cannot read is one it cannot enforce." % line)
-    want_hash, want_len, rel = parts[0], int(parts[1]), parts[2]
+    want_hash, want_len_text, rel = parts[0], parts[1], parts[2]
+    # VALIDATED WHERE IT ENTERS, not where it is used. os.path.join silently discards `src` when
+    # `rel` is absolute, so an absolute path here verified a header in a DIFFERENT tree and defeated
+    # the DAW_CONTRACT_SRC isolation every selftest fixture rests on. `..` escapes the same way. And
+    # int() on a non-numeric length raised an uncaught ValueError straight past the refusal three
+    # lines above — failing closed, but with a traceback instead of a diagnosis.
+    if (not re.fullmatch(r'[0-9a-f]{64}', want_hash)
+            or not want_len_text.isdigit()
+            or os.path.isabs(rel)
+            or '..' in rel.split('/')):
+        raise SystemExit("  FAIL: shm_sys.provenance record is malformed:\n"
+                         "        %r\n"
+                         "        The hash must be 64 lowercase hex, the length a number, and the\n"
+                         "        path repo-relative with no parent traversal. A record this check\n"
+                         "        cannot trust is one it cannot enforce." % line)
+    want_len = int(want_len_text)
     entries += 1
+    recorded.add(rel)
     p = os.path.join(src, rel)
     if not os.path.exists(p):
         unreadable.append(rel)
@@ -294,6 +311,24 @@ if stale:
                      "        that no longer exist. Rebuild the bridge:\n"
                      "          cargo build --manifest-path ui/Cargo.toml -p daw-bridge"
                      % (len(stale), "\n        ".join(stale)))
+# THE SIDECAR MAY NOT DECLARE ITS OWN SCOPE. Everything above iterates the lines the sidecar
+# happens to contain, so a sidecar with a line REMOVED agreed with every tree for the header it no
+# longer mentions: delete one line, edit that header, and this check reported "4 header(s)
+# unchanged" and passed. The 8.header_edited control refused only because the sidecar happened to
+# name the header it edited.
+#
+# `wanted` is derived here from the roots' include closure; the sidecar is written by the party
+# being checked. Comparing them is the difference between one fact and two.
+missing_scope = sorted(wanted - recorded)
+if missing_scope:
+    raise SystemExit("  FAIL: shm_sys.provenance does not record %d header(s) the roots include:\n"
+                     "        %s\n"
+                     "        Those headers are in the depend set but nothing pins their bytes, so\n"
+                     "        editing one leaves these bindings stale and this check silent.\n"
+                     "        Rebuild the bridge:\n"
+                     "          cargo build --manifest-path ui/Cargo.toml -p daw-bridge"
+                     % (len(missing_scope), " ".join(missing_scope)))
+
 print("  provenance: %d header(s) unchanged since these bindings were generated" % entries)
 
 gen = set(re.findall(r'pub struct daw_([A-Za-z0-9_]+)', binds))

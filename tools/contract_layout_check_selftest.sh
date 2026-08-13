@@ -526,10 +526,75 @@ if not src.strip():
     raise SystemExit("  MUTATION DID NOT LAND: the provenance copy is empty to begin with")
 # A header from a tree this is not. Records that name files nobody has are how an artefact copied
 # between checkouts announces itself, and the check must refuse rather than skip the entry.
-open(path, 'w').write(src + "0123456789abcdef 42 apps/not_in_this_tree.h\n")
+#
+# THE HASH MUST BE WELL-FORMED, or this control does not test what it names. It read
+# `0123456789abcdef` — sixteen hex digits, the superseded FNV width — and once the check began
+# validating record FORM at the point of entry, that fixture was refused for being malformed and
+# never reached the missing-file branch. The selftest still went red, which is the direction to be
+# wrong in, but it went red for the wrong reason. Sixty-four hex digits isolate the predicate.
+open(path, 'w').write(src + "%s 42 apps/not_in_this_tree.h\n" % ("0123456789abcdef" * 4))
 PY
 then
   expect_refusal "8.provenance_foreign" "$(stage foreign)" "not present here" "$FOREIGN"
+else
+  FAIL=$((FAIL+1))
+fi
+
+# 9.* — THE SIDECAR IS INPUT, AND INPUT IS VALIDATED WHERE IT ENTERS.
+# Independent review demonstrated all three of these passing. They are not hypothetical: each was
+# produced by mutation against this tree before the repair.
+NARROW="$(stage_bindings prov_narrow)"
+cp "$REAL_BINDINGS" "$NARROW"
+if python3 - "$(dirname "$NARROW")/shm_sys.provenance" <<'PY'
+import sys
+path = sys.argv[1]
+lines = [l for l in open(path).read().splitlines() if l.strip()]
+if len(lines) < 2:
+    raise SystemExit("  MUTATION DID NOT LAND: fewer than two records to narrow")
+# Drop one record. The sidecar then agrees with every possible tree for the header it no longer
+# mentions — the check used to iterate only what the sidecar contained, so this PASSED.
+open(path, 'w').write("\n".join(lines[1:]) + "\n")
+PY
+then
+  expect_refusal "9.provenance_scope_narrowed" "$(stage prov_narrow)" "does not record" "$NARROW"
+else
+  FAIL=$((FAIL+1))
+fi
+
+ABSPATH="$(stage_bindings prov_abs)"
+cp "$REAL_BINDINGS" "$ABSPATH"
+if python3 - "$(dirname "$ABSPATH")/shm_sys.provenance" <<'PY'
+import sys
+path = sys.argv[1]
+lines = [l for l in open(path).read().splitlines() if l.strip()]
+h, n, _rel = lines[0].split(None, 2)
+# os.path.join discards its first argument when the second is absolute, so this record used to be
+# verified against a header in a DIFFERENT tree — defeating the DAW_CONTRACT_SRC isolation every
+# fixture above depends on.
+lines[0] = "%s %s /etc/hosts" % (h, n)
+open(path, 'w').write("\n".join(lines) + "\n")
+PY
+then
+  expect_refusal "9.provenance_absolute_path" "$(stage prov_abs)" "malformed" "$ABSPATH"
+else
+  FAIL=$((FAIL+1))
+fi
+
+BADHASH="$(stage_bindings prov_badhash)"
+cp "$REAL_BINDINGS" "$BADHASH"
+if python3 - "$(dirname "$BADHASH")/shm_sys.provenance" <<'PY'
+import sys
+path = sys.argv[1]
+lines = [l for l in open(path).read().splitlines() if l.strip()]
+_h, n, rel = lines[0].split(None, 2)
+# The superseded 16-hex FNV width from cdb25b08. A sidecar in the old format used to be reported as
+# five CHANGED headers, with identical byte counts printed on both sides — the message's own
+# evidence refuting the cause it named. A wrong FORM is now refused as a wrong form.
+lines[0] = "0123456789abcdef %s %s" % (n, rel)
+open(path, 'w').write("\n".join(lines) + "\n")
+PY
+then
+  expect_refusal "9.provenance_bad_hash_form" "$(stage prov_badhash)" "malformed" "$BADHASH"
 else
   FAIL=$((FAIL+1))
 fi
