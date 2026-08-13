@@ -2660,3 +2660,38 @@ document, and the disproof was four lines from the quote it discussed.
 The other two decisions are unaffected and stand: `> ` remains a documented marker with a
 versioned mapping, and attestations pin a historical tree with selective current-blob
 validation. Neither rested on a claim about DEMO.md's content.
+
+## AE-P0.3 blocked on a NEW owner decision, found by measurement (2026-08-13)
+
+Implementing the attestation required actually capturing the observation, which nobody had
+tried. Three facts, all measured with a bounded run of the real script (process-group TERM
+after N seconds; the script's own rollback ran and left nothing behind — 0 engine, sidecar
+or host processes after):
+
+1. **The line `DEMO.md:70` quotes cannot be observed without a credential.**
+   `DAW_WEBSTACK_ALLOW_CREDENTIALS=1 tools/webstack.sh` exits 2 at
+   `REFUSING TO START: credentialed mode requested but no explicit key resolves`, before it
+   ever reaches the output site. The runbook itself says as much at `:424` — the credentialed
+   launch needs "both `DAW_WEBSTACK_ALLOW_CREDENTIALS=1` and an explicit key/file".
+2. **The credential-free line IS freely observable**, and its bytes are exactly the shape the
+   schema review predicted: a two-space prefix (`2020`), not the doc's `3e20` (`"> "`).
+   Captured: `  ask     credential-free default; sidecar cwd cannot discover checkout/home
+   .env files`.
+3. The two lines differ ONLY in `CREDENTIAL_MODE`'s value. Everything else, including the
+   five spaces after `ask`, is byte-identical.
+
+So the ticket is blocked in a way none of its four reviews or its checklist noticed: the one
+line in the population needs a secret to observe, and attestation is a record of OBSERVATION.
+I will not fabricate the bytes — the whole point of Option B is that a human ran the command
+and saw them, and inventing them would be the exact defect AE-P0.3 exists to catch, committed
+inside its fix.
+
+This also explains, after the fact, why the checklist offered "change the doc to attest the
+default branch's line" as an option at all. My reversal of that decision was still correct on
+its stated grounds — the doc is not wrong, it documents a credentialed launch — but the
+reversal replaced a wrong reason with an unimplementable one, and only running the command
+showed that.
+
+**DECISION #4 FOR THE OWNER — written up in
+`docs/architecture/decisions/OPEN-DECISIONS-FOR-JAAKKO.md`.** AE-P0.3 implementation is
+blocked until it is answered. Everything else on the ticket is ready.

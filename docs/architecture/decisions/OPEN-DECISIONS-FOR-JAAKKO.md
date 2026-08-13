@@ -71,3 +71,33 @@ These were either already recommended by a reviewer or cheap and reversible.
 | 1 | **AE-P0.3: keep `> ` as a documented marker**, with an explicit versioned mapping to the observed bytes | Removing it would leave the extractor with no way to tell a quoted output line from prose, and the mapping is already specified. Silent trimming is what the review forbade, not the marker itself. |
 | 2 | **AE-P0.3: attestations pin a historical tree**, with selective current-blob validation | The reviewer preferred this. Requiring equality with current HEAD would invalidate every attestation the moment an unrelated commit lands. |
 | 3 | ~~change `DEMO.md` to quote the DEFAULT branch's line~~ **REVERSED 2026-08-13 — the record pins `DAW_WEBSTACK_ALLOW_CREDENTIALS=1` instead** | I was wrong. `DEMO.md:58-70` shows the credentialed invocation and then says "Check the line it prints" — the quoted line IS the documented command's output. I decided from a summary of the doc instead of the doc. |
+
+---
+
+# NEW — decision 4 (2026-08-13, found by measurement)
+
+## The one line the runbook quotes cannot be observed without your API key
+
+`DEMO.md:70` quotes the **credentialed** launch's output. I tried to capture it and the
+script refuses before printing anything: *"credentialed mode requested but no explicit key
+resolves"*. Attestation is a record of something a person OBSERVED, so this line cannot be
+attested by me, and I will not type the bytes in by hand — that is the exact defect this
+ticket exists to catch.
+
+The **credential-free** line is freely observable. I captured it. The two differ only in
+one value; everything else is byte-identical.
+
+**Options**
+- **A. You run one capture.** `DAW_WEBSTACK_ALLOW_CREDENTIALS=1 DAW_ENV_FILE=<your file>
+  tools/webstack.sh`, and paste me the line plus its surrounding output. One command, once.
+  Keeps the runbook exactly as it is.
+- **B. The runbook quotes BOTH lines** — credential-free and credentialed — and only the
+  observable one is attested; the other is marked as requiring a key.
+- **C. Attestation is scoped to lines observable without secrets.** The credentialed line
+  gets a named, recorded exemption rather than an attestation.
+
+**Recommendation: A if you are willing** — it is one command and it keeps the strongest
+claim. Otherwise **C**, which is honest about the boundary rather than quietly narrowing it.
+
+**Cost if wrong:** none is risky. B and C both weaken what the check proves about one line;
+A costs you sixty seconds.
