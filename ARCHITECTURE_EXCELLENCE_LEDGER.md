@@ -2390,3 +2390,64 @@ closure matched one include spelling; rule 2b matched a list of write spellings;
 that used the other form, and in each case widening the pattern would have left the
 next form open. The fix in all three was the same: state the property structurally and
 let the check derive the population.
+
+## T3 third review — 3 blockers, repaired at `6af1574f` (2026-08-13)
+
+Two of the three were introduced by my own previous repair. Recorded because the
+sequence is the lesson.
+
+**The closure was still a spelling, twice over.** The second repair moved resolution
+from the include TARGET to the including DIRECTORY, but the matcher still required
+double quotes and no space after the hash. `#include <apps/x.h>` and `#  include
+"apps/x.h"` both escaped, and for such a header the original fail-open reproduced
+verbatim: delete its provenance record, edit it, PASS. Each repair moved the defect one
+token along because each kept asking how the line LOOKS.
+
+Closed by not asking. The scope demand now unions bindgen's depfile — clang's own answer
+to what it parsed, immune to spelling, conditionals and angle brackets, and written by
+the build rather than by this check. The regex closure is KEPT as the independent
+opinion for the depfile-completeness assertion, where consulting the depfile would be
+circular.
+
+**Neither repair was ratcheted.** Reverting either left the suite green, and on the real
+tree the closure change was a no-op — every in-closure include happens to use the
+prefixed form today. Two controls added and both proven by revert:
+`10.scope_angle_include` goes BLIND without the union, and `9.provenance_length_form`
+reports WRONG REASON against `.isdigit()`. The first attempt at that second proof had a
+failed anchor assertion, so its "pass" was meaningless until corrected — the assertion
+is why that was visible at all.
+
+`10.scope_angle_include` re-pins `patcher_abi.h`, which its own include rewrite made
+stale, because otherwise the freshness gate fires three checks earlier and the control
+measures the gate it tripped on the way rather than the one it names. That is the P0.3
+checklist's §4 rule met independently for the third time today.
+
+**I had broken a control by widening it.** The scope control's reason gate had become
+`does not record.*shared_memory|shared_memory`, whose bare second alternative matches ANY
+refusal naming that header. Verified by the reviewer: the scope assertion could be
+deleted outright and its own control still reported ok. Restored to the phrase unique to
+that refusal, which was correct before I touched it.
+
+Selftest now 21 refused for their named reason, 5 held. T3 still does not merge; this is
+the third repair and it wants a fourth review.
+
+## Decisions taken by lead (2026-08-13)
+
+Recorded so they can be overridden. All three are AE-P0.3 and all were either already
+recommended by a reviewer or are cheap and reversible.
+
+- `> ` STAYS as a documented marker with an explicit versioned mapping to the observed
+  bytes. Removing it leaves the extractor no way to distinguish a quoted output line
+  from prose; what the review forbade was calling a silent trim "exact", not the marker.
+- Attestations pin a HISTORICAL tree with selective current-blob validation, per the
+  reviewer's stated preference. Requiring equality with current HEAD would invalidate
+  every attestation on the next unrelated commit.
+- `docs/DEMO.md` changes to quote the DEFAULT branch's line, rather than the record
+  pinning `DAW_WEBSTACK_ALLOW_CREDENTIALS=1`. The runbook currently quotes output only
+  the non-default invocation produces, so a reader following it sees a different line.
+
+Three decisions remain genuinely open and are written up for the owner in
+`docs/architecture/decisions/OPEN-DECISIONS-FOR-JAAKKO.md`: CMD00 minting, CMD00
+`commandType` on the wire, and when a pending flapping-reset request should expire. The
+first two the CMD00 memo explicitly reserves to the owner; the third is a design choice
+whose every option is bounded to a wrong flapping count.
