@@ -109,6 +109,9 @@ watcher:  none (required for Codex)
 | `AE-P1.5` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P1.6` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P2.*` | `BLOCKED` | Phase 1 gates | unassigned | unassigned | none | none |
+| `T3` (ABI mirror coverage) | `MERGED` | seven independent reviews | `lead` | independent subagent | merged from `ae/impl-engine-t3a-probe` | product main `d0e0ad0a`; follow-up `54f3d460` |
+| `P2-CMD-00` step 1 | `LANDED, GATE HALF-MET` | design `P2-CMD-00-revised.md` + owner rulings 1-2 | `lead` | independent subagent | product main | `45626d44`; blockers closed `7b7b7b24`, `ba4f1b1c` |
+| `P2-CMD-00` step 2 | `BLOCKED` | carrier design review; may need owner decision 5 | `lead` | in review | none | design `AE-CMD00-step2-carrier.md` |
 | `AE-P3.*` | `BLOCKED` | Phase 1/2 contracts | unassigned | unassigned | none | none |
 | `AE-P4.*` | `BLOCKED` | Phase 2 transactions | unassigned | unassigned | none | none |
 | `AE-P5.*` | `BLOCKED` | replacement behavior gated | unassigned | unassigned | none | none |
@@ -3181,3 +3184,22 @@ still states the UI command ring is SPSC and "exactly one process may be the pro
 have been MULTI-producer since M2.18 (`apps/shared_memory.h:440-446` describes the CAS-reserve/ready
 publication that made them so). The design's §3 reported this and deliberately did not fix it,
 being read-only. It is the premise the whole minting scheme rests on, so it should not stay wrong.
+
+## The authority table did not list the work (2026-08-14)
+
+`T3` and `P2-CMD-00` consumed this entire session and neither appeared in the `Ticket state` table
+— the table this ledger names as the single authority for phase status, and that I pointed the plan
+at after deleting its duplicate. A table that omits the only two tickets in flight is not an
+authority; it is a historical record wearing an authority's label.
+
+Added, with `P2-CMD-00` split into the two steps because they are in genuinely different states:
+step 1 landed with its gate half-met and both review blockers since closed, step 2 blocked on a
+carrier design that may have to go back to the owner.
+
+Worth naming as a pattern rather than a slip: this is the third time this session that the ledger's
+own summary layer has drifted from what it summarises. First the plan's duplicated phase table, then
+the `File locks` line restating a lock the hotspot table had released, now the ticket table missing
+its live tickets. Each time the fix was the same — point at the authority, or BE the authority — and
+each time the drift appeared within hours of the edit that caused it. The lesson is not "update the
+summary"; it is that a summary layer maintained by hand decays at the speed the work moves, which
+here is hours.
