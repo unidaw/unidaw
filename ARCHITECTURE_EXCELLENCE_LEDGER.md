@@ -1890,3 +1890,98 @@ Review/merge policy: a completion immediately receives a bounded next task;
 no idle slot is intentional. Dirty or overlapping worktrees are quarantined,
 never silently reverted. Every implementation claim requires exact commit,
 clean-tree, build/test evidence, and independent review before merge.
+
+## Lead transition and fleet audit (2026-08-13, 19:0x UTC)
+
+Orchestrator handle changed from `backend` to `lead`. This is not cosmetic: it was
+silently costing the program work.
+
+`backend` is DEAD, verified rather than assumed. Its registration under
+`/tmp/agent-hook/sessions` names codex session `019fdc27-4c30-7dd2-846c-500108bbbf24`,
+and no process is resuming that session; the only live codex sessions on the channel
+are `019fe7bf-05af` (codex-worker-1) and `019fe7bf-cc19` (codex-worker-2). Every worker
+was still addressing `backend`, so their reports were being appended to a mailbox that
+no process drains. Two known casualties, both recovered by re-send: claude-worker-2's
+T3 integration audit, and codex-worker-2's T3-FRESH-1 part1 review.
+
+### The delivery asymmetry that produced the silent reviewers
+
+The two runtimes have opposite idle behaviour, and the previous fleet snapshot did not
+record it:
+
+- A Claude worker holds itself awake with `watch-next.mjs`; the harness re-invokes it
+  when that background task exits. Liveness requires BOTH an alive pid AND a parent that
+  is the harness shell wrapper — a watcher reparented to pid 1 is DETACHED, looks healthy
+  in `ps`, holds its pidfile, and wakes nobody.
+- A codex worker has no watcher by design and goes idle at the end of EVERY turn. Bus
+  mail does not wake it. An assignment sent to an idle codex agent is an assignment
+  nobody has started, and it stays that way until something types into its terminal.
+  `send.mjs` performs that wake itself, resolving handle -> session id -> pid -> tty.
+
+This is the mechanism behind codex-worker-1 producing nothing for 9.5 hours across an
+assignment and an URGENT heartbeat. It was not refusing work; it was never woken to it.
+
+### Detecting codex idleness without prodding
+
+A codex agent's rollout under `~/.codex/sessions` for its registered session id ends in
+`payload.type = task_complete` when its turn has ended. Last event `task_complete` means
+IDLE; anything else means mid-turn. This is exact, unlike mtime staleness, which cannot
+distinguish a thinking agent from a stopped one. Use it before waking, so a wake never
+interleaves with a live turn.
+
+### Assignments issued (one authoritative task per worker)
+
+- `claude-worker-1`: HOST-R3c bounded implementation, unchanged, active.
+- `claude-worker-2`: T3-MERGE-PROOF. Its own audit closed with "WHAT I DID NOT VERIFY:
+  that the merged tree builds and passes"; that gap is now the ticket, in a throwaway
+  worktree, resolving no other author's conflicts.
+- `codex-worker-1`: HOST-R3b-REVIEW at 808d4c6a, exact and read-only.
+- `codex-worker-2`: T3-REVIEW of the six-commit branch ending bbe2f51e. Its version-parity
+  review of 025baabb is EXPLICITLY RESCINDED — it held two overlapping reviews.
+
+### T3 ruling
+
+T3 (`ae/impl-engine-t3a-probe`, head `bbe2f51e`, worktree `/Users/jak/src/daw-impl-engine`)
+KEEPS HOLDING. Verified independently: the head commit exists, six commits, tree clean.
+The hold now rests on a stated reason rather than on a dead agent's default — an ABI/bindgen
+change does not merge without exact independent review by a non-owner, so it is assigned to
+codex-worker-2 rather than left waiting on a reviewer who never started.
+
+Durable results from claude-worker-2's T3 integration audit, recorded here because the bus is
+a notification plane and not a source of truth:
+
+- T3 contributes ZERO merge conflicts. All contention is `ae/impl-engine-001` versus
+  `p2/ctrl-02-worker2` over `apps/daw_engine_main.cpp` and `apps/engine_rowops_commands.{cpp,h}`,
+  and exists whether or not T3 merges. `p2/ctrl-01-worker2` and `p2/ctrl-02-worker2` are the
+  same commit, `e4ff102a`.
+- Three files overlap ctrl-02: `ui/Cargo.lock`, `ui/daw-bridge/Cargo.toml`,
+  `ui/daw-bridge/src/layout.rs`. Both branches add a dependency to the same crate. The merged
+  tree was inspected directly rather than trusting a clean exit code; re-check by hand if
+  either branch is rebased.
+- Predicted and accepted risk: ctrl-02's `UiCommandOutcomePayload` satisfies the check as main
+  has it today, but T3 makes that check strictly stronger. A mirror with the right size and a
+  wrong field order passes before the merge and fails after. If that fires it is a real layout
+  defect on its first live subject and is routed to its author. The check is NOT to be relaxed
+  to make ctrl-02 green.
+- Operational, so it is not misread as breakage: ctrl-02 moves C++ header bytes, so
+  `contract_layout` REFUSES until the bridge is rebuilt
+  (`cargo build --manifest-path ui/Cargo.toml -p daw-bridge`). That refusal is the provenance
+  check working. The same property makes bisecting T3 commits require a rebuild at each commit.
+- No dirty CTRL02 work exists in any checkout. `backend` twice believed otherwise; that belief
+  is not carried forward.
+
+### Plan/ledger contradiction, unresolved
+
+`ARCHITECTURE_EXCELLENCE_PLAN.md` still states `AE-P0 ACTIVE` and `AE-P1.* BLOCKED by AE-P0`,
+while this ledger records AE-P1.1 and AE-P1.2 frozen and P2 work in flight. One of the two is
+wrong. Flagged, not silently patched: the plan's program state is the orchestrator's to
+maintain, and it needs a deliberate re-derivation rather than an edit that makes the sentence
+agree with the newest entry.
+
+### Standing fleet policy
+
+A 10-minute fleet check now runs continuously. It judges each worker on two independent
+signals rather than on what the worker claims: whether it is WORKING (watcher alive and
+correctly parented for Claude; last rollout event not `task_complete` for codex) and whether
+it HAS WORK (last sent versus last received assignment on the bus). A worker whose last send
+predates its last assignment is a silent reviewer and is treated as stopped.
