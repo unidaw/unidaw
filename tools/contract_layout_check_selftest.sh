@@ -52,13 +52,31 @@ trap 'rm -rf "$TMP"' EXIT
 # mutation. If this ever matches, the control has stopped testing the case it was written for.
 LEGACY='#\[repr\(C[^\]]*\)\][\s\S]{0,200}?pub struct ([A-Za-z0-9_]+)'
 
+REAL_DEPFILE="$(dirname "$REAL_BINDINGS")/shm_sys.d"
+
 stage() {                       # stage <dir> — a fresh copy of the sources the check reads
   local d="$TMP/$1"
-  mkdir -p "$d/ui/daw-bridge/src" "$d/patcher_rust/src"
+  mkdir -p "$d/ui/daw-bridge/src" "$d/patcher_rust/src" "$d/apps"
   cp "$ROOT/ui/daw-bridge/src/layout.rs"  "$d/ui/daw-bridge/src/"
   cp "$ROOT/ui/daw-bridge/src/control.rs" "$d/ui/daw-bridge/src/" 2>/dev/null
   cp "$ROOT/patcher_rust/src/lib.rs"      "$d/patcher_rust/src/"
+  # build.rs is read for the ROOT HEADER LIST, and the headers for the include closure. A staged
+  # tree missing them makes every control fail on the closure check instead of its own subject —
+  # which is how I found out they were needed.
+  cp "$ROOT/ui/daw-bridge/build.rs"       "$d/ui/daw-bridge/"
+  cp "$ROOT"/apps/*.h                     "$d/apps/" 2>/dev/null
   echo "$d"
+}
+
+# stage_bindings <tag> — a directory holding a bindings file AND the depfile that belongs beside
+# it. Controls that supply their own bindings must supply the pair, because the check reads the
+# depfile from the chosen bindings' own directory; handing it a lone file would make it refuse for
+# a missing depfile rather than for the defect under test.
+stage_bindings() {
+  local d="$TMP/bind_$1"
+  mkdir -p "$d"
+  cp "$REAL_DEPFILE" "$d/shm_sys.d" 2>/dev/null
+  echo "$d/shm_sys.rs"
 }
 
 # expect_refusal <name> <dir> <regex the refusal must contain> [bindings]
@@ -165,7 +183,7 @@ fi
 # actually consults. The step it does not cover — that a header edit reaches the bindings — is
 # build.rs's job and bindgen's own layout tests already pin it.
 D="$(stage shrink)"
-MUT="$TMP/shrink_bindings.rs"
+MUT="$(stage_bindings shrink)"
 if python3 - "$REAL_BINDINGS" "$MUT" "$D/patcher_rust/src/lib.rs" <<'PY'
 import re, sys
 src = open(sys.argv[1]).read()
@@ -363,7 +381,7 @@ done
 # carries no patcher types at all, and a check that selects it compares seven mirrors against
 # nothing and says PASS. cargo keeps one output directory per build-script fingerprint, so stale
 # siblings are normal, and whichever branch was built last owns the newest mtime.
-STALE="$TMP/stale_shm_sys.rs"
+STALE="$(stage_bindings stale)"
 python3 - "$REAL_BINDINGS" "$STALE" <<'PY'
 import re, sys
 src = open(sys.argv[1]).read()
@@ -407,7 +425,7 @@ fi
 # changed the offset form, every field comparison would compare an empty set and pass. The size
 # form already has a reflex (asserted_types reads it, and empty refuses); this gives the offset
 # form one too, by producing bindings that keep every size assertion and no offsets.
-NOOFF="$TMP/nooffsets_shm_sys.rs"
+NOOFF="$(stage_bindings form)"
 if python3 - "$REAL_BINDINGS" "$NOOFF" <<'PY'
 import re, sys
 src = open(sys.argv[1]).read()
@@ -422,6 +440,34 @@ PY
 then
   expect_refusal "6.bindgen_form" "$(stage form)" \
                  "no field-offset assertions in|form this check parses" "$NOOFF"
+else
+  FAIL=$((FAIL+1))
+fi
+
+# ---- the transitive dependency, which is the whole point of the depfile. apps/harmony_timeline.h
+# is included by patcher_abi.h, is where HarmonyEvent is declared, and was one of the two headers
+# nobody declared to cargo before this. Removing it from the depfile is what the world looked like
+# then: bindgen reads it, cargo does not watch it, and editing it leaves the bindings stale with
+# nothing saying so.
+DEPGAP="$(stage_bindings depgap)"
+cp "$REAL_BINDINGS" "$DEPGAP"
+if python3 - "$(dirname "$DEPGAP")/shm_sys.d" <<'PY'
+import re, sys
+path = sys.argv[1]
+src = open(path).read()
+if '/apps/harmony_timeline.h' not in src:
+    raise SystemExit("  MUTATION DID NOT LAND: the depfile never named apps/harmony_timeline.h, so\n"
+                     "        removing it proves nothing about whether the check would notice")
+out = re.sub(r'\S*/apps/harmony_timeline\.h', '', src)
+if '/apps/harmony_timeline.h' in out:
+    raise SystemExit("  MUTATION DID NOT LAND: the entry survived")
+if '/apps/event_id.h' not in out:
+    raise SystemExit("  MUTATION IS TOO BROAD: the other transitive header went too, so a refusal\n"
+                     "        would not show that ONE missing dependency is caught")
+open(path, 'w').write(out)
+PY
+then
+  expect_refusal "7.depfile_gap" "$(stage depgap)" "does not name .* header" "$DEPGAP"
 else
   FAIL=$((FAIL+1))
 fi

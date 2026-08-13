@@ -75,18 +75,21 @@
 #   3. `__bindgen_padding_*` names explicit padding and is dropped from the C++ side. Not guarded
 #      directly, but the failure is safe: a renamed padding field is treated as a member and the
 #      offsets stop matching. Exactly one struct is affected today (UiEditBatchEntry).
-#   4. FRESHNESS IS NOT CHECKED and deliberately out of scope here. Selection proves the bindings
-#      CONTAIN every type being compared, not that they were generated from the current headers —
-#      a complete file built from an older patcher_abi.h passes. tools/contract_freshness_check.sh
-#      covers binaries against sources; bindings-against-header is covered by neither, and saying
-#      so is the point of this paragraph.
+#   4. FRESHNESS IS HALF CLOSED. What is fixed: bindgen now declares every header it PARSED, so a
+#      change to any of them — including the two transitive ones nobody had listed — re-runs the
+#      build script, and the section below refuses if that declaration ever stops being complete.
+#      What remains open: nothing verifies that the bindings on disk were generated from the
+#      headers as they stand NOW. Cargo is trusted to have acted on the declaration it was given.
+#      A content fingerprint would close it; that is a separate step and until it lands, this is
+#      the seam. tools/contract_freshness_check.sh covers binaries against sources, which is the
+#      neighbouring question, not this one.
 #   5. The pointer width solved from daw_PatcherContext is applied to patcher_rust, which holds
 #      only while both target the same platform. True here, not asserted; a cross-compile is where
 #      it would break.
 #
 #   tools/contract_layout_check.sh              the check
-#   tools/contract_layout_check.sh --selftest   its sixteen controls: twelve refusals, four that
-#                                               must NOT fire
+#   tools/contract_layout_check.sh --selftest   its seventeen controls: thirteen refusals, four
+#                                               that must NOT fire
 #
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -171,6 +174,65 @@ if not re.search(r'offset_of!\(daw_\w+,\s*\w+\)\s*-\s*\d+usize', binds):
                      "        the form this check parses. Either layout_tests were narrowed, or a\n"
                      "        bindgen release changed the emitted shape — in which case the parsing\n"
                      "        below needs updating, NOT this guard removing.")
+
+# ---------------------------------------------------------------------------------------------
+# THE DEPENDENCY SET BINDGEN DECLARED, versus the one the headers actually imply.
+#
+# build.rs used to tell cargo about the three headers a human listed. Those three include two more,
+# and a change to either did not re-run the build script — so the bindings kept the old struct and
+# every comparison below ran against a twin generated from a header that no longer existed. Not
+# merely unverified: unrebuildable, and with no symptom. HarmonyEvent lives in one of the two.
+#
+# bindgen now writes a depfile naming every file it parsed, and build.rs declares those to cargo.
+# This is the check that the arrangement still holds: the transitive closure of the roots —
+# computed here from the #include lines rather than listed — must appear in that depfile. Both
+# sides derived, so a header added three levels down is covered without anyone remembering.
+depfile_path = os.path.join(os.path.dirname(bindings), 'shm_sys.d')
+if not os.path.exists(depfile_path):
+    raise SystemExit("  FAIL: no shm_sys.d beside the chosen bindings.\n"
+                     "        %s\n"
+                     "        Without it nothing says which headers bindgen read, so cargo cannot\n"
+                     "        know when to regenerate. Absence is not freshness — rebuild the\n"
+                     "        bridge, and if the depfile is gone for good that is a build.rs\n"
+                     "        regression rather than a reason to relax this." % depfile_path)
+
+# The roots come from build.rs, which is the authority on what bindgen is handed.
+buildrs = os.path.join(src, "ui/daw-bridge/build.rs")
+roots = (re.findall(r'repo\.join\("(apps/[^"]+\.h)"\)', open(buildrs).read())
+         if os.path.exists(buildrs) else [])
+if not roots:
+    raise SystemExit("  FAIL: could not read the header list out of ui/daw-bridge/build.rs, so the\n"
+                     "        closure below would be empty and would agree with anything")
+
+def closure(rel, seen):
+    # Every apps/ header reachable from `rel` by #include, itself included.
+    if rel in seen:
+        return
+    seen.add(rel)
+    p = os.path.join(src, rel)
+    if not os.path.exists(p):
+        return
+    for inc in re.findall(r'(?m)^\s*#include\s+"(apps/[^"]+)"', open(p).read()):
+        closure(inc, seen)
+
+wanted = set()
+for r in roots:
+    closure(r, wanted)
+
+dep_text = open(depfile_path).read()
+# The depfile carries absolute paths, so a header is declared when its repo-relative tail appears
+# as a whole path component. (A regex with a (?<![\w/]) lookbehind was the obvious way to write
+# this and is exactly wrong: it forbids the leading slash every absolute path has, so nothing
+# matched and the check refused all five. It failed loudly, which is the direction to be wrong in.)
+undeclared = sorted(r for r in wanted if ('/' + r) not in dep_text)
+if undeclared:
+    raise SystemExit("  FAIL: bindgen's depfile does not name %d header(s) the roots include:\n"
+                     "        %s\n"
+                     "        A header bindgen parsed but did not declare is one cargo will not\n"
+                     "        watch, so editing it leaves these bindings stale and silent."
+                     % (len(undeclared), " ".join(undeclared)))
+print("  depend set: %d headers reachable from %d root(s), all declared by bindgen"
+      % (len(wanted), len(roots)))
 
 gen = set(re.findall(r'pub struct daw_([A-Za-z0-9_]+)', binds))
 if not gen:
