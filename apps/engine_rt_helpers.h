@@ -68,6 +68,32 @@ void enqueueMirrorReplay(TrackRuntime& runtime, daw::MirrorCause cause);
 // state to answer its own question and took an overflow replay with it.
 void retireMirrorCause(TrackRuntime& runtime, daw::MirrorCause cause);
 
+// THE WATCHDOG'S EVICTION, once. HOST-R3b.
+//
+// This body was written three times — engine_track_setup.cpp twice and engine_restart_worker.cpp
+// once — as an identical lambda capturing the runtime three different ways (`runtime.get()`,
+// `&runtime`, `runtime`). Three copies of one rule that agreed on the bytes and could drift on the
+// behaviour, which is exactly the shape that let the mirror-replay clear diverge in HOST-R2.
+//
+// It publishes needsRestart deliberately: an eviction is a REQUEST for a restart, and the pump that
+// acts on it reads that flag. That is the opposite side of scheduleHostRestart's contract, which
+// promises the state and never the request — the two together are the whole protocol.
+void evictHostForWatchdog(TrackRuntime* runtime);
+
+// TEARING A TRACK'S HOST DOWN FOR GOOD. HOST-R3b.
+//
+// Written twice, byte-identical after normalising the receiver name: engine_track_commands.cpp for a
+// removed track and engine_load_project.cpp for a closed project. Two call sites, one meaning — the
+// slot is going away or being blanked, so nothing about its old host should survive.
+//
+// needsRestart is cleared, not set: this is the opposite of an eviction. An eviction wants the host
+// back; this wants it gone, and leaving the request armed would have the restart worker resurrect a
+// host for a track that no longer exists.
+//
+// THE CALLER STILL HOLDS controllerMutex and still calls controller.disconnect() itself. This owns
+// the atomics only — the lock discipline and the teardown order stay where the reader can see them.
+void tearDownHostState(TrackRuntime& runtime);
+
 // ---------------------------------------------------------------- THE RENDER BLOCK'S ARITHMETIC
 //
 // Five rules lifted out of renderTrack, the 1,910-line lambda nested inside the producer thread.

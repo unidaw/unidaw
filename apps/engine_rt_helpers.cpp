@@ -55,6 +55,22 @@ void retireMirrorCause(TrackRuntime& runtime, daw::MirrorCause cause) {
   runtime.mirrorGateSampleTime.store(0, std::memory_order_release);
 }
 
+void evictHostForWatchdog(TrackRuntime* runtime) {
+  if (!runtime) {
+    return;
+  }
+  runtime->hostReady.store(false, std::memory_order_release);
+  runtime->active.store(false, std::memory_order_release);
+  runtime->needsRestart.store(true, std::memory_order_release);
+}
+
+void tearDownHostState(TrackRuntime& runtime) {
+  runtime.needsRestart.store(false, std::memory_order_release);
+  runtime.hostReady.store(false, std::memory_order_release);
+  runtime.active.store(false, std::memory_order_release);
+  runtime.hostGaveUp.store(false, std::memory_order_release);
+}
+
 uint64_t tickDeltaToSamples(uint64_t tickDelta, long double samplesPerTick) {
   return static_cast<uint64_t>(
       std::llround(static_cast<long double>(tickDelta) * samplesPerTick));

@@ -165,25 +165,25 @@ ALLOW = {
       {'active': 1, 'hostReady': 1, 'restartInFlight': 1},                 # restart requested
   ('apps/engine_chain_host.cpp', 'rebuildHostForChain'):
       {'active': 1, 'hostGaveUp': 1, 'hostReady': 1, 'needsRestart': 1},   # reconcile failed
-  ('apps/engine_load_project.cpp', 'applyDocument'):
-      {'active': 1, 'hostGaveUp': 1, 'hostReady': 1, 'needsRestart': 1},   # project closed
   ('apps/engine_master_render.cpp', 'runMasterRenderThread'):
-      {'hostReady': 2, 'needsRestart': 2},                                 # master send / timeout
+      {'needsRestart': 2},                                                 # master send / timeout
   ('apps/engine_produce_block.cpp', 'produceBlock::processTrack'):
       {'active': 1, 'hostReady': 1, 'needsRestart': 1},                    # dispatch failed
   ('apps/engine_producer_thread.cpp', 'runProducerThread'):
       {'active': 1},                                                       # progress observed
   ('apps/engine_restart_worker.cpp', 'runRestartWorker'):
-      {'active': 3, 'hostGaveUp': 1, 'hostGeneration': 1, 'hostReady': 4,
-       'needsRestart': 3, 'restartInFlight': 4},                           # launch / gave up / done
-  ('apps/engine_track_commands.cpp', 'handleRemoveTrack'):
-      {'active': 1, 'hostGaveUp': 1, 'hostReady': 1, 'needsRestart': 1},   # track removed
+      {'active': 2, 'hostGaveUp': 1, 'hostGeneration': 1, 'hostReady': 3,
+       'needsRestart': 2, 'restartInFlight': 4},                           # launch / gave up / done
+  ('apps/engine_rt_helpers.cpp', 'evictHostForWatchdog'):
+      {'active': 1, 'hostReady': 1, 'needsRestart': 1},                    # HOST-R3b: was 3 lambdas
+  ('apps/engine_rt_helpers.cpp', 'tearDownHostState'):
+      {'active': 1, 'hostGaveUp': 1, 'hostReady': 1, 'needsRestart': 1},   # HOST-R3b: was 2 copies
   ('apps/engine_track_setup.cpp', 'reconcileChildTracks'):
       {'active': 1, 'hostReady': 1, 'needsRestart': 1},                    # slot repurposed
   ('apps/engine_track_setup.cpp', 'restartTrackHost'):
-      {'active': 2, 'hostGeneration': 1, 'hostReady': 3, 'needsRestart': 1},
+      {'active': 1, 'hostGeneration': 1, 'hostReady': 2},
   ('apps/engine_track_setup.cpp', 'setupTrackRuntime'):
-      {'active': 1, 'hostGeneration': 1, 'hostReady': 3, 'needsRestart': 1},
+      {'hostGeneration': 1, 'hostReady': 2},
 }
 EXPECTED_TOTAL = sum(sum(v.values()) for v in ALLOW.values())
 
@@ -207,9 +207,16 @@ for key, want in ALLOW.items():
         if fld not in want:
             bad(f'NEW FIELD: {key[0]} {key[1]}() now writes {fld}, which the allowlist does not list')
 
-# ---- rule 2: the scheduleHostRestart protocol ----------------------------------------------------
-# The premise first: the callee must NOT publish needsRestart, or a pump call site becomes a
-# publisher and this rule's classification is wrong. Verify the property rather than trusting it.
+# ---- rule 2: scheduleHostRestart's PROMISE --------------------------------------------------
+# REPLACED, NOT RELAXED — and the previous version of this rule said to do exactly that. It enforced
+# a PUMP-or-PUBLISHER contract on every call site, because the function published on one of four exit
+# paths and no caller could rely on it. HOST-R3b hoisted the two stores above all three early returns,
+# so the premise that rule rested on is gone and the caller classification with it.
+#
+# What replaces it is the promise itself: hostReady and active are written BEFORE the first early
+# return, and needsRestart is still never written here. The second half is unchanged and load-bearing
+# — needsRestart is a REQUEST, and two call sites are pumps that fire only when it is already true,
+# so a callee that set it would request the restart it was called to observe.
 main_lines = src.get('apps/daw_engine_main.cpp', [])
 lam = next((i for i, l in enumerate(main_lines)
             if re.search(r'auto\s+scheduleHostRestart\s*=\s*\[', l)), None)
@@ -223,33 +230,28 @@ else:
         if depth <= 0 and k > lam:
             end = k
             break
-    body = '\n'.join(main_lines[lam:end + 1])
-    if re.search(r'needsRestart\.(store|exchange)', body):
-        bad('scheduleHostRestart now writes needsRestart',
-            'rule 2 classifies a call site as a PUMP when it is guarded by a needsRestart.load.',
-            'If the callee publishes the flag too, that classification is wrong. Re-derive the rule.')
-    returns = len(re.findall(r'^\s+return;', body, re.M))
+    body = main_lines[lam:end + 1]
+    text = '\n'.join(body)
+    if re.search(r'needsRestart\.(store|exchange)', text):
+        bad('scheduleHostRestart writes needsRestart',
+            'that field is a REQUEST. Two call sites are pumps guarded by a needsRestart.load, so a',
+            'callee that sets it requests the restart it was called to observe.')
+    first_return = next((i for i, l in enumerate(body) if re.match(r'\s+return;', l)), None)
+    ready_at = next((i for i, l in enumerate(body) if re.search(r'hostReady\.store\(\s*false', l)), None)
+    active_at = next((i for i, l in enumerate(body) if re.search(r'active\.store\(\s*false', l)), None)
+    if ready_at is None or active_at is None:
+        bad('scheduleHostRestart does not publish hostReady and active at all',
+            'the promise is the whole point of HOST-R3b; without it every caller must publish again')
+    elif first_return is not None and (ready_at > first_return or active_at > first_return):
+        bad('scheduleHostRestart publishes AFTER an early return — the promise is conditional again',
+            f'first `return;` at body line {first_return}, hostReady at {ready_at}, active at {active_at}.',
+            'A conditional writer is not a single writer: a caller cannot rely on it, and the',
+            'PUMP-or-PUBLISHER contract this replaced would have to come back.')
+    returns = len([l for l in body if re.match(r'\s+return;', l)])
     if returns < 3:
         bad(f'scheduleHostRestart has {returns} early returns, expected >= 3',
-            'the rule exists because its writes are conditional. If they no longer are, the',
-            'PUBLISHER classification is unnecessary and this rule should be replaced, not relaxed.')
-
-    for f in files:
-        for i, l in enumerate(src[f], 1):
-            if l.strip().startswith('//') or not re.search(r'(?<!auto )scheduleHostRestart\s*\(', l):
-                continue
-            if re.search(r'auto\s*&?\s*\w*\s*=', l) or 'std::function' in l:
-                continue                     # a binding, not a call
-            ctx = '\n'.join(x for x in src[f][max(0, i - 6):i] if not x.strip().startswith('//'))
-            pump = re.search(r'needsRestart\.load', ctx)
-            publisher = re.search(r'hostReady\.store\(\s*false', ctx)
-            if not pump and not publisher:
-                bad(f'UNCLASSIFIED RESTART REQUEST: {f}:{i}',
-                    'scheduleHostRestart returns without writing on three of four paths (isAuxChild,',
-                    'hostGaveUp, CAS lost). A caller must either be a PUMP — guarded by a',
-                    'needsRestart.load, firing only on a published request — or a PUBLISHER, storing',
-                    'hostReady=false itself so the request survives those returns. This site is',
-                    'neither, so a dropped restart leaves a dead host reading hostReady=true.')
+            'the promise is interesting precisely because those paths exist and publish anyway;',
+            'if they are gone, re-derive this rule rather than deleting it.')
 
 # ---- rule 3: active.store(true) has exactly one site --------------------------------------------
 ups = [(f, ln) for f, ln, fld, fn in writes
@@ -301,6 +303,6 @@ if fail:
     sys.exit(1)
 print(f'  PASS  {len(writes)} readiness writes, all {len(ALLOW)} transitions accounted for; '
       f'{len(gens)} generation bumps beside a launch; 1 writer-up on active; '
-      'every restart request classified; no aliases')
+      'scheduleHostRestart publishes before every early return; no aliases')
 print('readiness_writer_check: PASS')
 PYEOF

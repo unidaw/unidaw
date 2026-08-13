@@ -1173,6 +1173,27 @@ int main(int argc, char** argv) {
   };
 
   auto scheduleHostRestart = [&](TrackRuntime& runtime) {
+    // THIS FUNCTION PROMISES: after it returns, this track is not marked usable. HOST-R3b.
+    //
+    // It used to publish on ONE of its four exit paths — the three early returns below wrote
+    // nothing — so no caller could rely on it, and every caller that needed the state published had
+    // to write hostReady itself. That is not sloppiness on the callers' part: a conditional writer
+    // is not a single writer, and R3a had to enforce a PUMP-or-PUBLISHER contract to compensate.
+    //
+    // The promise is FREE, which is why it is made here rather than documented. On all three early
+    // paths the value is already false: an aux child never launched a host (and does not read its
+    // own field — for an aux child TrackInfo's hostReady/active point at the PARENT's, see
+    // engine_audio_callback.h:65); the give-up path stored both before setting hostGaveUp
+    // (engine_restart_worker.cpp:55-56); and losing the CAS means the winner published exactly
+    // these two stores. So hoisting them changes no state and removes a class of caller error.
+    //
+    // IT DOES NOT PROMISE needsRestart, and must not. That field is a REQUEST, and two of the four
+    // call sites are pumps that fire only when it is already true — a callee that set it would
+    // request the restart it was called to observe. tools/readiness_writer_check.sh asserts this
+    // function does not write it; that assertion is load-bearing, not incidental.
+    runtime.hostReady.store(false, std::memory_order_release);
+    runtime.active.store(false, std::memory_order_release);
+
     // Movement 4: an aux child has no host to (re)start.
     if (runtime.isAuxChild.load(std::memory_order_acquire)) {
       return;
@@ -1187,8 +1208,6 @@ int main(int argc, char** argv) {
             expected, true, std::memory_order_acq_rel)) {
       return;
     }
-    runtime.hostReady.store(false, std::memory_order_release);
-    runtime.active.store(false, std::memory_order_release);
     {
       std::lock_guard<std::mutex> lock(restartMutex);
       restartQueue.push_back(&runtime);

@@ -1,6 +1,7 @@
 #include "engine_load_project.h"
 
 #include "apps/engine_clip_adoption.h"
+#include "apps/engine_rt_helpers.h"  // tearDownHostState
 #include "apps/engine_load_patcher_pool.h"
 #include "apps/engine_load_track.h"
 
@@ -589,10 +590,7 @@ bool applyDocument(LoadProjectDeps& deps, daw::ProjectDocument& document,
         // the command thread with no tracksMutex held, so taking controllerMutex is safe.
         {
           std::lock_guard<std::mutex> clock(runtime->controllerMutex);
-          runtime->needsRestart.store(false, std::memory_order_release);
-          runtime->hostReady.store(false, std::memory_order_release);
-          runtime->active.store(false, std::memory_order_release);
-          runtime->hostGaveUp.store(false, std::memory_order_release);
+          tearDownHostState(*runtime);
           runtime->watchdog.reset();
           runtime->controller.disconnect();
           runtime->config.pluginPaths.clear();

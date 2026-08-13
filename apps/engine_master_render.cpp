@@ -118,7 +118,9 @@ void runMasterRenderThread(MasterRenderDeps& deps) {
                 // The master is not in the tracks vector, so the consumer's periodic
                 // re-arm never sees it: schedule its restart HERE or a dead master host
                 // stays dead for the rest of the session.
-                masterTrack->hostReady.store(false, std::memory_order_release);
+                // hostReady is published by scheduleHostRestart on every path now (HOST-R3b), so the
+                // store that used to be here is gone. needsRestart STAYS: the callee deliberately
+                // does not publish it, and runRestartWorker bails if it is false.
                 masterTrack->needsRestart.store(true, std::memory_order_release);
                 scheduleHostRestart(*masterTrack);
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -129,7 +131,6 @@ void runMasterRenderThread(MasterRenderDeps& deps) {
                   daw::LogLine() << "Engine: master FX host is not completing blocks; "
                                "restarting it." << std::endl;
                   consecutiveTimeouts = 0;
-                  masterTrack->hostReady.store(false, std::memory_order_release);
                   masterTrack->needsRestart.store(true, std::memory_order_release);
                   scheduleHostRestart(*masterTrack);
                 }

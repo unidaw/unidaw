@@ -1,5 +1,6 @@
 // Bodies for apps/engine_track_commands.h. Each moved verbatim out of handleUiEntry.
 #include "apps/engine_track_commands.h"
+#include "apps/engine_rt_helpers.h"  // tearDownHostState
 
 #include <algorithm>
 #include <cstring>
@@ -324,10 +325,7 @@ void handleRemoveTrack(TrackCommandDeps& deps,
           // taking controllerMutex is safe.
           {
             std::lock_guard<std::mutex> clock(rt->controllerMutex);
-            rt->needsRestart.store(false, std::memory_order_release);
-            rt->hostReady.store(false, std::memory_order_release);
-            rt->active.store(false, std::memory_order_release);
-            rt->hostGaveUp.store(false, std::memory_order_release);
+            tearDownHostState(*rt);
             rt->watchdog.reset();
             rt->controller.disconnect();
             rt->config.pluginPaths.clear();

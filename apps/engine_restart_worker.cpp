@@ -85,11 +85,7 @@ void runRestartWorker(RestartWorkerDeps& deps) {
                 << " successfully." << std::endl;
       runtime->watchdog = std::make_unique<daw::Watchdog>(
           runtime->controller.mailbox(), daw::kHostLateObservationsBeforeEviction,
-          [ptr = runtime]() {
-            ptr->hostReady.store(false, std::memory_order_release);
-            ptr->active.store(false, std::memory_order_release);
-            ptr->needsRestart.store(true, std::memory_order_release);
-          });
+          [ptr = runtime]() { evictHostForWatchdog(ptr); });
       runtime->hostReady.store(true, std::memory_order_release);
       applyHostBypassStates(*runtime);
       {
