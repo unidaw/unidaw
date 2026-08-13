@@ -3133,3 +3133,51 @@ refusal variant with no payload.
 
 Gates 9, 10 and 11 of the design's twelve are now satisfied. The remaining eight need the minter
 and the reader, which is step 2.
+
+## CMD00 step 2 is BLOCKED on an unspecified — and tightly constrained — command side (2026-08-14)
+
+Step 2 is the minter and the reader, and it is what would close the remaining eight acceptance
+gates. It cannot start, and the reason is a gap in the design rather than a decision I can take.
+
+**The design never says how the id reaches the engine.** §4 is titled "What the engine does with
+it: nothing — echo verbatim", which presumes the engine RECEIVES it. §3 specifies the minting
+(`correlationHi` a per-process nonce, `correlationLo` a counter from 1) and §1 measures the seven
+REFUSAL payloads' free space to the byte. Nothing in the document measures, or even mentions, the
+command side. Gates 1 and 4 — "a forged refusal carrying MY id is adopted", "a retry mints a new id"
+— are unreachable without it.
+
+**And the constraint is tight, measured just now:**
+
+    EventEntry payload capacity  44 bytes
+    UiCommandPayload             40 bytes, align 4, ELEVEN fields, no reserved run
+    free                          4 bytes — exactly half of an 8-byte id
+
+So there is no room. `UiClipWindowCommandPayload` is also 40 and does carry a `reserved`, but the
+general command payload does not. This is not a case of "take it from the reserved space" as the
+refusal side was; it needs a decision about what gives.
+
+The options I can see, stated so the choice is deliberate rather than discovered mid-edit:
+
+- **A. Send only the 32-bit counter on the command** and have the engine echo it beside a nonce it
+  learns elsewhere. Fits the 4 free bytes, but the engine does not know the producer's nonce, so it
+  needs a registration path — which is the allocation authority §3 rejected.
+- **B. Free 4 bytes inside `UiCommandPayload`** by narrowing a field (`notePitch` is a `uint32_t`
+  carrying a MIDI pitch). A wire change to the hottest command struct, and every consumer moves.
+- **C. Correlate by RING POSITION instead of an id** — the refusal echoes the command's slot index
+  plus a generation, both of which the sender already knows. Adds no command field at all, but
+  needs a generation to survive slot reuse, and the ring is multi-producer.
+- **D. Grow `EventEntry`.** Largest blast radius; almost certainly wrong.
+
+I am not choosing between these by improvising. Two commits ago I landed a schema change against a
+half-met gate; the correct response to finding a second unspecified layout question is to design it
+and have that design reviewed, not to pick the one that fits in the four bytes I happen to have.
+
+NEXT: write the step-2 carrier design against these four options with the measurements above, send
+it for independent design review, and — if the review does not settle it — put it to the owner as
+decision 5. Gates 9, 10 and 11 remain satisfied; the other nine wait on this.
+
+One documentation defect noticed in passing and worth its own fix: `ui/daw-bridge/src/control.rs:4-7`
+still states the UI command ring is SPSC and "exactly one process may be the producer". The rings
+have been MULTI-producer since M2.18 (`apps/shared_memory.h:440-446` describes the CAS-reserve/ready
+publication that made them so). The design's §3 reported this and deliberately did not fix it,
+being read-only. It is the premise the whole minting scheme rests on, so it should not stay wrong.
