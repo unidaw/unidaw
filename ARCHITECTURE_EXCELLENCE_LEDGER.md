@@ -2800,3 +2800,44 @@ event_payloads.h and layout.rs" recorded earlier. Landing CMD00 first would mean
 payload identities are born outside the stronger check, and T3 would then have to be re-pinned
 against a wire it never saw. Landing T3 first means CMD00's changes are covered on their first
 commit, which is the whole point of the branch.
+
+## T3 sixth review — 5 blockers, repaired at `f0c5983e` (2026-08-14)
+
+The review confirmed the fifth repair's three central claims by measurement: the union catches
+all three unspellable includes THROUGH the depfile half (each goes fail-open the moment
+`| dep_rel` is removed), the silent zero is gone across four invocation spellings, and control 3
+no longer accepts its own check's PASS line.
+
+**The finding worth remembering: I reintroduced the control-3 defect inside the commit that
+fixed control 3.** Both controls I added carried a bare `|StructName` alternative in their reason
+regex, so they matched any refusal naming that struct. A partial revert — keeping half the
+"uncomputable is a refusal" rule — made `11.mirror_without_offsets` report `ok` on a refusal
+claiming a PHANTOM field-order divergence, the opposite of what the control names. Fixing a defect
+class in one place and committing it in another, in the same commit, is a sharper version of
+"a repair un-learns its own lesson".
+
+Also closed:
+
+- **The restored union was ratcheted by nothing.** Deleting `| dep_rel` left all 23 controls
+  green — the exact state the two repairs before it were in when they regressed. Now
+  `10b.scope_macro_include`, using a macro include that no lexical matcher can see by
+  construction, and asserting that blindness.
+- **Tail-matching invented demands.** The depfile carries ~750 SDK headers, so a repo file at
+  `sys/errno.h`, or a root-level file named `version`, resolved by coincidence into a PERMANENT
+  refusal naming a header the roots do not include, with a printed remedy that could not fix it.
+  The reviewer's `samefile` fix could not be used — every fixture points `src` at a staged COPY
+  while the depfile names the real tree, so it rejects every genuine entry (20 controls failed
+  when I tried it). The prefix is now DERIVED from the roots the depfile must contain: bindgen was
+  handed them, so they identify the depfile's own spelling for this repo, with no root from the
+  environment and therefore no route back to the silent zero.
+- **A checkout path containing a space** emptied `dep_rel` and refused on a good tree — the
+  emptiness guard reached by a legitimate repo rather than a defect. Now escape-aware.
+- **The patcher side discarded its exemption**, so its refusal advised declaring one that did
+  nothing and an internal `repr(C)` type could not be added to `patcher_rust` at all.
+- "A reason is required" was asserted in two comments and tested nowhere.
+
+Selftest is 25 refused for their named reason, 7 held. Seventh review pending.
+
+Process note: an anchor assertion caught an invalid negative control for the second time today —
+a `python3 -c` sabotage whose anchor had moved reported `ok` for a test that never applied. The
+assertion is the only reason that was visible.
