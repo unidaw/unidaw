@@ -38,7 +38,7 @@ int main() {
   // engine_chain_host.cpp:264-265, verbatim.
   std::thread commandThread([&] {
     while (!stop.load(std::memory_order_relaxed)) {
-      runtime.restartWindowResetRequested.store(true, std::memory_order_release);
+      requestFlappingBudgetReset(runtime);
     }
   });
 
@@ -48,7 +48,7 @@ int main() {
     constexpr auto kRestartWindow = std::chrono::seconds(10);
     while (!stop.load(std::memory_order_relaxed)) {
       const auto nowRestart = std::chrono::steady_clock::now();
-      if (runtime.restartWindowResetRequested.exchange(false, std::memory_order_acq_rel)) {
+      if (runtime.restartWindowResetRequestedAt.exchange(0, std::memory_order_acq_rel) != 0) {
         runtime.restartAttempts = 0;
         runtime.restartWindowStart = {};
       }

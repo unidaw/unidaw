@@ -44,12 +44,26 @@ void runRestartWorker(RestartWorkerDeps& deps) {
       constexpr uint32_t kMaxRestartsPerWindow = 5;
       constexpr auto kRestartWindow = std::chrono::seconds(10);
       const auto nowRestart = std::chrono::steady_clock::now();
-      // The chain was rebuilt since we last looked, so this plugin gets a fresh budget. Consumed
+      // The track was re-armed since we last looked, so this plugin gets a fresh budget. Consumed
       // with exchange so the request is taken exactly once, and applied HERE because these two
       // fields are this thread's alone — see engine_types.h.
-      if (runtime->restartWindowResetRequested.exchange(false, std::memory_order_acq_rel)) {
-        runtime->restartAttempts = 0;
-        runtime->restartWindowStart = {};
+      //
+      // AND IT EXPIRES. As a bare flag this was an unbounded latch: if the restart the request
+      // belonged to never happened — scheduleHostRestart's CAS can fail and never enqueue — the
+      // request sat set until some LATER, unrelated crash storm consumed it and was handed a fresh
+      // 5-restart budget it had not earned. Owner ruling 2026-08-13: a request older than the same
+      // window the guard uses is discarded rather than applied. Taken either way, so a stale one
+      // cannot accumulate.
+      const uint64_t resetRequestedAt =
+          runtime->restartWindowResetRequestedAt.exchange(0, std::memory_order_acq_rel);
+      if (resetRequestedAt != 0) {
+        const auto requestAge = nowRestart.time_since_epoch()
+                                - std::chrono::steady_clock::duration(
+                                      static_cast<std::chrono::steady_clock::rep>(resetRequestedAt));
+        if (requestAge <= kRestartWindow) {
+          runtime->restartAttempts = 0;
+          runtime->restartWindowStart = {};
+        }
       }
       if (runtime->restartWindowStart.time_since_epoch().count() == 0 ||
           nowRestart - runtime->restartWindowStart > kRestartWindow) {

@@ -67,7 +67,7 @@ import re, subprocess, sys, collections
 
 ROOT = sys.argv[1]
 FIELDS = ['hostReady', 'active', 'hostGeneration', 'needsRestart', 'restartInFlight', 'hostGaveUp',
-          'restartWindowResetRequested']
+          'restartWindowResetRequestedAt']
 WRITE = re.compile(r'\b(' + '|'.join(FIELDS) + r')\.(?:store|exchange|fetch_\w+|compare_exchange\w*)\s*\(')
 SIG = re.compile(r'^([A-Za-z_][\w:<>,*&\s]*?\b)?([A-Za-z_]\w*)\s*\(')
 NOT_A_FN = {'if', 'for', 'while', 'switch', 'return', 'sizeof', 'catch'}
@@ -166,7 +166,9 @@ ALLOW = {
       {'active': 1, 'hostReady': 1, 'restartInFlight': 1},                 # restart requested
   ('apps/engine_chain_host.cpp', 'rebuildHostForChain'):
       {'active': 1, 'hostGaveUp': 1, 'hostReady': 1, 'needsRestart': 1,
-       'restartWindowResetRequested': 1},                                  # reconcile failed + R3c request
+      },                                                                   # reconcile failed
+  ('apps/engine_types.h', 'requestFlappingBudgetReset'):
+      {'restartWindowResetRequestedAt': 1},                                 # the one way to ask
   ('apps/engine_master_render.cpp', 'runMasterRenderThread'):
       {'needsRestart': 2},                                                 # master send / timeout
   ('apps/engine_produce_block.cpp', 'produceBlock::processTrack'):
@@ -176,12 +178,12 @@ ALLOW = {
   ('apps/engine_restart_worker.cpp', 'runRestartWorker'):
       {'active': 2, 'hostGaveUp': 1, 'hostGeneration': 1, 'hostReady': 3,
        'needsRestart': 2, 'restartInFlight': 4,
-       'restartWindowResetRequested': 1},                                  # launch / gave up / done + R3c consume
+       'restartWindowResetRequestedAt': 1},                                # launch / gave up / done + R3c consume
   ('apps/engine_rt_helpers.cpp', 'evictHostForWatchdog'):
       {'active': 1, 'hostReady': 1, 'needsRestart': 1},                    # HOST-R3b: was 3 lambdas
   ('apps/engine_rt_helpers.cpp', 'tearDownHostState'):
       {'active': 1, 'hostGaveUp': 1, 'hostReady': 1, 'needsRestart': 1,
-       'restartWindowResetRequested': 1},                                  # HOST-R3b: was 2 copies
+      },                                                                   # HOST-R3b: was 2 copies
   ('apps/engine_track_setup.cpp', 'reconcileChildTracks'):
       {'active': 1, 'hostReady': 1, 'needsRestart': 1},                    # slot repurposed
   ('apps/engine_track_setup.cpp', 'restartTrackHost'):
@@ -292,7 +294,7 @@ for f in files:
                     'these two are plain members owned by the restart worker thread. Touching them',
                     'from any other thread is a data race — TSan reported exactly that on',
                     'restartWindowStart — and a read races just as a write does.',
-                    'Set restartWindowResetRequested instead; the worker consumes it and clears them.')
+                    'Call requestFlappingBudgetReset() instead; the worker consumes it and clears them.')
 
 owner_writes = sum(1 for l in src.get(OWNER, [])
                    if not l.strip().startswith('//')
@@ -329,13 +331,17 @@ for f, ln, fn in rearm:
         if start <= ln <= end:
             body = src[f][start - 1:end]
             break
-    requests = any(re.search(r'restartWindowResetRequested\.store\(\s*true', l)
+    # THE CALL, NOT THE STORE. This grepped for a particular store spelling and would have gone
+    # blind the moment the request became a timestamp rather than a flag — which is exactly what
+    # the owner ruling then made it. One named function is the structural fact; how it writes the
+    # field is its own business.
+    requests = any('requestFlappingBudgetReset(' in l
                    for l in body if not l.strip().startswith('//'))
     if not requests:
         bad(f'RE-ARM WITHOUT A BUDGET RESET: {f}:{ln} clears hostGaveUp inside {fn}()',
             'the track is re-armed but restartAttempts/restartWindowStart survive, so the next',
             'host inherits a spent budget and is given up on early. Set',
-            'restartWindowResetRequested there; the worker owns the two counters and clears them.')
+            'requestFlappingBudgetReset(runtime) there; the worker owns the two counters.')
 
 # ---- rule 3: active.store(true) has exactly one site --------------------------------------------
 ups = [(f, ln) for f, ln, fld, fn in writes

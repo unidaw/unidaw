@@ -75,7 +75,7 @@ void tearDownHostState(TrackRuntime& runtime) {
   // was disabled again on the new host's FIRST crash, however healthy that plugin was.
   // The two counters belong to the restart worker and may not be written here, so this asks —
   // which is the mechanism HOST-R3c introduced and applied at only one of its two re-arm sites.
-  runtime.restartWindowResetRequested.store(true, std::memory_order_release);
+  requestFlappingBudgetReset(runtime);
 }
 
 uint64_t tickDeltaToSamples(uint64_t tickDelta, long double samplesPerTick) {

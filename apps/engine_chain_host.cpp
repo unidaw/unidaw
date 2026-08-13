@@ -263,7 +263,7 @@ void rebuildHostForChain(ChainHostDeps& deps, TrackRuntime& runtime) {
       runtime.hostGaveUp.store(false, std::memory_order_release);
       // REQUEST, do not clear. These two fields belong to the restart worker thread; writing them
       // from here (the UI/command thread) was the data race TSan reports on restartWindowStart.
-      runtime.restartWindowResetRequested.store(true, std::memory_order_release);
+      requestFlappingBudgetReset(runtime);
       runtime.needsRestart.store(true, std::memory_order_release);
       daw::LogLine() << "Engine: queued host restart for track "
                 << runtime.trackId << std::endl;

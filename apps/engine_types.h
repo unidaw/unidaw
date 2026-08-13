@@ -365,10 +365,19 @@ struct TrackRuntime {
   // owner, so the sentence is now true by construction rather than by hope.
   uint32_t restartAttempts = 0;
   std::chrono::steady_clock::time_point restartWindowStart{};
-  // Set by whoever rebuilds the chain, consumed and cleared by the restart worker. One atomic bool
+  // Set by whoever re-arms the track, consumed and cleared by the restart worker. One atomic
   // replaces two unsynchronised writes, and the deferral costs nothing: the counter is read ONLY
   // inside the worker, so it is fresh at exactly the moment it is consulted.
-  std::atomic<bool> restartWindowResetRequested{false};
+  //
+  // IT CARRIES A TIME, NOT A FLAG, AND THAT IS THE POINT. As a bool the request was an unbounded
+  // latch: if the restart it belonged to never happened — the CAS in scheduleHostRestart can fail
+  // and never enqueue — the request stayed set indefinitely and was consumed by the NEXT, unrelated
+  // crash storm, handing it a fresh 5-restart budget it had not earned. Owner ruling 2026-08-13:
+  // expire it by the same 10s window the guard already uses, so a request outlives its own rebuild
+  // by no more than the episode it was meant to cover.
+  //
+  // Zero means "no request". steady_clock is monotonic, so a real request can never encode 0.
+  std::atomic<uint64_t> restartWindowResetRequestedAt{0};
   std::atomic<bool> hostGaveUp{false};
   std::unique_ptr<daw::Watchdog> watchdog;
   std::map<std::array<uint8_t, 16>, ParamMirrorEntry, ParamKeyLess> paramMirror;
@@ -497,6 +506,24 @@ struct TrackRuntime {
   std::atomic<bool> ringStdOverflowed{false};
   std::atomic<bool> ringStdPanicPending{false};
 };
+
+// RE-ARMING A TRACK RE-ARMS ITS BUDGET, and there is exactly one way to ask.
+//
+// Both re-arm sites — rebuildHostForChain and tearDownHostState — clear hostGaveUp, which means
+// "try this track again". The crash counter and window survive that, so without this the next host
+// inherits a spent budget: a track given up on at 6 attempts, removed and re-added inside the
+// window, was disabled again on its first crash however healthy the new plugin was.
+//
+// The two counters belong to the restart worker thread and may not be written from here, so this
+// records a REQUEST and the worker applies it. Kept as one named function rather than two copies of
+// a store because that is what readiness_writer_check.sh rule 2c looks for: a rule enforced by
+// finding a call is enforced by structure, where one that greps for a particular store spelling is
+// blind the moment somebody writes it differently.
+inline void requestFlappingBudgetReset(TrackRuntime& runtime) {
+  const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+  runtime.restartWindowResetRequestedAt.store(static_cast<uint64_t>(now),
+                                              std::memory_order_release);
+}
 
 // What was AUTHORED ON A STEM, parked between the load and the derivation.
 //
