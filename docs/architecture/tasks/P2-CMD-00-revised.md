@@ -27,10 +27,18 @@ that needs the field. Measured `offsetof`/`sizeof`/`alignof`:
 | `UiPatcherGraphErrorPayload` | 40 | 4 | **32** | ✅ (exactly) |
 
 Every reserved run reaches byte 40, so **bytes 32–40 are free in all seven**. That gives a result the
-original could not have had from two samples: **one uniform offset, 32**, so a reader extracts the
-correlation id from any refusal *without dispatching on payload type first*. `UiPatcherGraphErrorPayload`
-is the binding constraint — its reserved run is exactly those 8 bytes — and it is the payload that
-forces the answer rather than one that barely accommodates it.
+original could not have had from two samples: **one uniform offset, 32**, so a reader that has already
+established the entry *is* a refusal does not then need to know **which** of the seven it is in order
+to find the id. `UiPatcherGraphErrorPayload` is the binding constraint — its reserved run is exactly
+those 8 bytes — and it is the payload that forces the answer rather than one that barely accommodates
+it.
+
+**This does not remove the dispatch.** §6 measures a publisher that emits uninitialised payload bytes,
+so a reader must still confirm the entry's `type` is a refusal and that `size` covers offset 40 before
+reading there. One offset saves the reader a *second* dispatch over payload shapes, not the first one
+over event type. My first draft of this paragraph said "without dispatching on payload type first" and
+contradicted §6 two screens below — the same superseded-rule-stated-elsewhere defect this project has
+now paid for repeatedly, committed inside the document that measures it.
 
 ## 2. The id is two `uint32_t`, not a `uint64_t` — and this is not cosmetic
 
