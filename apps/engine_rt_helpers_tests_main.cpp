@@ -114,8 +114,9 @@ void testEnqueueMirrorReplaySkipsAuxChild() {
   normal.mirrorPrimed.store(true, std::memory_order_release);
   normal.mirrorGateSampleTime.store(42, std::memory_order_release);
 
-  enqueueMirrorReplay(normal);
+  enqueueMirrorReplay(normal, daw::kMirrorCauseRelaunch);
   CHECK(normal.mirrorPending.load(std::memory_order_acquire) == true);
+  CHECK(normal.mirrorCauses.load(std::memory_order_acquire) == daw::kMirrorCauseRelaunch);
   CHECK(normal.mirrorPrimed.load(std::memory_order_acquire) == false);
   CHECK(normal.mirrorGateSampleTime.load(std::memory_order_acquire) == 0);
 
@@ -129,8 +130,10 @@ void testEnqueueMirrorReplaySkipsAuxChild() {
   child.mirrorPrimed.store(true, std::memory_order_release);
   child.mirrorGateSampleTime.store(42, std::memory_order_release);
 
-  enqueueMirrorReplay(child);
+  enqueueMirrorReplay(child, daw::kMirrorCauseRelaunch);
   CHECK(child.mirrorPending.load(std::memory_order_acquire) == false);
+  // and no CAUSE is recorded either — an aux child's arming is skipped whole, not half-applied
+  CHECK(child.mirrorCauses.load(std::memory_order_acquire) == daw::kMirrorCauseNone);
   CHECK(child.mirrorPrimed.load(std::memory_order_acquire) == true);
   CHECK(child.mirrorGateSampleTime.load(std::memory_order_acquire) == 42);
 }
