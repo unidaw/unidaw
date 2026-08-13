@@ -2558,3 +2558,74 @@ Sequencing note: this touches `apps/event_payloads.h` and `ui/daw-bridge/src/lay
 which are merge hotspots and are also the files T3 pins. T3 must settle first, or the two
 will fight over the same layout assertions. Implementation is therefore queued behind T3's
 outstanding review rather than started now.
+
+## Ruling 3 review — engine PASS, four holes in the enforcing rule (`b7dfcf4d`)
+
+The C++ passed on every count the review could test by execution: it compiled the time
+arithmetic on this platform and confirmed the types and the comparison, enumerated every
+access to all three fields by construct, and DERIVED that the expiry loses nothing — a
+pending request always satisfies `W <= T1`, so `requestAge <= T2 - W <= window`, and the
+two boundaries complement (strict on one side, inclusive on the other) with no gap. That
+argument now lives in the code; it was the load-bearing fact and it was written nowhere.
+
+Four ways to defeat the rule that enforces it, all now closed and each verified by
+mutation:
+
+1. Rule 2b exempted `apps/engine_types.h` whole, "the declaration itself" — true until
+   this work put the FIRST requester-thread code in that file. Writing the two plain
+   members inside `requestFlappingBudgetReset` reinstates the exact HOST-R3c race, in the
+   very function the rule's failure message tells you to call, and the check passed. An
+   exemption granted for what a file CONTAINED does not notice the file changing.
+2. Rule 2c was satisfied by a trailing comment or a string literal naming the helper.
+   Rule 2b twenty lines above strips both. The original control only fired because
+   `tearDownHostState`'s comment happens not to spell the name — one explanatory comment
+   would have retired the rule.
+3. Rule 2c accepted the helper called on a DIFFERENT object: the re-armed track keeps its
+   spent budget while another gets a free one, blessed by the rule written to forbid it.
+4. Rule 2c's span was top-level-only while its comment claimed it matched the write scan.
+   Rule 1 attributes to `main::scheduleHostRestart` (41 lines); 2c scanned `main` — 1,984
+   lines, 87 named lambdas. Verified old-vs-new: the old logic is BLIND on the same code.
+
+And the property the ruling was actually about now has a control. The age check is
+extracted as `flappingResetRequestIsFresh` so it can be CALLED — it was three lines inside
+a worker loop reachable only by running an engine with a plugin that crashes on load,
+which is why it had no test. Five cases: stale, fresh, no-request, the exact boundary, and
+a request from the future (reachable, since the worker captures its reference time before
+the exchange). Verified by sabotage: making the request never expire fails the stale case.
+
+## T3 fourth review — NOT SAFE TO MERGE, repaired by DELETION at `3b0206fb`
+
+Five blockers, two of them regressions from the third repair. The review's closing
+judgement is the important part: the defence was accreting faster than the invariants. The
+scope demand had three derivations from two artifacts written by two programs, and a
+variant with the union deleted and one regex widened passed the entire suite — which is
+the strongest possible evidence that the union was paying for itself only in fixtures.
+
+So the fourth repair REMOVES rather than adds:
+
+- The depfile union had a SILENT ZERO. `relpath` against `$ROOT`, which bash computes with
+  a logical `cd`+`pwd`, while `build.rs` canonicalises — so invoking the gate through a
+  symlinked path (`/tmp` on macOS, exactly how this repo runs gates in temp worktrees)
+  dropped every entry and degraded the demand to the previous behaviour, with no message
+  and no change to any printed line. Every other derived set in the file refuses when
+  empty; the one the repair rested on did not. It was also equal to `recorded` by
+  construction, so it was never an independent opinion.
+- The closure now matches the DIRECTIVE (`#\s*include\s*[<"]`) rather than the delimiter.
+  Three revisions keyed this on how an include is written and each was defeated by the
+  next spelling; one structural closure answers both the scope and the declaration
+  question in one place, which is what those three attempts kept failing to do.
+- Control 9's traceback assertion was DEAD CODE: piped into `grep -q` under `pipefail`, so
+  the pipeline status was the check's — always 1 for a fixture built to refuse. Half of a
+  control added to ratchet a repair had never executed.
+- The bridge field-order loop `continue`d past a mirror with no offset assertions while
+  printing `len(mirrored)`, so a struct could be uncovered AND reported as covered. The
+  patcher loop refuses for the identical condition. One rule, two sites, opposite policies.
+- `hand - gen` was unguarded on the bridge side. The argument for guarding it is made in
+  this same file for `patcher_rust` and was never applied to the larger population it
+  describes.
+
+Check PASS, selftest 21 refused / 5 held. T3 is now on its fourth repair and needs a fifth
+review. Each round has found real defects; the trend is that the last one found fewer NEW
+classes and more instances of classes already named, which is the shape of converging
+rather than thrashing — but it has not converged yet and must not merge until a review
+returns PASS.
