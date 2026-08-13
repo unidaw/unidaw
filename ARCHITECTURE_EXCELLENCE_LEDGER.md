@@ -3203,3 +3203,49 @@ its live tickets. Each time the fix was the same — point at the authority, or 
 each time the drift appeared within hours of the edit that caused it. The lesson is not "update the
 summary"; it is that a summary layer maintained by hand decays at the speed the work moves, which
 here is hours.
+
+## My carrier design is REFUTED — the ring index cannot carry the id (2026-08-14)
+
+Independent design review returned blockers. Recorded now because the refutation is more useful
+than the proposal was.
+
+**The decisive finding is one I could not have reached by reasoning about the ring.**
+`reportSamplerReject(SamplerLoad, LoadFailed, …)` is emitted from `apps/daw_engine_main.cpp:1481`
+inside `rebuildSamplerRender`, reached via `refreshSamplerForTrack` → `loadTrackFromDocument` →
+`loadProjectFromPath`, which has two callers: a UI command (has an index) and
+**`loadStartupProject(...)` called directly from `main()` at `:2167`** — at engine boot, before any
+ring read. No `EventEntry`, no slot, no index.
+
+So one shared emit path is reachable both with and without a causing command. For the reservation
+index there is **no value to thread at any price**, and the design would have to invent a "no
+command" sentinel for a path it does not know exists. Two further refutations of the same kind:
+batch ops, and chunked bulk where "the index of the final chunk stands in for a command assembled
+from N separate reservations".
+
+**And my cost estimate was wrong in the other direction.** Explicit threading is **87 edit sites**
+deduplicated across the seven types — 45 named functions plus 42 `std::function` Deps fields and
+forwarder lambdas, weighted Sampler 28, Harmony 20, Clip 17. The ~8-site "ambient" alternative is
+new construction (no `currentCommand`/`commandContext`/`thread_local` exists anywhere in `apps/`),
+and a stale ambient reproduces a defect already on this project's record: a failed sampler load
+re-resolved on every project load, poisoning later verbs.
+
+**A factual error in my own design document, found while reading `EventEntry`:** I wrote that
+`UiCommandPayload` leaves 4 free bytes. It does not. `EventEntry::payload` is declared `[40]` and
+`UiCommandPayload` is exactly 40 — **zero** free bytes. The 4 I counted were `ready`, the M2.18
+publication flag, which is emphatically not free. My "44 bytes capacity" came from
+`sizeof - offsetof(payload)`, which includes `ready`. The constraint is therefore tighter than I
+reported, which strengthens the refutation.
+
+**The reviewer's recommendation: keep owner ruling 1.** The per-process nonce stands. Carry it in
+`EventEntry::sampleTime` — an existing `uint64_t` on the entry, exactly 8 bytes — which is Option E,
+a fifth option I did not consider. Its advantage over my proposal is precisely the
+`loadStartupProject` case: an entry-carried id is simply ABSENT there, so the all-zero "no id"
+sentinel that `-revised.md` §6.1 already specifies applies for free, with nothing invented.
+
+**Owner decision 5 is NOT needed.** The reviewer is explicit that the ring-index refutation goes to
+the owner as information, not as a decision request. Ruling 1 was correct on its own terms and the
+carrier question does not reopen it.
+
+Waiting on the full blocker text before implementing: I received only the addendum, which
+references blockers 1-8 without stating them, and I will not act on a partial verdict or
+reconstruct them by inference.
