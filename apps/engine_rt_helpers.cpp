@@ -69,6 +69,13 @@ void tearDownHostState(TrackRuntime& runtime) {
   runtime.hostReady.store(false, std::memory_order_release);
   runtime.active.store(false, std::memory_order_release);
   runtime.hostGaveUp.store(false, std::memory_order_release);
+  // RE-ARMING A TRACK MUST RE-ARM ITS BUDGET. Clearing hostGaveUp says "try this track again", but
+  // restartAttempts and restartWindowStart survived the teardown, so the NEXT host inherited a
+  // spent budget: a track given up on at 6 attempts, removed, and re-added within the 10s window
+  // was disabled again on the new host's FIRST crash, however healthy that plugin was.
+  // The two counters belong to the restart worker and may not be written here, so this asks —
+  // which is the mechanism HOST-R3c introduced and applied at only one of its two re-arm sites.
+  runtime.restartWindowResetRequested.store(true, std::memory_order_release);
 }
 
 uint64_t tickDeltaToSamples(uint64_t tickDelta, long double samplesPerTick) {

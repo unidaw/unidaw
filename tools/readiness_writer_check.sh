@@ -180,7 +180,8 @@ ALLOW = {
   ('apps/engine_rt_helpers.cpp', 'evictHostForWatchdog'):
       {'active': 1, 'hostReady': 1, 'needsRestart': 1},                    # HOST-R3b: was 3 lambdas
   ('apps/engine_rt_helpers.cpp', 'tearDownHostState'):
-      {'active': 1, 'hostGaveUp': 1, 'hostReady': 1, 'needsRestart': 1},   # HOST-R3b: was 2 copies
+      {'active': 1, 'hostGaveUp': 1, 'hostReady': 1, 'needsRestart': 1,
+       'restartWindowResetRequested': 1},                                  # HOST-R3b: was 2 copies
   ('apps/engine_track_setup.cpp', 'reconcileChildTracks'):
       {'active': 1, 'hostReady': 1, 'needsRestart': 1},                    # slot repurposed
   ('apps/engine_track_setup.cpp', 'restartTrackHost'):
@@ -288,6 +289,37 @@ if owner_writes < 5:
     bad(f'the restart worker writes the flapping guard {owner_writes} times, expected >= 5',
         'the fields may have been renamed or moved, in which case rule 2b is blind and the',
         'ownership it enforces is no longer being enforced at all')
+
+# ---- rule 2c: re-arming a track must re-arm its flapping budget ---------------------------------
+# ONE RULE, TWO SITES, AND ONLY ONE OF THEM HAD IT. Clearing hostGaveUp means "try this track
+# again". The counter and window survive that, so without a reset request the next host inherits a
+# spent budget and is given up on early — measured against the real sites, not hypothesised.
+# HOST-R3c introduced the request and applied it at rebuildHostForChain only; tearDownHostState,
+# reached from RemoveTrack and project load, kept re-arming a track onto a used-up counter.
+#
+# Keyed on the CONSTRUCT (a store of false to hostGaveUp) rather than on a list of function names,
+# so a third re-arm site added later is covered the day it appears rather than the day someone
+# remembers to add it here.
+rearm = [(f, ln, fn) for f, ln, fld, fn in writes
+         if fld == 'hostGaveUp' and re.search(r'hostGaveUp\.store\(\s*false', src[f][ln - 1])]
+if not rearm:
+    bad('no site clears hostGaveUp, so rule 2c is blind',
+        'the field may have been renamed; re-arm sites are no longer being checked at all')
+for f, ln, fn in rearm:
+    # The enclosing span, recomputed the same way the write scan attributes names, so "in the same
+    # function" means the same thing to both rules.
+    body = []
+    for start, end, _name in top_level_spans(src[f]):
+        if start <= ln <= end:
+            body = src[f][start - 1:end]
+            break
+    requests = any(re.search(r'restartWindowResetRequested\.store\(\s*true', l)
+                   for l in body if not l.strip().startswith('//'))
+    if not requests:
+        bad(f'RE-ARM WITHOUT A BUDGET RESET: {f}:{ln} clears hostGaveUp inside {fn}()',
+            'the track is re-armed but restartAttempts/restartWindowStart survive, so the next',
+            'host inherits a spent budget and is given up on early. Set',
+            'restartWindowResetRequested there; the worker owns the two counters and clears them.')
 
 # ---- rule 3: active.store(true) has exactly one site --------------------------------------------
 ups = [(f, ln) for f, ln, fld, fn in writes
