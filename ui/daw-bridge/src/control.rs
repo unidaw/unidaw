@@ -1516,6 +1516,19 @@ impl EngineHandle {
         out
     }
 
+    /// As `send_chord_command`, returning the id it minted. Same opt-in shape as
+    /// `send_command_correlated`, for the same reason: the id-less form has callers that return
+    /// the result directly.
+    pub fn send_chord_command_correlated(
+        &self,
+        payload: UiChordCommandPayload,
+    ) -> Result<u64, String> {
+        self.write_entry(
+            &payload as *const UiChordCommandPayload as *const u8,
+            std::mem::size_of::<UiChordCommandPayload>(),
+        )
+    }
+
     pub fn send_chord_command(&self, payload: UiChordCommandPayload) -> Result<(), String> {
         self.write_entry(
             &payload as *const UiChordCommandPayload as *const u8,

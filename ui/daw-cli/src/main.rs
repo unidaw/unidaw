@@ -1160,6 +1160,7 @@ enum ClipOutcome {
 
 fn await_clip_outcome(
     handle: &EngineHandle,
+    command_id: u64,
     track: u32,
     command_type: u16,
     sent_base: u32,
@@ -1176,7 +1177,31 @@ fn await_clip_outcome(
             let u32at = |o: usize| {
                 u32::from_le_bytes([payload[o], payload[o + 1], payload[o + 2], payload[o + 3]])
             };
-            if u32at(4) == track && u16at(16) == command_type && u32at(8) == sent_base {
+            // MATCH ON THE ID THIS SENDER MINTED (P2-CMD-00), not on (track, commandType,
+            // sentBase). That triple names a KIND of command on a track, so two concurrent writers
+            // — or one writer and a retry — are indistinguishable by it, and for SetRowOps the
+            // third key is inert because UiSetRowOpsPayload carries no base version at all. That
+            // inert key is AE-P1.2 item 29's remaining half, and matching on the id makes it
+            // irrelevant rather than needing a value invented for it.
+            //
+            // The reader rule is normative and this follows it: dispatch on the diff type FIRST
+            // (done above), require the payload to be long enough that offset 32 lies inside what
+            // the publisher wrote, and treat all-zero as NO ID — never a match. A ReplayComplete
+            // gate publishes size 0 with a zeroed payload, which is byte-identical to a legacy
+            // id at offset 32; only the dispatch separates them.
+            let refusal_id = if payload.len() >= 40 {
+                ((u32at(36) as u64) << 32) | (u32at(32) as u64)
+            } else {
+                0
+            };
+            if command_id != 0 && refusal_id == command_id {
+                return ClipOutcome::Refused { reason: u16at(2), current: u32at(12) };
+            }
+            // FALLBACK while a sender that does not mint may still be running. Kept deliberately
+            // narrow: only when this caller has no id of its own, so a minted command never
+            // adopts a refusal by the old triple.
+            if command_id == 0
+                && u32at(4) == track && u16at(16) == command_type && u32at(8) == sent_base {
                 return ClipOutcome::Refused { reason: u16at(2), current: u32at(12) };
             }
         }
@@ -2982,11 +3007,11 @@ fn main() {
                     let before_len = handle.peek_ui_diffs().len();
                     let ver_before = handle.clip_version_for_track(track);
                     match note_command(command, &args, base) {
-                        Ok(payload) => match handle.send_command(payload) {
-                            Ok(()) => {
+                        Ok(payload) => match handle.send_command_correlated(payload) {
+                            Ok(sent_id) => {
                                 let label = if is_write { "note" } else { "delete-note" };
                                 let cmd = command as u16;
-                                match await_clip_outcome(&handle, track, cmd, base, before_len, ver_before) {
+                                match await_clip_outcome(&handle, sent_id, track, cmd, base, before_len, ver_before) {
                                     ClipOutcome::Applied | ClipOutcome::Unknown => {
                                         println!(
                                             "{{ \"sent\": \"{label}\", \"base_version\": {base} }}"
@@ -2996,8 +3021,8 @@ fn main() {
                                     ClipOutcome::Refused { reason, current } if retry_stale
                                         && reason == daw_bridge::layout::UiClipRejectReason::StaleBase as u16 => {
                                         match note_command(command, &args, current) {
-                                            Ok(again) => match handle.send_command(again) {
-                                                Ok(()) => match await_clip_outcome(&handle, track, cmd, current, handle.peek_ui_diffs().len(), handle.clip_version_for_track(track)) {
+                                            Ok(again) => match handle.send_command_correlated(again) {
+                                                Ok(retry_id) => match await_clip_outcome(&handle, retry_id, track, cmd, current, handle.peek_ui_diffs().len(), handle.clip_version_for_track(track)) {
                                                     ClipOutcome::Applied | ClipOutcome::Unknown => {
                                                         eprintln!("daw-cli: base {base} was stale; retried at {current}");
                                                         println!("{{ \"sent\": \"{label}\", \"base_version\": {current}, \"retried\": true }}");
@@ -5412,10 +5437,10 @@ removed is the whole command");
                     let before_len = handle.peek_ui_diffs().len();
                     let ver_before = handle.clip_version_for_track(track);
                     match chord_command(&args, base) {
-                        Ok(payload) => match handle.send_chord_command(payload) {
-                            Ok(()) => {
+                        Ok(payload) => match handle.send_chord_command_correlated(payload) {
+                            Ok(sent_id) => {
                                 let cmd = payload.command_type;
-                                match await_clip_outcome(&handle, track, cmd, base, before_len, ver_before) {
+                                match await_clip_outcome(&handle, sent_id, track, cmd, base, before_len, ver_before) {
                                     ClipOutcome::Applied | ClipOutcome::Unknown => {
                                         println!("{{ \"sent\": \"chord\", \"base_version\": {base} }}");
                                         0
@@ -5426,8 +5451,8 @@ removed is the whole command");
                                         // rather than re-sending the payload with a patched field:
                                         // the base is not the only thing derived from it.
                                         match chord_command(&args, current) {
-                                            Ok(again) => match handle.send_chord_command(again) {
-                                                Ok(()) => match await_clip_outcome(&handle, track, cmd, current, handle.peek_ui_diffs().len(), handle.clip_version_for_track(track)) {
+                                            Ok(again) => match handle.send_chord_command_correlated(again) {
+                                                Ok(retry_id) => match await_clip_outcome(&handle, retry_id, track, cmd, current, handle.peek_ui_diffs().len(), handle.clip_version_for_track(track)) {
                                                     ClipOutcome::Applied | ClipOutcome::Unknown => {
                                                         eprintln!("daw-cli: base {base} was stale; retried at {current}");
                                                         println!("{{ \"sent\": \"chord\", \"base_version\": {current}, \"retried\": true }}");
@@ -5469,8 +5494,8 @@ removed is the whole command");
                     // Harmony has its own version counter, not the clip one.
                     let base = handle.harmony_version();
                     match harmony_command(&args, base) {
-                        Ok(payload) => match handle.send_command(payload) {
-                            Ok(()) => {
+                        Ok(payload) => match handle.send_command_correlated(payload) {
+                            Ok(sent_id) => {
                                 /*
                                  * WAIT FOR THE ENGINE TO TAKE IT, and say so — this used to print
                                  * "sent" and exit 0 the instant the command was queued.
