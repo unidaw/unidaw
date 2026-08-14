@@ -6,14 +6,19 @@
 # non-zero, because a check can fail for a syntax error, a missing file or an unrelated assertion
 # and look identical in a log.
 #
-# FIVE OF THEM REQUIRE A PASS INSTEAD, and they are not filler. A check that reconstructs layout can
+# SOME OF THEM REQUIRE A PASS INSTEAD, and they are not filler. A check that reconstructs layout can
 # start refusing things that are not defects, and the shapes most likely to do that are a rename,
-# which moves no byte; a same-width swap; a narrowing absorbed by the next field's alignment; and a
-# stale bindings file sitting beside a good one; and an edit to a header bindgen never parsed,
-# since apps/ holds far more than the five in the closure and a freshness check that trips on any
-# of them is one nobody keeps green. Those five assert the check STAYS QUIET — and
-# additionally that BOTH reconstructing sections actually ran, so none can be satisfied by a
-# section having quietly stopped looking.
+# which moves no byte; a same-width swap; a narrowing absorbed by the next field's alignment; a
+# case-only spelling difference between a mirror and its twin; a stale bindings file sitting beside
+# a good one; and an edit to a header bindgen never parsed, since apps/ holds far more than the five
+# in the closure and a freshness check that trips on any of them is one nobody keeps green. Those
+# assert the check STAYS QUIET — and additionally that BOTH reconstructing sections actually ran, so
+# none can be satisfied by a section having quietly stopped looking.
+#
+# THE COUNT IS NOT WRITTEN HERE ON PURPOSE. This sentence used to begin "FIVE OF THEM", and was
+# stale at eight before this file was touched again. The run prints the live tally of refused and
+# held controls, and that number is derived; a second copy in prose is a copy that drifts, which is
+# the failure this whole file exists to make loud.
 #
 # TWO PROPERTIES EACH CONTROL MUST HAVE, both learned the hard way in this repo:
 #
@@ -366,6 +371,21 @@ elif which == 'ptr_narrow':     # a pointer field that stopped being pointer-siz
                                 # NEXT field is a u32 and therefore actually moves
     out = inside('PatcherContext', "    pub event_buffer: *mut EventEntry,",
                  "    pub event_buffer: u32,")
+elif which == 'name_rename':
+    # THE MUTATION NO LAYOUT COMPARISON CAN SEE. Two spellings of one field occupy the same bytes,
+    # so every offset and every total is unchanged and the whole patcher section passes. This is
+    # AE-P1.2 item 24 exactly — the C++ calls it `reserved`, the Rust called it `_pad0` — and
+    # before the name rule existed, reverting that rename left the check GREEN.
+    out = inside('PatcherSliceSelectConfig', "    pub reserved: [u8; 4],",
+                 "    pub _pad0: [u8; 4],")
+elif which == 'name_case':
+    # A HOLD, and the reason the rule normalises instead of comparing equal. HarmonyEvent really is
+    # snake_cased against its C++ twin (`scale_id` / `scaleId`), so a strict equality rule would
+    # refuse a CORRECT mirror. Spelling it the C++ way must be equally legal: both normalise to
+    # `scaleid`, and neither is a contract change. Without this control the rule could tighten to
+    # equality and only HarmonyEvent would notice — one mirror standing between a wrong rule and a
+    # green suite.
+    out = inside('HarmonyEvent', "    pub scale_id: u32,", "    pub scaleId: u32,")
 elif which == 'ptr_narrow_absorbed':
     # The same narrowing where the next member is itself pointer-aligned: the four freed bytes
     # become padding, every offset and the total are UNCHANGED, and no layout comparison can see
@@ -383,6 +403,8 @@ PY
 for c in "add_struct:refuse:PatcherNewlyAddedConfig" \
          "ptr_insert:refuse:PatcherContext: this mirror lays fields at" \
          "ptr_narrow:refuse:PatcherContext: this mirror lays fields at" \
+         "name_rename:refuse:PatcherSliceSelectConfig: this mirror calls a field" \
+         "name_case:pass:" \
          "ptr_narrow_absorbed:pass:"; do
   name="${c%%:*}"; rest="${c#*:}"; mode="${rest%%:*}"; want="${rest#*:}"
   D="$(stage "pa_$name")"

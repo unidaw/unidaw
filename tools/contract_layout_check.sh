@@ -978,6 +978,18 @@ if unlisted:
                      "        inferred from an omission here."
                      % (len(unlisted), " ".join(unlisted)))
 
+pnorm = lambda s: s.lower().replace('_', '')
+
+def patcher_field_names(name):
+    """The hand mirror's field names in DECLARATION order, or None if it cannot be read."""
+    m = re.search(r'^pub struct %s\s*\{' % re.escape(name), patcher_src, re.M)
+    if not m:
+        return None
+    end = patcher_src.find('}', m.end())
+    if end < 0:
+        return None
+    return re.findall(r'^\s*pub ([A-Za-z0-9_]+)\s*:', patcher_src[m.end():end], re.M)
+
 patcher_consts = {m: int(v) for m, v in
                   re.findall(r'pub const ([A-Z_0-9]+):\s*[a-z0-9]+\s*=\s*(\d+);', patcher_src)}
 patcher_layout = engine(patcher_src, patcher_hand, patcher_consts, PTR_WIDTH)
@@ -998,6 +1010,34 @@ for n in PATCHER:
     if sorted(offsets) != want or total != cpp_size:
         pdrift.append("%s: this mirror lays fields at %s (size %d); the C++ puts them at %s "
                       "(size %d)" % (n, sorted(offsets)[:9], total, want[:9], cpp_size))
+
+    # AND THE NAMES, which offsets cannot see. Two spellings of one field occupy the same bytes,
+    # so everything above passes while the two sides disagree about what the field is CALLED.
+    # Measured cost: AE-P1.2 item 24 was exactly this — C++ `reserved`, Rust `_pad0`, same offset.
+    #
+    # NORMALISED, not equal. Six of the seven mirrors spell their fields identically, but
+    # HarmonyEvent is snake_cased against the C++ (`scale_id` / `scaleId`), so strict equality
+    # would refuse a correct mirror. Normalising lower-and-strip-underscores keeps that legal and
+    # still separates `pad0` from `reserved`, which is the pair that matters. Derived by measuring
+    # all seven rather than assumed: the first draft of this rule asserted equality and would have
+    # gone red on HarmonyEvent immediately.
+    #
+    # POSITIONAL, because these are compared in offset order and a mirror that renames two fields
+    # by swapping them is a real hazard that a set comparison cannot see.
+    cpp_names = [f for f, _o in sorted(
+        ((k, v) for k, v in cpp_off.items() if not k.startswith('__bindgen_padding')),
+        key=lambda kv: kv[1])]
+    hand_names = patcher_field_names(n)
+    if hand_names is None:
+        pblocked.append("%s: its fields could not be read for a name comparison" % n)
+    elif len(hand_names) == len(cpp_names):
+        for h, c in zip(hand_names, cpp_names):
+            if pnorm(h) != pnorm(c):
+                pdrift.append("%s: this mirror calls a field `%s` where the C++ calls it `%s` — "
+                              "same offset, so every layout assertion above passes" % (n, h, c))
+    else:
+        pdrift.append("%s: this mirror declares %d field(s), the C++ %d"
+                      % (n, len(hand_names), len(cpp_names)))
 
 if pblocked:
     print()
