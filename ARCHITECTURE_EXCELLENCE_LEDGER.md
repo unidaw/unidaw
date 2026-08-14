@@ -3672,3 +3672,54 @@ Editing the pinned SHA to make the check green would falsify the acknowledgement
 thing that pin exists to prevent. The honest options are to merge the packet's commit into the
 history it governs, or to record that the acknowledgement refers to a commit outside it — both are
 owner-facing, and neither is a checker edit.
+
+## `main()` under its ceiling, and PROGRESS.md caught up 346 commits (`537a6624`, `d6810429`)
+
+Both on `main` in the `/Users/jak/src/daw` worktree, not on this branch — the ledger and the code
+live on different branches, which is worth saying once because it is how an entry ends up describing
+commits a reader cannot find with `git log` from here.
+
+**`progress_check` had been failing on a BREACHED monotone ratchet**, not on stale numbers: `main()`
+was 1,992 lines against a ceiling of 1,955. The check forbids the obvious fix in its own words —
+"This number is allowed to go DOWN and never up … Move logic OUT of `main()` rather than raising the
+ceiling." So the ceiling was not touched.
+
+`resetTrackContent` and `laneQuantizeOf` were declared `[]` — captureless, therefore free functions
+already — and moved to `apps/engine_rt_helpers.h` with no plumbing. Selection was by CAPTURES, not
+by size, which is the rule this repo has repeatedly paid to learn. Bodies moved VERBATIM and the
+claim was PROVEN rather than asserted: the 21 statements of the first compare identical to the
+original after de-indenting.
+
+**Most of the reduction was RATIONALE moving with its code**, and that is not padding. Fifteen lines
+above `resetTrackContent` explained why three paths clearing four fields by hand each forgot the same
+two. Left in `main()` after the function left, that comment described nothing. A comment stranded
+from its code is worse than no comment — it is a claim with no subject.
+
+Result: `main()` 1,992 → 1,944, ceiling lowered to 1,944, build clean.
+
+**One error, recorded because of its shape.** The delete range was correct for the first extraction
+and off by one for the second, orphaning a `};`. `main()` then measured 437 with 20 build errors —
+loud and immediate. The two ranges differed because I wrote the arithmetic TWICE instead of once. It
+was caught by rebuilding, not by re-reading, which is the only reason it cost minutes.
+
+**A concurrency mistake worth not repeating:** I ran a targeted `ctest -R` batch while a broad `ctest
+-E` sweep was still running in the SAME build directory. They share `Testing/Temporary`, so the
+32/33 result from the targeted batch is provisional — the standing rule against running a suite
+during a sweep exists for this. The two file-reading checks (`progress_check`, `doc_citation_check`)
+were run standalone and are unaffected.
+
+### PROGRESS.md was 346 commits stale against a limit of 12
+
+So the drift guard was what had gone red; the facts themselves were merely old. Recomputed at
+`537a6624`. But **the prose was staler than the numbers, and that is the half no check can reach** —
+the file says so itself: "What none of this can do is make the prose useful."
+
+Eight days of this programme had produced no narrative entry. The one now written is weighted toward
+review findings in MY OWN work, because that is where this period's evidence actually is: a carrier
+design refuted on two facts I had asserted as measured; a live ring defect found as a SIDE finding
+while refuting it; a commit-message justification I invented and replicated seven times before
+anyone read it; an eighth defect in a check that had passed seven reviews, surfaced only by MERGING
+it into a tree that had moved on; and controls that fired without ratcheting.
+
+The through-line, stated there and worth stating here: all but one needed a reader with no stake in
+the conclusion.
