@@ -899,6 +899,15 @@ add_test(NAME root_isolation
 )
 set_tests_properties(root_isolation PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# A ring cursor read out of shared memory becomes a pointer; unmasked it addresses an arbitrary
+# distance from the mapping, and on the command ring that is a 64-byte write. Two of the three
+# accessors had drifted from the idiom the third always used.
+add_test(NAME ring_index_masking
+  COMMAND ${CMAKE_COMMAND} -E env --unset=BASH_ENV --unset=ENV
+    bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/ring_index_masking_check.sh
+)
+set_tests_properties(ring_index_masking PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120)
+
 # AE-P0.2's generated schema bundle and its C++/Rust/TS emissions. Six test files validated them,
 # all six passed, and until this entry existed nothing executed any of them: `ae_p0_2` appeared
 # nowhere in this file, and the Rust one had no Cargo.toml above it, so `cargo test` could not have

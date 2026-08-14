@@ -1484,7 +1484,10 @@ impl EngineHandle {
         let write = unsafe { (*ring.header).write_index.load(Ordering::Acquire) };
         let mut n = 0;
         while read != write && n < max {
-            out.push(unsafe { *ring.entries.add(read as usize) });
+            // Masked here for the same reason as write_entry: the FIRST `read` is the raw shared
+            // value, and only the increment below was masked — so every iteration after the first
+            // was in range and the first was not.
+            out.push(unsafe { *ring.entries.add((read & ring.mask) as usize) });
             read = (read + 1) & ring.mask;
             n += 1;
         }
@@ -1960,7 +1963,21 @@ impl EngineHandle {
         };
         let _ = next;
         unsafe {
-            let slot = ring.entries.add(write as usize);
+            // MASK AT THE POINT OF USE. `write` is the value this producer reserved, and it came
+            // out of SHARED MEMORY — either the initial load or the `actual` returned by a failed
+            // CAS. The loop masks `next`, the value stored BACK, and then this line indexed with
+            // the unmasked `write`, so the mask never reached the arithmetic that dereferences.
+            //
+            // In a correct system that is harmless: both implementations only ever store a masked
+            // value, so the index is in range by INVARIANT. But the invariant is a property of a
+            // word another process writes, which is exactly the trust this file is being taught not
+            // to extend. Out of range it is a 64-byte volatile write at an arbitrary distance from
+            // the mapping — the harm AE-P1.3's descriptor validation is named for and could not
+            // prevent, because validating the descriptor says nothing about the indices.
+            //
+            // `peek_ui_diffs` in this file already masks at the point of use; this makes the three
+            // ring accessors agree.
+            let slot = ring.entries.add((write & ring.mask) as usize);
             std::ptr::write_volatile(slot, entry);
             // Release: everything written above is visible to the engine before it can
             // observe ready == 1.
