@@ -3555,3 +3555,41 @@ The lesson is the one already recorded and now paid for twice: a targeted `-R` f
 verification that answers only the question you already thought to ask. The full suite times out on
 this machine at the known engine stall, so the practical form is a broad `-E` exclusion rather than
 `-R` selection — that is what surfaced all three.
+
+## `rust_tests_check`'s three failures are live symptoms of what CMD00 fixes (2026-08-14)
+
+Investigated the third broad-suite failure. Three `daw-agent` tests fail, all on the sampler load
+path:
+
+    a_sample_that_does_not_exist_is_an_error_not_a_silent_ok
+    a_drum_slot_is_pinned_to_its_key_and_the_answer_says_so
+    load_sample_gives_the_sampler_a_sound_across_the_keyboard
+
+The first one's assertion is the whole story: *"loading a file that does not exist reported SUCCESS.
+The slot is minted either way, so this is indistinguishable from a working load until the track
+plays nothing."*
+
+**Not mine — established, not assumed.** `ui/daw-agent/src/tools.rs`,
+`apps/engine_sampler_commands.cpp` and `apps/sampler_engine.h` are untouched by this session, and
+the test file last changed two merges ago.
+
+**But they are not merely stale tests. They are the correlation defect, live.** `load_sample`
+(`tools.rs:1774`) sends the command and then calls `refused_or(track, journal_at, ["sampler_load"],
+…)` — it DOES look for a refusal. And the engine DOES emit one: `reportSamplerReject(SamplerLoad,
+LoadFailed, …)` at `apps/daw_engine_main.cpp:1481`. So a refusal is produced and the caller is
+looking for it, and the caller still reports success.
+
+That is precisely the problem `P2-CMD-00` exists to solve: without an id, a refusal is matched to a
+command by scope and timing, and the match fails. It is also the same emit site the carrier review
+identified as reachable from `loadStartupProject` with NO causing command — the site that killed the
+ring-index proposal.
+
+**What I established and what I did not.** Established: the tests fail at HEAD, the code they cover
+is untouched by this session, the caller looks for a refusal, and the engine emits one. NOT
+established: whether the refusal is emitted-but-unmatched or not emitted for this particular input.
+Distinguishing those needs a run with the journal in hand, which I have not done.
+
+**Consequence for prioritisation.** Owner decision 5 is not an abstract doctrine question. It gates
+CMD00 step 2, which is the fix for a user-visible defect — a sample that does not load reporting
+success — and for three tests failing in a registered ctest right now. That raises its value
+considerably over how it was presented when it was only about a version number.
