@@ -3633,3 +3633,42 @@ was not an hour ago.
 The lesson for me: I wrote "they are the correlation defect, live" from a plausible reading, flagged
 the gap honestly, and the gap turned out to contain the actual mechanism. Flagging an assumption is
 not the same as testing it, and the flag made me comfortable enough to stop.
+
+## `repository_integrity`: 37 violations to 1, and the last is a governance finding (`ea112f3f`)
+
+None of the 37 were mine. All followed from markdown having no classification.
+
+**The rule this checker encodes is worth stating:** a markdown file earns LIVE provenance by being
+CONSUMED BY A REGISTERED CHECK. Nothing consumed `docs/architecture/**` — the task packets, which
+are the documents designs are read FROM. The CMD00 design lives there, and its citations were
+checked by nothing while I spent hours reasoning from it. `doc_citation`'s scope now covers `docs/**`
+with per-file baselines measured by that rule's own regex, and the class rule follows.
+
+**That deleted a provenance my own earlier change had falsified.** `root-design-prose` read "root
+Markdown … not consumed by a registered check". Widening `doc_citation` to root documents an hour
+before made that sentence false the moment it landed, and I did not notice until the integrity
+checker made me read it. **A provenance is a claim about the world, so extending a check's reach is
+also an edit to whatever explained why something sat outside it.**
+
+**A finding surfaced by classification, not by a checker rule.** The generated AE-P0.2 contracts are
+consumed only by tests under `tools/architecture/ae_p0_2/tests/` that are **not registered in
+ctest** — `ae_p0_2` appears nowhere in `CMakeLists.txt`. The ledger records `AE-P0.2 implementation`
+as COMPLETE with a final corrective candidate independently approved, and its test suite does not
+run. They are classified EXCLUDED with that reason written into the provenance rather than hidden by
+a bare extension rule. `check_registry_check.sh` never noticed because its glob is `tools/*_check.sh`
+— the same population gap I widened for `tools/tsan` earlier today, in a second place.
+
+**And classifying the packets live surfaced a defect no rule could previously see:** an absolute
+`/Users/jak/...` path in `AE-P0.2-lane0.md`, which `user-specific-absolute-path` refuses in live
+content. Removed, fact kept.
+
+### The remaining violation is deliberately not fixed
+
+`packet-not-ancestor`: the AE-P0.1 task packet `258f4235` that the work was ACKNOWLEDGED AGAINST is
+not an ancestor of `main`. It exists only on `ae/p0-followup` and `ae/p0-roots-current`. It was not
+an ancestor at this session's start, so it is pre-existing.
+
+Editing the pinned SHA to make the check green would falsify the acknowledgement, which is the one
+thing that pin exists to prevent. The honest options are to merge the packet's commit into the
+history it governs, or to record that the acknowledgement refers to a commit outside it — both are
+owner-facing, and neither is a checker edit.
