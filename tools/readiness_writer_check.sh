@@ -427,6 +427,76 @@ for f in files:
                 'a reference or pointer to one of these atomics can be written under another name,',
                 'which every rule above would miss. Write through the field, or extend this scan.')
 
+# ---- rule 6: WHO MAY SEND TO A HOST ---------------------------------------------------------
+# The rules above govern who WRITES readiness. This one governs who acts on it, and it is here
+# rather than in a file of its own because the span/attribution machinery is here: a second copy
+# of `top_level_spans` and `enclosing` would be a second implementation of the same arithmetic,
+# differing eventually.
+#
+# WHY IT EXISTS. AE-P1.2 item 16 asked for a ratchet on the hostReady guard in
+# applyHostBypassStates — a site that HAS one. Enumerating by the construct instead of the name
+# found the opposite: of eleven `controller.send*` sites, two were unguarded, and both were
+# sendPluginState. Clearing readiness does NOT close the socket (evictHostForWatchdog and
+# scheduleHostRestart leave the controller connected), so those pushes SUCCEEDED and the bytes
+# died with the relaunched host, logged ok=true. Nothing ever re-sends plugin state.
+#
+# THE EXEMPTION IS NAMED, NOT AN OMISSION. A site absent from a list reads identically whether it
+# was considered and excused or never noticed, and this project has paid for that difference more
+# than once. sendShutdown is the one send that must run regardless of readiness.
+#
+# WHAT THIS RULE DOES NOT PROVE, stated so it is not read as more than it is: it requires a
+# `hostReady.load` in the same function ABOVE the send. It does not prove the guard DOMINATES the
+# send on every path — a load inside an unrelated branch would satisfy it. It is a deletion
+# ratchet, not a dataflow proof, and it is strictly stronger than the per-file search that scored
+# engine_device_commands.cpp as covered when its one load guarded a different send.
+SEND = re.compile(r'\bcontroller\.send([A-Za-z]\w*)\s*\(')
+SEND_EXEMPT = {
+    ('apps/engine_shutdown.cpp', 'sendShutdown'):
+        'every contending thread is joined first and disconnect() SIGKILLs the host anyway; '
+        'asking a host that is still there to exit is the point',
+}
+EXPECTED_SENDS = 11
+
+sends = []
+for f in files:
+    lines = src[f]
+    spans = top_level_spans(lines)
+    lams = named_lambda_spans(lines)
+    for i, l in enumerate(lines, 1):
+        if l.strip().startswith('//'):
+            continue
+        m = SEND.search(l)
+        if not m:
+            continue
+        verb = 'send' + m.group(1)
+        owner = enclosing(spans, i, lams)
+        # The guard must be inside the SAME function, above the send. Find that function's extent
+        # by taking the narrowest span containing the line, lambdas included.
+        extent = None
+        for a, b, _n in list(spans) + list(lams):
+            if a <= i <= b and (extent is None or (b - a) < (extent[1] - extent[0])):
+                extent = (a, b)
+        lo = extent[0] if extent else 1
+        guarded = any('hostReady.load' in lines[k - 1] for k in range(lo, i))
+        sends.append((f, i, verb, owner, guarded))
+
+for f, i, verb, owner, guarded in sends:
+    if guarded:
+        continue
+    why = SEND_EXEMPT.get((f, verb))
+    if why:
+        continue
+    bad(f'UNGUARDED SEND TO A HOST: {f}:{i} {verb} in {owner}',
+        'no hostReady.load precedes it in this function. Clearing readiness does not close the',
+        'socket, so this send can SUCCEED into a host that is about to be relaunched and killed,',
+        'and report true for work no plugin will ever do. Guard it, or add it to SEND_EXEMPT with',
+        'the reason it must run regardless — an unlisted site reads the same as an unnoticed one.')
+
+if len(sends) != EXPECTED_SENDS:
+    bad(f'{len(sends)} host-send site(s), expected exactly {EXPECTED_SENDS}',
+        'a pinned count, not a floor: a floor survives the addition it exists to catch. If a send',
+        'was added, guard it and raise this number deliberately; if one went, lower it.')
+
 for msg, detail in fail:
     print(f'  FAIL  {msg}')
     for d in detail:
@@ -437,5 +507,7 @@ if fail:
 print(f'  PASS  {len(writes)} readiness writes, all {len(ALLOW)} transitions accounted for; '
       f'{len(gens)} generation bumps beside a launch; 1 writer-up on active; '
       'scheduleHostRestart publishes before every early return; no aliases')
+print(f'  PASS  {len(sends)} sends to a host, {sum(1 for s in sends if s[4])} guarded by a '
+      f'hostReady.load in the same function, {len(SEND_EXEMPT)} exempt by name')
 print('readiness_writer_check: PASS')
 PYEOF

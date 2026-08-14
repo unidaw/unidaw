@@ -170,7 +170,19 @@ void handleSetDeviceParam(DeviceCommandDeps& deps,
   if (runtime && found) {
     const float normalized =
         std::clamp(static_cast<float>(sp.valueMilli) / 1000.0f, 0.0f, 1.0f);
-    {
+    // ASK WHETHER THE HOST IS THERE, as sendOpenEditor does twelve lines above and as every other
+    // send to a host now does. This one did not, and the file's single `hostReady.load` covers the
+    // editor path only — which is why a per-FILE search for the guard scores this file as covered
+    // and is wrong.
+    //
+    // The consequence here is narrower than for plugin state, and that is why the mirror write
+    // below stays OUTSIDE the guard: the value is recorded either way and engine_restart_worker
+    // re-applies it on relaunch, so nothing is lost. What the guard removes is a wrong-plugin
+    // window — during a chain rebuild `config.pluginPaths` is already the NEW chain while the host
+    // still holds the old one, so `pluginIndex` can address a different plugin than the caller
+    // meant. The host bounds-checks and logs a drop, but "refused for the right reason" is better
+    // than "refused downstream for a reason the sender cannot see".
+    if (runtime->hostReady.load(std::memory_order_acquire)) {
       std::lock_guard<std::mutex> lock(runtime->controllerMutex);
       forwarded = runtime->controller.sendSetParam(pluginIndex, sp.uid16, normalized);
     }
