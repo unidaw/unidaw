@@ -5799,10 +5799,18 @@ reported as a sweep is exactly the over-claim this sprint keeps catching.
 
 ### Housekeeping noticed, not acted on
 
-Three `daw_engine` processes are alive with `--run-seconds 30` and elapsed times of ~4h50m — hung
-well past their own budget, matching the known run-seconds stall. They predate this cycle. Left
-running rather than killed unprompted; worth clearing, and killed BY PID, never `pkill -f
-daw_engine`.
+Three `daw_engine` processes were alive with `--run-seconds 30` and elapsed times of ~4h50m — hung
+well past their own budget, matching the known run-seconds stall. They predated this cycle.
+
+**Killed on Jaakko's instruction, BY PID** (`kill 30226 44402 77908`), never `pkill -f daw_engine`,
+which would take out any other instance on the machine. All three exited on SIGTERM; no SIGKILL
+needed. `daw_engine` and `juce_host_process` counts are both 0 afterwards, so the hosts went with
+their engines rather than being orphaned — which is the failure mode worth checking for, since an
+orphaned host holds a socket and a shared segment.
+
+One gotcha worth recording: `ps -o pid,etime,args $(pgrep -f X)` with an EMPTY `pgrep` result lists
+**every process on the machine** rather than none, so it reads as "lots still running". The counts
+are the answer; the listing is not.
 
 ### Open for the next session
 
