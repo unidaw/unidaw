@@ -107,6 +107,7 @@ watcher:  none (required for Codex)
 | `AE-P1.3` | `GATE MET` | the `AE-P1.2` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent x2 | none | both attach paths ordered; 19 region accessors + ring cursors bounded; contract property test; non-overlap is the residue |
 | `AE-P1.4` | `GATE MET` | the `AE-P0` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent | none | 5 plain writes fixed; watchdog use-after-free fixed; TSan evidence DELIVERED — `tsan_command_hammer.sh` 108 commands landed / 0 races, and `tsan_render.sh` 1 race -> 0 after the RenderPool fix |
 | `RenderPool race` | `FIXED, REVIEWED` | found by `AE-P1.4`'s instrument | `lead` | independent subagent | none | straggler read `m_fn`/`m_count` unlocked across a batch handover: null deref, out-of-range item, and an `m_remaining` underflow that HANGS the producer; generation packed into the claim counter; review returned SAFE-TO-MERGE with 3 defects (store order, a 2^32 count re-opening the hang, a wrong wrap figure) — all fixed at `a4345f33` |
+| `Success signal uncorrelated` | `OWNER CALL (9)` | found hardening the item 29 check | `lead` | none | none | `await_clip_outcome` infers Applied from a bare version counter; MEASURED to mask a real refusal 3 of 6 runs under load, because `load maximal` bumps the version 1->2 across half a second |
 | `AE-P1.5` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P1.6` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P2.*` | `BLOCKED` | Phase 1 gates | unassigned | unassigned | none | none |
@@ -5352,3 +5353,47 @@ the validator — which is the failure mode every hand-maintained list in this r
 
 Not implemented in this cycle: a full sweep was running, and building against a live ctest run is a
 way to corrupt both. Designed and recorded rather than half-built.
+
+## Decision 9 — the refusal is correlated; the SUCCESS is not, and it can mask the refusal
+
+Hardening `refusal_correlation_check.sh` surfaced a product weakness, not just a flaky test.
+
+`await_clip_outcome` has two signals. The negative one is now correlated: a refusal is matched by the
+command id its sender minted (P2-CMD-00). **The positive one is not.** It is:
+
+```rust
+if handle.clip_version_for_track(track) != version_before {
+    return ClipOutcome::Applied;
+}
+```
+
+A version counter moving proves SOMETHING changed the thing it counts — never that YOUR command did.
+That is the exact sentence `tools/counter_only_outcome_check.sh` was written to enforce, and this
+site is one of its three pinned members. What this cycle added is a MEASURED demonstration that the
+failure is reachable rather than theoretical:
+
+> `load maximal` moves track 0's clip version 1 → 2 over about half a second. A write issued in that
+> window sees the load's bump, returns `Applied`, and **never sees the refusal that was coming.**
+> Three of six runs under concurrent load, reproducibly.
+
+The consequence is the one the sprint exists to eliminate: **a caller is told its edit landed when
+the engine threw it away.** It bites hardest for exactly the caller who cares — one that pins
+`--base`, i.e. a deliberate concurrent author, for whom the refusal is the answer they asked for.
+
+My check now sidesteps it by waiting for quiescence. **A real caller cannot** — the sidecar and an
+agent writing to the same track have no quiet moment to wait for.
+
+**The decision.**
+
+| | Option | Cost |
+|---|---|---|
+| **A** *(recommended)* | correlate the success signal too — the engine already holds the ambient command id at dispatch; publish it alongside the clip snapshot so the CLI can match positively instead of inferring from a counter | a wire change, so a `kShmVersion` bump under decision 5's doctrine |
+| B | mitigation only: on seeing the version move, drain the diff ring once more before concluding `Applied` | no wire change; narrows the window, does not close it — the refusal may simply not be published yet |
+
+A is the real fix and finishes what P2-CMD-00 started: the id was added to the refusal path because
+the triple could not identify a command, and the success path is deciding on something strictly
+weaker than that triple — a bare counter. B leaves a known-reachable hole in place, which is worth
+saying plainly rather than shipping as "improved".
+
+Not implemented: A is a shared-memory change, and those do not land here without an owner call and an
+exact independent review.
