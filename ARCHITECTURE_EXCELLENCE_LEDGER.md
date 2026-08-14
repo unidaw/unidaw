@@ -3723,3 +3723,66 @@ it into a tree that had moved on; and controls that fired without ratcheting.
 
 The through-line, stated there and worth stating here: all but one needed a reader with no stake in
 the conclusion.
+
+## AE-P0.2's six tests now run, and two red checks were red for stale reasons (`9f199354`)
+
+The finding recorded at `eeca572c` was independently re-derived and it was UNDERSTATED. Not a
+suite that lacked a ctest entry: **six test files that had never executed in any harness**.
+`ae_p0_2` appeared nowhere in `CMakeLists.txt`, and `contracts_rust_test.rs` has no `Cargo.toml`
+anywhere above it, so `cargo test` could not have found it either. The verification was told
+explicitly not to decide registration by filename-substring grep — the `readback_check.sh` incident
+is why — and used `ctest -N` by exact name instead.
+
+**All six pass.** That is the uncomfortable part. This was never a broken suite someone would trip
+over; it was a WORKING suite nobody ran, which is strictly harder to notice and is the same shape as
+the Rust test binaries that had stopped compiling while `cargo build` stayed green.
+
+`tools/ae_p0_2_contracts_check.sh` runs them and is deliberately a `*_check.sh` under `tools/`, so
+`check_registry_check` covers the thing that covers them. Its glob is `tools/*_check.sh` and could
+not see this population at all — the ledger already recorded that same gap for `tools/tsan`, so this
+is its second instance.
+
+### The rule that earns its lines, and the mutation that corrected me
+
+`contracts_cpp_test.cpp` and `contracts_rust_test.rs` are NOT standalone binaries and have no
+registration of their own. Their only path to execution is `cross-language.test.mjs` compiling them
+with clang++/rustc and feeding them 23 golden-vector arguments. Two mutations, and **they do not
+behave the same**:
+
+    swap `clang++` for a no-op    2 pass / 1 FAIL   the suite catches this itself
+    DELETE the whole C++ test     2 pass / 0 fail   FULLY GREEN, C++ coverage gone
+
+So the hazard is not a broken invocation, which is loud, but a tidy deletion, which is silent — and
+a tidy deletion is the edit a person actually makes. **My first draft of that comment asserted the
+swap stayed green; the control refuted it.** Both numbers are now written into the check rather than
+the conclusion I expected. Separately confirmed the tests are not vacuous: altering a constant in
+`generated/contracts.hpp` takes the suite to 2 pass / 1 fail, naming the C++ assertion.
+
+### Two pre-existing red checks, both red for a reason that had expired
+
+Verified as pre-existing by stashing the change and re-running — neither was mine.
+
+- **`root_isolation`** asserted that root design prose was EXEMPT from absolute-path scanning. That
+  exclusion died when `doc_citation` widened to root documents, and the control was left asserting
+  the SUPERSEDED behaviour. It has been failing ever since. Inverted to assert the rule as it now
+  stands.
+- **The excluded-provenance fixture** asserted zero violations over a `.wav` whose bytes contained
+  no path — so it could not distinguish "wav correctly excluded" from "wav scanned and empty". The
+  path is inside the bytes now. Stated honestly in place: the obvious mutation does NOT isolate that
+  assertion, because a stricter sibling two lines above fires first, so it is meaningful but not
+  independently demonstrated.
+
+**And registering the tests falsified the provenance that excluded their artifacts** — "generated
+wire contracts whose only consumers are AE-P0.2 tests that are NOT registered in ctest". True until
+the entry landed. The exclusion is gone and `.hpp`/`.ts` are live classes. That is the SECOND time in
+this programme, after `root-design-prose`: extending a check's reach is also an edit to every
+sentence explaining why something sat outside it. It should now be expected rather than rediscovered.
+
+### A methodology note that cost a result
+
+A targeted `ctest -R` batch was run inside a still-running `ctest -E` sweep in the SAME build
+directory. They share `Testing/Temporary`, and `ctest --rerun-failed` then reported test NUMBERS
+from the other run's record — #61 is `persisted_field_reach` in the full list and was
+`rust_tests_check` in the filtered one. The failure list was therefore fiction and had to be
+discarded and re-run cleanly. Test numbering is not stable across filtered invocations, so a
+`--rerun-failed` list is only meaningful for the exact invocation that produced it.
