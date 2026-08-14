@@ -5397,3 +5397,21 @@ saying plainly rather than shipping as "improved".
 
 Not implemented: A is a shared-memory change, and those do not land here without an owner call and an
 exact independent review.
+
+## Sweep after the cycle: 230/231, and the one failure is decision 8
+
+Unfiltered, `-j2`, 678 s, two new checks registered (231 up from 229):
+
+| | |
+|---|---|
+| passed | 230 |
+| skipped by design | 1 (`audio_stability`) |
+| **failed** | **1 — `repository_integrity`, decision 8, pre-existing and not fixable from inside the sprint** |
+
+`render_pool_race`, `render_pool` and `refusal_correlation` all pass, the last of which had failed in
+this exact sweep before the quiescence fix.
+
+**Both new checks were re-verified against their negative controls after being hardened**, which is
+the part that matters: `refusal_correlation` was made more patient to stop a false alarm, and a more
+patient check is the classic way to buy stability by going blind. It still fails when the engine's
+echo is zeroed. Making a check pass is not the same as keeping it able to fail.
