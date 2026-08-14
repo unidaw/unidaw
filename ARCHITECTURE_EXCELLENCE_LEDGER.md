@@ -4920,3 +4920,43 @@ puts it in front of the owner rather than in a commit.
 
 Item 27 is therefore **two-thirds closed and blocked on decision 7** for the rest, which is a
 different state from the "BLOCKING, all three fail" it carried.
+
+## AE-P1.2 item 28: the extraction that has to exist before any check (`c78944fb`)
+
+Item 28 is explicit that the check could not come first — *"no check over that extraction can be
+written until the extraction has a predicate, a command and a member list"*. All three now exist,
+and the member list is DERIVED rather than typed in.
+
+**The predicate:** a site comparing a version accessor against a saved "before" binding and turning
+that comparison directly into a SUCCESS verdict.
+
+**Three members.** Item 28 names one — daw-cli's clip outcome. The command finds two more, a daw-cli
+harmony wait and a sidecar harmony write, neither of which the item mentions. Pinned, so a fourth
+earns a look.
+
+**Two candidates are NOT members**, and reading them is what separates them from a pattern that
+over-collects: `await_refusal_or_ack`'s `applied()` closure (the ack is documented as an
+optimisation — a refusal is checked first every pass and the journal re-read after, so the counter
+never decides alone), and `wait_for_harmony_version` (a wait PRIMITIVE returning whether the counter
+moved, not a verdict — calling it a member would make the rule condemn its own vocabulary).
+
+**The narrow predicate missed a member.** Requiring the success return within a few lines finds two
+sites and misses the harmony wait, which assigns `applied = true` and breaks out. So it is written
+wide and filtered by hand: **a population is not what one pattern matches, it is what survives
+reading every candidate.**
+
+### Its own control caught a flaw in it
+
+The exemptions were keyed by SUBSTRING, so renaming `base` to `baseline` left `!= base` still
+matching — **the excused text is a prefix of the changed text**, so the exemption survived the exact
+edit it existed to notice, and the control PASSED when it should have failed. Keyed on the full line
+now; the control then fails properly, reporting both the count and the stale exemption.
+
+That is the same family as the wrapped-construct greps: an approximate match standing in for a
+boundary. It is the first time in this programme a control has caught a defect in the check it was
+written for, which is an argument for writing the failing control before believing the passing one.
+
+**The product half is not closed and this does not claim it.** Replacing the three needs a positive
+"applied" signal carrying the id, and the engine emits none — the identity travels on refusals only.
+That is a wire question adjacent to decision 7; pinning the population is what makes the replacement
+checkable when it lands.
