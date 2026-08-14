@@ -112,12 +112,34 @@ void runRestartWorker(RestartWorkerDeps& deps) {
         runtime->hostGeneration.store(
             daw::nextHostGeneration(runtime->hostGeneration.load(std::memory_order_relaxed)),
             std::memory_order_release);
+        // THE WATCHDOG IS RE-ARMED HERE, inside the launch's own lock, and the placement is the
+        // point rather than the locking.
+        //
+        // The producer reads this pointer under controllerMutex and says why at the read site
+        // (WDOG-04). This assignment used to sit OUTSIDE the lock entirely — a use-after-free,
+        // since assigning a unique_ptr DESTROYS the old Watchdog while the producer may be inside
+        // check() on it, and the worker never blocked because it was not asking for the lock.
+        //
+        // WHY IN *THIS* SCOPE AND NOT ITS OWN. Watchdog holds a RAW `const BlockMailbox*`, and
+        // launch() begins by calling disconnect(), which drops the shared memory view and munmaps
+        // it. So from the moment launch() starts, the still-live OLD watchdog's mailbox_ dangles.
+        // Re-arming in a separate scope below would leave the lock released across that window,
+        // and a producer acquiring it there would call the old watchdog's check() on unmapped
+        // memory. Constructing here means the mutex is never released between the unmap and the
+        // re-arm. mailbox() is valid at this point precisely because launch() has just succeeded.
+        //
+        // The other three write sites avoid this by construction — they reset the watchdog BEFORE
+        // disconnect() under one lock. This worker was the only one that dropped the lock in
+        // between.
+        runtime->watchdog = std::make_unique<daw::Watchdog>(
+            runtime->controller.mailbox(), daw::kHostLateObservationsBeforeEviction,
+            [ptr = runtime]() { evictHostForWatchdog(ptr); });
       }
       std::cout << "Consumer: Restarted track " << runtime->trackId
                 << " successfully." << std::endl;
-      runtime->watchdog = std::make_unique<daw::Watchdog>(
-          runtime->controller.mailbox(), daw::kHostLateObservationsBeforeEviction,
-          [ptr = runtime]() { evictHostForWatchdog(ptr); });
+      // Published AFTER the watchdog above: the unlock happens-before this release store, so a
+      // producer that sees hostReady and then takes controllerMutex necessarily sees the new
+      // watchdog. applyHostBypassStates below takes the same mutex, so nothing may hold it here.
       runtime->hostReady.store(true, std::memory_order_release);
       applyHostBypassStates(*runtime);
       {
@@ -132,8 +154,13 @@ void runRestartWorker(RestartWorkerDeps& deps) {
           retireMirrorCause(*runtime, daw::kMirrorCauseRelaunch);
         }
       }
-      if (runtime->watchdog) {
-        runtime->watchdog->reset();
+      // Same mutex as the assignment above and as the producer's read: reset() mutates the
+      // observation counters the producer is comparing against.
+      {
+        std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+        if (runtime->watchdog) {
+          runtime->watchdog->reset();
+        }
       }
       runtime->needsRestart.store(false, std::memory_order_release);
       runtime->restartInFlight.store(false, std::memory_order_release);
