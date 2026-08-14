@@ -4106,3 +4106,47 @@ That is the next increment.
 Two side observations from the same read, neither actioned: the shutdown loop covers `tracks` only,
 so `masterTrack` is never sent a Shutdown and is killed by `~HostController`; and that loop
 dereferences `runtime` without the `if (runtime)` null test every other all-tracks loop uses.
+
+## AE-P1.2 item 16 CLOSED — the ratchet, with its exemption named (`2b36a140`)
+
+Item 16 asked for a ratchet on the `hostReady` guard in `applyHostBypassStates`. Enumerating by
+CONSTRUCT rather than by the name the item gives turned it around twice: the rule ranges over all
+eleven `controller.send*` sites, not the one cited; two of them were unguarded and are fixed
+(`ec69d074`); and the last gap, `sendSetParam`, now asks too — matching `sendOpenEditor` twelve
+lines above it in the same file.
+
+`sendSetParam`'s consequence was narrower and the fix reflects that: the param mirror is written
+OUTSIDE the guard and replayed by the restart worker, so no value is lost. What the guard removes is
+a wrong-plugin window — during a chain rebuild `config.pluginPaths` is already the NEW chain while
+the host still holds the old one, so `pluginIndex` can address a different plugin than the caller
+meant.
+
+**The rule lives in `readiness_writer_check` rather than a new file**, because the span and
+attribution machinery is there. A second copy of `top_level_spans` and `enclosing` would be a second
+implementation of the same arithmetic, differing eventually. That check already governs who WRITES
+readiness; this governs who acts on it, which is the same subject from the other side.
+
+**The exemption is NAMED.** `sendShutdown` must run regardless — every contending thread is joined
+first and `disconnect()` SIGKILLs the host anyway. A site absent from a list reads identically
+whether it was considered and excused or never noticed, and this programme has paid for that
+difference more than once.
+
+**What it does not prove, written into the check itself:** it requires a `hostReady.load` in the
+same function above the send. It does NOT prove the guard dominates the send on every path — a load
+in an unrelated branch would satisfy it. It is a deletion ratchet, not a dataflow proof. It is still
+strictly stronger than the per-file search that scored `engine_device_commands.cpp` as covered while
+its single load guarded a different send.
+
+### Three controls, each firing for its own reason
+
+    remove the guard on the undo push    names that file, line and function
+    remove the shutdown exemption        flags sendShutdown — so the exemption is LOAD-BEARING,
+                                         not decorative, which is the thing an exemption list
+                                         most often fails to be
+    add a twelfth send                   flags it AND refuses the pinned count, so the population
+                                         cannot decay by addition
+
+The check now reports what it verified rather than only that it passed: *"11 sends to a host, 10
+guarded by a `hostReady.load` in the same function, 1 exempt by name"*.
+
+Build clean; ctest readiness/device_chain/param/undo/plugin_state 18/18.
