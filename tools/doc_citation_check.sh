@@ -24,7 +24,16 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 python3 - "$ROOT" <<'PY'
 import os, re, sys, pathlib
 root = pathlib.Path(sys.argv[1])
-docs = sorted(list((root / 'docs').glob('*.md')) + [root / 'README.md'])
+# ROOT DOCUMENTS ARE IN SCOPE TOO. This read `docs/*.md` plus README only, so ARCHITECTURE_
+# REVIEW.md, AGENTS.md, SHM_LAYOUT.md and every other root-level document were invisible to
+# it — and that is where the rot was found: the review document still described a header and two
+# checks that v29 deleted, as present and covering things, while this check passed. (Their names
+# are deliberately NOT repeated here: rule 3 below forbids a comment naming a path that does not
+# exist, and it caught this very paragraph doing exactly that on the first run after the scope
+# widened. The check working on its own author is the best evidence it works.)
+# A citation checker that does not read the repository's largest design document is not checking
+# citations, it is checking a directory.
+docs = sorted(set(list((root / 'docs').glob('*.md')) + list(root.glob('*.md'))))
 ok = True
 
 # ---- rule 1: the line-number citation count can SHRINK and cannot GROW.
@@ -36,7 +45,10 @@ ok = True
 #
 # The fifteen citations into daw_engine_main.cpp are already gone — that file lost a third of its
 # lines tonight and every one of them had come to point somewhere else.
-BASELINE = {'SAMPLER_DESIGN.md': 21, 'TRACKER_GAP_LIST.md': 20, 'per-note-ops.md': 1}
+BASELINE = {'SAMPLER_DESIGN.md': 21, 'TRACKER_GAP_LIST.md': 20, 'per-note-ops.md': 1,
+            # Measured 2026-08-14 when root documents came into scope, with this rule's own
+            # regex rather than an approximation of it. They ratchet down like the others.
+            'ARCHITECTURE_REVIEW.md': 19, 'MASTER_TRACK_DESIGN.md': 1}
 line_cite = re.compile(r'\b[\w/]+\.(?:cpp|h|rs|mjs):\d+')
 for d in docs:
     if not d.exists():
