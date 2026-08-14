@@ -1131,7 +1131,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const UiWaveformRequestPayload as *const u8,
             std::mem::size_of::<UiWaveformRequestPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Reads one waveform answer slot under its per-slot seqlock (seq odd while the
@@ -1239,7 +1239,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const UiAutomationLaneRequestPayload as *const u8,
             std::mem::size_of::<UiAutomationLaneRequestPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Reads one automation answer slot under its per-slot seqlock (seq ODD while the engine is
@@ -1341,7 +1341,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiSamplerEnvelopeRequestPayload as *const u8,
             std::mem::size_of::<crate::layout::UiSamplerEnvelopeRequestPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Per-track display names for the current track count (nul-trimmed).
@@ -1382,7 +1382,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const UiPatcherNodeConfigPayload as *const u8,
             std::mem::size_of::<UiPatcherNodeConfigPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Add, remove or connect patcher nodes. Same story as the config above:
@@ -1394,7 +1394,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const UiPatcherGraphCommandPayload as *const u8,
             std::mem::size_of::<UiPatcherGraphCommandPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// v23: the first instrument's name per track (empty when the track has none).
@@ -1520,7 +1520,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const UiChordCommandPayload as *const u8,
             std::mem::size_of::<UiChordCommandPayload>(),
-        )
+        ).map(|_| ())
     }
 
     pub fn send_clip_window_request(
@@ -1530,7 +1530,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const UiClipWindowCommandPayload as *const u8,
             std::mem::size_of::<UiClipWindowCommandPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Drain the engine's outbound diff ring into `out`, up to `max` entries.
@@ -1565,11 +1565,24 @@ impl EngineHandle {
     /// Writes one command into the UI ring. Returns false when the ring is
     /// full, which means the engine is not draining and the caller should
     /// retry rather than treat the command as sent.
-    pub fn send_command(&self, payload: UiCommandPayload) -> Result<(), String> {
+    /// Sends a command and returns the ID IT MINTED, so the caller can recognise its own refusal.
+    ///
+    /// P2-CMD-00. Added BESIDE `send_command` rather than by changing it: the id-less form has 57
+    /// call sites and 33 of them return the result directly, so widening the type turned a
+    /// two-line improvement into a 33-file edit for callers that never look at the value. A
+    /// correlating caller opts in; everyone else is untouched.
+    pub fn send_command_correlated(&self, payload: UiCommandPayload) -> Result<u64, String> {
         self.write_entry(
             &payload as *const UiCommandPayload as *const u8,
             std::mem::size_of::<UiCommandPayload>(),
         )
+    }
+
+    pub fn send_command(&self, payload: UiCommandPayload) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const UiCommandPayload as *const u8,
+            std::mem::size_of::<UiCommandPayload>(),
+        ).map(|_| ())
     }
 
     /// Send a device-chain edit (AddDevice/RemoveDevice/MoveDevice/UpdateDevice). Same
@@ -1587,7 +1600,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiChainCommandPayload as *const u8,
             std::mem::size_of::<crate::layout::UiChainCommandPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Load a sample into a sampler device, minting a source and a slot.
@@ -1598,7 +1611,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiSamplerLoadPayload as *const u8,
             std::mem::size_of::<crate::layout::UiSamplerLoadPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Edit one field of one sampler slot.
@@ -1609,7 +1622,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiSamplerSetSlotPayload as *const u8,
             std::mem::size_of::<crate::layout::UiSamplerSetSlotPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Write a note's row ops. The MASK in the payload says which of them this command is
@@ -1621,7 +1634,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiSetRowOpsPayload as *const u8,
             std::mem::size_of::<crate::layout::UiSetRowOpsPayload>(),
-        )
+        ).map(|_| ())
     }
 
     pub fn send_sampler_set_device(
@@ -1631,7 +1644,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiSamplerSetDevicePayload as *const u8,
             std::mem::size_of::<crate::layout::UiSamplerSetDevicePayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Ask the engine to publish one sampler device's kit, then read the answer.
@@ -1642,7 +1655,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiSamplerKitRequestPayload as *const u8,
             std::mem::size_of::<crate::layout::UiSamplerKitRequestPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Reads one answered kit slot under its seqlock. `None` while the engine is mid-write or
@@ -1710,7 +1723,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiSamplerSlicePayload as *const u8,
             std::mem::size_of::<crate::layout::UiSamplerSlicePayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Add, move or remove one slice marker.
@@ -1721,7 +1734,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiSamplerMarkerPayload as *const u8,
             std::mem::size_of::<crate::layout::UiSamplerMarkerPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Send an arbitrarily long payload as BulkChunk (83) entries for the engine to reassemble.
@@ -1783,7 +1796,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiSamplerLfoPayload as *const u8,
             std::mem::size_of::<crate::layout::UiSamplerLfoPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Set a sampler mod set's filter (SamplerSetFilter).
@@ -1798,7 +1811,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiSamplerFilterPayload as *const u8,
             std::mem::size_of::<crate::layout::UiSamplerFilterPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Set a sampler mod set's VINTAGE: bit depth and rate reduction (SamplerSetVintage).
@@ -1809,7 +1822,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiSamplerVintagePayload as *const u8,
             std::mem::size_of::<crate::layout::UiSamplerVintagePayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Set a CLIP's own subdivision and meter (SetClipGrid, 94).
@@ -1820,7 +1833,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiSetClipGridPayload as *const u8,
             std::mem::size_of::<crate::layout::UiSetClipGridPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Set one field of an audio clip: in-point, gain, or either fade (SetAudioClipField).
@@ -1831,7 +1844,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiAudioClipFieldPayload as *const u8,
             std::mem::size_of::<crate::layout::UiAudioClipFieldPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Set a sampler modulator's ADSR (SamplerSetEnvelope).
@@ -1842,7 +1855,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiSamplerEnvelopePayload as *const u8,
             std::mem::size_of::<crate::layout::UiSamplerEnvelopePayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Write a note's row ops (SetRowOps). The write half of what the engine already publishes.
@@ -1853,7 +1866,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiSetRowOpsPayload as *const u8,
             std::mem::size_of::<crate::layout::UiSetRowOpsPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Write the pattern that reproduces a chop.
@@ -1864,7 +1877,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiSamplerEmitRowsPayload as *const u8,
             std::mem::size_of::<crate::layout::UiSamplerEmitRowsPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Send a track-routing replace (SetTrackRouting). Its own 40-byte payload,
@@ -1880,7 +1893,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiTrackRoutingPayload as *const u8,
             std::mem::size_of::<crate::layout::UiTrackRoutingPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Add or remove a modulation link.
@@ -1891,7 +1904,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiModLinkCommandPayload as *const u8,
             std::mem::size_of::<crate::layout::UiModLinkCommandPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Name the VST parameter a link targets.
@@ -1902,7 +1915,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiModLinkUid16Payload as *const u8,
             std::mem::size_of::<crate::layout::UiModLinkUid16Payload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Drive a modulation source value (turn a macro knob).
@@ -1913,7 +1926,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiModSourceValuePayload as *const u8,
             std::mem::size_of::<crate::layout::UiModSourceValuePayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Add/remove a patcher node, or connect two.
@@ -1924,7 +1937,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiPatcherGraphCommandPayload as *const u8,
             std::mem::size_of::<crate::layout::UiPatcherGraphCommandPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Configure a patcher node.
@@ -1935,7 +1948,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiPatcherNodeConfigPayload as *const u8,
             std::mem::size_of::<crate::layout::UiPatcherNodeConfigPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Write one automation point.
@@ -1946,7 +1959,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiAutomationPointPayload as *const u8,
             std::mem::size_of::<crate::layout::UiAutomationPointPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// v29: send a MARKER command (add / remove / rename / move). Total — a marker names a
@@ -1958,7 +1971,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiMarkerCommandPayload as *const u8,
             std::mem::size_of::<crate::layout::UiMarkerCommandPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// v29: send a TIMELINE command — SetTimeSignature, or InsertRemoveTime (the ripple).
@@ -1969,7 +1982,7 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiArrangeTimeCommandPayload as *const u8,
             std::mem::size_of::<crate::layout::UiArrangeTimeCommandPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// Send a rack knob write. Same ring as send_command; a distinct payload shape
@@ -1978,24 +1991,33 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiSetParamPayload as *const u8,
             std::mem::size_of::<crate::layout::UiSetParamPayload>(),
-        )
+        ).map(|_| ())
     }
 
     /// The engine dispatches on the entry's payload size, so every command
     /// shape shares one ring-write path.
-    fn write_entry(&self, payload: *const u8, size: usize) -> Result<(), String> {
+    /// Writes one command into the UI ring and returns the ID IT MINTED for it.
+    ///
+    /// P2-CMD-00. The id was previously minted and discarded, which made it useless to the one
+    /// party that needs it: a sender cannot recognise its own refusal without knowing what it
+    /// stamped. Returning it is what turns "every refusal carries an identity" into "a caller can
+    /// tell whether this refusal is ITS OWN" — the difference AE-P1.2 item 27 is about.
+    fn write_entry(&self, payload: *const u8, size: usize) -> Result<u64, String> {
         let Some(ring) = self.ring_ui.as_ref() else {
             return Err("handle was not opened for writing".to_string());
         };
         if size > 40 {
             return Err(format!("payload of {size} bytes does not fit an EventEntry"));
         }
+        // Minted before the entry so the same value can be written AND returned; minting twice
+        // would give the caller an id the engine never saw.
+        let id = command_id_next();
         let mut entry = EventEntry {
             // P2-CMD-00: the command's identity rides here. sampleTime is unused on a UI
             // command entry — it names an audio position and a command has none — so these eight
             // bytes were free and are exactly the id's width. Giving them a meaning is why
             // kShmVersion moves to 39; see the rule at that constant.
-            sample_time: command_id_next(),
+            sample_time: id,
             block_id: 0,
             event_type: EventType::UiCommand as u16,
             size: size as u16,
@@ -2022,7 +2044,7 @@ impl EngineHandle {
                     next,
                     Ordering::AcqRel,
                     Ordering::Relaxed,
-                )
+                ).map(|_| ())
             } {
                 Ok(_) => break next,
                 Err(actual) => write = actual,
@@ -2051,7 +2073,7 @@ impl EngineHandle {
             let ready = &(*slot).ready as *const u32 as *const AtomicU32;
             (*ready).store(1, Ordering::Release);
         }
-        Ok(())
+        Ok(id)
     }
 }
 
