@@ -5308,3 +5308,47 @@ So a broken correlation does not look like an error. **It looks like success.** 
 confirmed exactly that: with the engine's echo zeroed, the check failed with exit 0 and
 `{ "sent": "note", "base_version": 0 }` printed for an edit the engine had thrown away. Restored, it
 reports the refusal. Both directions observed, not argued.
+
+## AE-P1.3 residue: designed, and the naive version of it would fire on correct code
+
+The residue is a whole-layout validator: every region is individually bounds-checked by
+`region_fits`, but two regions could **overlap** and both pass. Non-overlap holds by construction on
+the producer, so this is about detecting a CORRUPT header — it aliases rather than escapes the
+mapping, which is why it is the lesser hazard and was left last.
+
+**Reading the producer first changed the design.** `apps/engine_ui_shm.cpp:39-41` assigns three
+offsets the SAME value:
+
+```c++
+header.audioInOffset  = offset;
+header.audioOutOffset = offset;
+header.ringStdOffset  = offset;
+```
+
+A pairwise-disjoint check written from the Rust side alone would fail on the shipped, correct layout
+— the exact shape of a check that fires on correct code and gets weakened until it sees nothing.
+
+It is correct because the UI segment carries **no audio planes**: `numChannelsIn`, `numChannelsOut`
+and `numBlocks` are all set to 0 four lines above, so both audio regions have size zero and a
+zero-length region overlaps nothing under a half-open interval. That means a validator computing
+sizes properly needs **no exemption at all** — but only if sizes come from the header's own declared
+fields rather than from the types alone. Getting that wrong produces either a false alarm or, worse,
+an exemption that then hides a genuine aliasing of the audio planes if they are ever populated.
+
+**Size sources, which is the whole of the work:**
+
+| Kind | Size from |
+|---|---|
+| audio in / out | `numChannels{In,Out} * numBlocks * channelStrideBytes` — zero today |
+| rings (6) | the ring's own `capacity` / `entry_size`, already validated by `ring_view` |
+| variable (6) | the header's `ui*Bytes` companions |
+| fixed (10) | `size_of::<T>()` from the Rust mirror |
+
+**The population is three-way and must be derived, not typed.** 24 `*Offset = offset` assignments in
+`engine_ui_shm.cpp`, 24 region offset fields in `layout.rs` (26 matches minus `note_offset` and
+`chord_offset`, which are payload fields and not regions), and 24 entries in the validator's table.
+The check pins their agreement, so a new region cannot be added to the producer and silently escape
+the validator — which is the failure mode every hand-maintained list in this repo has eventually hit.
+
+Not implemented in this cycle: a full sweep was running, and building against a live ctest run is a
+way to corrupt both. Designed and recorded rather than half-built.
