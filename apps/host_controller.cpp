@@ -626,7 +626,32 @@ bool HostController::sendSetBypass(uint32_t pluginIndex, bool bypass) {
   request.pluginIndex = pluginIndex;
   request.bypass = bypass ? 1u : 0u;
   std::lock_guard<std::mutex> lock(socketMutex_);
-  return sendMessage(socketFd_, ControlMessageType::SetBypass, &request, sizeof(request));
+  // BOUNDED, BECAUSE THE CALLER HOLDS A LIFETIME LOCK WHILE THIS RUNS. AE-P1.2 item 15.
+  //
+  // `applyHostBypassStates` takes `runtime.controllerMutex` across the whole send loop, and it
+  // cannot simply narrow that: the mutex guards the controller's LIFETIME against the restart
+  // worker reassigning it, so releasing it between sends would trade a stall for a use-after-free.
+  //
+  // With the blocking sender that hold is bounded by `SO_SNDTIMEO`, which is **60 seconds** — set
+  // that high deliberately, because loading a plugin like Zebra2 takes 10+ seconds. A frozen host
+  // fills its socket buffer within a few blocks of playback (ProcessBlock is streaming at it), and
+  // then this call blocks. Meanwhile `engine_restart_worker.cpp:103` and `:160` need that same
+  // mutex to DROP the dead host — so recovery waits behind sends addressed to the host it is
+  // trying to drop.
+  //
+  // The bounded sender is MSG_DONTWAIT with capped retries, so the ceiling is ~100 ms instead of
+  // 60 s. `ProcessBlock` already uses it for the same reason one layer down.
+  //
+  // NO SEMANTIC CHANGE HERE, and that is why this one is converted and its five siblings are not.
+  // SetBypass is documented FIRE-AND-FORGET in two places (engine_readiness_level.h:53,
+  // engine_readiness_tests_main.cpp:213), and its only caller DISCARDS the result — so a drop was
+  // already silent. Against a frozen host the blocking send fails too, just 60 seconds later.
+  // `sendSetChain`, `sendOpenEditor`, `sendSetParam` and `sendResetPlugins` are the same shape and
+  // also run under that mutex, but every one of them CONSUMES its return value, so bounding them
+  // would turn a slow success into a reported failure. That is a behaviour change and wants its own
+  // decision rather than being folded in here.
+  return sendMessageNonBlocking(socketFd_, ControlMessageType::SetBypass, &request,
+                                sizeof(request));
 }
 
 bool HostController::sendSetParam(uint32_t pluginIndex, const uint8_t* uid16,

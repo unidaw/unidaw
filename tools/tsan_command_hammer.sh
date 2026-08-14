@@ -103,8 +103,8 @@ rounds=0
 while [ "$(date +%s)" -lt "$END" ]; do
   # Each of these writes trackSnapshot on the command thread while the producer loads it.
   cli do add-device --track 0 --kind sampler        # chain edit -> snapshot rebuild
-  cli do set-bypass --track 0 --device 0 --on 1     # chain edit
-  cli do set-bypass --track 0 --device 0 --on 0
+  cli do set-bypass --track 0 --device 0 --bypass 1  # chain edit
+  cli do set-bypass --track 0 --device 0 --bypass 0
   cli do add-track                                  # tombstone reuse on a recycled slot
   cli do remove-track --track 3
   cli do undo                                       # whole-document swap
