@@ -4060,3 +4060,49 @@ The fourth defect is in the PRODUCT. `if (isPlaying)` in `engine_producer_thread
 that is not playing stalls silently**. Forcing play and asserting production narrows that window
 considerably but does not remove it. Making the oracle independent of the logging is the rest of
 the item, and it is the half the item's own title is about.
+
+## Item 16 was the wrong end of its own finding: two host sends never asked if the host was there (`ec69d074`)
+
+Item 16 says *"the swap trap rests on an unratcheted guard"* and points at `applyHostBypassStates`
+— **the site that HAS the guard**. Pinning the shape instead of the name: of eleven
+`controller.send*` sites, nine consult `hostReady` and **two did not**, and both are
+`sendPluginState`. The item named the guarded site; the defect was in its unguarded peers.
+
+**This is not a dropped message.** `hostReady == false` does NOT imply the socket is gone —
+`evictHostForWatchdog` and `scheduleHostRestart` clear readiness while leaving the controller
+connected. So an unguarded push does not fail: it **succeeds, returns true**, and the bytes are
+discarded when the restart worker relaunches that host and SIGKILLs the old one. `ok=true` was
+logged for state no plugin ever applied. And **nothing re-sends plugin state, ever** — a restart
+replays the param mirror and re-applies bypass; the blob is never pushed again. The user-visible
+shape is "a plugin whose host hiccuped comes back at defaults, and Ctrl-Z cannot bring it back".
+
+**The undo site compounded it twice**, both in bookkeeping that ran regardless of the send:
+`lastPushedState` was written BEFORE the send, so a push that never arrived was remembered as
+delivered and the dedup then refused to ever send it again — **not self-healing, self-sealing**; and
+`pluginStateDirty.store(false)` sat outside `if (ok)`, so a failed push marked the track clean and
+the next capture carried the stale blob forward. The comment above that store already read *"A PUSH
+THAT LANDED is not a change the engine has yet to see"*. The code now matches its own comment.
+
+### Two method notes
+
+**My per-file measurement was a proxy and it mis-scored a file.** I counted `hostReady.load`
+occurrences per file and read 0 as unguarded. `engine_device_commands.cpp` has exactly one — and it
+guards `sendOpenEditor` only, leaving `sendSetParam` twelve lines below ungated. A count per file
+cannot see which site a guard covers. The per-site read is what found it.
+
+**Coverage is stated rather than implied.** No test exercises this: it needs a host restart racing
+an undo, and reaching `restorePluginSnapshot` in a unit test needs a fake controller that does not
+exist. The 9 passing undo/plugin-state/project checks passed WITH the defect present — they show no
+regression, not that the fix works.
+
+### What item 16 actually needs
+
+The ratchet, now buildable from a verified per-site classification: every send to a host consults
+readiness, with the exemptions NAMED rather than left as omissions — `sendShutdown` legitimately
+needs none (every contending thread is joined first and `disconnect()` SIGKILLs anyway), and
+`sendSetParam`'s gap is hygiene rather than loss because the param mirror is replayed on restart.
+That is the next increment.
+
+Two side observations from the same read, neither actioned: the shutdown loop covers `tracks` only,
+so `masterTrack` is never sent a Shutdown and is killed by `~HostController`; and that loop
+dereferences `runtime` without the `if (runtime)` null test every other all-tracks loop uses.
