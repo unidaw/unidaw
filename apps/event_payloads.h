@@ -1668,6 +1668,9 @@ enum class UiChordDiffType : uint16_t {
 // which exists for exactly this reason in every host.
 //
 // SO THE UI SAYS SO, on the flags field that already exists — no new opcode, no kShmVersion bump.
+// PREDATES THE 2026-08-14 RULING at kShmVersion: previously-zero bits given a meaning is a
+// repurposing and takes a bump today. The justification below — an old client is unaffected —
+// is true and is not the question a version answers.
 // A client that never sets these behaves exactly as before, which is what makes this safe to land
 // before any UI emits it.
 //
@@ -1780,6 +1783,8 @@ static_assert(sizeof(UiSetParamPayload) == 40,
 //
 // TOOK TWO WORDS THAT WERE ALREADY THERE AND ALREADY ZERO, so an engine that does not know the
 // bit reads fields exactly as it always did: no payload growth, no opcode, no kShmVersion bump.
+// PREDATES THE 2026-08-14 RULING at kShmVersion — "already there and already zero" is exactly
+// the repurposing that rule now covers. Takes a bump today.
 inline constexpr uint16_t kWaveformRequestSamplerSource = 1u << 1;
 
 struct UiWaveformRequestPayload {

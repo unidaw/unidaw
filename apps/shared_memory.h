@@ -138,6 +138,36 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //    tripped through save and reload and no UI could read it — and no command could write it
 //    (task #110). Publishing it is half the fix; SamplerSetSlotName (90) is the other half, and
 //    they land together because a field you can set and not see is not better than neither.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// WHEN THIS NUMBER MOVES. Ruled by the owner 2026-08-14, written here once because the tree held
+// two answers and they met every time a reserved field was used.
+//
+// THE RULE: giving an EXISTING field, slot or bit a NEW MEANING is a wire change and takes a bump,
+// even when nothing observable moves and every shipped reader is unaffected.
+//
+// The objection to that — made repeatedly and in good faith in the comments this rule supersedes —
+// is that an old reader required the field to be zero, ignored it, and therefore cannot be harmed.
+// True, and not the question a version answers. **A version identifies which MEANINGS an image
+// carries.** If two images can share a version while a field means different things in each, then
+// no reader can use the version to decide what it may interpret, which is the only job the number
+// has. Backwards-compatibility of one reader is a separate property from identity of the format.
+//
+// WHAT IS *NOT* A REPURPOSING, so the rule is not over-applied — three of the "no bump" comments
+// in this tree were read as contradicting it and do not:
+//   * a new ENUM VALUE where readers switch and ignore unknowns (UiDiffType::PresetSaved) —
+//     no existing field changed meaning;
+//   * a new COMMAND that writes only fields already published (the clip-ops setter) — likewise;
+//   * a region at a COMPUTED offset with no header field at all (the host key-event ring), which
+//     also belongs to kControlVersion rather than this number.
+// Those are additive in the strict sense: an image before and after means the same thing
+// everywhere it is defined.
+//
+// The three genuine precedents are marked at their sites. They predate this ruling and are not
+// retroactively wrong — the history is what it is — but the same change today takes a bump.
+//
+// A bump is cheap and its cost is bounded: the equality gate forces both sides to rebuild, which
+// is the point. Ambiguity about what a v38 image means is not bounded.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
 constexpr uint16_t kShmVersion = 38;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
@@ -200,6 +230,10 @@ struct alignas(64) ShmHeader {
   // Tempo at the current playhead, in milli-BPM (120000 = 120.000). A u32 so the UI
   // compares an integer instead of rebuilding a string on a float that jitters in
   // its last digit. Repurposed reserved slot — same offset, no kShmVersion bump.
+  // PREDATES THE 2026-08-14 RULING at kShmVersion, and is the clearest of the three cases it
+  // supersedes: a reserved u32 given a meaning. The same change today takes a bump. Left as it
+  // landed rather than rewritten — the history is what it is — but marked so this sentence is
+  // not read as the rule.
   uint32_t uiTempoMilliBpm = 120000;
   uint64_t uiClipOffset = 0;
   uint64_t uiClipBytes = 0;
