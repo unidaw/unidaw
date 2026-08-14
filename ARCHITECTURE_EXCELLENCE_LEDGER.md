@@ -103,7 +103,7 @@ watcher:  none (required for Codex)
 | `AE-P0.2 implementation` | `COMPLETE` | packet `6287ffd` approved + AE-P0.1 integration | codex-worker-2 | claude-worker-2 | `/Users/jak/src/daw-ae-p0-2-lane0` | product main `75c6f06`; final corrective candidate independently approved |
 | `AE-P0.3` | `BLOCKED` | B1-B8 design review of Option B (see 2026-08-13 re-derivation) | `lead` | unassigned | none | last impl `02eb2d65`, review BLOCKED |
 | `AE-P1.1` | `FROZEN` | `AE-P0` | claude-worker-2 | codex-worker-1 | `/Users/jak/src/daw-ae-p1-1-packet` | `ba88bcb4657b62bdfc752d338d877e139e212ca6`; independent PASS; successor-only |
-| `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; 30 open items (11 blocking, item 34 withdrawn); G4 not decidable |
+| `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; 30 open at the frozen SHA, but re-derived against the product: 4 DONE, 5 PARTIAL, 8 open PRODUCT items, 12 PACKET, 1 withdrawn; items 26 and 35 need owner calls, 27+29 gated on decision 5; G4 not decidable |
 | `AE-P1.3` | `BLOCKED` | `AE-P1.2` | unassigned | unassigned | none | none |
 | `AE-P1.4` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P1.5` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
@@ -3926,3 +3926,71 @@ the next reader check the backlog against the tree with grep instead of judgemen
 
 A full re-derivation of all 30 against the product is running; the ticket row will be corrected to
 distinguish "open at the frozen SHA" from "still to do".
+
+## AE-P1.2's 30 "open" items, re-derived against the product
+
+Every one of the 30 was checked against `/Users/jak/src/daw` by symbol rather than by the packet's
+line numbers, which are broadly stale (item 16's cited `daw_engine_main.cpp:1107-1109` is now
+`:1059-1061`). **A line-number miss is not evidence of absence**, and the packet is frozen while the
+file has moved by hundreds of lines.
+
+    DONE in the product        4    19, 24, 30, 32
+    PARTIAL                    5    18, 27, 29, 33, 37
+    NOT DONE, product work     8    7, 14, 15, 16, 26, 28, 35, 36
+    PACKET / process work     12    1, 2, 3, 4, 12, 17, 20, 22, 25, 31, 38, 39
+    WITHDRAWN                  1    34
+
+So **"30 open" overstates the remaining product work by a factor of nearly four.** Four items are
+already done, and twelve are packet authoring rather than engineering. The genuinely actionable
+product list is eight items and four remaining halves.
+
+Item 19 was found DONE with the strongest evidence of the set: `kHostLateObservationsBeforeEviction`
+is 3 in `apps/watchdog.h` under a comment citing "AE-P1.2 G3 ruling R3", the unit is named
+("OBSERVATIONS, NOT MILLISECONDS"), all three production sites use it, and two registered checks pin
+it. Items 24, 30 and 32 each cite their item number in a code comment — which is the only reason
+this re-derivation was cheap, and an argument for keeping that habit deliberately.
+
+### Two items must NOT be implemented as ruled
+
+- **Item 35** — R14 rules "parity: declare `ready` on the Rust side". **The product explicitly
+  refuses that ruling, with reasons**, in `patcher_rust/src/lib.rs`: *"PUBLICATION HERE IS `count`,
+  NOT A PER-SLOT FLAG — which is why this type has no `ready`"*, arguing the buffer is engine-local
+  with one producer and one consumer on one thread, and mitigating instead with per-field offset
+  asserts plus a payload-end boundary assert. That is R14's own second option. **This is an owner
+  call between a parity rule and a measured argument against it, not implementation work** — and it
+  is the type name that already cost one wrong refutation, because two crates declare an
+  `EventEntry` and only one is governed.
+- **Item 26** — the missing adjacent multi-plugin fixture. The product has **argued it away** in
+  `docs/architecture/tasks/P2-G4-01-inventory.md`, landing `apps/host_chain_buffers.h` and a
+  ping-pong parity test instead: *"That is a better use of the effort than the multi-plugin
+  fixture."* That is a substitution, not a partial completion, and the alias rebinding it would
+  have exercised is still uncovered. Confirm or overrule the substitution before building anything.
+
+### What the eight open product items actually are
+
+`7` an enforced writer/drainer ownership assertion for the UI-out ring, which today is asserted only
+in prose. `14` the BATCH path takes its base from the per-track counter and waits on the GLOBAL one
+— the same counter-crossing already fixed once for `add_notes`, still live in the sidecar and in
+BOTH branches, not just the note one. `15` `applyHostBypassStates` still takes `controllerMutex`.
+`16` the swap trap rests on an unratcheted `hostReady` read. `28` the CLI still decides `Applied`
+from a counter comparison with no identity read. `36` `host_stall_check.sh` cannot distinguish the
+outcomes it decides — its oracle counts log lines, its marker is appended through a second file
+description, a `play` failure is discarded with `|| true`, and the stall log is gated behind
+`isPlaying` while the `continue` is not.
+
+**Items 27 and 29 are one change, and it is gated.** The wire slot exists — `correlationLo`/`Hi` at
+offset 32 in all seven refusal payloads, 28 static_asserts, and `refusal_identity_check` pinning the
+population — but **nothing mints or reads it**: the id appears only in the header, that check, and
+the Rust mirror. All three emit sites pass no identity. Minting it closes 27's class-wide defect and
+29's `sentBase` half together, and it is gated on **owner decision 5**.
+
+### A side finding, verified and fixed
+
+`watchdog_bound_check.sh` declared that `Watchdog::check()` had no production call site and that
+"the bound is inert in the running engine". The producer thread calls it, from inside the controller
+lock. **A stale LIMITATION is worse than a stale feature note** — it describes real work as still
+owed, so the next reader either redoes it or believes a live engine is inert. Fixed in `8c5707a6`.
+
+I nearly rejected that report: my search was `.check(`, the call is `runtime->watchdog->check(` with
+its argument on the next line, and the pattern could not match it. A grep that cannot express the
+shape it seeks returns exactly what a real absence returns.
