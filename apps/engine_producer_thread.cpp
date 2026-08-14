@@ -90,6 +90,11 @@ void runProducerThread(ProducerThreadDeps& deps) {
                 << " minCompleted=" << minCompleted
                 << " playback=" << currentPlayback
                 << " extra=" << extra
+                // WHETHER THE TRANSPORT WAS RUNNING, because the two cases are different findings
+                // and used to be indistinguishable by being one of them silent. Gated-while-stopped
+                // is not urgent; gated-while-playing is a dropout. A reader needs to tell them
+                // apart, which is what this field is for now that both are logged.
+                << " playing=" << (transport.playing.load(std::memory_order_acquire) ? 1 : 0)
                 << " hosts=[" << stallHosts << "]" << std::endl;
     };
     // THE TRANSPORT ADVANCES BY A CARRIED FRACTION, not by a rounded tick.
@@ -295,20 +300,22 @@ void runProducerThread(ProducerThreadDeps& deps) {
       minCompleted = progress.minCompleted;
       const bool throttleInactive = !anyActive;
       if (minCompleted == std::numeric_limits<uint32_t>::max()) {
-        if (isPlaying) {
-          logStall("minCompleted", nextBlockId.load(std::memory_order_relaxed), 0,
-                   audioPlaybackBlockId.load(std::memory_order_acquire), 0);
-        }
+        // NOT GATED ON isPlaying, and that gate was the defect. The `continue` below runs
+        // whether or not the transport is running, so the PRODUCTION was gated either way and only
+        // the REPORT was conditional — a producer held by a frozen host went silent the moment
+        // playback stopped. logStall is already gated on debugStall and rate-limited to 2/second,
+        // so it cannot flood; the diagnostic mode exists precisely to see this.
+        logStall("minCompleted", nextBlockId.load(std::memory_order_relaxed), 0,
+                 audioPlaybackBlockId.load(std::memory_order_acquire), 0);
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         continue;
       }
 
       const uint32_t inFlight = nextBlockId.load() - minCompleted;
       if (inFlight >= engineConfig.numBlocks) {
-        if (isPlaying) {
-          logStall("inFlight", nextBlockId.load(std::memory_order_relaxed), minCompleted,
-                   audioPlaybackBlockId.load(std::memory_order_acquire), inFlight);
-        }
+        // Same as the minCompleted arm above: the gate is on the report, not on the gating.
+        logStall("inFlight", nextBlockId.load(std::memory_order_relaxed), minCompleted,
+                 audioPlaybackBlockId.load(std::memory_order_acquire), inFlight);
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         continue;
       }
