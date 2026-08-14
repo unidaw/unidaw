@@ -1826,13 +1826,79 @@ fn load_sample(handle: &EngineHandle, args: &Value) -> ToolResult {
         reserved: [0; 3],
         name,
     };
+    // THE SLOT'S IDENTITY IS THAT IT WAS NOT THERE BEFORE.
+    //
+    // Not its name. The engine seeds a slot's name with the file's STEM, and a rename command can
+    // change it afterwards, so matching the read-back by file name is wrong in both directions —
+    // it misses a renamed slot and it matches a pre-existing one loaded from the same file. That
+    // was tried and recorded as a wrong turn; this reads the kit first and looks for an id that
+    // was not in it.
+    let device = arg_u64(args, "device").unwrap_or(0);
+    let before: std::collections::BTreeSet<u16> =
+        match read_kit(handle, track, device, std::time::Duration::from_millis(500)) {
+            Ok(v) if v.found => v.slots.iter().map(|s| s.slotId).collect(),
+            // No sampler yet, or no answer: an empty "before" is still correct — every slot the
+            // load mints is new relative to it.
+            _ => std::collections::BTreeSet::new(),
+        };
+
     let journal_at = daw_bridge::journal::journal_mark();
-    match handle.send_sampler_load(payload) {
-        Ok(()) => refused_or(track as u32, journal_at, &["sampler_load"], json!({
-            "sent": true, "track": track, "file": file, "drum": drum,
-        })),
-        Err(e) => ToolResult::err(e),
+    if let Err(e) = handle.send_sampler_load(payload) {
+        return ToolResult::err(e);
     }
+    if let Some(reason) = daw_bridge::journal::await_refusal(
+        track as u32, journal_at, &["sampler_load"]) {
+        return ToolResult::err(format!(
+            "the engine refused it: {}", daw_bridge::journal::refusal_sentence(&reason)));
+    }
+
+    // WAIT FOR THE SLOT, DO NOT ASSUME IT. This is the positive confirmation `refused_or` cannot
+    // give: no refusal within its window means only that none was SEEN, and a sampler refusal is
+    // emitted from the render rebuild, later than the command's own ack. A slot that appears is
+    // evidence; a quiet 250 ms is not.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let minted = loop {
+        if let Ok(v) = read_kit(handle, track, device, std::time::Duration::from_millis(500)) {
+            if v.found {
+                if let Some(s) = v.slots.iter().find(|s| !before.contains(&s.slotId)) {
+                    break Some(*s);
+                }
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let Some(slot) = minted else {
+        return ToolResult::err(format!(
+            "\"{file}\" never appeared as a slot on track {track}, so the sampler is silent. The \
+             load was sent and not refused, which on this path is not evidence it was applied."));
+    };
+
+    // A NAME THAT RESOLVES TO NOTHING STILL MINTS A SLOT — published with its source missing and
+    // lengthFrames 0. It exists, it draws, and it plays silence. Reporting ok here is the exact
+    // belief that gets notes written on top of a track that cannot make a sound.
+    if slot.lengthFrames == 0 {
+        return ToolResult::err(format!(
+            "\"{file}\" did not resolve to audio — the slot exists but has no frames behind it, so \
+             the sampler is silent. Check the name against the project directory."));
+    }
+
+    // SAID IN WORDS, because `key_low == key_high` is a step of reasoning, and it is the step that
+    // decides whether the part sounds. A model that has to derive it will not.
+    let plays = if slot.keyLow == slot.keyHigh {
+        format!("only note {} — every other note is silent", slot.keyLow)
+    } else {
+        format!("notes {}..{}, rooted at {}", slot.keyLow, slot.keyHigh, slot.rootKey)
+    };
+    ToolResult::ok(json!({
+        "track": track, "file": file, "drum": drum,
+        "slot": slot.slotId,
+        "key_low": slot.keyLow, "key_high": slot.keyHigh, "root": slot.rootKey,
+        "length_frames": slot.lengthFrames,
+        "plays": plays,
+    }))
 }
 
 /// Edit ONE patcher device's graph.

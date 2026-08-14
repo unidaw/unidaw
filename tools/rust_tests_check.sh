@@ -18,11 +18,24 @@
 # THE COMPILE GATE IS THE POINT. --no-run over the whole workspace is what would have caught the
 # original defect on the commit that introduced it; running the suites is the second-order check.
 #
-# WHAT IS NOT RUN HERE, said out loud rather than quietly skipped:
-#   daw-agent's engine_e2e — it starts real engines and loads vendor plugins, which is what the
-#   C++ checks in this suite already do under proper isolation, and running two engine fleets
-#   from one ctest invocation is how the shared-segment collisions in this project started. It is
-#   still COMPILED by the gate above.
+# WHAT IS RUN HERE — and this paragraph said the OPPOSITE until 2026-08-14, which is worth keeping
+# as the correction rather than quietly rewriting.
+#
+#   It claimed daw-agent's engine_e2e was compiled but NOT run, on the grounds that "running two
+#   engine fleets from one ctest invocation is how the shared-segment collisions in this project
+#   started". Both halves were wrong by then. The run line below is
+#   `cargo test -p daw-sidecar -p daw-bridge -p daw-cli -p daw-agent`, and nothing in daw-agent's
+#   Cargo.toml excludes an integration target, so cargo runs engine_e2e like any other. It has been
+#   running the whole time. The proof is not an argument about cargo semantics: this check FAILED on
+#   three engine_e2e sampler assertions, by file and line, on 2026-08-14.
+#
+#   And the safety rationale had expired independently. engine_e2e's start_engine sets
+#   DAW_UI_SHM_NAME per test, so each engine gets its own segment — the collision the paragraph
+#   feared is exactly what that change fixed. The reason survived the thing it was reasoning about.
+#
+#   This is the failure mode this check exists to catch, one level up: a stale claim that supplies a
+#   ready reason not to look. Believing it would mean thinking e2e coverage is absent from ctest
+#   while it is the part finding real defects.
 #
 #   THE "ONE GENUINE FAILURE" THIS USED TO NAME IS FIXED. It said
 #   multi_bundle_selects_named_subplugin failed — a project naming Zebralette inside the Zebra2
@@ -84,4 +97,4 @@ if [ "${PASSED:-0}" -lt "$SIDECAR_FLOOR" ]; then
 fi
 
 echo "rust_tests_check: PASS — every workspace test binary compiles and $PASSED tests pass" \
-     "(daw-agent's engine_e2e is compiled but not run here; see the header)"
+     "(daw-agent's engine_e2e is among them; it boots real engines, isolated by DAW_UI_SHM_NAME)"
