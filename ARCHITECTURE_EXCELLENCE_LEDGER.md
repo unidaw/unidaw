@@ -4848,3 +4848,43 @@ P1.4 commit. A ratchet only ratchets when it runs.
 Remaining for CMD00: the sender mints a nonce into `sampleTime`, and `kShmVersion` goes to 39 in the
 same change — that is the half decision 5 governs, and it is the one that gives items 27, 28 and 29
 their identity.
+
+## P2-CMD-00 complete: the sender mints an id and `kShmVersion` is 39 (`82654d2a`)
+
+Decision 5 ruled option A, and this is the commit that gives `sampleTime` a meaning — so the rule
+written at `kShmVersion` last commit is applied to its first case rather than argued about.
+
+Minting per §3 and ruling 1: **`correlationHi` a 32-bit nonce drawn once per process**,
+**`correlationLo` a counter within it from 1**, travelling as one 64-bit value in
+`EventEntry::sampleTime`. A nonce rather than a claimed id because the rings are multi-producer
+since M2.18, so an id must be unique across concurrent producers AND across producer LIFETIMES — the
+outbound ring is peeked rather than drained, so a restarted process's refusals are still visible and
+a bare counter fails the second test.
+
+**The bound is stated rather than called unique**, as §3 requires: birthday-on-2³² across lifetimes,
+~1e-6 at 100 and ~1e-4 at 1000 in a session, self-correcting on the next read. The nonce is forced
+non-zero, because all-zero is the "no id" sentinel and a sender must never mint one.
+
+### Positive evidence, because the whole change is a value travelling
+
+The suite would pass equally well if the id never arrived, so no-regression proves nothing here:
+
+- **Engine:** set the ambient, emit a refusal, read the payload back — the halves are at offsets 32
+  and 36. **The zero case is half that test**, since one checking only the non-zero case would pass
+  against code that always wrote the ambient's initial value. And the bracket RESTORES rather than
+  clears, so a nested dispatch cannot drop the outer id.
+- **Sender:** ids are distinct, monotonic in the low word, non-zero, and **share one high word** —
+  the property that makes the id identify a SENDER rather than just a command, which is what
+  survives a restart and is why a bare counter was refused.
+
+`contract_freshness` caught the stale bindings mid-way, as designed. 235 Rust tests; ctest 36/36.
+
+### What this unblocks
+
+Items 27, 28 and 29 were all waiting on an identity to exist. It does now:
+
+- **27** — the three refusal emit sites can carry a sender-minted id; one does, the other two need
+  the same two lines.
+- **28** — the CLI decides `Applied` by comparing a counter (`main.rs`, `await_clip_outcome` matches
+  on `(track, commandType, sentBase)`); it can now match on the id instead.
+- **29** — `SetRowOps`'s inert third correlation key was gated on exactly this.
