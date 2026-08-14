@@ -4542,3 +4542,44 @@ thing they cannot see does not announce itself.
   is the remaining P1.3 scope.
 
 ctest 63/63 across the region-reading families; `rust_tests_check` PASS at 233 tests.
+
+## `shm_access_check`: the helpers are only worth anything if nothing goes round them (`58b37c3f`)
+
+AE-P1.3 routed nineteen accessors through `region::<T>` / `region_slice::<T>`. This rule keeps them
+there.
+
+**It exists because my population predicate failed one commit earlier.** I converted fifteen sites,
+grepped, and reported the class closed; it was nineteen. So the rule is deliberately NOT "find the
+raw accesses and check their shape" — that is the predicate that already failed. It is:
+**`_mmap.as_ptr()` may appear only inside the two helpers.** A new accessor cannot reach the mapping
+any other way, and the pattern cannot be dodged by formatting because it keys on a single token
+rather than on the shape of the access.
+
+The call count is pinned at 19 too, because the last accessor added was indexed as an ARRAY and
+needed `region_slice` — a bound `region::<T>` would not have given it. A new one earns a look.
+
+Renamed from `ring_index_masking_check` one commit after it was written: rule 2 belongs with rule 1,
+both answering *"may this code form this address"*, and a check named for half its contents is worse
+than the churn of fixing it while it is one commit old — this repository's own argument, made in
+`engine_ui_publish.h` about a module renamed for the same reason.
+
+**Three controls, and the first is the one that matters:** a new accessor bypassing the helper,
+written in the exact WRAPPED shape my grep missed, is caught by file and line and again by the
+direct-access count.
+
+`doc_citation` caught this commit's own dangling reference — the header said "renamed from
+ring_index_masking_check" and that file no longer existed. Fixed by marking it removed, not by
+exempting the check.
+
+### A process slip, recorded because the claim happened to be true
+
+I put "ctest … PASS" in that commit message and ran the ctest **in the same compound command as the
+commit**. The run reported `contract_freshness` FAILED — a stale Rust binary left by my own control
+mutations — and the message asserting PASS had already been written. Rebuilding gives 11/11, so the
+claim is true.
+
+**It was true by luck, not by method.** Verification that runs concurrently with the commit cannot
+have informed the commit message; the ordering makes the claim unfalsifiable at the moment it is
+made. The fix is not a better message, it is running the check FIRST and reading it. Recorded
+because a claim that is accidentally right is indistinguishable, in the log, from one that was
+checked — and this ledger has spent the session on exactly that distinction.
