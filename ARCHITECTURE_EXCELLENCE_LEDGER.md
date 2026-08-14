@@ -105,7 +105,8 @@ watcher:  none (required for Codex)
 | `AE-P1.1` | `FROZEN` | `AE-P0` | claude-worker-2 | codex-worker-1 | `/Users/jak/src/daw-ae-p1-1-packet` | `ba88bcb4657b62bdfc752d338d877e139e212ca6`; independent PASS; successor-only |
 | `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; 30 open at the frozen SHA, but re-derived against the product: 4 DONE, 5 PARTIAL, 8 open PRODUCT items, 12 PACKET, 1 withdrawn; items 26 and 35 need owner calls, 27+29 gated on decision 5; G4 not decidable |
 | `AE-P1.3` | `GATE MET` | the `AE-P1.2` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent x2 | none | both attach paths ordered; 19 region accessors + ring cursors bounded; contract property test; non-overlap is the residue |
-| `AE-P1.4` | `ACTIVE` | the `AE-P0` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent | none | 5 plain writes to an atomically-read pointer fixed; watchdog use-after-free fixed; TSan evidence NOT yet run |
+| `AE-P1.4` | `GATE MET` | the `AE-P0` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent | none | 5 plain writes fixed; watchdog use-after-free fixed; TSan evidence DELIVERED — `tsan_command_hammer.sh` 108 commands landed / 0 races, and `tsan_render.sh` 1 race -> 0 after the RenderPool fix |
+| `RenderPool race` | `FIXED, IN REVIEW` | found by `AE-P1.4`'s instrument | `lead` | independent subagent | none | straggler read `m_fn`/`m_count` unlocked across a batch handover: null deref, out-of-range item, and an `m_remaining` underflow that HANGS the producer; generation packed into the claim counter; new `render_pool_race_check.sh` registered in ctest |
 | `AE-P1.5` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P1.6` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P2.*` | `BLOCKED` | Phase 1 gates | unassigned | unassigned | none | none |
@@ -5170,3 +5171,97 @@ command traffic driven against a live producer. It **refuses a vacuous pass** �
 rounds of traffic and a clean TSan result is indistinguishable from a genuinely clean interleaving,
 so it fails and says so. Not committed until it has run; an unrun script asserting a property is the
 same shape as a control that has never fired.
+
+## The render pool race, fixed — and the two ways this nearly reported itself green
+
+### The defect
+
+`drain()` read `m_fn` and `m_count` — plain members written under the pool mutex — with no lock.
+The old comment above it argued this was safe, reasoning about ONE of the two members:
+
+> Reads m_fn only AFTER establishing that the claimed index is in range, which is what makes a
+> worker that wakes up late harmless.
+
+A worker is a **straggler** whenever it is still looping after the batch's last item COMPLETED. The
+waiter is released by `m_remaining` reaching zero, and that says nothing about whether every worker
+has LEFT. The next batch then rewrites `m_fn` and `m_count` and resets the claim index underneath it.
+Three failures follow, and all three had to close:
+
+| # | Failure | How |
+|---|---|---|
+| 1 | Null dereference | `m_fn = nullptr`, then the next batch's pointer and index reset — plain and relaxed writes with no release between them, so a straggler sees the reset index with the stale nullptr |
+| 2 | Out-of-range item | a straggler holding the OLD count claims an index past the NEW batch's end; the caller indexes a track vector by it |
+| 3 | **Hang** | those extra claims each decrement `m_remaining`, underflowing past zero; `wait(remaining == 0)` never wakes and the producer stops producing |
+
+The third is the worst and the least visible: on the audio path it is a dropout, not a crash.
+
+**The fix** packs the generation INTO the claim counter — one `atomic<uint64_t>`, generation high,
+index low — so "which batch is open" and "which item is next" are a single indivisible fact. A
+straggler's compare-exchange sees the generation move and it leaves without touching a function
+object, a count or the tally. Workers copy `fn`/`count`/`generation` under one lock hold, so `drain`
+reads no shared plain state at all. A separate generation check beside the counter would not do: two
+loads can straddle a batch boundary.
+
+### Evidence
+
+| Check | Before | After |
+|---|---|---|
+| `tools/tsan_render.sh` (real engine) | **1 race**, render_pool.h:87 ↔ :137 | **0** |
+| `tools/render_pool_race_check.sh` (new) | race at :86 and :87 ↔ :137 | PASS, 20000 handovers |
+| `tools/render_pool_check.sh` | PASS | PASS — byte-identical, 1 thread vs 8 |
+
+### Two near-misses, both of which printed PASS
+
+**The negative control did not apply.** I built the control with `-I<dir-with-old-header>` while the
+program stayed in `apps/` — and `#include "render_pool.h"` searches the including file's OWN
+directory first, so BOTH builds compiled the fixed header. It printed the same PASS as the real run.
+Caught by preprocessing each build and counting a token that exists only in the fix: 4 occurrences
+vs 0. A control that never applied is indistinguishable from a control that found nothing, so the
+question to ask a green control is not "did it pass" but "did it compile different code".
+
+**The stress program's own assertions do not discriminate.** Every index exactly once, nothing past
+the end — neither fired on the unfixed pool over 20000 batches. The race is real but rarely
+consequential, which is exactly why it survived. TSan is the discriminator, not the assertions, so
+`render_pool_race_check.sh` treats a binary with no `__tsan` symbols as a FAILURE rather than as a
+degraded mode. A check whose power comes from an instrument must refuse to pass without it.
+
+### AE-P1.4 evidence, now delivered
+
+`tools/tsan_command_hammer.sh` — **PASS, 108 commands landed over 18 rounds against a live producer,
+0 refused, 0 races.** This is the evidence I said I owed: `tsan_render.sh` drives an offline render
+with no UI commands, while every write P1.4 fixed is on the command thread.
+
+**Its first green run was hollow and its own guard could not see it.** `cli()` swallowed every exit
+code with `|| true`, and the guard counted `rounds` — loop iterations — so 108 silently-refused
+commands and 108 applied ones printed an identical `18 rounds ... PASS`. A stale daw-cli is refused
+silently in this project, so that was not a hypothetical. The guard now counts what LANDED, from the
+CLI's exit status, and requires 12. Re-run: 108 landed, 0 refused — the original run WAS genuine,
+but that was luck, not something the check established.
+
+## Decision 8 — `repository_integrity` is red on main, and unblocking it means merging two branches
+
+The full sweep leaves two failures. One is mine and now fixed (`check_registry` correctly caught the
+new `render_pool_race_check.sh` as unregistered; it is registered and passes). The other is not, and
+it is not fixable from inside the sprint.
+
+`repository_integrity` fails with `packet-not-ancestor`: the AE-P0.1 packet commit `258f4235` is
+required to be an ancestor of the checked worktree, and on `main` it is not. It exists — on two
+branches that were never merged:
+
+| Branch | Commits not on main | Contents |
+|---|---|---|
+| `ae/p0-roots-current` | 5 | the packet plus checkout-isolation enforcement |
+| `ae/p0-followup` | 11 | bootstrap/readiness/provenance gates, appears to supersede the above |
+
+Both touch `CMakeLists.txt`, `tools/ask_path_check.sh`, `docs/`, and a stray committed
+`tools/__pycache__/*.pyc`.
+
+**The decision: merge `ae/p0-followup` into main, or retire both branches and re-point
+`EXPECTED_PACKET_SHA` in `tools/repository_integrity_check.mjs:42`.** Merging eleven commits of
+someone else's gate work is not a judgement call I should make silently, and the alternative —
+editing the expected SHA — would make a red integrity check green by changing what it expects, which
+is the one repair that must never be done without the owner saying so.
+
+Recommendation: **merge `ae/p0-followup`**, since the check was written to demand exactly that and
+the branch looks like the finished form. Until then this failure is pre-existing and unrelated to
+any change in this sprint, and it should be reported as such rather than filtered out of the sweep.
