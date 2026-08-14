@@ -5128,3 +5128,45 @@ and I had grepped for `\berror\b`, which counted the word inside a warning and r
 while I read the green ctest as authoritative. **Two signals disagreed and I believed the wrong one
 for a minute.** The rule that follows is cheap: after a build, grep `error:` with the colon, and
 never let a passing suite stand in for a successful compile.
+
+## TSan found a race in the render pool, and the instrument I owed does not cover what I owed it for
+
+**AE-P1.4's gate is a concurrency hammer plus TSan, and I had run neither.** Running
+`tools/tsan_render.sh` produced two findings, one about the product and one about the evidence.
+
+### 1. A live data race in `RenderPool`
+
+    Write  render_pool.h:87   producer thread, holding m_mutex     m_fn = &fn
+    Read   render_pool.h:137  pool worker, holding NOTHING         drain()
+
+`drain()` reads `m_count` and dereferences `m_fn` with no lock; `parallelFor` writes both under one.
+There IS a happens-before edge for the batch a worker was woken for — the CV wait acquires the mutex
+— so the interesting question is which read races, and it is the one AFTER a batch finishes.
+
+**The window:** a worker decrements `m_remaining` to zero, the producer wakes from
+`m_doneCv.wait`, sets `m_fn = nullptr`, and starts the next batch writing `m_fn = &fn2` — while that
+same worker is still looping inside `drain()`, calling `m_next.fetch_add` and re-reading `m_count`
+and `m_fn`. The waiter is released before the worker has finished touching the shared state.
+
+That is crash-capable rather than merely formal: the worker can dereference `m_fn` in the window
+where it is `nullptr`, or execute the new batch's function against the old batch's bookkeeping.
+
+Not fixed here — it is on the per-track production path, wants a design rather than a patch (a
+generation-stamped snapshot taken under the lock, or atomics with the right ordering), and belongs in
+its own change with its own review rather than folded into the end of an unrelated cycle.
+
+### 2. The instrument does not cover the thing it was run for
+
+`tsan_render.sh` drives `daw_engine --render` — an OFFLINE render with **no UI commands at all**. It
+exercises the producer, consumer, render pool and master render thread and never the command thread.
+
+**Every write AE-P1.4 fixed is on the command thread**: the five plain `trackSnapshot` writes were in
+patcher edits, aux reconciliation, tombstone reuse and the command-side reuse path; the watchdog
+use-after-free was in the restart worker. So this run is not evidence about that fix at all — it is
+evidence about the render path, and it found something there.
+
+`tools/tsan_command_hammer.sh` is written for the gap: a real engine under TSan, playing, with
+command traffic driven against a live producer. It **refuses a vacuous pass** — fewer than two
+rounds of traffic and a clean TSan result is indistinguishable from a genuinely clean interleaving,
+so it fails and says so. Not committed until it has run; an unrun script asserting a property is the
+same shape as a control that has never fired.
