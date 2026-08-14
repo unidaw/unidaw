@@ -86,8 +86,21 @@ uint64_t uiDiffNowMs(UiPublishDeps& deps);
 // Says a diff was dropped, at most once a second.
 void logUiDiffDrop(UiPublishDeps& deps);
 
+// True when the calling thread is the one that first wrote the UI-out ring. The first caller
+// latches ownership; every later thread answers false. See the definition for why this is a latch
+// and not a comparison against a registered thread id.
+bool uiDiffWriterIsOwner();
+
+// Says, at most once per process, that a thread other than the owner wrote the ring.
+void reportUiDiffForeignWriter();
+
 // Pushes one diff into the ring the UI drains, or counts a drop. Never blocks — the writer is on
 // the command thread and must never wait on a UI that is not draining.
+//
+// THAT SENTENCE IS NOW ENFORCED RATHER THAN ASSERTED. It used to be the whole of the evidence for
+// a single-writer claim, and AE-P1.2 item 7 is that a claim about which THREAD runs something
+// cannot be established by reading call sites — 28 threads are spawned in apps/, and any of them
+// may reach this one write. The check below latches the first writer and names any other.
 //
 // A TEMPLATE because it always was one: main() declared it with `const auto& diffPayload` and every
 // caller passes a different payload struct. Writing out an overload per payload, or erasing to
@@ -99,6 +112,10 @@ inline void sendUiDiff(UiPublishDeps& deps, daw::EventRingView& ringUiOut, daw::
   auto& uiDiffSent = deps.uiDiffSent;
   auto& uiDiffDropped = deps.uiDiffDropped;
   auto logUiDiffDrop = [&] { daw::engine::logUiDiffDrop(deps); };
+
+  if (!uiDiffWriterIsOwner()) {
+    reportUiDiffForeignWriter();
+  }
 
 
     daw::EventEntry diffEntry;

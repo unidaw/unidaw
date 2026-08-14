@@ -3,7 +3,73 @@
 #include "engine_pure.h"
 #include "event_log.h"
 
+#include <atomic>
+#include <functional>
+#include <thread>
+
 namespace daw::engine {
+
+// WHICH THREAD MAY WRITE THE UI-OUT RING — ENFORCED, NOT ASSERTED IN PROSE.
+//
+// The header says "the writer is on the command thread". AE-P1.2 item 7 is that this was a claim
+// with no evidence behind it, and the reason it needs evidence is precise: producer identity is a
+// property of EXECUTION AGENTS, not of source text. Eighteen call sites are not eighteen writers,
+// and one `ringWrite` site is not one writer — `std::thread`/`jthread` appears 28 times in apps/,
+// and any of those threads may enter the single write site. A grep over call sites cannot see
+// which of them run on which thread, so no census settles it.
+//
+// This latches the first writer's thread and reports any other. It is a LATCH rather than a
+// comparison against a recorded "command thread" id because nothing publishes such an id, and
+// inventing a registration call would put the same claim one level up with the same absence of
+// enforcement behind it.
+//
+// NOT AN assert(). The sidecar's offset assertions were `debug_assert` and compiled out of every
+// release build, which is exactly how a real defect stayed invisible here before. This is always
+// on: one relaxed load and a comparison on the common path, and a CAS only on the very first call.
+//
+// It does not STOP the foreign write. A ring write that is already in flight is not made safer by
+// refusing it late, and dropping a diff to prove a point would turn a diagnosis into an outage.
+// It makes the violation observable, once, by name.
+namespace {
+std::atomic<std::uint64_t>& uiDiffWriterOwner() {
+  static std::atomic<std::uint64_t> owner{0};
+  return owner;
+}
+}  // namespace
+
+bool uiDiffWriterIsOwner() {
+  std::uint64_t me =
+      static_cast<std::uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
+  if (me == 0) {
+    me = 1;  // 0 is the unclaimed sentinel, so a thread hashing to it borrows 1
+  }
+  auto& owner = uiDiffWriterOwner();
+  const std::uint64_t cur = owner.load(std::memory_order_acquire);
+  if (cur == me) {
+    return true;
+  }
+  if (cur == 0) {
+    std::uint64_t expected = 0;
+    if (owner.compare_exchange_strong(expected, me, std::memory_order_acq_rel,
+                                      std::memory_order_acquire)) {
+      return true;  // first caller claims it
+    }
+    return expected == me;  // lost the race to another thread; are we it anyway?
+  }
+  return false;
+}
+
+void reportUiDiffForeignWriter() {
+  // ONCE. A second writer entering a hot publish path would otherwise produce a line per diff,
+  // and a log that floods is a log nobody reads at the moment it matters.
+  static std::atomic<bool> reported{false};
+  if (reported.exchange(true, std::memory_order_relaxed)) {
+    return;
+  }
+  DAW_EVENT("ui_diff.foreign_writer")
+      .field("thread",
+             static_cast<uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id())));
+}
 
 // EVERY WRITE TO THE UI-OUT RING GOES THROUGH sendUiDiff, including this one's three. The bytes are
 // the same — sendUiDiff builds the entry exactly as makeUiDiffEntry did — but a snapshot that does
