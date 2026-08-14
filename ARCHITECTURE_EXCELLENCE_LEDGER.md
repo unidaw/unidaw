@@ -3428,3 +3428,55 @@ known to carry several, and not this ticket's to rewrite.
 
 Verified: cargo build clean, `ctest` 11/11 after rebuilding `daw-cli`, which `contract_freshness`
 correctly reported stale against the changed `control.rs`.
+
+## The audit found four stale rules in CODE, and one I had broken myself (2026-08-14)
+
+An audit of `ARCHITECTURE_REVIEW.md`'s open-defect list verified every item against the tree by
+running its named checks. The document findings were real but the sharpest ones were in the code
+the document describes.
+
+### Four superseded rules standing beside their replacements — `f32073fa`
+
+`apps/engine_arrangetime_commands.cpp:263` said "THE METER NEEDS NO RIPPLE AT ALL … the meter now
+lives ON the section … The question is not answered, it is dissolved." **Twenty-seven lines above
+it, in the same function, the code ripples meter points** — and that loop's own comment says "the
+spine could not have this bug". The Section spine was deleted in v29; the paragraph describing the
+spine world survived inside the function that refutes it.
+
+Also: `engine_handle_ui_entry.cpp:409` describing five retired opcodes as current, and TWO copies of
+"kUiMaxAudioClips is 64 while the extent list holds 256" when they are equal by definition. The
+second copy is in `tools/extent_truncation_check.sh` — the file CITED AS THE COVERAGE for that
+defect. A coverage note that still describes the defect as live is how a reader concludes the wrong
+thing about what is checked.
+
+### A section titled "Open" in which nothing was open — `a322a9b9`
+
+Zero of its five items were open: four self-labelled RESOLVED and re-verified, and the fifth
+resolved by DELETION. Retitled. Item 3 was the only one with no status marker, which made it the
+likeliest to be picked up and acted on. Item 2's headline was true for FOUR AND A HALF HOURS on
+2026-07-30 before the spine was deleted — its correction had been APPENDED to the end of the item
+rather than applied to the headline, leaving the false half where a reader starts. Items 23 and 25
+name five artefacts that no longer exist; marked DONE-THEN-DELETED rather than rewritten.
+
+### And one I broke myself — `7e695e3b`
+
+`tools/contract_layout_check.sh` cited `apps/x.h` four times: a placeholder I invented while
+explaining the include-spelling family in the T3 work. Zero occurrences before the T3 merge, four
+after. `doc_citation_check` refuses a comment pointing at a missing file because it "reads as though
+the thing it describes was never built" — and it is a REGISTERED ctest that was failing on main
+across several of my commits.
+
+**I did not notice because every verification I ran used a targeted `-R` filter** —
+`'contract|readiness|registry|freshness|version'` — which never selects `doc_citation`. That is the
+trap already on this project's record: a targeted build let a test target stay uncompiled for five
+commits while a full suite was reported green.
+
+**And the deeper reason it hid: the check was ALREADY RED.** `docs/DEMO.md` carried a line-number
+citation against a baseline of zero, so `doc_citation` had been failing before my change and
+absorbed a second, unrelated cause invisibly. **A red check is not merely a missing signal; it is a
+place new breakage can hide.** Both causes fixed; it passes now.
+
+Also learned: the systemic gap that let the document rot is that `doc_citation_check.sh` scans
+`docs/*.md` plus `README.md` only — `ARCHITECTURE_REVIEW.md`, `AGENTS.md`, `SHM_LAYOUT.md` and every
+other root-level document are invisible to it. Widening that scope is the real fix and is a separate
+increment, because the newly-scanned files will have their own citation debt.
