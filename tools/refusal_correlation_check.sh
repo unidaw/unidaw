@@ -66,7 +66,12 @@ SHM="daw_corr_$$"
 
 TMP="$(mktemp -d)"
 ENG=""
+NOISE=""
 cleanup() {
+  if [ -n "$NOISE" ]; then
+    kill "$NOISE" 2>/dev/null
+    wait "$NOISE" 2>/dev/null
+  fi
   # `wait` after the kill, so the shell reaps the child quietly. Without it the job-control notice
   # ("Terminated: 15") lands on the terminal AFTER the verdict line, which reads like a failure in
   # ctest output for a check that passed.
@@ -195,6 +200,28 @@ grep -q "REFUSED" "$TMP/stale.err" || {
   echo "  FAIL: exit 3 without the refusal message — the exit code and the report disagree."
   echo "refusal_correlation_check: FAILED"; exit 1; }
 
+
+# THERE IS NO DETERMINISTIC GATE HERE FOR THE MASKING HALF, AND I TRIED.
+#
+# The other half of this ticket is that an unrelated version bump must not be mistaken for this
+# command's success. I wrote a phase 2 for it: a second writer moving track 0's clip version
+# continuously while the stale write waits. It passed WITH THE DEFECT DELIBERATELY RESTORED, so it
+# was blind and it is gone rather than sitting here looking like coverage.
+#
+# Why it was blind: `await_clip_outcome` scans the diffs BEFORE checking the counter on every pass,
+# so whenever the refusal arrives promptly the counter is never consulted and no amount of version
+# churn can mask anything. The masking needs a DELAYED refusal, not a busy counter — which is why it
+# first appeared under `ctest -j2` and not on an idle machine, and why a background writer cannot
+# manufacture it.
+#
+# What the fix rests on instead, measured rather than asserted: the same stale write issued without
+# waiting for the version to settle, six runs under concurrent ctest load.
+#
+#     counter deciding the outcome (before)   3 of 6 passed
+#     command id deciding it (after)          6 of 6 passed
+#
+# That is real evidence and it is honest about being load-dependent. A probabilistic gate in ctest
+# would fail on a fast machine and be silenced within a week.
 echo
 echo "refusal_correlation_check: PASS — the engine's refusal was matched to the id its sender minted"
 echo "   (a broken echo would have surfaced as exit 0 and a reported success, not as an error)"
