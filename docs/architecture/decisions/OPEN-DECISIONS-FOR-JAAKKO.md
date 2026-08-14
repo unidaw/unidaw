@@ -136,3 +136,37 @@ future reader treating v38 and v39 wire images as identical when their field mea
 
 *(Independent note, not a decision: the ring-index scheme I proposed is refuted and your ruling 1 —
 the per-process nonce — stands unchanged. Recorded for information only.)*
+
+
+---
+
+# NEW — decision 6 (2026-08-14, found by measurement)
+
+## The AI agent reports `ok: true` when it has no evidence the engine did anything
+
+`refused_or` in `ui/daw-agent/src/tools.rs` waits 250 ms for a refusal. **No refusal ⇒ `ok: true`.**
+That is absence of evidence reported as success.
+
+Measured: **24 of 24** agent tool call sites work this way. Zero use `await_refusal_or_ack`, the
+function that takes an "did it actually apply?" predicate and returns only after positive
+confirmation. Only `daw-cli` uses that, at one site.
+
+Why it matters more here than on the command line is already written in the function's own comment:
+a person reads "sent" and moves on, **a model reads it as confirmation and reasons from it** — told
+a sample loaded, it chops slices off a source that does not exist and reports a finished kit. And
+the 250 ms window is known to be too short in at least one real path: a sampler refusal is emitted
+from the render rebuild, later than the command ack.
+
+**Options**
+- **A. Add an explicit `confirmed: false`** to results that only saw no refusal. Additive, breaks
+  no caller, ~1 hour. The model can still misread `ok`.
+- **B. Give each site an `applied()` predicate** and use the ack path. Correct, and 24 sites each
+  needing their own read-back — days, and some verbs may have no observable signal.
+- **C. Report unconfirmed as `ok: false`.** Truthful about evidence, but reports failure for
+  commands that in fact succeeded, which is worse for a model than the current defect.
+
+**Recommendation: A now, B incrementally** for the verbs where a read-back already exists (the
+sampler ones do). Not C.
+
+**Cost if wrong:** A leaves the misreading possible but records the truth in the payload. B is
+slow but ends the class. C would actively cause bad model behaviour.
