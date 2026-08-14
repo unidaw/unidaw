@@ -651,8 +651,18 @@ if len(mirrored) < 20:
 # ---------------------------------------------------------------------------------------------
 # THE PATCHER'S EventEntry, WHICH IS A MIRROR NO PART OF THE ABOVE CAN SEE.
 #
-# patcher_rust is a separate crate with no bindgen twin: build.rs reads shared_memory.h and
-# event_payloads.h, not patcher_abi.h, so `hand & gen` is empty for everything in it. Its
+# patcher_rust is a separate crate, so it is absent from the BRIDGE mirror set this section walks —
+# `hand & gen` is empty for it here, and the PATCHER section further down is what compares it.
+#
+# THE REASON THIS PARAGRAPH USED TO GIVE WAS FALSE, corrected in place rather than deleted. It read:
+# "no bindgen twin: build.rs reads shared_memory.h and event_payloads.h, not patcher_abi.h".
+# Measured 2026-08-14: build.rs names patcher_abi.h as its THIRD header and passes it to bindgen,
+# and the allowlist carries `daw::Patcher.*`, `daw::MusicalLogicPayload` and `daw::HarmonyEvent`.
+# The bindings DO contain the twins — `daw_PatcherSliceSelectConfig` is there with `base`, `count`,
+# `reserved` — and this very file refuses bindings that lack the patcher types, which it could not
+# do if they were never generated.
+#
+# Its
 # EventEntry is a DELIBERATELY PARTIAL mirror of daw::EventEntry — six of the seven members, no
 # `ready` — pinned by const assertions written from numbers measured by hand.
 #
@@ -664,8 +674,22 @@ if len(mirrored) < 20:
 # So both sides are derived here instead. The C++ offsets come from the bindings — the C++
 # compiler's own layout — and the payload's extent is measured as the distance to WHATEVER FIELD
 # FOLLOWS IT, not to `ready` by name, because an inserted member is precisely the case that must
-# not pass. This is the EventEntry-scoped instance of a general gap (patcher_abi.h has six more
-# structs with no twin at all); closing that properly is a separate ticket.
+# not pass.
+#
+# THE REMAINING GAP IS NAMES, NOT TWINS — and the sentence here previously said "patcher_abi.h has
+# six more structs with no twin at all", which is false in the same way as the paragraph above. The
+# PATCHER section further down derives patcher_rust's repr(C) mirrors, refuses UNLISTED additions,
+# and compares all of them against their generated twins: "59 fields across 7 mirrors agree".
+#
+# What that section compares is OFFSETS. It is name-blind, and the cost is measured rather than
+# hypothetical: AE-P1.2 item 24 was a field the C++ calls `reserved` and the Rust called `_pad0` in
+# PatcherSliceSelectConfig. Reverting that rename leaves this check PASSING, because the two
+# spellings occupy the same bytes.
+#
+# A name comparison is well defined for THIS population specifically: the patcher structs use
+# IDENTICAL field names on both sides — `base`, `count`, `steps`, `hits`. That is not true of the
+# bridge mirrors, which are camelCase against snake_case, and where comparing names would be
+# meaningless. So the ticket is narrower and more tractable than "six structs have no twin" implied.
 def bindgen_layout(name):
     """The C++ offsets of `name`, read from bindgen's own const-assert block."""
     offs = {f: int(v) for f, v in
