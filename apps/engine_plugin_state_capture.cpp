@@ -142,6 +142,22 @@ uint32_t restorePluginSnapshot(EngineState& engineState,
   }
   uint32_t pushed = 0;
   for (TrackRuntime* runtime : hostingRuntimes(engineState, masterTrack)) {
+    // THE HOST MUST BE READY, and this was the only send to a host in the engine that did not ask.
+    //
+    // `hostReady == false` does NOT mean the socket is gone: evictHostForWatchdog and
+    // scheduleHostRestart clear readiness while leaving the controller connected. So an unguarded
+    // push here does not fail — it SUCCEEDS, returns true, and the bytes are discarded when the
+    // restart worker relaunches that host and SIGKILLs the old one. It was the silent case: `ok=true`
+    // logged for state no plugin ever applied.
+    //
+    // Skipping the whole track leaves `lastPushedState` and `pluginStateDirty` untouched, which is
+    // what lets a later restore retry. That is the point of doing this here rather than at the send.
+    if (!runtime->hostReady.load(std::memory_order_acquire)) {
+      DAW_EVENT("undo.plugin_state_skipped")
+          .field("track", runtime->trackId)
+          .field("reason", "host_not_ready");
+      continue;
+    }
     for (const auto& device : hostedDevices(runtime)) {
       const auto found = snapshot.blobs.find({runtime->trackId, device.deviceId});
       if (found == snapshot.blobs.end() || found->second == nullptr) {
@@ -154,28 +170,41 @@ uint32_t restorePluginSnapshot(EngineState& engineState,
       // "the same state" would make an unrelated undo audibly click.
       {
         std::lock_guard<std::mutex> lock(runtime->pluginStateMutex);
-        auto& last = runtime->lastPushedState[device.deviceId];
+        const auto& last = runtime->lastPushedState[device.deviceId];
         if (last != nullptr && (last == found->second || *last == *found->second)) {
           continue;
         }
-        last = found->second;
+        // `last` IS NOT WRITTEN HERE ANY MORE, and that was the sharper half of the defect.
+        // Recording the bytes as pushed BEFORE the send meant a push that never arrived was
+        // remembered as delivered, and nothing clears this map on a host restart — so the next
+        // undo back to that same state hit the `continue` above and sent nothing at all. The gap
+        // was not self-healing, it was self-sealing.
       }
       bool ok = false;
       {
         std::lock_guard<std::mutex> lock(runtime->controllerMutex);
         ok = runtime->controller.sendPluginState(device.hostIndex, *found->second);
       }
+      if (ok) {
+        std::lock_guard<std::mutex> lock(runtime->pluginStateMutex);
+        runtime->lastPushedState[device.deviceId] = found->second;
+      }
       DAW_EVENT("undo.plugin_state_pushed")
           .field("track", runtime->trackId)
           .field("device", device.deviceId)
           .field("bytes", static_cast<uint64_t>(found->second->size()))
           .field("ok", ok);
-      if (ok) {
-        ++pushed;
-      }
       // A PUSH THAT LANDED IS NOT A CHANGE THE ENGINE HAS YET TO SEE. Without this the next
       // capture would re-read every plugin undo touched, for state it just wrote itself.
-      runtime->pluginStateDirty.store(false, std::memory_order_release);
+      //
+      // "THAT LANDED" is what the comment always said and is now what the code does. This store
+      // ran unconditionally, so a FAILED push also marked the track clean, and the next
+      // capture(onlyDirty=true) then skipped it and carried the stale blob forward. Two
+      // bookkeeping writes, both recording a delivery that did not happen.
+      if (ok) {
+        ++pushed;
+        runtime->pluginStateDirty.store(false, std::memory_order_release);
+      }
     }
   }
   return pushed;

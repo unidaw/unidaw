@@ -731,8 +731,15 @@ static void restorePluginStateFromDisk(LoadProjectDeps& deps,
         }
         std::vector<uint8_t> blob((std::istreambuf_iterator<char>(in)),
                                   std::istreambuf_iterator<char>());
+        // THE HOST MUST BE READY. On the common path it is — setupTrackRuntime launches
+        // synchronously and rebuildHostForChain keeps it up — but when the chain reconcile FAILS it
+        // sets hostReady=false plus needsRestart and returns, the restart worker relaunches on
+        // another thread, and this runs immediately after on the load thread. `ok` would then be
+        // true for a push into a host about to be SIGKILLed, because clearing readiness does not
+        // close the socket.
+        const bool hostRunning = runtime->hostReady.load(std::memory_order_acquire);
         bool ok = false;
-        {
+        if (hostRunning) {
           std::lock_guard<std::mutex> lock(runtime->controllerMutex);
           ok = runtime->controller.sendPluginState(
               static_cast<uint32_t>(hostIndex), blob);
@@ -741,6 +748,7 @@ static void restorePluginStateFromDisk(LoadProjectDeps& deps,
             .field("track", source.trackId)
             .field("device", savedIds[hostIndex])
             .field("bytes", static_cast<uint64_t>(blob.size()))
+            .field("host_ready", hostRunning)
             .field("ok", ok);
       }
     }
