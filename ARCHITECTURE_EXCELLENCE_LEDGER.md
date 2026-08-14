@@ -5584,3 +5584,18 @@ So: uphold. But the refusal rests on one load-bearing sentence — *"nothing rea
 buffer"* — and that is prose. The residue is to make it a CHECK: pin the population of writers of
 this type, so a second one (which might target a genuine multi-producer ring, where a clobbered
 `ready` is silent data loss on the audio thread) forces a look rather than passing unnoticed.
+
+### Item 35 residue landed: `patcher_event_tail_check`, registered, four controls
+
+The prose the refusal rests on is now a check. The predicate is the **write width, not the buffer**:
+two sites take a mutable slice and mutate fields of existing entries, which never reaches the tail;
+only a whole-object store covers the padding where the C++ side keeps `ready`.
+
+**Its first version was blind, and its own control found that.** The pattern was anchored to the
+start of a line, so an inline `unsafe { let slot = ...; *slot = entry; }` walked straight past it —
+a predicate defined by POSITION cannot see the construct that sits somewhere else. De-anchored, and
+it catches index assignment (`events[i] = entry;`) too. Four controls now fire, including the store
+that escaped.
+
+`patcher_event_tail: PASS — 1 whole-object store in push_event, 2 field-only bulk views`, at
+`b466a351`.
