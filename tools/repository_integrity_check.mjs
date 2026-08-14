@@ -79,8 +79,9 @@ const LIVE_CLASS_RULES = [
         || name === 'comparer_blind_fields.txt';
     } },
   { id: 'registered-operational-markdown',
-    provenance: 'README.md and direct docs/*.md are consumed by registered doc_citation/unit checks',
-    matches: ({ path }) => path === 'README.md' || /^docs\/[^/]+\.md$/.test(path) },
+    provenance: 'README.md, root Markdown and everything under docs/ are consumed by the registered doc_citation check',
+    matches: ({ path }) => path.endsWith('.md') &&
+      (!path.includes('/') || path.startsWith('docs/')) },
   { id: 'executable-mode',
     provenance: 'Git/worktree executable bit marks an operational entry point',
     matches: ({ executable }) => executable },
@@ -90,6 +91,10 @@ const LIVE_CLASS_RULES = [
 ];
 
 const EXCLUDED_CLASS_RULES = [
+  { id: 'ae-p0-2-generated-contracts',
+    provenance: 'generated wire contracts whose only consumers are AE-P0.2 tests that are NOT registered in ctest — excluded because nothing that runs reads them',
+    matches: ({ path }) => /^tools\/architecture\/ae_p0_2\/generated\//.test(path) },
+
   { id: 'pinned-task-packet',
     provenance: 'the exact task packet is validated byte-for-byte against EXPECTED_PACKET_SHA',
     matches: ({ path }) => path === PACKET_PATH },
@@ -105,9 +110,12 @@ const EXCLUDED_CLASS_RULES = [
   { id: 'font-asset',
     provenance: 'WOFF2 files are binary vendored fonts',
     matches: ({ path }) => extname(path).toLowerCase() === '.woff2' },
-  { id: 'root-design-prose',
-    provenance: 'root Markdown other than README is design/governance prose not consumed by a registered check',
-    matches: ({ path }) => !path.includes('/') && path.endsWith('.md') && path !== 'README.md' },
+  // 'root-design-prose' is GONE. It said root Markdown was "design/governance prose not consumed
+  // by a registered check", and on 2026-08-14 doc_citation_check's scope widened to root *.md and
+  // then to docs/**, which made that sentence false the moment it landed. The files are now
+  // classified live for the reason the markdown rule above states, and this exclusion would have
+  // gone on asserting they were unchecked. A provenance is a claim about the world, so widening a
+  // check's reach is also an edit to whatever explained why something was outside it.
   { id: 'web-design-prose',
     provenance: 'ui-web Markdown is design/user prose not read by the registered web checks',
     matches: ({ path }) => path.startsWith('ui-web/') && path.endsWith('.md') },

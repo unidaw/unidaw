@@ -13,7 +13,9 @@ reviewer
 
 Branch: `ae/p0-2-lane0`
 
-Worktree: `/Users/jak/src/daw-ae-p0-2-lane0`
+Worktree: the sibling checkout `daw-ae-p0-2-lane0` (recorded without its absolute path: an
+absolute home-directory path in live content is what `repository_integrity` refuses, and this
+line was invisible to it only because nothing classified this document until 2026-08-14)
 
 ## Objective
 

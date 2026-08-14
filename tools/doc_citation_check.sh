@@ -33,7 +33,7 @@ root = pathlib.Path(sys.argv[1])
 # widened. The check working on its own author is the best evidence it works.)
 # A citation checker that does not read the repository's largest design document is not checking
 # citations, it is checking a directory.
-docs = sorted(set(list((root / 'docs').glob('*.md')) + list(root.glob('*.md'))))
+docs = sorted(set(list((root / 'docs').rglob('*.md')) + list(root.glob('*.md'))))
 ok = True
 
 # ---- rule 1: the line-number citation count can SHRINK and cannot GROW.
@@ -45,10 +45,24 @@ ok = True
 #
 # The fifteen citations into daw_engine_main.cpp are already gone — that file lost a third of its
 # lines tonight and every one of them had come to point somewhere else.
-BASELINE = {'SAMPLER_DESIGN.md': 21, 'TRACKER_GAP_LIST.md': 20, 'per-note-ops.md': 1,
-            # Measured 2026-08-14 when root documents came into scope, with this rule's own
-            # regex rather than an approximation of it. They ratchet down like the others.
-            'ARCHITECTURE_REVIEW.md': 19, 'MASTER_TRACK_DESIGN.md': 1}
+BASELINE = {
+    # Measured with this rule's own regex each time the scope widened, never estimated.
+    # docs/*.md and README, the original scope:
+    'SAMPLER_DESIGN.md': 21, 'TRACKER_GAP_LIST.md': 20, 'per-note-ops.md': 1,
+    # root documents, added 2026-08-14:
+    'ARCHITECTURE_REVIEW.md': 19, 'MASTER_TRACK_DESIGN.md': 1,
+    # docs/architecture/** task packets, added 2026-08-14. These are the documents designs are
+    # READ FROM — the CMD00 design lives here — and nothing was checking their citations at all,
+    # which is also why repository_integrity called them unclassified: a markdown file earns its
+    # live provenance by being consumed by a registered check, and none consumed these.
+    'P2-CMD-00-command-outcome.md': 4, 'P2-CMD-00-owner-decisions.md': 4,
+    'P2-CMD-00-review.md': 3, 'P2-CMD-00-revised.md': 9,
+    'P2-G4-01-inventory.md': 9, 'P2-HOST-R3-readiness-transaction.md': 13,
+    'P2-HOST-R3b-decision.md': 10, 'P2-HOST-R3c-flapping-guard-race.md': 18,
+    'P2-HOST-remediation.md': 5, 'P2-SHM-01-inventory.md': 10,
+    'P2-WDOG-02-inventory.md': 12, 'P2-WDOG-03-ticket.md': 2,
+    'P2-WDOG-04-watchdog-call-site.md': 16,
+}
 line_cite = re.compile(r'\b[\w/]+\.(?:cpp|h|rs|mjs):\d+')
 for d in docs:
     if not d.exists():
