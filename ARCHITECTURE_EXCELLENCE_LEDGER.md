@@ -5539,3 +5539,48 @@ entry would fail on a fast machine and be silenced inside a week.
 
 **Still to do before this lands: the mandatory exact independent review** — this is a shared-memory
 change and those do not merge here without one.
+
+## Items 26 and 35 ruled
+
+### Item 26 — CONFIRM the substitution
+
+The fixture was replaced by `apps/host_chain_buffers.h` plus a ping-pong parity test. I nearly
+overruled this on the ledger's own framing ("a substitution, not a partial completion"), then read
+what landed.
+
+The G4 inventory established there is **no aliasing hazard to exercise**: the host uses two distinct
+ping-pong buffers, and parity plus pre-clear ordering keeps every adjacent input separate from its
+output. The replacement asserts that in `engine_pure_tests_main.cpp:610-645` — the alternation
+A/B/A/SegmentOutput, and critically that **no plugin but the last writes SegmentOutput**, checked
+across all indices rather than demonstrated on one configuration.
+
+A property proven over the whole index space, running in ctest with no plugin fixture required, is a
+better result than the fixture. **Confirmed.** The substitution is not a gap.
+
+### Item 35 — UPHOLD the product's refusal, and pin the premise instead
+
+R14 wants `ready` declared on the Rust side for parity. **I nearly ruled this already done**, having
+grepped `ui/` and found exactly one `EventEntry` — in `layout.rs`, which DOES declare `ready`.
+
+That was a subset. The governed one is `patcher_rust/src/lib.rs:117`, outside `ui/`. This is the
+second time this type name has produced a wrong answer by measuring the wrong file, and it is why
+the rule is to disambiguate by PATH and state which file was measured.
+
+The governed mirror has 6 members and no `ready`, and the refusal is argued from measurement, not
+preference:
+
+* the buffer has one producer and one consumer **on one thread**, so a publication flag would mean
+  nothing;
+* `push_event` stores the whole object, whose tail padding covers those four bytes — harmless
+  *because nothing reads them from this buffer*;
+* size, alignment and **every offset** are asserted at compile time, and `EVENT_READY_OFFSET = 60`
+  is declared as the boundary the payload must stop at.
+
+**Adding `ready` would make things worse**, which is the part R14 does not weigh: it would create a
+field this crate must never write, in a type whose whole-object store would write it — a footgun
+strictly worse than a documented absence.
+
+So: uphold. But the refusal rests on one load-bearing sentence — *"nothing reads them from this
+buffer"* — and that is prose. The residue is to make it a CHECK: pin the population of writers of
+this type, so a second one (which might target a genuine multi-producer ring, where a clobbered
+`ready` is silent data loss on the audio thread) forces a look rather than passing unnoticed.
