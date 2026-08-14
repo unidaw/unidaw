@@ -108,6 +108,7 @@ watcher:  none (required for Codex)
 | `AE-P1.4` | `GATE MET` | the `AE-P0` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent | none | 5 plain writes fixed; watchdog use-after-free fixed; TSan evidence DELIVERED — `tsan_command_hammer.sh` 108 commands landed / 0 races, and `tsan_render.sh` 1 race -> 0 after the RenderPool fix |
 | `RenderPool race` | `FIXED, REVIEWED` | found by `AE-P1.4`'s instrument | `lead` | independent subagent | none | straggler read `m_fn`/`m_count` unlocked across a batch handover: null deref, out-of-range item, and an `m_remaining` underflow that HANGS the producer; generation packed into the claim counter; review returned SAFE-TO-MERGE with 3 defects (store order, a 2^32 count re-opening the hang, a wrong wrap figure) — all fixed at `a4345f33` |
 | `Success signal uncorrelated` | `OWNER CALL (9)` | found hardening the item 29 check | `lead` | none | none | `await_clip_outcome` infers Applied from a bare version counter; MEASURED to mask a real refusal 3 of 6 runs under load, because `load maximal` bumps the version 1->2 across half a second |
+| `Packet provenance (dec 8)` | `DONE` | ruled 2026-08-14 | `lead` | 3 named controls | none | merge REJECTED after measuring: branch is 16186 lines behind main. Ancestry was a proxy; main carries the packet byte-identically via squash at `71758c0`. Named `INTEGRATED_PACKETS` record, both halves ratcheted. `41f3d9ee` |
 | `AE-P1.5` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P1.6` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P2.*` | `BLOCKED` | Phase 1 gates | unassigned | unassigned | none | none |
@@ -5415,3 +5416,45 @@ this exact sweep before the quiescence fix.
 the part that matters: `refusal_correlation` was made more patient to stop a false alarm, and a more
 patient check is the classic way to buy stability by going blind. It still fails when the engine's
 echo is zeroed. Making a check pass is not the same as keeping it able to fail.
+
+## Decisions 7, 8, 9, and items 26/35: ruled by Jaakko 2026-08-14 — "go with your recommendations"
+
+Standing instruction attached to it: **make decisions of this size autonomously, using best
+judgement, rather than queueing them.** Recorded here because it changes how this ledger should be
+written from now on — an entry that says "blocked on an owner call" now needs to justify why the call
+could not be made here.
+
+### Decision 8: my recommendation was wrong, and measuring it is what showed that
+
+I recommended **merging `ae/p0-followup` into main**. Acting on it, I measured the branch first:
+
+| | |
+|---|---|
+| fork point | `62bafdc6`, the product baseline |
+| main vs branch | **16186 deletions**, 139 files |
+| would drag in | stale `control.rs`, `shm_access_check.sh`, `watchdog_bound_check.sh`, `tsan_command_hammer.sh` … |
+
+The branch forked at the baseline and main has moved a very long way past it. Merging would re-apply
+stale shared tooling and produce conflicts across `CMakeLists.txt`, `webstack.sh`, `verify.sh` and
+the web tests — to restore a link whose underlying property already holds.
+
+**Because the property does hold.** `main` carries the packet **byte-identically** (blob
+`3c63759`), and the ledger's recorded integration commit `71758c0` is an ancestor of main and carries
+that same blob. AE-P0.1 reached main by squash, not by merge.
+
+So the rule was a **proxy**: commit ancestry stands in for "this worktree carries the acknowledged
+packet", and squash integration breaks the proxy without touching the property. The exclusion rule's
+own provenance says so — *"the exact task packet is validated **byte-for-byte** against
+EXPECTED_PACKET_SHA"* — and every other rule in `validatePacketProvenance` tests content or scope.
+Ancestry was the only one testing history shape.
+
+**What landed instead of a merge:** a NAMED integration record, keyed to the exact packet SHA, in the
+idiom `check_registry` already uses for `DECLARED_UNREGISTERED`. Both halves are verified — the
+recorded commit must be an ancestor AND carry the packet byte-for-byte — so a wrong entry fails
+rather than excusing anything. A new packet gets no free pass: no record means true ancestry is
+still required. And an entry whose packet becomes a genuine ancestor is reported STALE, because an
+allowance that outlives its reason is how a list stops describing the world.
+
+This is deliberately not the third option I dismissed. Re-pointing `EXPECTED_PACKET_SHA` would make a
+red check green by changing what it expects; this changes what it ACCEPTS, in one named case, with
+the reason attached and both halves ratcheted.
