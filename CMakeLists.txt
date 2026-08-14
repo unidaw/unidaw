@@ -899,14 +899,15 @@ add_test(NAME root_isolation
 )
 set_tests_properties(root_isolation PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
-# A ring cursor read out of shared memory becomes a pointer; unmasked it addresses an arbitrary
-# distance from the mapping, and on the command ring that is a 64-byte write. Two of the three
-# accessors had drifted from the idiom the third always used.
-add_test(NAME ring_index_masking
+# How the bridge may touch the mapped segment: ring cursors masked where they become pointers, and
+# nothing reaching the mapping except through the bounds-checked region helpers. Renamed from
+# ring_index_masking when the second rule joined it — a check named for half its contents is worse
+# than the churn of fixing it one commit later.
+add_test(NAME shm_access
   COMMAND ${CMAKE_COMMAND} -E env --unset=BASH_ENV --unset=ENV
-    bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/ring_index_masking_check.sh
+    bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/shm_access_check.sh
 )
-set_tests_properties(ring_index_masking PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120)
+set_tests_properties(shm_access PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120)
 
 # AE-P0.2's generated schema bundle and its C++/Rust/TS emissions. Six test files validated them,
 # all six passed, and until this entry existed nothing executed any of them: `ae_p0_2` appeared

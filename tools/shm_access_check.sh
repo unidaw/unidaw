@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
-# EVERY RING INDEX IS MASKED AT THE POINT IT BECOMES A POINTER.
+# HOW THE BRIDGE IS ALLOWED TO TOUCH THE MAPPED SEGMENT. Two rules, one subject.
+#
+#   1. Every ring index is masked at the point it becomes a pointer.
+#   2. Nothing reaches the mapping except through the bounds-checked region helpers.
+#
+# RENAMED ONE COMMIT AFTER IT WAS WRITTEN, from a name that described only rule 1 (removed). Rule 2 belongs with rule 1
+# — both answer "may this code form this address" — and a check named for half its contents is
+# worse than the churn of fixing it while it is still one commit old. That argument is this
+# repository's, made in engine_ui_publish.h about a module renamed for the same reason.
 #
 # A ring index read out of shared memory is a number another process wrote. `entries.add(i)` turns
 # it into an address and the caller then reads or writes 64 bytes there, so an index outside
@@ -24,7 +32,24 @@
 # the rule is expressed as "all three agree" rather than invented: the right idiom was already in
 # the file and two of its three siblings had drifted from it.
 #
-#   tools/ring_index_masking_check.sh
+# ---- RULE 2 -----------------------------------------------------------------------------------
+#
+# AE-P1.3 routed nineteen region accessors through `region::<T>` / `region_slice::<T>`, which prove
+# the region fits inside the mapping before handing back a pointer. The helpers are only worth
+# anything if nothing goes around them.
+#
+# THIS RULE EXISTS BECAUSE THE POPULATION WAS WRONG. I converted fifteen sites, grepped, and
+# reported the class closed. It was nineteen: my predicate wanted `as *const T` on the SAME LINE as
+# the `.add()`, and four accessors wrap onto the next line with a fully-qualified path. A
+# line-oriented predicate cannot see a construct that wraps, and three of the four were the LAST
+# regions in the layout — precisely what a segment truncated mid-setup is missing.
+#
+# So the rule is not "find the raw sites and check them", which is the predicate that already
+# failed. It is: `_mmap.as_ptr()` may appear ONLY inside the two helpers. A new accessor cannot
+# reach the mapping any other way, so it cannot be missed by a pattern — it does not compile
+# without going through them or adding a use this check refuses.
+#
+#   tools/shm_access_check.sh
 #
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -122,7 +147,69 @@ print("  PASS  %d entry-array index site(s), each masked where the pointer is fo
 PYEOF
 rc=$?
 if [ $rc -ne 0 ]; then
-  echo "ring_index_masking_check: FAILED"
+  fail=1
+fi
+
+python3 - "$SRC" <<'PYEOF'
+import re, sys
+
+lines = open(sys.argv[1]).read().splitlines()
+
+# Rule 2. Whole-text search, reported by line — deliberately not a per-line predicate about the
+# SHAPE of the access, which is the thing that missed four sites.
+RAW = re.compile(r'_mmap\s*\.\s*as_ptr\s*\(\)')
+HELPER = re.compile(r'^\s*fn (region|region_slice)<T>')
+EXPECTED_RAW = 2          # one inside each helper
+EXPECTED_CALLS = 19       # accessors going through them
+
+helper_spans = []
+for i, l in enumerate(lines, 1):
+    if HELPER.match(l):
+        depth, j = 0, i - 1
+        while j < len(lines):
+            depth += lines[j].count('{') - lines[j].count('}')
+            if depth <= 0 and j > i - 1:
+                break
+            j += 1
+        helper_spans.append((i, j + 1))
+
+def in_helper(n):
+    return any(a <= n <= b for a, b in helper_spans)
+
+raw = [(i, l.strip()) for i, l in enumerate(lines, 1)
+       if RAW.search(l) and not l.lstrip().startswith('//')]
+outside = [(i, t) for i, t in raw if not in_helper(i)]
+calls = sum(1 for l in lines
+            if re.search(r'self\.region(_slice)?::<', l) and not l.lstrip().startswith('//'))
+
+bad = False
+for i, t in outside:
+    print("  FAIL: control.rs:%d reaches the mapping directly: %s" % (i, t[:70]))
+    print("        Only region::<T> and region_slice::<T> may do that. They prove the region fits")
+    print("        inside the mapping first; a direct .as_ptr() is an accessor that skipped it.")
+    bad = True
+
+if len(raw) != EXPECTED_RAW:
+    print("  FAIL: %d direct mapping access(es), expected exactly %d — one per helper."
+          % (len(raw), EXPECTED_RAW))
+    bad = True
+
+if calls != EXPECTED_CALLS:
+    print("  FAIL: %d accessor(s) go through the region helpers, expected exactly %d." % (calls, EXPECTED_CALLS))
+    print("        A pinned count. A new region accessor earns a look: the last one added was")
+    print("        indexed as an ARRAY and needed region_slice, which region::<T> would not bound.")
+    bad = True
+
+if bad:
+    raise SystemExit(1)
+print("  PASS  %d accessor(s) reach the mapping, all through the bounds-checked helpers" % calls)
+PYEOF
+if [ $? -ne 0 ]; then
+  fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo "shm_access_check: FAILED"
   exit 1
 fi
-echo "ring_index_masking_check: PASS"
+echo "shm_access_check: PASS"
