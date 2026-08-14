@@ -4440,3 +4440,51 @@ The reviewer enumerated what this increment does NOT close, and one item outrank
   lets the rest land.
 
 That is the next increment, and it is unblocked.
+
+## AE-P1.3: the headline harm closed, and a rule with three sites ratcheted (`d3d92a17`)
+
+The previous review's sharpest point was that **validating the descriptor does not make the view
+safe to USE** — a perfectly validated ring indexed by a corrupt cursor is the same access. This
+closes the harm the previous commit was named for and could not prevent.
+
+`write_entry` computed a masked `next` — the value stored BACK into `write_index` — then
+**explicitly discarded it** (`let _ = next;`) and indexed the slot with the UNMASKED `write` it had
+reserved. `drain_ui_out` masked the INCREMENT, so every iteration after the first was in range and
+the first, the raw shared value, was not. Both then read or wrote 64 bytes there.
+
+In a correct system this is harmless: both implementations only ever store a masked value, so the
+index is in range **by invariant**. That invariant is a property of a word another process writes,
+which is exactly the trust this file is being taught not to extend. `peek_ui_diffs` has always
+masked at the point of use; the three accessors agree now.
+
+### The check, and its two wrong drafts
+
+A rule with three sites, in a codebase that watched one reach seven hand-rolled copies under a
+comment saying four. `ring_index_masking_check` derives the population from `entries.add(` rather
+than listing accessors, and pins the count. **The rule is "masked where the pointer is formed", not
+"the function mentions mask"** — both defects had a mask in the function, just not on the path that
+formed the pointer, so the weaker rule would have passed both.
+
+Both wrong drafts are kept in the check's header, because the way they were caught matters:
+
+1. The first demanded the mask INSIDE the index expression and **refused `peek_ui_diffs`** — the one
+   accessor that was correct all along, and the one the check cites as its idiom.
+2. The second accepted a masked local but searched the whole FILE for that local's assignments,
+   found five unrelated `let slot = addr_of!(...)` bindings in other accessors, and refused the same
+   site again. **A name means nothing outside the scope that binds it.**
+
+Each was caught by RUNNING the check against correct code and reading the accusation. Neither would
+have been caught by reasoning about the regex, and a check that confidently accuses correct code is
+worse than no check — this project deleted a whole check-auditing tool for exactly that.
+
+Three controls: the write-side defect and the read-side defect are each caught by file and line; and
+a local masked once then REASSIGNED RAW is refused, which is what makes "all of whose assignments"
+load-bearing rather than decorative.
+
+### What remains in this class
+
+~20 sibling region offsets in `control.rs` still read a `u64` out of `ShmHeader` and dereference,
+guarded by `off == 0` alone — clip window, arrange summary, harmony, patcher, scales, device params,
+waveform, automation, sampler kit, device meters. `EngineHandle` does not store `size`, so the
+parameter idiom used for the ring does not reach them; storing it, or exposing a bounds-checked
+`region::<T>(offset)`, is the shape that lets the rest land. Unblocked, and the next increment.
