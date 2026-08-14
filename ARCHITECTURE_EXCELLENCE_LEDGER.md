@@ -103,7 +103,7 @@ watcher:  none (required for Codex)
 | `AE-P0.2 implementation` | `COMPLETE` | packet `6287ffd` approved + AE-P0.1 integration | codex-worker-2 | claude-worker-2 | `/Users/jak/src/daw-ae-p0-2-lane0` | product main `75c6f06`; final corrective candidate independently approved |
 | `AE-P0.3` | `BLOCKED` | B1-B8 design review of Option B (see 2026-08-13 re-derivation) | `lead` | unassigned | none | last impl `02eb2d65`, review BLOCKED |
 | `AE-P1.1` | `FROZEN` | `AE-P0` | claude-worker-2 | codex-worker-1 | `/Users/jak/src/daw-ae-p1-1-packet` | `ba88bcb4657b62bdfc752d338d877e139e212ca6`; independent PASS; successor-only |
-| `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; 19 open items; G4 not decidable |
+| `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; 30 open items (11 blocking, item 34 withdrawn); G4 not decidable |
 | `AE-P1.3` | `BLOCKED` | `AE-P1.2` | unassigned | unassigned | none | none |
 | `AE-P1.4` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P1.5` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
@@ -3786,3 +3786,59 @@ from the other run's record — #61 is `persisted_field_reach` in the full list 
 `rust_tests_check` in the filtered one. The failure list was therefore fiction and had to be
 discarded and re-run cleanly. Test numbering is not stable across filtered invocations, so a
 `--rerun-failed` list is only meaningful for the exact invocation that produced it.
+
+## `load_sample` reported ok for a sound that does not exist (`477022cc`)
+
+`rust_tests_check` has been RED, pre-existing, on three `engine_e2e` sampler assertions. They are
+the live form of open decision 6, not a hypothetical: `load_sample` answered `{"sent": true}` and
+`ok: true` for a file that does not exist.
+
+**The cause was not the 250 ms window.** `PROGRESS.md` states that `load_sample` reads the kit back
+rather than reporting the send, and describes the output field by field. **The code never did it** —
+`key_low` occurs once in `tools.rs` and not in that function. The tests encode the documented
+behaviour and were failing against an implementation that had never had it.
+
+The function's own comment records how: a merge produced TWO definitions of `load_sample` at
+different offsets with no textual conflict, and the survivor was kept as *"the superset of both"*.
+**It was not a superset.** It carried main's semantics and the refusal wiring and lost the read-back.
+The compiler caught the duplicate NAME and could not catch the missing BEHAVIOUR — so the resolution
+was verified by the one signal that could not see the loss. That is the sharpest instance yet of
+clean merges hiding breakage.
+
+The fix is positive confirmation: read the kit first, then poll until a slot appears that was not
+there before, and report what it plays. The new slot is identified by **not having been there**, not
+by name — the engine seeds a slot's name from the file stem and a rename can change it afterwards,
+so name-matching both misses a renamed slot and matches a pre-existing one from the same file (tried
+before, recorded as a wrong turn). `lengthFrames == 0` is now an error, because a name that resolves
+to nothing still MINTS a slot that exists, draws, and is silent.
+
+This is decision 6's option B applied to ONE verb. It does not pre-empt the decision: the global
+convention is untouched, and `ok` is only made to mean what this tool already claimed.
+
+Verified: `engine_e2e` 64 passed / 0 failed, was 61/3; `rust_tests_check` PASS.
+
+### The check was carrying a false claim about itself
+
+Found while reading it. `rust_tests_check`'s header said `engine_e2e` was compiled but **not run**,
+because *"running two engine fleets from one ctest invocation is how the shared-segment collisions
+in this project started"*. Both halves were false.
+
+The run line is `cargo test -p ... -p daw-agent`, and nothing in daw-agent's `Cargo.toml` excludes an
+integration target, so cargo has been running `engine_e2e` all along. **Proven by the check's own
+failure output** — three `engine_e2e` assertions by file and line — rather than by arguing about
+cargo semantics. And the safety rationale had expired independently: `start_engine` sets
+`DAW_UI_SHM_NAME` per test, which is the change that fixed the collision it feared. *The reason
+outlived the thing it was reasoning about.*
+
+Believing the header would mean thinking e2e coverage is absent from ctest while it is the part
+finding real defects. A stale claim that supplies a ready reason not to look is exactly what this
+check exists to catch, and it was carrying one about itself.
+
+### Ledger correction: AE-P1.2 has 30 open items, not 19
+
+The ticket-state row says "19 open items". Verified against the packet independently, by two
+sources that agree: the document's own header reads *"39 atomic, 9 CLOSED at this SHA, 30 open"*,
+and `AE-P1.2-manifest.json` counts `{items: 39, closed: 9, open: 30, blocking: 11}` with 39 records
+of which 9 are flagged closed. **30 open, 11 blocking.** Item 34 is WITHDRAWN and must not be
+scheduled — it is kept in the list deliberately so its disappearance would not read as work
+completed. The row is corrected below.
