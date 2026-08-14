@@ -4197,3 +4197,50 @@ seconds. The distinguishing ingredients are a loaded project with live hosts and
 before the stop. **This is not an explanation and is not offered as one** — it is the first
 repeatable reproduction of a symptom that has only ever been seen after the fact, and it belongs to
 whoever picks up the orphaned-host question.
+
+## AE-P1.2 items 33 and 36 CLOSED (`fe987ad1`, `6d5c7ff3`)
+
+### Item 33 — a floor and a note, where two pins were needed
+
+`request_registry_check` ranged over two populations and asserted neither in the direction that
+actually happens.
+
+**The kinds FLOOR** (`len(KINDS) < 7`) guarded against the extraction breaking — every rule is "for
+each kind", so finding nothing satisfies all of them. But a floor is blind the other way, and an
+EIGHTH request kind with no Rust mirror, no reader and no send site left every rule green: each
+ranges over the kinds it found, and the new one simply joined them.
+
+**The send-site total was a `note`** — printed, asserted against nothing. Item 33 states its own
+refutation: *add an eighth send site and the ratchet stays green*, because the per-kind rule only
+asks whether each kind has AT LEAST ONE sender.
+
+Both pinned, at 7 and 16. **And it ratchets, verified rather than argued**: with a seventeenth send
+site present the OLD check PASSES and the new one refuses. That is the test separating "the control
+fires" from "the check catches what it was written for", and it is the one this programme keeps
+finding was skipped.
+
+Both refusals say what to do, not only what is wrong — a new kind needs a mirror, a reader and a
+sender; a new send site needs someone to confirm the caller waits for its own answer, since the echo
+rule cannot see it.
+
+### Item 36's fourth defect — the gate was on the report, not on the gating
+
+`if (isPlaying)` wrapped only `logStall`. The `continue` that gates production ran regardless, so
+production was gated either way and only the REPORT was conditional. **A producer held by a frozen
+host went silent the moment playback stopped** — the state a person diagnosing a stall is most
+likely to be in.
+
+The gate was never flood protection: `logStall` is already gated on `DAW_ENGINE_DEBUG_STALL` and
+rate-limited to twice a second. It was a blind spot inside the diagnostic mode that exists to see
+this. Both arms now log, and the line carries `playing=0|1` so the two findings stay distinguishable
+— until now the way they were told apart was that one did not appear.
+
+**Verified in the direction that matters.** A live engine under the diagnostic produced 19 stall
+lines including `producer stall (inFlight) ... playing=0`, which **could not have existed before the
+change**, alongside others at `playing=1`. And it did not break the check that reads those lines,
+which was the real risk: `host_stall_check` counts those lines against a threshold of 3, so extra
+lines could have caused a FALSE FAILURE. Re-run: 1,674 blocks, 0 stalls after the freeze, PASS.
+
+Item 36's oracle still counts log lines rather than reading a counter, but the logging now shadows
+the gating faithfully and the threshold tests persistence rather than an exact count, so the
+remaining distance is presentational.
