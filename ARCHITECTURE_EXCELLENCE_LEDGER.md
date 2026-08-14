@@ -4986,3 +4986,42 @@ opts in; the other 57 are untouched. The 36 internal wrappers discard it explici
 Nothing consumes the id yet. That is what closes item 29's remaining half — a consumer correlating
 on `(track, commandType, sentBase)` has an INERT third key for `SetRowOps`, and matching on the id
 makes that key irrelevant rather than needing a value invented for it.
+
+## AE-P1.2 item 29 closed: refusals correlate by the minted id (`d57a69b4`)
+
+The CLI matched a refusal on `(track, commandType, sentBase)`. That triple names a KIND of command
+on a track, so two concurrent writers — or a write and its own stale-base retry — are
+indistinguishable by it. And for `SetRowOps` the third key is **inert**: `UiSetRowOpsPayload` carries
+no base version, so `sentBase` is 0 by contract and the triple degenerates to a pair.
+
+That inert key is item 29's remaining half, and **the item is explicit that it could not be closed by
+inventing a value for it**. Matching on the id makes it irrelevant instead, which is the only way it
+was ever going to close.
+
+Both retry paths mint their own id — the case the old triple could not distinguish at all, since a
+retry re-sends the SAME command type to the SAME track and only the base differs, which is exactly
+what the retry changes.
+
+It follows the normative reader rule rather than indexing to offset 32: dispatch on the diff type
+first, require the payload long enough that offset 32 lies inside what the publisher wrote, and treat
+all-zero as NO ID. The old triple survives as a fallback ONLY when the caller has no id of its own.
+
+**A mistake worth recording:** my first pass renamed the send in the CHORD path too and injected a
+`sent_id` binding that did not exist there, because I matched the await call by its arguments and
+both paths share them. A blanket rewrite keyed on a shared shape reaches into a sibling that only
+looks the same. The compiler caught it.
+
+### A pre-existing red check my own sweeps were hiding
+
+`version_arbiter` fails — reproduced with these changes stashed, and it derives from `apps/*.cpp`
+while this commit is Rust only. **I had been excluding it from my sweep filters all session**, which
+is precisely the "a red check is where breakage hides" shape, applied to my own tooling rather than
+the tree's.
+
+Its extraction takes `UiCommandType::X` within FOUR LINES of a `requireMatchingClipVersion(` call and
+finds 5 where it expects ≥7. Widening the window to twelve lines recovers 6, not 7 — **so there are
+two causes mixed**: a proximity approximation that has degraded, and one command genuinely absent
+from the arbitrated set. The check's own comment anticipates exactly this: *"finding FEWER means the
+extraction broke, not that the code got safer"*.
+
+Not investigated further here; filed as the next item rather than folded into an unrelated commit.
