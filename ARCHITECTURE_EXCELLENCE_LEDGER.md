@@ -4888,3 +4888,35 @@ Items 27, 28 and 29 were all waiting on an identity to exist. It does now:
 - **28** — the CLI decides `Applied` by comparing a counter (`main.rs`, `await_clip_outcome` matches
   on `(track, commandType, sentBase)`); it can now match on the id instead.
 - **29** — `SetRowOps`'s inert third correlation key was gated on exactly this.
+
+## AE-P1.2 item 27: two of three refusal channels closed, the third needs a decision (`56430725`)
+
+Item 27 is about three refusal CHANNELS, not three call sites — adoptable `ClipRejected`,
+`UiDiffType::ResyncNeeded`, `UiHarmonyDiffType::ResyncNeeded` — and R12's finding is that **all
+three** failed the invariant: none carried a sender-minted per-command identity, so `commandType`
+named a KIND and not an instance for every member.
+
+**ClipRejected** closed when the ambient id reached `emitClipReject`. **The harmony channel** closes
+here: `UiHarmonyDiffPayload` has carried the id fields since step 1 and nothing ever wrote them, so
+a caller could see that SOME harmony write was refused and not whether it was its own.
+
+The two success paths in that file deliberately do NOT set it — Add/Update and Remove are
+notifications of something that happened, not answers to a command, and an id there would invite a
+reader to correlate a broadcast with its own request. Established by reading all three construction
+sites rather than the one I was looking for.
+
+### The third channel cannot be closed the same way
+
+`UiDiffType::ResyncNeeded` travels on `UiDiffPayload`, which is **exactly 40 bytes and FULL** —
+offsets 32-39 are `noteVelocity` and `noteColumn`, real fields, not reserved. Every other refusal
+payload puts the id at offset 32; there is none free here, and `EventEntry::payload` cannot grow
+past 40 inside a cache-line-aligned entry.
+
+**Raised as decision 7 rather than solved by inventing a wire design.** Four options are written up;
+the recommendation is to echo the id in `EventEntry::sampleTime` on the way OUT, mirroring how it
+arrives — no new bytes, and the only option that generalises to any future refusal on a full
+payload. It is a wire design affecting three channels and hard to undo once shipped, which is what
+puts it in front of the owner rather than in a commit.
+
+Item 27 is therefore **two-thirds closed and blocked on decision 7** for the rest, which is a
+different state from the "BLOCKING, all three fail" it carried.
