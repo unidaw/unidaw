@@ -33,8 +33,13 @@
 //     different lock. A reader can observe a fresh generation beside a stale readiness. HOST-R3.
 //   * nextHostGeneration skips 0 on wrap, which addresses NEVER-LAUNCHED and NOT ABA. A reader
 //     holding generation N across 2^32 relaunches sees N again. A 64-bit epoch is HOST-R4.
-//   * tools/host_generation_check.sh counts occurrences per file; it does not bind a bump to the
-//     launch it belongs to. HOST-R5.
+//   * ~~tools/host_generation_check.sh counts occurrences per file; it does not bind a bump to the
+//     launch it belongs to. HOST-R5.~~ CLOSED. The check now attributes both launches and bumps to
+//     their enclosing FUNCTION and requires that every function which launches also bumps. The
+//     per-file counts are kept beside it because they catch a removal, which the binding does not.
+//     Verified by the mutation the counts were blind to: moving a bump from setupTrackRuntime into
+//     restartTrackHost leaves the file at 3 calls and 2 bumps — the old rule passes — and the new
+//     one names setupTrackRuntime and the lines it launches from.
 //
 namespace daw {
 

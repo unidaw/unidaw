@@ -62,6 +62,87 @@ if [ "$total_calls" -lt 4 ] || [ "$total_bumps" -lt 3 ]; then
   note "      4 and 3 existed when this was written. Fewer means the search stopped matching."
 fi
 
+# ---- HOST-R5: BIND EACH BUMP TO THE LAUNCH IT BELONGS TO -----------------------------------------
+#
+# The pins above are per FILE, and this header already admitted the gap: "counts occurrences per
+# file; it does not bind a bump to the launch it belongs to" (apps/engine_readiness_level.h, the
+# KNOWN LIMITS block). The mutation they cannot see is a MOVE. engine_track_setup.cpp holds three
+# launch/connect calls and two bumps across two functions; relocate one bump from setupTrackRuntime
+# into restartTrackHost and the file still reads 3 and 2, the check still passes, and an entire
+# launch path now leaves a stale generation — which is indistinguishable from a fresh mapping,
+# which is the whole thing the generation exists to make distinguishable.
+#
+# So attribute both to their enclosing function and require that every function which launches also
+# bumps. This SUBSUMES the counts rather than replacing them: the counts still catch a removal, and
+# this catches a relocation.
+#
+# It does not require one bump PER CALL, deliberately, for the reason stated above: setupTrackRuntime's
+# connect and launch are two arms of one decision under a single success check, so one bump covers
+# both. A rule demanding parity there would be wrong and would be "fixed" by adding a redundant bump.
+python3 - "$ROOT" <<'PYEOF'
+import os, re, sys
+root = sys.argv[1]
+CALL = re.compile(r'controller(?:\.|->)(?:launch|connect)\(')
+BUMP = re.compile(r'hostGeneration\.store')
+# A top-level definition starts in column 0 with a name and a paren and ends at a column-0 brace.
+START = re.compile(r'^[A-Za-z_][A-Za-z0-9_:<>,&*\s]*\w\s*\(')
+
+def spans(lines):
+    out, n = [], len(lines)
+    for i, l in enumerate(lines):
+        if not START.match(l):
+            continue
+        name = re.sub(r'\s*\(.*$', '', l).split()[-1]
+        j = i
+        while j < n and not lines[j].startswith('}'):
+            j += 1
+        out.append((i + 1, j + 1, name))
+    return out
+
+launching, bumping, bad = {}, {}, []
+for fn in sorted(os.listdir(os.path.join(root, 'apps'))):
+    if not fn.endswith('.cpp') or 'tests_main' in fn:
+        continue
+    path = os.path.join('apps', fn)
+    lines = open(os.path.join(root, path)).read().splitlines()
+    sp = spans(lines)
+    def owner(ln):
+        for a, b, name in sp:
+            if a <= ln <= b:
+                return name
+        return '<file scope>'
+    for i, l in enumerate(lines, 1):
+        if l.lstrip().startswith('//'):
+            continue
+        if CALL.search(l):
+            launching.setdefault((path, owner(i)), []).append(i)
+        if BUMP.search(l):
+            bumping.setdefault((path, owner(i)), []).append(i)
+
+for key, at in sorted(launching.items()):
+    if key not in bumping:
+        bad.append("%s: %s launches at line(s) %s and never bumps hostGeneration."
+                   % (key[0], key[1], ",".join(map(str, at))))
+for key, at in sorted(bumping.items()):
+    if key not in launching:
+        bad.append("%s: %s bumps hostGeneration at line(s) %s but launches nothing — a bump that "
+                   "belongs to another function's mapping." % (key[0], key[1], ",".join(map(str, at))))
+
+EXPECTED_LAUNCHING_FUNCTIONS = 3
+if len(launching) != EXPECTED_LAUNCHING_FUNCTIONS:
+    bad.append("%d function(s) launch or connect a host, expected exactly %d. The attribution may "
+               "have broken, or a new launch path exists: give it a bump and raise this number."
+               % (len(launching), EXPECTED_LAUNCHING_FUNCTIONS))
+
+if bad:
+    for b in bad:
+        print("  FAIL  %s" % b)
+    raise SystemExit(1)
+print("  PASS  %d function(s) launch a host and every one bumps the generation in the same function"
+      % len(launching))
+PYEOF
+if [ $? -ne 0 ]; then fail=1; fi
+
 # The wrap guard is the one piece of arithmetic here, and 0 means never-launched. If the guard goes,
 # a wrapped counter reports a long-lived host as one that never started.
 if ! grep -q 'next == 0u ? 1u : next' "$ROOT/apps/engine_readiness_level.h"; then
