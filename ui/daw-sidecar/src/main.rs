@@ -5004,31 +5004,47 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                 // moves on any accepted edit, so it is still the
                                 // "did that land" signal even though it is no longer
                                 // the base anything is arbitrated against.
-                                let global_before = handle.clip_version();
                                 // Read per OP, from the op's OWN track: a batch can
                                 // span tracks (a transpose across a selection does),
                                 // and the counters diverge, so one base for the whole
                                 // frame is right for at most one of them.
-                                let sent = if let Some(c) = build_chord(line) {
+                                //
+                                // THE WAIT MUST READ THE COUNTER THE BASE CAME FROM, and it
+                                // did not: the base was per-track and the wait polled the
+                                // GLOBAL version. That is the identical crossing already
+                                // fixed once for the agent's add_notes — the global is
+                                // "bumped whenever any track's clip state changes", so the
+                                // wait is satisfied by activity on ANOTHER track, this op
+                                // returns before its own write lands, and the next op in the
+                                // batch reads a base that is already stale and is refused.
+                                // A batch spanning two tracks satisfies its own waits from
+                                // the wrong track, which is why a multi-track transpose was
+                                // the case most likely to lose edits.
+                                let (sent, track, before) = if let Some(c) = build_chord(line) {
                                     let mut c = c;
-                                    c.base_version = handle.clip_version_for_track(c.track_id);
-                                    handle.send_chord_command(c).is_ok()
+                                    let before = handle.clip_version_for_track(c.track_id);
+                                    c.base_version = before;
+                                    (handle.send_chord_command(c).is_ok(), c.track_id, before)
                                 } else {
                                     match build_command(line) {
                                         Ok(mut p) => {
                                             p.base_version = resolve_base(
                                                 &handle, p.track_id, 0, p.command_type);
-                                            handle.send_command(p).is_ok()
+                                            // resolve_base decides per command type, so the
+                                            // wait's baseline is read back from the SAME
+                                            // helper rather than assumed equal to it.
+                                            (handle.send_command(p).is_ok(), p.track_id,
+                                             p.base_version)
                                         }
-                                        Err(_) => false,
+                                        Err(_) => (false, 0, 0),
                                     }
                                 };
                                 if !sent { failed += 1; continue; }
                                 // Wait for the engine to actually apply it. Without
                                 // this the next op re-reads the same version and we
                                 // are back to the race we are fixing.
-                                if handle.wait_for_clip_version(
-                                    global_before, global_before.wrapping_add(1),
+                                if handle.wait_for_track_clip_version(
+                                    track, before, before.wrapping_add(1),
                                     Duration::from_millis(250)) { ok += 1; } else { failed += 1; }
                             }
                             let reply = format!("{{\"ok\":true,\"applied\":{ok},\"failed\":{failed}}}");
