@@ -4150,3 +4150,50 @@ The check now reports what it verified rather than only that it passed: *"11 sen
 guarded by a `hostReady.load` in the same function, 1 exempt by name"*.
 
 Build clean; ctest readiness/device_chain/param/undo/plugin_state 18/18.
+
+## AE-P1.2 item 7: the single-writer claim is enforced now (`caccd7b2`)
+
+`engine_ui_publish.h` said *"the writer is on the command thread"*, and that sentence was the whole
+of the evidence. Item 7's objection is exact and generalises: **producer identity is a property of
+EXECUTION AGENTS, not of source text.** Eighteen call sites are not eighteen writers, and one
+`ringWrite` site is not one writer — `std::thread`/`jthread` appears 28 times in `apps/`, and any of
+those threads may reach the single write. No census over call sites can settle it, which is why the
+item says *"enforced by something, not observed by grep."*
+
+`sendUiDiff` now latches the first writing thread and names any other, once.
+
+- **A latch, not a comparison against a registered id**, because nothing publishes such an id and
+  adding a registration call would put the same unevidenced claim one level up.
+- **Not an `assert()`.** The sidecar's offset assertions were `debug_assert` and compiled out of
+  every release build — that is how a real defect stayed invisible here before. This is always on:
+  a relaxed load and a comparison on the common path, a CAS only on the first call.
+- **It does not stop the write.** A write already in flight is not made safer by refusing it late,
+  and dropping a diff to prove a point turns a diagnosis into an outage.
+
+**Measured, and the claim holds.** A live engine driven through project load, play, three rounds of
+add-device / set-bypass / undo, and stop produced 29 UI/chain/device events and **zero**
+`ui_diff.foreign_writer`. That is one workload and not a proof for all of them — which is precisely
+the argument for enforcing it continuously instead of concluding it once.
+
+The first run of that probe reported zero violations AND zero UI events, because every `daw-cli`
+call had failed silently: I pointed CLI at `build/daw-cli`, which does not exist. **The sanity count
+is the only reason a vacuous zero was not reported as a result** — the same discipline this
+programme has now applied to `host_stall_check` and `audio_stability_check`.
+
+### The host reaper fired — twice, reproducibly, in a constructed test
+
+`tools/lib/engine_wait.sh`'s reaper carries this note: *"This has never fired in a constructed test
+— a host normally exits when its engine dies. Whatever run produced this is the one that explains
+the orphans nobody has accounted for; say what it was."*
+
+**It fired on both runs of the probe above**, reporting `REAPED 1 ORPHANED HOST(S)`. So this is now
+a reproducible constructed case, which the comment says did not exist. Saying what it was, as asked:
+a `--run-seconds 30` engine, a REAL project load that launches hosts, playback, three rounds of
+chain edits and undo, then `stop_engine`.
+
+That differs from the earlier investigations recorded here, which measured a bare engine with the
+host killed via SIGSTOP-into-SIGKILL and via direct SIGKILL, and found every host gone within
+seconds. The distinguishing ingredients are a loaded project with live hosts and real playback
+before the stop. **This is not an explanation and is not offered as one** — it is the first
+repeatable reproduction of a symptom that has only ever been seen after the fact, and it belongs to
+whoever picks up the orphaned-host question.
