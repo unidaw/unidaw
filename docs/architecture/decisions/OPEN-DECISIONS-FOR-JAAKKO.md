@@ -1,5 +1,24 @@
 # Open decisions
 
+## STILL OPEN — three things, and nothing else in the programme is waiting on anything else
+
+| what | the question | my recommendation |
+|---|---|---|
+| **Decision 7** | `UiDiffType::ResyncNeeded` has nowhere to put a command id — its payload is exactly 40 bytes and full | **echo the id in `EventEntry::sampleTime` outbound**, mirroring how it arrives; no new bytes, and the only option that generalises |
+| **AE-P1.2 item 26** | the required adjacent multi-plugin fixture was ARGUED AWAY in favour of a landed substitute (`host_chain_buffers.h` + a ping-pong parity test) | confirm the substitution or overrule it — the alias rebinding the fixture would have exercised is still uncovered |
+| **AE-P1.2 item 35** | ruling R14 says "declare `ready` on the Rust side"; the PRODUCT explicitly refuses, with measured reasons — publication there is `count`, not a per-slot flag, and the buffer is engine-local, one producer, one consumer, one thread | a call between the parity rule and the product's counter-argument; R14's own second option is the product's position |
+
+Decision 7 is written up in full below. Items 26 and 35 are AE-P1.2 backlog entries rather than
+numbered decisions, and are listed here because this file is where the decision surface is meant to
+be readable in one place — their evidence is in the ledger.
+
+**Decision 7 also gates item 28's product half**: replacing the counter-only "applied" decisions
+needs a positive signal carrying the id, and how a refusal carries one is exactly what 7 settles.
+
+---
+
+## Already ruled
+
 **Decisions 1-3 ruled 2026-08-13; decisions 4-6 ruled 2026-08-14.** Kept as the record of what was
 asked and decided; do not re-open without a new decision.
 
@@ -11,6 +30,7 @@ asked and decided; do not re-open without a new decision.
 | 4 | AE-P0.3 credentialed capture | **option A — Jaakko supplied the env file; capture taken and attested** |
 | 5 | version bump for a repurposed field | **option A — bump to 39, and write the rule down once** |
 | 6 | agent reporting an unconfirmed command | **A then B — mark unconfirmed now, per-verb acks incrementally** |
+| 7 | how `ResyncNeeded` carries a command id | **OPEN** — see the top of this file |
 
 ## Decision 4, closed by observation
 
