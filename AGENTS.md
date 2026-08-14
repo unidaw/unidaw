@@ -95,6 +95,49 @@ Note on numbering: the code comments call the audio movement "Movement 4"; the
 current active work is the audio engine.
 
 
+## Verifying a claim about this codebase (added 2026-08-14, from repeated failures)
+
+These are not style preferences. Each one is here because it was got wrong repeatedly in one
+session, and four of them produced a wrong RESULT — a miscount, a subset reported as a whole, a
+self-deadlock, and a passing test that had never compiled.
+
+**A grep line is not the code.** A match shows you one line. Whether the construct continues onto
+the next line, whether the list is complete, and what scope encloses a statement are all invisible in
+it — and the output looks identical either way. There is no signal separating "no more matches" from
+"my pattern cannot express what I am asking".
+
+- **Never pipe a population enumeration through `head`.** It silently reports a subset as the whole.
+- **A single-line pattern misses a wrapped construct.** `as *const T` on the next line, a call whose
+  argument continues below, `&child->field` on a continuation. Use a multi-line scan (read the file
+  in python) when the thing you are matching can span lines.
+- **A proximity window (`grep -A4`) is an approximation of structure.** It degrades silently when
+  code moves. Read the call's ARGUMENTS instead.
+- **Before adding a lock, read the enclosing function's braces.** A `lock_guard` at function scope
+  and one in a nested block look identical in a grep line. Assuming the latter re-acquires a
+  non-recursive mutex and deadlocks.
+- **Prefer a predicate that DERIVES its population at run time** over a number you obtained once by
+  grepping. Every ratchet in `tools/` does this; it is why they held while the prose around them did
+  not.
+
+**A passing suite is not a successful compile.** `ctest` does not rebuild. A build that fails leaves
+the previous binaries in place and the suite runs them, reporting green for code that does not
+exist. After building, grep the output for `error:` **with the colon** — plain `error` matches the
+word inside warnings and will tell you there are errors when the build was clean, or let you read a
+stale green as authoritative.
+
+**Never put a verification and a commit in the same command.** `run-tests && git commit` does not
+gate anything when the middle element is a pipe — the exit status is the pager's. Run it, READ it,
+then commit. A claim asserted before its evidence arrives is true only by luck.
+
+**An exclusion is a claim that decays.** `ctest -E this|that` to keep a sweep fast is a statement
+that the excluded checks do not matter right now. One of them was red for a week behind such a
+filter. Re-run unfiltered periodically.
+
+**When a fix and its justification are separable, check the justification separately.** Two
+independent reviews in one session refuted the REASON for a change while confirming the change. A
+correctly ordered publication of wrong contents is still wrong, and "the guard is present" never
+answers "does it fit?".
+
 ## Project summary
 - Building a precise, malleable DAW with a single canonical clip model that
   serves both tracker and piano roll views.
