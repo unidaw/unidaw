@@ -5025,3 +5025,40 @@ from the arbitrated set. The check's own comment anticipates exactly this: *"fin
 extraction broke, not that the code got safer"*.
 
 Not investigated further here; filed as the next item rather than folded into an unrelated commit.
+
+## `version_arbiter` explained and fixed: undo stopped being clip-arbitrated (`fb8ded2a`)
+
+Red since `6d1a20b9`, over a week, and invisible because it sat behind the `-E` exclusion filters I
+used for this programme's broad sweeps — **a red check hidden by the tooling meant to find red
+checks.**
+
+Its floor says *"do not lower these"*, which is correct: finding FEWER usually means the grep went
+blind, not that the code got safer. So it was only movable by establishing the opposite:
+
+    the set at the check's own introduction (7a9d3f6a) was 7; at HEAD it is 5
+    the two missing members are Undo and Redo
+    6d1a20b9 "undo Step 2c: the switchover" deleted both arbitration calls
+    a STRUCTURAL extraction reading each call's ARGUMENTS agrees at 5, so the
+        proximity window is not what shrank the count
+
+**I nearly recorded the wrong cause.** My first reading was that Undo/Redo had been counted through
+the dead deps wiring item 30 removed — tidy, and false. Reading the file at that commit shows a real
+arbitration call refusing undo on a stale base. The wiring became dead IN `6d1a20b9`; item 30's
+"never called" was true when written and describes a consequence, not the cause. Two true statements,
+one wrong causal order — and only reading the historical file separated them.
+
+**The removal was right in kind**, which is what makes lowering the floor correct rather than
+convenient. R10 reached the same conclusion from the other direction: undo replaces the whole
+document through `applyDocument`, so a per-track clip version is the wrong instrument — the thing
+being replaced is not a track.
+
+**The residual hazard stays open**: an edit made between a user seeing the screen and pressing undo
+is still silently reverted, and covering it needs a DOCUMENT-level version that does not exist. R10
+tracks it; the check's comment says so rather than implying the gap closed.
+
+### The sweep-filter lesson
+
+Every broad `ctest -E` in this session excluded `version_arbiter` among others, to keep sweeps fast.
+That exclusion list was never re-examined, so a check that went red a week ago was reported by
+nothing. **An exclusion is a claim that the excluded thing does not matter right now, and it decays
+exactly like any other carried claim.**
