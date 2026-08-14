@@ -3842,3 +3842,49 @@ and `AE-P1.2-manifest.json` counts `{items: 39, closed: 9, open: 30, blocking: 1
 of which 9 are flagged closed. **30 open, 11 blocking.** Item 34 is WITHDRAWN and must not be
 scheduled — it is kept in the list deliberately so its disappearance would not read as work
 completed. The row is corrected below.
+
+## AE-P1.2 item 24 CLOSED, and the summary that named a subset (`ab48af32`)
+
+R4 ruled the direction: `patcher_abi.h` keeps `reserved`, `patcher_rust/src/lib.rs` renames, because
+the C++ header is the ABI authority and renaming the authority to match its mirror inverts which
+document defines the contract.
+
+**The scope had to be re-derived, and this is the reusable part.** The backlog summary said "rename
+the Rust `_pad0`". There are THREE `_pad0` fields in the Rust and TWO in the C++, and only one pair
+disagrees:
+
+    PatcherSliceSelectConfig   C++ reserved[4]   Rust _pad0: [u8; 4]    <- item 24
+    PatcherEuclideanConfig     C++ _pad0[2]      Rust _pad0: [u8; 2]    already matched
+    PatcherRandomDegreeConfig  C++ _pad0[2]      Rust _pad0: [u8; 2]    already matched
+
+Acting on the summary would have renamed two fields that already agreed, breaking their parity in
+the other direction while closing the item. Both edits were anchored inside the
+`PatcherSliceSelectConfig` declaration and its initialiser so the matched pairs could not be
+touched. This is the third time in this programme that a finding named N sites and the population
+was different — the rule is to enumerate by the CONSTRUCT before editing, never from the prose.
+
+### The rename is not guarded by anything in the product
+
+Established by MUTATION, not assumed: with the rename reverted, `contract_layout_check` and
+`version_parity_check` both still PASS. `contract_layout` compares OFFSETS — "59 fields across 7
+mirrors agree" — and is name-blind here by construction.
+
+This is not a newly discovered hole. `contract_layout_check`'s own header states it: `patcher_rust`
+has no bindgen twin because `build.rs` reads `shared_memory.h` and `event_payloads.h` rather than
+`patcher_abi.h`, so *"patcher_abi.h has six more structs with no twin at all; closing that properly
+is a separate ticket"*. `PatcherSliceSelectConfig` is one of those six. The parity is held only by
+the packet's gate, and saying so is better than implying the rename is now pinned.
+
+**That separate ticket is the highest-value follow-up I can see in this area**: pointing `build.rs`
+at `patcher_abi.h` would give six structs a generated twin and convert a hand-checked naming
+convention into a derived one.
+
+### Note on item 35 before anyone picks it up
+
+R14 rules "parity — declare `ready` on the Rust side". `contract_layout_check`'s header describes
+that same mirror as **"a DELIBERATELY PARTIAL mirror of daw::EventEntry — six of the seven members,
+no `ready`"**, with const assertions written from hand-measured numbers. So item 35 does not merely
+add a field: it changes a mirror whose partiality is currently documented as intentional, and the
+check's reasoning would have to move with it. It is an ABI change and takes exact independent
+review before it lands — this is also the type name that once cost a wrong refutation, because two
+crates declare an `EventEntry` and only one is governed.
