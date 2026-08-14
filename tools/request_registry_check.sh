@@ -48,12 +48,20 @@ if not m:
     print("FAIL: could not find enum class UiCommandType in apps/event_payloads.h"); sys.exit(1)
 KINDS = {name: int(val) for name, val in re.findall(r'^\s*(Request\w+)\s*=\s*(\d+)\s*,', m.group(1), re.M)}
 
-# A floor on the authority itself. Every assertion below is "for each kind", so an extraction that
-# finds nothing satisfies all of them. Seven existed when this was written; FEWER means the enum
-# moved or the pattern broke, not that the product shrank.
-if len(KINDS) < 7:
-    bad(f"found {len(KINDS)} Request* kinds in UiCommandType; 7 existed when this was written. "
-        "Fewer means the extraction broke — fix the pattern, do not lower this number.")
+# A PIN on the authority itself, and it was a FLOOR until AE-P1.2 item 33. Every assertion below is
+# "for each kind", so an extraction that finds nothing satisfies all of them — which is what the
+# floor was for. But a floor is blind in the other direction, and that direction is the one that
+# happens: an EIGHTH request kind added with no reader, no mirror and no send site left every rule
+# here green, because each rule ranges over the kinds it found and the new one simply joined them.
+#
+# The refusal is the point. Growth stops here until a person states the new number, and stating it
+# means having looked at what the new kind needs.
+EXPECTED_KINDS = 7
+if len(KINDS) != EXPECTED_KINDS:
+    bad(f"found {len(KINDS)} Request* kinds in UiCommandType, expected exactly {EXPECTED_KINDS}. "
+        "FEWER means the enum moved or the pattern broke — fix the extraction, do not lower this. "
+        "MORE means a request kind was added: give it a Rust mirror, a reader and a send site, "
+        "then raise this number deliberately.")
 note(f"{len(KINDS)} request kinds in the C++ enum: " + ", ".join(sorted(KINDS)))
 
 # ------------------------------------------------- 1b. the Rust mirror carries the SAME numbers.
@@ -87,8 +95,23 @@ for rel in CRATES:
                 if i >= tstart: excluded += 1
                 else: senders[k].append(f"{rel}:{i}")
 
-note(f"{sum(len(v) for v in senders.values())} production send sites "
+# THE SEND-SITE TOTAL IS PINNED, NOT NOTED. This was a `note` — printed and asserted against
+# nothing — and AE-P1.2 item 33 states its own refutation: add an eighth send site and the ratchet
+# stays green. The per-kind rule below only asks whether each kind has AT LEAST ONE sender, so a new
+# site for a kind that already had one is invisible to it.
+#
+# What a new send site costs is a person looking: a request issued from a new place is a new caller
+# of the request/response protocol, and this project's request bugs have been about WHO asks and
+# whether they wait correctly, not about the enum.
+EXPECTED_SEND_SITES = 16
+live_sends = sum(len(v) for v in senders.values())
+note(f"{live_sends} production send sites "
      f"({excluded} in test modules, excluded by module boundary)")
+if live_sends != EXPECTED_SEND_SITES:
+    bad(f"{live_sends} production send sites, expected exactly {EXPECTED_SEND_SITES}. "
+        "A site was added or removed. Confirm the new caller waits for its own answer — the echo "
+        "rule below is per KIND and cannot see a second sender of a kind that already had one — "
+        "then set this number deliberately.")
 for k in sorted(KINDS):
     if not senders[k]:
         bad(f"{k} has NO production send site. A request kind nothing issues is either dead or "
