@@ -5599,3 +5599,28 @@ that escaped.
 
 `patcher_event_tail: PASS — 1 whole-object store in push_event, 2 field-only bulk views`, at
 `b466a351`.
+
+## Item 36 was already done — the third carried item this sprint that had decayed
+
+The open list describes `host_stall_check.sh` as unable to distinguish the outcomes it decides, with
+four named defects. I re-derived them against the product instead of reciting them. **All four are
+fixed**, each with its reasoning left in the file:
+
+| Named defect | State |
+|---|---|
+| a `play` failure discarded with `\|\| true` | FIXED — now `\|\| fail`, with the reason: a producer that never played produces no blocks, therefore no stalls, and 0 stalls reads as the property holding |
+| marker appended through a second file description | FIXED — replaced by a line-count anchor; two offsets into one file is a race for a place in the stream |
+| the oracle counts log lines | FIXED — the oracle is the producer's own words. The comment records that the previous version compared fixed audio windows and **passed with the fix reverted** |
+| the stall log gated behind `isPlaying` while the `continue` is not | FIXED — `engine_producer_thread.cpp:303` now says "NOT GATED ON isPlaying, and that gate was the defect" |
+
+Registered, and `host_stall_check` passed in 20.57 s in the last full sweep.
+
+Two things worth keeping from this. First, the file states what its remaining limitation **cannot**
+do — buffered engine writes can inflate the after-freeze count, which pushes toward a FALSE FAILURE,
+the safe direction — which is the right way to leave a known imperfection: named, with its direction
+argued, rather than implied.
+
+Second, this is the **third** carried item this sprint found already complete (items 29, 30, and now
+36), plus item 35 where the blocking premise was mine and wrong. A carried open-list decays against
+the product in BOTH directions. Re-deriving costs minutes; reciting costs a cycle of building
+something that exists.
