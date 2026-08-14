@@ -5760,3 +5760,53 @@ and leaves the value at its default. `tools/tsan_command_hammer.sh` had been pas
 whole life, so its bypass toggle never toggled — it sent `bypass=1` twice per round instead of 1 then
 0. The TSan result stands (the command still dispatched and still wrote `trackSnapshot`), but the
 traffic was less varied than its own comment claimed. Fixed in both files.
+
+## STOPPING POINT — 2026-08-14, paused for quota
+
+### State: everything committed and pushed, nothing half-applied
+
+`main` at `54215b6b`, audit branch at `759cf6fd`. Working trees clean. No sabotage left in any file
+(each negative control restored from a `cp` backup and verified at 0 occurrences).
+
+### Landed this cycle
+
+| | |
+|---|---|
+| Decision 8 | packet provenance — merge REJECTED after measuring the branch 16186 lines behind; named `INTEGRATED_PACKETS` record instead, 3 controls |
+| Decisions 7+9 | one problem, one mechanism: the command id rides `EventEntry::sampleTime` outbound. kShmVersion 39→40 |
+| Review remediation | chord success restored (727-740 ms → 18-20 ms), `shm_access` pin moved deliberately 4→5, two falsified doc passages, and the C++ echo test the change lacked |
+| Lockstep repair | HEAD had briefly published 40 against 39; fixed, and `version_parity_check` now verifies the pair AS COMMITTED |
+| Item 26 | CONFIRMED — the substitution asserts more than the fixture would have |
+| Item 35 | UPHELD, with `patcher_event_tail_check` pinning the prose the refusal rests on (4 controls) |
+| Item 36 | already done — third decayed carry this sprint |
+| Item 15 | hardened, **NOT demonstrated**; probe kept unregistered because its control passes |
+
+### NOT verified: the final full sweep did not finish
+
+A full `ctest` was running when this stopped and was **cancelled mid-run**. The last COMPLETE sweep
+was 230/231 at an earlier commit, before the review remediation, the lockstep repair, the version
+parity rule and the item-15 hardening. **Those five changes have only their own targeted checks
+behind them**, not a full-suite pass:
+
+* `engine_ui_publish_tests` PASS, with its control failing three named assertions
+* `shm_access` / `version_parity` / `contract_layout` / `refusal_identity` / `counter_only_outcome`
+  all PASS
+* `refusal_correlation` PASS, chord latency re-measured at 18-20 ms
+* `patcher_event_tail` PASS
+
+**First action on resuming: a full unfiltered `ctest`.** Saying this plainly because a targeted pass
+reported as a sweep is exactly the over-claim this sprint keeps catching.
+
+### Housekeeping noticed, not acted on
+
+Three `daw_engine` processes are alive with `--run-seconds 30` and elapsed times of ~4h50m — hung
+well past their own budget, matching the known run-seconds stall. They predate this cycle. Left
+running rather than killed unprompted; worth clearing, and killed BY PID, never `pkill -f
+daw_engine`.
+
+### Open for the next session
+
+`AE-P1.3` non-overlap validator (designed, with the three-way derived population and the deliberate
+audio-plane aliasing already worked out), item 14 (BATCH base/global counter crossing, live in the
+sidecar and both branches), item 16 (the swap trap's unratcheted `hostReady` read), and item 15's
+reproduction. **Nothing is blocked on an owner decision.**
