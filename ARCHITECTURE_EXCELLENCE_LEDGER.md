@@ -4625,3 +4625,35 @@ This is at least the sixth instance of this exact trap in this programme, and th
 pass a quoted heredoc, never a double-quoted `-c` string — was already written down. Knowing the
 rule did not apply it. The tell is visible and I nearly skipped past it: zsh prints `command not
 found: region` while the surrounding command reports success.
+
+## Where the truncation habit actually bit, audited rather than assumed
+
+Twice in three commits I enumerated a population through a pager or a line-oriented pattern and
+reported a subset as the whole: fifteen region accessors that were nineteen, and five plain snapshot
+writes that were six — the missing one being the tombstone-reuse case the plan names by hand. That
+is frequent enough to ask whether the ratchets built this session inherited it.
+
+**They did not, and the reason is structural.** Every check written here DERIVES its population and
+then pins the derived number; none hardcodes a number I obtained by grepping:
+
+    refusal_identity_check    walks struct bodies for the id field
+    shm_access_check          scans for _mmap.as_ptr() and self.region:: uses
+    request_registry_check    extracts Request* variants from the enum, senders from source
+    host_generation_check     attributes launches and bumps to enclosing functions
+    ae_p0_2_contracts_check   globs the suite directory
+    readiness_writer_check    walks writes, sends and TrackInfo constructions
+
+Spot-checked the one most exposed to my own error, `readiness_writer_check`'s pin of ELEVEN sends to
+a host: `grep -rc controller.send` over `apps/` returns 21, which decomposes exactly as 11 production
+call sites plus 10 in `*_tests_main`, and the exclusion is deliberate and documented. Also confirmed
+no `controller.send` call wraps across lines, which is the shape that defeated the region grep — so
+that regex is not missing a member the way mine did.
+
+**The distinction worth keeping:** the checks are sound because they compute the population at run
+time; my ANALYSIS greps were unsound because they sampled it once, through `head`, and I quoted the
+sample. The failure was never in the ratchets — it was in the sentences I wrote around them, which
+is exactly where this programme keeps finding it.
+
+The practical rule, now stated where it can be found: **never pipe a population enumeration through
+`head`, and never trust a line-oriented pattern against a construct that can wrap.** Both produce a
+number that looks like an answer.
