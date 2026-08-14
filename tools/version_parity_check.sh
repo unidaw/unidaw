@@ -85,6 +85,57 @@ for label, cpp_f, cpp_re, rs_f, rs_re in PAIRS:
             'a mirrored constant is two facts that can disagree. Both sides move in ONE changeset;',
             'no other check in this tree compares them.')
 
+# ---- rule 4: the pair must also agree AS COMMITTED --------------------------------------------
+#
+# RULES 1-3 READ THE WORKING TREE, AND THAT IS NOT WHERE THE DAMAGE LANDS. On 2026-08-14 this check
+# passed — both halves were correct on disk — minutes before a commit published
+# `kShmVersion = 40` against `K_SHM_VERSION = 39`. A selective `git add` named the files of one
+# change by hand and the Rust half, whose bump had been sitting uncommitted, was simply not in the
+# list. Anyone checking out that commit gets a pair the equality gate refuses at runtime.
+#
+# A check that validates the working tree cannot see a commit that publishes half of it. "Never name
+# one half of a mirrored pair in a selective add" is a discipline, and disciplines are what this
+# suite exists to replace. So the same two patterns are applied to the same two files AS THEY EXIST
+# AT HEAD.
+#
+# The working tree may legitimately differ from HEAD mid-change; what may never happen is the PAIR
+# disagreeing within either snapshot. So this compares HEAD's C++ value against HEAD's Rust value,
+# never against the working tree's.
+import subprocess
+
+def at_head(rel):
+    """The file's contents at HEAD, or None when there is nothing to compare against."""
+    try:
+        r = subprocess.run(['git', '-C', str(ROOT), 'show', f'HEAD:{rel}'],
+                           capture_output=True, text=True)
+    except OSError:
+        return None
+    if r.returncode != 0:
+        return None      # not tracked at HEAD yet — a new pair, nothing published to be wrong
+    return r.stdout
+
+head_checked = 0
+in_git = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', '--verify', 'HEAD'],
+                        capture_output=True, text=True).returncode == 0
+if in_git:
+    for label, cpp_f, cpp_re, rs_f, rs_re in PAIRS:
+        cpp_text, rs_text = at_head(cpp_f), at_head(rs_f)
+        if cpp_text is None or rs_text is None:
+            continue
+        ha, hb = re.findall(cpp_re, cpp_text), re.findall(rs_re, rs_text)
+        if len(ha) != 1 or len(hb) != 1:
+            bad(f'{label}: at HEAD, {cpp_f} has {len(ha)} and {rs_f} has {len(hb)} definitions, '
+                f'expected exactly 1 each',
+                'the committed form cannot be parsed, so the published pair is unverified')
+            continue
+        head_checked += 1
+        if ha[0] != hb[0]:
+            bad(f'COMMITTED VERSION MISMATCH — {label}: at HEAD {cpp_f} says {ha[0]}, '
+                f'{rs_f} says {hb[0]}',
+                'the WORKING TREE may well be correct; this is about what was published.',
+                'A selective `git add` that names one half of a mirrored pair does exactly this,',
+                'and every working-tree check passes while it happens.')
+
 if checked < len(PAIRS):
     bad(f'only {checked} of {len(PAIRS)} pairs were comparable',
         'an unresolvable pair is a blind spot, not a pass')
@@ -142,7 +193,9 @@ if fail:
     print('version_parity_check: FAILED')
     sys.exit(1)
 vals = ', '.join(f'{l.split(" / ")[0]}={sole_value(c, cr, l)}' for l, c, cr, _, _ in PAIRS)
+head_note = (f'; {head_checked} pair(s) also verified as committed at HEAD'
+             if head_checked else '; NOT verified at HEAD (no git history reachable)')
 print(f'  PASS  {checked} mirrored version constants agree across languages ({vals}); '
-      f'{len(cpp_consts)} k*Version constants scanned, no unguarded twin')
+      f'{len(cpp_consts)} k*Version constants scanned, no unguarded twin{head_note}')
 print('version_parity_check: PASS')
 PYEOF
