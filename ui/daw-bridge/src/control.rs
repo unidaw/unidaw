@@ -462,6 +462,15 @@ impl EngineHandle {
     }
 
     fn region<T>(&self, offset: u64) -> Option<*const T> {
+        // Same precondition ring_view asserts: region_fits validates the OFFSET, so the resulting
+        // address is only aligned if the BASE is. mmap gives a page-aligned base. Stated as an
+        // assertion here too rather than in prose alone — the asymmetry was a review finding, and
+        // the harness that motivated ring_view's assert was itself misaligned.
+        debug_assert_eq!(
+            self._mmap.as_ptr() as usize % std::mem::align_of::<T>(),
+            0,
+            "region assumes a mapping-aligned base; the region inherits the base's alignment"
+        );
         let offset = usize::try_from(offset).ok()?;
         if !region_fits(
             offset,
@@ -2382,5 +2391,83 @@ mod region_fits_tests {
         // Written as `offset + size <= mapped` this is the input that wraps and passes. The
         // subtraction cannot, which is why the check is phrased that way.
         assert!(!region_fits(usize::MAX - 63, 128, 64, 4096));
+    }
+}
+
+#[cfg(test)]
+mod region_fits_property_tests {
+    use super::region_fits;
+
+    // AE-P1.3's gate is worded "fuzz and property tests cannot construct an out-of-bounds or
+    // misaligned typed view". The suite beside this one is example-based: it pins outcomes for
+    // inputs I thought of. This asserts the CONTRACT instead — for any input at all, saying yes
+    // implies the region genuinely lies inside the mapping and is correctly aligned.
+    //
+    // That is the difference between "the cases I chose are refused" and "nothing that passes can
+    // be out of bounds", and only the second is what the gate asks for. It is also the direction
+    // that survives someone rewriting the predicate: the examples would need updating, this would
+    // not.
+    //
+    // Deterministic rather than randomised — a fixed LCG plus the edge values that actually break
+    // this kind of arithmetic. A test that draws different inputs each run reports a different
+    // fact each run, and this project has spent a long time on claims that were true by luck.
+
+    fn interesting() -> Vec<usize> {
+        let mut v = vec![
+            0, 1, 2, 7, 8, 63, 64, 65, 127, 128, 4095, 4096, 4097,
+            usize::MAX, usize::MAX - 1, usize::MAX - 63, usize::MAX - 64,
+            usize::MAX / 2, usize::MAX / 2 + 1,
+        ];
+        // ...and a spread of ordinary values, so the edges are not the only shapes exercised.
+        let mut lcg: u64 = 0x2545_F491_4F6C_DD1D;
+        // Kept small on purpose: the first draft used 400 rounds and the test took 29 SECONDS,
+        // which is a tax on every run of the suite for coverage the edge values already give. The
+        // accepted-count assertion below is what guards against trimming it into vacuity.
+        for _ in 0..24 {
+            lcg = lcg.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            v.push((lcg >> 11) as usize);
+            v.push(((lcg >> 11) % 8192) as usize);
+        }
+        v
+    }
+
+    #[test]
+    fn nothing_that_passes_can_be_out_of_bounds_or_misaligned() {
+        let vals = interesting();
+        let aligns = [0usize, 1, 2, 4, 8, 16, 32, 64];
+        let mut accepted = 0u64;
+        for &offset in &vals {
+            for &size in &vals {
+                for &align in &aligns {
+                    for &mapped in &vals {
+                        if !region_fits(offset, size, align, mapped) {
+                            continue;
+                        }
+                        accepted += 1;
+                        // The four things a caller is entitled to assume when this says yes.
+                        assert_ne!(align, 0, "a zero alignment must never be accepted");
+                        assert_ne!(offset, 0, "offset 0 means absent, never a valid region");
+                        assert_eq!(offset % align, 0, "accepted a misaligned offset");
+                        // The one that matters: the region lies inside the mapping, computed in a
+                        // form that CANNOT itself overflow — `offset + size` is exactly the
+                        // expression the predicate avoids, so asserting with it here would be
+                        // asserting the bug.
+                        assert!(
+                            offset <= mapped - size,
+                            "accepted offset {offset} size {size} in mapping {mapped}"
+                        );
+                        assert!(mapped >= size);
+                    }
+                }
+            }
+        }
+        // A PREDICATE THAT ALWAYS SAYS NO SATISFIES EVERY ASSERTION ABOVE. Without this the whole
+        // test is vacuous, which is the exact shape of two controls this project has already had
+        // to correct.
+        assert!(
+            accepted > 1000,
+            "only {accepted} inputs were accepted; the test proved nothing about a predicate that \
+             refuses everything"
+        );
     }
 }

@@ -159,7 +159,12 @@ lines = open(sys.argv[1]).read().splitlines()
 # SHAPE of the access, which is the thing that missed four sites.
 RAW = re.compile(r'_mmap\s*\.\s*as_ptr\s*\(\)')
 HELPER = re.compile(r'^\s*fn (region|region_slice)<T>')
-EXPECTED_RAW = 2          # one inside each helper
+EXPECTED_RAW = 3          # one per helper, plus region's base-alignment debug_assert
+#
+# RAISED FROM 2 BY THE RULE ITSELF. Adding a debug_assert to `region` that reads the base address
+# made a third direct access, and this pin refused it until the number was stated. That is the pin
+# working: the access is legitimate — it is inside a helper and it asserts the precondition the
+# helper depends on — but a count that moves silently is how the fourth one arrives unnoticed.
 EXPECTED_CALLS = 19       # accessors going through them
 
 helper_spans = []
