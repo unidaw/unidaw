@@ -101,17 +101,17 @@ watcher:  none (required for Codex)
 | `AE-P0.2 discovery` | `ESCALATED_TO_ADR` | frozen baseline + packet | `claude-worker-2` | `codex-worker-2` | read-only root | four rejected designs; evidence complete |
 | `AE-P0.2 ADR` | `APPROVED` | current-main inventory + exact review | `backend` | `codex-worker-2` | root | exact SHA `7dff997`; approval received |
 | `AE-P0.2 implementation` | `COMPLETE` | packet `6287ffd` approved + AE-P0.1 integration | codex-worker-2 | claude-worker-2 | `/Users/jak/src/daw-ae-p0-2-lane0` | product main `75c6f06`; final corrective candidate independently approved |
-| `AE-P0.3` | `BLOCKED` | B1-B8 design review of Option B (see 2026-08-13 re-derivation) | `lead` | unassigned | none | last impl `02eb2d65`, review BLOCKED |
+| `AE-P0.3` | `CAPTURE TAKEN` | decision 4 ruled 2026-08-14; credentialed line OBSERVED and byte-matched | `lead` | unassigned | none | attestation now rests on an observation, not a transcription |
 | `AE-P1.1` | `FROZEN` | `AE-P0` | claude-worker-2 | codex-worker-1 | `/Users/jak/src/daw-ae-p1-1-packet` | `ba88bcb4657b62bdfc752d338d877e139e212ca6`; independent PASS; successor-only |
 | `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; 30 open at the frozen SHA, but re-derived against the product: 4 DONE, 5 PARTIAL, 8 open PRODUCT items, 12 PACKET, 1 withdrawn; items 26 and 35 need owner calls, 27+29 gated on decision 5; G4 not decidable |
-| `AE-P1.3` | `BLOCKED` | `AE-P1.2` | unassigned | unassigned | none | none |
-| `AE-P1.4` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
+| `AE-P1.3` | `GATE MET` | the `AE-P1.2` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent x2 | none | both attach paths ordered; 19 region accessors + ring cursors bounded; contract property test; non-overlap is the residue |
+| `AE-P1.4` | `ACTIVE` | the `AE-P0` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent | none | 5 plain writes to an atomically-read pointer fixed; watchdog use-after-free fixed; TSan evidence NOT yet run |
 | `AE-P1.5` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P1.6` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P2.*` | `BLOCKED` | Phase 1 gates | unassigned | unassigned | none | none |
 | `T3` (ABI mirror coverage) | `MERGED` | seven independent reviews | `lead` | independent subagent | merged from `ae/impl-engine-t3a-probe` | product main `d0e0ad0a`; follow-up `54f3d460` |
 | `P2-CMD-00` step 1 | `LANDED, GATE HALF-MET` | design `P2-CMD-00-revised.md` + owner rulings 1-2 | `lead` | independent subagent | product main | `45626d44`; blockers closed `7b7b7b24`, `ba4f1b1c` |
-| `P2-CMD-00` step 2 | `BLOCKED` | carrier design review; may need owner decision 5 | `lead` | in review | none | design `AE-CMD00-step2-carrier.md` |
+| `P2-CMD-00` step 2 | `COMPLETE` | decision 5 ruled 2026-08-14 | `lead` | — | none | carrier is `EventEntry::sampleTime`; sender mints, engine echoes, `kShmVersion` 39 |
 | `AE-P3.*` | `BLOCKED` | Phase 1/2 contracts | unassigned | unassigned | none | none |
 | `AE-P4.*` | `BLOCKED` | Phase 2 transactions | unassigned | unassigned | none | none |
 | `AE-P5.*` | `BLOCKED` | replacement behavior gated | unassigned | unassigned | none | none |
