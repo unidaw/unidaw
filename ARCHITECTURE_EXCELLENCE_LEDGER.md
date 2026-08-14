@@ -4375,3 +4375,68 @@ Re-derived, not carried. The AE-P1.2 product items are done (7, 14, 16, 19, 24, 
 withdrawn (34), or reduced to a precondition for an unchosen fix (15, and 18 via HOST-R2). What is
 left needs an owner, and the exact list is in the next section of this ledger and in
 `docs/architecture/decisions/OPEN-DECISIONS-FOR-JAAKKO.md`.
+
+## AE-P1.3 opened: both attach paths trusted an offset before validating the header (`62e1a1df`)
+
+**AE-P1.3 was listed BLOCKED on AE-P1.2 and that dependency had decayed.** Only its protocol-
+fingerprint half could move if decision 5 lands; bounds, alignment and non-overlap are structural
+and independent of the version number. Re-deriving the blocker rather than repeating it is what
+found the work.
+
+**Both attach paths had the same defect.** `ring_view` (Rust) did `base.add(offset)` and
+DEREFERENCED it to read `capacity`, with `offset != 0` as the only test — the out-of-bounds read
+happened before the first check, and the capacity and entry-size rules that followed ran on whatever
+those bytes were. `HostController::mapSharedMemory` (C++) was worse in kind: `shmSize_` comes from
+the host's HELLO RESPONSE and `mailboxOffset` out of the mapping, and **the magic/version test —
+whose whole purpose is to detect a host built against a different layout — ran AFTER `mailboxOffset`
+had been turned into a `completedBlockId` the producer dereferences every block.**
+
+Both reordered: the size admits a header, the header identifies itself, only then is any offset in
+it believed. `shmRegionFits` extracted to `engine_pure.h` so the arithmetic is testable without
+connecting a real host; the subtraction is deliberate, since `offset + size <= mapped` overflows and
+waves through the value it exists to catch.
+
+### The second review, and what it cost me
+
+**Two of my own tests were wrong**, and an independent reviewer measured both. The "straddling"
+case rounded DOWN to a header that fitted exactly and was refused by an unrelated pre-existing rule
+while its comment claimed otherwise. The "overflow" case overflows nothing — 2³¹ × 64 = 2³⁷ — and is
+refused by the same branch as its neighbour, so my "two ratchets" were one mechanism tested twice.
+The test buffers were `vec![0u8; n]`, measured at 32 mod 64, so a module about memory safety was
+writing through a misaligned pointer to an `align(64)` type.
+
+**And the framing was the real hit.** I ran ONE mutation and reported it as "measured, not assumed",
+which implies the set was characterised. It was not. All three are now run and they are not
+equivalent:
+
+    remove the entries-fit arithmetic    two clean assertion failures
+    remove the header-fits check         SIGSEGV — the binary dies
+    remove the alignment check           no test notices
+
+**Step (2) cannot be ratcheted by an outcome test, and that is a property of the design rather than
+a gap.** Any offset whose HEADER does not fit also has ENTRIES that do not fit, so the later check
+reaches the same verdict — after reading out of bounds to get there. Step (2) does not change the
+answer; it makes arriving at it safe. The only observable difference is a segfault, and a test
+asserting on UB asserts on nothing. Recording that beats manufacturing coverage for it.
+
+That is the second time in two reviews that my control was a grade weaker than I claimed. The
+pattern is specific and worth naming: **I verify that a check FIRES, then describe it as though I
+had verified WHAT IT DISCRIMINATES.**
+
+### The class is open, and the headline harm is still live
+
+The reviewer enumerated what this increment does NOT close, and one item outranks the fix:
+
+- **`write_entry` uses the raw `write_index` unmasked** — `ring.entries.add(write as usize)` then a
+  64-byte volatile write, with only `next` masked. `drain_ui_out` has the read-side twin.
+  `peek_ui_diffs` does it correctly, so the right idiom is already in the file. **Validating the
+  descriptor does not make the view safe to use**, and this keeps "on a writable attach that is a
+  write" live on the ring just validated.
+- **~20 sibling region offsets** in the same file read a `u64` offset out of `ShmHeader` and
+  dereference, guarded by `off == 0` and nothing else — clip window, arrange summary, harmony,
+  patcher, scales, device params, waveform, automation, sampler kit, device meters.
+- **`EngineHandle` does not store `size`**, so the parameter-passing idiom used here does not reach
+  those sites. Storing it, or exposing a bounds-checked `region::<T>(offset)`, is the shape that
+  lets the rest land.
+
+That is the next increment, and it is unblocked.
