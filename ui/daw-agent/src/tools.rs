@@ -59,6 +59,27 @@ pub struct ToolResult {
 /// only safe thing for a caller to do with it is stop. The reader, and the two rules that make it
 /// correct, live in daw_bridge::journal — shared with daw-cli rather than copied, so the two
 /// surfaces cannot drift into disagreeing about what the same command did.
+///
+/// WHAT THIS DOES NOT ESTABLISH, stated because the heading above overclaims it.
+///
+/// `await_refusal` waits 250 ms for a refusal and returns None if none arrives. None therefore
+/// means "no refusal was SEEN IN THE WINDOW", not "the engine applied it" — and this function
+/// turns that into `ok: true`. **Absence of evidence, reported as success.** The window is known
+/// to be too short in at least one real path: a sampler refusal is emitted from the render
+/// rebuild, later than the command's own ack.
+///
+/// `daw_bridge::journal::await_refusal_or_ack` is the form that settles this — it takes an
+/// `applied()` predicate and returns only after positive confirmation, re-reading the journal
+/// once more before reporting success. **All 24 call sites here use the weaker form; only daw-cli
+/// uses the ack form, at one site.**
+///
+/// Fixing it changes what a model reads as success across the whole tool surface, so it is
+/// recorded as open decision 6 for the owner rather than settled inside a comment. (That record
+/// lives on the architecture-audit branch, not in this tree — said explicitly because a bare path
+/// to it here would name a directory this branch does not have, and doc_citation does not read
+/// Rust files, so nothing would have caught the dangling reference.)
+/// Left as a written limitation deliberately: the alternative was a heading that reads as a
+/// guarantee over code that does not provide one.
 fn refused_or(track: u32, journal_at: u64, ops: &[&str], output: Value) -> ToolResult {
     match daw_bridge::journal::await_refusal(track, journal_at, ops) {
         Some(reason) => ToolResult::err(format!(
