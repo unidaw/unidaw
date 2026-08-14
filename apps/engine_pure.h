@@ -204,4 +204,30 @@ uint64_t placementReach(uint64_t at, uint64_t length);
 
 
 
+// DOES A REGION OF `regionSize` BYTES, AT `offset`, FIT INSIDE A MAPPING OF `mappedSize`?
+//
+// AE-P1.3. Extracted rather than written inline at the attach site, for the reason this whole file
+// exists: the arithmetic that decides whether a shared-memory offset is believable was reachable
+// only by connecting a real host, so the case it exists to refuse — a malformed one — could not be
+// posed at all. A guard that cannot be shown to reject anything is indistinguishable from no guard.
+//
+// THE SUBTRACTION IS THE POINT, and it is why this is a function rather than `offset + regionSize
+// <= mappedSize`. That form overflows: an offset near the top of the range wraps the sum back into
+// bounds and the check waves through exactly the value it exists to catch. Subtracting instead
+// cannot overflow, and the `mappedSize < regionSize` test in front of it is what stops the
+// subtraction underflowing.
+//
+// Alignment is part of fitting, not a separate question: a misaligned pointer to a type with
+// stricter alignment is undefined behaviour before it is a bounds problem.
+constexpr bool shmRegionFits(uint64_t offset, uint64_t regionSize, uint64_t align,
+                             uint64_t mappedSize) {
+  if (align == 0 || offset % align != 0) {
+    return false;
+  }
+  if (mappedSize < regionSize) {
+    return false;
+  }
+  return offset <= mappedSize - regionSize;
+}
+
 }  // namespace daw::engine

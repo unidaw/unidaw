@@ -393,15 +393,17 @@ impl EngineHandle {
             }
         };
         let ring_ui = if writable {
-            ring_view(mmap.as_ptr() as *mut u8, ring_offset)
+            ring_view(mmap.as_ptr() as *mut u8, ring_offset, size as usize)
         } else {
             None
         };
         // THE OUTBOUND RING, mapped even on a read-only attach. It is the engine's diff channel
         // and this side only ever PEEKS it — see peek_ui_diffs for why it must never drain.
-        let ring_ui_out = ring_view(mmap.as_ptr() as *mut u8, unsafe {
-            (*header).ring_ui_out_offset
-        });
+        let ring_ui_out = ring_view(
+            mmap.as_ptr() as *mut u8,
+            unsafe { (*header).ring_ui_out_offset },
+            size as usize,
+        );
         Ok(Self {
             _mmap: mmap,
             header,
@@ -1969,11 +1971,51 @@ impl EngineHandle {
     }
 }
 
-fn ring_view(base: *mut u8, offset: u64) -> Option<RingView> {
+/// A typed view of one ring, or None if the header does not describe one that FITS.
+///
+/// AE-P1.3. Every value this reads comes out of shared memory, and until this validated nothing but
+/// `offset != 0` the sequence was: take an unbounded `offset` from the header, `base.add(offset)`,
+/// and DEREFERENCE it to read `capacity` — an out-of-bounds read performed before the first check.
+/// The capacity and entry-size tests that followed could not help; they ran on whatever those bytes
+/// happened to be. The resulting `mask` is `capacity - 1`, so a plausible-looking capacity indexes
+/// far past the mapping, and on a writable attach that is a write.
+///
+/// A corrupt header is not only an attack. A truncated file from an engine that died mid-setup, or
+/// a stale segment from a different build whose magic and version happen to match, arrives here the
+/// same way.
+///
+/// ORDER IS THE WHOLE POINT. Each check must pass before the read it protects:
+///   1. the offset is non-zero and correctly aligned for RingHeader;
+///   2. the HEADER fits inside the mapping — checked before any field of it is read;
+///   3. only then are capacity and entry_size read, and validated;
+///   4. the ENTRIES array fits too, computed with checked arithmetic so a huge capacity cannot
+///      wrap the sum back into range.
+///
+/// `len` is the mapped length, which the caller already knows from the file's metadata.
+fn ring_view(base: *mut u8, offset: u64, len: usize) -> Option<RingView> {
     if offset == 0 {
         return None;
     }
-    let header = unsafe { base.add(offset as usize) as *mut RingHeader };
+    let offset = usize::try_from(offset).ok()?;
+    // THE ALIGNMENT CHECK IS ON THE OFFSET, SO IT ONLY WORKS IF THE BASE IS ALIGNED — entries land
+    // at `base + offset + 64`, so `entries % 64 == base % 64`. In production `base` comes from mmap
+    // and is page-aligned, which is why this holds; it is a precondition of the function and not
+    // something the offset test establishes. Stated as an assertion rather than a comment because
+    // the first test harness written for this function allocated `vec![0u8; n]`, which measured 32
+    // mod 64, and therefore validated nothing while appearing to.
+    debug_assert_eq!(
+        base as usize % std::mem::align_of::<RingHeader>(),
+        0,
+        "ring_view assumes a mapping-aligned base; entries inherit the base's alignment"
+    );
+    if offset % std::mem::align_of::<RingHeader>() != 0 {
+        return None;
+    }
+    // (2) The header must fit BEFORE it is read. `checked_add` because offset is attacker-shaped.
+    if offset.checked_add(std::mem::size_of::<RingHeader>())? > len {
+        return None;
+    }
+    let header = unsafe { base.add(offset) as *mut RingHeader };
     let capacity = unsafe { (*header).capacity };
     if capacity == 0 || (capacity & (capacity - 1)) != 0 {
         return None;
@@ -1983,10 +2025,184 @@ fn ring_view(base: *mut u8, offset: u64) -> Option<RingView> {
         return None;
     }
     let entries_offset = (std::mem::size_of::<RingHeader>() + 63) & !63;
+    // (4) ...and so must every entry the mask can reach. capacity is a u32 power of two, so the
+    // product is computed in usize with checked arithmetic rather than trusted to be small.
+    let entries_bytes = (capacity as usize).checked_mul(entry_size)?;
+    let end = offset
+        .checked_add(entries_offset)?
+        .checked_add(entries_bytes)?;
+    if end > len {
+        return None;
+    }
     let entries = header as *mut u8;
     Some(RingView {
         header,
         entries: unsafe { entries.add(entries_offset) as *mut EventEntry },
         mask: capacity - 1,
     })
+}
+
+#[cfg(test)]
+mod ring_view_bounds_tests {
+    use super::*;
+
+    // AE-P1.3. Every field ring_view reads comes out of shared memory, so these build the header
+    // BY HAND in a plain buffer and hand it offsets a corrupt or truncated segment would produce.
+    //
+    // WHAT EACH MUTATION ACTUALLY DOES TO THIS SUITE. All three were run; an earlier version of
+    // this comment reported one of them and implied the set had been characterised, which an
+    // independent review called out. The three are not equivalent and the difference is the
+    // interesting part:
+    //
+    //   remove the ENTRIES-FIT arithmetic (step 4)  -> two clean assertion failures,
+    //                                                  `entries_that_do_not_fit_are_refused` and
+    //                                                  `a_capacity_larger_than_the_mapping_is_refused`.
+    //                                                  These are one mechanism (`end > len`) tested
+    //                                                  twice, not two independent ratchets.
+    //   remove the HEADER-FITS check (step 2)       -> SIGSEGV. The binary dies.
+    //   remove the alignment check                  -> no test notices (see below).
+    //
+    // STEP (2) CANNOT BE RATCHETED BY AN OUTCOME TEST, and that is a property of the design rather
+    // than a gap in the suite. Any offset whose HEADER does not fit also has ENTRIES that do not
+    // fit, so step (4) reaches the same verdict — after reading out of bounds to get there. Step
+    // (2)'s job is not to change the answer; it is to make arriving at the answer safe. The only
+    // observable difference is the segfault above, which is UB manifesting, and a test that asserts
+    // on UB asserts on nothing. What establishes step (2) is reading the order.
+    //
+    // The remaining tests are OUTCOME PINS, not ratchets: they pass against weaker code too,
+    // because these buffers are zeroed and `capacity == 0` was already refused. Worth having,
+    // worth not overselling.
+
+    const HDR: usize = std::mem::size_of::<RingHeader>();
+    const ENTRIES_AT: usize = (HDR + 63) & !63;
+    const ENTRY: usize = std::mem::size_of::<EventEntry>();
+
+    /// A 64-ALIGNED zeroed buffer. `vec![0u8; n]` is not aligned for an `align(64)` type — measured
+    /// at 32 mod 64 for the sizes used here — so the previous harness wrote through a misaligned
+    /// `*mut RingHeader`, which is undefined behaviour inside a test module whose subject is memory
+    /// safety. It also meant the tests did not model production, where `base` comes from mmap and
+    /// is page-aligned. `ring_view` validates the OFFSET, so entries are aligned only if the BASE
+    /// is; that precondition is now asserted in the function and honoured here.
+    struct Aligned {
+        ptr: *mut u8,
+        layout: std::alloc::Layout,
+    }
+    impl Aligned {
+        fn new(len: usize) -> Self {
+            let layout = std::alloc::Layout::from_size_align(len.max(1), 64).unwrap();
+            let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+            assert!(!ptr.is_null());
+            assert_eq!(ptr as usize % 64, 0);
+            Self { ptr, layout }
+        }
+    }
+    impl Drop for Aligned {
+        fn drop(&mut self) {
+            unsafe { std::alloc::dealloc(self.ptr, self.layout) };
+        }
+    }
+
+    /// A 64-aligned buffer with a well-formed ring header at `offset`.
+    fn buffer_with_ring(offset: usize, capacity: u32, len: usize) -> Aligned {
+        let buf = Aligned::new(len);
+        let hdr = unsafe { buf.ptr.add(offset) as *mut RingHeader };
+        unsafe {
+            (*hdr).capacity = capacity;
+            (*hdr).entry_size = ENTRY as u32;
+        }
+        buf
+    }
+
+    fn view(buf: &Aligned, offset: u64, len: usize) -> bool {
+        ring_view(buf.ptr, offset, len).is_some()
+    }
+
+    #[test]
+    fn a_well_formed_ring_is_accepted() {
+        let cap = 4u32;
+        let len = 64 + ENTRIES_AT + cap as usize * ENTRY;
+        let buf = buffer_with_ring(64, cap, len);
+        assert!(view(&buf, 64, len), "a ring that fits must be usable");
+    }
+
+    #[test]
+    fn an_offset_past_the_mapping_is_refused() {
+        let buf = buffer_with_ring(64, 4, 4096);
+        // The shape a corrupt header produces: a plausible number that is simply outside.
+        assert!(!view(&buf, 1 << 30, 4096));
+        assert!(!view(&buf, u64::MAX, 4096));
+    }
+
+    #[test]
+    fn a_header_straddling_the_end_is_refused() {
+        // THIS TEST WAS VACUOUS AND IS THE REASON TO WRITE THE NUMBERS DOWN. It used
+        // `((4096 - HDR/2) & !63)`, which rounds DOWN to 4032 — and 4032 + 64 == 4096 == len, so
+        // the header fitted exactly and was refused by the pre-existing `capacity == 0` rule while
+        // its comment claimed it straddled the end. An independent review measured it.
+        //
+        // A straddle needs a mapping whose length is NOT a multiple of 64, because the offset must
+        // be 64-aligned to get past the alignment gate at all. 3968 + 64 = 4032 > 4000.
+        //
+        // This is the ONLY test that covers step (2), the header-fits check — the centrepiece of
+        // this function's ordering argument. Before this rewrite, deleting that check left seven of
+        // eight tests green.
+        let len = 4000;
+        let straddle = 3968u64;
+        assert_eq!(straddle % 64, 0, "must pass the alignment gate to reach the fits check");
+        assert!(straddle as usize + HDR > len, "the fixture must actually straddle");
+        let buf = buffer_with_ring(64, 4, len);
+        assert!(!view(&buf, straddle, len));
+    }
+
+    #[test]
+    fn a_misaligned_offset_is_refused() {
+        let buf = buffer_with_ring(64, 4, 4096);
+        assert!(!view(&buf, 65, 4096), "RingHeader is align(64)");
+    }
+
+    #[test]
+    fn entries_that_do_not_fit_are_refused() {
+        // The header fits and every field is individually plausible; only the ENTRIES run past the
+        // end. This is the case the pre-AE-P1.3 code could not see at all: it validated the
+        // capacity's shape and never asked whether the array it describes exists.
+        let cap = 1024u32;
+        let len = 64 + ENTRIES_AT + 8 * ENTRY;
+        let buf = buffer_with_ring(64, cap, 64 + ENTRIES_AT + 8 * ENTRY);
+        assert!(!view(&buf, 64, len));
+    }
+
+    #[test]
+    fn a_capacity_larger_than_the_mapping_is_refused() {
+        // RENAMED. This was `a_capacity_that_would_overflow_the_sum_is_refused`, and it overflows
+        // nothing: 2^31 * 64 = 2^37, measured. It is refused by `end > len` — the same branch the
+        // previous test exercises — so the two are one mechanism tested twice, not two ratchets.
+        //
+        // The `checked_mul` in the function is UNREACHABLE by construction and stays as defence
+        // rather than coverage: `entry_size` is pinned to exactly 64 two lines above it and
+        // `capacity` is a u32, so the product is bounded by 2^38. The `checked_add` is reachable
+        // only at an offset within 64 bytes of usize::MAX, which is also untested. Saying so beats
+        // a name that promises a branch no test enters.
+        let cap = 1u32 << 31;
+        let len = 4096;
+        let buf = buffer_with_ring(64, cap, len);
+        assert!(!view(&buf, 64, len));
+    }
+
+    #[test]
+    fn a_non_power_of_two_capacity_is_still_refused() {
+        // Pre-existing rule, pinned here so the reordering above cannot have dropped it: mask
+        // arithmetic requires a power of two.
+        let len = 4096;
+        let buf = buffer_with_ring(64, 3, len);
+        assert!(!view(&buf, 64, len));
+    }
+
+    #[test]
+    fn a_wrong_entry_size_is_still_refused() {
+        let len = 4096;
+        let buf = buffer_with_ring(64, 4, len);
+        let hdr = unsafe { buf.ptr.add(64) as *mut RingHeader };
+        unsafe { (*hdr).entry_size = (ENTRY as u32) + 1 };
+        assert!(!view(&buf, 64, len));
+    }
 }

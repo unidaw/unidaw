@@ -283,24 +283,53 @@ bool HostController::mapSharedMemory(const HelloResponse& response,
     return false;
   }
 
+  // AE-P1.3, and this ordering is the whole of it. `shmSize_` comes from the host's HELLO
+  // RESPONSE and `mailboxOffset` out of the mapping itself — neither is this process's own number.
+  //
+  // The magic/version test below exists to detect a host built against a different layout. It used
+  // to run AFTER `view->header->mailboxOffset` had already been read and turned into a pointer, so
+  // the one check that decides whether this header is even the right FORMAT came too late to
+  // protect the read that depends on it. A host reporting a size smaller than ShmHeader made that
+  // first read out of bounds, and an out-of-range mailboxOffset produced a `completedBlockId` the
+  // producer then dereferences every block.
+  //
+  // So: the size admits a header; the header identifies itself; only then is any offset in it
+  // believed.
+  if (shmSize_ < sizeof(ShmHeader)) {
+    std::cerr << "HostController: shm is " << shmSize_ << " bytes, too small for a "
+              << sizeof(ShmHeader) << "-byte header." << std::endl;
+    return false;
+  }
+  auto* header = reinterpret_cast<ShmHeader*>(mapped);
+  if (header->magic != kShmMagic || header->version != kShmVersion) {
+    std::cerr << "HostController: shm header mismatch (magic="
+              << std::hex << header->magic << " version=" << std::dec
+              << header->version << ")." << std::endl;
+    return false;
+  }
+  // Checked in this order and with this arithmetic so a large offset cannot wrap the sum back
+  // into range: the subtraction cannot underflow because the size test above already passed.
+  const uint64_t mailboxOffset = header->mailboxOffset;
+  if (mailboxOffset > shmSize_ - sizeof(BlockMailbox) ||
+      mailboxOffset % alignof(BlockMailbox) != 0) {
+    std::cerr << "HostController: mailboxOffset " << mailboxOffset
+              << " does not admit a " << sizeof(BlockMailbox) << "-byte mailbox in "
+              << shmSize_ << " bytes." << std::endl;
+    return false;
+  }
+
   auto view = std::make_shared<SharedMemoryView>();
   view->base = mapped;
   view->size = shmSize_;
-  view->header = reinterpret_cast<ShmHeader*>(mapped);
+  view->header = header;
   view->mailbox = reinterpret_cast<BlockMailbox*>(
-      reinterpret_cast<uint8_t*>(mapped) + view->header->mailboxOffset);
+      reinterpret_cast<uint8_t*>(mapped) + mailboxOffset);
   view->completedBlockId = &view->mailbox->completedBlockId;
 
   shmView_ = view;
   shmBase_ = mapped;
   shmHeader_ = view->header;
   mailbox_ = view->mailbox;
-  if (shmHeader_->magic != kShmMagic || shmHeader_->version != kShmVersion) {
-    std::cerr << "HostController: shm header mismatch (magic="
-              << std::hex << shmHeader_->magic << " version=" << std::dec
-              << shmHeader_->version << ")." << std::endl;
-    return false;
-  }
   if (shmHeader_->blockSize != config.blockSize ||
       shmHeader_->sampleRate != config.sampleRate ||
       shmHeader_->numChannelsIn != config.numChannelsIn ||
