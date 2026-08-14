@@ -324,6 +324,11 @@ impl Mapping {
 pub struct EngineHandle {
     _mmap: Mapping,
     header: *const ShmHeader,
+    // AE-P1.3. The mapped length, kept so a region offset out of the header can be checked against
+    // something. Without it the only available shape was passing the length as a parameter, which
+    // works for the rings because they are built inside attach_inner and reaches none of the
+    // fifteen region accessors that are not.
+    size: usize,
     ring_ui: Option<RingView>,
     ring_ui_out: Option<RingView>,
 }
@@ -407,9 +412,66 @@ impl EngineHandle {
         Ok(Self {
             _mmap: mmap,
             header,
+            size: size as usize,
             ring_ui,
             ring_ui_out,
         })
+    }
+
+    /// A pointer to a `T` at `offset` bytes into the mapping, or None if the mapping does not
+    /// admit one there.
+    ///
+    /// AE-P1.3. Fifteen region accessors read a `u64` offset out of the shared header and turned it
+    /// into a `*const T` — several into a Rust REFERENCE, which is stricter still — guarded by
+    /// `offset == 0` and nothing else. Every one of those offsets is a number another process
+    /// wrote. The engine writes them correctly; a truncated segment from an engine that died
+    /// mid-setup, or a stale one from a build whose magic and version happen to match, does not.
+    ///
+    /// ONE HELPER RATHER THAN THE CHECK WRITTEN FIFTEEN TIMES. The rule is identical at every site
+    /// and this project has watched an identical rule reach seven hand-written copies under a
+    /// comment claiming four. It also means the sites read as what they are — "give me this region
+    /// if it is there" — instead of restating pointer arithmetic.
+    ///
+    /// The subtraction is deliberate: `offset + size_of::<T>() <= self.size` overflows and admits
+    /// exactly the offset it exists to refuse. The `self.size < size_of::<T>()` test in front of it
+    /// is what keeps the subtraction from underflowing.
+    ///
+    /// Alignment is checked because these become references to types with alignment requirements,
+    /// and a misaligned reference is undefined behaviour before it is a bounds problem. The base is
+    /// page-aligned (mmap), so an aligned offset gives an aligned address.
+    /// A pointer to `count` consecutive `T` at `offset`, or None if the mapping does not admit
+    /// them ALL.
+    ///
+    /// AE-P1.3. `region::<T>` proves ONE `T` fits, which is the wrong bound wherever the caller
+    /// then indexes. The all-tracks clip region is published as
+    /// `sizeof(UiClipWindowSnapshot) * kUiMaxTracks` and read with `base.add(track_id)`, so
+    /// validating one element left the other sixty-three unchecked — measured at up to 14,970,312
+    /// bytes past the end of the real segment. The residual guard there compares the header's
+    /// declared `*_bytes` against the expected size, but that is another number the writer chose;
+    /// nothing compared it to the MAPPING.
+    ///
+    /// `ring_view` one screen away had this right from the start: it bounds the header AND the
+    /// entries array. This is the same rule for typed regions.
+    fn region_slice<T>(&self, offset: u64, count: usize) -> Option<*const T> {
+        let bytes = count.checked_mul(std::mem::size_of::<T>())?;
+        let offset = usize::try_from(offset).ok()?;
+        if !region_fits(offset, bytes, std::mem::align_of::<T>(), self.size) {
+            return None;
+        }
+        Some(unsafe { self._mmap.as_ptr().add(offset) as *const T })
+    }
+
+    fn region<T>(&self, offset: u64) -> Option<*const T> {
+        let offset = usize::try_from(offset).ok()?;
+        if !region_fits(
+            offset,
+            std::mem::size_of::<T>(),
+            std::mem::align_of::<T>(),
+            self.size,
+        ) {
+            return None;
+        }
+        Some(unsafe { self._mmap.as_ptr().add(offset) as *const T })
     }
 
     /// The diffs currently sitting in the engine's outbound ring, NEWEST LAST.
@@ -656,9 +718,12 @@ impl EngineHandle {
             if offset == 0 || bytes < std::mem::size_of::<UiClipWindowSnapshot>() as u64 {
                 return None;
             }
-            let snapshot = unsafe {
-                *(self._mmap.as_ptr().add(offset as usize) as *const UiClipWindowSnapshot)
+            let Some(snapshot_ptr) = self.region::<UiClipWindowSnapshot>(offset) else {
+                return None;
             };
+            // A COPY, not a reference: this is inside a seqlock attempt, and the value must be
+            // taken before commit() decides whether the read was torn.
+            let snapshot = unsafe { *snapshot_ptr };
             if attempt.commit(unsafe { &(*self.header).ui_version }, v0) {
                 return Some(snapshot);
             }
@@ -685,8 +750,11 @@ impl EngineHandle {
             if offset == 0 || (bytes as usize) < stride * K_UI_MAX_TRACKS {
                 return None;
             }
-            let base = self._mmap.as_ptr().wrapping_add(offset as usize)
-                as *const UiClipWindowSnapshot;
+            // THE WHOLE ARRAY, not one element: `base.add(track_id)` reaches the last track.
+            let Some(base) = self.region_slice::<UiClipWindowSnapshot>(offset, K_UI_MAX_TRACKS)
+            else {
+                return None;
+            };
             let snapshot = unsafe { *base.add(track_id as usize) };
             if attempt.commit(unsafe { &(*self.header).ui_version }, v0) {
                 return Some(snapshot);
@@ -712,8 +780,7 @@ impl EngineHandle {
         {
             return None;
         }
-        let base = self._mmap.as_ptr().wrapping_add(offset as usize)
-            as *const crate::layout::UiArrangeSummaryRegion;
+        let Some(base) = self.region::<crate::layout::UiArrangeSummaryRegion>(offset) else { return None; };
         for _ in 0..64 {
             let v0 = unsafe { std::ptr::read_volatile(&(*base).version) };
             // 0 means a write is IN FLIGHT. Without this the read was not torn-safe at all,
@@ -755,8 +822,7 @@ impl EngineHandle {
             if offset == 0 {
                 return (Vec::new(), 0);
             }
-            let region = self._mmap.as_ptr().wrapping_add(offset as usize)
-                as *const UiClipExtentRegion;
+            let Some(region) = self.region::<UiClipExtentRegion>(offset) else { return (Vec::new(), 0); };
             let count = unsafe { (*region).count as usize }.min(K_UI_MAX_CLIP_EXTENTS);
             let truncated = unsafe { (*region).truncated };
             let mut out = Vec::with_capacity(count);
@@ -799,7 +865,7 @@ impl EngineHandle {
         if off == 0 {
             return 0;
         }
-        let snap = self._mmap.as_ptr().wrapping_add(off as usize) as *const UiHarmonySnapshot;
+        let Some(snap) = self.region::<UiHarmonySnapshot>(off) else { return 0; };
         unsafe { std::ptr::read_volatile(&(*snap).version) }
     }
 
@@ -808,7 +874,7 @@ impl EngineHandle {
         if off == 0 {
             return 0;
         }
-        let snap = self._mmap.as_ptr().wrapping_add(off as usize) as *const UiHarmonySnapshot;
+        let Some(snap) = self.region::<UiHarmonySnapshot>(off) else { return 0; };
         (unsafe { (*snap).event_count }).min(K_UI_MAX_HARMONY_EVENTS as u32)
     }
 
@@ -821,8 +887,7 @@ impl EngineHandle {
             if off == 0 {
                 return Vec::new();
             }
-            let snap =
-                self._mmap.as_ptr().wrapping_add(off as usize) as *const UiHarmonySnapshot;
+            let Some(snap) = self.region::<UiHarmonySnapshot>(off) else { return Vec::new(); };
             let count =
                 (unsafe { (*snap).event_count } as usize).min(K_UI_MAX_HARMONY_EVENTS);
             let mut out = Vec::with_capacity(count);
@@ -881,7 +946,7 @@ impl EngineHandle {
         if off == 0 {
             return 0;
         }
-        let region = self._mmap.as_ptr().wrapping_add(off as usize) as *const UiPatcherRegion;
+        let Some(region) = self.region::<UiPatcherRegion>(off) else { return 0; };
         unsafe { std::ptr::read_volatile(&(*region).version) }
     }
 
@@ -896,8 +961,7 @@ impl EngineHandle {
             if off == 0 {
                 return PatcherView::default();
             }
-            let region =
-                self._mmap.as_ptr().wrapping_add(off as usize) as *const UiPatcherRegion;
+            let Some(region) = self.region::<UiPatcherRegion>(off) else { return PatcherView::default(); };
             let nodes_n =
                 (unsafe { (*region).node_count } as usize).min(K_UI_MAX_PATCHER_NODES);
             let edges_n =
@@ -931,8 +995,7 @@ impl EngineHandle {
         if off == 0 {
             return Vec::new();
         }
-        let region =
-            self._mmap.as_ptr().wrapping_add(off as usize) as *const UiScaleRegion;
+        let Some(region) = self.region::<UiScaleRegion>(off) else { return Vec::new(); };
         let n = (unsafe { (*region).scaleCount } as usize).min(K_UI_MAX_SCALES);
         let mut out = Vec::with_capacity(n);
         for i in 0..n {
@@ -957,8 +1020,7 @@ impl EngineHandle {
         if off == 0 {
             return DeviceParamsView::default();
         }
-        let region = self._mmap.as_ptr().wrapping_add(off as usize)
-            as *const UiDeviceParamsRegion;
+        let Some(region) = self.region::<UiDeviceParamsRegion>(off) else { return DeviceParamsView::default(); };
         let n = (unsafe { (*region).paramCount } as usize).min(K_UI_MAX_DEVICE_PARAMS);
         let mut view = DeviceParamsView {
             version: unsafe { (*region).version },
@@ -997,8 +1059,7 @@ impl EngineHandle {
         if off == 0 {
             return AudioSourcesView::default();
         }
-        let region = self._mmap.as_ptr().wrapping_add(off as usize)
-            as *const UiAudioSourceRegion;
+        let Some(region) = self.region::<UiAudioSourceRegion>(off) else { return AudioSourcesView::default(); };
         let ver_ptr = unsafe { std::ptr::addr_of!((*region).version) } as *const AtomicU32;
         for _ in 0..256 {
             let v0 = unsafe { (*ver_ptr).load(Ordering::Acquire) };
@@ -1076,8 +1137,7 @@ impl EngineHandle {
         if off == 0 {
             return None;
         }
-        let region =
-            self._mmap.as_ptr().wrapping_add(off as usize) as *const UiWaveformRegion;
+        let Some(region) = self.region::<UiWaveformRegion>(off) else { return None; };
         let slot = unsafe { std::ptr::addr_of!((*region).slots[index]) };
         // The slot's `seq` is a plain u32 in the bindgen struct (SHM_BINDGEN maps the
         // C++ atomic to u32); read it through an AtomicU32 cast so the seqlock's
@@ -1124,8 +1184,7 @@ impl EngineHandle {
         if off == 0 {
             return AutomationLanesView::default();
         }
-        let region = self._mmap.as_ptr().wrapping_add(off as usize)
-            as *const UiAutomationLaneRegion;
+        let Some(region) = self.region::<UiAutomationLaneRegion>(off) else { return AutomationLanesView::default(); };
         // Same discipline as the arrange summary, for the same reason: version 0 means a write is
         // IN FLIGHT. Sampling the version, reading the body, and sampling again is NOT torn-safe
         // by itself — the engine only moves the number after writing, so a reader that lands
@@ -1187,8 +1246,7 @@ impl EngineHandle {
         if off == 0 {
             return None;
         }
-        let region = self._mmap.as_ptr().wrapping_add(off as usize)
-            as *const UiAutomationSlotRegion;
+        let Some(region) = self.region::<UiAutomationSlotRegion>(off) else { return None; };
         let slot = unsafe { std::ptr::addr_of!((*region).slots[index]) };
         let seq_ptr = unsafe { std::ptr::addr_of!((*slot).seq) } as *const AtomicU32;
         for _ in 0..4096 {
@@ -1228,8 +1286,7 @@ impl EngineHandle {
         if off == 0 {
             return None;
         }
-        let region = self._mmap.as_ptr().wrapping_add(off as usize)
-            as *const crate::layout::UiSamplerEnvelopeRegion;
+        let Some(region) = self.region::<crate::layout::UiSamplerEnvelopeRegion>(off) else { return None; };
         let slot = unsafe { std::ptr::addr_of!((*region).slots[index]) };
         let seq_ptr = unsafe { std::ptr::addr_of!((*slot).seq) } as *const AtomicU32;
         for _ in 0..4096 {
@@ -1438,9 +1495,8 @@ impl EngineHandle {
         if offset == 0 {
             return out;
         }
-        let region = unsafe {
-            &*((self._mmap.as_ptr()).add(offset as usize) as *const UiDeviceMeterRegion)
-        };
+        let Some(region_ptr) = self.region::<UiDeviceMeterRegion>(offset) else { return out; };
+        let region = unsafe { &*region_ptr };
         for d in 0..K_UI_MAX_METERED_DEVICES {
             let m = region.meters[slot][d];
             if m.device_id == UI_METER_NO_DEVICE {
@@ -1591,8 +1647,7 @@ impl EngineHandle {
         if off == 0 {
             return 0;
         }
-        let region = self._mmap.as_ptr().wrapping_add(off as usize)
-            as *const crate::layout::UiSamplerKitRegion;
+        let Some(region) = self.region::<crate::layout::UiSamplerKitRegion>(off) else { return 0; };
         let ptr = unsafe { std::ptr::addr_of!((*region).version) } as *const AtomicU32;
         unsafe { (*ptr).load(Ordering::Acquire) }
     }
@@ -1605,8 +1660,7 @@ impl EngineHandle {
         if off == 0 {
             return None;
         }
-        let region = self._mmap.as_ptr().wrapping_add(off as usize)
-            as *const crate::layout::UiSamplerKitRegion;
+        let Some(region) = self.region::<crate::layout::UiSamplerKitRegion>(off) else { return None; };
         let slot = unsafe { std::ptr::addr_of!((*region).slots[index]) };
         let seq_ptr = unsafe { std::ptr::addr_of!((*slot).seq) } as *const AtomicU32;
         for _ in 0..4096 {
@@ -1988,6 +2042,30 @@ impl EngineHandle {
     }
 }
 
+/// Does a `size`-byte region of alignment `align` fit at `offset` in a mapping of `mapped` bytes?
+///
+/// AE-P1.3, and free rather than a method for one reason: as a method on EngineHandle it could only
+/// be exercised by attaching to a live engine, so the malformed cases it exists to refuse could not
+/// be posed at all. A guard that cannot be shown to reject anything is indistinguishable from no
+/// guard, and this project has shipped that shape more than once.
+///
+/// Offset 0 is "the region is absent", which every caller already treated as absent.
+///
+/// THE SUBTRACTION IS THE POINT. `offset + size <= mapped` overflows and admits exactly the offset
+/// it exists to refuse; the `mapped < size` test in front of it stops the subtraction underflowing.
+fn region_fits(offset: usize, size: usize, align: usize, mapped: usize) -> bool {
+    if offset == 0 || align == 0 {
+        return false;
+    }
+    if offset % align != 0 {
+        return false;
+    }
+    if mapped < size {
+        return false;
+    }
+    offset <= mapped - size
+}
+
 /// A typed view of one ring, or None if the header does not describe one that FITS.
 ///
 /// AE-P1.3. Every value this reads comes out of shared memory, and until this validated nothing but
@@ -2221,5 +2299,88 @@ mod ring_view_bounds_tests {
         let hdr = unsafe { buf.ptr.add(64) as *mut RingHeader };
         unsafe { (*hdr).entry_size = (ENTRY as u32) + 1 };
         assert!(!view(&buf, 64, len));
+    }
+}
+
+#[cfg(test)]
+mod region_fits_tests {
+    use super::region_fits;
+
+    // AE-P1.3. These pose the malformed descriptors a corrupt or truncated segment produces, which
+    // the accessors themselves cannot be asked about without attaching to a live engine.
+    //
+    // WHICH OF THESE RATCHET: all FIVE conditions are covered, one test each, and this is the
+    // measured result of deleting each in turn rather than a claim about the suite. It said FOUR
+    // until a reviewer counted them: the first clause is a disjunction, `offset == 0 || align == 0`,
+    // and deleting the second half left the suite green. Counting a disjunction as one condition is
+    // how a covered-looking predicate keeps an untested branch. The
+    // ring-view suite next door is weaker precisely because a pre-existing rule refused its zeroed
+    // fixtures by accident; region_fits is the only thing deciding here.
+    //
+    //   remove `offset == 0`      -> absent_is_not_a_region
+    //   remove `align == 0`       -> a_zero_alignment_is_refused
+    //   remove the alignment test -> a_misaligned_offset_is_refused
+    //   remove `mapped < size`    -> a_mapping_smaller_than_the_region_is_refused, and note it
+    //                                fails by PANICKING inside region_fits — the subtraction
+    //                                underflows, which is what that clause exists to prevent
+    //   remove the bounds test    -> one_byte_past_the_end_is_refused AND
+    //                                an_offset_near_the_top_of_the_range_cannot_wrap_into_bounds
+
+    #[test]
+    fn a_region_that_fits_is_accepted() {
+        assert!(region_fits(64, 128, 64, 4096));
+        // Exactly flush with the end is legal: the last byte is mapped.
+        assert!(region_fits(4096 - 128, 128, 64, 4096));
+    }
+
+    #[test]
+    fn absent_is_not_a_region() {
+        // Offset 0 means "the engine has not published this region", which every caller already
+        // treated as absent. It is not a bounds failure and must not be reported as one.
+        assert!(!region_fits(0, 128, 64, 4096));
+    }
+
+    #[test]
+    fn one_byte_past_the_end_is_refused() {
+        // The off-by-one in the dangerous direction. If this passed, the last byte of the region
+        // would be the first byte after the mapping.
+        assert!(!region_fits(4096 - 128 + 64, 128, 64, 4096));
+    }
+
+    #[test]
+    fn a_zero_alignment_is_refused() {
+        // THE FIFTH CONDITION THE COMMIT MESSAGE CALLED FOUR. `offset == 0 || align == 0` is a
+        // disjunction, and deleting only the second half left this suite fully green — so the
+        // claim "all four clauses are covered" described five conditions as four and one of them
+        // was untested.
+        //
+        // `region` only ever passes `align_of::<T>()`, which is never 0, so this is unreachable
+        // from the two callers. It is covered anyway rather than deleted because region_fits is a
+        // FREE function whose entire justification is that malformed inputs can be posed to it —
+        // an argument that does not survive leaving one of its own inputs unexercised. It also
+        // stops `%` dividing by zero if a future caller computes an alignment.
+        assert!(!region_fits(64, 128, 0, 4096));
+    }
+
+    #[test]
+    fn a_misaligned_offset_is_refused() {
+        assert!(!region_fits(65, 128, 64, 4096));
+        // ...and alignment is judged against the type's requirement, not a constant.
+        assert!(region_fits(4, 8, 4, 4096));
+        assert!(!region_fits(4, 8, 8, 4096));
+    }
+
+    #[test]
+    fn a_mapping_smaller_than_the_region_is_refused() {
+        // The case that makes the subtraction safe: without the `mapped < size` test the next line
+        // would underflow to a huge bound and admit everything.
+        assert!(!region_fits(64, 4096, 64, 128));
+    }
+
+    #[test]
+    fn an_offset_near_the_top_of_the_range_cannot_wrap_into_bounds() {
+        // Written as `offset + size <= mapped` this is the input that wraps and passes. The
+        // subtraction cannot, which is why the check is phrased that way.
+        assert!(!region_fits(usize::MAX - 63, 128, 64, 4096));
     }
 }
