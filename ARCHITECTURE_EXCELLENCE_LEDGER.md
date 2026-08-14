@@ -4020,3 +4020,43 @@ a class to sweep. Recorded because the reflex after finding a counter-crossing i
 global wait, and here that would have broken undo.
 
 `rust_tests_check` PASS, 218 tests.
+
+## AE-P1.2 item 36, three of four: the check could pass having tested nothing (`758deb3a`)
+
+`host_stall_check`'s verdict is *"few inFlight stalls after the freeze"*, and **a run that produced
+no blocks satisfies it perfectly** — no production, no stalls, count 0, pass. Three of the item's
+four named defects all fed that single failure, which is why they are one commit.
+
+1. **`cli do play --force ... || true`** discarded the one failure that makes everything after it
+   meaningless. It now fails and says so.
+2. **The freeze anchor was a second writer.** `echo froze-host-marker >> "$TMP/eng.log"` opened a
+   second file description onto the file the engine is still writing through its own. Two
+   independent offsets racing for a position in one stream — and that position is the entire basis
+   of "after the freeze". Now a line-count snapshot, which has one writer. **This does not fix
+   buffering**, and the check says so: engine writes issued before the freeze can still land after
+   the offset, which inflates the count toward a FALSE FAILURE. That is the safe direction; it
+   cannot manufacture a pass.
+3. **The precondition, which is the actual repair.** The check reads `producer.load` at shutdown and
+   refuses a run of under 100 blocks, because a frozen host cannot gate a producer that was not
+   producing.
+
+Point 3 is the same shape as `audio_stability_check` passing on two idle runs, where every
+comparison it made was satisfied by the loaded side reporting zero. **A check must be able to tell
+"the property held" from "the question was never posed"**, and this one could not.
+
+**Verified in both directions.** Real run: 1,669 blocks, 0 stalls after the freeze, PASS in 21s.
+Control: point the extraction at an event that is never emitted, so the run looks like it produced
+nothing — the check FAILS, naming its reason.
+
+One self-correction worth keeping: the first draft matched `"name":"producer.load"` and the emitter
+writes `"event":`. It would have extracted nothing, defaulted to zero, and failed every run for a
+reason unrelated to the engine. Caught by testing the pattern against the real line shape rather
+than against my memory of the format.
+
+### Item 36 is NOT closed
+
+The fourth defect is in the PRODUCT. `if (isPlaying)` in `engine_producer_thread.cpp` wraps only
+`logStall`, while the `continue` that actually gates production runs regardless — so **a producer
+that is not playing stalls silently**. Forcing play and asserting production narrows that window
+considerably but does not remove it. Making the oracle independent of the logging is the rest of
+the item, and it is the half the item's own title is about.
