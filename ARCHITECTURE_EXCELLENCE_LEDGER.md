@@ -3480,3 +3480,38 @@ Also learned: the systemic gap that let the document rot is that `doc_citation_c
 `docs/*.md` plus `README.md` only — `ARCHITECTURE_REVIEW.md`, `AGENTS.md`, `SHM_LAYOUT.md` and every
 other root-level document are invisible to it. Widening that scope is the real fix and is a separate
 increment, because the newly-scanned files will have their own citation debt.
+
+## The citation checker now reads the documents it was written for (2026-08-14)
+
+Two increments, `9c2f7d4e` and `1e7391e0`, closing the systemic gap behind the review document's rot.
+
+**Scope.** `doc_citation_check.sh` scanned `docs/*.md` plus `README.md` only, so
+`ARCHITECTURE_REVIEW.md`, `AGENTS.md` and `SHM_LAYOUT.md` were invisible to it. A citation checker
+that does not read the repository's largest design document is checking a directory, not citations.
+Widened, with two measured baselines that ratchet down like the existing three.
+
+**Bare mentions.** Rule 2 matched only PAIRED citations — a path with a symbol beside it — so a
+backticked path alone was matched by nothing. That is exactly how a header and two checks deleted in
+v29 sat in the review document being read as present. Rule 2b now requires a bare in-repo path to
+exist, or to be marked retired.
+
+**The marker is structural, not a window.** A broken path is allowed when IMMEDIATELY followed by a
+`(deleted|removed|retired)` note — closing backtick, optional spaces, then the note. Deliberately
+not "somewhere within N characters": a distance is the approximation this project keeps being bitten
+by, and a nearby word would let an unrelated aside excuse a citation it never meant to. And marking
+a path that EXISTS as retired fails too, so the cheapest way to silence the rule is not to declare
+everything dead.
+
+**Both times, measurement beat the hand grep.** My grep said three broken paired citations in the
+review document; rule 2's actual predicate found zero, because it only matches pairs. Had I trusted
+the grep I would have built a mechanism for a problem the check does not have. The bare-path
+population — 152 mentions, 4 broken — was likewise measured with the rule's own regex.
+
+**The check caught its author twice.** The scope-widening comment named the three deleted files
+while explaining why the scope changed; the bare-path comment used an illustrative `apps/foo.h`.
+Rule 3 forbids a comment naming a path that does not exist, and it fired on both. Illustrations
+removed rather than the rule weakened — a check that fires on the person extending it is the best
+evidence it works.
+
+Controls, all verified then restored: a new line-citation in a root document fails the baseline; a
+broken bare path with no marker fails; a marker on a live path fails.
