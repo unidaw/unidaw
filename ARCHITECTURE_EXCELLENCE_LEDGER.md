@@ -4342,3 +4342,36 @@ launch path leaves a stale generation. Launches and bumps are now attributed to 
 FUNCTION. It SUBSUMES the counts rather than replacing them — those still catch a removal, which the
 binding does not. Verified by the exact mutation: counts unchanged, old rule passes, new rule names
 `setupTrackRuntime` and the lines it launches from.
+
+## The 02b review's one residue is ratcheted (`5520b76a`)
+
+The review closed with a single unratcheted item, and I had written it into that commit as *"a
+ratchet is the follow-up"* — a sentence that ages into a claim nobody rechecks. Closed rather than
+carried.
+
+`mappingIsCurrent` returns TRUE on a null `liveHostGeneration`. Right for the one test fixture with
+no runtime behind it; and it meant a future production construction site that forgot the field would
+opt out of the stale-mapping guard with nothing anywhere to notice. `readiness_writer_check` now
+requires every DEFAULT-CONSTRUCTED `TrackInfo` in production to wire it, and pins how many exist.
+
+**Copies are exempt on purpose, and the reason is not convenience.** The aux-child path does
+`TrackInfo child = parent;` and inherits a consistent snapshot/pointer PAIR. Demanding a
+re-assignment there would invite re-reading the generation without re-reading the mapping — the one
+combination that manufactures a mismatch out of nothing, turning the guard into something that
+rejects LIVE tracks. That failure would be worse than the hole being closed.
+
+Two controls: deleting the existing assignment gives a named refusal at the exact file, line and
+variable; adding a second construction site **that is correctly wired** is still refused, because
+the count is pinned — a new publisher of the audio thread's view of a track earns a human look even
+when it is right.
+
+The comment that declared this unratcheted is corrected in place with its old wording kept visible.
+It was true when written and is why the check exists — **the reason a guard is safe is worth more
+than the assertion that it is.**
+
+### Status: no product work remains that is not waiting on a decision
+
+Re-derived, not carried. The AE-P1.2 product items are done (7, 14, 16, 19, 24, 30, 32, 33, 36),
+withdrawn (34), or reduced to a precondition for an unchosen fix (15, and 18 via HOST-R2). What is
+left needs an owner, and the exact list is in the next section of this ledger and in
+`docs/architecture/decisions/OPEN-DECISIONS-FOR-JAAKKO.md`.
