@@ -4668,3 +4668,53 @@ Tested rather than assumed, on the two that feed a threshold: `kUiMaxClipNotes` 
 `kUiMaxClipExtents` each match exactly once in `shared_memory.h`, and `extent_truncation_check`
 validates the extracted value afterwards instead of trusting it. No instance found where `head -1`
 is choosing among duplicates. Recorded as a negative so it is not re-investigated.
+
+## AE-P1.4 opened: five plain writes to an atomically-read pointer (`f201d1a1`)
+
+`AE-P1.4` was listed BLOCKED on `AE-P0`. That is phase ordering, not a technical dependency — P0 is
+repository roots, worktree provenance and attestation coverage; P1.4 is producer-thread concurrency.
+Re-deriving the blocker is what opened it, for the second time this programme.
+
+`trackSnapshot` is loaded with acquire at EIGHT sites. Most writers stored with release; five
+assigned plainly. **Mixed atomic and plain access to one object is a data race whatever the values
+are**, and this codebase has already taken a SIGSEGV from a race on a snapshot `shared_ptr`. Four of
+the five are on P1.4's own hand-written list of cases.
+
+**The mutex is why they looked safe.** Two assign under `trackMutex`; the producer never takes it —
+verified across produce_block, producer_thread, emit_notes and the audio callback — so the lock
+orders them against other writers and against nothing that reads. The consumer site is the clearest:
+`audioRender` stored atomically and `trackSnapshot` plainly, four lines apart, on one object.
+
+The review returned PUSH after failing to break it on four axes, and sharpened two things.
+
+**The exemption argument was right for the wrong reason.** Four plain writes remain; I justified
+them as "nobody can name it yet". The actual happens-before edge is `tracksMutex` — all four callers
+`push_back` under it and every reader arrives via `snapshotTracks()` or `trackAt()`, which take it.
+Now stated, because a future publication path that skipped that mutex would break those writes while
+leaving my sentence still true.
+
+**And my own message miscounted, in a commit about miscounting.** It claimed FOUR reader sites;
+there are eight. Worse, the grep I used to VERIFY the reviewer's correction missed one too —
+`engine_produce_block.cpp` wraps `&child->trackSnapshot` onto a continuation line. That is the third
+time in four commits a line-oriented pattern has failed on a wrapped construct, and the second time
+inside a commit whose subject was that exact error. Recounted with a multi-line scan.
+
+**What the tests show:** ctest 46/46, which is a NO-REGRESSION gate and not evidence the fix works —
+a memory-order defect has no functional signature. TSan over patcher-edit-during-playback is the
+positive evidence and has not been run.
+
+### Two defects the review found, filed not fixed
+
+1. **A removed-then-re-added track comes back SILENT.** `buildTrackSnapshot` reads six fields;
+   `resetTrackContent` clears five — `track.routing` and the `routesToMaster` atomic that mirrors it
+   survive, and `RemoveTrack` does not clear them either. So both tombstone sites publish the dead
+   track's routing into the new one. Pre-existing; annotated at the site, because **a correctly
+   ordered publication of wrong contents is still wrong** and my comment claimed only the first half.
+2. **`watchdog` is the same family with a worse failure mode.** The producer dereferences it under
+   `controllerMutex`; four of five writers hold that mutex and `engine_restart_worker.cpp` assigns it
+   OUTSIDE — the guard closes three lines before the assignment. Unlike a `shared_ptr`, that
+   assignment destroys the old Watchdog immediately, so it is a use-after-free rather than a stale
+   read. Narrow — the `hostReady` gate is false through a restart — but nothing closes the window
+   between the producer's `hostReady` read and its lock.
+
+Item 2 is a live use-after-free and outranks anything else open in this phase.
