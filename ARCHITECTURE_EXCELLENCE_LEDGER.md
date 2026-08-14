@@ -4278,3 +4278,67 @@ class, not a live deadlock, and the difference decides whether anyone should be 
 **Nothing to implement here.** Recorded so the next reader does not go looking for a deadlock that
 cannot occur — the same shape as items 29 and 30, where the backlog described work the product had
 already moved past.
+
+## P2-HOST-02b: the review refuted the reason, kept the fix (`560abb8f`), and HOST-R5 (`2a249ec5`)
+
+Held unpushed for independent review, per the standing rule that shared-memory and RT changes do not
+land on an unreviewed reading. **The reviewer's verdict was DO-NOT-PUSH, and it was right.**
+
+**The hazard I claimed does not exist.** `TrackInfo` holds the mapping's owner BY VALUE —
+`shared_ptr<const SharedMemoryView>` — and that view's destructor is the ONLY `munmap` in the
+engine; `HostController::disconnect` does `shmView_.reset()`, dropping a reference rather than
+unmapping. While a published `TrackInfo` exists the pages stay mapped. A relaunch also creates a
+FRESH shm object rather than resizing the old one. **And even had it been real, a compare followed
+by a dereference is TOCTOU and could not have closed it.** I verified all of this myself rather than
+taking the refutation on trust.
+
+**The fix survives on a different and true justification**: it prevents mixing a dead host's
+last-written samples and its stale `completedBlockId` — plausible values that no null check can
+distinguish from live ones. Three sentences asserting memory safety are gone. The recurring failure
+here is prose outliving its content and becoming the next reader's evidence, and I had written three
+fresh instances of it.
+
+**Two dereferences bypassed both gates while the comment claimed every gate was covered** — false
+when written. The priming loop on the live audio thread, whose `completedBlockId` decides the play
+cushion; and `awaitNextBlock`, where a miss matters most in that file's own terms, since both shipped
+bugs there were a WAIT disagreeing with `process()` about which tracks count — and `process()` now
+discards a stale-mapped track. Both gated.
+
+**The control I was proud of was one grade weaker than I said.** Inverting the predicate and watching
+`offline_render` fail proves the call site EXECUTES; it does not prove the predicate DISCRIMINATES.
+Every fixture in the tree took the null branch, so nothing exercised an unequal generation. **"It
+fires" is not "it ratchets" — my own stated rule, and I claimed the stronger thing.** There is now a
+unit test for stale / current / rebuilt and for 0 not being a wildcard, and defeating the predicate
+makes it fail at the exact assertion.
+
+Also from the review: gate 2 hoisted above the per-channel loop (breaking mid-track would leave a
+partial mix with its PDC cursor committed); the predicate moved out of the membership section, which
+answers a different question; and `contributesToMix`'s summary comment, which my insertion had
+orphaned, restored.
+
+Sound on the axes I could have got dangerously wrong: lifetime (it joins six pre-existing pointers
+into a never-destroyed `TrackRuntime`), ordering (snapshot and mapping read under one
+`controllerMutex`; every bump inside the same critical section as its launch), and RT-safety.
+
+**Left explicit rather than implicit:** the null pointer fails OPEN, so a future `TrackInfo`
+construction site that forgets the field opts out silently and nothing notices. The test pins today's
+three sites; a ratchet is the follow-up.
+
+### A git mistake, recorded because the recovery is the useful part
+
+`git commit --amend` amends HEAD, and HEAD was HOST-R5 — not the 02b commit I meant to revise. The
+amend folded HOST-R5's changes into 02b under 02b's message and erased HOST-R5's. Caught by reading
+`--stat` after the amend instead of trusting the new SHA. Nothing was pushed, so the repair was a
+soft reset and two clean re-commits, verified by `git status` being empty afterwards — nothing
+stranded in the split. **The habit that saved it is checking what a rewrite actually produced; the
+habit that caused it is amending without checking what HEAD was.**
+
+### HOST-R5, same session
+
+`host_generation_check` pinned per-FILE counts of launch/connect calls and generation bumps, and the
+readiness header named the gap itself. The mutation counts cannot see is a MOVE: relocating a bump
+between two functions of one file leaves it at 3 calls and 2 bumps, the check passes, and a whole
+launch path leaves a stale generation. Launches and bumps are now attributed to their enclosing
+FUNCTION. It SUBSUMES the counts rather than replacing them — those still catch a removal, which the
+binding does not. Verified by the exact mutation: counts unchanged, old rule passes, new rule names
+`setupTrackRuntime` and the lines it launches from.
