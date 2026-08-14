@@ -11,10 +11,10 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: 537a6624
+- as-of-commit: fb8ded2a
 - main-cpp-lines: 2151
 - main-function-lines: 1944
-- ctest-entries: 226
+- ctest-entries: 229
 - main-function-ceiling: 1944
 
 ## Why this file cannot quietly go stale
@@ -46,6 +46,63 @@ The reason it is built this way: every stale claim found in this repo was in a f
 *intended* to keep current. `tools/meter_bar_check.sh` carried "THE ANCHOR IS NOT FIXED" for months
 after it was fixed — stale in the direction that gets work done twice, by someone with no reason to
 suspect the first attempt exists.
+
+## 2026-08-14 — the shared-memory boundary, and a stretch about evidence
+
+Thirty-three commits, and almost all of them were about the same thing from different angles: the
+boundary where this process starts trusting bytes another process wrote. What makes the stretch
+worth reading is not the fixes — it is how many of my own claims did not survive being checked.
+
+**AE-P1.3, the attach path.** `ring_view` took a ring offset out of a shared header, did
+`base.add(offset)`, and DEREFERENCED it to read `capacity`, with `offset != 0` as the only test. The
+out-of-bounds read happened before the first check, and the capacity and entry-size rules that
+followed ran on whatever those bytes were. The C++ side was worse in kind: `mapSharedMemory` read
+`mailboxOffset` and built a `completedBlockId` from it BEFORE the magic/version test whose entire
+purpose is to detect a host built against a different layout. Both are ordered now — the size admits
+a header, the header identifies itself, only then is any offset in it believed.
+
+Then the part that mattered more: **validating a descriptor does not make the view safe to use.**
+`write_entry` computed a masked slot index, explicitly discarded it, and indexed with the raw
+reserved cursor; `drain_ui_out` masked the increment but not the first read. Nineteen region
+accessors reached the mapping directly and now go through one bounds-checked helper, and a ratchet
+refuses anything that reaches it another way.
+
+**A pointer the producer loads atomically had five plain writes.** Most writers used
+`atomic_store_explicit`; five assigned plainly, two of them under a mutex the producer never takes.
+Mixed atomic and plain access to one object is a race whatever the values are. Separately, the
+restart worker destroyed a `unique_ptr` — a use-after-free, not a stale read — outside the mutex the
+producer reads it under.
+
+**And the wire got an identity.** A refusal named a KIND of command, so a caller could not tell
+whether the refusal was its own. Commands now carry a per-process nonce plus a counter in
+`EventEntry::sampleTime` — bytes that were free because a command has no audio position — and the
+engine echoes it. `kShmVersion` moved to 39, which is the first application of a rule written the
+commit before: giving an existing field a new meaning is a wire change even when nothing observable
+moves, because a version identifies which MEANINGS an image carries.
+
+### What did not survive checking, which is the useful half
+
+- **Two reviews refuted my REASONS and kept my FIXES.** The mapping guard was justified as closing a
+  use-after-free; it closes nothing of the kind, because `TrackInfo` pins the mapping by
+  `shared_ptr` — and a compare followed by a dereference could not close a UAF anyway. The fix is
+  right for a different reason: it stops a dead host's stale samples being mixed.
+- **Four populations were subsets.** Fifteen region accessors were nineteen; five plain writes were
+  six; four atomic readers were eight; five arbitrated commands had been seven. Each time the
+  predicate could not express what I was asking — a same-line pattern against a wrapped construct,
+  `head` on an enumeration, a proximity window.
+- **The same mistake reached a lock.** A grep line showed a `lock_guard` near a write and I inferred
+  a nested scope; it was function-scoped and already held. The second acquisition self-deadlocked
+  and a test timed out.
+- **A control passed when it should have failed** — an exemption keyed by substring survived the
+  rename it existed to notice, because the excused text was a prefix of the new text.
+- **A check was red for a week behind my own sweep filters.** `version_arbiter` lost two members
+  when undo became a whole-document operation and stopped being arbitrated against a per-track clip
+  version. The removal was right; the floor was stale; the exclusion list that hid it was never
+  re-examined.
+
+The rule that comes out of all of it is narrow enough to use: **when the question is about
+structure — scope, extent, enclosure, completeness — read the code, not a match.** A pattern's
+output looks identical whether it found everything or could not express the question.
 
 ## 2026-08-07..14 — the architecture-excellence period, and what reviewing my own work cost
 
