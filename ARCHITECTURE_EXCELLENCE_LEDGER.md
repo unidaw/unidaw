@@ -4960,3 +4960,29 @@ written for, which is an argument for writing the failing control before believi
 "applied" signal carrying the id, and the engine emits none — the identity travels on refusals only.
 That is a wire question adjacent to decision 7; pinning the population is what makes the replacement
 checkable when it lands.
+
+## P2-CMD-00: the sender can learn the id it minted (`57684816`)
+
+The id was minted and discarded — useless to the one party that needs it, since **a sender cannot
+recognise its own refusal without knowing what it stamped**. `write_entry` returns it now and
+`send_command_correlated` exposes it.
+
+**Added beside `send_command` rather than widening it**, for a measured reason. Widening the return
+type broke 33 call sites — not because they read the value but because they RETURN the result
+directly, so the type flowed outward into functions that never mention an id. A correlating caller
+opts in; the other 57 are untouched. The 36 internal wrappers discard it explicitly with
+`.map(|_| ())`, keeping the discard visible at each site rather than hidden in a signature.
+
+### Two mistakes, both a pattern reaching further than intended
+
+- I estimated widening as "mostly source-compatible" and it was 33 errors. The estimate came from
+  thinking about `.is_ok()` and `?` and not about `return handle.send_command(p)`.
+- The regex that added `.map(|_| ())` to 36 wrappers **spanned a function boundary**: its non-greedy
+  gap ran past one signature into the next function's body, so it also rewrote
+  `send_command_correlated` — the one function that must NOT discard the id. The compiler caught it.
+  A regex over code whose gap can cross a `}` will do this wherever the shape recurs, and this is the
+  same family as the line-oriented greps: **a pattern that cannot express the boundary it needs.**
+
+Nothing consumes the id yet. That is what closes item 29's remaining half — a consumer correlating
+on `(track, commandType, sentBase)` has an INERT third key for `SetRowOps`, and matching on the id
+makes that key irrelevant rather than needing a value invented for it.
