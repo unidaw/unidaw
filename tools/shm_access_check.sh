@@ -69,7 +69,13 @@ lines = open(path).read().splitlines()
 # miss, and a fourth site is how this rule was broken twice already.
 SITE = re.compile(r'\bentries\s*\.\s*add\s*\(([^)]*)\)')
 MASKED = re.compile(r'&\s*(?:ring\.)?mask\b')
-EXPECTED_SITES = 4
+# 5 since P2-CMD-00's outbound half. `peek_ui_diffs_correlated` walks the same UI-out ring as
+# `peek_ui_diffs` to read `EventEntry::sampleTime`, which the payload has no room for. This
+# number moved DELIBERATELY, which is the whole point of pinning it rather than taking a floor:
+# the check went red on the commit that added the site, the site was read, and its index is
+# masked at the point of use (`let slot = (index & ring.mask) as usize;`) exactly like its four
+# neighbours. A floor would have absorbed it in silence.
+EXPECTED_SITES = 5
 
 # Function extents, so a local's assignments are read in the scope that binds it.
 FN = re.compile(r'^\s*(?:pub\s+)?(?:async\s+)?fn\s+\w+')

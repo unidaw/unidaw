@@ -1168,9 +1168,44 @@ fn await_clip_outcome(
     version_before: u32,
 ) -> ClipOutcome {
     for _ in 0..120 {
-        let diffs = handle.peek_ui_diffs();
-        for (diff_type, payload) in diffs.iter().skip(before_len) {
+        let diffs = handle.peek_ui_diffs_correlated();
+        // THE REFUSAL IS LOOKED FOR FIRST, ACROSS ALL NEW DIFFS, and only then the success. One
+        // command can produce more than one diff, so "the first diff carrying my id" does not
+        // decide anything; the KIND does. Preferring the refusal is also the safe direction — a
+        // wrongly reported refusal is visible and re-triable, a wrongly reported success is not.
+        let mut applied = false;
+        for (event_type, diff_type, correlation, payload) in diffs.iter().skip(before_len) {
+            // A CHORD SUCCESS ARRIVES ON A DIFFERENT CHANNEL. `EventType::UiChordDiff` carries a
+            // `UiChordDiffType`, whose AddChord/RemoveChord/UpdateChord are 1/2/3 — the SAME
+            // numbers as UiDiffType's AddNote/RemoveNote/UpdateNote. The event type is what tells
+            // them apart, so it is matched before the diff type is trusted.
+            if *event_type == daw_bridge::layout::EventType::UiChordDiff as u16 {
+                let is_chord_applied = *diff_type
+                    == daw_bridge::layout::UiChordDiffType::AddChord as u16
+                    || *diff_type == daw_bridge::layout::UiChordDiffType::RemoveChord as u16
+                    || *diff_type == daw_bridge::layout::UiChordDiffType::UpdateChord as u16;
+                if command_id != 0 && *correlation == command_id && is_chord_applied {
+                    applied = true;
+                }
+                continue;
+            }
             if *diff_type != daw_bridge::layout::UiDiffType::ClipRejected as u16 {
+                // THE SUCCESS SIGNAL, CORRELATED — and it must name the diff types that MEAN a
+                // clip edit was applied, not merely "not a refusal".
+                //
+                // "Any other diff carrying my id" was my first attempt and it was deterministically
+                // wrong: `UiDiffType`'s own documentation says of ClipRejected that "ResyncNeeded
+                // (4) is still emitted alongside, unchanged". A refusal therefore emits TWO diffs,
+                // and now that every outbound diff carries the ambient command id, the companion
+                // matched and reported the refusal as a success. It went from 3 of 6 runs failing
+                // to 6 of 6 — the probe caught it before it shipped, which is the only reason this
+                // reads as a comment rather than as a bug.
+                let is_clip_applied = *diff_type == daw_bridge::layout::UiDiffType::AddNote as u16
+                    || *diff_type == daw_bridge::layout::UiDiffType::RemoveNote as u16
+                    || *diff_type == daw_bridge::layout::UiDiffType::UpdateNote as u16;
+                if command_id != 0 && *correlation == command_id && is_clip_applied {
+                    applied = true;
+                }
                 continue;
             }
             let u16at = |o: usize| u16::from_le_bytes([payload[o], payload[o + 1]]);
@@ -1205,7 +1240,28 @@ fn await_clip_outcome(
                 return ClipOutcome::Refused { reason: u16at(2), current: u32at(12) };
             }
         }
-        if handle.clip_version_for_track(track) != version_before {
+        // Only after every new diff has been examined for a refusal.
+        if applied {
+            return ClipOutcome::Applied;
+        }
+        // THE COUNTER FALLBACK, NOW GUARDED THE SAME WAY THE LEGACY REFUSAL MATCH IS.
+        //
+        // "The version moved, so my edit applied" was the last uncorrelated decision in this
+        // function, and it is strictly weaker than the triple it sits beside: a bare counter names
+        // no command at all. It is also REACHABLE, not theoretical — `load maximal` moves track 0's
+        // clip version 1 -> 2 across about half a second, and a write issued in that window read
+        // the load's bump as its own success and never saw the refusal that was coming. Three of
+        // six runs under concurrent load.
+        //
+        // The consequence is the one this whole ticket exists to remove: the caller is told its
+        // edit landed when the engine threw it away — worst for the caller who pinned `--base`,
+        // i.e. the deliberate concurrent author for whom the refusal is the answer they asked for.
+        //
+        // So it now applies only to a caller that minted no id, exactly like the legacy triple
+        // above. A correlated caller waits for its own diff and, failing that, times out to
+        // `Unknown` — which is reported as applied, unchanged, because claiming a refusal we did
+        // not observe would be worse than the silence it replaces.
+        if command_id == 0 && handle.clip_version_for_track(track) != version_before {
             return ClipOutcome::Applied;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));

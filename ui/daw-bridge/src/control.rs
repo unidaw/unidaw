@@ -528,6 +528,53 @@ impl EngineHandle {
         self.ring_ui_out.is_some()
     }
 
+    /// The diffs in the outbound ring, each with THE ID OF THE COMMAND THAT CAUSED IT.
+    ///
+    /// P2-CMD-00, outbound half. The engine echoes the ambient command id in
+    /// `EventEntry::sampleTime` — outside the 40-byte payload, because every payload that would
+    /// want to carry it is exactly full. `0` means no id: a diff published outside any command
+    /// dispatch, which the reader rule defines as never a match rather than as an id of zero.
+    ///
+    /// BESIDE `peek_ui_diffs`, NOT INSTEAD OF IT. That function returns `(u16, [u8; 40])` to
+    /// **14 call sites**, and widening its tuple would break every one — which is exactly what
+    /// widening `write_entry` did earlier in this sprint, breaking 33 callers to deliver a value
+    /// two of them wanted. Only the sites that need the id call this one.
+    pub fn peek_ui_diffs_correlated(&self) -> Vec<(u16, u16, u64, [u8; 40])> {
+        let Some(ring) = self.ring_ui_out.as_ref() else {
+            return Vec::new();
+        };
+        let read = unsafe { (*ring.header).read_index.load(Ordering::Acquire) };
+        let write = unsafe { (*ring.header).write_index.load(Ordering::Acquire) };
+        let mut out = Vec::new();
+        let mut index = read;
+        while index != write {
+            let slot = (index & ring.mask) as usize;
+            let entry = unsafe { std::ptr::read_volatile(ring.entries.add(slot)) };
+            // BOTH CHANNELS, AND THE EVENT TYPE IS RETURNED WITH THE DIFF TYPE BECAUSE IT HAS TO BE.
+            //
+            // This first admitted `EventType::UiDiff` only, which silently dropped every chord
+            // outcome: a successful chord is published as `EventType::UiChordDiff` (8) carrying a
+            // `UiChordDiffType`, a DIFFERENT enum. Independent review measured the cost at 727-740 ms
+            // per chord against 31-35 ms for a note — the caller found no matching diff, span the
+            // full 120 x 5 ms wait and fell out as `Unknown`, which prints as success.
+            //
+            // The two enums OVERLAP NUMERICALLY — `UiChordDiffType::AddChord` and
+            // `UiDiffType::AddNote` are both 1 — so a bare `diff_type` cannot be interpreted without
+            // knowing which channel it came from. Returning the event type is not decoration; it is
+            // what makes the value meaningful at all.
+            let is_diff = entry.event_type == EventType::UiDiff as u16
+                || entry.event_type == EventType::UiChordDiff as u16;
+            if entry.ready != 0 && is_diff {
+                let diff_type = u16::from_le_bytes([entry.payload[0], entry.payload[1]]);
+                out.push((entry.event_type, diff_type, entry.sample_time, entry.payload));
+            }
+            // Masked, for the reason spelled out in peek_ui_diffs below: these indices are SLOT
+            // NUMBERS, and advancing unmasked ran the loop until u32 wrapped.
+            index = (index + 1) & ring.mask;
+        }
+        out
+    }
+
     pub fn peek_ui_diffs(&self) -> Vec<(u16, [u8; 40])> {
         let Some(ring) = self.ring_ui_out.as_ref() else {
             return Vec::new();

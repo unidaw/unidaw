@@ -110,15 +110,25 @@ uint64_t currentCommandId();
 // permitted and restores rather than clears, so a handler that dispatches another command cannot
 // silently drop the outer id.
 //
-// CONSTRUCTED FROM `EventEntry::sampleTime`, and that choice is the carrier decision. sampleTime is
-// zero on every UI command entry — both senders write 0 — so its eight bytes are free and are
-// exactly the width of the id. `UiCommandPayload` had none to offer: it is 40 bytes with eleven
-// fields and no reserved run, which is what refuted the earlier carrier proposals.
+// CONSTRUCTED FROM `EventEntry::sampleTime`, and that choice is the carrier decision. Those eight
+// bytes were free on a UI command entry and are exactly the width of an id. `UiCommandPayload` had
+// none to offer: it is 40 bytes with eleven fields and no reserved run, which is what refuted the
+// earlier carrier proposals.
 //
-// GIVING THOSE BYTES A MEANING IS A REPURPOSING under the rule at kShmVersion, and takes a bump
-// WHEN A SENDER MINTS ONE. Reading them here does not: every shipped sender still writes 0, so the
-// ambient is 0, which the reader rule already defines as "no id". This half is inert by
-// construction — which is why it lands before the bump rather than with it.
+// THIS PARAGRAPH USED TO SAY the field is "zero on every UI command entry — both senders write 0",
+// and that reading it "is inert by construction" because "every shipped sender still writes 0".
+// Both sentences were falsified by v39, where `write_entry` began minting into `sample_time`, and
+// they sat directly above the line v40 then changed. An independent review found them still here.
+// A rule is not changed until every sentence stating it is changed — see the ledger's entry on
+// exactly this failure mode.
+//
+// WHERE IT STANDS NOW: v39 gave the field a meaning INBOUND, minted by the sender. v40 gives it the
+// same meaning OUTBOUND, echoed by `sendUiDiff` onto every UI diff. Both were repurposings under
+// the rule at kShmVersion and each took its own bump.
+//
+// ZERO STILL MEANS NO ID in both directions, which is the legacy sentinel the reader rule already
+// specifies: a diff published outside any command dispatch has no ambient id and writes 0, and the
+// reader treats that as never a match rather than as an id of zero.
 class ScopedCommandId {
  public:
   explicit ScopedCommandId(uint64_t id);
@@ -163,7 +173,27 @@ inline void sendUiDiff(UiPublishDeps& deps, daw::EventRingView& ringUiOut, daw::
 
 
     daw::EventEntry diffEntry;
-    diffEntry.sampleTime = 0;
+    // THE ID OF THE COMMAND THAT CAUSED THIS DIFF, echoed to the reader. P2-CMD-00, outbound half.
+    //
+    // WHY HERE AND NOT IN THE PAYLOAD. Every outbound payload that would want to carry it is full:
+    // `UiDiffPayload` is 2 + 2 + 9x4 = exactly 40 bytes, and so is the ResyncNeeded payload that
+    // blocked this the first time it was tried. `EventEntry::sampleTime` sits OUTSIDE the 40-byte
+    // payload, is eight bytes — exactly the width of an id — and was written as a literal 0 on
+    // every outbound diff, so it costs nothing to take.
+    //
+    // SYMMETRIC WITH THE INBOUND DIRECTION rather than novel: a sender already MINTS its id into
+    // `EventEntry::sampleTime` on the way in, which is what `handleUiEntry` reads to set the
+    // ambient. Echoing it in the same field on the way out means one field carries one meaning in
+    // both directions.
+    //
+    // ONE LINE AT THE CHOKEPOINT covers all of it. This is the single writer of the UI-out ring —
+    // that is what `uiDiffWriterIsOwner()` enforces — so every emit site gets the id: the clip-edit
+    // successes, the refusals, the patcher and chain diffs. Nothing has to be threaded anywhere.
+    //
+    // ZERO STILL MEANS NO ID, unchanged. A diff published outside any command dispatch — the load
+    // path's resync, anything on a timer — has no ambient id and writes 0, which the reader rule
+    // already defines as "never a match" rather than as an id of zero.
+    diffEntry.sampleTime = currentCommandId();
     diffEntry.blockId = 0;
     diffEntry.type = static_cast<uint16_t>(type);
     diffEntry.size = sizeof(diffPayload);

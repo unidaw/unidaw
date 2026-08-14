@@ -111,6 +111,56 @@ void testDiffIsDelivered() {
   CHECK(back.trackId == 3u);
 }
 
+// ------------------------------------------------------- outbound correlation
+// EVERY OUTBOUND DIFF CARRIES THE ID OF THE COMMAND THAT CAUSED IT (P2-CMD-00, v40).
+//
+// This exists because independent review found the change shipping with NO regression coverage of
+// its own: `sendUiDiff`'s echo could be reverted to a literal `0` and the whole suite stayed green.
+// The one end-to-end check that looked like coverage, `refusal_correlation_check.sh`, exercises the
+// PAYLOAD's correlation fields at offset 32 — a different carrier entirely — so it passes either
+// way. A line with no test is a line that will be "simplified" back.
+//
+// Both directions are asserted, because only the pair discriminates: inside a dispatch the entry
+// must carry that dispatch's id, and outside one it must carry 0. Asserting only the first would
+// also pass if the field were hard-wired to any constant.
+void testOutboundDiffCarriesCommandId() {
+  Fixture f;
+  auto d = f.deps();
+  daw::UiDiffPayload payload{};
+
+  {
+    daw::engine::ScopedCommandId scoped(0xABCDEF0123456789ull);
+    emitUiDiff(d, payload);
+  }
+  daw::EventEntry entry{};
+  CHECK(f.ring.pop(entry));
+  CHECK(entry.sampleTime == 0xABCDEF0123456789ull);
+
+  // OUTSIDE ANY DISPATCH THE AMBIENT IS 0, and the reader rule reads 0 as "no id" — never as a
+  // match. A diff emitted on a timer or during load must not adopt the last command's identity.
+  emitUiDiff(d, payload);
+  daw::EventEntry outside{};
+  CHECK(f.ring.pop(outside));
+  CHECK(outside.sampleTime == 0u);
+
+  // NESTING RESTORES rather than clears, so an inner dispatch cannot silently strip the outer id
+  // from diffs emitted after it returns.
+  {
+    daw::engine::ScopedCommandId outer(0x1111u);
+    {
+      daw::engine::ScopedCommandId inner(0x2222u);
+      emitUiDiff(d, payload);
+    }
+    emitUiDiff(d, payload);
+  }
+  daw::EventEntry innerEntry{};
+  daw::EventEntry afterInner{};
+  CHECK(f.ring.pop(innerEntry));
+  CHECK(f.ring.pop(afterInner));
+  CHECK(innerEntry.sampleTime == 0x2222u);
+  CHECK(afterInner.sampleTime == 0x1111u);
+}
+
 // -------------------------------------------------------------------- drops
 void testFullRingDropsAndCounts() {
   Fixture f;
@@ -297,6 +347,7 @@ void testSamplerRejectJournals() {
 
 int main() {
   testDiffIsDelivered();
+  testOutboundDiffCarriesCommandId();
   testFullRingDropsAndCounts();
   testUnmappedRingIsNotADrop();
   testDropLogIsRateLimited();

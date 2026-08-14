@@ -169,10 +169,18 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 // is the point. Ambiguity about what a v38 image means is not bounded.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // v39: EventEntry::sampleTime carries a command IDENTITY on UI command entries (P2-CMD-00).
+//      INBOUND ONLY — see v40, which is the other direction and a separate repurposing.
+// v40: EventEntry::sampleTime carries that same identity OUTBOUND, on UI DIFF entries, echoed by
+//      the engine from the ambient command id. It was a literal 0 on every outbound diff before
+//      this. Taken because every outbound payload that could have carried it is full —
+//      UiDiffPayload is 2 + 2 + 9x4 = exactly 40 bytes, and so is the ResyncNeeded payload — while
+//      sampleTime sits OUTSIDE the 40-byte payload and is exactly the width of an id.
+//      Zero still means "no id": a diff published outside any command dispatch has no ambient id
+//      and writes 0, which the reader rule defines as never a match rather than as an id of zero.
 //    Nothing moved and no field grew — sampleTime was zero on those entries and is now a
 //    per-process nonce plus a counter. That is exactly the repurposing the rule above governs,
 //    and this bump is the rule being applied to its first case rather than argued about.
-constexpr uint16_t kShmVersion = 39;
+constexpr uint16_t kShmVersion = 40;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
