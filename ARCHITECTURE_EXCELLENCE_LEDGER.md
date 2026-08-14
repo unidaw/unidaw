@@ -4488,3 +4488,57 @@ guarded by `off == 0` alone — clip window, arrange summary, harmony, patcher, 
 waveform, automation, sampler kit, device meters. `EngineHandle` does not store `size`, so the
 parameter idiom used for the ring does not reach them; storing it, or exposing a bounds-checked
 `region::<T>(offset)`, is the shape that lets the rest land. Unblocked, and the next increment.
+
+## AE-P1.3: nineteen region accessors bounded, and the count was wrong twice (`bc2ae0cd`)
+
+Every region accessor in the bridge read a `u64` offset out of the shared header and turned it into
+a `*const T` — several into a Rust REFERENCE, stricter still — guarded by `offset == 0` alone.
+`EngineHandle` stores `size` now, which is what lets the rule reach accessors that are not built
+inside `attach_inner`.
+
+### The population was 15 in my telling and 19 in fact
+
+My predicate required `as *const T` on the SAME LINE as the `.add()`. Four sites wrap onto the next
+line with a fully-qualified `crate::layout::` path, so a grep reported the class CLOSED while four
+accessors of the identical shape remained — `ui_arrange_offset`, `ui_sampler_envelope_offset`, and
+`ui_sampler_kit_offset` twice. **A line-oriented predicate cannot see a construct that wraps.** The
+three sampler ones are the LAST regions in the layout, which is exactly what a segment truncated
+mid-setup is missing — the scenario the change is named for.
+
+### The real defect: one bound was the wrong bound
+
+`region::<T>` proves ONE `T` fits. The all-tracks clip region is published as
+`sizeof(UiClipWindowSnapshot) * kUiMaxTracks` and read with `base.add(track_id)`, so validating one
+element left sixty-three unchecked — **up to 14,970,312 bytes past the end of the real segment**.
+The site's residual guard compares the header's declared `*_bytes` against the expected size, but
+that is another number the writer chose; nothing compared it to the MAPPING.
+
+I found this myself before the review returned, by reading the producer's layout and noticing
+`uiClipAllBytes` is 64× one snapshot. **The hazard pre-existed; what my change did was make the site
+LOOK validated**, which is worse — a reader now sees `region::<T>()` and stops asking.
+`region_slice::<T>(offset, count)` bounds the whole extent with `checked_mul`, which is what
+`ring_view` one screen away had right from the start.
+
+### "All four clauses" described five conditions
+
+`offset == 0 || align == 0` is a disjunction. Deleting only the second half left the suite fully
+green, so a covered-looking predicate kept an untested branch. Now five conditions, five tests, each
+verified by deleting its clause — including the `mapped < size` one, which fails by PANICKING on the
+underflow it exists to prevent.
+
+**Counting a disjunction as one condition is a reusable way to be wrong about coverage**, and it is
+the same family as the line-oriented grep above: both are predicates that look complete because the
+thing they cannot see does not announce itself.
+
+### Verified negatives, so they are not re-investigated
+
+- **The C++ attach surface is complete.** Three `mmap` sites: the host creates its own segment, the
+  engine creates the UI segment, and the engine attaches to the host's — already fixed. The host
+  writes its own offsets and reads back its own values, so it is not a trust boundary.
+- **Non-overlap holds by construction on the producer.** Every region is
+  `header.X = offset; offset += alignUp(size, 64)`, strictly increasing. The plan's non-overlap
+  clause is therefore about detecting a CORRUPT header declaring overlaps, which needs a
+  whole-layout validator and is a lesser hazard — it aliases rather than escapes the mapping. That
+  is the remaining P1.3 scope.
+
+ctest 63/63 across the region-reading families; `rust_tests_check` PASS at 233 tests.
