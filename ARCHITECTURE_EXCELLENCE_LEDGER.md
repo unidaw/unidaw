@@ -3593,3 +3593,43 @@ Distinguishing those needs a run with the journal in hand, which I have not done
 CMD00 step 2, which is the fix for a user-visible defect — a sample that does not load reporting
 success — and for three tests failing in a registered ctest right now. That raises its value
 considerably over how it was presented when it was only about a version number.
+
+## Correction: the sampler failure is a WINDOW race, and an id alone would not fix it
+
+I recorded the three failing tests as "the correlation defect, live" and flagged one assumption as
+unverified: whether the refusal is emitted-but-unmatched or never emitted. I verified it, and the
+answer refines the claim.
+
+**The refusal IS emitted and IS journalled with the right name.** `reportSamplerReject`
+(`apps/engine_ui_publish.cpp:436-467`) calls `deps.historyAppend(uiCommandTypeName(command),
+"rejected:" + reason, trackId, …)`, and `uiCommandTypeName(SamplerLoad)` is `"sampler_load"`
+(`apps/event_payloads.h:1286`) — exactly the string `await_refusal` searches for. So this is NOT
+the wrong-name failure this project has recorded before.
+
+**It is a TIMING failure, and it is racy by construction.** The refusal fires from inside
+`rebuildSamplerRender`'s loop over `st.sources` when a file fails to DECODE
+(`apps/daw_engine_main.cpp:1481`) — the render rebuild, not the command handler. So it is
+necessarily later than the command's acknowledgement. The caller polls
+`await_refusal` (`ui/daw-bridge/src/journal.rs:221-231`) for 50 iterations of 5ms — **250ms** —
+matching on scope plus `"op":"sampler_load"`. A refusal produced after that window is not seen.
+
+**So an id alone would not fix these tests, and my earlier framing was too strong.** What fixes
+them is the OTHER half of the CMD00 design, which does not need the id at all:
+`refused_or` returns `ToolResult::ok(...)` when `await_refusal` finds nothing
+(`ui/daw-agent/src/tools.rs:62-68`) — it treats "I saw no refusal in my window" as success. The
+design names this exactly: "`Unknown` becomes precise: *no refusal bearing my id arrived in my
+window*. It must stay distinct from `Applied`. **Reporting it as applied is the current behaviour
+and is what lets a lost edit read as a success.**"
+
+That is gate 8 ("silence — no refusal reports `Unknown` explicitly"), and it is the part of CMD00
+that is reachable WITHOUT the carrier decision. The id makes the answer precise; distinguishing
+Unknown from Applied is what stops a failed load reading as a success.
+
+**Not changing it in this increment.** Making `refused_or` report Unknown instead of ok is a
+behaviour change across every tool that uses it, and it would turn a currently-green suite amber in
+ways that need their own reading. It is now a properly-scoped ticket rather than a guess, which it
+was not an hour ago.
+
+The lesson for me: I wrote "they are the correlation defect, live" from a plausible reading, flagged
+the gap honestly, and the gap turned out to contain the actual mechanism. Flagging an assumption is
+not the same as testing it, and the flag made me comfortable enough to stop.
