@@ -3888,3 +3888,41 @@ add a field: it changes a mirror whose partiality is currently documented as int
 check's reasoning would have to move with it. It is an ABI change and takes exact independent
 review before it lands — this is also the type name that once cost a wrong refutation, because two
 crates declare an `EventEntry` and only one is governed.
+
+## The AE-P1.2 open list has decayed against the product, and two "next items" were already done
+
+I picked the two items a backlog summary ranked as the smallest concrete wins. **Both were already
+implemented in the product**, and neither could be discovered without checking the product rather
+than the packet.
+
+**Item 30 — DONE.** `UndoCommandDeps` no longer declares `requireMatchingClipVersion`. The struct
+carries a comment naming *"Open item 30, RULED (R10)"* and — correctly — keeps the hazard the
+deletion must not be read as dismissing: undo replaces the WHOLE document through `applyDocument`,
+so an edit made between seeing the screen and pressing Ctrl-Z is silently reverted, and a per-track
+clip version is the wrong instrument for it because the thing being replaced is not a track.
+
+**Item 29 — concrete half DONE.** `engine_rowops_commands.cpp` computes a real `currentBase` through
+`currentTrackClipVersion`; the comment credits the measurement and cites the item. What remains is
+`sentBase`, and the packet itself says it cannot be fixed by inventing a value: `UiSetRowOpsPayload`
+carries no base version because a row-op edit is not version-gated, so a consumer correlating on
+`(track, commandType, sentBase)` has an INERT third key. The packet calls this **latent rather than
+live** — no consumer awaits a SetRowOps refusal at this SHA. Giving SetRowOps a request identity is
+CMD00's work, so item 29's remainder is gated on **owner decision 5**, not available now.
+
+### Why this matters more than two items
+
+**The packet is FROZEN at a SHA; the product has moved.** So its open list is a snapshot, not a
+statement about remaining work, and every number derived from it — including the "30 open" I
+corrected the ticket-state row to an hour ago — counts items at that SHA rather than work left to
+do. The row is not wrong, but it answers a different question than the one a reader asks it.
+
+This is the same shape as carrying a blocked-list without re-deriving it: a dependency, a status, or
+a count is a claim like any other and goes stale like any other. The packet says this about itself,
+about a different sentence: *"nothing re-reads a sentence that merely says what is blocked on what."*
+
+Both fixes CITE THEIR ITEM NUMBER in a code comment, which is the only reason the discovery was
+cheap. That is a practice worth keeping deliberately: a fix that names the ticket it closes lets
+the next reader check the backlog against the tree with grep instead of judgement.
+
+A full re-derivation of all 30 against the product is running; the ticket row will be corrected to
+distinguish "open at the frozen SHA" from "still to do".
