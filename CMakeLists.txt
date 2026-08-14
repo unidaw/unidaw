@@ -899,6 +899,14 @@ add_test(NAME root_isolation
 )
 set_tests_properties(root_isolation PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# AE-P1.2 item 28 / G2-A PASS 4: which consumers still conclude 'my command applied' from a version
+# counter moving. The counter proves SOMETHING changed, never that YOUR command did.
+add_test(NAME counter_only_outcome
+  COMMAND ${CMAKE_COMMAND} -E env --unset=BASH_ENV --unset=ENV
+    bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/counter_only_outcome_check.sh
+)
+set_tests_properties(counter_only_outcome PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120)
+
 # How the bridge may touch the mapped segment: ring cursors masked where they become pointers, and
 # nothing reaching the mapping except through the bounds-checked region helpers. Renamed from
 # ring_index_masking when the second rule joined it — a check named for half its contents is worse
