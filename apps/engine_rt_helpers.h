@@ -94,6 +94,33 @@ void evictHostForWatchdog(TrackRuntime* runtime);
 // the atomics only — the lock discipline and the teardown order stay where the reader can see them.
 void tearDownHostState(TrackRuntime& runtime);
 
+// Everything a track slot must forget when its content is replaced. Extracted from a captureless
+// lambda in main() on 2026-08-14: it captured nothing, so it was a free function already, and
+// main() is under a size ratchet that only moves down.
+// Everything a track CONTAINS, wiped in one place. The caller must already hold
+// runtime->trackMutex.
+//
+// Three paths repurpose an existing runtime — AddTrack refilling a tombstone, the load
+// blanking a slot past the new document, and reconcileChildTracks recycling a slot as a
+// stem — and all three cleared the same four fields by hand (chain, placements, owned
+// clips, editable ids) while all three forgot the same two: `automationClips` and
+// `modRegistry.links`. Neither is cleared anywhere else either; both are only ever
+// ASSIGNED, at load, for tracks the document actually names.
+//
+// So: remove a track that had a filter sweep and a mod link, add a track, and the new
+// track carries the deleted one's automation and a link naming device ids that no longer
+// exist — device ids restart per track, so the leftover link can end up modulating
+// whatever device now sits in that slot. Both are then written to disk by the next save.
+// Three copies of a list that has to stay complete is the bug; one function is the fix.
+void resetTrackContent(TrackRuntime& rt);
+
+// The three quantize atomics as one value. Also extracted from a captureless lambda in main()
+// on 2026-08-14, for the same reason: it captured nothing and main() is under a size ratchet.
+// The lane's quantize, read from the one place it lives. Used by BOTH the scheduling copy and
+// the published deviation, so the number the UI draws and the number the audio uses cannot come
+// from different settings. (Comment moved with the code — left in main() it described nothing.)
+daw::LaneQuantize laneQuantizeOf(const TrackRuntime& rt);
+
 // ---------------------------------------------------------------- THE RENDER BLOCK'S ARITHMETIC
 //
 // Five rules lifted out of renderTrack, the 1,910-line lambda nested inside the producer thread.

@@ -373,44 +373,6 @@ int main(int argc, char** argv) {
            !rt.removed.load(std::memory_order_acquire) &&
            rt.trackId < liveTrackCount.load(std::memory_order_acquire);
   };
-  // Everything a track CONTAINS, wiped in one place. The caller must already hold
-  // runtime->trackMutex.
-  //
-  // Three paths repurpose an existing runtime — AddTrack refilling a tombstone, the load
-  // blanking a slot past the new document, and reconcileChildTracks recycling a slot as a
-  // stem — and all three cleared the same four fields by hand (chain, placements, owned
-  // clips, editable ids) while all three forgot the same two: `automationClips` and
-  // `modRegistry.links`. Neither is cleared anywhere else either; both are only ever
-  // ASSIGNED, at load, for tracks the document actually names.
-  //
-  // So: remove a track that had a filter sweep and a mod link, add a track, and the new
-  // track carries the deleted one's automation and a link naming device ids that no longer
-  // exist — device ids restart per track, so the leftover link can end up modulating
-  // whatever device now sits in that slot. Both are then written to disk by the next save.
-  // Three copies of a list that has to stay complete is the bug; one function is the fix.
-  auto resetTrackContent = [](TrackRuntime& rt) {
-    rt.track.chain = daw::TrackChain{};
-    rt.track.modRegistry.links.clear();
-    rt.track.automationClips.clear();
-    rt.track.harmonyQuantize = false;
-    rt.track.soundAddressedOnly = false;
-    rt.sourcePlacements.clear();
-    rt.ownedClips.clear();
-    rt.editableClipIds.clear();
-    rt.arrangementDirty.store(false, std::memory_order_relaxed);
-    // Lane settings and the mixer belong to the track that is gone, not to whatever takes
-    // the slot next. A leftover solo is the worst of these: the whole project goes quiet
-    // and the reason is on a lane the user thinks they deleted.
-    rt.mixGainLinear.store(1.0f, std::memory_order_relaxed);
-    rt.mixPan.store(0.0f, std::memory_order_relaxed);
-    rt.mixMute.store(false, std::memory_order_relaxed);
-    rt.mixSolo.store(false, std::memory_order_relaxed);
-    rt.quantizeGrid.store(0, std::memory_order_release);
-    rt.quantizeStrength.store(0, std::memory_order_release);
-    rt.quantizeSwing.store(0, std::memory_order_release);
-    rt.linesPerBeat.store(4, std::memory_order_relaxed);
-    rt.allowNoteOverlap.store(false, std::memory_order_relaxed);
-  };
 
   // The map and its lock in one object: apps/engine_aux_child_overlays.h.
   TrackRuntime* uiTrack = nullptr;
@@ -661,16 +623,6 @@ int main(int argc, char** argv) {
   std::deque<TrackRuntime*> restartQueue;
   transport.loopEndNanotick.store(patternTicks, std::memory_order_release);
   std::atomic<bool> clipDirty{true};
-  // The lane's quantize, read from the one place it lives. Used by BOTH the scheduling
-  // copy and the published deviation, so the number the UI draws and the number the
-  // audio uses cannot come from different settings.
-  auto laneQuantizeOf = [](const TrackRuntime& rt) -> daw::LaneQuantize {
-    daw::LaneQuantize q;
-    q.gridNanoticks = rt.quantizeGrid.load(std::memory_order_acquire);
-    q.strengthMilli = rt.quantizeStrength.load(std::memory_order_acquire);
-    q.swingMilli = rt.quantizeSwing.load(std::memory_order_acquire);
-    return q;
-  };
 
   std::atomic<uint32_t> clipVersion{0};
   // M1.13: moves when a LANE's quantize changes. Deliberately separate from

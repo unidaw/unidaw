@@ -64,6 +64,38 @@ void evictHostForWatchdog(TrackRuntime* runtime) {
   runtime->needsRestart.store(true, std::memory_order_release);
 }
 
+daw::LaneQuantize laneQuantizeOf(const TrackRuntime& rt) {
+  daw::LaneQuantize q;
+  q.gridNanoticks = rt.quantizeGrid.load(std::memory_order_acquire);
+  q.strengthMilli = rt.quantizeStrength.load(std::memory_order_acquire);
+  q.swingMilli = rt.quantizeSwing.load(std::memory_order_acquire);
+  return q;
+}
+
+void resetTrackContent(TrackRuntime& rt) {
+  rt.track.chain = daw::TrackChain{};
+  rt.track.modRegistry.links.clear();
+  rt.track.automationClips.clear();
+  rt.track.harmonyQuantize = false;
+  rt.track.soundAddressedOnly = false;
+  rt.sourcePlacements.clear();
+  rt.ownedClips.clear();
+  rt.editableClipIds.clear();
+  rt.arrangementDirty.store(false, std::memory_order_relaxed);
+  // Lane settings and the mixer belong to the track that is gone, not to whatever takes
+  // the slot next. A leftover solo is the worst of these: the whole project goes quiet
+  // and the reason is on a lane the user thinks they deleted.
+  rt.mixGainLinear.store(1.0f, std::memory_order_relaxed);
+  rt.mixPan.store(0.0f, std::memory_order_relaxed);
+  rt.mixMute.store(false, std::memory_order_relaxed);
+  rt.mixSolo.store(false, std::memory_order_relaxed);
+  rt.quantizeGrid.store(0, std::memory_order_release);
+  rt.quantizeStrength.store(0, std::memory_order_release);
+  rt.quantizeSwing.store(0, std::memory_order_release);
+  rt.linesPerBeat.store(4, std::memory_order_relaxed);
+  rt.allowNoteOverlap.store(false, std::memory_order_relaxed);
+}
+
 void tearDownHostState(TrackRuntime& runtime) {
   runtime.needsRestart.store(false, std::memory_order_release);
   runtime.hostReady.store(false, std::memory_order_release);
