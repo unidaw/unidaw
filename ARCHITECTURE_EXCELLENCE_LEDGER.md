@@ -5099,3 +5099,32 @@ fixed — editing the acknowledged SHA would falsify the acknowledgement it exis
 Nothing else is in flight. The remaining work is three owner calls, now surfaced at the top of
 `docs/architecture/decisions/OPEN-DECISIONS-FOR-JAAKKO.md` rather than only inside this ledger:
 decision 7 (which also gates item 28's product half), item 26, and item 35.
+
+## A removed-then-re-added track came back silent (`9ccfb43e`)
+
+`buildTrackSnapshot` reads six fields; `resetTrackContent` cleared five. **`routing` survived**, and
+`RemoveTrack` does not clear it either — so a track routed to None, removed, and re-added in the
+same slot inherited the dead track's output. No error, no log, and the only symptom is a track that
+makes no sound for a reason nothing on screen explains.
+
+Filed rather than fixed when the review found it, because it surfaced inside a memory-ordering
+change and did not belong there. Fixed now, restored to what `setupTrackRuntime` gives a fresh
+runtime rather than to a zeroed struct — a reused slot must be indistinguishable from a new track,
+and zeroing would be a third behaviour neither path produces.
+
+**The test is written against the snapshot's FIELD LIST**, not against the fields I thought of,
+because the defect was exactly a field falling out of that correspondence. It discriminates:
+removing the routing reset fails three assertions by name, including the atomic mirror.
+
+### It caught me mid-way, in the way this ledger keeps describing
+
+My first draft used a default-constructed `AutomationClip`, which has no default constructor. **The
+build FAILED and ctest reported 15/15** — because it ran the previous binary. That is this
+repository's recorded trap precisely: a test binary that stopped compiling while the suite stayed
+green. I nearly reported a passing test that had never been compiled.
+
+The only reason I saw it was grepping the build output for `error:` instead of trusting the suite —
+and I had grepped for `\berror\b`, which counted the word inside a warning and reported "errors: 2"
+while I read the green ctest as authoritative. **Two signals disagreed and I believed the wrong one
+for a minute.** The rule that follows is cheap: after a build, grep `error:` with the colon, and
+never let a passing suite stand in for a successful compile.
