@@ -4244,3 +4244,37 @@ lines could have caused a FALSE FAILURE. Re-run: 1,674 blocks, 0 stalls after th
 Item 36's oracle still counts log lines rather than reading a counter, but the logging now shadows
 the gating faithfully and the threshold tests persistence rather than an exact count, so the
 remaining distance is presentational.
+
+## Item 15 re-derived: there is no self-deadlock today, and the line reads as though there is
+
+Re-derived rather than carried forward, because a blocked-list decays and this programme has already
+recited one for a dozen rounds after it stopped being true.
+
+Item 15 reads, in full: *"The self-deadlock: the admitted fix class requires `applyHostBypassStates`
+to stop taking `controllerMutex`."* As a backlog line that reads as a LIVE defect. It is not one.
+
+**All three call sites call it with no `controllerMutex` held**, verified by reading the lock scopes
+rather than the names:
+
+    engine_chain_host.cpp:253      both controllerMutex guards above it are in scoped blocks that
+                                   CLOSE before the call (the sendSetChain block ends immediately
+                                   before `if (reconciled)`)
+    engine_chain_host.cpp:272      outside every lock
+    engine_restart_worker.cpp:122  the launch block's guard closes at :115, seven lines above
+
+So the inner acquisition inside `applyHostBypassStates` cannot self-deadlock as the code stands.
+
+**The item is a PRECONDITION for a fix that has not been chosen, not a bug.** The packet says so
+where the requirement is stated: *"the fix class this gate admits requires applyHostBypassStates to
+stop taking controllerMutex, i.e. a caller-holds contract or a lock-passing signature — which the
+predecessor did not state and which is a design decision, not a detail."* Adopting that class means
+holding the lock ACROSS the call, and only then does the inner acquisition deadlock.
+
+Two named options, no ruling: **a caller-holds contract** (every caller takes `controllerMutex`
+before calling, the callee assumes it) or **a lock-passing signature** (the lock is threaded through
+the call). That is an owner decision and it stays open — but the thing it gates is a future fix
+class, not a live deadlock, and the difference decides whether anyone should be chasing it now.
+
+**Nothing to implement here.** Recorded so the next reader does not go looking for a deadlock that
+cannot occur — the same shape as items 29 and 30, where the backlog described work the product had
+already moved past.
