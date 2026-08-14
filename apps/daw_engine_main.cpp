@@ -411,8 +411,7 @@ int main(int argc, char** argv) {
   auto masterTrack = std::make_unique<TrackRuntime>();
   masterTrack->trackId = daw::kMasterTrackId;
   masterTrack->trackName = "Master";
-  // Pre-publication: masterTrack was make_unique'd two lines up and no thread has it yet.
-  masterTrack->trackSnapshot = buildTrackSnapshot(masterTrack->track);
+  masterTrack->trackSnapshot = buildTrackSnapshot(masterTrack->track);  // pre-publication
   // 4b groundwork: give the master a host-capable config so a VST effect on the master
   // SUM can be hosted out of process. Its input IS the sum, so numChannelsIn ==
   // numChannelsOut (an audio-in effects chain). Dedicated socket/shm names off the
@@ -1097,9 +1096,7 @@ int main(int argc, char** argv) {
     if (!runtime) {
       return nullptr;
     }
-    // Pre-publication, as in setupTrackRuntime: reconcileChildTracks appends this runtime to
-    // `tracks` after setupAuxChildRuntime returns it, so nothing can observe these stores yet.
-    runtime->track.chain = daw::TrackChain{};  // no plugins
+    runtime->track.chain = daw::TrackChain{};  // no plugins; pre-publication (AE-P1.4)
     runtime->trackSnapshot = buildTrackSnapshot(runtime->track);
     runtime->trackName = name;
     runtime->parentId.store(parentTrackId, std::memory_order_relaxed);

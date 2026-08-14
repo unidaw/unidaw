@@ -9,6 +9,18 @@
 
 namespace daw::engine {
 
+namespace {
+thread_local uint64_t g_currentCommandId = 0;
+}  // namespace
+
+uint64_t currentCommandId() { return g_currentCommandId; }
+
+ScopedCommandId::ScopedCommandId(uint64_t id) : previous_(g_currentCommandId) {
+  g_currentCommandId = id;
+}
+ScopedCommandId::~ScopedCommandId() { g_currentCommandId = previous_; }
+
+
 // WHICH THREAD MAY WRITE THE UI-OUT RING — ENFORCED, NOT ASSERTED IN PROSE.
 //
 // The header says "the writer is on the command thread". AE-P1.2 item 7 is that this was a claim
@@ -493,6 +505,12 @@ void emitClipReject(UiPublishDeps& deps, daw::UiClipRejectReason reason, uint32_
     payload.sentBase = sentBase;
     payload.currentBase = currentBase;
     payload.commandType = static_cast<uint16_t>(commandType);
+    // THE ID OF THE COMMAND THAT CAUSED THIS, split across two uint32_t at offsets 32 and 36 —
+    // see the payload's own assertions for why it is two words and not a uint64_t. Zero until a
+    // sender mints one, which the reader rule already reads as "no id" rather than as a match.
+    const uint64_t id = currentCommandId();
+    payload.correlationLo = static_cast<uint32_t>(id & 0xFFFFFFFFu);
+    payload.correlationHi = static_cast<uint32_t>(id >> 32);
     // THE LAST HAND-WRITTEN COPY OF THE ACCOUNTING, now gone. This was sendUiDiff's body inlined:
     // same write, same two counters, same drop log — a second copy of a rule that agreed on the
     // bytes and could drift on the behaviour. It is the one call now.

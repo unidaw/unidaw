@@ -86,6 +86,50 @@ uint64_t uiDiffNowMs(UiPublishDeps& deps);
 // Says a diff was dropped, at most once a second.
 void logUiDiffDrop(UiPublishDeps& deps);
 
+// THE ID OF THE UI COMMAND CURRENTLY BEING DISPATCHED, or 0 for none.
+//
+// P2-CMD-00. A refusal must carry the identity of the command that caused it, and the emit sites
+// cannot see it: they reach `emitClipReject` through a std::function in a deps struct, fifteen
+// references away from the entry that arrived. Threading a parameter would cross sixteen command
+// modules to deliver one value that is constant for the whole dispatch.
+//
+// So it is AMBIENT, and bracketed. `handleUiEntry` sets it from the entry it is about to dispatch
+// and it clears on every exit path, which matters because that function returns from many places.
+//
+// AMBIENT IS ONLY SOUND HERE BECAUSE THE DISPATCH IS SINGLE-THREADED, which is not an assumption
+// any more: sendUiDiff latches its writing thread and reports any other (AE-P1.2 item 7). It is
+// `thread_local` regardless, so a second dispatcher would get its own value rather than corrupt
+// this one — a wrong id is a bad diagnosis, a shared one is a race.
+//
+// ZERO MEANS NO ID, which is the legacy sentinel the reader rule already specifies: all-zero at
+// offset 32 is `Unknown`, never a match. So until a sender mints one, every refusal carries 0 and
+// behaves exactly as it does today.
+uint64_t currentCommandId();
+
+// Sets the ambient id for its lifetime and restores the previous value on destruction. Nesting is
+// permitted and restores rather than clears, so a handler that dispatches another command cannot
+// silently drop the outer id.
+//
+// CONSTRUCTED FROM `EventEntry::sampleTime`, and that choice is the carrier decision. sampleTime is
+// zero on every UI command entry — both senders write 0 — so its eight bytes are free and are
+// exactly the width of the id. `UiCommandPayload` had none to offer: it is 40 bytes with eleven
+// fields and no reserved run, which is what refuted the earlier carrier proposals.
+//
+// GIVING THOSE BYTES A MEANING IS A REPURPOSING under the rule at kShmVersion, and takes a bump
+// WHEN A SENDER MINTS ONE. Reading them here does not: every shipped sender still writes 0, so the
+// ambient is 0, which the reader rule already defines as "no id". This half is inert by
+// construction — which is why it lands before the bump rather than with it.
+class ScopedCommandId {
+ public:
+  explicit ScopedCommandId(uint64_t id);
+  ~ScopedCommandId();
+  ScopedCommandId(const ScopedCommandId&) = delete;
+  ScopedCommandId& operator=(const ScopedCommandId&) = delete;
+
+ private:
+  uint64_t previous_;
+};
+
 // True when the calling thread is the one that first wrote the UI-out ring. The first caller
 // latches ownership; every later thread answers false. See the definition for why this is a latch
 // and not a comparison against a registered thread id.

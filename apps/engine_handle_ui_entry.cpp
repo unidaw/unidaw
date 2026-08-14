@@ -1,4 +1,5 @@
 #include "engine_handle_ui_entry.h"
+#include "engine_ui_publish.h"  // ScopedCommandId — the dispatch id bracket
 
 #include "apps/engine_command_mutates.h"
 
@@ -18,6 +19,17 @@ namespace daw::engine {
 // rather than being duplicated.
 
 void handleUiEntry(HandleUiEntryDeps& deps, const daw::EventEntry& entry) {
+  // P2-CMD-00. The dispatched command's id, ambient for the whole dispatch so a refusal emitted
+  // deep inside a handler carries it without a parameter threaded through sixteen command modules.
+  //
+  // BRACKETED HERE RATHER THAN AT THE CALL SITE, and not only because main() has a ceiling: this
+  // is the function whose extent the bracket is supposed to match. main()'s lambda merely forwards,
+  // so a bracket there would be one scope wider than the thing it describes and would survive any
+  // future caller that dispatched without it.
+  //
+  // Zero until a sender mints an id, which the reader rule already reads as "no id". See
+  // ScopedCommandId for why sampleTime is the carrier and when that takes a version bump.
+  ScopedCommandId scopedCommandId(entry.sampleTime);
   // Re-bind every dependency to the name the body already uses. This is what lets the
   // 1,623 lines below be the untouched original.
   auto& automationCommandDeps = deps.automationCommandDeps;
