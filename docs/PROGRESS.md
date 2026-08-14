@@ -11,11 +11,11 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: 9367134
-- main-cpp-lines: 2184
-- main-function-lines: 1978
-- ctest-entries: 202
-- main-function-ceiling: 1955
+- as-of-commit: 537a6624
+- main-cpp-lines: 2151
+- main-function-lines: 1944
+- ctest-entries: 226
+- main-function-ceiling: 1944
 
 ## Why this file cannot quietly go stale
 
@@ -46,6 +46,71 @@ The reason it is built this way: every stale claim found in this repo was in a f
 *intended* to keep current. `tools/meter_bar_check.sh` carried "THE ANCHOR IS NOT FIXED" for months
 after it was fixed — stale in the direction that gets work done twice, by someone with no reason to
 suspect the first attempt exists.
+
+## 2026-08-07..14 — the architecture-excellence period, and what reviewing my own work cost
+
+Eight days and ~350 commits under `ARCHITECTURE_EXCELLENCE_LEDGER.md`, which is where the ticket
+state lives; this section records only what generalises. The period ran first as a fleet of four
+workers and then, once that stopped producing verified work, as one agent doing the implementation
+with subagents doing the reviews. **The reviews are the part that paid.** What follows is mostly a
+list of things an independent reader caught in work I had already convinced myself of.
+
+**A design refuted on two measured facts, both of which I had asserted.** The plan for carrying a
+command id into the engine was to reuse the ring's reservation index, on the grounds that it wraps
+at 2^32 — about fifty days of continuous traffic — and that `UiCommandPayload` had four spare
+bytes. Neither is true. The index is MASKED at the ring capacity, so it wraps every 1023 commands,
+about a second under load; and the payload has ZERO spare bytes, not four. The proposal died on
+arithmetic I had presented as measurement, and the reviewer's whole contribution was reading
+`apps/event_ring.cpp` instead of believing the document.
+
+**The same reviewer found a live defect while refuting it.** A slow — not dead — producer that
+publishes into a slot the consumer already retired gets its command dispatched one lap later, out
+of order, seconds after the sender gave up. That is `docs/architecture/decisions/AE-RING-01-stale-replay.md`.
+It is unrelated to the design being reviewed, and it was found because someone was reading the ring
+carefully for another reason. Side findings are the argument for review by a party with no stake in
+the conclusion.
+
+**A justification I invented and then replicated seven times.** A commit message claimed a widened
+field would break "four `reinterpret_cast` sites" in the host process. Those casts are of a byte
+vector off a socket, and there is no such cast of the ring payload anywhere in the tree. The claim
+was plausible, load-bearing for the decision, never checked, and copied verbatim into six more
+places before anyone read it. Corrected as disavowals rather than deleted, because a wrong reason
+that quietly disappears teaches nobody.
+
+**A merge found the defect that seven reviews had not.** The contract-layout check compares
+bindgen-generated twins field by field. Seven independent reviews passed it. Integrating it into
+`main` is what surfaced the eighth defect: the set of structs it required was the UNION of every
+candidate it had ever seen, so a struct deleted from the codebase — surviving only in prose
+comments and one two-week-old build directory — became permanently mandatory. Fixed before the
+merge landed, so `main` never carried it. Worth naming: **the reviews all asked "is this check
+correct", and the defect only appears when you ask "what does this check do in a tree that has
+moved on".**
+
+**A red check is a place new breakage hides.** `doc_citation_check` was already failing on one
+stale document. Four placeholder paths from unrelated work then broke it further and nothing
+changed — the suite was red before and red after. Targeted `ctest -R` filters kept it out of sight.
+An already-failing check has no signal left to give.
+
+**"It fires" is not "it ratchets".** Several negative controls in this period emitted their named
+failure reason while exercising a shape the pre-fix code already caught. The test that separates
+them is to revert the fix and confirm the control goes BLIND. Four more controls were invalid in a
+different way — their anchors had moved, so they asserted against text that was no longer there and
+reported meaningless passes. Asserting that each anchor still exists is what caught those, and it
+is now the habit: a control that cannot state what it would miss is not evidence.
+
+**Where this leaves `main()`.** 1,992 lines to 1,944, by moving two captureless lambdas and their
+rationale into `apps/engine_rt_helpers.h`. Captureless is the whole selection rule — they were free
+functions already. The ceiling follows down to 1,944, which is what the ratchet is for, and
+`progress_check` had been refusing commits for exactly the reason it exists: **it forbids raising
+the ceiling and says to move logic out instead.**
+
+Two items are blocked on an owner decision rather than on work, and both are recorded in
+`docs/architecture/decisions/OPEN-DECISIONS-FOR-JAAKKO.md`: whether one credentialed capture may be
+taken for the web-stack ticket, and whether giving an EXISTING field a new meaning requires a
+version bump. The second gates two separate changes, and the tree currently argues both ways — the
+command doctrine says such repurposing IS a wire change, and nine counter-precedents in the same
+tree say it is not. That contradiction is the decision; picking a side inside a ticket would settle
+it by accident.
 
 ## 2026-08-06 (afternoon) — a bug panel, and the regression it caused
 
