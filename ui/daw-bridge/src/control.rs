@@ -1991,7 +1991,11 @@ impl EngineHandle {
             return Err(format!("payload of {size} bytes does not fit an EventEntry"));
         }
         let mut entry = EventEntry {
-            sample_time: 0,
+            // P2-CMD-00: the command's identity rides here. sampleTime is unused on a UI
+            // command entry — it names an audio position and a command has none — so these eight
+            // bytes were free and are exactly the id's width. Giving them a meaning is why
+            // kShmVersion moves to 39; see the rule at that constant.
+            sample_time: command_id_next(),
             block_id: 0,
             event_type: EventType::UiCommand as u16,
             size: size as u16,
@@ -2049,6 +2053,49 @@ impl EngineHandle {
         }
         Ok(())
     }
+}
+
+/// The identity this process stamps on the commands it sends, per P2-CMD-00 §3.
+///
+/// `hi` is a 32-bit nonce drawn ONCE for this process; `lo` is a counter within it starting at 1.
+/// Together they are the 64-bit id the engine echoes back on a refusal, so a caller can tell which
+/// of its commands was refused rather than adopting the outcome of somebody else's.
+///
+/// WHY A NONCE AND NOT A CLAIMED ID. The rings are MULTI-PRODUCER since M2.18 — a producer
+/// CAS-reserves a slot, fills it, then sets `ready` — so an id must be unique across concurrent
+/// producers AND across producer lifetimes, because the outbound ring is peeked rather than drained
+/// and a restarted process's refusals are still visible. A counter alone fails the second test. The
+/// exact alternative is a claim array in shared memory with CAS acquisition, which buys exactness
+/// at the price of a wire change, an allocation authority and a stale-claim reclamation rule; the
+/// nonce needs none of those. Ruled by the owner 2026-08-13.
+///
+/// THE BOUND, STATED RATHER THAN CALLED UNIQUE. Collision is birthday-on-2^32 across producer
+/// LIFETIMES, not across commands: about 1e-6 at 100 lifetimes in a session and 1e-4 at 1000. When
+/// it does collide, one client adopts another's refusal once and self-corrects on the next read.
+///
+/// The nonce comes from `RandomState`, which the standard library seeds randomly per process — no
+/// dependency, and the value is stable for this process because it is drawn once.
+fn command_id_next() -> u64 {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static NONCE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    let hi = *NONCE.get_or_init(|| {
+        let mut h = RandomState::new().build_hasher();
+        h.write_u64(std::process::id() as u64);
+        let n = (h.finish() >> 32) as u32;
+        // 0 is the "no id" sentinel for the WHOLE id, and hi == 0 with lo == 0 would collide with
+        // it. Any non-zero lo keeps the id distinguishable, but borrowing 1 costs nothing and keeps
+        // the invariant local to the nonce rather than spread across two fields.
+        if n == 0 { 1 } else { n }
+    });
+    // Starts at 1: fetch_add returns the PREVIOUS value, so the first id has lo == 1 and an
+    // all-zero id can only mean "this sender does not mint one".
+    let lo = COUNTER.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+    ((hi as u64) << 32) | (lo as u64)
 }
 
 /// Does a `size`-byte region of alignment `align` fit at `offset` in a mapping of `mapped` bytes?
@@ -2469,5 +2516,38 @@ mod region_fits_property_tests {
             "only {accepted} inputs were accepted; the test proved nothing about a predicate that \
              refuses everything"
         );
+    }
+}
+
+#[cfg(test)]
+mod command_id_tests {
+    use super::command_id_next;
+
+    // P2-CMD-00 §3. The id is a per-process nonce in the high word and a counter in the low word.
+    // These pin the three properties a correlator depends on; the collision BOUND is stated in the
+    // function's own comment and is not testable here, because it is a property of many processes.
+    #[test]
+    fn ids_are_distinct_non_zero_and_share_one_nonce() {
+        let a = command_id_next();
+        let b = command_id_next();
+        let c = command_id_next();
+
+        // NON-ZERO IS LOAD-BEARING: all-zero is the documented "no id" sentinel, so a minted id
+        // colliding with it would report as un-correlated and never match.
+        assert_ne!(a, 0);
+        assert_ne!(b, 0);
+
+        // Distinct, and monotonic within the process — the low word is what separates two commands
+        // from the same sender.
+        assert_ne!(a, b);
+        assert_ne!(b, c);
+        assert_eq!((b & 0xFFFF_FFFF) , (a & 0xFFFF_FFFF) + 1);
+
+        // ONE NONCE FOR THE PROCESS. If the high word moved per call it would still be unique, and
+        // it would stop identifying the SENDER — which is the half that survives a restart, and the
+        // reason a bare counter was refused.
+        assert_eq!(a >> 32, b >> 32);
+        assert_eq!(b >> 32, c >> 32);
+        assert_ne!(a >> 32, 0, "a zero nonce would make the first id collide with the sentinel");
     }
 }

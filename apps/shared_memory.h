@@ -168,7 +168,11 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 // A bump is cheap and its cost is bounded: the equality gate forces both sides to rebuild, which
 // is the point. Ambiguity about what a v38 image means is not bounded.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-constexpr uint16_t kShmVersion = 38;
+// v39: EventEntry::sampleTime carries a command IDENTITY on UI command entries (P2-CMD-00).
+//    Nothing moved and no field grew — sampleTime was zero on those entries and is now a
+//    per-process nonce plus a counter. That is exactly the repurposing the rule above governs,
+//    and this bump is the rule being applied to its first case rather than argued about.
+constexpr uint16_t kShmVersion = 39;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;

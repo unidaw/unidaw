@@ -192,6 +192,56 @@ void testNowMsIsMonotonic() {
 }
 
 // -------------------------------------------------------------- the emitters
+// P2-CMD-00: the refusal carries the id of the command that caused it, and the plumbing that
+// delivers it is ambient rather than a parameter — so the only way to know it arrives is to set the
+// ambient and read the payload back.
+//
+// THE ZERO CASE IS HALF THE TEST. All-zero at offset 32 is the documented "no id" sentinel, and it
+// is what every refusal carries until a sender mints one. A test that only checked the non-zero
+// case would pass equally well against code that always wrote the ambient's initial value.
+void testClipRejectCarriesTheCommandId() {
+  {
+    Fixture f;
+    auto d = f.deps();
+    daw::engine::ScopedCommandId scoped(0x00000002FFFFFFFFull);
+    emitClipReject(d, daw::UiClipRejectReason::StaleBase, 1, 0, 0,
+                   daw::UiCommandType::WriteNote);
+    daw::EventEntry entry{};
+    CHECK(f.ring.pop(entry));
+    daw::UiClipRejectPayload p{};
+    std::memcpy(&p, entry.payload, sizeof(p));
+    // Split low-word-first, which is why the id is two uint32_t and not a uint64_t: the halves sit
+    // at fixed offsets 32 and 36 in every refusal payload regardless of the struct's own layout.
+    CHECK(p.correlationLo == 0xFFFFFFFFu);
+    CHECK(p.correlationHi == 0x00000002u);
+  }
+  {
+    // Outside any bracket the ambient is 0, and the payload must say "no id" rather than carry a
+    // stale one from the previous dispatch.
+    Fixture f;
+    auto d = f.deps();
+    emitClipReject(d, daw::UiClipRejectReason::StaleBase, 1, 0, 0,
+                   daw::UiCommandType::WriteNote);
+    daw::EventEntry entry{};
+    CHECK(f.ring.pop(entry));
+    daw::UiClipRejectPayload p{};
+    std::memcpy(&p, entry.payload, sizeof(p));
+    CHECK(p.correlationLo == 0u);
+    CHECK(p.correlationHi == 0u);
+  }
+  {
+    // RESTORES, DOES NOT CLEAR. A nested dispatch must not silently drop the outer command's id —
+    // that would make a refusal from the outer command report as un-correlated.
+    daw::engine::ScopedCommandId outer(7);
+    {
+      daw::engine::ScopedCommandId inner(9);
+      CHECK(daw::engine::currentCommandId() == 9u);
+    }
+    CHECK(daw::engine::currentCommandId() == 7u);
+  }
+  CHECK(daw::engine::currentCommandId() == 0u);
+}
+
 void testClipRejectCarriesBothVersions() {
   Fixture f;
   auto d = f.deps();
@@ -252,6 +302,7 @@ int main() {
   testDropLogIsRateLimited();
   testNowMsIsMonotonic();
   testClipRejectCarriesBothVersions();
+  testClipRejectCarriesTheCommandId();
   testModAndRoutingErrorsJournal();
   testSamplerRejectJournals();
 
