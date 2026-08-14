@@ -3994,3 +3994,29 @@ owed, so the next reader either redoes it or believes a live engine is inert. Fi
 I nearly rejected that report: my search was `.check(`, the call is `runtime->watchdog->check(` with
 its argument on the next line, and the pattern could not match it. A grep that cannot express the
 shape it seeks returns exactly what a real absence returns.
+
+## AE-P1.2 item 14 CLOSED — the batch wait read the wrong counter (`7b2177fe`)
+
+The sidecar's BATCH path read each op's base from **its own track** — under a comment stating the
+reason, *"a batch can span tracks and the counters diverge, so one base for the whole frame is right
+for at most one of them"* — and then waited on `clip_version()`, the **global** counter.
+
+This is the identical crossing already fixed once for the agent's `add_notes` and written up in
+`PROGRESS.md`. The global counter moves whenever ANY track's clip state changes, so the wait is
+satisfied by activity on a different track, the op returns before its own write has landed, and the
+next op in the batch sends a base that is already stale and is correctly refused. **A batch spanning
+two tracks satisfies its own waits from the wrong track** — which is why a multi-track transpose,
+the very case the original comment cites, was the most likely to lose edits silently.
+
+Both branches crossed, chord and command. The fix waits with `wait_for_track_clip_version` on the
+op's own track, and takes the wait's baseline from the SAME source as the base rather than assuming
+they are equal — the command branch reads back `p.base_version` after `resolve_base`, because
+`resolve_base` decides per command type.
+
+**The population was enumerated instead of inferred from the finding.** Two call sites use the
+global wait. The other is `undo_redo`, and it is CORRECT: undo replaces the whole document, so it is
+not track-scoped and there is no single track to wait on. One crossing and one legitimate use — not
+a class to sweep. Recorded because the reflex after finding a counter-crossing is to replace every
+global wait, and here that would have broken undo.
+
+`rust_tests_check` PASS, 218 tests.
