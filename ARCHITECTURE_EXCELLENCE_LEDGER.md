@@ -5062,3 +5062,40 @@ Every broad `ctest -E` in this session excluded `version_arbiter` among others, 
 That exclusion list was never re-examined, so a check that went red a week ago was reported by
 nothing. **An exclusion is a claim that the excluded thing does not matter right now, and it decays
 exactly like any other carried claim.**
+
+## The first unfiltered measurement, and the documentation caught up (`8f6de5f2`)
+
+Last cycle's lesson was that an exclusion is a claim that decays. Acting on it: a full `ctest` with
+**no `-E` filters at all** — the first unfiltered measurement of this tree in the session.
+
+    229 tests · 3 failures · 1 skip
+
+    contract_freshness    stale bindings after my header edits — cleared by a rebuild
+    repository_integrity  the deliberate packet-not-ancestor pin, unchanged all session
+    progress_doc          33 commits of documentation drift, mine
+    audio_stability       SKIPPED by design — the one check built to say "I could not answer"
+
+**So `version_arbiter` was the only thing the filters were hiding.** Worth stating as a negative:
+the exclusion habit cost exactly one red check, not a hidden field of them. That is a smaller answer
+than I expected and it is the answer.
+
+`progress_doc` is now green and the file is current at `fb8ded2a` — 2151 lines of `main.cpp`, 229
+registered tests, `main()` still at its 1944 ceiling.
+
+**The narrative is weighted toward what did not survive checking**, because that is the half worth
+reading later: two reviews that refuted my REASONS while keeping my FIXES, four populations that
+were subsets, the same mistake reaching a lock and self-deadlocking a test, a control that passed
+when it should have failed, and a check red for a week behind my own filters.
+
+It ends on the rule that generalises all of them: **when the question is about structure — scope,
+extent, enclosure, completeness — read the code, not a match.** A pattern's output looks identical
+whether it found everything or could not express the question.
+
+### Where the programme stands
+
+Every check in the tree is green except the packet pin, which is owner-facing and deliberately not
+fixed — editing the acknowledged SHA would falsify the acknowledgement it exists to protect.
+
+Nothing else is in flight. The remaining work is three owner calls, now surfaced at the top of
+`docs/architecture/decisions/OPEN-DECISIONS-FOR-JAAKKO.md` rather than only inside this ledger:
+decision 7 (which also gates item 28's product half), item 26, and item 35.
