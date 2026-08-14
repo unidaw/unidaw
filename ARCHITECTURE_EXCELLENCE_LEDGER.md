@@ -4762,3 +4762,49 @@ The rule, now also in the durable notes: when the question is about STRUCTURE �
 enclosure, completeness — read the braces or parse it. Never pipe a population through `head`. Use a
 multi-line scan when a call can wrap. **Before adding a lock, read the enclosing function's brace
 structure rather than grepping for the mutex name.**
+
+## Decision 5, first half: the version-bump rule written down once (`978ccb5c`)
+
+Jaakko ruled option A. The ruling has two halves and this is the second, which the decision note
+said matters separately from the choice: the tree held two answers and they met every time a
+reserved field was used.
+
+**The rule, at `kShmVersion` where a reader changing a field will meet it:** giving an EXISTING
+field, slot or bit a NEW MEANING is a wire change and takes a bump, even when nothing observable
+moves and every shipped reader is unaffected.
+
+The objection it supersedes was made in good faith several times — an old reader required the field
+to be zero, ignored it, and cannot be harmed. **That is true and it is not the question a version
+answers.** A version identifies which MEANINGS an image carries; if two images share a version while
+a field means different things in each, no reader can use the version to decide what it may
+interpret, which is the only job the number has. One reader's backwards-compatibility is a different
+property from identity of the format.
+
+### The contradiction was smaller than the decision note said
+
+I checked instead of repeating the figure. Of the "no bump" statements in the tree, **three are not
+repurposings at all**, and the rule now names them so it is not over-applied:
+
+    a new ENUM VALUE readers ignore when unknown        UiDiffType::PresetSaved
+    a new COMMAND writing only already-published fields the clip-ops setter
+    a COMPUTED-offset region with no header field       the host key-event ring, on kControlVersion
+
+Those are additive in the strict sense — the image means the same thing before and after, everywhere
+it is defined. Only three are the genuine contested class: a reserved `u32` given a meaning, and two
+cases of previously-zero bits. Each is marked at its site.
+
+**Marked, not rewritten.** They predate the ruling and are not retroactively wrong. But a rule and
+the sentences contradicting it cannot both stand, and leaving them unmarked is how the next reader
+concludes the rule is optional.
+
+### The same process failure, twice
+
+I put ctest and `git commit` in one command again. The `&&` chain short-circuits on the grep, not on
+ctest, so it committed AND PUSHED with `contract_layout` failing. The failure was stale bindings —
+my comment edits changed two contract headers, so the provenance sidecar no longer matched, and
+`cargo build` fixed it. The commit's claim is therefore true of the code.
+
+**True again, and again not by method.** I recorded this exact ordering mistake in this ledger
+earlier today and then repeated it, which is the more useful fact than either instance. The rule is
+not "be careful": it is **never put a verification and a commit in the same command.** Run it, read
+it, then commit. A `&&` chain whose middle element is a pipe does not gate anything.
