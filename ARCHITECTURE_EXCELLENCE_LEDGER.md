@@ -106,7 +106,7 @@ watcher:  none (required for Codex)
 | `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; 30 open at the frozen SHA, but re-derived against the product: 4 DONE, 5 PARTIAL, 8 open PRODUCT items, 12 PACKET, 1 withdrawn; items 26 and 35 need owner calls, 27+29 gated on decision 5; G4 not decidable |
 | `AE-P1.3` | `GATE MET` | the `AE-P1.2` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent x2 | none | both attach paths ordered; 19 region accessors + ring cursors bounded; contract property test; non-overlap is the residue |
 | `AE-P1.4` | `GATE MET` | the `AE-P0` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent | none | 5 plain writes fixed; watchdog use-after-free fixed; TSan evidence DELIVERED — `tsan_command_hammer.sh` 108 commands landed / 0 races, and `tsan_render.sh` 1 race -> 0 after the RenderPool fix |
-| `RenderPool race` | `FIXED, IN REVIEW` | found by `AE-P1.4`'s instrument | `lead` | independent subagent | none | straggler read `m_fn`/`m_count` unlocked across a batch handover: null deref, out-of-range item, and an `m_remaining` underflow that HANGS the producer; generation packed into the claim counter; new `render_pool_race_check.sh` registered in ctest |
+| `RenderPool race` | `FIXED, REVIEWED` | found by `AE-P1.4`'s instrument | `lead` | independent subagent | none | straggler read `m_fn`/`m_count` unlocked across a batch handover: null deref, out-of-range item, and an `m_remaining` underflow that HANGS the producer; generation packed into the claim counter; review returned SAFE-TO-MERGE with 3 defects (store order, a 2^32 count re-opening the hang, a wrong wrap figure) — all fixed at `a4345f33` |
 | `AE-P1.5` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P1.6` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P2.*` | `BLOCKED` | Phase 1 gates | unassigned | unassigned | none | none |
@@ -5265,3 +5265,46 @@ is the one repair that must never be done without the owner saying so.
 Recommendation: **merge `ae/p0-followup`**, since the check was written to demand exactly that and
 the branch looks like the finished form. Until then this failure is pre-existing and unrelated to
 any change in this sprint, and it should be reported as such rather than filtered out of the sweep.
+
+## Review outcome, and item 29 closed with a runtime proof
+
+### The RenderPool fix passed independent review, with three defects to fix
+
+**SAFE-TO-MERGE**, and the review was worth the wait: it generated its own evidence rather than
+reading mine, running a harsher stress than the shipped one (16 workers on 10 cores, counts swinging
+33→2→32→3 to widen the stale-count window, a per-batch tag so an in-range item run for the WRONG
+batch is caught, 40 start/stop cycles, degenerate counts). Three defects, all now fixed:
+
+| | Defect | Status |
+|---|---|---|
+| A | `m_remaining` stored AFTER `m_ticket` while the comment claimed the opposite — and the comment's own justification described the interleaving under which that order HANGS | stores swapped |
+| B | a count above 2^32 makes `index >= count` unable to fire and carries `ticket + 1` into the generation half — **failure mode 3 reintroduced by its own fix** | such counts take the inline path |
+| C | "around 800 days" before the generation wraps; the arithmetic gives **289** | corrected |
+
+**B is the one worth carrying forward.** The fix for a hang re-opened the same hang one property
+along — bounded now by a field width rather than by a missing lock. That is the repair-un-learns-its-
+own-lesson shape, and it was found because the reviewer BUILT it: the header rebuilt with the field
+narrowed to 8 bits ran at count 200 and hung at count 300. I had reasoned it unreachable and left it
+unguarded; unreachable and guarded costs one clause.
+
+**C is the more embarrassing one.** Among several measured figures in that comment, the single one I
+reasoned out instead of computing was the only one wrong — by 2.8x. The tell was available: it sat
+among neighbours that had all been derived.
+
+### Item 29: the id loop now has runtime evidence
+
+The ledger said *"Nothing consumes the id yet"*. That was stale — `await_clip_outcome` matches on the
+minted id, and the engine echoes it. But reading a mint, an echo and a match in three files is not
+evidence that the value ARRIVING is the value sent, so `tools/refusal_correlation_check.sh` proves it
+against a live engine: one applied write moves the version, a second pinned to `--base 0` is stale by
+construction, and the refusal must be reported.
+
+**Why it can fail.** `do note` sends correlated, so `command_id` is never 0 — which makes the legacy
+`(track, commandType, sentBase)` path unreachable, since it is guarded on the caller having no id. If
+the id does not survive the trip, NEITHER recogniser fires, the wait times out, and the outcome is
+`Unknown` — which the CLI deliberately reports as applied.
+
+So a broken correlation does not look like an error. **It looks like success.** The negative control
+confirmed exactly that: with the engine's echo zeroed, the check failed with exit 0 and
+`{ "sent": "note", "base_version": 0 }` printed for an edit the engine had thrown away. Restored, it
+reports the refusal. Both directions observed, not argued.
