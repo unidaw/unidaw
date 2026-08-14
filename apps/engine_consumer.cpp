@@ -655,6 +655,7 @@ void runConsumerThread(ConsumerDeps& deps) {
                 info.completedBlockId = shmView->completedBlockId;
                 info.hostGeneration =
                     runtime->hostGeneration.load(std::memory_order_acquire);
+                info.liveHostGeneration = &runtime->hostGeneration;
                 info.hostReady = &runtime->hostReady;
                 info.active = &runtime->active;
                 info.gainLinear = &runtime->mixGainLinear;

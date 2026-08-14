@@ -435,6 +435,47 @@ static void testARequestFromTheFutureIsFresh() {
   CHECK(daw::engine::flappingResetRequestIsFresh(future, now, window));
 }
 
+
+// ---------------------------------------------------- P2-HOST-02b: stale mapping vs current one
+//
+// THE PREDICATE MUST DISCRIMINATE, which is a different claim from "the call site is reached".
+// The change that added mappingIsCurrent was verified by inverting it and watching offline_render
+// fail — and an independent review pointed out that this proves only that the gate EXECUTES. Every
+// TrackInfo in the tree's fixtures took the null-pointer branch, so nothing anywhere exercised an
+// unequal generation. "It fires" is not "it ratchets", and this is the missing half.
+void testAStaleMappingIsRejectedAndACurrentOneIsNot() {
+  FakeTrack t;
+  std::atomic<uint32_t> live{7};
+
+  EngineAudioCallback::TrackInfo info = infoFor(t, 0);
+  info.liveHostGeneration = &live;
+  info.hostGeneration = 7;
+  CHECK(EngineAudioCallback::mappingIsCurrent(info));
+
+  // The host relaunched after this entry was built. Nothing about the entry changed — every
+  // pointer is still non-null and the mapping is still mapped — which is exactly why no null
+  // check can see it.
+  live.store(daw::nextHostGeneration(7), std::memory_order_release);
+  CHECK(!EngineAudioCallback::mappingIsCurrent(info));
+
+  // Rebuilt against the new generation, it is current again.
+  info.hostGeneration = live.load(std::memory_order_acquire);
+  CHECK(EngineAudioCallback::mappingIsCurrent(info));
+
+  // 0 IS NOT A WILDCARD. A never-launched runtime reads 0, and an entry carrying 0 against a live
+  // 1 must be refused rather than treated as "no opinion" — nextHostGeneration skips 0 on wrap for
+  // this reason and the predicate must not undo it.
+  info.hostGeneration = 0;
+  live.store(1, std::memory_order_release);
+  CHECK(!EngineAudioCallback::mappingIsCurrent(info));
+
+  // The null case is a fixture, and it fails OPEN by design. Pinned here so that decision is a
+  // tested choice rather than an accident nobody wrote down.
+  EngineAudioCallback::TrackInfo unmanaged = infoFor(t, 1);
+  CHECK(unmanaged.liveHostGeneration == nullptr);
+  CHECK(EngineAudioCallback::mappingIsCurrent(unmanaged));
+}
+
 int main() {
   testOverflowDuringPrimedRelaunchReplayIsNotDropped();
   testAStaleAckCannotAnswerAReArmedReplay();
@@ -456,6 +497,7 @@ int main() {
   testMutedTracksAreNotWaitedFor();
   testRequireActiveFalseIgnoresProduction();
   testAStaleResetRequestIsDiscarded();
+  testAStaleMappingIsRejectedAndACurrentOneIsNot();
   testAFreshResetRequestIsApplied();
   testNoRequestIsNotAReset();
   testTheWindowBoundaryIsInclusiveAndComplementsTheGuard();

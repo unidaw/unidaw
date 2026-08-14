@@ -34,9 +34,22 @@ public:
   struct TrackInfo {
     std::shared_ptr<const daw::SharedMemoryView> shmView;
     void* shmBase = nullptr;
-    // The host lifetime shmBase belongs to (P2-HOST-02a). Carried, not yet consulted: 02b compares
-    // it against the runtime's live value before dereferencing shmBase. 0 = never launched.
+    // The host lifetime shmBase belongs to (P2-HOST-02a), and the runtime's LIVE counter to
+    // compare it against (P2-HOST-02b). 0 = never launched.
+    //
+    // The pair is the point. `hostGeneration` is a snapshot taken when this TrackInfo was built;
+    // `liveHostGeneration` points at the value the restart worker bumps. Equal means the mapping
+    // this entry holds is still the one the runtime is using. Unequal means the host was relaunched
+    // after this list was built, so `shmView` maps the DEAD host's segment — still mapped, still
+    // readable, and holding whatever that host last wrote.
+    //
+    // NOT a use-after-free guard — see mappingIsCurrent for why it cannot be one and what it
+    // actually prevents. `shmView` pins the mapping for as long as this entry lives. What goes
+    // stale is the CONTENT: the previous host's last-written samples and its last completedBlockId,
+    // which are indistinguishable from live values by any null check. The generation makes that
+    // detectable.
     uint32_t hostGeneration = 0;
+    const std::atomic<uint32_t>* liveHostGeneration = nullptr;
     const daw::ShmHeader* header = nullptr;
     const std::atomic<uint32_t>* completedBlockId = nullptr;
     const std::atomic<bool>* hostReady = nullptr;
@@ -90,6 +103,44 @@ public:
   // only whether the pipeline is up, and awaitNextBlock must not ask because `active` lags the
   // data it is derived from. Folding them in would merge two rules that are only adjacent. Each
   // site still states its own readiness test, and its own reason.
+
+  // ------------------------------------------------------ IS THIS ENTRY'S MAPPING STILL LIVE
+  //
+  // Deliberately NOT part of the membership section above. That section answers "will the mixer
+  // read this track", which is one question asked at five sites; this answers "is what this entry
+  // points at still the current host's mapping", which is validity, not membership. Folding it in
+  // would merge two rules that are only adjacent — the same argument that section makes about
+  // hostReady and active.
+  //
+  // WHAT THIS DOES AND DOES NOT PREVENT, because the first version of this comment claimed the
+  // wrong thing and an independent review caught it:
+  //
+  //   IT DOES NOT PREVENT A USE-AFTER-FREE, and it could not. TrackInfo holds the mapping's owner
+  //   BY VALUE (`std::shared_ptr<const daw::SharedMemoryView> shmView`), and that view's
+  //   destructor is the only munmap in the engine — HostController::disconnect drops a reference
+  //   rather than unmapping. So while a published TrackInfo exists the pages stay mapped, and the
+  //   audio thread only ever reaches a version the hazard-pointer scheme still retains. A relaunch
+  //   also creates a FRESH shm object rather than resizing the old one, so the old mapping is not
+  //   shrunk under a reader either. Even if the hazard were real, a compare here followed by a
+  //   dereference below is TOCTOU and would not close it.
+  //
+  //   WHAT IT DOES PREVENT is mixing a DEAD HOST'S LAST-WRITTEN SAMPLES. A relaunched track's old
+  //   mapping keeps returning whatever the previous host left in it, which is stale audio and a
+  //   stale completedBlockId — plausible-looking values that no null check can distinguish from
+  //   live ones. That is worth guarding on its own terms and does not need a memory-safety claim
+  //   to justify it.
+  //
+  // A NULL `liveHostGeneration` ANSWERS TRUE. Every TrackInfo the consumer publishes sets it
+  // (engine_consumer.cpp, beside hostReady); the only null case in the tree is a unit-test fixture.
+  // Failing open there keeps a fixture mixing rather than silently muting it — but it is fail-open
+  // with no ratchet, so a future construction site that forgets the field would opt out unnoticed.
+  static bool mappingIsCurrent(const TrackInfo& track) {
+    if (track.liveHostGeneration == nullptr) {
+      return true;
+    }
+    return track.hostGeneration ==
+           track.liveHostGeneration->load(std::memory_order_acquire);
+  }
 
   // Solo is exclusive across the whole bus, so it is resolved over the whole set before any one
   // track can be judged.
@@ -282,6 +333,13 @@ public:
         if (track.active && !track.active->load(std::memory_order_acquire)) {
           continue;
         }
+        // P2-HOST-02b, and this loop was MISSED by the first version of the change while its
+        // comment claimed every dereferencing gate was covered. It runs on the audio thread and
+        // its completedBlockId decides whether the cushion is satisfied at Play, so a dead host's
+        // last block id could satisfy — or hold up — the start of playback.
+        if (!mappingIsCurrent(track)) {
+          continue;
+        }
         anyActive = true;
         maxCompleted = std::max(
             maxCompleted, track.completedBlockId->load(std::memory_order_acquire));
@@ -300,6 +358,12 @@ public:
 
     for (const auto& track : *tracks) {
       if (!track.shmView || !track.shmBase || !track.header || !track.completedBlockId) {
+        continue;
+      }
+      // P2-HOST-02b. The pointers above can all be non-null and still address the segment of a
+      // host that was relaunched after this list was built — mapped and readable, holding that
+      // host's last writes.
+      if (!mappingIsCurrent(track)) {
         continue;
       }
       if (!contributesToMix(track, anySolo)) {
@@ -388,6 +452,13 @@ public:
       const uint64_t planeBase = track.planeByteOffset;
       const uint32_t planeStrideCh = track.planeStrideChannels;
       const int mixChanCount = static_cast<int>(track.mixChannelCount);
+      // P2-HOST-02b, ABOVE the channel loop rather than inside it. The answer cannot change
+      // between channels of one track, an acquire load is not hoistable by the compiler, and
+      // breaking out mid-track would leave a partially mixed track with its PDC cursor already
+      // committed — a new way into a shape the null checks below already have.
+      if (!mappingIsCurrent(track)) {
+        continue;
+      }
       for (int ch = 0; ch < std::min(masterCh, mixChanCount); ++ch) {
         // Extra safety checks
         if (!track.shmView || !track.shmBase || !track.header) {
@@ -950,6 +1021,15 @@ public:
         // on completedBlockId is exactly right and cannot hang past the caller's timeout — and a
         // host that genuinely never acknowledges SHOULD stall the render with a diagnostic rather
         // than quietly write silence.
+        // P2-HOST-02b, and this is the site where a miss matters most in this file's own terms.
+        // The section above is an argument about a WAIT disagreeing with process() about which
+        // tracks count — both shipped bugs here were that shape. process() now discards a track
+        // whose mapping is stale, so a pump that kept waiting on one would reproduce exactly that
+        // disagreement: it would wait for a dead host's counter to reach a block the live host is
+        // already past, and fail the render on a timeout.
+        if (!mappingIsCurrent(track)) {
+          continue;
+        }
         const uint32_t completed =
             track.completedBlockId->load(std::memory_order_acquire);
         if (completed < want && want - completed > worstGap) {
