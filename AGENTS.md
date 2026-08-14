@@ -129,6 +129,26 @@ stale green as authoritative.
 gate anything when the middle element is a pipe — the exit status is the pager's. Run it, READ it,
 then commit. A claim asserted before its evidence arrives is true only by luck.
 
+**A green negative control has more readings than "the check is blind", and the commonest is that
+it never applied.** Before concluding a check cannot see a defect, prove the control BUILT OR RAN
+DIFFERENT CODE — and prove it by measuring the artifact, not by re-reading the flags you typed. A
+`-I` pointing at a substituted header does nothing, because `#include "foo.h"` searches the including
+file's own directory first; `clang++ -E | grep -c <token-only-in-the-fix>` answered it in one command
+(4 vs 0) where the command line looked correct. Same family as a stale object file: the command was
+right and the input was not.
+
+**A guard must count the thing the property depends on, not a proxy one level above it.** A TSan
+hammer counted loop ITERATIONS, so 108 silently-refused commands and 108 applied ones printed an
+identical `18 rounds ... PASS` — and a stale daw-cli is refused silently here, so that was not
+hypothetical. Count what LANDED, from exit status. The guard was written specifically to prevent a
+vacuous pass and could not see one.
+
+**A check whose power comes from an instrument must refuse to pass without it.** The render-pool
+stress program's own assertions did not fire on the unfixed pool over 20000 batches; only
+ThreadSanitizer discriminated. So `render_pool_race_check.sh` treats a binary with no `__tsan`
+symbols as a FAILURE, not as a degraded mode — otherwise the day the sanitizer silently stops being
+applied, the check keeps reporting PASS with the defect back in place.
+
 **An exclusion is a claim that decays.** `ctest -E this|that` to keep a sweep fast is a statement
 that the excluded checks do not matter right now. One of them was red for a week behind such a
 filter. Re-run unfiltered periodically.

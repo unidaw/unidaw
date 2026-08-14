@@ -1050,6 +1050,25 @@ add_test(NAME check_registry
 )
 set_tests_properties(check_registry PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# The render pool's BATCH HANDOVER, under ThreadSanitizer. Distinct from render_pool (which renders
+# on 1 thread and 8 and compares bytes): the race fixed here was between batches, not inside one, so
+# a byte-identical render is blind to it. The script compiles its own instrumented binary with
+# clang++ rather than using a build target, so it cannot go stale behind a targeted build — and it
+# FAILS if that binary has no __tsan symbols, because its assertions alone do not catch the defect.
+add_test(NAME render_pool_race
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/render_pool_race_check.sh
+)
+set_tests_properties(render_pool_race PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
+
+# P2-CMD-00 END TO END, against a live engine. refusal_identity_check is the static half and pins
+# which payloads carry the id; this one proves the loop CLOSES — minted by the sender, carried in
+# EventEntry::sampleTime, echoed at payload offset 32, matched by await_clip_outcome. A broken echo
+# does not surface as an error but as SUCCESS for a refused edit, which is what it asserts against.
+add_test(NAME refusal_correlation
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/refusal_correlation_check.sh
+)
+set_tests_properties(refusal_correlation PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 # SetClipText (98): a clip's name and its audio source path, the last two persisted_field_reach
 # GAPs. Renders offline, so no audio device.
 add_test(NAME clip_text
