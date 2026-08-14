@@ -5458,3 +5458,35 @@ allowance that outlives its reason is how a list stops describing the world.
 This is deliberately not the third option I dismissed. Re-pointing `EXPECTED_PACKET_SHA` would make a
 red check green by changing what it expects; this changes what it ACCEPTS, in one named case, with
 the reason attached and both halves ratcheted.
+
+## Decisions 7 and 9 are the same problem, and one mechanism closes both
+
+Starting decision 9 (correlate the success signal) I went looking for room in `UiDiffPayload` and
+found it is **2 + 2 + 9×4 = exactly 40 bytes, full** — the identical wall decision 7 hit with
+`ResyncNeeded`. They are not two problems. They are one: *an outbound diff has no space left to say
+which command caused it.*
+
+So my decision 7 recommendation is also the answer to 9. **`EventEntry::sampleTime` is outside the
+40-byte payload**, it is 8 bytes — exactly the width of a command id — and `sendUiDiff` currently
+writes a literal `0` into it on every outbound diff. Free, in precisely the way the INBOUND direction
+already exploits: senders mint the id into `sampleTime` on the way in, so echoing it there on the way
+out is symmetric rather than novel.
+
+**The change is one line at a chokepoint.** `sendUiDiff` is the single writer of that ring — that
+was the point of consolidating it, and `uiDiffWriterIsOwner()` enforces it. Setting
+`diffEntry.sampleTime = currentCommandId()` there gives EVERY outbound diff the id of the command
+that caused it: the four clip-edit success diffs, the refusals, the patcher and chain diffs, all 18
+emit sites, without touching a payload or growing a struct.
+
+This is a wire change under decision 5's doctrine — a field that read 0 now carries meaning — so it
+takes `kShmVersion` 39 → 40 in lockstep with `K_SHM_VERSION`, and an exact independent review before
+it lands, because shared-memory changes do not merge here without one.
+
+**The Rust side must not widen `peek_ui_diffs`.** It returns `Vec<(u16, [u8; 40])>` across **14 call
+sites**, and widening the tuple would break all of them — the same trap `write_entry` sprang earlier
+this sprint, where widening one signature broke 33 callers. A correlated variant goes BESIDE it and
+only the sites that need the id move.
+
+Plan, in order: engine chokepoint → version bump in lockstep → Rust correlated reader → CLI matches
+success by id instead of inferring it from a counter → controls that prove a wrong id is not matched
+→ review.
