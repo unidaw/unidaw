@@ -4657,3 +4657,14 @@ is exactly where this programme keeps finding it.
 The practical rule, now stated where it can be found: **never pipe a population enumeration through
 `head`, and never trust a line-oriented pattern against a construct that can wrap.** Both produce a
 number that looks like an answer.
+
+**Extended that audit to the pre-existing checks, and it came back clean.** 38 of the `*_check.sh`
+files mention `head -N`. Nearly all are output formatting. The ones inside a derivation are `head -1`
+extracting a value expected to be unique — a pid, a track id, a constant read out of
+`shared_memory.h` — which is a different shape from truncating a population, but carries its own
+risk: if the pattern matched twice, the first would be taken silently.
+
+Tested rather than assumed, on the two that feed a threshold: `kUiMaxClipNotes` and
+`kUiMaxClipExtents` each match exactly once in `shared_memory.h`, and `extent_truncation_check`
+validates the extracted value afterwards instead of trusting it. No instance found where `head -1`
+is choosing among duplicates. Recorded as a negative so it is not re-investigated.
