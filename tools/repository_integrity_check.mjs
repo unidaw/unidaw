@@ -58,9 +58,12 @@ const LIVE_CLASS_RULES = [
   { id: 'python-source-extension', extensions: ['.py'],
     provenance: 'Python tools and registered checks',
     matches: ({ path }) => extname(path).toLowerCase() === '.py' },
-  { id: 'native-source-extension', extensions: ['.cpp', '.h'],
-    provenance: 'C++ build and test source consumed by CMake',
-    matches: ({ path }) => ['.cpp', '.h'].includes(extname(path).toLowerCase()) },
+  { id: 'native-source-extension', extensions: ['.cpp', '.h', '.hpp'],
+    provenance: 'C++ build and test source consumed by CMake, and generated C++ headers consumed by registered checks',
+    matches: ({ path }) => ['.cpp', '.h', '.hpp'].includes(extname(path).toLowerCase()) },
+  { id: 'typescript-source-extension', extensions: ['.ts'],
+    provenance: 'TypeScript source; the AE-P0.2 contract emission is compiled and asserted by ae_p0_2_contracts',
+    matches: ({ path }) => extname(path).toLowerCase() === '.ts' },
   { id: 'rust-source-extension', extensions: ['.rs'],
     provenance: 'Rust workspace source and build scripts',
     matches: ({ path }) => extname(path).toLowerCase() === '.rs' },
@@ -91,9 +94,16 @@ const LIVE_CLASS_RULES = [
 ];
 
 const EXCLUDED_CLASS_RULES = [
-  { id: 'ae-p0-2-generated-contracts',
-    provenance: 'generated wire contracts whose only consumers are AE-P0.2 tests that are NOT registered in ctest — excluded because nothing that runs reads them',
-    matches: ({ path }) => /^tools\/architecture\/ae_p0_2\/generated\//.test(path) },
+  // `ae-p0-2-generated-contracts` was here, reading: "generated wire contracts whose only consumers
+  // are AE-P0.2 tests that are NOT registered in ctest — excluded because nothing that runs reads
+  // them". Registering `ae_p0_2_contracts` in ctest made that sentence false the moment it landed,
+  // so the exclusion went with it and these files are now classified LIVE like anything else a
+  // registered check consumes.
+  //
+  // Second time this exact thing has happened here — `root-design-prose` died the same way, an hour
+  // after doc_citation's scope widened to root documents. A provenance is a CLAIM ABOUT THE WORLD,
+  // so extending a check's reach is also an edit to every sentence explaining why something sat
+  // outside it. Worth expecting rather than rediscovering.
 
   { id: 'pinned-task-packet',
     provenance: 'the exact task packet is validated byte-for-byte against EXPECTED_PACKET_SHA',
@@ -898,9 +908,19 @@ function selfTest(repositoryRoot) {
       && violation.rule === 'user-specific-absolute-path'
       && violation.classRule === 'registered-operational-markdown'),
     'direct operational Markdown was not classified and scanned');
-    assert(!markdownResult.violations.some((violation) => violation.path === 'DESIGN.md'),
-      'explicitly excluded root design prose was scanned as operational Markdown');
-    pass('operational-markdown', 'registered direct docs are live while design prose has explicit exclusion provenance');
+    // This assertion used to be its own INVERSE — `!violations.some(... 'DESIGN.md')`, asserting
+    // that root design prose was exempt, which was true while `root-design-prose` excluded it.
+    // That rule was deleted when doc_citation's scope widened to root documents, and the control
+    // was left behind asserting the superseded behaviour. It has been failing ever since, as the
+    // registered `root_isolation` test, which is precisely how a red check becomes a place later
+    // breakage hides: the suite was already red here, so nothing new could show up.
+    //
+    // Root Markdown is LIVE now, so the honest control is the opposite one: a user-specific
+    // absolute path in root prose MUST be reported. Asserting the rule, not the history.
+    assert(markdownResult.violations.some((violation) => violation.path === 'DESIGN.md'
+      && violation.rule === 'user-specific-absolute-path'),
+    'root design prose is live content now and its absolute path was NOT reported');
+    pass('operational-markdown', 'registered direct docs and root prose are both live and both scanned');
 
     const homeLiteral = ['$' + 'HOME', 'src', 'foreign-checkout'].join(slash);
     const homeDerivedLiteral = makeFixture(tempRoot, 'home-derived-literal', {
@@ -1014,9 +1034,23 @@ function selfTest(repositoryRoot) {
     const excluded = classifySurface('fixture.wav', '100644', Buffer.from('opaque'));
     assert(excluded.kind === 'excluded' && excluded.id === 'audio-fixture' && excluded.provenance,
       'excluded binary class lacks explicit provenance');
+    // The fixture used to carry a root `DESIGN.md` holding an absolute path alongside the .wav,
+    // asserting BOTH stayed silent. That was the `root-design-prose` exclusion, now deleted — root
+    // Markdown is live and such a path is a real violation there, so keeping the file in a
+    // zero-violations fixture asserted the opposite of the current rule. The .wav is the actual
+    // subject here: a binary whose bytes must never be interpreted as paths or executable text.
+    //
+    // The path is now INSIDE the .wav bytes on purpose. Previously the fixture's audio content held
+    // no path at all, so "zero violations" was satisfied whether wavs were excluded or scanned —
+    // the assertion could not tell its two outcomes apart. It can now.
+    //
+    // Stated precisely, because the obvious mutation does NOT isolate this line: deleting the
+    // audio-fixture exclusion is caught two assertions above ("excluded binary class lacks explicit
+    // provenance"), which gates the same rule more strictly and fires first. So this assertion is
+    // meaningful but not independently demonstrated, and saying so is better than implying a
+    // control was proven when a sibling did the work.
     const excludedFixture = makeFixture(tempRoot, 'excluded-provenance', {
-      'DESIGN.md': `Historical path: ${userPath}\n`,
-      'fixture.wav': Buffer.from('opaque audio fixture'),
+      'fixture.wav': Buffer.from(`opaque audio fixture ${userPath}`),
     });
     stageAll(excludedFixture);
     assert(scanRepository(excludedFixture).violations.length === 0, 'explicit excluded classes did not remain excluded');

@@ -899,6 +899,16 @@ add_test(NAME root_isolation
 )
 set_tests_properties(root_isolation PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# AE-P0.2's generated schema bundle and its C++/Rust/TS emissions. Six test files validated them,
+# all six passed, and until this entry existed nothing executed any of them: `ae_p0_2` appeared
+# nowhere in this file, and the Rust one had no Cargo.toml above it, so `cargo test` could not have
+# found it either. The ticket was recorded COMPLETE with its suite never once run.
+add_test(NAME ae_p0_2_contracts
+  COMMAND ${CMAKE_COMMAND} -E env --unset=BASH_ENV --unset=ENV
+    bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/ae_p0_2_contracts_check.sh
+)
+set_tests_properties(ae_p0_2_contracts PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
+
 # Every hand-written Rust mirror is pinned to the C++ struct bindgen generates from the header.
 add_test(NAME contract_layout
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/contract_layout_check.sh
