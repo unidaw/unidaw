@@ -139,6 +139,43 @@ void testEnqueueMirrorReplaySkipsAuxChild() {
 }
 
 // ------------------------------------------------------ the render block's arithmetic
+// EVERY FIELD buildTrackSnapshot READS MUST BE RESET, and routing was the one that was not.
+//
+// A track routed to None, removed, and re-added in the same slot came back SILENT carrying the dead
+// track's output — no error, no log, and the only visible symptom is a track that makes no sound
+// for a reason nothing on screen explains.
+//
+// THE TEST IS WRITTEN AGAINST THE SNAPSHOT'S FIELD LIST, not against the fields I happened to think
+// of, because the defect was precisely a field falling out of that correspondence. If
+// buildTrackSnapshot gains a seventh input, this test should gain an assertion with it.
+void testResetClearsEverythingTheSnapshotReads() {
+  TrackRuntime rt;
+  // Content on all six, each set to something a fresh track would never have.
+  rt.track.chain.devices.push_back(daw::Device{});
+  rt.track.modRegistry.links.push_back(daw::ModLink{});
+  rt.track.automationClips.emplace_back(std::string("cutoff"));
+  rt.track.harmonyQuantize = true;
+  rt.track.soundAddressedOnly = true;
+  rt.track.routing.audioOut.kind = daw::TrackRouteKind::None;
+  rt.routesToMaster.store(false, std::memory_order_relaxed);
+
+  daw::engine::resetTrackContent(rt);
+
+  CHECK(rt.track.chain.devices.empty());
+  CHECK(rt.track.modRegistry.links.empty());
+  CHECK(rt.track.automationClips.empty());
+  CHECK(!rt.track.harmonyQuantize);
+  CHECK(!rt.track.soundAddressedOnly);
+  // The one that was missing. Restored to what setupTrackRuntime gives a fresh runtime, not to a
+  // zeroed struct — a reused slot must be indistinguishable from a new track, and zeroing would be
+  // a third behaviour neither path produces.
+  CHECK(rt.track.routing.audioOut.kind == daw::defaultTrackRouting().audioOut.kind);
+  CHECK(rt.track.routing.audioOut.kind != daw::TrackRouteKind::None);
+  // ...and the atomic that mirrors it, which is read by the mixer rather than the snapshot: a
+  // correct routing with a stale mirror is the same silence by another route.
+  CHECK(rt.routesToMaster.load(std::memory_order_relaxed));
+}
+
 void testTickDeltaToSamples() {
   CHECK(tickDeltaToSamples(0, 1.0L) == 0);
   CHECK(tickDeltaToSamples(100, 1.0L) == 100);
@@ -1108,6 +1145,7 @@ int main() {
   testQuantizePitchFallback();
   testEnqueueMirrorReplaySkipsAuxChild();
   testTickDeltaToSamples();
+  testResetClearsEverythingTheSnapshotReads();
   testClamp01();
   testRampedVelocity();
   testNodeIndexForId();

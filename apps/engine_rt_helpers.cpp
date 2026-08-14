@@ -78,6 +78,21 @@ void resetTrackContent(TrackRuntime& rt) {
   rt.track.automationClips.clear();
   rt.track.harmonyQuantize = false;
   rt.track.soundAddressedOnly = false;
+  // ROUTING IS PART OF THE CONTENT, and leaving it out made a removed-then-re-added track come
+  // back SILENT. buildTrackSnapshot reads six fields; this cleared five, and `track.routing`
+  // survived — so a track routed to None, removed, and re-added in the same slot inherited the
+  // dead track's output. RemoveTrack does not clear it either. Found by an independent review of
+  // the tombstone-reuse path, which noticed that the store there was correctly ORDERED and said
+  // nothing about whether its CONTENTS were right.
+  //
+  // Restored to the same value a fresh runtime gets rather than to a zeroed struct: the point of a
+  // reused slot is to be indistinguishable from a new track, and `defaultTrackRouting()` is what
+  // setupTrackRuntime assigns. Zeroing would give a third behaviour that neither path produces.
+  rt.track.routing = daw::defaultTrackRouting();
+  // The atomic mirror moves with it, by the same expression setupTrackRuntime uses — two copies of
+  // a derivation is how they disagree, so this is written the one way it is written there.
+  rt.routesToMaster.store(rt.track.routing.audioOut.kind != daw::TrackRouteKind::None,
+                          std::memory_order_relaxed);
   rt.sourcePlacements.clear();
   rt.ownedClips.clear();
   rt.editableClipIds.clear();
