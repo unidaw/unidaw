@@ -5624,3 +5624,44 @@ Second, this is the **third** carried item this sprint found already complete (i
 36), plus item 35 where the blocking premise was mine and wrong. A carried open-list decays against
 the product in BOTH directions. Re-deriving costs minutes; reciting costs a cycle of building
 something that exists.
+
+## Item 15 is real, and the mechanism is a recovery path queued behind the thing it is recovering from
+
+The open list says only *"`applyHostBypassStates` still takes `controllerMutex`"*. Holding a mutex is
+not by itself a defect, so here is what makes it one, read rather than inferred.
+
+**The chain.**
+
+1. `daw_engine_main.cpp:1058` — `applyHostBypassStates` copies the device list under `trackMutex`,
+   releases it, then takes `runtime.controllerMutex` **across the whole send loop**.
+2. `host_controller.cpp:624` — each `sendSetBypass` calls the BLOCKING `sendMessage`.
+3. `host_controller.cpp:47` — the socket's `SO_SNDTIMEO` is **60 seconds**, set that high on purpose
+   because *"complex plugins like Zebra2 can take 10+ seconds"* to load.
+4. `engine_restart_worker.cpp:103` and `:160` — the path that DROPS and relaunches a dead host takes
+   `controllerMutex`.
+
+So a frozen host can hold `controllerMutex` for up to 60 s per device, and the recovery path that
+would drop that host waits behind sends **addressed to the host it is trying to drop**.
+
+**The lock cannot simply be narrowed.** `controllerMutex` guards the controller's LIFETIME against
+the restart worker reassigning it — releasing it between sends would trade a stall for a
+use-after-free. Two sites in `engine_consumer.cpp` already use `try_to_lock` on this mutex, which is
+someone having noticed it can be held a long time without fixing why.
+
+**The fix is to bound the send, and the precedent already exists.** `sendMessageNonBlocking` is
+`MSG_DONTWAIT` with bounded retries — 20 EAGAIN attempts, 50 polls at 2 ms — so roughly a 100 ms
+ceiling instead of 60 s. Today exactly ONE caller uses it: `ProcessBlock`, the audio-path message,
+where blocking is obviously fatal. `SetBypass` is documented as FIRE-AND-FORGET in two places
+(`engine_readiness_level.h:53`, `engine_readiness_tests_main.cpp:213`), so the bounded send matches
+its stated semantics rather than changing them.
+
+**A drop is silent either way, and that is pre-existing.** `sendSetBypass` returns whether it sent;
+`applyHostBypassStates` ignores the result. With the blocking send and a frozen host the message
+fails too — after 60 s — so the bounded send is not worse in the case that matters, and is bounded
+in the case that does not.
+
+**Naming the subset before fixing it.** SetBypass is the path item 15 names, but `SetChain`,
+`OpenEditor`, `SetParam`, `ResetPlugins` and `Shutdown` are the same shape: fire-and-forget messages
+on the blocking sender. Which of those are sent under `controllerMutex` is the enumeration to do
+before calling this class closed — a finding that names one site when the construct has six is the
+error this sprint has hit repeatedly.
