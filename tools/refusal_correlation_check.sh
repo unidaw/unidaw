@@ -29,6 +29,14 @@
 # concurrent author testing staleness and the refusal is the answer they asked for. One applied write
 # moves the version, then a write against base 0 is stale by construction.
 #
+# BUT THE SETUP WRITE MUST BE PUBLISHED FIRST, and getting that wrong made this check fail in the
+# shape of the very defect it detects. `await_clip_outcome` returns Applied as soon as the clip
+# version MOVES, without asking which command moved it — so a setup publish still in flight is read
+# by the stale write as its own success. It passed standalone and failed inside `ctest -j2`, where
+# the engine publishes more slowly. A check whose false alarm is INDISTINGUISHABLE from its true
+# finding is worse than no check, so the wait below observes the published version rather than
+# sleeping.
+#
 # NEGATIVE CONTROL, run 2026-08-14 and reproducible in about four minutes:
 #   cp apps/engine_ui_publish.cpp /tmp/pub.bak
 #   # in emitClipReject, replace the two correlation writes with literal zeros:
@@ -99,7 +107,63 @@ fi
 grep -q '"sent"' "$TMP/apply.log" || {
   echo "  FAIL: setup write reported no send:"; cat "$TMP/apply.log"
   echo "refusal_correlation_check: FAILED"; exit 1; }
-echo "   setup write applied"
+
+# WAIT FOR THE SETUP WRITE TO BE PUBLISHED, and this wait is the whole reason this check is stable.
+#
+# `await_clip_outcome` returns Applied as soon as the track's clip version MOVES. It does not ask
+# which command moved it. So if the setup write's publish is still in flight when the stale write
+# starts waiting, the stale write sees the SETUP's version bump, concludes Applied, and the check
+# fails — reporting exactly the message it prints when the id is genuinely lost.
+#
+# That is not hypothetical: this check passed standalone and failed inside a `ctest -j2` sweep, where
+# the engine is slower to publish. The command thread finishing is not the consumer thread having
+# published; the two are separated by a queue, and every timing-sensitive failure in this repository
+# has lived in that gap. Waiting on the PUBLISHED version — the same value await_clip_outcome reads —
+# closes it, and does so by observing the state rather than by sleeping long enough.
+clip_version() {
+  cli get tracks 2>/dev/null | grep '"track_id": 0,' \
+    | grep -oE '"clip_version": [0-9]+' | grep -oE '[0-9]+$' | head -1
+}
+# QUIESCENCE, NOT "NON-ZERO". The first version of this waited for the published version to become
+# greater than zero, which is a weaker condition than it looks: MEASURED, `load maximal` moves track
+# 0's clip version 1 -> 2 over about half a second and then holds. Waiting for "> 0" therefore
+# returned at 1, with the load's own second bump still in flight — and that bump landed during the
+# stale write's wait, moved the version, and was read as the stale write's success.
+#
+# That is why waiting for the setup write to "be published" did not fix this: the setup write was
+# never the thing still in flight. Six runs under concurrent load still failed three times, which is
+# what sent me to measure the version instead of reasoning about it a second time.
+#
+# So the predicate is: the same value seen on several consecutive samples. That covers any producer
+# of version bumps, including ones nobody has thought of, which a wait keyed to a specific command
+# cannot.
+wait_stable() {
+  local prev="" same=0 v
+  for _ in $(seq 1 120); do
+    v="$(clip_version)"
+    if [ -n "$v" ] && [ "$v" = "$prev" ]; then
+      same=$((same + 1))
+      [ "$same" -ge 5 ] && { echo "$v"; return 0; }
+    else
+      same=0
+    fi
+    prev="$v"
+    sleep 0.1
+  done
+  echo "$prev"
+  return 1
+}
+
+SETTLED="$(wait_stable)" || {
+  echo "  FAIL: the published clip version never settled, so any write below would race whatever is"
+  echo "        still moving it. Nothing can be concluded about correlation."
+  echo "refusal_correlation_check: FAILED"; exit 1; }
+if [ -z "$SETTLED" ] || [ "$SETTLED" -eq 0 ] 2>/dev/null; then
+  echo "  FAIL: the setup write never became visible in the published clip version (read '$SETTLED')."
+  echo "refusal_correlation_check: FAILED"
+  exit 1
+fi
+echo "   setup write applied, published and settled (clip version $SETTLED)"
 
 echo "== writing against a deliberately stale base"
 cli do note --track 0 --nanotick 960000 --column 0 --pitch 62 --base 0 >"$TMP/stale.out" 2>"$TMP/stale.err"
