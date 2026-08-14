@@ -4808,3 +4808,43 @@ my comment edits changed two contract headers, so the provenance sidecar no long
 earlier today and then repeated it, which is the more useful fact than either instance. The rule is
 not "be careful": it is **never put a verification and a commit in the same command.** Run it, read
 it, then commit. A `&&` chain whose middle element is a pipe does not gate anything.
+
+## P2-CMD-00: the engine can carry a command id now, inert until a sender mints one (`aa480ad3`)
+
+Both of §8's owner decisions are ruled, so the revised design has no open questions. What was
+missing is that **nothing minted or read the id**: the wire slot has existed since step 1 —
+`correlationLo`/`Hi` at offset 32 in all seven refusal payloads, 28 static_asserts, a decay ratchet —
+and the id appeared only in the header, that check, and the Rust mirror.
+
+**The carrier is `EventEntry::sampleTime`**, and the reason it can be is measured rather than
+argued: it is zero on every UI command entry, both senders write 0, so its eight bytes are free and
+are exactly the id's width. `UiCommandPayload` had none to offer — 40 bytes, eleven fields, no
+reserved run — which is what refuted the earlier proposals including my own ring-index scheme.
+
+**The id is ambient, bracketed to the dispatch.** The emit sites reach `emitClipReject` through a
+`std::function` in a deps struct, fifteen references from the entry that arrived; threading a
+parameter would cross sixteen command modules to deliver one value constant for the whole dispatch.
+Ambient is only sound because the dispatch is single-threaded — **and that is no longer an
+assumption**: `sendUiDiff` latches its writing thread and names any other (item 7). The two pieces of
+this programme met without being planned to.
+
+**Inert by construction, which is why it lands before the bump.** Every shipped sender writes
+`sampleTime = 0`, so the ambient is 0, and the reader rule already defines all-zero at offset 32 as
+"no id". Giving those bytes a MEANING is the repurposing the new rule governs and takes the bump to
+39 **when a sender mints one**. Reading them does not.
+
+### The ratchet refused my first draft, for the third time
+
+My explanation in `main()` pushed it 1944 → 1957, over a ceiling that may only go down. The fixes
+were all placement rather than deletion: the rationale moved to the declaration it describes, the
+bracket moved into `handleUiEntry` — where it belongs anyway, since `main()`'s lambda merely forwards
+and a bracket there would be one scope wider than the thing it describes — and two annotations became
+trailing comments. Back at 1944 with nothing lost.
+
+**I had also been over the ceiling for several commits without noticing**, because I was not running
+`progress_check` while editing `main()`. Two of the four excess lines were annotations I added in the
+P1.4 commit. A ratchet only ratchets when it runs.
+
+Remaining for CMD00: the sender mints a nonce into `sampleTime`, and `kShmVersion` goes to 39 in the
+same change — that is the half decision 5 governs, and it is the one that gives items 27, 28 and 29
+their identity.
