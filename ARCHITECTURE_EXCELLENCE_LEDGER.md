@@ -4583,3 +4583,45 @@ have informed the commit message; the ordering makes the claim unfalsifiable at 
 made. The fix is not a better message, it is running the check FIRST and reading it. Recorded
 because a claim that is accidentally right is indistinguishable, in the log, from one that was
 checked — and this ledger has spent the session on exactly that distinction.
+
+## AE-P1.3: the predicate's CONTRACT is asserted now, not a list of cases (`ec5b3889`)
+
+The gate says *"fuzz and property tests cannot construct an out-of-bounds or misaligned typed
+view"*. What existed was example-based — it pins outcomes for inputs I thought of. The new test
+asserts the CONTRACT: for any input, `region_fits` saying yes implies the region genuinely lies
+inside the mapping and is aligned.
+
+**That is the difference between "the cases I picked are refused" and "nothing that passes can be
+out of bounds"**, and only the second is what the gate asks for. It also survives a rewrite of the
+predicate; the examples would not.
+
+The bounds assertion is written `offset <= mapped - size` on purpose: `offset + size` is the
+expression the predicate exists to avoid, so asserting with it would be asserting the bug.
+
+- **It discriminates**, measured: swap the subtraction for the wrapping addition and it fails
+  immediately.
+- **It cannot go vacuous.** A predicate that always says no satisfies every assertion in it, so the
+  test also requires that over a thousand inputs were ACCEPTED. Two controls here have already had
+  to be corrected for exactly that shape.
+- **Deterministic, not randomised.** A test drawing fresh inputs each run reports a different fact
+  each run. The first draft used 400 random rounds and took 29 SECONDS — a tax on every suite run
+  for coverage the edge values already give.
+
+### The new assert tripped my own ratchet, which is the part worth reading
+
+The alignment `debug_assert` added to `region` reads the base address, so it is a THIRD direct
+mapping access where `shm_access_check` pinned two. The access is legitimate — inside a helper,
+asserting the precondition that helper depends on — and the pin refused it anyway until the number
+was raised deliberately. **A count that moves silently is how the fourth one arrives unnoticed**, so
+a ratchet stopping its own author is the ratchet working rather than friction.
+
+### And a defect that no check could catch
+
+A backtick inside a `python3 -c "..."` string let zsh command-substitute the word `region` out of
+that very comment. `shm_access_check` passed, because a missing word in prose is not something any
+check reads — the sentence read "Adding a debug_assert to  that reads the base address".
+
+This is at least the sixth instance of this exact trap in this programme, and the standing remedy —
+pass a quoted heredoc, never a double-quoted `-c` string — was already written down. Knowing the
+rule did not apply it. The tell is visible and I nearly skipped past it: zsh prints `command not
+found: region` while the surrounding command reports success.
