@@ -204,3 +204,37 @@ sampler ones do). Not C.
 
 **Cost if wrong:** A leaves the misreading possible but records the truth in the payload. B is
 slow but ends the class. C would actively cause bad model behaviour.
+
+
+---
+
+# NEW — decision 7 (2026-08-14, found while closing item 27)
+
+## One refusal channel has nowhere to put the command id
+
+Item 27 needs all three refusal channels to carry a sender-minted identity. Two now do. The third —
+`UiDiffType::ResyncNeeded` — travels on `UiDiffPayload`, which is **exactly 40 bytes and full**:
+
+    offsets 32-39 = noteVelocity, noteColumn      real fields, not reserved
+
+Every other refusal payload puts the id at offset 32. There is none free here, and
+`EventEntry::payload` is fixed at 40 bytes inside a 64-byte cache-line-aligned entry.
+
+**Options**
+- **A. Echo the id in `EventEntry::sampleTime` on the way OUT**, mirroring how it arrives. Needs no
+  payload space, works for any future refusal on a full payload. Costs: readers must expose
+  `sampleTime` (today `peek_ui_diffs` returns only type + payload), and the id then lives in two
+  places — payload for seven types, entry for this one.
+- **B. Per-diffType repurposing.** For `ResyncNeeded` those two fields are always zero, so use
+  offsets 32-39 only for that diffType. Cheapest, and fragile: one struct meaning different things
+  per `diffType` is the shape that has bitten this wire before.
+- **C. A dedicated payload type** for resync refusals, with room. Clean, and a new type plus another
+  version bump.
+- **D. Leave it uncorrelated** and record that this channel answers "someone was refused" only.
+
+**Recommendation: A.** It is symmetric with the carrier just landed, needs no new bytes, and is the
+only option that generalises. B trades a wire fact for a per-type convention; C costs a bump for one
+channel; D leaves item 27 permanently one-third open.
+
+**Cost if wrong:** A means a reader change and a second home for the id. B risks a future note diff
+being read as carrying an id. Neither is dangerous; both are hard to undo once shipped.
