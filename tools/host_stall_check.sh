@@ -74,7 +74,12 @@ hosts_ready() { [ "$(grep -c 'host ready for track' "$TMP/eng.log" 2>/dev/null)"
 wait_until 60 hosts_ready || fail "not all six hosts came up; freezing one proves nothing.
 $(tail -6 "$TMP/eng.log" | sed 's/^/          /')"
 
-cli do play --force >/dev/null 2>&1 || true
+# PLAY MUST SUCCEED. This was `|| true`, which discarded the one failure that makes everything
+# below meaningless: a producer that never played produces no blocks, therefore no stalls, and the
+# stall count lands at 0 — comfortably under the threshold, reported as the property holding.
+cli do play --force >/dev/null 2>&1 \
+  || fail "'play --force' failed, so the producer never ran. Every assertion below would have
+        passed on an engine that did nothing, which is the failure this check exists to catch."
 sleep 4   # a real duration: the capture needs audible material BEFORE the freeze to compare against
 
 # FREEZE ONE HOST. Its socket path carries the track index, so this picks track 0 specifically
@@ -84,9 +89,19 @@ FROZEN="$(pgrep -f "juce_host_process.*_0\.sock" | head -1)"
 [ -n "$FROZEN" ] || fail "found no host process to freeze, so this check cannot pose its question"
 kill -STOP "$FROZEN" || fail "could not SIGSTOP the host process $FROZEN"
 echo "  froze host pid $FROZEN"
-# An anchor IN THE ENGINE LOG, so "after the freeze" is a position in the same stream the
-# stalls are counted from rather than a wall-clock guess.
-echo "froze-host-marker" >> "$TMP/eng.log"
+# An anchor in the engine log, so "after the freeze" is a position in the same stream the stalls
+# are counted from rather than a wall-clock guess.
+#
+# A LINE COUNT, NOT AN APPENDED MARKER. This used to `echo froze-host-marker >> "$TMP/eng.log"`,
+# giving the file a SECOND writer through a second file description while the engine is still
+# writing through its own. Two independent offsets into one file is a race for a place in the
+# stream, and the anchor's position is the whole basis of "after".
+#
+# What this does NOT fix, said plainly rather than implied: if the engine's own writes are
+# buffered, lines produced BEFORE the freeze can still land after this offset and be counted as
+# after it. That would inflate the count and push this check toward a FALSE FAILURE, which is the
+# safe direction — it cannot manufacture a pass.
+FREEZE_AT=$(wc -l < "$TMP/eng.log")
 sleep 7
 
 kill -CONT "$FROZEN" 2>/dev/null; FROZEN=""
@@ -102,7 +117,29 @@ wait "$ENG" 2>/dev/null || true; ENG=""
 # `inFlight` stall repeats forever, because the minimum can never advance past the frozen host.
 # Frozen host + fix = the host is dropped and production continues. That is a statement about the
 # engine, made from the engine's own words, and it needs no clock alignment at all.
-STALLS_AFTER=$(awk '/froze-host-marker/{seen=1} seen && /producer stall \(inFlight\)/{n++} END{print n+0}' "$TMP/eng.log")
+# THE PRECONDITION, WITHOUT WHICH THE COUNT BELOW MEANS NOTHING. The verdict is "few stalls after
+# the freeze", and a run that produced NO BLOCKS AT ALL satisfies it perfectly: no production, no
+# stalls, zero, pass. So establish that the producer actually produced before reading its silence
+# as good news. `producer.load` is emitted at shutdown and carries the block count.
+#
+# This is the same shape recorded for audio_stability_check, which passed on two idle runs because
+# every comparison it made was satisfied by the loaded side reporting zero. A check must be able to
+# tell "the property held" from "the question was never posed".
+# `"event":`, not `"name":` — my first draft of this line guessed the key and would have extracted
+# nothing, defaulting BLOCKS to 0 and failing every run for the wrong reason. The emitter writes
+# {"ts_ms":N,"event":"...","blocks":N,...}; see apps/event_log.cpp. Structured events reach this
+# file because DAW_EVENT_LOG is unset here, so the sink falls back to stderr and the engine is
+# launched with 2>&1.
+BLOCKS=$(sed -n 's/.*"event":"producer\.load".*"blocks":\([0-9]*\).*/\1/p' "$TMP/eng.log" | tail -1)
+[ -n "$BLOCKS" ] || BLOCKS=0
+if [ "$BLOCKS" -lt 100 ]; then
+  fail "the producer rendered $BLOCKS block(s), so this run never posed its question. A frozen
+        host cannot gate a producer that was not producing, and the stall count below would have
+        read 0 and passed. Look at whether playback actually started before blaming the engine."
+fi
+echo "  producer rendered $BLOCKS blocks before shutdown"
+
+STALLS_AFTER=$(awk -v mark="$FREEZE_AT" 'NR > mark && /producer stall \(inFlight\)/{n++} END{print n+0}' "$TMP/eng.log")
 echo "  inFlight stalls after the freeze: $STALLS_AFTER"
 if [ "$STALLS_AFTER" -gt 3 ]; then
   echo
