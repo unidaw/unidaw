@@ -1069,6 +1069,15 @@ add_test(NAME refusal_correlation
 )
 set_tests_properties(refusal_correlation PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 300)
 
+# AE-P1.2 item 35. patcher_rust's EventEntry deliberately omits `ready`, and the refusal rests on one
+# sentence of prose: push_event's whole-object store writes tail padding that "nothing reads from
+# this buffer". The compile-time assertions pin size and every offset; they cannot see a SECOND
+# whole-object writer appear, aimed at a buffer where that tail IS `ready`. This pins the writers.
+add_test(NAME patcher_event_tail
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/patcher_event_tail_check.sh
+)
+set_tests_properties(patcher_event_tail PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 120)
+
 # SetClipText (98): a clip's name and its audio source path, the last two persisted_field_reach
 # GAPs. Renders offline, so no audio device.
 add_test(NAME clip_text
