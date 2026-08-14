@@ -5665,3 +5665,62 @@ in the case that does not.
 on the blocking sender. Which of those are sent under `controllerMutex` is the enumeration to do
 before calling this class closed — a finding that names one site when the construct has six is the
 error this sprint has hit repeatedly.
+
+## The outbound-id review came back DO-NOT-MERGE. All three defects fixed, plus one I caused after it
+
+### D1 — a measured 23x regression, and the same subset error a fourth time
+
+`is_clip_applied` named `{AddNote, RemoveNote, UpdateNote}`. A successful **chord** is published as
+`EventType::UiChordDiff` (8), not `UiDiff` (6), carrying a `UiChordDiffType` — a different enum.
+`peek_ui_diffs_correlated` filtered it out entirely, and the counter fallback that used to catch it
+is now gated on `command_id == 0`, which chords never satisfy. Every chord spun the full 120 x 5 ms
+and fell out as `Unknown`, which prints as success.
+
+| | before | after |
+|---|---|---|
+| note | 31-35 ms | 19 ms |
+| chord | **727-740 ms** | **18-20 ms** |
+
+The reviewer established causation with a control, not by inference. And the two enums **overlap
+numerically** — `AddChord` and `AddNote` are both 1 — so the event type now travels with the diff
+type; a bare diff type cannot be interpreted without knowing its channel.
+
+This is the fourth time this sprint a finding named a subset: I enumerated the note diff types and
+never asked whether the construct had another channel.
+
+### D2 — `shm_access_check` was RED and I had not run it
+
+The new ring walk adds a fifth `entries.add()` site against a pin of 4. The site is correctly masked,
+so the pin moved to 5 **deliberately, with the reason recorded** — which is what a pinned count is
+for and what a floor would have absorbed in silence. The check did its job; I had not run it.
+
+### D3 — prose falsified two versions ago, sitting directly above the line I changed
+
+`ScopedCommandId`'s doc still said *"every shipped sender still writes 0"* and *"inert by
+construction"*, both falsified at v39. `shared_memory.h` had no `v40:` entry and its v39 line scoped
+the meaning to inbound, so a reader at v40 would conclude sampleTime is still 0 outbound. Both fixed.
+
+### The coverage the change shipped without
+
+The reviewer's sharpest point: `sendUiDiff`'s echo could be **reverted to `0` with the whole suite
+green**, because `refusal_correlation_check` exercises the payload's offset-32 fields — a different
+carrier. `testOutboundDiffCarriesCommandId` now asserts the id inside a dispatch, `0` outside one,
+and restore-on-nesting. Control: reverting the echo fails three named assertions.
+
+### And then I published a broken lockstep
+
+Committing the remediation with a selective `git add`, I named the review files and omitted
+`layout.rs` — whose `K_SHM_VERSION` bump had been sitting uncommitted across several commits. **HEAD
+carried `kShmVersion = 40` against `K_SHM_VERSION = 39`**: a pair the equality gate refuses at
+runtime. Fixed in the next commit.
+
+`version_parity_check` had passed minutes earlier, and correctly — **it reads the working tree**,
+where both halves were right. A check that validates the working tree cannot see a commit that
+publishes half of it.
+
+So rule 4 now applies the same patterns to the same files **at HEAD**. The negative control is
+isolated rather than incidental: a detached worktree at the broken commit with its working tree
+REPAIRED, so rules 1-3 pass and only rule 4 can fire. It reports the mismatch. Worktree removed.
+
+The lesson is not "be careful with `git add`". It is that a discipline was doing a check's job, and
+this suite exists to replace disciplines.
