@@ -1,4 +1,38 @@
-# Open decisions — ALL ANSWERED 2026-08-13
+# Open decisions
+
+**Decisions 1-3 ruled 2026-08-13; decisions 4-6 ruled 2026-08-14.** Kept as the record of what was
+asked and decided; do not re-open without a new decision.
+
+| # | Question | RULED |
+|---|---|---|
+| 1 | CMD00 sender identity | **per-process nonce** |
+| 2 | `commandType` on the wire | **dropped** |
+| 3 | pending flapping-reset expiry | **timestamped, expires with the 10s window** |
+| 4 | AE-P0.3 credentialed capture | **option A — Jaakko supplied the env file; capture taken and attested** |
+| 5 | version bump for a repurposed field | **option A — bump to 39, and write the rule down once** |
+| 6 | agent reporting an unconfirmed command | **A then B — mark unconfirmed now, per-verb acks incrementally** |
+
+## Decision 4, closed by observation
+
+Ruled by Jaakko pointing at the checkout's `.env`. Run 2026-08-14:
+
+    DAW_WEBSTACK_ALLOW_CREDENTIALS=1 DAW_ENV_FILE=<checkout>/.env KEEP_ENGINE=0 tools/webstack.sh
+
+The credential-boundary line was OBSERVED and compares byte-for-byte with the line `docs/DEMO.md`
+quotes, under the `> ` marker mapping decided separately:
+
+    ask     explicit credentialed mode; sidecar cwd cannot discover checkout/home .env files
+
+No bytes were typed in by hand, which is the whole point of the ticket. The key itself was never
+read, printed or copied — only the file's PATH was passed to the launcher.
+
+---
+
+The original write-up follows.
+
+---
+
+# (superseded header)
 
 **Jaakko ruled: go with the recommendations, all three.** Kept as the record of what was
 asked and decided; do not re-open without a new decision.
