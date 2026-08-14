@@ -3515,3 +3515,43 @@ evidence it works.
 
 Controls, all verified then restored: a new line-citation in a root document fails the baseline; a
 broken bare path with no marker fails; a marker on a live path fails.
+
+## The broad suite found three failures my filters never selected (2026-08-14)
+
+Running `ctest` without an `-R` filter — after learning that targeted runs hid a check I broke —
+surfaced three failures. None is in any filter I have used this session.
+
+**1. `repository_integrity` — 18 tracked files with no declared provenance.** Sixteen are task
+documents under `docs/architecture/tasks/` and two are generated files under
+`tools/architecture/ae_p0_2/generated/`. Verified NONE of them are mine: the check wants every
+tracked file classified as live or excluded, and the fleet's task documents were added without
+that. Pre-existing.
+
+**2. `progress_doc` — two failures, and one is a BREACHED RATCHET.**
+`docs/PROGRESS.md` is 344 commits behind HEAD against a limit of 12, which is why nobody saw the
+second: **`main()` is 1992 lines against a ceiling of 1955.**
+
+Measured rather than assumed, with a harness first validated against the check's own answer (both
+say 1992 for the working tree):
+
+    session start (0753eb3b)   main() = 1985   ALREADY 30 over the ceiling
+    now        (1e7391e0)      main() = 1992
+    PROGRESS.md records                  1978   — stale before I started
+
+So the ceiling was already breached when I arrived, and the only thing this session did to that
+file was MERGE T3, which brought two commits from `ae/impl-engine-001` that touch it. The growth is
++7.
+
+**Stated limit on that attribution:** my per-revision harness returns 0 for those two commits while
+returning correct values for the session boundaries, so I did NOT establish which of them added the
+lines, or whether the merge itself did. I am reporting the boundary measurements, which I trust, and
+not the per-commit split, which I could not reproduce. The ceiling is a monotone ratchet meant to
+fall; raising it would defeat it, so the reduction is its own ticket rather than a number to edit.
+
+**3. `rust_tests_check` — a failing Rust test** in the agent tools: an assertion that `drum:true`
+defaults to root 36. Not investigated yet; not obviously related to this session's work.
+
+The lesson is the one already recorded and now paid for twice: a targeted `-R` filter is a
+verification that answers only the question you already thought to ask. The full suite times out on
+this machine at the known engine stall, so the practical form is a broad `-E` exclusion rather than
+`-R` selection — that is what surfaced all three.
