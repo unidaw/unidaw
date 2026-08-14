@@ -5724,3 +5724,39 @@ REPAIRED, so rules 1-3 pass and only rule 4 can fire. It reports the mismatch. W
 
 The lesson is not "be careful with `git add`". It is that a discipline was doing a check's job, and
 this suite exists to replace disciplines.
+
+## Item 15: hardened, NOT demonstrated — and the probe says so instead of me
+
+The mechanism reads convincingly: `applyHostBypassStates` holds `controllerMutex` across its send
+loop and cannot narrow it (the mutex guards the controller's lifetime against the restart worker);
+each `sendSetBypass` is bounded only by `SO_SNDTIMEO = 60 s`; and the restart worker needs that same
+mutex to DROP a dead host — so recovery could queue behind sends addressed to the host it is
+dropping.
+
+**I could not reproduce it.** A probe that boots an engine, freezes a host mid-playback and times
+whether the command thread still serves an unrelated request:
+
+| | follow-up command landed |
+|---|---|
+| bounded send (the change) | 142 ms |
+| blocking send, deliberately restored | 146 ms |
+
+The same number. So the change lands as **hardening**, item 15 stays open as **NOT DEMONSTRATED**,
+and I am not claiming a fix for a stall I never observed.
+
+The change is still defensible on its own terms — `SetBypass` is documented FIRE-AND-FORGET in two
+places, its only caller discards the return, `ProcessBlock` already uses the bounded sender, and
+bounded cannot be worse than unbounded when the result is thrown away. But "cannot be worse" is a
+different claim from "fixes the stall", and only the first is supported.
+
+**The probe is kept and NOT registered**, renamed `_probe` so the registry glob does not select it. A
+check whose negative control passes is measuring nothing; registering it would add a green tick
+certifying nothing. It is kept so the next attempt starts from a reproduction *known* not to work,
+with the three untested explanations written down: the path may not reach `applyHostBypassStates`,
+the frozen socket buffer may never fill, or the send may return for a reason not yet found.
+
+**A real bug found while writing it.** The CLI flag is `--bypass 0|1`; `--on 1` is silently ignored
+and leaves the value at its default. `tools/tsan_command_hammer.sh` had been passing `--on` for its
+whole life, so its bypass toggle never toggled — it sent `bypass=1` twice per round instead of 1 then
+0. The TSan result stands (the command still dispatched and still wrote `trackSnapshot`), but the
+traffic was less varied than its own comment claimed. Fixed in both files.
