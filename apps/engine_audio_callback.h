@@ -132,8 +132,18 @@ public:
   //
   // A NULL `liveHostGeneration` ANSWERS TRUE. Every TrackInfo the consumer publishes sets it
   // (engine_consumer.cpp, beside hostReady); the only null case in the tree is a unit-test fixture.
-  // Failing open there keeps a fixture mixing rather than silently muting it — but it is fail-open
-  // with no ratchet, so a future construction site that forgets the field would opt out unnoticed.
+  // Failing open there keeps a fixture mixing rather than silently muting it. It IS fail-open, so
+  // the thing that makes it safe is external: readiness_writer_check requires every
+  // default-constructed TrackInfo in production to wire `liveHostGeneration`, and pins how many
+  // there are. A copy (the aux-child path) is exempt on purpose — it inherits a consistent
+  // snapshot/pointer PAIR, and demanding a re-assignment there would invite re-reading the
+  // generation without re-reading the mapping, which is the one combination that manufactures a
+  // mismatch out of nothing.
+  //
+  // This sentence previously ended "fail-open with no ratchet, so a future construction site that
+  // forgets the field would opt out unnoticed", which was true when written and is why the check
+  // exists. Left visible rather than deleted: the reason a guard is safe is worth more than the
+  // assertion that it is.
   static bool mappingIsCurrent(const TrackInfo& track) {
     if (track.liveHostGeneration == nullptr) {
       return true;

@@ -497,6 +497,54 @@ if len(sends) != EXPECTED_SENDS:
         'a pinned count, not a floor: a floor survives the addition it exists to catch. If a send',
         'was added, guard it and raise this number deliberately; if one went, lower it.')
 
+# ---- rule 7: A TrackInfo THAT FORGETS ITS GENERATION OPTS OUT OF THE MAPPING GUARD -----------
+# P2-HOST-02b gave the audio thread a check that rejects a relaunched host's stale mapping, and it
+# FAILS OPEN: `mappingIsCurrent` returns true when `liveHostGeneration` is null. That is the right
+# default for the one test fixture that legitimately has no runtime behind it, and it means a future
+# production construction site that forgets the field silently opts out of the guard with nothing to
+# notice. The independent review of 02b named this as its one unratcheted residue; this is it.
+#
+# THE RULE RANGES OVER DEFAULT-CONSTRUCTED TrackInfo ONLY. A copy (`TrackInfo child = parent;`, the
+# aux-child path) inherits a consistent snapshot/pointer PAIR from its parent, and demanding a
+# re-assignment there would be wrong — it would invite someone to re-read the generation without
+# re-reading the mapping, which is the one combination that produces a mismatch out of nothing.
+TRACKINFO_DECL = re.compile(r'\bTrackInfo\s+([A-Za-z_]\w*)\s*;')
+TRACKINFO_COPY = re.compile(r'\bTrackInfo\s+[A-Za-z_]\w*\s*=')
+EXPECTED_FRESH_TRACKINFO = 1
+
+fresh = []
+for f in files:
+    lines = src[f]
+    spans = top_level_spans(lines)
+    lams = named_lambda_spans(lines)
+    for i, l in enumerate(lines, 1):
+        if l.strip().startswith('//') or TRACKINFO_COPY.search(l):
+            continue
+        m = TRACKINFO_DECL.search(l)
+        if not m:
+            continue
+        var = m.group(1)
+        extent = None
+        for a, b, _n in list(spans) + list(lams):
+            if a <= i <= b and (extent is None or (b - a) < (extent[1] - extent[0])):
+                extent = (a, b)
+        hi = extent[1] if extent else len(lines)
+        wired = any(('%s.liveHostGeneration' % var) in lines[k - 1] for k in range(i, hi + 1))
+        fresh.append((f, i, var, wired))
+
+for f, i, var, wired in fresh:
+    if not wired:
+        bad(f'TrackInfo WITHOUT A LIVE GENERATION: {f}:{i} builds `{var}` and never sets',
+            f'`{var}.liveHostGeneration`. mappingIsCurrent fails OPEN on a null one, so this entry',
+            'silently opts out of the stale-mapping guard and nothing else would report it.',
+            'Set it beside the hostGeneration snapshot, from the SAME locked read.')
+
+if len(fresh) != EXPECTED_FRESH_TRACKINFO:
+    bad(f'{len(fresh)} default-constructed TrackInfo site(s) in production, expected exactly '
+        f'{EXPECTED_FRESH_TRACKINFO}',
+        'a pinned count: a new one is a new publisher of the audio thread"s view of a track, and it',
+        'needs its generation wired. Raise this deliberately once it is.')
+
 for msg, detail in fail:
     print(f'  FAIL  {msg}')
     for d in detail:
@@ -509,5 +557,6 @@ print(f'  PASS  {len(writes)} readiness writes, all {len(ALLOW)} transitions acc
       'scheduleHostRestart publishes before every early return; no aliases')
 print(f'  PASS  {len(sends)} sends to a host, {sum(1 for s in sends if s[4])} guarded by a '
       f'hostReady.load in the same function, {len(SEND_EXEMPT)} exempt by name')
+print(f'  PASS  {len(fresh)} default-constructed TrackInfo, each wiring liveHostGeneration')
 print('readiness_writer_check: PASS')
 PYEOF
