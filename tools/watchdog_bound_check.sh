@@ -18,9 +18,23 @@
 #      not to an implementation detail.
 #
 # WHAT IT DELIBERATELY DOES NOT CHECK, because a check silent about its limits reads as coverage:
-# whether the bound is ever CONSULTED. `Watchdog::check()` has no production call site at this
-# commit; the bound is inert in the running engine. That is a separate defect with its own ticket,
-# and pinning the constant does not close it. See apps/watchdog_bound_tests_main.cpp.
+# whether the bound is ever CONSULTED. This file still does not check that, and the limit stands.
+#
+# WHAT HAS CHANGED IS THE FACT THAT WAS WRITTEN BESIDE IT. This paragraph used to say
+# "`Watchdog::check()` has no production call site at this commit; the bound is inert in the running
+# engine. That is a separate defect with its own ticket." Measured 2026-08-14: the producer thread
+# calls it, inside the controller lock, guarded by `if (runtime->watchdog)` — see
+# apps/engine_producer_thread.cpp, in the block whose comment explains why the observation is taken
+# from INSIDE the mutex (a plugin load would otherwise evict its own host mid-load).
+#
+# So the bound is live, and the "separate defect" that sentence pointed at is closed. A stale
+# limitation is worse than a stale feature note: it describes real work as still owed, and the next
+# reader either redoes it or trusts a running engine to be inert when it is not.
+#
+# Worth recording how nearly this correction went the other way: my first search was for `.check(`
+# and the call is `runtime->watchdog->check(` with its argument on the following line, so the
+# pattern could not match it and I briefly took a correct report to be wrong. See
+# apps/watchdog_bound_tests_main.cpp.
 #
 # Pure source analysis; no engine, no audio device, no build.
 #   tools/watchdog_bound_check.sh
