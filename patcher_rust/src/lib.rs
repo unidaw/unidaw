@@ -83,7 +83,7 @@ pub struct PatcherLfoConfig {
 pub struct PatcherSliceSelectConfig {
     pub base: u16,
     pub count: u16,
-    pub _pad0: [u8; 4],
+    pub reserved: [u8; 4],
 }
 
 #[repr(C)]
@@ -688,7 +688,7 @@ pub extern "C" fn patcher_process_slice_select(ctx: *mut PatcherContext) {
         let mut config = PatcherSliceSelectConfig {
             base: 1,
             count: 8,
-            _pad0: [0u8; 4],
+            reserved: [0u8; 4],
         };
         if !ctx_ref.node_config.is_null()
             && ctx_ref.node_config_size as usize >= core::mem::size_of::<PatcherSliceSelectConfig>()
