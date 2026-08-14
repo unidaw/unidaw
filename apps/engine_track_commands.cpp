@@ -232,7 +232,12 @@ void handleAddTrack(TrackCommandDeps& deps,
               std::lock_guard<std::mutex> tlock(existing->trackMutex);
               resetTrackContent(*existing);
               existing->trackName = "Track " + std::to_string(slot + 1);
-              existing->trackSnapshot = buildTrackSnapshot(existing->track);
+              // The trackMutex held here does NOT protect this: the producer reads
+              // trackSnapshot with an atomic load and never takes trackMutex, so the lock
+              // orders this against other writers and against nothing that reads.
+              std::atomic_store_explicit(&existing->trackSnapshot,
+                                         buildTrackSnapshot(existing->track),
+                                         std::memory_order_release);
             }
             existing->isAuxChild.store(false, std::memory_order_release);
             existing->parentId.store(0, std::memory_order_relaxed);

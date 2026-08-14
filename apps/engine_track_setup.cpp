@@ -85,6 +85,17 @@ std::unique_ptr<TrackRuntime> setupTrackRuntime(TrackSetupDeps& deps, uint32_t t
     runtime->routesToMaster.store(
         runtime->track.routing.audioOut.kind != daw::TrackRouteKind::None,
         std::memory_order_relaxed);
+    // PLAIN ON PURPOSE, and the distinction is the whole of AE-P1.4. This runtime is not in
+    // `tracks` yet — the caller push_backs it after this returns — so no other thread can name
+    // it, and an atomic store here would buy nothing while implying the object is shared.
+    // Every assignment to these pointers AFTER publication is atomic.
+    //
+    // THE ORDERING GUARANTEE IS tracksMutex, not the absence of a name. "Nobody can see it yet"
+    // is the intuition; what actually makes these writes visible to a later reader is that all
+    // four callers push_back under tracksMutex and every reader reaches a runtime through
+    // snapshotTracks() or trackAt(), which take it. Worth stating precisely, because a future
+    // publication path that skipped that mutex would break these writes while leaving the
+    // sentence above still true.
     runtime->clipSnapshot = std::make_shared<ClipSnapshot>();
     runtime->trackSnapshot = buildTrackSnapshot(runtime->track);
 
@@ -256,7 +267,20 @@ void reconcileChildTracks(ChildTrackDeps& deps, TrackRuntime& parent) {
           std::lock_guard<std::mutex> tlock(rt->trackMutex);
           resetTrackContent(*rt);
           rt->trackName = childName;
-          rt->trackSnapshot = buildTrackSnapshot(rt->track);
+          // TOMBSTONE REUSE, which is a PUBLISHED runtime — `tracks[childId]` already exists and
+          // the producer may be reading it this block. The trackMutex above orders this against
+          // other writers only; the producer loads trackSnapshot atomically and never takes it.
+          // This is one of the cases AE-P1.4 names by hand ("track tombstone/reuse").
+          //
+          // THE STORE IS CORRECT; ITS CONTENTS ARE NOT, and the two must not be confused. This
+          // publishes whatever buildTrackSnapshot reads, and resetTrackContent clears five of
+          // the six fields it reads — `track.routing` and the `routesToMaster` atomic that
+          // mirrors it survive the reset. So a track routed to None, removed, and re-added in
+          // this slot comes back SILENT, carrying the dead track's routing. Pre-existing and
+          // untouched here; filed rather than fixed in a memory-ordering change.
+          std::atomic_store_explicit(&rt->trackSnapshot,
+                                     buildTrackSnapshot(rt->track),
+                                     std::memory_order_release);
         }
         rt->parentId.store(parent.trackId, std::memory_order_relaxed);
         rt->collapsed.store(false, std::memory_order_relaxed);

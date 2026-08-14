@@ -585,7 +585,13 @@ void runConsumerThread(ConsumerDeps& deps) {
             snapshot = rebuildFlatAndPublish(*child);
             std::atomic_store_explicit(&child->audioRender, rebuildAudioRender(*child),
                                        std::memory_order_release);
-            child->trackSnapshot = buildTrackSnapshot(child->track);
+            // ATOMIC, like the audioRender store four lines above. This was a plain assignment
+            // to a pointer the producer loads atomically — mixed atomic/plain access to one
+            // object, which is a data race whatever the values happen to be. The inconsistency
+            // was visible within one statement of itself.
+            std::atomic_store_explicit(&child->trackSnapshot,
+                                       buildTrackSnapshot(child->track),
+                                       std::memory_order_release);
           }
           std::atomic_store_explicit(&child->clipSnapshot, snapshot,
                                      std::memory_order_release);

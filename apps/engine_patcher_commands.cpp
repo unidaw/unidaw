@@ -189,7 +189,9 @@ void handleAddPatcherNode(PatcherCommandDeps& deps,
         }
         if (applied) {
           device->patcher = scratch.graph;
-          runtime->trackSnapshot = buildTrackSnapshot(runtime->track);
+          std::atomic_store_explicit(&runtime->trackSnapshot,
+                                     buildTrackSnapshot(runtime->track),
+                                     std::memory_order_release);
         }
       }
     }
@@ -416,7 +418,9 @@ void handleSetPatcherNodeConfig(PatcherCommandDeps& deps,
         applied = applyNodeConfigTo(scratch, configPayload, &failure);
         if (applied) {
           device->patcher = scratch.graph;
-          runtime->trackSnapshot = buildTrackSnapshot(runtime->track);
+          std::atomic_store_explicit(&runtime->trackSnapshot,
+                                     buildTrackSnapshot(runtime->track),
+                                     std::memory_order_release);
         }
       }
     }
