@@ -5490,3 +5490,51 @@ only the sites that need the id move.
 Plan, in order: engine chokepoint → version bump in lockstep → Rust correlated reader → CLI matches
 success by id instead of inferring it from a counter → controls that prove a wrong id is not matched
 → review.
+
+## Decisions 7+9 implemented — and two of my own attempts were wrong before one was right
+
+`kShmVersion` 39 → 40, `K_SHM_VERSION` in lockstep. `sendUiDiff` now writes
+`diffEntry.sampleTime = currentCommandId()` where it wrote a literal `0`, so every outbound diff
+carries the id of the command that caused it — all 18 emit sites, no payload touched, no struct
+grown. Rust gets `peek_ui_diffs_correlated()` BESIDE `peek_ui_diffs` (14 call sites, untouched), and
+`await_clip_outcome` matches success by id instead of inferring it from a counter.
+
+### Attempt 1: "any diff carrying my id means success". Deterministically wrong.
+
+It went from 3-of-6 runs failing to **6 of 6**. `UiDiffType`'s own documentation says of
+`ClipRejected`: *"ResyncNeeded (4) is still emitted alongside, unchanged."* A refusal emits TWO
+diffs, and once every outbound diff carries the ambient id, the companion matched and the refusal was
+reported as a success. The success predicate has to name the types that MEAN a clip edit applied —
+`AddNote`, `RemoveNote`, `UpdateNote` — not "not a refusal". The refusal is now looked for across all
+new diffs before any success is concluded, because a wrongly reported refusal is visible and
+re-triable and a wrongly reported success is not.
+
+The answer was in the enum's comment, four lines from the constant I was testing against.
+
+### Attempt 2: a "deterministic" phase 2 that passed with the defect restored.
+
+I added a second phase — a background writer moving track 0's version continuously while the stale
+write waits — and called it deterministic. **The negative control passed**, so it was blind, and it
+is deleted rather than left looking like coverage.
+
+Why it was blind: `await_clip_outcome` scans the diffs BEFORE consulting the counter on every pass,
+so when the refusal arrives promptly the counter is never reached and no amount of version churn
+masks anything. The masking needs a **delayed refusal**, not a busy counter — which is why it first
+appeared under `ctest -j2` and why a background writer cannot manufacture it. I had reasoned about
+the ingredient (a moving counter) instead of the mechanism (a late refusal).
+
+### What the fix actually rests on, measured
+
+Same stale write, issued WITHOUT waiting for the version to settle, six runs under concurrent ctest
+load:
+
+| deciding the outcome | result |
+|---|---|
+| the counter (before) | **3 of 6 passed** |
+| the command id (after) | **6 of 6 passed** |
+
+Load-dependent, and said so in the script rather than dressed up as a gate. A probabilistic ctest
+entry would fail on a fast machine and be silenced inside a week.
+
+**Still to do before this lands: the mandatory exact independent review** — this is a shared-memory
+change and those do not merge here without one.
