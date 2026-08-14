@@ -43,6 +43,28 @@ const EXPECTED_PACKET_SHA = '258f42359dd3f500df06f4797c4f9d84cb9c4a1b';
 const EXPECTED_PRODUCT_BASELINE = '62bafdc6cf1cd53168ce73d098cd6acc78659be8';
 const PACKET_PATH = 'docs/architecture/tasks/AE-P0.1-repair-current.md';
 
+// PACKETS THAT REACHED THIS HISTORY WITHOUT THEIR OWN COMMIT, keyed by the EXACT packet SHA.
+//
+// See validatePacketProvenance for why this exists: ancestry is a proxy for "the worktree carries
+// the acknowledged packet", and squash or cherry-pick integration breaks the proxy while leaving the
+// property intact. Each entry must name a commit that IS an ancestor and that carries the packet
+// byte-for-byte; both are verified, so a wrong entry fails rather than excusing anything.
+//
+// KEYED BY PACKET SHA ON PURPOSE. A new packet gets no free pass — it needs true ancestry or its own
+// deliberate entry here. And an entry whose packet becomes a real ancestor is reported as STALE,
+// because an allowance that outlives its reason is how a list stops describing the world.
+const INTEGRATED_PACKETS = {
+  '258f42359dd3f500df06f4797c4f9d84cb9c4a1b': {
+    commit: '71758c0',
+    reason: 'AE-P0.1 was integrated into product main by squash rather than by merge, so the packet '
+      + 'commit is not an ancestor while its content is. The ledger records this integration as '
+      + '"product main 71758c0"; that commit is an ancestor of main and carries this packet blob '
+      + 'byte-identically. The branches still holding the packet commit (ae/p0-roots-current, '
+      + 'ae/p0-followup) forked at the product baseline and are now far behind main; merging one to '
+      + 'restore the link would re-apply stale shared tooling to prove something already true.',
+  },
+};
+
 // Every tracked regular file is assigned a named live or excluded class. There is no default
 // exclusion and no speculative extension list: adding a new class is a reviewable policy change.
 // `extensionRule` classes are audited against the real index so a dead extension allowlist cannot
@@ -523,10 +545,49 @@ function validatePacketProvenance(root, trackedByPath, add, options = {}) {
         explanation: 'commits between product baseline and acknowledged packet changed non-packet paths' });
     }
   }
+  // ANCESTRY IS A PROXY FOR PROVENANCE, AND SQUASH INTEGRATION BREAKS THE PROXY WITHOUT BREAKING
+  // THE PROPERTY. What this rule wants is that the checked worktree carries the packet that was
+  // acknowledged. Commit ancestry establishes that when work is merged; it establishes nothing when
+  // the work is squashed or cherry-picked, which is how AE-P0.1 reached main — the ledger records
+  // the integration as `product main 71758c0`, and that commit IS an ancestor and carries the
+  // packet blob byte-identically.
+  //
+  // The alternative repairs were both worse. Merging `ae/p0-followup` re-applies a branch that
+  // forked at the product baseline and is now 16186 lines behind main, dragging stale copies of
+  // shared tooling into conflict to restore a link whose property already holds. Re-pointing
+  // EXPECTED_PACKET_SHA makes a red check green by changing what it expects, which is the one
+  // repair that must never be quiet.
+  //
+  // So the allowance is NAMED and keyed to the exact packet SHA, in the same idiom as
+  // check_registry's DECLARED_UNREGISTERED: a packet with no record still requires true ancestry,
+  // and a record that stops being true FAILS rather than lapsing into silence.
   const ancestor = run('git', ['-C', root, 'merge-base', '--is-ancestor', packetSha, 'HEAD']);
-  if (ancestor.status !== 0) {
+  const integration = INTEGRATED_PACKETS[packetSha];
+  if (ancestor.status === 0) {
+    // The stale half. If the packet became a genuine ancestor, the allowance has outlived its
+    // reason and must go, or it sits there excusing a condition that no longer exists.
+    if (integration) {
+      add({ path: packetPath, state: 'packet', line: 0, rule: 'packet-integration-record-stale',
+        explanation: `the packet IS an ancestor now, so the INTEGRATED_PACKETS entry naming ${integration.commit} should be deleted` });
+    }
+  } else if (!integration) {
     add({ path: packetPath, state: 'packet', line: 0, rule: 'packet-not-ancestor',
-      explanation: 'the acknowledged task packet is not an ancestor of the checked worktree' });
+      explanation: 'the acknowledged task packet is not an ancestor of the checked worktree, and no integration commit is recorded for it' });
+  } else {
+    // Both halves must hold. The recorded commit has to be on this history AND carry the exact
+    // packet, or the record is asserting an integration that did not happen.
+    const integrated = run('git', ['-C', root, 'merge-base', '--is-ancestor', integration.commit, 'HEAD']);
+    if (integrated.status !== 0) {
+      add({ path: packetPath, state: 'packet', line: 0, rule: 'packet-integration-not-ancestor',
+        explanation: `the recorded integration commit ${integration.commit} is not an ancestor of the checked worktree` });
+    } else {
+      const viaEntry = packetTreeEntry(root, integration.commit, packetPath);
+      const packetEntry = packetTreeEntry(root, packetSha, packetPath);
+      if (!viaEntry || !packetEntry || viaEntry.oid !== packetEntry.oid) {
+        add({ path: packetPath, state: 'packet', line: 0, rule: 'packet-integration-content-drift',
+          explanation: `the recorded integration commit ${integration.commit} does not carry the acknowledged packet byte-for-byte` });
+      }
+    }
   }
 
   const expected = packetTreeEntry(root, packetSha, packetPath);
