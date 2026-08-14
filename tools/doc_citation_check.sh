@@ -104,6 +104,51 @@ for d in docs:
             ok = False
         checked += 1
 
+# ---- rule 2b: a BARE path mention in a doc must exist, or be marked retired.
+#
+# Rule 2 matches only PAIRED citations — a path with a symbol beside it, in either order. A bare
+# backticked path with no symbol beside it was matched by nothing, and that is precisely how three deleted
+# artefacts sat in the review document being read as present: a header and two checks removed in
+# v29, still named as covering things, with this check green.
+#
+# Measured before writing this: 152 backticked in-repo path mentions across the 21 scanned docs,
+# of which 4 do not exist. The rule is affordable because the debt is small, and it was measured
+# with this rule's own regex rather than a hand grep, which disagreed with it earlier today.
+#
+# THE RETIREMENT MARKER IS STRUCTURAL, NOT A WINDOW. A doc must be able to name a dead file on
+# purpose — history is written about things that no longer exist — so a broken path is allowed if
+# it is IMMEDIATELY followed by a parenthetical retirement note. "Immediately" means exactly that:
+# closing backtick, optional spaces, then the note. It is deliberately not "somewhere in the next
+# N characters", because a distance is the approximation this project keeps being bitten by; a
+# nearby word would let an unrelated aside excuse a citation it never meant to.
+#
+# AND THE MARKER CANNOT BE A BLANKET EXEMPTION: marking a path that DOES exist as retired fails
+# too. Otherwise the cheapest way to silence this rule is to declare everything dead, and the rule
+# would decay into a formality nobody reads.
+RETIRE = r'`\s*\((?:deleted|removed|retired)\b[^)]*\)'
+bare_path = re.compile(r'`((?:apps|tools|ui|patcher_rust|platform_juce)/[\w/.\-]+\.(?:cpp|h|rs|sh|mjs|py))`')
+bare_ok = 0
+for d in docs:
+    if not d.exists():
+        continue
+    text = d.read_text(errors='ignore')
+    for m in bare_path.finditer(text):
+        rel = m.group(1)
+        marked = re.match(RETIRE, text[m.end() - 1:]) is not None
+        exists = (root / rel).exists()
+        if not exists and not marked:
+            print("  FAIL: %s names %s, which does not exist and is not marked retired." % (d.name, rel))
+            print("        If it is history, write it as `%s` (deleted in vNN) — naming a dead" % rel)
+            print("        file on purpose is fine; naming one by accident reads as still present.")
+            ok = False
+        elif exists and marked:
+            print("  FAIL: %s marks %s retired, and it exists." % (d.name, rel))
+            print("        The marker is for files that are gone. Marking a live one turns this")
+            print("        rule off for it, which is how a check becomes a formality.")
+            ok = False
+        else:
+            bare_ok += 1
+
 # ---- rule 3: a file path named in a COMMENT must exist, in tools/*.sh and apps/*.h too.
 #
 # Rules 1 and 2 only look at docs/. But the densest cross-references in this repo are not in the

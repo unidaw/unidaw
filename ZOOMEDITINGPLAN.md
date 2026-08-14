@@ -2,7 +2,7 @@
 
 ## Current State (Audit)
 - `VISIBLE_ROWS`, `LINES_PER_BEAT`, `ROW_HEIGHT` are fixed constants in
-  `ui/daw-app/src/main.rs`.
+  `ui/daw-app/src/main.rs` (removed with the Rust GPUI app).
 - `scroll_row_offset` + `cursor_row` are row indices; nanoticks are derived from
   `(scroll_row_offset + cursor_row) * row_nanoticks`.
 - Follow-playhead recenters by rows in render.
