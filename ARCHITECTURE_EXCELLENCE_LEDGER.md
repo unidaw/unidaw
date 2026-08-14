@@ -4718,3 +4718,47 @@ positive evidence and has not been run.
    between the producer's `hostReady` read and its lock.
 
 Item 2 is a live use-after-free and outranks anything else open in this phase.
+
+## The watchdog use-after-free, and the deadlock I shipped reaching for a second one (`596f58c1`)
+
+**The real defect.** The producer dereferences `runtime->watchdog` while holding `controllerMutex`
+and says why in its own comment — WDOG-04, *"Observing from INSIDE means the mutex that blocks the
+dispatch also blocks the observation"*. The restart worker assigned it and called `->reset()`
+OUTSIDE that mutex; its guard closes three lines before the assignment. Because it is a
+`unique_ptr`, assigning DESTROYS the old Watchdog, so the producer can be inside `check()` holding
+the mutex while the worker frees the object under it — and the worker never blocks, because it was
+not asking for the lock. **A use-after-free, not a stale read.** Both writes are scoped now, tightly:
+`hostReady` must still publish AFTER the new watchdog, and `applyHostBypassStates` takes the same
+mutex internally.
+
+### And I "found" a second instance that was not one
+
+`restartTrackHost`'s watchdog assignment looked unlocked, so I wrapped it. **Its `lock_guard` at the
+top of the function is FUNCTION-SCOPED, not a nested block** — it already covered that write. My
+addition was a second acquisition of a non-recursive mutex on the same thread: a guaranteed
+self-deadlock. `device_chain_ui` TIMED OUT, which is how it surfaced. Reverted; 28/28 after. The
+causal demonstration is clean — add the lock, timeout; remove it, passes.
+
+The review that reported *"four of five writers hold that same mutex"* was right, and my correction
+of it was wrong. Its one named exception was the one real defect.
+
+### This is the fourth instance of one root cause, and the first to hang
+
+A pattern match standing in for reading the code, escalating in cost across four commits:
+
+    a same-line requirement          missed 4 of 19 region accessors, class reported CLOSED
+    `head -10` on a population       missed the tombstone case the plan names by hand
+    a wrapped continuation line      counted 6 readers where there were 8, inside a commit
+                                     whose own subject was miscounting
+    a grep line for `lock_guard`     inferred a nested scope from a function-scoped guard,
+                                     and self-deadlocked
+
+**A grep line is a rendering of one line.** Whether a construct continues onto the next, whether the
+list is complete, and what scope encloses a statement are all invisible in it — and the output looks
+like an answer either way. There is no signal separating "no more matches" from "my pattern cannot
+express what I am asking".
+
+The rule, now also in the durable notes: when the question is about STRUCTURE — scope, extent,
+enclosure, completeness — read the braces or parse it. Never pipe a population through `head`. Use a
+multi-line scan when a call can wrap. **Before adding a lock, read the enclosing function's brace
+structure rather than grepping for the mutex name.**
