@@ -67,13 +67,38 @@ n_clip=$(printf '%s\n' "$CLIP_ARB" | grep -c '[A-Za-z]')
 n_harm=$(printf '%s\n' "$HARM_ARB" | grep -c '[A-Za-z]')
 
 # BLINDNESS FLOOR. Every assertion below is "for each arbitrated command", so a grep that matches
-# nothing passes them all. These numbers are the counts when the check was written; the point is
-# not the exact value but that finding FEWER means the extraction broke, not that the code got
-# safer. Renaming an arbiter is exactly how that would happen.
-if [ "$n_clip" -lt 7 ] || [ "$n_harm" -lt 2 ]; then
-  echo "FAIL: found $n_clip clip-arbitrated and $n_harm harmony-arbitrated commands (expected >=7 and >=2)."
+# nothing passes them all. Finding FEWER usually means the extraction broke rather than that the
+# code got safer, and renaming an arbiter is exactly how that would happen.
+#
+# LOWERED 7 -> 5 ON 2026-08-14, AND THE REASON MATTERS BECAUSE THE INSTRUCTION BELOW SAYS NOT TO.
+# The floor said "do not lower these", so it was only movable by establishing that the population
+# genuinely shrank rather than that the grep went blind. It did, and here is the evidence:
+#
+#   * the set at this check's own introduction (7a9d3f6a) was 7; at HEAD it is 5;
+#   * the two missing members are Undo and Redo;
+#   * they were removed by 6d1a20b9, "undo Step 2c: the switchover — 4 of 15 undoable becomes
+#     15 of 15", which deleted both `requireMatchingClipVersion(payload.baseVersion, ...Undo/Redo)`
+#     calls when undo became a whole-document operation;
+#   * a structural extraction that reads each call's ARGUMENTS, rather than this proximity window,
+#     agrees at 5 — so the window is not what shrank the count.
+#
+# AND THE REMOVAL WAS RIGHT IN KIND. AE-P1.2's ruling R10 reached the same conclusion from the other
+# direction: undo replaces the whole document through applyDocument, so a PER-TRACK clip version is
+# the wrong instrument for it — the thing being replaced is not a track. Arbitrating it against one
+# would refuse edits that are fine and permit the ones that are not.
+#
+# THE RESIDUAL HAZARD IS REAL AND IS NOT THIS CHECK'S. An edit made between a user seeing the screen
+# and pressing undo is still silently reverted, and covering that needs a DOCUMENT-level version,
+# which does not exist. R10 says so explicitly and it is tracked there, not here.
+#
+# This check was red from 6d1a20b9 until today. It stayed invisible because it sat behind the `-E`
+# exclusion filters used for the broad sweeps in this programme — a red check hidden by the tooling
+# meant to find red checks.
+if [ "$n_clip" -lt 5 ] || [ "$n_harm" -lt 2 ]; then
+  echo "FAIL: found $n_clip clip-arbitrated and $n_harm harmony-arbitrated commands (expected >=5 and >=2)."
   note "The extraction found less than it did when written, so every check below would pass"
-  note "on an empty set. An arbiter was probably renamed — fix the greps, do not lower these."
+  note "on an empty set. An arbiter was probably renamed — fix the greps, do not lower these"
+  note "without establishing, as the comment above does, that the population itself shrank."
   exit 1
 fi
 
