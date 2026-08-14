@@ -1,4 +1,5 @@
 #include "engine_harmony_timeline.h"
+#include "engine_ui_publish.h"  // currentCommandId — the dispatch id
 
 #include "engine_rt_helpers.h"
 #include "event_log.h"
@@ -118,6 +119,16 @@ bool HarmonyTimeline::requireMatchingHarmonyVersion(uint32_t baseVersion,
     daw::UiHarmonyDiffPayload diffPayload{};
     diffPayload.diffType = static_cast<uint16_t>(daw::UiHarmonyDiffType::ResyncNeeded);
     diffPayload.harmonyVersion = current;
+    // P2-CMD-00 / AE-P1.2 item 27, second of the three refusal channels. The payload has carried
+    // the id since step 1 and nothing wrote it, so a caller could see that SOME harmony write was
+    // refused and not whether it was ITS OWN — `commandType` names a kind, not an instance.
+    //
+    // The two success paths above (Add/Update/Remove) deliberately do not set it: they are
+    // notifications of something that HAPPENED, not answers to a command, and an id there would
+    // invite a reader to correlate a broadcast with its own request.
+    const uint64_t commandId = daw::engine::currentCommandId();
+    diffPayload.correlationLo = static_cast<uint32_t>(commandId & 0xFFFFFFFFu);
+    diffPayload.correlationHi = static_cast<uint32_t>(commandId >> 32);
     emitHarmonyDiff(diffPayload);
     DAW_EVENT("harmony.version_mismatch")
         .field("base", baseVersion)
