@@ -37,7 +37,7 @@
 # times a SUBSEQUENT, unrelated command end to end. If the command thread is parked in a 60-second
 # send, the follow-up cannot land.
 #
-#   tools/bypass_send_bounded_check.sh
+#   tools/bypass_send_probe.sh [budgetMs]            (default 15000)
 #
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
