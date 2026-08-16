@@ -103,19 +103,21 @@ watcher:  none (required for Codex)
 | `AE-P0.2 implementation` | `COMPLETE` | packet `6287ffd` approved + AE-P0.1 integration | codex-worker-2 | claude-worker-2 | `/Users/jak/src/daw-ae-p0-2-lane0` | product main `75c6f06`; final corrective candidate independently approved |
 | `AE-P0.3` | `CAPTURE TAKEN` | decision 4 ruled 2026-08-14; credentialed line OBSERVED and byte-matched | `lead` | unassigned | none | attestation now rests on an observation, not a transcription |
 | `AE-P1.1` | `FROZEN` | `AE-P0` | claude-worker-2 | codex-worker-1 | `/Users/jak/src/daw-ae-p1-1-packet` | `ba88bcb4657b62bdfc752d338d877e139e212ca6`; independent PASS; successor-only |
-| `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; 30 open at the frozen SHA, but re-derived against the product: 4 DONE, 5 PARTIAL, 8 open PRODUCT items, 12 PACKET, 1 withdrawn; items 26 and 35 need owner calls, 27+29 gated on decision 5; G4 not decidable |
+| `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; of the 8 open PRODUCT items: 7, 14, 16, 26, 35, 36 CLOSED; 28 STILL OPEN (clip/chord half closed by decisions 7+9, harmony half reverted, blocked on `AE-RING-02`); 15 hardened but NOT demonstrated. G4 not decidable |
 | `AE-P1.3` | `GATE MET` | the `AE-P1.2` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent x2 | none | both attach paths ordered; 19 region accessors + ring cursors bounded; contract property test; non-overlap is the residue |
 | `AE-P1.4` | `GATE MET` | the `AE-P0` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent | none | 5 plain writes fixed; watchdog use-after-free fixed; TSan evidence DELIVERED — `tsan_command_hammer.sh` 108 commands landed / 0 races, and `tsan_render.sh` 1 race -> 0 after the RenderPool fix |
 | `RenderPool race` | `FIXED, REVIEWED` | found by `AE-P1.4`'s instrument | `lead` | independent subagent | none | straggler read `m_fn`/`m_count` unlocked across a batch handover: null deref, out-of-range item, and an `m_remaining` underflow that HANGS the producer; generation packed into the claim counter; review returned SAFE-TO-MERGE with 3 defects (store order, a 2^32 count re-opening the hang, a wrong wrap figure) — all fixed at `a4345f33` |
-| `Success signal uncorrelated` | `OWNER CALL (9)` | found hardening the item 29 check | `lead` | none | none | `await_clip_outcome` infers Applied from a bare version counter; MEASURED to mask a real refusal 3 of 6 runs under load, because `load maximal` bumps the version 1->2 across half a second |
+| `Success signal uncorrelated` | `RESOLVED` | ruled 2026-08-14, implemented as decisions 7+9 | `lead` | independent subagent | none | `await_clip_outcome` no longer infers Applied from a bare version counter; matches the minted id + diff type instead, counter fallback guarded to `command_id == 0` |
 | `Packet provenance (dec 8)` | `DONE` | ruled 2026-08-14 | `lead` | 3 named controls | none | merge REJECTED after measuring: branch is 16186 lines behind main. Ancestry was a proxy; main carries the packet byte-identically via squash at `71758c0`. Named `INTEGRATED_PACKETS` record, both halves ratcheted. `41f3d9ee` |
-| `Outbound command id (dec 7+9)` | `IMPLEMENTED, IN REVIEW` | ruled 2026-08-14 | `lead` | independent subagent | none | `UiDiffPayload` is exactly 40 bytes and full, so the id rides `EventEntry::sampleTime` OUTSIDE the payload — one line at `sendUiDiff`, the single writer, covering all 18 emit sites. kShmVersion 39->40 in lockstep. Success now matched by id + diff type, counter fallback guarded to `command_id == 0` |
+| `Outbound command id (dec 7+9)` | `IMPLEMENTED, review findings fixed` | ruled 2026-08-14 | `lead` | independent subagent | none | `UiDiffPayload` is exactly 40 bytes and full, so the id rides `EventEntry::sampleTime` OUTSIDE the payload — one line at `sendUiDiff`, the single writer, covering all 18 emit sites. kShmVersion 39->40 in lockstep. Success now matched by id + diff type, counter fallback guarded to `command_id == 0`. Review found 3 defects (chord subset, `shm_access` pin, stale doc) — all fixed; a post-fix lockstep break (`kShmVersion` 40 vs `K_SHM_VERSION` 39) also caught and fixed. No recorded final re-approval pass |
 | `AE-P1.5` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P1.6` | `BLOCKED` | `AE-P0` | unassigned | unassigned | none | none |
 | `AE-P2.*` | `BLOCKED` | Phase 1 gates | unassigned | unassigned | none | none |
 | `T3` (ABI mirror coverage) | `MERGED` | seven independent reviews | `lead` | independent subagent | merged from `ae/impl-engine-t3a-probe` | product main `d0e0ad0a`; follow-up `54f3d460` |
 | `P2-CMD-00` step 1 | `LANDED, GATE HALF-MET` | design `P2-CMD-00-revised.md` + owner rulings 1-2 | `lead` | independent subagent | product main | `45626d44`; blockers closed `7b7b7b24`, `ba4f1b1c` |
 | `P2-CMD-00` step 2 | `COMPLETE` | decision 5 ruled 2026-08-14 | `lead` | — | none | carrier is `EventEntry::sampleTime`; sender mints, engine echoes, `kShmVersion` 39 |
+| `AE-RING-02` (bystander drain race) | `TICKETED, NOT FIXED` | found extending decisions 7+9 to harmony (item 28) | `lead` | independent subagent | none | a bystander peeking the UI-out ring (e.g. `await_clip_outcome`) can lose its diff to `daw-sidecar`'s unconditional 50ms `drain_engine_events` thread, which genuinely advances the ring's one shared `read_index`. MEASURED via A/B revert on `cli-harmony-rapid.mjs` (5/5 -> 3/5 -> 5/5). Clip/chord shares the exposure by construction, unconfirmed by any existing test. `docs/architecture/decisions/AE-RING-02-bystander-drain.md`, `2aa0b919`. No direction chosen; gates item 28's harmony half |
+| `doc_citation` (stale probe self-citation) | `FIXED` | found in the resumed full sweep | `lead` | independent subagent | none | `tools/bypass_send_probe.sh:40` cited its pre-rename filename; corrected to match, `f8101910` |
 | `AE-P3.*` | `BLOCKED` | Phase 1/2 contracts | unassigned | unassigned | none | none |
 | `AE-P4.*` | `BLOCKED` | Phase 2 transactions | unassigned | unassigned | none | none |
 | `AE-P5.*` | `BLOCKED` | replacement behavior gated | unassigned | unassigned | none | none |
@@ -5818,3 +5820,102 @@ are the answer; the listing is not.
 audio-plane aliasing already worked out), item 14 (BATCH base/global counter crossing, live in the
 sidecar and both branches), item 16 (the swap trap's unratcheted `hostReady` read), and item 15's
 reproduction. **Nothing is blocked on an owner decision.**
+
+## Resuming: the open list above had decayed, and the first sweep found something new (2026-08-16)
+
+### Items 14 and 16 were already closed — the stopping-point note above is stale
+
+Both survived a second, independent check before being trusted: `7b2177fe` ("item 14 CLOSED — the
+batch wait read the wrong counter", `rust_tests_check` 218/218) and `2b36a140` ("item 16 CLOSED —
+the ratchet, with its exemption named", `readiness_writer_check` registered) are real commits on
+`main`, both ancestors of `main`'s tip, and nothing between them and here reopens either. They
+closed **earlier in the same 2026-08-14 session** whose own stopping-point note, written later that
+day, still listed them as open — the exact "carried blocked-list decays" failure this ledger has
+now caught in itself four times (items 29, 30, 36, and now 14+16 together). The lesson restated
+because it keeps paying rent: a carried open-list is a claim about the past, not a query against
+the present, and it must be re-derived, not recited.
+
+### First action taken: the full unfiltered sweep the stopping point asked for
+
+Not run by this session — a live sweep against `main` (`ctest --test-dir build -j2`, 232 tests) was
+already in flight, started by another active session, when this one looked. Running a second one
+concurrently is exactly the mistake `engine-instance-isolation` exists to prevent, so this session
+watched the existing run instead of duplicating it. Result: **231/232 passed, 1 skipped by design
+(`audio_stability`), 1 failed — `doc_citation`**. `repository_integrity` (decision 8's prior
+failure) now PASSES, confirming that packet-provenance fix held.
+
+`doc_citation` failed on `tools/bypass_send_probe.sh:40`, a leftover comment citing
+`tools/bypass_send_bounded_check.sh` — the probe's name before it was deliberately renamed to
+`_probe` (item 15's hardening) so the registry glob would not select it. The rename updated every
+functional reference but missed this one documentation line. Fixed at `f8101910` (renamed to the
+real filename plus its actual first argument, matching the usage-line convention sibling `tools/`
+scripts use); independently reviewed (confirmed the old filename is absent from the whole tree, the
+new argument doc matches the script body, the checker passes, and the probe's deliberate
+non-registration is unaffected). `doc_citation_check` now PASSES; the 232-test population is
+therefore green modulo the one design skip.
+
+### Item 28, re-derived: one of its three members was already fixed as a side effect
+
+`await_clip_outcome` (`daw-cli/main.rs`) — item 28's first named member — already dispatches on the
+minted command id (`command_id != 0 && *correlation == command_id && is_clip_applied`), covering
+both `UiDiff` and `UiChordDiff`. Decisions 7+9 (the outbound id landing) closed this member without
+anyone naming item 28 at the time; `sendUiDiff` echoes the id onto every UI diff, and this was the
+first caller built against it. The counter fallback that remains is explicitly guarded to
+`command_id == 0`, matching every other id-correlated site in the tree.
+
+The other two members — the daw-cli harmony wait (`harmony_version() != base`) and the sidecar's
+`send_harmony_and_await` (identical shape) — were still on the bare counter, and both were
+attempted this session.
+
+### The harmony fix was implemented, found to regress, and reverted — not shipped broken
+
+`UiHarmonyDiff` already carries the id (it routes through `sendUiDiff` like every other diff), so
+the fix looked like a direct extension of the same proven pattern: widen `peek_ui_diffs_correlated`
+to the harmony channel, add an `await_harmony_outcome` mirroring `await_clip_outcome`, rewire both
+call sites. It compiled clean and passed `rust_tests_check`.
+
+It broke `cli-harmony-rapid.mjs` — 5/5 down to 3/5, with the saved document proving at least one of
+the two reported failures was a **false negative**, not a real refusal. Reverting the three files
+restored 5/5 with no other change, which is the A/B measurement, not a guess.
+
+**Root cause, independently verified: a bystander peeking a single-consumer ring can lose its diff
+to whoever actually drains it.** `daw-sidecar`'s `drain_engine_events` thread ticks every 50ms
+UNCONDITIONALLY (not gated on a connected browser page) and genuinely advances the ring's one
+shared `read_index` via `drain_ui_out`. `peek_ui_diffs`/`peek_ui_diffs_correlated` never write that
+index back — they are true peeks — so a bystander in a SEPARATE PROCESS (daw-cli) can have its
+target diff consumed out from under it before its own poll runs again. `drain_ui_out`'s own doc
+comment asserted the opposite ("nothing else consumes this ring... which is why it is safe to
+start") — true when written, false since P2-CMD-00 gave daw-cli a real reason to peek the same
+ring. Fixed the comment and wrote up the mechanism, evidence, and candidate directions (none
+chosen) at `docs/architecture/decisions/AE-RING-02-bystander-drain.md`, commit `2aa0b919`.
+
+**The already-shipped clip/chord path has the identical exposure by construction and is untested
+against this shape.** `cli-verbs.mjs` exercises `do note`/`do delete-note` against a live sidecar
+but serially — no concurrent-load pressure resembling what caught this for harmony. No CLI-driven
+`do chord` test against a live stack exists at all. So `await_clip_outcome` is **PLAUSIBLE, not
+CONFIRMED** to share this bug; nothing in the current suite rules it in or out.
+
+### Ticket state
+
+| | |
+|---|---|
+| Item 14 | CLOSED (was already; stopping-point note was stale) |
+| Item 16 | CLOSED (was already; stopping-point note was stale) |
+| Item 28 | **STILL OPEN.** Clip/chord member closed (side effect of decisions 7+9). Harmony's two members are NOT closed — the id-correlated fix exists but is reverted, blocked on AE-RING-02 |
+| `doc_citation` | FIXED, `f8101910` |
+| AE-RING-02 | NEW, ticketed not fixed, `2aa0b919`. No owner decision requested yet — candidate directions are named in the ticket, not ranked |
+| Full sweep | 231/232 GREEN (1 design skip), confirmed on `main` at the commit before this session's changes |
+
+### Open for the next session
+
+AE-RING-02 needs an owner call on direction (per-client cursors / move outcome-correlation off the
+ring onto the journal / protect in-flight ids in the drain) before item 28's harmony half can ship.
+Worth checking, cheaply, before that: whether `cli-verbs.mjs`'s note/delete-note coverage can be
+turned into a concurrent-load variant (matching `cli-harmony-rapid.mjs`'s shape) to move clip/chord
+from PLAUSIBLE to either CONFIRMED or genuinely ruled out — that answer changes how urgent AE-RING-02
+is, since it currently reads as "a new channel's fix regressed" rather than "shipped code is
+already wrong in production."
+
+`AE-P1.3` non-overlap validator and item 15's reproduction remain open, unchanged from the prior
+session's note. Nothing is blocked on an owner decision except AE-RING-02's direction, and that
+decision only gates item 28's harmony half — every other open item is free to proceed.
