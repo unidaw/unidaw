@@ -1597,9 +1597,31 @@ impl EngineHandle {
     ///
     /// SINGLE CONSUMER. This advances the ring's read_index, so exactly one
     /// thread in one process may call it for a given segment — whatever drains
-    /// it takes the messages away from everyone else. Nothing else consumes this
-    /// ring on the UI segment today (the engine only writes; the C++ device-chain
-    /// tests read their own segments), which is why it is safe to start.
+    /// it takes the messages away from everyone else.
+    ///
+    /// THAT SENTENCE USED TO END "nothing else consumes this ring on the UI segment
+    /// today... which is why it is safe to start", true when written and FALSE now.
+    /// P2-CMD-00 (AE-P1.2 decisions 7+9) gave `peek_ui_diffs`/`peek_ui_diffs_correlated`
+    /// a real job: a daw-cli process, in a SEPARATE OS process from whichever sidecar
+    /// calls this function, polls the same ring to correlate its own command's outcome
+    /// by id. Those calls never advance `read_index` (true peeks), so they cannot break
+    /// THIS function's exclusivity — but the reverse is not true. Whoever calls
+    /// `drain_ui_out` (normally the sidecar's `drain_engine_events`, ticking every 50ms
+    /// UNCONDITIONALLY, not gated on a connected browser page) can advance `read_index`
+    /// past an entry a bystander peeker has not yet observed, making that entry
+    /// permanently invisible to it — the peek window is `[read_index, write_index)` and
+    /// once `read_index` moves past a slot, that slot is gone for every future peek, not
+    /// just this one.
+    ///
+    /// MEASURED, not theoretical: extending the P2-CMD-00 pattern to a new channel
+    /// (AE-P1.2 item 28, harmony) reproduced this as a real false negative under
+    /// `cli-harmony-rapid.mjs`'s concurrent load, with a live sidecar attached — reverting
+    /// the change made the failure disappear. The existing clip/note path
+    /// (`await_clip_outcome`) shares the identical exposure by construction; it is
+    /// UNTESTED under concurrent load against a live sidecar (the one test that shares
+    /// its shape, `cli-verbs.mjs`, sends commands serially and passes, which does not
+    /// rule out the race, only that this particular test does not apply enough pressure
+    /// to hit it). See `docs/architecture/decisions/AE-RING-02-bystander-drain.md`.
     ///
     /// Returns the number drained. An empty ring is the normal case and costs
     /// two atomic loads.
