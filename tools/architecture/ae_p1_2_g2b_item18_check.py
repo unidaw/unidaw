@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Structural and exact-evidence checker for AE-P1.2 G2-B item-18 schema v6."""
+"""Structural and exact-evidence checker for AE-P1.2 G2-B item-18 schema v7."""
 
 from __future__ import annotations
 
@@ -27,9 +27,9 @@ TOP_LEVEL_KEYS = {
 
 EXPECTED_EXTERNAL = {
     "revision_predecessor": {
-        "packet_commit": "ce7db30f6bbce9a1c85746b9cc19a2493b25a720",
-        "packet_tree": "551829b73d10add8483bf38002d3047384c77343",
-        "manifest_sha256": "569859a53467b4f281f27dfbd75ec3274047eb4a8419c38634407fc996bd02b8",
+        "packet_commit": "33545d38e07fff4eabea0fdedb98e99a8861f7db",
+        "packet_tree": "99b337730d44f3a2896b30c0a2185e12a3e59b93",
+        "manifest_sha256": "5fec77cb28cf08536f3f9ce538f048892ba26bc8ffe2f45ba62e579611fe0075",
     },
     "predecessor": {
         "packet_commit": "2b5f0747f1b7dde79ae788af3826c49c78df5d2a",
@@ -55,30 +55,30 @@ EXPECTED_EXTERNAL = {
 # manifest immutable without copying 2,000 lines of JSON into the checker. Self-tests mutate
 # the parsed manifest while these constants remain fixed, so a declaration cannot bless itself.
 EXPECTED_SECTION_DIGESTS = {
-    "schema": "2952d0f57ab858240058b064173999ac0bff92d9f479e1913255eb874ca0f6d3",
+    "schema": "d139fff9b339c669681d9dc25b575ab4cf07230912b26be3ef318e8e6c950bd4",
     "ticket": "51fc055b4f8c131bfb5f08b4d03e9141b5667cc3f398ef763016462cf9fd1380",
     "status": "a9214bd949881802e074114cc9ffc50cbf88f003ee4a269801e41dd13fdecf5c",
     "owner": "74a80ba7942f31913df8aed6e77553465be5b3c80bc5666036f42a54a94c828a",
-    "revision_predecessor": "442cefe3c4289221ec0f0ee2f717c57f8c98412be2540ef395040a6be8abad93",
-    "review_history": "fba67f0166c0d4f243b211944d2c61b5a83172934a44368660fd6b07899fb813",
+    "revision_predecessor": "ebbbc0a6a3c62d43b6de0ed61d876d169c7ec6794567daad983d57f79138a8df",
+    "review_history": "8e8a6117cb24d11de6eb8012967ce1ccbf56d4e5b3853730522844d096ddcc09",
     "predecessor": "a87219ba250bdbb90663db22afac5052bc7379e485789cc40e10abc21e8f5959",
     "item15": "0bb1bb2ed7ab992ab7607c8fb4517a26b6bdc7698e8836b8ba3e57bc33884c32",
     "program_source": "2cbd44acb7ae764d5b84e8bcb76cc3f34dd435e4d734104809d199fbb76fa212",
     "frozen_product": "4dcff51b0d360b6c2ebafb0ab2b44f94ada495a53144f15cf6ad5e220ae856de",
-    "scope": "3c5a172cfebe8fe6a89e02dcc0cef38fa1ee5e7f89aca459a5be2bdcfc43d77d",
-    "implementation_authorization": "bdc52f13a8674198d3e31a52c4a7b82e89730941e15a79d268c1f849bdda7c51",
-    "non_goals": "9fdd950b5f980507a7b22d2cbfb17d1676fc580eeddb9ccd39fb1c1591a75ad2",
-    "governed_files": "a68013853756158add7ae38dc25954e67ebb6e47117901e04853db795da5ad6f",
-    "populations": "5a3e26f80f17410c2f4768e27de78895c25cea04beed4597373dd0f51360dc10",
+    "scope": "5cd74e847617e15bbbf2aac2da2467c8c9a6a46f84e1c2bcee79994e4c412813",
+    "implementation_authorization": "8a02dbbd39a3134fcc3256b264bd617e2c162bc950cc72cf89ebd2a960eeaa8e",
+    "non_goals": "368dfdd113fbdc2499ba11f6942d306e06189436921deaced90d9d94a19fd8e2",
+    "governed_files": "ad070daa005a642274d3ed1b88ee3b20bb61bfc5bca674e2213e62430415f6fc",
+    "populations": "974b60cce53d3cca4c6f3999594b9733527f3b796838ae6e31a8f30fb603444f",
     "changed_records": "2dce85a326c8f654eeae78ff4501f6855bca6eb708211892c256fc63283cc5d1",
-    "records": "84c963f29e184440b1824aae45453c2a4789066f3700f6e6eb0c0d21de9e195b",
-    "test_cases": "60375f5577f070ec216472722d90a03447bf7a1b3da6f2bbb9d9dd2689ab8c00",
+    "records": "efeb87c6861145026b48a9035788029b41c761016753273a624247a4d2df0d73",
+    "test_cases": "31b368bdaeb2ee9b854f8e3c14a5fdda0d82b86a2254d1c1a247bbaceba7edb8",
 }
 
 EXPECTED_COUNTS = {
-    "governed_files": 85,
+    "governed_files": 86,
     "records": 33,
-    "test_cases": 33,
+    "test_cases": 36,
     "host_ready_true_sites": 3,
     "track_snapshot_publications": 24,
     "host_plan_mutation_roots": 21,
@@ -99,10 +99,11 @@ EXPECTED_COUNTS = {
     "replay_lifecycle_lexical_scan": 36,
     "replay_receiver_order_sites": 7,
     "offline_coordinator_sites": 12,
-    "mapping_and_output_gates": 12,
+    "mapping_and_output_gates": 23,
     "capacity_contract_sites": 5,
     "event_ring_write_sites": 8,
     "document_restore_and_identity_sites": 11,
+    "state_artifact_identity_sites": 7,
 }
 
 EXPECTED_RECORD_IDS = {
@@ -132,9 +133,11 @@ EXPECTED_TEST_IDS = {
     "T-ORDINARY-BATCH-ATOMIC", "T-NO-DRAIN-LEAK", "T-PRODUCER-GATES",
     "T-GLOBAL-DEVICE-IDENTITY", "T-SESSION-BLOCK-ATOMIC",
     "T-LEGACY-DISABLED-ROUNDTRIP", "T-ALL-EVENT-WRITERS",
+    "T-STATE-ARTIFACT-MIGRATION", "T-ROUTING-BLOCK-DETERMINISM",
+    "T-ORDINARY-CAPACITY-PERMANENT",
 }
 
-EXPECTED_MUTATION_CONTROLS = 97
+EXPECTED_MUTATION_CONTROLS = 105
 
 MUTATION_SCAN_RE = re.compile(
     r"(?:addDevice|removeDeviceById|moveDeviceById|setDevice[A-Za-z]+)\([^;]*(?:->|\.)chain"
@@ -164,10 +167,19 @@ REPLAY_LIFECYCLE_RE = re.compile(
     r"mirror(?:Pending|Primed|GateSampleTime|Causes)|ReplayComplete|replayAckSampleTime"
 )
 EVENT_RING_WRITE_RE = re.compile(r"\bdaw::ringWrite\s*\(")
-DOCUMENT_IDENTITY_RE = re.compile(
-    r"history\.(?:undo|redo)\(|applyDocument\(doc\)"
-    r"|visit\.field\(\"(?:device_id|routing|chain|mod_links|devices)\"|uint32_t deviceId"
+MAPPING_GATE_RE = re.compile(
+    r"mappingIsCurrent\(track\)|bool await(?:Any|All)ReadyTracks?\("
+    r"|m_masterFxActive.*load\(|masterTrack->controller\.sendProcessBlock\("
+    r"|EngineAudioCallback::TrackInfo info|if \(completed > 0\)"
+    r"|if \(!?runtime->hostReady\.load\(|bool mirrorOnly\s*="
+    r"|^\s*mirrorOnly\s*=\s*true|if \(!mirrorOnly|else if \(mirrorOnly"
 )
+DOCUMENT_IDENTITY_RE = re.compile(
+    r"[A-Za-z_]\w*\.(?:undo|redo)\(|applyDocument\(doc\)"
+    r"|[A-Za-z_]\w*\.field\(\"(?:device_id|routing|chain|mod_links|devices)\""
+    r"|uint32_t deviceId"
+)
+STATE_ARTIFACT_RE = re.compile(r"plugin(?:State|Params)FileName")
 OFFLINE_ENTRYPOINT_RE = re.compile(r"\brunOfflinePump\s*\(")
 
 CARRIER_SCAN_RE = re.compile(
@@ -176,7 +188,7 @@ CARRIER_SCAN_RE = re.compile(
     r"|packSamplerAddr|static_cast<uint16_t>\(n.ownerDeviceId\)"
     r"|ownerDeviceId\s*>\s*0xFFFF|deviceId\s*&\s*0xffff"
     r"|owner\s*&\s*0x7FFF|device\s*>\s*0x7FFF|\b(?:device|owner|id)\s+as\s+u16"
-    r"|device_id\s*:[^\n]*as\s+u16|UiSamplerSlotNameHeader\s+h\{\}"
+    r"|device_id\s*:[^\n]*as\s+u16|UiSamplerSlotNameHeader\s+[A-Za-z_]\w*\s*\{\}"
 )
 
 CARRIER_SCAN_PATHS = {
@@ -394,6 +406,8 @@ def render(manifest: dict) -> str:
         f"- Offline coordinator sites: {len(p['offline_coordinator_sites'])}.",
         f"- Document restore/identity sites: "
         f"{len(p['document_restore_and_identity_sites'])}.",
+        f"- State artifact identity sites: {len(p['state_artifact_identity_sites'])}.",
+        f"- Mapping/output/readiness/producer gates: {len(p['mapping_and_output_gates'])}.",
         "",
         "## Review history",
         "",
@@ -432,7 +446,7 @@ def validate_graph_and_semantics(manifest: dict) -> None:
     refuse(len(ids) != len(set(ids)) or set(ids) != EXPECTED_RECORD_IDS,
            "record id population changed")
     refuse(set(manifest["changed_records"]) != EXPECTED_RECORD_IDS,
-           "schema-v6 changed-record closure is incomplete")
+           "schema-v7 changed-record closure is incomplete")
     refuse(len(test_ids) != len(set(test_ids)) or set(test_ids) != EXPECTED_TEST_IDS,
            "test id population changed")
     by_id = {record["id"]: record for record in records}
@@ -480,23 +494,30 @@ def validate_graph_and_semantics(manifest: dict) -> None:
 
     authority = by_id["R-HOST-PLAN-AUTHORITY"]["statement"]
     for token in (
-        "session ExecutionSnapshot", "one atomic snapshot publication", "HostConfig plugin vectors",
+        "session ExecutionSnapshot", "normalized one-block routing graph and reduce order",
+        "one atomic snapshot publication", "HostConfig plugin vectors",
         "TrackStateSnapshot.chainDevices", "TrackStateSnapshot.routing", "routesToMaster",
         "project-global nextDeviceId", "undo/redo document", "revision exhaustion",
     ):
         refuse(token not in authority, f"session authority weakened: missing {token}")
     routing = by_id["R-ROUTING-AUTHORITY"]["statement"]
-    for token in ("one session ExecutionSnapshot revision", "None reaches neither master",
+    for token in ("session ExecutionSnapshot revision", "None reaches neither master",
                   "Master reaches master only", "Track(target) reaches that destination only",
-                  "ExternalInput is invalid", "sidechain Track send is additive",
+                  "ExternalInput is invalid", "contradictory endpoints fail compilation",
+                  "block N-1", "graph cycles are legal", "one-block-per-edge feedback",
+                  "ascending {sourceTrackId, sourceBus, channel}",
+                  "sidechain Track edge is additive", "one block per Track edge",
                   "without duplicating it to master", "routesToMaster atomic are removed",
-                  "no old/new route combination"):
+                  "no old/new route combination", "order-dependent fan-in"):
         refuse(token not in routing, f"routing authority weakened: missing {token}")
     device_ids = by_id["R-DEVICE-ID-LIFETIME"]["statement"]
     for token in ("project-global", "[1, kStableDeviceIdMax]", "exactly 0x7FFF",
                   "validates before conversion", "never masks, wraps", "next_device_id",
                   "never reuses", "undo/redo", "0x8000", "globally duplicate",
                   "{trackId, oldDeviceId}->newDeviceId", "rewrites every device",
+                  "LegacyArtifactKey{trackId, oldDeviceId}", "pluginStateFileName",
+                  "pluginParamsFileName", "canonical files", "only canonical artifacts",
+                  "Stale legacy aliases are ignored", "missing required artifact migration",
                   "Exhaustion", "fails load"):
         refuse(token not in device_ids, f"device-id lifetime weakened: missing {token}")
     mirror = by_id["R-MIRROR-INSTANCE-IDENTITY"]["statement"]
@@ -515,13 +536,17 @@ def validate_graph_and_semantics(manifest: dict) -> None:
     for token in ("All six frozen host-event ring writers", "SessionBlockPlan",
                   "sessionBlockTicket", "Phase 1", "canonical stable host order",
                   "preflights every ring", "before reserving any", "no participant reserves",
+                  "audio-input recipe", "OrdinaryFailedPermanent", "no automatic retry occurs",
+                  "realtime transport stops", "offline sets renderFailed",
                   "Phase 2", "partial/full control-frame failure", "quarantined",
                   "realtime playback stops", "offline rendering fails",
-                  "No partially successful session block"):
+                  "matching output resolves the immutable master-input recipe",
+                  "No permanently oversized or partially successful session block"):
         refuse(token not in transactional, f"transactional batch weakened: missing {token}")
     capacity = by_id["R-ATOMIC-PRIMER-CAPACITY"]["statement"]
     for token in ("ringWriteBatch", "one CAS", "ready=0", "first reserved ready flag last",
-                  "phase 1", "C-2", "N>=C-1", "Every preflight and batch result is consumed"):
+                  "phase 1", "N>=C ordinary entries as OrdinaryFailedPermanent",
+                  "C-2", "N>=C-1", "Every preflight and batch result is consumed"):
         refuse(token not in capacity, f"capacity boundary weakened: missing {token}")
     master = by_id["R-MASTER-CORRELATION"]["statement"]
     for token in ("hostGeneration", "dispatchTicket", "sessionBlockTicket", "mirrorEpoch",
@@ -723,6 +748,12 @@ def validate_frozen_evidence(manifest: dict) -> None:
             frozen["commit"], DOCUMENT_IDENTITY_RE, DOCUMENT_IDENTITY_PATHS,
             skip_line_comments=True,
         ),
+        "mapping_and_output_gates": derive_line_scan(
+            frozen["commit"], MAPPING_GATE_RE, skip_line_comments=True,
+        ),
+        "state_artifact_identity_sites": derive_line_scan(
+            frozen["commit"], STATE_ARTIFACT_RE, skip_line_comments=True,
+        ),
     }
     for name, observed in derived_scans.items():
         refuse(list(observed) != population_pairs(manifest, name), f"derived census drifted: {name}")
@@ -746,7 +777,7 @@ def validate(
     validate_exact_sections(manifest)
     for key, identity in EXPECTED_EXTERNAL.items():
         refuse(manifest[key] != identity, f"external identity changed: {key}")
-    refuse(manifest["schema"] != "ae-p1.2-g2b-item18-packet/6", "schema is not v6")
+    refuse(manifest["schema"] != "ae-p1.2-g2b-item18-packet/7", "schema is not v7")
     refuse(len(manifest["records"]) != EXPECTED_COUNTS["records"], "record count changed")
     refuse(len(manifest["test_cases"]) != EXPECTED_COUNTS["test_cases"], "test count changed")
     validate_graph_and_semantics(manifest)
@@ -792,11 +823,17 @@ def self_test(manifest: dict) -> int:
             CARRIER_SCAN_RE, "device_id: opaque(args, \"device\") as u16,"
         ),
         "stable carrier consumer": (
-            CARRIER_SCAN_RE, "daw::UiSamplerSlotNameHeader h{};"
+            CARRIER_SCAN_RE, "daw::UiSamplerSlotNameHeader header{};"
         ),
         "replay stage lifecycle": (REPLAY_LIFECYCLE_RE, "runtime.mirrorPending.store(true);"),
         "event ring writer": (EVENT_RING_WRITE_RE, "daw::ringWrite(events, entry);"),
         "document restore": (DOCUMENT_IDENTITY_RE, "deps.applyDocument(doc);"),
+        "renamed undo owner": (DOCUMENT_IDENTITY_RE, "timeline.undo();"),
+        "renamed document visitor": (
+            DOCUMENT_IDENTITY_RE, 'walker.field("device_id", &Device::id, 0u);'
+        ),
+        "mapping output gate": (MAPPING_GATE_RE, "if (!mirrorOnly && isPlaying) {}"),
+        "state artifact key": (STATE_ARTIFACT_RE, "pluginStateFileName(track, id);"),
         "receiver priority": (REPLAY_ORDER_RE, "return EventType::Param;"),
         "offline call": (OFFLINE_ENTRYPOINT_RE, "daw::engine::runOfflinePump(deps);"),
     }
@@ -849,7 +886,8 @@ def self_test(manifest: dict) -> int:
         "T-PROJECT-TARGET-MIGRATION", "T-ORDINARY-BATCH-ATOMIC",
         "T-NO-DRAIN-LEAK", "T-PRODUCER-GATES", "T-GLOBAL-DEVICE-IDENTITY",
         "T-SESSION-BLOCK-ATOMIC", "T-LEGACY-DISABLED-ROUNDTRIP",
-        "T-ALL-EVENT-WRITERS",
+        "T-ALL-EVENT-WRITERS", "T-STATE-ARTIFACT-MIGRATION",
+        "T-ROUTING-BLOCK-DETERMINISM", "T-ORDINARY-CAPACITY-PERMANENT",
     ):
         candidate = copy.deepcopy(manifest)
         next(case for case in candidate["test_cases"] if case["id"] == test_id)[
@@ -883,7 +921,7 @@ def main() -> int:
     validate(manifest)
     controls = self_test(manifest)
     p = manifest["populations"]
-    print("AE-P1.2 G2-B item 18 schema-v6 packet: PASS")
+    print("AE-P1.2 G2-B item 18 schema-v7 packet: PASS")
     print(f"  records: {len(manifest['records'])}")
     print(f"  tests: {len(manifest['test_cases'])}")
     print(f"  governed files: {len(manifest['governed_files'])}")
@@ -902,6 +940,8 @@ def main() -> int:
     print(f"  event-ring writers: {len(p['event_ring_write_sites'])}")
     print(f"  replay lifecycle sites: {len(p['replay_lifecycle_lexical_scan'])}")
     print(f"  document restore/identity sites: {len(p['document_restore_and_identity_sites'])}")
+    print(f"  state artifact identity sites: {len(p['state_artifact_identity_sites'])}")
+    print(f"  mapping/output/readiness/producer gates: {len(p['mapping_and_output_gates'])}")
     print(f"  mutation controls: {controls}/{EXPECTED_MUTATION_CONTROLS} refused")
     print("  implementation before dual PASS: false")
     print("  implementation after same-SHA dual PASS: true")
