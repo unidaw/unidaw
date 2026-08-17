@@ -19,7 +19,7 @@ PREDECESSOR_MANIFEST = "docs/architecture/tasks/AE-P1.2-manifest.json"
 ITEM15_MANIFEST = "docs/architecture/tasks/AE-P1.2-g2b-item15-manifest.json"
 
 TOP_LEVEL_KEYS = {
-    "schema", "ticket", "status", "owner", "predecessor", "item15",
+    "schema", "ticket", "status", "owner", "revision_predecessor", "review_history", "predecessor", "item15",
     "program_source", "frozen_product", "scope", "implementation_authorization",
     "non_goals", "governed_files", "populations", "changed_records", "records",
     "test_cases",
@@ -28,12 +28,12 @@ REQUIRED_RECORDS = {
     "G-ITEM18", "DEP-PREDECESSOR", "DEP-ITEM15", "DEP-FROZEN-BASE",
     "P-READINESS-PUBLISHERS", "P-SNAPSHOT-PUBLISHERS", "P-HOST-PLAN-MUTATIONS",
     "R-BYPASS-STAGED", "R-HOST-PLAN-AUTHORITY", "R-DISPATCH-TICKET",
-    "R-MIRROR-EPOCH", "R-PASS4-REPLACEMENT", "R-OFFLINE-PRIMER", "R-G4-WITNESS",
+    "R-MIRROR-EPOCH", "R-R13-RECONCILIATION", "R-PASS4-REPLACEMENT", "R-OFFLINE-PRIMER", "R-G4-WITNESS",
     "D-PRODUCTION-FIXTURE", "R-REVIEW-GATED-AUTH", "CTRL-PACKET", "CTRL-MUTATIONS",
 }
 REQUIRED_TESTS = {
     "T-COLD-REFUSES", "T-ALL-PUBLISHERS", "T-PLAN-RACE", "T-EXACT-SLOTS",
-    "T-BYPASS-FAILURE", "T-LOWER-PRIMER", "T-PRIMED-NOT-COMPLETE",
+    "T-BYPASS-FAILURE", "T-LOWER-PRIMER", "T-PRIMED-NOT-COMPLETE", "T-PRIMER-CAPACITY",
     "T-ACK-BOUNDARY", "T-REARM-REGRESSES", "T-TRACK-LOCAL",
     "T-OFFLINE-NO-LEAK", "T-G4-WITNESS",
 }
@@ -54,6 +54,11 @@ EXPECTED_PROGRAM = {
 EXPECTED_FROZEN = {
     "commit": "92dfdfe23cc7ff93f2ce14894a35d089e3d9e2b8",
     "tree": "238ac970b5d61fe16055ede4c43a2978ddb11da7",
+}
+EXPECTED_REVISION_PREDECESSOR = {
+    "packet_commit": "886544f1b933007021c1cb7a7bee65ea982fcf7f",
+    "packet_tree": "7112851ec83213c96d8bc674db84be28ab3bd352",
+    "manifest_sha256": "706353c3e8421c280e681b49ebee0884bf9343ce0c9ec87f965c930f027d03f8",
 }
 EXPECTED_GOVERNED_PATHS = (
     "apps/daw_engine_main.cpp",
@@ -80,6 +85,7 @@ EXPECTED_GOVERNED_PATHS = (
     "apps/engine_restart_worker.cpp",
     "apps/engine_rt_helpers.cpp",
     "apps/engine_sampler_commands.cpp",
+    "apps/engine_save_project.cpp",
     "apps/engine_song_store.cpp",
     "apps/engine_track_commands.cpp",
     "apps/engine_track_setup.cpp",
@@ -88,6 +94,7 @@ EXPECTED_GOVERNED_PATHS = (
     "apps/engine_ui_publish.cpp",
     "apps/host_controller.cpp",
     "apps/ipc_io.cpp",
+    "apps/project_file.cpp",
 )
 EXPECTED_READY_SITES = (
     ("apps/engine_track_setup.cpp", 64, "setupTrackRuntime",
@@ -129,6 +136,7 @@ EXPECTED_HOST_PLAN_ROOTS = (
     ("apps/engine_chain_commands.cpp", 108, "handleAddDevice/removeDeviceById", "execution_plan_topology"),
     ("apps/engine_chain_commands.cpp", 115, "handleAddDevice/moveDeviceById", "execution_plan_topology"),
     ("apps/engine_chain_commands.cpp", 125, "handleAddDevice/setDeviceBypass", "execution_plan_vst_or_patcher_audio"),
+    ("apps/engine_chain_commands.cpp", 130, "handleAddDevice/setDevicePatcherNodeId", "execution_plan_patcher_audio_node"),
     ("apps/engine_chain_commands.cpp", 135, "handleAddDevice/setDeviceHostSlotIndex", "host_plan_when_vst"),
     ("apps/daw_engine_main.cpp", 1209, "updateTrackChainForInstrument", "host_plan_missing_snapshot_publication"),
     ("apps/engine_load_track.cpp", 86, "loadTrackFromDocument", "host_plan"),
@@ -144,6 +152,53 @@ EXPECTED_NON_HOST = (
     ("apps/engine_sampler_commands.cpp", "sampler document internals; samplerSnapshot authority"),
     ("apps/engine_bulk_edit.cpp", "sampler document internals"),
     ("apps/engine_patcher_commands.cpp", "patcher graph/config internals; resulting patcherNodeId repoint is included separately"),
+    ("apps/engine_track_commands.cpp", "Euclidean patcher configuration internals"),
+)
+EXPECTED_MUTATION_SCAN = (
+    ("apps/daw_engine_main.cpp", 1099, "hostless_aux_prepublication"),
+    ("apps/daw_engine_main.cpp", 1209, "live_execution_plan_alias"),
+    ("apps/daw_engine_main.cpp", 1217, "live_execution_plan_mutation"),
+    ("apps/engine_bulk_edit.cpp", 91, "live_sampler_internal"),
+    ("apps/engine_bulk_edit.cpp", 240, "live_sampler_internal"),
+    ("apps/engine_chain_commands.cpp", 100, "live_execution_plan_mutation"),
+    ("apps/engine_chain_commands.cpp", 108, "live_execution_plan_mutation"),
+    ("apps/engine_chain_commands.cpp", 115, "live_execution_plan_mutation"),
+    ("apps/engine_chain_commands.cpp", 125, "live_execution_plan_mutation"),
+    ("apps/engine_chain_commands.cpp", 130, "live_execution_plan_mutation"),
+    ("apps/engine_chain_commands.cpp", 135, "live_execution_plan_mutation"),
+    ("apps/engine_chain_host.cpp", 159, "read_only_false_positive"),
+    ("apps/engine_consumer.cpp", 573, "hostless_aux_restore"),
+    ("apps/engine_load_patcher_pool.cpp", 76, "comment_false_positive"),
+    ("apps/engine_load_patcher_pool.cpp", 88, "document_transform"),
+    ("apps/engine_load_patcher_pool.cpp", 101, "live_execution_plan_mutation"),
+    ("apps/engine_load_project.cpp", 105, "document_transform"),
+    ("apps/engine_load_project.cpp", 498, "live_execution_plan_mutation"),
+    ("apps/engine_load_project.cpp", 617, "live_execution_plan_helper_call"),
+    ("apps/engine_load_track.cpp", 86, "live_execution_plan_mutation"),
+    ("apps/engine_patcher_assemble.cpp", 88, "live_execution_plan_mutation"),
+    ("apps/engine_patcher_commands.cpp", 135, "live_patcher_internal"),
+    ("apps/engine_patcher_commands.cpp", 407, "live_patcher_internal"),
+    ("apps/engine_rt_helpers.cpp", 75, "execution_plan_helper_declaration"),
+    ("apps/engine_rt_helpers.cpp", 76, "live_execution_plan_mutation"),
+    ("apps/engine_sampler_commands.cpp", 206, "live_sampler_internal"),
+    ("apps/engine_sampler_commands.cpp", 724, "live_sampler_internal"),
+    ("apps/engine_sampler_commands.cpp", 924, "live_sampler_internal"),
+    ("apps/engine_sampler_commands.cpp", 1032, "live_sampler_internal"),
+    ("apps/engine_sampler_commands.cpp", 1124, "live_sampler_internal"),
+    ("apps/engine_sampler_commands.cpp", 1199, "live_sampler_internal"),
+    ("apps/engine_sampler_commands.cpp", 1307, "live_sampler_internal"),
+    ("apps/engine_sampler_commands.cpp", 1429, "live_sampler_internal"),
+    ("apps/engine_save_project.cpp", 249, "save_copy_transform"),
+    ("apps/engine_save_project.cpp", 380, "save_copy_transform"),
+    ("apps/engine_track_commands.cpp", 174, "live_euclidean_internal"),
+    ("apps/engine_track_commands.cpp", 233, "live_execution_plan_helper_call"),
+    ("apps/engine_track_commands.cpp", 344, "live_execution_plan_mutation"),
+    ("apps/engine_track_setup.cpp", 69, "live_execution_plan_mutation"),
+    ("apps/engine_track_setup.cpp", 75, "live_execution_plan_mutation"),
+    ("apps/engine_track_setup.cpp", 79, "live_execution_plan_mutation"),
+    ("apps/engine_track_setup.cpp", 268, "live_execution_plan_helper_call"),
+    ("apps/project_file.cpp", 1315, "document_parser_transform"),
+    ("apps/project_file.cpp", 1437, "document_parser_transform"),
 )
 EXPECTED_SOURCE_SPANS = {
     "G-ITEM18": [
@@ -159,6 +214,7 @@ EXPECTED_SOURCE_SPANS = {
     "P-HOST-PLAN-MUTATIONS": [
         "manifest:/populations/host_plan_mutation_roots",
         "manifest:/populations/classified_non_host_chain_mutations",
+        "manifest:/populations/chain_mutation_scan",
     ],
     "R-BYPASS-STAGED": [
         "frozen:apps/host_controller.cpp:624-654",
@@ -180,6 +236,7 @@ EXPECTED_SOURCE_SPANS = {
         "frozen:apps/engine_produce_block.cpp:508-516",
         "frozen:apps/engine_producer_thread.cpp:199-229",
     ],
+    "R-R13-RECONCILIATION": "predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:2158-2185",
     "R-PASS4-REPLACEMENT": "manifest:/test_cases",
     "R-OFFLINE-PRIMER": [
         "frozen:apps/engine_audio_callback.h:900-980",
@@ -191,6 +248,13 @@ EXPECTED_SOURCE_SPANS = {
     "CTRL-PACKET": "packet:tools/architecture/ae_p1_2_g2b_item18_check.py",
     "CTRL-MUTATIONS": "packet:tools/architecture/ae_p1_2_g2b_item18_check.py",
 }
+MUTATION_SCAN_RE = re.compile(
+    r"(?:addDevice|removeDeviceById|moveDeviceById|setDevice[A-Za-z]+)\([^;]*track\.chain"
+    r"|track\.chain\s*="
+    r"|resetTrackContent\("
+    r"|for \(auto& [^:]+:\s*[^)]*track\.chain\.devices"
+    r"|auto& devices\s*=\s*[^;]*track\.chain\.devices"
+)
 
 
 class Refused(RuntimeError):
@@ -278,6 +342,7 @@ def render(manifest: dict) -> str:
         f"Status: `{manifest['status']}`. Owner: `{manifest['owner']}`.",
         f"Frozen product: `{manifest['frozen_product']['commit']}` (tree `{manifest['frozen_product']['tree']}`).",
         f"Item-15 input: `{manifest['item15']['packet_commit']}` / manifest `{manifest['item15']['manifest_sha256']}`.",
+        f"Revision successor to: `{manifest['revision_predecessor']['packet_commit']}` / manifest `{manifest['revision_predecessor']['manifest_sha256']}`.",
         "",
         "## Scope", "", manifest["scope"], "",
         "Implementation authorized before dual PASS: "
@@ -289,9 +354,17 @@ def render(manifest: dict) -> str:
         f"- TrackStateSnapshot publications: `{len(populations['track_snapshot_publications'])}`.",
         f"- Hosted-plan mutation roots: `{len(populations['host_plan_mutation_roots'])}`.",
         f"- Explicit non-host mutation families: `{len(populations['classified_non_host_chain_mutations'])}`.",
+        f"- Mechanically reproduced lexical mutation candidates: `{len(populations['chain_mutation_scan'])}`.",
+        "", "## Review history", "",
+    ]
+    for review in manifest["review_history"]:
+        lines.append(
+            f"- `{review['packet_commit']}`: semantic `{review['semantic']}`, evidence `{review['evidence']}`. {review['resolution']}"
+        )
+    lines.extend([
         "",
         "## Records", "",
-    ]
+    ])
     for record in manifest["records"]:
         lines.append(f"- `{record['id']}` [{record['kind']} / {record['status']}]: {record['statement']}")
     lines.extend(["", "## Required implementation tests", ""])
@@ -320,12 +393,37 @@ def tuple_non_host(entries: list[dict]) -> tuple[tuple, ...]:
     return tuple((e.get("path"), e.get("classification")) for e in entries)
 
 
+def tuple_mutation_scan(entries: list[dict]) -> tuple[tuple, ...]:
+    return tuple((e.get("path"), e.get("line"), e.get("classification")) for e in entries)
+
+
+def derive_mutation_scan(commit: str) -> tuple[tuple[str, int], ...]:
+    paths = git("ls-tree", "-r", "--name-only", commit, "--", "apps").decode().splitlines()
+    matches: list[tuple[str, int]] = []
+    for path in paths:
+        if not path.endswith(".cpp") or "_tests_main" in path:
+            continue
+        lines = git("show", f"{commit}:{path}").decode().splitlines()
+        for index, line in enumerate(lines, start=1):
+            if MUTATION_SCAN_RE.search(line):
+                matches.append((path, index))
+    return tuple(sorted(matches))
+
+
 def validate(manifest: dict, *, verify_files: bool = True, verify_prose: bool = True) -> None:
     refuse(set(manifest) != TOP_LEVEL_KEYS, "top-level manifest shape changed")
-    refuse(manifest["schema"] != "ae-p1.2-g2b-item18-packet/1", "schema changed")
+    refuse(manifest["schema"] != "ae-p1.2-g2b-item18-packet/2", "schema changed")
     refuse(manifest["ticket"] != "AE-P1.2-G2B-ITEM18", "ticket changed")
     refuse(manifest["status"] != "REVIEW_CANDIDATE", "status changed")
     refuse(manifest["owner"] != "backend", "owner changed")
+    refuse(manifest["revision_predecessor"] != EXPECTED_REVISION_PREDECESSOR,
+           "revision predecessor identity changed")
+    refuse(manifest["review_history"] != [{
+        "packet_commit": "886544f1b933007021c1cb7a7bee65ea982fcf7f",
+        "semantic": "BLOCKED",
+        "evidence": "BLOCKED",
+        "resolution": "Schema v2 adds the omitted setDevicePatcherNodeId execution-plan mutation and Euclidean internal family, then replaces self-declared completeness with a 44-line frozen-source lexical scan and deletion/substitution controls. It also makes mirror transitions one controller-locked ticket/epoch transaction and adds fail-closed exhaustion and primer-capacity requirements.",
+    }], "review history changed")
     refuse(manifest["predecessor"] != EXPECTED_PREDECESSOR, "predecessor identity changed")
     refuse(manifest["item15"] != EXPECTED_ITEM15, "item-15 identity changed")
     refuse(manifest["program_source"] != EXPECTED_PROGRAM, "program identity changed")
@@ -345,7 +443,7 @@ def validate(manifest: dict, *, verify_files: bool = True, verify_prose: bool = 
     populations = manifest["populations"]
     refuse(set(populations) != {
         "host_ready_true_sites", "track_snapshot_publications",
-        "host_plan_mutation_roots", "classified_non_host_chain_mutations"
+        "host_plan_mutation_roots", "classified_non_host_chain_mutations", "chain_mutation_scan"
     }, "population classes changed")
     refuse(tuple_ready(populations["host_ready_true_sites"]) != EXPECTED_READY_SITES,
            "readiness publisher population changed")
@@ -355,6 +453,8 @@ def validate(manifest: dict, *, verify_files: bool = True, verify_prose: bool = 
            "host-plan mutation population changed")
     refuse(tuple_non_host(populations["classified_non_host_chain_mutations"]) != EXPECTED_NON_HOST,
            "classified non-host population changed")
+    refuse(tuple_mutation_scan(populations["chain_mutation_scan"]) != EXPECTED_MUTATION_SCAN,
+           "lexical mutation scan changed")
 
     governed = manifest["governed_files"]
     refuse(not isinstance(governed, list), "governed_files is not a list")
@@ -421,22 +521,29 @@ def validate(manifest: dict, *, verify_files: bool = True, verify_prose: bool = 
     refuse("dedicated immutable AuthoredHostExecutionPlan" not in host_plan or
            "exact full ordered topology" not in host_plan or
            "reloads the current plan" not in host_plan or
-           "no longer an authority for hosted segmentation" not in host_plan,
+           "no longer an authority for hosted segmentation" not in host_plan or
+           "Revisions never wrap" not in host_plan,
            "host-plan authority or post-lock validation weakened")
     ticket = by_id["R-DISPATCH-TICKET"]["statement"]
     refuse("nonzero uint64 dispatch ticket" not in ticket or
            "rechecks it after acquiring" not in ticket or
-           "stale offline waiter" not in ticket,
+           "stale offline waiter" not in ticket or "Tickets never wrap" not in ticket,
            "dispatch-ticket contract weakened")
     mirror = by_id["R-MIRROR-EPOCH"]["statement"]
     refuse("re-entrant generation" not in mirror or
-           "ack >= the exact nonzero gate" not in mirror or
-           "same dispatch-ticket/epoch" not in mirror or
-           "stale ack cannot promote" not in mirror,
+           "controllerMutex-guarded witness" not in mirror or
+           "no loose atomic pair" not in mirror or
+           "same ticket/epoch" not in mirror or
+           "stale ack cannot promote" not in mirror or "Epochs never wrap" not in mirror,
            "mirror epoch or stale-ack contract weakened")
+    r13 = by_id["R-R13-RECONCILIATION"]["statement"]
+    refuse("R13 remains valid" not in r13 or "not a repair for that withdrawn race theory" not in r13 or
+           "Gating is per host" not in r13, "R13 reconciliation weakened")
     pass4 = by_id["R-PASS4-REPLACEMENT"]["statement"]
     refuse("control-only primer ProcessBlock" not in pass4 or
            "remain refused until the exact gate ack" not in pass4 or
+           "active publication" not in pass4 or "outputs are discarded" not in pass4 or
+           "publishes no partial primer" not in pass4 or
            "Unrelated tracks continue" not in pass4,
            "PASS 4 replacement weakened")
     offline = by_id["R-OFFLINE-PRIMER"]["statement"]
@@ -455,6 +562,10 @@ def validate(manifest: dict, *, verify_files: bool = True, verify_prose: bool = 
     refuse("prior epoch's ack" not in rearm_test["statement"], "stale re-arm control omitted")
     offline_test = next(case for case in manifest["test_cases"] if case["id"] == "T-OFFLINE-NO-LEAK")
     refuse("captured output" not in offline_test["statement"], "offline output leak is untested")
+    capacity_test = next(case for case in manifest["test_cases"] if case["id"] == "T-PRIMER-CAPACITY")
+    refuse("publishes none of the primer" not in capacity_test["statement"] or
+           "leaves the exact epoch unprimed" not in capacity_test["statement"],
+           "partial-primer capacity failure is untested")
 
     if verify_files:
         refuse(object_tree(EXPECTED_FROZEN["commit"]) != EXPECTED_FROZEN["tree"],
@@ -465,12 +576,18 @@ def validate(manifest: dict, *, verify_files: bool = True, verify_prose: bool = 
                "item-15 tree mismatch")
         refuse(object_tree(EXPECTED_PROGRAM["commit"]) != EXPECTED_PROGRAM["tree"],
                "program tree mismatch")
+        refuse(object_tree(EXPECTED_REVISION_PREDECESSOR["packet_commit"]) !=
+               EXPECTED_REVISION_PREDECESSOR["packet_tree"],
+               "revision predecessor tree mismatch")
         predecessor_bytes = git("show", f"{EXPECTED_PREDECESSOR['packet_commit']}:{PREDECESSOR_MANIFEST}")
         refuse(sha256(predecessor_bytes) != EXPECTED_PREDECESSOR["manifest_sha256"],
                "predecessor manifest digest mismatch")
         item15_bytes = git("show", f"{EXPECTED_ITEM15['packet_commit']}:{ITEM15_MANIFEST}")
         refuse(sha256(item15_bytes) != EXPECTED_ITEM15["manifest_sha256"],
                "item-15 manifest digest mismatch")
+        revision_bytes = git("show", f"{EXPECTED_REVISION_PREDECESSOR['packet_commit']}:{MANIFEST_PATH.relative_to(ROOT)}")
+        refuse(sha256(revision_bytes) != EXPECTED_REVISION_PREDECESSOR["manifest_sha256"],
+               "revision predecessor manifest digest mismatch")
         for entry in governed:
             path = safe_repo_path(entry["path"], "governed")
             frozen_bytes = git("show", f"{EXPECTED_FROZEN['commit']}:{path}")
@@ -503,6 +620,10 @@ def validate(manifest: dict, *, verify_files: bool = True, verify_prose: bool = 
                                     for p, n, k in EXPECTED_SNAPSHOT_SITES)
         refuse(tuple(sorted(observed_snapshots)) != tuple(sorted(normalized_expected)),
                "frozen snapshot publication census drifted")
+
+        expected_scan_locations = tuple(sorted((path, line) for path, line, _ in EXPECTED_MUTATION_SCAN))
+        refuse(derive_mutation_scan(EXPECTED_FROZEN["commit"]) != expected_scan_locations,
+               "frozen lexical mutation scan drifted")
 
         for path, line, _, _ in EXPECTED_HOST_PLAN_ROOTS:
             frozen_line = git("show", f"{EXPECTED_FROZEN['commit']}:{path}").decode().splitlines()[line - 1]
@@ -558,6 +679,14 @@ def self_test(manifest: dict) -> None:
     add("non-host classification deletion", candidate)
 
     candidate = copy.deepcopy(manifest)
+    candidate["populations"]["chain_mutation_scan"].pop()
+    add("lexical mutation scan deletion", candidate)
+
+    candidate = copy.deepcopy(manifest)
+    candidate["populations"]["chain_mutation_scan"][0]["line"] = 1100
+    add("lexical mutation scan substitution", candidate)
+
+    candidate = copy.deepcopy(manifest)
     next(r for r in candidate["records"] if r["id"] == "R-BYPASS-STAGED")["statement"] = \
         "MappedAndBypassed proves the plugin applied every state."
     add("bypass application overclaim", candidate)
@@ -573,6 +702,17 @@ def self_test(manifest: dict) -> None:
     add("primed treated as complete", candidate)
 
     candidate = copy.deepcopy(manifest)
+    next(r for r in candidate["records"] if r["id"] == "R-MIRROR-EPOCH")["statement"] = \
+        "Two unrelated atomics eventually agree on ticket and epoch."
+    add("loose mirror atomics accepted", candidate)
+
+    candidate = copy.deepcopy(manifest)
+    statement = next(r for r in candidate["records"] if r["id"] == "R-HOST-PLAN-AUTHORITY")["statement"]
+    next(r for r in candidate["records"] if r["id"] == "R-HOST-PLAN-AUTHORITY")["statement"] = \
+        statement.replace(" Revisions never wrap: exhaustion refuses the edit and leaves the prior plan authoritative.", "")
+    add("counter exhaustion contract removed", candidate)
+
+    candidate = copy.deepcopy(manifest)
     next(c for c in candidate["test_cases"] if c["id"] == "T-ACK-BOUNDARY")["statement"] = \
         "Any acknowledgement completes the mirror."
     add("ack boundary weakened", candidate)
@@ -581,6 +721,11 @@ def self_test(manifest: dict) -> None:
     next(c for c in candidate["test_cases"] if c["id"] == "T-REARM-REGRESSES")["statement"] = \
         "Overflow is logged."
     add("re-arm regression control removed", candidate)
+
+    candidate = copy.deepcopy(manifest)
+    next(c for c in candidate["test_cases"] if c["id"] == "T-PRIMER-CAPACITY")["statement"] = \
+        "The producer retries eventually."
+    add("partial-primer capacity control removed", candidate)
 
     candidate = copy.deepcopy(manifest)
     candidate["non_goals"] = [item for item in candidate["non_goals"] if "global mirrorOnly" not in item]
@@ -624,7 +769,8 @@ def main() -> int:
     print(f"  governed files: {len(manifest['governed_files'])}")
     print("  readiness publishers: 3")
     print("  snapshot publications: 24")
-    print("  mutation controls: 19/19 refused")
+    print("  lexical mutation candidates: 44")
+    print("  mutation controls: 24/24 refused")
     print("  implementation before dual PASS: false")
     print("  implementation after same-SHA dual PASS: true")
     return 0
