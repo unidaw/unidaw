@@ -62,6 +62,11 @@ const EXCLUDED = {
    * all, and a green sweep says nothing about whether the demo starts.
    */
   'demo-stack-smoke.mjs': 'needs a running tools/webstack.sh — run it by hand before a demo',
+  // AE-RING-02's shipped note path intermittently loses a version-refusal diff to the sidecar's
+  // shared-ring drain, returns success without retrying, and drops the note. This is a deliberately
+  // red reproduction, not a green gate; run it repeatedly with `--only cli-note-rapid` until the
+  // owner chooses and lands a fix direction.
+  'cli-note-rapid.mjs': 'AE-RING-02 known-defect probe — intermittent red until the ring race is fixed',
   'repro-hang.mjs': 'a reproduction script for one bug, not a suite — it is meant to hang',
   'soak.mjs': 'minutes of heap soak; run it deliberately, not on every sweep',
 };

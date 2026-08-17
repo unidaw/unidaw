@@ -285,6 +285,10 @@ async function demandFree(ports) {
  *   is the relationship index.html hardcodes.
  * @param {string} [opts.shm] shared-memory name.
  * @param {boolean} [opts.keepDir] leave the project copy on disk for inspection.
+ * @param {boolean} [opts.withSidecar] start daw-sidecar. Defaults true; false exists for
+ *   engine/CLI controls that must isolate whether a sidecar reader changes shared-ring behavior.
+ * @param {boolean} [opts.sidecarAfterEngine] start the sidecar only after the engine publishes
+ *   SHM. Defaults false; true gives race probes an explicit attached-drain precondition.
  */
 /**
  * Three CONSECUTIVE free ports.
@@ -335,10 +339,17 @@ async function findFreeBase(tries = 40) {
 export async function startStack({ base = 0, shm = '', keepDir = false,
                                    capture = '', captureSeconds = 30,
                                    runSeconds = 0, numBlocks = 0,
-                                   allowCredentials = false } = {}) {
+                                   allowCredentials = false, withSidecar = true,
+                                   sidecarAfterEngine = false } = {}) {
   const procs = [];
   if (typeof allowCredentials !== 'boolean') {
     throw new Error('stack: allowCredentials must be boolean');
+  }
+  if (typeof withSidecar !== 'boolean') {
+    throw new Error('stack: withSidecar must be boolean');
+  }
+  if (typeof sidecarAfterEngine !== 'boolean') {
+    throw new Error('stack: sidecarAfterEngine must be boolean');
   }
   if (!base) base = await findFreeBase();
   // The segment name has to be unique too, or two runs share one engine's memory
@@ -588,15 +599,21 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
   });
   procs.push(engine);
 
-  const sidecar = spawn(sidecarBin, [
-    '--shm', shm, '--port', String(base + 1), '--cmd-port', String(base + 2),
-    '--keep-engine', '--plugin-cache', pluginCache,
-  ], {
-    env: childEnvironments.sidecar,
-    cwd: sidecarCwd,
-    stdio: ['ignore', log('sidecar'), log('sidecar')],
-  });
-  procs.push(sidecar);
+  let sidecarStarted = false;
+  const startSidecar = () => {
+    if (!withSidecar || sidecarStarted) return;
+    const sidecar = spawn(sidecarBin, [
+      '--shm', shm, '--port', String(base + 1), '--cmd-port', String(base + 2),
+      '--keep-engine', '--plugin-cache', pluginCache,
+    ], {
+      env: childEnvironments.sidecar,
+      cwd: sidecarCwd,
+      stdio: ['ignore', log('sidecar'), log('sidecar')],
+    });
+    procs.push(sidecar);
+    sidecarStarted = true;
+  };
+  if (!sidecarAfterEngine) startSidecar();
 
   const server = spawn(process.execPath, [join(UIWEB, 'test/serve.mjs'), String(base)],
                        { cwd: UIWEB, env: childEnvironments.page,
@@ -624,7 +641,9 @@ const killSpawned = () => {
 };
 try {
   await until(() => listening(base), `page server on ${base}`);
-  await until(() => listening(base + 1), `sidecar on ${base + 1}`);
+  if (withSidecar && !sidecarAfterEngine) {
+    await until(() => listening(base + 1), `sidecar on ${base + 1}`);
+  }
   /*
    * AND THE ENGINE'S SEGMENT, which is the thing anything actually needs.
    *
@@ -649,6 +668,10 @@ try {
       return true;
     } catch { return false; }
   }, `the engine to publish ${shm}`, 30000);
+  if (withSidecar && sidecarAfterEngine) {
+    startSidecar();
+    await until(() => listening(base + 1), `sidecar on ${base + 1}`);
+  }
 
   /*
    * WHERE IN THE WAV A MOMENT LANDS.
@@ -811,6 +834,7 @@ try {
   process.on('exit', reapSync);
 
   return { url: `http://127.0.0.1:${base}/index.html`, dir, root, shm, base, sidecarCwd,
+           withSidecar, sidecarAfterEngine,
            capture, captureOffset, audioStartedAt, runSeconds, stop,
            /*
             * Did the device actually PULL a block? The only honest basis for believing or
