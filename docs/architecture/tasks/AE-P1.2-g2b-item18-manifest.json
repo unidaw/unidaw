@@ -1,12 +1,12 @@
 {
-  "schema": "ae-p1.2-g2b-item18-packet/7",
+  "schema": "ae-p1.2-g2b-item18-packet/8",
   "ticket": "AE-P1.2-G2B-ITEM18",
   "status": "REVIEW_CANDIDATE",
   "owner": "backend",
   "revision_predecessor": {
-    "packet_commit": "33545d38e07fff4eabea0fdedb98e99a8861f7db",
-    "packet_tree": "99b337730d44f3a2896b30c0a2185e12a3e59b93",
-    "manifest_sha256": "5fec77cb28cf08536f3f9ce538f048892ba26bc8ffe2f45ba62e579611fe0075"
+    "packet_commit": "d82a0c659368a88fbcbd3b75c70bf9d6e05fc4e0",
+    "packet_tree": "2eea956549791022766b9681927c5edc67fea627",
+    "manifest_sha256": "b6ca34cae82261a966d84500b9b047969d7339cf8cc850d562eeb400259419b4"
   },
   "review_history": [
     {
@@ -44,6 +44,12 @@
       "semantic": "BLOCKED",
       "evidence": "BLOCKED",
       "resolution": "Schema v7 carries legacy global-id rewrites through external plugin state and parameter-manifest artifact keys; fixes every Track route to one-block delivery with deterministic fan-in; gives oversized ordinary batches a terminal outcome; and replaces the remaining name-dependent carrier/document scans plus the incomplete gate declaration with type/member grammars and exact derived populations."
+    },
+    {
+      "packet_commit": "d82a0c659368a88fbcbd3b75c70bf9d6e05fc4e0",
+      "semantic": "BLOCKED",
+      "evidence": "BLOCKED",
+      "resolution": "Schema v8 adds a machine-checked 20-row routing lane-by-kind matrix and conflict normalizer, a four-row optional-artifact presence matrix with explicit corruption/save/package outcomes, the omitted package allowlist boundary, argument-independent applyDocument matching, and receiver/local-name-independent readiness-output dataflow derivation."
     }
   ],
   "predecessor": {
@@ -64,7 +70,221 @@
     "commit": "92dfdfe23cc7ff93f2ce14894a35d089e3d9e2b8",
     "tree": "238ac970b5d61fe16055ede4c43a2978ddb11da7"
   },
-  "scope": "Close AE-P1.2 G2-B item 18 with one session-level immutable ExecutionSnapshot, complete routing/execution/dispatch/carrier/document/artifact populations, project-global bounded non-reusing stable device and mirror identities, deterministic one-block Track routing, session-wide two-phase block transactions over every host event writer, a production sender/receiver primer oracle, correlated replay acknowledgement, lossless disabled legacy automation, terminal capacity failure, and track/master/offline output gates bound to the item-15 lock contract.",
+  "routing_matrix": {
+    "lanes": [
+      "midi_in",
+      "midi_out",
+      "audio_in",
+      "audio_out",
+      "sidechain"
+    ],
+    "kinds": [
+      "None",
+      "Master",
+      "Track",
+      "ExternalInput"
+    ],
+    "rows": [
+      {
+        "lane": "midi_in",
+        "kind": "None",
+        "valid": true,
+        "effect": "no_input_side_declaration",
+        "id_rule": "trackId=0,inputId=0"
+      },
+      {
+        "lane": "midi_in",
+        "kind": "Master",
+        "valid": false,
+        "effect": "reject_master_as_input_source",
+        "id_rule": "rejected"
+      },
+      {
+        "lane": "midi_in",
+        "kind": "Track",
+        "valid": true,
+        "effect": "declare_one_track_source",
+        "id_rule": "existing non-self trackId,inputId=0"
+      },
+      {
+        "lane": "midi_in",
+        "kind": "ExternalInput",
+        "valid": true,
+        "effect": "declare_external_midi_source",
+        "id_rule": "trackId=0,registered nonzero inputId"
+      },
+      {
+        "lane": "midi_out",
+        "kind": "None",
+        "valid": true,
+        "effect": "no_output_side_declaration",
+        "id_rule": "trackId=0,inputId=0"
+      },
+      {
+        "lane": "midi_out",
+        "kind": "Master",
+        "valid": false,
+        "effect": "reject_missing_master_midi_sink",
+        "id_rule": "rejected"
+      },
+      {
+        "lane": "midi_out",
+        "kind": "Track",
+        "valid": true,
+        "effect": "declare_one_track_destination",
+        "id_rule": "existing non-self trackId,inputId=0"
+      },
+      {
+        "lane": "midi_out",
+        "kind": "ExternalInput",
+        "valid": false,
+        "effect": "reject_input_kind_as_output_sink",
+        "id_rule": "rejected"
+      },
+      {
+        "lane": "audio_in",
+        "kind": "None",
+        "valid": true,
+        "effect": "no_input_side_declaration",
+        "id_rule": "trackId=0,inputId=0"
+      },
+      {
+        "lane": "audio_in",
+        "kind": "Master",
+        "valid": false,
+        "effect": "reject_master_as_input_source",
+        "id_rule": "rejected"
+      },
+      {
+        "lane": "audio_in",
+        "kind": "Track",
+        "valid": true,
+        "effect": "declare_one_track_source",
+        "id_rule": "existing non-self trackId,inputId=0"
+      },
+      {
+        "lane": "audio_in",
+        "kind": "ExternalInput",
+        "valid": true,
+        "effect": "declare_external_audio_source",
+        "id_rule": "trackId=0,registered nonzero inputId"
+      },
+      {
+        "lane": "audio_out",
+        "kind": "None",
+        "valid": true,
+        "effect": "no_output_side_declaration",
+        "id_rule": "trackId=0,inputId=0"
+      },
+      {
+        "lane": "audio_out",
+        "kind": "Master",
+        "valid": true,
+        "effect": "declare_master_sink_only",
+        "id_rule": "trackId=0,inputId=0"
+      },
+      {
+        "lane": "audio_out",
+        "kind": "Track",
+        "valid": true,
+        "effect": "declare_one_track_destination_without_direct_master",
+        "id_rule": "existing non-self trackId,inputId=0"
+      },
+      {
+        "lane": "audio_out",
+        "kind": "ExternalInput",
+        "valid": false,
+        "effect": "reject_input_kind_as_output_sink",
+        "id_rule": "rejected"
+      },
+      {
+        "lane": "sidechain",
+        "kind": "None",
+        "valid": true,
+        "effect": "no_key_source",
+        "id_rule": "trackId=0,inputId=0"
+      },
+      {
+        "lane": "sidechain",
+        "kind": "Master",
+        "valid": false,
+        "effect": "reject_master_as_key_source",
+        "id_rule": "rejected"
+      },
+      {
+        "lane": "sidechain",
+        "kind": "Track",
+        "valid": true,
+        "effect": "declare_one_additive_track_key_source",
+        "id_rule": "existing non-self trackId,inputId=0"
+      },
+      {
+        "lane": "sidechain",
+        "kind": "ExternalInput",
+        "valid": true,
+        "effect": "declare_external_audio_key_source",
+        "id_rule": "trackId=0,registered nonzero inputId"
+      }
+    ],
+    "normalization": {
+      "complementary_pairs": [
+        "midi_out->midi_in",
+        "audio_out->audio_in"
+      ],
+      "track_edge_latency_blocks": 1,
+      "exact_duplicate": "coalesce_once",
+      "source_output_cardinality": "For each media lane a source resolves to at most one Track or Master destination; two input-side declarations naming one source for different destinations, or Master plus Track, fail compilation.",
+      "input_none": "None contributes no input-side constraint; zero or more output-declared Track sources may fan in.",
+      "input_track": "Track(source) creates that edge when the source output is None, coalesces an exact matching output, and fails if any different Track source or Master/ExternalInput source also targets the lane.",
+      "input_external": "ExternalInput(inputId) is the sole main input source and conflicts with every Track edge targeting that lane.",
+      "output_none": "None contributes no output-side edge; one complementary Track input may create the source's sole Track edge.",
+      "fan_in_order": [
+        "sourceTrackId",
+        "sourceBus",
+        "channel"
+      ],
+      "cycle_policy": "Track cycles are valid delayed feedback with one block per edge.",
+      "pre_fader_rule": "preFaderSend selects the N-1 pre/post-fader signal only for audio_out Track and is canonicalized true for every other row.",
+      "aux_child_rule": "Aux children are derived output-bus projections owned by their parent track plan, not authored TrackRoute lanes; they inherit the parent's exact execution identity and sourceBus participates in deterministic fan-in ordering."
+    }
+  },
+  "artifact_presence_matrix": {
+    "rows": [
+      {
+        "state_blob": false,
+        "parameter_manifest": false,
+        "load_outcome": "success_with_plugin_default_state_and_no_parameter_metadata",
+        "retained_for_save": "nothing",
+        "module_entries": "none"
+      },
+      {
+        "state_blob": true,
+        "parameter_manifest": false,
+        "load_outcome": "restore_nonempty_opaque_blob_and_report_manifest_absent",
+        "retained_for_save": "blob_under_canonical_key",
+        "module_entries": "canonical_blob_only"
+      },
+      {
+        "state_blob": false,
+        "parameter_manifest": true,
+        "load_outcome": "keep_plugin_default_state_parse_manifest_and_rewrite_embedded_track_device_key",
+        "retained_for_save": "canonicalized_manifest_with_parameter_entries_preserved",
+        "module_entries": "canonical_manifest_only"
+      },
+      {
+        "state_blob": true,
+        "parameter_manifest": true,
+        "load_outcome": "restore_blob_and_parse_manifest_independently",
+        "retained_for_save": "canonical_blob_and_canonicalized_manifest",
+        "module_entries": "both_canonical_entries"
+      }
+    ],
+    "present_file_rules": "Each file is optional, but an existing non-regular or unreadable path, an empty blob, malformed manifest JSON, or manifest whose embedded track/device differs from its LegacyArtifactKey fails load before document or ExecutionSnapshot publication.",
+    "legacy_precedence": "For schema 1-5, each present old {trackId,oldDeviceId} file is the sole source for that artifact; when the old and newly allocated filenames differ, a pre-existing file at the new name is stale, ignored, and cannot override the old-key source.",
+    "save_rules": "Blob and manifest capture are independent optional outcomes. Unavailable capture emits a structured absence diagnostic; a retained loaded artifact supplies that side when live capture is unavailable. Every available side is staged and atomically renamed under its canonical {trackId,newGlobalDeviceId} filename, with manifest embedded ids rewritten; a failed available-artifact write returns an artifact error rather than full save success.",
+    "package_rules": "Module assembly derives an allowlist from the current ProjectDocument hosted devices crossed with pluginStateFileName and pluginParamsFileName, sorts it, packs each present readable canonical regular file, permits either side to be absent, refuses an unreadable allowlisted file, and ignores every non-allowlisted stale alias or unrelated state-directory file."
+  },
+  "scope": "Close AE-P1.2 G2-B item 18 with one session-level immutable ExecutionSnapshot, machine-checked routing and optional-artifact matrices, complete execution/dispatch/carrier/document/artifact/package populations, project-global bounded non-reusing stable device and mirror identities, deterministic one-block Track routing, session-wide two-phase block transactions over every host event writer, a production sender/receiver primer oracle, correlated replay acknowledgement, lossless disabled legacy automation, terminal capacity failure, and track/master/offline output gates bound to the item-15 lock contract.",
   "implementation_authorization": {
     "before_dual_pass": false,
     "after_same_sha_semantic_and_evidence_pass": true,
@@ -84,7 +304,7 @@
     "Device ids are globally unique within a project, not merely within a track; schema-6 persists one project watermark and legacy migration rewrites every track-scoped reference through an explicit {trackId, oldDeviceId} map.",
     "A post-reservation control-frame failure is not retried as partial success: it poisons the session dispatch, accepts no output or transport advance, and quarantines every participant before future playback.",
     "Every Track routing edge has exactly one block of delay; cycles are legal delayed feedback, and fan-in is reduced in ascending source track id, source bus, and channel order.",
-    "Legacy state blobs and parameter manifests are read through the same {trackId, oldDeviceId} migration map as the document and are written only under canonical schema-6 global-id names on save."
+    "Legacy state blobs and parameter manifests are independent optional artifacts read through the same {trackId, oldDeviceId} migration map as the document; present corrupt files fail closed, saves use only canonical schema-6 global-id names, and modules ignore every filename outside the current-document allowlist."
   ],
   "governed_files": [
     {
@@ -194,6 +414,10 @@
     {
       "path": "apps/engine_modlink_commands.cpp",
       "sha256": "43c6b35a9524dc3b1648d53ef458d885c7c7dbead3b87a4e6b05fbc08cfc4af0"
+    },
+    {
+      "path": "apps/engine_module_commands.cpp",
+      "sha256": "906b216d21bf5aff99528d8805c6da1a5eafddf371c18f54a9e849e60845e8c4"
     },
     {
       "path": "apps/engine_offline_render.cpp",
@@ -328,6 +552,10 @@
       "sha256": "aaa382f1529d67122eeec1ccd93eca9574ff6473a9e0059d461d54a1b4b1d449"
     },
     {
+      "path": "apps/engine_transport_commands.cpp",
+      "sha256": "e49e3cdb4804e4cb139df2db25cdc066370328f8eb4039a2acbfa47337190dfc"
+    },
+    {
       "path": "apps/engine_types.h",
       "sha256": "e5023f9e4aa7e39174c692c1952db71fe1889d9055efba444ba5ce5fa9eab7e2"
     },
@@ -402,6 +630,10 @@
     {
       "path": "apps/track_routing.h",
       "sha256": "c4f845f92d64dd9e12e529771365f32fa87efe90b0b7d8ed87e98baff1710435"
+    },
+    {
+      "path": "apps/watchdog.h",
+      "sha256": "f91256105a8859867e657e67f4db1d5487220acad782df7a42b12638402261d0"
     },
     {
       "path": "CMakeLists.txt",
@@ -3371,119 +3603,504 @@
     ],
     "mapping_and_output_gates": [
       {
+        "path": "apps/daw_engine_main.cpp",
+        "line": 1059,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 147,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 328,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 340,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 343,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
         "path": "apps/engine_audio_callback.h",
         "line": 350,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 354,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 355,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 361,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_audio_callback.h",
         "line": 376,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 382,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 395,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 405,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 413,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 414,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 417,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 418,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 419,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 424,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 429,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_audio_callback.h",
         "line": 469,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_audio_callback.h",
         "line": 694,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 695,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_audio_callback.h",
         "line": 852,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 888,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 892,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_audio_callback.h",
         "line": 941,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 959,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 965,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 1016,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_audio_callback.h",
         "line": 1040,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 1043,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 1044,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 1045,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 1046,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_start.cpp",
+        "line": 21,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_audio_start.cpp",
+        "line": 86,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_chain_host.cpp",
+        "line": 211,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_consumer.cpp",
+        "line": 521,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_consumer.cpp",
         "line": 646,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_consumer.cpp",
         "line": 656,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_consumer.cpp",
+        "line": 730,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_consumer.cpp",
+        "line": 754,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_consumer.cpp",
+        "line": 770,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_consumer.cpp",
+        "line": 771,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_consumer.cpp",
+        "line": 772,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_consumer.cpp",
+        "line": 779,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_consumer.cpp",
+        "line": 1167,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_device_commands.cpp",
         "line": 111,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_device_commands.cpp",
         "line": 185,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_load_project.cpp",
+        "line": 740,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_master_render.cpp",
+        "line": 13,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_master_render.cpp",
+        "line": 31,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_master_render.cpp",
+        "line": 32,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_master_render.cpp",
         "line": 75,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_master_render.cpp",
+        "line": 83,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_plugin_state_capture.cpp",
         "line": 155,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_produce_block.cpp",
         "line": 334,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_produce_block.cpp",
+        "line": 336,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_produce_block.cpp",
+        "line": 337,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_produce_block.cpp",
         "line": 338,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_produce_block.cpp",
+        "line": 339,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_produce_block.cpp",
         "line": 362,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_produce_block.cpp",
+        "line": 508,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_produce_block.cpp",
+        "line": 509,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_produce_block.cpp",
         "line": 602,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_produce_block.cpp",
         "line": 610,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_produce_block.cpp",
+        "line": 612,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_produce_block.cpp",
         "line": 620,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_produce_block.cpp",
+        "line": 904,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_produce_block.cpp",
+        "line": 909,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_produce_block.cpp",
+        "line": 910,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_produce_block.cpp",
+        "line": 913,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_produce_block.cpp",
+        "line": 919,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_produce_block.cpp",
+        "line": 1075,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_produce_block.cpp",
+        "line": 1089,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_producer_thread.cpp",
         "line": 172,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_producer_thread.cpp",
         "line": 200,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_producer_thread.cpp",
+        "line": 203,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_producer_thread.cpp",
+        "line": 204,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_producer_thread.cpp",
+        "line": 226,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_producer_thread.cpp",
         "line": 237,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_producer_thread.cpp",
+        "line": 240,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_producer_thread.cpp",
+        "line": 250,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       },
       {
         "path": "apps/engine_producer_thread.cpp",
         "line": 270,
-        "classification": "mapping_output_readiness_or_producer_gate"
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_producer_thread.cpp",
+        "line": 279,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_readiness_level.h",
+        "line": 82,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_readiness_level.h",
+        "line": 98,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_shutdown.cpp",
+        "line": 21,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_shutdown.cpp",
+        "line": 138,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 162,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 450,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 478,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/engine_transport_commands.cpp",
+        "line": 92,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/watchdog.h",
+        "line": 79,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/watchdog.h",
+        "line": 80,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/watchdog.h",
+        "line": 85,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/watchdog.h",
+        "line": 86,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/watchdog.h",
+        "line": 89,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
+      },
+      {
+        "path": "apps/watchdog.h",
+        "line": 91,
+        "classification": "readiness_output_dispatch_dataflow_candidate"
       }
     ],
     "capacity_contract_sites": [
@@ -3620,38 +4237,88 @@
     "state_artifact_identity_sites": [
       {
         "path": "apps/engine_load_project.cpp",
+        "line": 695,
+        "classification": "plugin_artifact_key_directory_or_package_boundary"
+      },
+      {
+        "path": "apps/engine_load_project.cpp",
         "line": 727,
-        "classification": "plugin_state_or_parameter_manifest_artifact_identity"
+        "classification": "plugin_artifact_key_directory_or_package_boundary"
+      },
+      {
+        "path": "apps/engine_module_commands.cpp",
+        "line": 65,
+        "classification": "plugin_artifact_key_directory_or_package_boundary"
       },
       {
         "path": "apps/engine_pure.cpp",
         "line": 112,
-        "classification": "plugin_state_or_parameter_manifest_artifact_identity"
+        "classification": "plugin_artifact_key_directory_or_package_boundary"
       },
       {
         "path": "apps/engine_pure.cpp",
         "line": 116,
-        "classification": "plugin_state_or_parameter_manifest_artifact_identity"
+        "classification": "plugin_artifact_key_directory_or_package_boundary"
       },
       {
         "path": "apps/engine_pure.h",
         "line": 65,
-        "classification": "plugin_state_or_parameter_manifest_artifact_identity"
+        "classification": "plugin_artifact_key_directory_or_package_boundary"
       },
       {
         "path": "apps/engine_pure.h",
         "line": 71,
-        "classification": "plugin_state_or_parameter_manifest_artifact_identity"
+        "classification": "plugin_artifact_key_directory_or_package_boundary"
+      },
+      {
+        "path": "apps/engine_save_project.cpp",
+        "line": 458,
+        "classification": "plugin_artifact_key_directory_or_package_boundary"
       },
       {
         "path": "apps/engine_save_project.cpp",
         "line": 485,
-        "classification": "plugin_state_or_parameter_manifest_artifact_identity"
+        "classification": "plugin_artifact_key_directory_or_package_boundary"
       },
       {
         "path": "apps/engine_save_project.cpp",
         "line": 507,
-        "classification": "plugin_state_or_parameter_manifest_artifact_identity"
+        "classification": "plugin_artifact_key_directory_or_package_boundary"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1380,
+        "classification": "plugin_artifact_key_directory_or_package_boundary"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1393,
+        "classification": "plugin_artifact_key_directory_or_package_boundary"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1487,
+        "classification": "plugin_artifact_key_directory_or_package_boundary"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1489,
+        "classification": "plugin_artifact_key_directory_or_package_boundary"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1493,
+        "classification": "plugin_artifact_key_directory_or_package_boundary"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1502,
+        "classification": "plugin_artifact_key_directory_or_package_boundary"
+      },
+      {
+        "path": "apps/project_file.h",
+        "line": 321,
+        "classification": "plugin_artifact_key_directory_or_package_boundary"
       }
     ]
   },
@@ -3734,7 +4401,7 @@
         "predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:2559-2569"
       ],
       "control": "CTRL-PACKET",
-      "statement": "Item 18 is acceptance-decidable: one session ExecutionSnapshot is the sole execution authority for deterministic one-block routing, globally unique devices, targets, patcher ownership, track and master execution; bounded stable ids and their external state artifacts cannot reuse, collide, narrow, or detach; every document restore, sender, ring writer, receiver, replay stage, mapping/output gate, carrier, master, and offline surface is mechanically inventoried; and PASS 4 is a production-bound correlated primer/ack/re-arm oracle with session-wide two-phase ordinary-block transactions and terminal capacity failure."
+      "statement": "Item 18 is acceptance-decidable: one session ExecutionSnapshot is the sole execution authority for deterministic one-block routing, globally unique devices, targets, patcher ownership, track and master execution; the exact 20-row routing matrix and four-row optional-artifact matrix decide every kind/presence case; bounded stable ids and their external state artifacts cannot reuse, collide, narrow, detach, or leak through package enumeration; every document restore, sender, ring writer, receiver, replay stage, readiness/output dataflow candidate, carrier, master, and offline surface is mechanically inventoried; and PASS 4 is a production-bound correlated primer/ack/re-arm oracle with session-wide two-phase ordinary-block transactions and terminal capacity failure."
     },
     {
       "id": "DEP-PREDECESSOR",
@@ -3945,11 +4612,13 @@
       "dependencies": [
         "R-PASS4-REPLACEMENT",
         "R-MASTER-CORRELATION",
-        "R-OFFLINE-PRIMER"
+        "R-OFFLINE-PRIMER",
+        "R-ROUTING-AUTHORITY",
+        "R-DEVICE-ID-LIFETIME"
       ],
       "source_span": "manifest:/test_cases",
       "control": "CTRL-MUTATIONS",
-      "statement": "One clock-free fixture drives the exact shared production dispatch helper used by both track call branches and the master branch. Fake controller/mailbox barriers expose a two-host routed SessionBlockPlan, canonical lock order, preflight, ring reservations, whole ordinary and primer batches, transient and permanent capacity, exact in-flight request, partial control-frame failure, participant quarantine, active, disconnect, generation, mirror witness, candidate/committed block and transport, and output witnesses; stale track mappings and stale master handoffs are rejected. A routing fixture permutes worker/storage order over acyclic, cyclic, and diamond graphs. A separate coordinator fixture drives the real offline state-machine seam through timeline-zero and counted output."
+      "statement": "One clock-free fixture drives the exact shared production dispatch helper used by both track call branches and the master branch. Fake controller/mailbox barriers expose a two-host routed SessionBlockPlan, canonical lock order, preflight, ring reservations, whole ordinary and primer batches, transient and permanent capacity, exact in-flight request, partial control-frame failure, participant quarantine, active, disconnect, generation, mirror witness, candidate/committed block and transport, and output witnesses; stale track mappings and stale master handoffs are rejected. A routing fixture executes all 20 matrix rows and conflict rules while permuting worker/storage order over acyclic, cyclic, and diamond graphs. An artifact fixture executes all four presence rows, corruption cases, canonical rewrites, and package allowlisting. A separate coordinator fixture drives the real offline state-machine seam through timeline-zero and counted output."
     },
     {
       "id": "R-REVIEW-GATED-AUTH",
@@ -3971,7 +4640,7 @@
       "dependencies": [],
       "source_span": "packet:tools/architecture/ae_p1_2_g2b_item18_check.py",
       "control": "CTRL-PACKET",
-      "statement": "The checker binds external identities, all governed blobs, exact populations, source locators, dependency closure, authorization semantics, and generated prose."
+      "statement": "The checker binds external identities, all governed blobs, both exact decision matrices, exact populations, source locators, dependency closure, authorization semantics, and generated prose."
     },
     {
       "id": "CTRL-MUTATIONS",
@@ -3981,7 +4650,7 @@
       "dependencies": [],
       "source_span": "packet:tools/architecture/ae_p1_2_g2b_item18_check.py",
       "control": "CTRL-MUTATIONS",
-      "statement": "The checker counts every synthetic scanner fixture in the same exact control total as manifest mutations and self-tests population deletion/substitution, receiver-renamed chain mutations, all ring writers, type/member-based narrow producer/consumer carriers, complete replay state, renamed undo/redo and document visitors, every mapping/output/producer gate, state-artifact identity, stale-plan omission, loose mirror publication, counter wrap, premature readiness, bypass overclaim, AwaitingAck-is-complete, split-host and partial ordinary/primer publication, drain leakage, stale ack, lost regression, global gating, offline leakage, authorization drift, locator substitution, and governed-byte drift."
+      "statement": "The checker counts every synthetic scanner fixture in the same exact control total as manifest mutations and self-tests matrix-row deletion/substitution, population deletion/substitution, receiver-renamed chain mutations, all ring writers, type/member-based narrow producer/consumer carriers, complete replay state, argument-renamed applyDocument plus undo/redo/document visitors, receiver/local-renamed readiness-output aliases, package enumeration, state-artifact identity, stale-plan omission, loose mirror publication, counter wrap, premature readiness, bypass overclaim, AwaitingAck-is-complete, split-host and partial ordinary/primer publication, drain leakage, stale ack, lost regression, global gating, offline leakage, authorization drift, locator substitution, and governed-byte drift."
     },
     {
       "id": "P-EXECUTION-AUTHORITY-CONSUMERS",
@@ -4006,7 +4675,7 @@
         "manifest:/populations/authored_document_exemptions"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "The bounded authority population contains fifty-seven direct chain/path hits, fifty-one routing hits, twenty-six mirror-identity hits, twenty-five legacy device-id allocator/persistence hits, twenty-five stable-device narrow-carrier producer/consumer/guard hits, forty-one compact/durable target hits, twenty-eight HostConfig/launch hits, eighty-one semantic execution/carrier/document consumers, eleven mechanically derived document restore/comparison/identity sites, seven state-blob/parameter-manifest artifact identity sites, and thirteen document-only exemptions. The implementation removes chainDevices and routing from TrackStateSnapshot, removes routesToMaster as a mixer authority, prevents execution targets from including authored chain APIs, and validates project-global stable device and artifact identities at every durable boundary."
+      "statement": "The bounded authority population contains fifty-seven direct chain/path hits, fifty-one routing hits, twenty-six mirror-identity hits, twenty-five legacy device-id allocator/persistence hits, twenty-five stable-device narrow-carrier producer/consumer/guard hits, forty-one compact/durable target hits, twenty-eight HostConfig/launch hits, eighty-one semantic execution/carrier/document consumers, eleven mechanically derived document restore/comparison/identity sites, seventeen mechanically derived artifact filename/directory/package boundaries, and thirteen document-only exemptions. The implementation removes chainDevices and routing from TrackStateSnapshot, removes routesToMaster as a mixer authority, prevents execution targets from including authored chain APIs, and validates project-global stable device and artifact identities at every durable boundary."
     },
     {
       "id": "P-DISPATCH-PROTOCOL-SURFACES",
@@ -4027,7 +4696,7 @@
         "manifest:/populations/capacity_contract_sites"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "The production surface is exactly three sendProcessBlock expressions in two semantic families, eight mechanically derived and classified daw::ringWrite callers of which six are host-block writers, one receiver reached by one dispatch edge, nine classified replay protocol sites backed by a mechanically derived thirty-six-site mirror/replay state lifecycle and the exact seven-site parameter/replay priority-and-consumption chain, twenty-three mechanically derived mapping/output/readiness/producer gates including the complete mirrorOnly lifecycle, and five capacity roots. Additions, deletions, substitutions, or unclassified missing writers or gates fail the checker."
+      "statement": "The production surface is exactly three sendProcessBlock expressions in two semantic families, eight mechanically derived and classified daw::ringWrite callers of which six are host-block writers, one receiver reached by one dispatch edge, nine classified replay protocol sites backed by a mechanically derived thirty-six-site mirror/replay state lifecycle and the exact seven-site parameter/replay priority-and-consumption chain, one hundred mechanically derived readiness/output/dispatch dataflow candidates including all stable-member reads and every discovered master-FX, mirror-stage, and completed-block local alias, and five capacity roots. Receiver or local-variable renames cannot shrink the census; additions, deletions, substitutions, or unclassified missing writers/candidates fail the checker."
     },
     {
       "id": "P-OFFLINE-OUTPUT-SURFACES",
@@ -4070,6 +4739,8 @@
         "P-EXECUTION-AUTHORITY-CONSUMERS"
       ],
       "source_span": [
+        "manifest:/routing_matrix",
+        "frozen:apps/track_routing.h:7-31",
         "frozen:apps/engine_track_commands.cpp:64-97",
         "frozen:apps/engine_produce_block.cpp:508-522",
         "frozen:apps/engine_produce_block.cpp:1171-1209",
@@ -4078,7 +4749,7 @@
         "frozen:apps/engine_consumer.cpp:636-675"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "Complete MIDI input/output, audio input/output, sidechain, aux-child, and pre-fader routing is normalized into one directed graph in the session ExecutionSnapshot revision. Audio output has one exhaustive truth table: None reaches neither master nor a destination; Master reaches master only; Track(target) reaches that destination only and has no direct master path; ExternalInput is invalid as output and candidate compilation fails. A Track input declaration and its matching output declaration coalesce into one edge; contradictory endpoints fail compilation. Every MIDI, audio, and sidechain Track edge delivers the source's fully rendered block N-1 to destination block N, so graph cycles are legal explicit one-block-per-edge feedback and runtime/worker order cannot change same- versus next-block delivery. Fan-in reduces in ascending {sourceTrackId, sourceBus, channel} order. A sidechain Track edge is additive key input and does not change source audioOut. preFaderSend selects the pre- or post-fader N-1 signal for a Track destination without duplicating it to master. The latency plan charges one block per Track edge. A routing command mutates only a candidate document and atomically publishes the compiled graph; producer routing, TrackInfo handoff, mixer inclusion, waits, and aux inheritance consume that exact revision. TrackStateSnapshot.routing and the routesToMaster atomic are removed as execution authorities, so no old/new route combination or order-dependent fan-in can mix."
+      "statement": "Complete MIDI input/output, audio input/output, sidechain, aux-child, and pre-fader routing is normalized into one directed graph in the session ExecutionSnapshot revision. The machine-readable routing_matrix is the exhaustive five authored TrackRoute lanes by four-kind truth table: all 20 rows fix validity, endpoint meaning, and id constraints; aux children are derived parent-owned output-bus projections rather than a sixth authored lane and inherit the parent's exact identity. None contributes no declaration on its side; audio_out Master reaches master only; Track declares a source or destination with exactly one block of delay; ExternalInput is valid only for midi_in, audio_in, and sidechain; every other Master/input or ExternalInput/output row fails compilation. For complementary MIDI and audio lanes, one-sided Track declarations create an edge, exact input/output duplicates coalesce once, each source has at most one Track or Master sink, input None permits output-declared fan-in, input Track(source) constrains the final source set to exactly that source, and input ExternalInput conflicts with every Track source; therefore A.audioOut=B with B.audioIn=C is rejected when A differs from C. Every MIDI, audio, and sidechain Track edge delivers the source's fully rendered block N-1 to destination block N, so graph cycles are legal explicit one-block-per-edge feedback and runtime/worker order cannot change same- versus next-block delivery. Fan-in reduces in ascending {sourceTrackId, sourceBus, channel} order. A sidechain Track edge is additive key input and does not change source audioOut. preFaderSend selects the pre- or post-fader N-1 signal only for audio_out Track without duplicating it to master and is canonicalized true otherwise. The latency plan charges one block per Track edge. A routing command mutates only a candidate document and atomically publishes the compiled graph; producer routing, TrackInfo handoff, mixer inclusion, waits, and aux inheritance consume that exact revision. TrackStateSnapshot.routing and the routesToMaster atomic are removed as execution authorities, so no old/new route combination or order-dependent fan-in can mix."
     },
     {
       "id": "R-DEVICE-ID-LIFETIME",
@@ -4090,6 +4761,7 @@
         "P-EXECUTION-AUTHORITY-CONSUMERS"
       ],
       "source_span": [
+        "manifest:/artifact_presence_matrix",
         "frozen:apps/device_chain.h:27-40",
         "frozen:apps/device_chain.cpp:42-90",
         "frozen:apps/engine_chain_commands.cpp:52-66",
@@ -4100,7 +4772,7 @@
         "manifest:/populations/state_artifact_identity_sites"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "A stable device id is project-global and in [1, kStableDeviceIdMax], where kStableDeviceIdMax is exactly 0x7FFF, the narrowest lossless carrier bound; zero, kDeviceIdAuto, and kParamTargetAll are never device identities. Every narrowing producer and consumer of a 15-bit, uint16, sampler-address, patcher-flag, or UI/control carrier validates before conversion and never masks, wraps, or silently narrows. The schema-6 ProjectDocument carries one next_device_id high-water mark allocated under the command-writer lock; it never decreases on load or undo/redo, is persisted across save/load, and never reuses a deleted id, while max+1 is 0x8000 and means exhausted. Candidate compilation rejects globally duplicate, zero, greater-than-max, sentinel, id-at-or-above-watermark, or dangling device references before publication. Schema 1-5 migration first validates uniqueness within each track, reserves all valid old ids, then walks tracks and devices in document order: the first occurrence may keep its id, each cross-track collision receives the lowest free global id, and one explicit {trackId, oldDeviceId}->newDeviceId map rewrites every device, stable automation target, modulation source/target, sampler reference, and derived patcher owner before compilation. The same map retains a LegacyArtifactKey{trackId, oldDeviceId} for each migrated hosted device: load resolves both pluginStateFileName and pluginParamsFileName through that old key, while schema-6 save writes canonical files under {trackId, newGlobalDeviceId} and package assembly includes only canonical artifacts for current devices. Stale legacy aliases are ignored, never rebound. Exhaustion, missing required artifact migration, or any ambiguous/dangling track-scoped reference fails load rather than rebinding."
+      "statement": "A stable device id is project-global and in [1, kStableDeviceIdMax], where kStableDeviceIdMax is exactly 0x7FFF, the narrowest lossless carrier bound; zero, kDeviceIdAuto, and kParamTargetAll are never device identities. Every narrowing producer and consumer of a 15-bit, uint16, sampler-address, patcher-flag, or UI/control carrier validates before conversion and never masks, wraps, or silently narrows. The schema-6 ProjectDocument carries one next_device_id high-water mark allocated under the command-writer lock; it never decreases on load or undo/redo, is persisted across save/load, and never reuses a deleted id, while max+1 is 0x8000 and means exhausted. Candidate compilation rejects globally duplicate, zero, greater-than-max, sentinel, id-at-or-above-watermark, or dangling device references before publication. Schema 1-5 migration first validates uniqueness within each track, reserves all valid old ids, then walks tracks and devices in document order: the first occurrence may keep its id, each cross-track collision receives the lowest free global id, and one explicit {trackId, oldDeviceId}->newDeviceId map rewrites every device, stable automation target, modulation source/target, sampler reference, and derived patcher owner before compilation. The same map retains a LegacyArtifactKey{trackId, oldDeviceId} for each migrated hosted device. The machine-readable artifact_presence_matrix decides all four independent optional .bin/.params.json combinations: absence is successful and explicit, each present old artifact is read through pluginStateFileName or pluginParamsFileName before publication, a present unreadable/empty blob or malformed/key-mismatched manifest fails load, and the manifest's embedded ids are rewritten while parameter entries are preserved. Schema-6 save stages every available or retained side under {trackId,newGlobalDeviceId}; unavailable capture is an explicit nonfatal absence, but a failed write of available bytes reports artifact error rather than full success. Module assembly derives its allowlist from current hosted devices crossed with both filename helpers, packs only present readable canonical files, permits either side to be absent, and ignores every stale alias or unrelated directory entry. Stale legacy aliases are ignored, never rebound or packaged. Exhaustion or any ambiguous/dangling track-scoped reference fails load rather than rebinding."
     },
     {
       "id": "R-MIRROR-INSTANCE-IDENTITY",
@@ -4312,7 +4984,7 @@
     },
     {
       "id": "T-ROUTING-ATOMICITY",
-      "statement": "A routing mutation parked between candidate compilation and publication changes no producer or mixer behavior; one session publication switches the normalized MIDI/audio/sidechain/aux graph, one-block latency plan, deterministic fan-in order, and master inclusion together, and every stale TrackInfo revision is refused. The exhaustive audioOut table proves None has no sink, Master is master-only, Track(target) is destination-only, ExternalInput is rejected, sidechain Track is additive without changing audioOut, and preFaderSend selects the delayed Track-send signal without a master duplicate."
+      "statement": "A routing mutation parked between candidate compilation and publication changes no producer or mixer behavior; one session publication switches the normalized MIDI/audio/sidechain/aux graph, one-block latency plan, deterministic fan-in order, and master inclusion together, and every stale TrackInfo revision is refused. The complete routing_matrix executes every lane/kind validity and id rule, all complementary-edge conflict rules, additive sidechain behavior, and preFaderSend canonicalization."
     },
     {
       "id": "T-DEVICE-ID-LIFETIME",
@@ -4380,11 +5052,19 @@
     },
     {
       "id": "T-STATE-ARTIFACT-MIGRATION",
-      "statement": "When legacy {trackId, deviceId} maps to a new global id, state restore reads both the .bin blob and .params.json manifest through the retained old artifact key before document publication; schema-6 save writes canonical global-id filenames, package assembly includes only current canonical artifacts, and old-load/new-save/new-load restores byte-identical state and manifest entries."
+      "statement": "When legacy {trackId, deviceId} maps to a new global id, each present .bin blob and .params.json manifest is read independently through the retained old artifact key before document publication; schema-6 save writes canonical global-id filenames, rewrites manifest embedded ids while preserving parameter entries, and old-load/new-save/new-load restores byte-identical opaque state plus equivalent canonical manifest data."
     },
     {
       "id": "T-ROUTING-BLOCK-DETERMINISM",
-      "statement": "Acyclic, cyclic, and diamond Track audio/MIDI/sidechain graphs all consume source block N-1 for destination block N. Reordering runtime storage or worker completion cannot change delivery; fan-in reduces ascending {sourceTrackId, sourceBus, channel}, duplicate input/output declarations coalesce once, contradictory declarations fail, and each cycle edge is one explicit delayed-feedback block."
+      "statement": "Acyclic, cyclic, and diamond Track audio/MIDI/sidechain graphs all consume source block N-1 for destination block N. Reordering runtime storage or worker completion cannot change delivery; fan-in reduces ascending {sourceTrackId, sourceBus, channel}; exact duplicate declarations coalesce; A.audioOut=B with B.audioIn=C fails for A!=C; input None permits deterministic output-declared fan-in; and each cycle edge is one explicit delayed-feedback block."
+    },
+    {
+      "id": "T-ROUTING-MATRIX",
+      "statement": "The implementation iterates the exact 5x4 routing_matrix: all 20 lane/kind rows produce the declared validity, effect, and id result; each complementary rule is exercised one-sided, exact-duplicate, source-cardinality, input-Track conflict, input-External conflict, Master conflict, fan-in, and preFader canonicalization, with no implicit default case."
+    },
+    {
+      "id": "T-ARTIFACT-PRESENCE-MATRIX",
+      "statement": "The implementation executes all four artifact_presence_matrix rows for legacy and schema-6 projects, separately tests absent, non-regular, unreadable, empty-blob, malformed-manifest, and embedded-key-mismatch outcomes, proves retained fallback and canonical atomic writes, and proves module assembly packs only the current-document allowlist while ignoring stale aliases."
     },
     {
       "id": "T-ORDINARY-CAPACITY-PERMANENT",

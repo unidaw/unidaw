@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Structural and exact-evidence checker for AE-P1.2 G2-B item-18 schema v7."""
+"""Structural and exact-evidence checker for AE-P1.2 G2-B item-18 schema v8."""
 
 from __future__ import annotations
 
@@ -22,14 +22,14 @@ TOP_LEVEL_KEYS = {
     "schema", "ticket", "status", "owner", "revision_predecessor", "review_history",
     "predecessor", "item15", "program_source", "frozen_product", "scope",
     "implementation_authorization", "non_goals", "governed_files", "populations",
-    "changed_records", "records", "test_cases",
+    "routing_matrix", "artifact_presence_matrix", "changed_records", "records", "test_cases",
 }
 
 EXPECTED_EXTERNAL = {
     "revision_predecessor": {
-        "packet_commit": "33545d38e07fff4eabea0fdedb98e99a8861f7db",
-        "packet_tree": "99b337730d44f3a2896b30c0a2185e12a3e59b93",
-        "manifest_sha256": "5fec77cb28cf08536f3f9ce538f048892ba26bc8ffe2f45ba62e579611fe0075",
+        "packet_commit": "d82a0c659368a88fbcbd3b75c70bf9d6e05fc4e0",
+        "packet_tree": "2eea956549791022766b9681927c5edc67fea627",
+        "manifest_sha256": "b6ca34cae82261a966d84500b9b047969d7339cf8cc850d562eeb400259419b4",
     },
     "predecessor": {
         "packet_commit": "2b5f0747f1b7dde79ae788af3826c49c78df5d2a",
@@ -55,30 +55,32 @@ EXPECTED_EXTERNAL = {
 # manifest immutable without copying 2,000 lines of JSON into the checker. Self-tests mutate
 # the parsed manifest while these constants remain fixed, so a declaration cannot bless itself.
 EXPECTED_SECTION_DIGESTS = {
-    "schema": "d139fff9b339c669681d9dc25b575ab4cf07230912b26be3ef318e8e6c950bd4",
+    "schema": "633aaec5c6af8bc76ba2cac9524add677c879e03f500952ade5c72315c3e0e36",
     "ticket": "51fc055b4f8c131bfb5f08b4d03e9141b5667cc3f398ef763016462cf9fd1380",
     "status": "a9214bd949881802e074114cc9ffc50cbf88f003ee4a269801e41dd13fdecf5c",
     "owner": "74a80ba7942f31913df8aed6e77553465be5b3c80bc5666036f42a54a94c828a",
-    "revision_predecessor": "ebbbc0a6a3c62d43b6de0ed61d876d169c7ec6794567daad983d57f79138a8df",
-    "review_history": "8e8a6117cb24d11de6eb8012967ce1ccbf56d4e5b3853730522844d096ddcc09",
+    "revision_predecessor": "72b8438bc29197417ba42b3da28aa9820b4ffc14998b397c71be0c6688e500a7",
+    "review_history": "c9f4ad6485c4ed91b9a9ec530e7c3749f1453ce2199d7c3ce5a49b8d2a2e7d12",
     "predecessor": "a87219ba250bdbb90663db22afac5052bc7379e485789cc40e10abc21e8f5959",
     "item15": "0bb1bb2ed7ab992ab7607c8fb4517a26b6bdc7698e8836b8ba3e57bc33884c32",
     "program_source": "2cbd44acb7ae764d5b84e8bcb76cc3f34dd435e4d734104809d199fbb76fa212",
     "frozen_product": "4dcff51b0d360b6c2ebafb0ab2b44f94ada495a53144f15cf6ad5e220ae856de",
-    "scope": "5cd74e847617e15bbbf2aac2da2467c8c9a6a46f84e1c2bcee79994e4c412813",
+    "routing_matrix": "67876cfdb7be392f00c1d132fef2ec4291e4ea23f2b260b4f9d7a5f745e9011d",
+    "artifact_presence_matrix": "749bf03591b21eaa63e25af34e70d9786232c00888e31247e47f9258a70264b2",
+    "scope": "0dbfe78af0b6676a164a73c4b880d35743c842513515bc62ac9e88de2f92887e",
     "implementation_authorization": "8a02dbbd39a3134fcc3256b264bd617e2c162bc950cc72cf89ebd2a960eeaa8e",
-    "non_goals": "368dfdd113fbdc2499ba11f6942d306e06189436921deaced90d9d94a19fd8e2",
-    "governed_files": "ad070daa005a642274d3ed1b88ee3b20bb61bfc5bca674e2213e62430415f6fc",
-    "populations": "974b60cce53d3cca4c6f3999594b9733527f3b796838ae6e31a8f30fb603444f",
+    "non_goals": "3ef11901053c950f3992d89eb2b7bdd1db62232d8b4db5c898ffa7ce57dc036e",
+    "governed_files": "6ea1f98092b8f8ba1dc55cac0dbdc21f2354ae0172a1f89acfd9782021d609f0",
+    "populations": "ba32eae4e2b2ba9c6f648c866ca169c202ba7bc76500c80a85b994bbde0b34ed",
     "changed_records": "2dce85a326c8f654eeae78ff4501f6855bca6eb708211892c256fc63283cc5d1",
-    "records": "efeb87c6861145026b48a9035788029b41c761016753273a624247a4d2df0d73",
-    "test_cases": "31b368bdaeb2ee9b854f8e3c14a5fdda0d82b86a2254d1c1a247bbaceba7edb8",
+    "records": "2332fbf2ae33f005369733e28442ef6c826b55aa891cea7ff64cf934add10c02",
+    "test_cases": "6a53cdfbbe69c3b3792a5dc59c8429f7a633114cda18459b813c3d391f039e6e",
 }
 
 EXPECTED_COUNTS = {
-    "governed_files": 86,
+    "governed_files": 89,
     "records": 33,
-    "test_cases": 36,
+    "test_cases": 38,
     "host_ready_true_sites": 3,
     "track_snapshot_publications": 24,
     "host_plan_mutation_roots": 21,
@@ -99,11 +101,11 @@ EXPECTED_COUNTS = {
     "replay_lifecycle_lexical_scan": 36,
     "replay_receiver_order_sites": 7,
     "offline_coordinator_sites": 12,
-    "mapping_and_output_gates": 23,
+    "mapping_and_output_gates": 100,
     "capacity_contract_sites": 5,
     "event_ring_write_sites": 8,
     "document_restore_and_identity_sites": 11,
-    "state_artifact_identity_sites": 7,
+    "state_artifact_identity_sites": 17,
 }
 
 EXPECTED_RECORD_IDS = {
@@ -135,9 +137,10 @@ EXPECTED_TEST_IDS = {
     "T-LEGACY-DISABLED-ROUNDTRIP", "T-ALL-EVENT-WRITERS",
     "T-STATE-ARTIFACT-MIGRATION", "T-ROUTING-BLOCK-DETERMINISM",
     "T-ORDINARY-CAPACITY-PERMANENT",
+    "T-ROUTING-MATRIX", "T-ARTIFACT-PRESENCE-MATRIX",
 }
 
-EXPECTED_MUTATION_CONTROLS = 105
+EXPECTED_MUTATION_CONTROLS = 116
 
 MUTATION_SCAN_RE = re.compile(
     r"(?:addDevice|removeDeviceById|moveDeviceById|setDevice[A-Za-z]+)\([^;]*(?:->|\.)chain"
@@ -167,19 +170,27 @@ REPLAY_LIFECYCLE_RE = re.compile(
     r"mirror(?:Pending|Primed|GateSampleTime|Causes)|ReplayComplete|replayAckSampleTime"
 )
 EVENT_RING_WRITE_RE = re.compile(r"\bdaw::ringWrite\s*\(")
-MAPPING_GATE_RE = re.compile(
-    r"mappingIsCurrent\(track\)|bool await(?:Any|All)ReadyTracks?\("
-    r"|m_masterFxActive.*load\(|masterTrack->controller\.sendProcessBlock\("
-    r"|EngineAudioCallback::TrackInfo info|if \(completed > 0\)"
-    r"|if \(!?runtime->hostReady\.load\(|bool mirrorOnly\s*="
-    r"|^\s*mirrorOnly\s*=\s*true|if \(!mirrorOnly|else if \(mirrorOnly"
+MAPPING_GATE_BASE_RE = re.compile(
+    r"\b(?:hostReady|active|completedBlockId|m_masterHostReady|m_masterFxActive|"
+    r"mirrorPending|mirrorPrimed)\b[^;\n]*(?:->|\.)\s*load\s*\("
+    r"|\b(?:mappingIsCurrent|readinessLevel|mirrorReplayCanComplete)\s*\("
+    r"|(?:->|\.)sendProcessBlock\s*\("
+    r"|EngineAudioCallback::TrackInfo\s+[A-Za-z_]\w*"
+    r"|bool\s+await(?:Any|All)ReadyTracks?\s*\("
 )
 DOCUMENT_IDENTITY_RE = re.compile(
-    r"[A-Za-z_]\w*\.(?:undo|redo)\(|applyDocument\(doc\)"
+    r"[A-Za-z_]\w*\.(?:undo|redo)\(|(?:->|\.)applyDocument\s*\("
     r"|[A-Za-z_]\w*\.field\(\"(?:device_id|routing|chain|mod_links|devices)\""
     r"|uint32_t deviceId"
 )
-STATE_ARTIFACT_RE = re.compile(r"plugin(?:State|Params)FileName")
+STATE_ARTIFACT_HELPER_RE = re.compile(
+    r"plugin(?:State|Params)FileName|pluginStateDirFor\s*\(|moduleStatePrefix\s*\("
+)
+STATE_ARTIFACT_PACKAGE_RE = re.compile(
+    r"std::filesystem::directory_iterator\s*\("
+    r"|[A-Za-z_]\w*\.path\(\)\.filename\(\)\.string\(\)"
+    r"|[A-Za-z_]\w*\.name\s*=\s*[A-Za-z_]\w*\s*\+\s*[A-Za-z_]\w*"
+)
 OFFLINE_ENTRYPOINT_RE = re.compile(r"\brunOfflinePump\s*\(")
 
 CARRIER_SCAN_RE = re.compile(
@@ -301,6 +312,93 @@ def derive_mutation_scan(commit: str) -> tuple[tuple[str, int], ...]:
     )
 
 
+def strip_cpp_line_comments(source: str) -> str:
+    """Remove line comments while preserving line numbers for lexical evidence scans."""
+    return "\n".join(line.split("//", 1)[0] for line in source.splitlines())
+
+
+def derive_mapping_output_gates_from_sources(
+    sources: dict[str, str],
+) -> tuple[tuple[str, int], ...]:
+    """Derive direct gates plus local aliases from stable member/type grammar.
+
+    Local names are deliberately discovered from assignments to the stable master-FX,
+    mirror-stage, and completed-block members. Renaming a receiver, witness, or local boolean
+    therefore cannot silently shrink the census.
+    """
+    found: set[tuple[str, int]] = set()
+    for path, raw_source in sorted(sources.items()):
+        source = strip_cpp_line_comments(raw_source)
+        lines = source.splitlines()
+        aliases: set[str] = set()
+
+        for match in re.finditer(
+            r"auto\s*&\s*([A-Za-z_]\w*)\s*=\s*[^;]*\.masterFxActive\s*;", source,
+        ):
+            aliases.add(match.group(1))
+        for match in re.finditer(
+            r"(?:const\s+)?(?:auto|uint32_t)\s+([A-Za-z_]\w*)\s*=\s*"
+            r"[^;]*completedBlockId[^;]*load\s*\([^;]*;",
+            source,
+            re.DOTALL,
+        ):
+            aliases.add(match.group(1))
+        for match in re.finditer(
+            r"\b([A-Za-z_]\w*)\s*=\s*[^;]*completedBlockId[^;]*load\s*\([^;]*;",
+            source,
+            re.DOTALL,
+        ):
+            aliases.add(match.group(1))
+        for match in re.finditer(
+            r"if\s*\([^{};]*mirrorPending[^{};]*load\s*\([^{};]*"
+            r"mirrorPrimed[^{};]*load\s*\([^{};]*\)\s*\)\s*\{\s*"
+            r"([A-Za-z_]\w*)\s*=\s*true\s*;",
+            source,
+            re.DOTALL,
+        ):
+            aliases.add(match.group(1))
+
+        for line_no, line in enumerate(lines, 1):
+            if MAPPING_GATE_BASE_RE.search(line):
+                found.add((path, line_no))
+            for alias in aliases:
+                if re.search(rf"\b{re.escape(alias)}\b", line):
+                    found.add((path, line_no))
+                    break
+    return tuple(sorted(found))
+
+
+def derive_mapping_output_gates(commit: str) -> tuple[tuple[str, int], ...]:
+    sources = {
+        path: git("show", f"{commit}:{path}").decode()
+        for path in production_sources(commit)
+    }
+    return derive_mapping_output_gates_from_sources(sources)
+
+
+def derive_state_artifact_sites_from_sources(
+    sources: dict[str, str],
+) -> tuple[tuple[str, int], ...]:
+    """Derive filename/directory helpers and the module package-name boundary."""
+    found: set[tuple[str, int]] = set()
+    for path, raw_source in sorted(sources.items()):
+        source = strip_cpp_line_comments(raw_source)
+        for line_no, line in enumerate(source.splitlines(), 1):
+            if STATE_ARTIFACT_HELPER_RE.search(line):
+                found.add((path, line_no))
+            if path == "apps/project_file.cpp" and STATE_ARTIFACT_PACKAGE_RE.search(line):
+                found.add((path, line_no))
+    return tuple(sorted(found))
+
+
+def derive_state_artifact_sites(commit: str) -> tuple[tuple[str, int], ...]:
+    sources = {
+        path: git("show", f"{commit}:{path}").decode()
+        for path in production_sources(commit)
+    }
+    return derive_state_artifact_sites_from_sources(sources)
+
+
 def population_pairs(manifest: dict, name: str) -> list[tuple[str, int]]:
     return sorted((entry["path"], entry["line"]) for entry in manifest["populations"][name])
 
@@ -384,6 +482,8 @@ def render(manifest: dict) -> str:
         "",
         "## Frozen populations",
         "",
+        f"- Routing decision rows: {len(manifest['routing_matrix']['rows'])}.",
+        f"- Artifact presence rows: {len(manifest['artifact_presence_matrix']['rows'])}.",
         f"- Governed files: {len(manifest['governed_files'])}.",
         f"- Readiness publishers: {len(p['host_ready_true_sites'])}.",
         f"- TrackStateSnapshot publications: {len(p['track_snapshot_publications'])}.",
@@ -438,7 +538,59 @@ def validate_exact_sections(manifest: dict) -> None:
         refuse(observed != EXPECTED_SECTION_DIGESTS[key], f"canonical section changed: {key}")
 
 
+def validate_decision_matrices(manifest: dict) -> None:
+    routing = manifest["routing_matrix"]
+    lanes = ["midi_in", "midi_out", "audio_in", "audio_out", "sidechain"]
+    kinds = ["None", "Master", "Track", "ExternalInput"]
+    refuse(routing.get("lanes") != lanes or routing.get("kinds") != kinds,
+           "routing matrix axes changed")
+    rows = routing.get("rows")
+    refuse(not isinstance(rows, list) or len(rows) != 20, "routing matrix is not 5x4")
+    observed = [(row.get("lane"), row.get("kind")) for row in rows]
+    expected = [(lane, kind) for lane in lanes for kind in kinds]
+    refuse(observed != expected or len(set(observed)) != 20,
+           "routing matrix does not cover each lane/kind exactly once")
+    refuse(sum(row.get("valid") is True for row in rows) != 14,
+           "routing matrix valid-row count changed")
+    for row in rows:
+        refuse(set(row) != {"lane", "kind", "valid", "effect", "id_rule"},
+               f"routing row shape changed: {row.get('lane')}/{row.get('kind')}")
+        refuse(not isinstance(row["valid"], bool) or not row["effect"] or not row["id_rule"],
+               f"routing row is undecidable: {row['lane']}/{row['kind']}")
+    normalization = routing.get("normalization", {})
+    refuse(normalization.get("complementary_pairs") !=
+           ["midi_out->midi_in", "audio_out->audio_in"],
+           "routing complementary pairs changed")
+    refuse(normalization.get("track_edge_latency_blocks") != 1,
+           "routing Track latency is not one block")
+    refuse(normalization.get("fan_in_order") !=
+           ["sourceTrackId", "sourceBus", "channel"],
+           "routing fan-in order changed")
+    for key in ("exact_duplicate", "source_output_cardinality", "input_none",
+                "input_track", "input_external", "output_none", "cycle_policy",
+                "pre_fader_rule", "aux_child_rule"):
+        refuse(not normalization.get(key), f"routing normalization rule missing: {key}")
+
+    artifacts = manifest["artifact_presence_matrix"]
+    artifact_rows = artifacts.get("rows")
+    refuse(not isinstance(artifact_rows, list) or len(artifact_rows) != 4,
+           "artifact presence matrix is not 2x2")
+    combinations = [(row.get("state_blob"), row.get("parameter_manifest"))
+                    for row in artifact_rows]
+    refuse(combinations != [(False, False), (True, False), (False, True), (True, True)],
+           "artifact presence matrix combinations changed")
+    for row in artifact_rows:
+        refuse(set(row) != {"state_blob", "parameter_manifest", "load_outcome",
+                            "retained_for_save", "module_entries"},
+               f"artifact row shape changed: {row}")
+        refuse(not row["load_outcome"] or not row["retained_for_save"] or
+               not row["module_entries"], "artifact row is undecidable")
+    for key in ("present_file_rules", "legacy_precedence", "save_rules", "package_rules"):
+        refuse(not artifacts.get(key), f"artifact decision rule missing: {key}")
+
+
 def validate_graph_and_semantics(manifest: dict) -> None:
+    validate_decision_matrices(manifest)
     records = manifest["records"]
     tests = manifest["test_cases"]
     ids = [record.get("id") for record in records]
@@ -446,7 +598,7 @@ def validate_graph_and_semantics(manifest: dict) -> None:
     refuse(len(ids) != len(set(ids)) or set(ids) != EXPECTED_RECORD_IDS,
            "record id population changed")
     refuse(set(manifest["changed_records"]) != EXPECTED_RECORD_IDS,
-           "schema-v7 changed-record closure is incomplete")
+           "schema-v8 changed-record closure is incomplete")
     refuse(len(test_ids) != len(set(test_ids)) or set(test_ids) != EXPECTED_TEST_IDS,
            "test id population changed")
     by_id = {record["id"]: record for record in records}
@@ -501,9 +653,17 @@ def validate_graph_and_semantics(manifest: dict) -> None:
     ):
         refuse(token not in authority, f"session authority weakened: missing {token}")
     routing = by_id["R-ROUTING-AUTHORITY"]["statement"]
-    for token in ("session ExecutionSnapshot revision", "None reaches neither master",
-                  "Master reaches master only", "Track(target) reaches that destination only",
-                  "ExternalInput is invalid", "contradictory endpoints fail compilation",
+    for token in ("session ExecutionSnapshot revision", "machine-readable routing_matrix",
+                  "all 20 rows", "None contributes no declaration",
+                  "aux children are derived parent-owned output-bus projections",
+                  "audio_out Master reaches master only",
+                  "ExternalInput is valid only for midi_in, audio_in, and sidechain",
+                  "one-sided Track declarations create an edge",
+                  "exact input/output duplicates coalesce once",
+                  "each source has at most one Track or Master sink",
+                  "input None permits output-declared fan-in",
+                  "input Track(source) constrains", "input ExternalInput conflicts",
+                  "A.audioOut=B with B.audioIn=C",
                   "block N-1", "graph cycles are legal", "one-block-per-edge feedback",
                   "ascending {sourceTrackId, sourceBus, channel}",
                   "sidechain Track edge is additive", "one block per Track edge",
@@ -516,8 +676,14 @@ def validate_graph_and_semantics(manifest: dict) -> None:
                   "never reuses", "undo/redo", "0x8000", "globally duplicate",
                   "{trackId, oldDeviceId}->newDeviceId", "rewrites every device",
                   "LegacyArtifactKey{trackId, oldDeviceId}", "pluginStateFileName",
-                  "pluginParamsFileName", "canonical files", "only canonical artifacts",
-                  "Stale legacy aliases are ignored", "missing required artifact migration",
+                  "pluginParamsFileName", "machine-readable artifact_presence_matrix",
+                  "all four independent optional", "absence is successful",
+                  "present unreadable/empty blob", "malformed/key-mismatched manifest",
+                  "manifest's embedded ids are rewritten",
+                  "unavailable capture is an explicit nonfatal absence",
+                  "failed write of available bytes reports artifact error",
+                  "allowlist from current hosted devices", "ignores every stale alias",
+                  "Stale legacy aliases are ignored",
                   "Exhaustion", "fails load"):
         refuse(token not in device_ids, f"device-id lifetime weakened: missing {token}")
     mirror = by_id["R-MIRROR-INSTANCE-IDENTITY"]["statement"]
@@ -641,6 +807,14 @@ def validate_population_lines(manifest: dict, governed_paths: set[str]) -> None:
         observed_classes[classification] = observed_classes.get(classification, 0) + 1
     refuse(observed_classes != writer_classes, "event writer classifications changed")
 
+    for name, classification in (
+        ("mapping_and_output_gates", "readiness_output_dispatch_dataflow_candidate"),
+        ("state_artifact_identity_sites", "plugin_artifact_key_directory_or_package_boundary"),
+    ):
+        refuse(any(entry.get("classification") != classification
+                   for entry in manifest["populations"][name]),
+               f"derived population classification changed: {name}")
+
 
 def validate_frozen_evidence(manifest: dict) -> None:
     frozen = EXPECTED_EXTERNAL["frozen_product"]
@@ -748,12 +922,8 @@ def validate_frozen_evidence(manifest: dict) -> None:
             frozen["commit"], DOCUMENT_IDENTITY_RE, DOCUMENT_IDENTITY_PATHS,
             skip_line_comments=True,
         ),
-        "mapping_and_output_gates": derive_line_scan(
-            frozen["commit"], MAPPING_GATE_RE, skip_line_comments=True,
-        ),
-        "state_artifact_identity_sites": derive_line_scan(
-            frozen["commit"], STATE_ARTIFACT_RE, skip_line_comments=True,
-        ),
+        "mapping_and_output_gates": derive_mapping_output_gates(frozen["commit"]),
+        "state_artifact_identity_sites": derive_state_artifact_sites(frozen["commit"]),
     }
     for name, observed in derived_scans.items():
         refuse(list(observed) != population_pairs(manifest, name), f"derived census drifted: {name}")
@@ -777,7 +947,7 @@ def validate(
     validate_exact_sections(manifest)
     for key, identity in EXPECTED_EXTERNAL.items():
         refuse(manifest[key] != identity, f"external identity changed: {key}")
-    refuse(manifest["schema"] != "ae-p1.2-g2b-item18-packet/7", "schema is not v7")
+    refuse(manifest["schema"] != "ae-p1.2-g2b-item18-packet/8", "schema is not v8")
     refuse(len(manifest["records"]) != EXPECTED_COUNTS["records"], "record count changed")
     refuse(len(manifest["test_cases"]) != EXPECTED_COUNTS["test_cases"], "test count changed")
     validate_graph_and_semantics(manifest)
@@ -827,18 +997,62 @@ def self_test(manifest: dict) -> int:
         ),
         "replay stage lifecycle": (REPLAY_LIFECYCLE_RE, "runtime.mirrorPending.store(true);"),
         "event ring writer": (EVENT_RING_WRITE_RE, "daw::ringWrite(events, entry);"),
-        "document restore": (DOCUMENT_IDENTITY_RE, "deps.applyDocument(doc);"),
+        "document restore renamed argument": (
+            DOCUMENT_IDENTITY_RE, "deps.applyDocument(candidate);"
+        ),
         "renamed undo owner": (DOCUMENT_IDENTITY_RE, "timeline.undo();"),
         "renamed document visitor": (
             DOCUMENT_IDENTITY_RE, 'walker.field("device_id", &Device::id, 0u);'
         ),
-        "mapping output gate": (MAPPING_GATE_RE, "if (!mirrorOnly && isPlaying) {}"),
-        "state artifact key": (STATE_ARTIFACT_RE, "pluginStateFileName(track, id);"),
+        "renamed readiness receiver": (
+            MAPPING_GATE_BASE_RE,
+            "if (!candidate->hostReady.load(std::memory_order_acquire)) {}",
+        ),
+        "state artifact key": (
+            STATE_ARTIFACT_HELPER_RE, "pluginStateFileName(track, id);"
+        ),
+        "renamed package entry": (
+            STATE_ARTIFACT_PACKAGE_RE, "archive.name = stem + leaf;"
+        ),
         "receiver priority": (REPLAY_ORDER_RE, "return EventType::Param;"),
         "offline call": (OFFLINE_ENTRYPOINT_RE, "daw::engine::runOfflinePump(deps);"),
     }
     for name, (pattern, text) in scanner_fixtures.items():
         refuse(pattern.search(text) is None, f"scanner fixture missed: {name}")
+
+    renamed_gate_source = """auto& enabled = deps.masterFxActive;
+if (!enabled.load(std::memory_order_acquire)) {}
+bool primer = false;
+if (node->mirrorPending.load(std::memory_order_acquire) &&
+    !node->mirrorPrimed.load(std::memory_order_acquire)) {
+  primer = true;
+}
+if (!primer && playing) {}
+uint32_t witness = node->completedBlockId.load(std::memory_order_acquire);
+if (witness > 0) {}
+if (!candidate->hostReady.load(std::memory_order_acquire)) {}
+EngineAudioCallback::TrackInfo projection;
+candidate->controller.sendProcessBlock(block);
+"""
+    expected_renamed_gates = tuple(("apps/renamed.cpp", line) for line in
+                                   (1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13))
+    refuse(derive_mapping_output_gates_from_sources(
+        {"apps/renamed.cpp": renamed_gate_source}
+    ) != expected_renamed_gates, "renamed readiness/output dataflow fixture missed")
+
+    renamed_package_source = """pluginStateFileName(track_id, device_id);
+for (const auto& item : std::filesystem::directory_iterator(root)) {}
+names.push_back(item.path().filename().string());
+ZipEntry archive;
+archive.name = stem + leaf;
+"""
+    expected_package = tuple(("apps/project_file.cpp", line) for line in (1, 2, 3, 5))
+    refuse(derive_state_artifact_sites_from_sources({
+        "apps/project_file.cpp": renamed_package_source,
+        "apps/other.cpp":
+            "for (auto& x : std::filesystem::directory_iterator(root)) {}\n",
+    }) != expected_package, "renamed package-boundary fixture missed")
+    structural_scanner_controls = 2
 
     cases: list[tuple[str, dict]] = []
     def add(name: str, candidate: dict) -> None:
@@ -858,6 +1072,18 @@ def self_test(manifest: dict) -> int:
     candidate = copy.deepcopy(manifest)
     candidate["governed_files"][0]["sha256"] = "0" * 64
     add("governed digest substitution", candidate)
+    candidate = copy.deepcopy(manifest)
+    candidate["routing_matrix"]["rows"].pop()
+    add("routing matrix row deletion", candidate)
+    candidate = copy.deepcopy(manifest)
+    candidate["routing_matrix"]["rows"][0]["valid"] = False
+    add("routing matrix result substitution", candidate)
+    candidate = copy.deepcopy(manifest)
+    candidate["artifact_presence_matrix"]["rows"].pop()
+    add("artifact matrix row deletion", candidate)
+    candidate = copy.deepcopy(manifest)
+    candidate["artifact_presence_matrix"]["package_rules"] = ""
+    add("artifact package rule deletion", candidate)
 
     for population in sorted(manifest["populations"]):
         candidate = copy.deepcopy(manifest)
@@ -888,6 +1114,7 @@ def self_test(manifest: dict) -> int:
         "T-SESSION-BLOCK-ATOMIC", "T-LEGACY-DISABLED-ROUNDTRIP",
         "T-ALL-EVENT-WRITERS", "T-STATE-ARTIFACT-MIGRATION",
         "T-ROUTING-BLOCK-DETERMINISM", "T-ORDINARY-CAPACITY-PERMANENT",
+        "T-ROUTING-MATRIX", "T-ARTIFACT-PRESENCE-MATRIX",
     ):
         candidate = copy.deepcopy(manifest)
         next(case for case in candidate["test_cases"] if case["id"] == test_id)[
@@ -903,8 +1130,8 @@ def self_test(manifest: dict) -> int:
             refused += 1
         else:
             raise Refused(f"mutation was accepted: {name}")
-    controls = len(scanner_fixtures) + len(cases)
-    refused_controls = len(scanner_fixtures) + refused
+    controls = len(scanner_fixtures) + structural_scanner_controls + len(cases)
+    refused_controls = len(scanner_fixtures) + structural_scanner_controls + refused
     refuse(controls != EXPECTED_MUTATION_CONTROLS,
            f"mutation-control population changed: {controls}")
     refuse(refused_controls != EXPECTED_MUTATION_CONTROLS,
@@ -921,9 +1148,11 @@ def main() -> int:
     validate(manifest)
     controls = self_test(manifest)
     p = manifest["populations"]
-    print("AE-P1.2 G2-B item 18 schema-v7 packet: PASS")
+    print("AE-P1.2 G2-B item 18 schema-v8 packet: PASS")
     print(f"  records: {len(manifest['records'])}")
     print(f"  tests: {len(manifest['test_cases'])}")
+    print(f"  routing decision rows: {len(manifest['routing_matrix']['rows'])}")
+    print(f"  artifact presence rows: {len(manifest['artifact_presence_matrix']['rows'])}")
     print(f"  governed files: {len(manifest['governed_files'])}")
     print(f"  readiness publishers: {len(p['host_ready_true_sites'])}")
     print(f"  snapshot publications: {len(p['track_snapshot_publications'])}")
