@@ -103,8 +103,9 @@ watcher:  none (required for Codex)
 | `AE-P0.2 implementation` | `COMPLETE` | packet `6287ffd` approved + AE-P0.1 integration | codex-worker-2 | claude-worker-2 | `/Users/jak/src/daw-ae-p0-2-lane0` | product main `75c6f06`; final corrective candidate independently approved |
 | `AE-P0.3` | `CAPTURE TAKEN` | decision 4 ruled 2026-08-14; credentialed line OBSERVED and byte-matched | `lead` | unassigned | none | attestation now rests on an observation, not a transcription |
 | `AE-P1.1` | `FROZEN` | `AE-P0` | claude-worker-2 | codex-worker-1 | `/Users/jak/src/daw-ae-p1-1-packet` | `ba88bcb4657b62bdfc752d338d877e139e212ca6`; independent PASS; successor-only |
-| `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; of the 8 open PRODUCT items: 7, 14, 16, 26, 28, 35, 36 CLOSED; item 15's planning choice is CLOSED by focused successor `8ee5b3cd`, but product implementation is NOT authorized until item 18 supplies its acceptance oracle and the readiness/chain-publication census is complete. G4 not decidable |
-| `AE-P1.2 G2-B item 15` | `PLANNING CLOSED; IMPLEMENTATION BLOCKED` | item 18 + publication census | `backend` | independent subagent x2 | `/Users/jak/src/daw-ae-p1-2-g2b-item15-packet` | packet `8ee5b3cd` / manifest `a9583a4c`; caller-held `unique_lock` capability, immutable authored plan, PASS 3 superseded, partial-stream disconnect; final semantic and evidence reviews PASS; no product edit authorized |
+| `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; of the 8 open PRODUCT items: 7, 14, 16, 26, 28, 35, 36 CLOSED; item 15 planning is closed by `8ee5b3cd`, and item 18's exact oracle/publication census is dual-PASS at `34f0d7b3`, so the combined item-15/item-18 implementation gate is open. Product implementation has not started. G4 not decidable |
+| `AE-P1.2 G2-B item 15` | `PLANNING CLOSED; IMPLEMENTATION AUTHORIZED` | item 18 exact dual PASS satisfied | `backend` | independent subagent x2 | `/Users/jak/src/daw-ae-p1-2-g2b-item15-packet` | packet `8ee5b3cd` / manifest `a9583a4c`; caller-held `unique_lock` capability, immutable authored plan, PASS 3 superseded, partial-stream disconnect; item 18 `34f0d7b3` now supplies the required acceptance oracle and publication census; product implementation has not started |
+| `AE-P1.2 G2-B item 18` | `PLANNING CLOSED; IMPLEMENTATION AUTHORIZED` | exact same-SHA semantic + evidence PASS satisfied | `backend` | independent subagent x2 | `/Users/jak/src/daw-ae-p1-2-g2b-item18-packet` | packet `34f0d7b3` / tree `62ea5d7f` / manifest `4fcd463c`; 33 records, 39 tests, 89 governed files, 100 gates, 118/118 mutation controls; immutable digest artifact inventory closes stale-file provenance; product implementation has not started |
 | `AE-P1.3` | `FIXED, REVIEWED` | the `AE-P1.2` dependency was phase ordering, re-derived 2026-08-14 | `backend` | independent subagent x2 | `/Users/jak/src/daw-ae-p1-3-nonoverlap-packet` | packet `a4f7abc5` / manifest `da0204dd`; product `542d8838`, evidence `92dfdfe2`; 25 regions + reserved header validated before publication, cached geometry only; both final reviews PASS |
 | `AE-P1.4` | `GATE MET` | the `AE-P0` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent | none | 5 plain writes fixed; watchdog use-after-free fixed; TSan evidence DELIVERED — `tsan_command_hammer.sh` 108 commands landed / 0 races, and `tsan_render.sh` 1 race -> 0 after the RenderPool fix |
 | `RenderPool race` | `FIXED, REVIEWED` | found by `AE-P1.4`'s instrument | `lead` | independent subagent | none | straggler read `m_fn`/`m_count` unlocked across a batch handover: null deref, out-of-range item, and an `m_remaining` underflow that HANGS the producer; generation packed into the claim counter; review returned SAFE-TO-MERGE with 3 defects (store order, a 2^32 count re-opening the hang, a wrong wrap figure) — all fixed at `a4345f33` |
@@ -6189,3 +6190,47 @@ source was edited, built, or run under this packet. `implementation_authorized` 
 item 18 must supply an executable replacement for withdrawn G2-B PASS 4, and a successor must
 inventory every readiness-true and chain-edit publication site and define their linearization before
 an implementation ticket can be generated.
+
+## AE-P1.2 G2-B item 18 planning closed; implementation authorized (2026-08-18)
+
+Focused successor `34f0d7b3abe6918a3578b0c5852ee22476bd8a75` (tree
+`62ea5d7f7f2128d0cabc87afc4f0f04b633bb486`, manifest SHA-256
+`4fcd463c3ca68c63f7100ae13874fe5620920b2ed76d0f1d4b905da1ec6a9a41`) is the frozen item-18
+release candidate. It was reviewed against clean product commit
+`92dfdfe23cc7ff93f2ce14894a35d089e3d9e2b8` (tree
+`238ac970b5d61fe16055ede4c43a2978ddb11da7`). The packet branch is
+`ae/p1-2-g2b-item18-packet`, and the absolute review worktree is
+`/Users/jak/src/daw-ae-p1-2-g2b-item18-packet`.
+
+The packet makes the combined item-15/item-18 implementation acceptance-decidable. One immutable
+session `ExecutionSnapshot` becomes the execution authority; the routing contract covers all 20
+lane-by-kind rows; session block publication is two-phase across every host event writer; replay,
+readiness, output, document restore, device/target carriers, and state-artifact sites are bounded
+populations rather than prose samples. The production fixture binds the track and master senders to
+the same dispatch seam and includes realtime and offline terminal-failure outcomes.
+
+The last semantic blocker was stale artifact provenance. Schema v9 closes it structurally: legacy
+import reads only the retained old key and records each side as `ExplicitAbsent` or `Present`;
+schema-6 documents reference an immutable generation plus sorted, per-entry digest inventory; save
+publishes and verifies the generation before atomically replacing the document reference; load and
+module assembly consume only that exact verified inventory and never enumerate ambient state files.
+For both blob and manifest, the negative control fixes the failed case: absent old key plus stale
+canonical-looking new file plus unavailable live capture remains absent and unpackaged.
+
+The exact packet checker passes with 33 records, 39 tests, 20 routing rows, four artifact-presence
+rows, 89 governed files, 17 artifact identity sites, 100 mapping/output/readiness/producer gates,
+and 118/118 mutation controls refused. It also verifies that implementation authorization is false
+before dual PASS and true only after same-SHA semantic and evidence PASS.
+
+Two fresh independent reviewers evaluated the exact commit above. The evidence reviewer returned
+PASS after checking identities, generated prose, governed hashes and locators, derived populations,
+decision matrices, checker self-mutations, and authorization. The semantic reviewer independently
+returned PASS after checking the complete contract, especially the stale-file negative path,
+generation commit order, retained fallback, module consumption, routing, dispatch transactions,
+identity migration, replay, readiness, and output gates. No blocker was waived and no reviewed byte
+changed afterward.
+
+No product source was edited, built, or run while the implementation gate was closed. Exact
+same-SHA dual PASS now satisfies item 18 and the dependency recorded by item 15, so product
+implementation is authorized but not yet started. Any change to the frozen packet requires a named
+successor and a new dual review.
