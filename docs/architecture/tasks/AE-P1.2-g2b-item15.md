@@ -6,8 +6,8 @@ Status: `REVIEW_CANDIDATE`. Owner: `backend`.
 Frozen product: `92dfdfe23cc7ff93f2ce14894a35d089e3d9e2b8` (tree `238ac970b5d61fe16055ede4c43a2978ddb11da7`).
 Program source: `02e984f578d1e08ff0773c354ce87aa7826f7f06` (tree `b7965c847d40ec8e4ef5b19359782ac28e49e4c7`).
 Successor to packet `2b5f0747f1b7dde79ae788af3826c49c78df5d2a` / manifest `c321130b860fda73991f04d1035bea7af03faf6e030fce5565664c1657ce093e`.
-Revision successor to `4a70972ac468d7c1320e95e940b3d4fbcbdd829c` / manifest `2c31f168c841f6a81c8f091283092108f9bec7fac1e80b05a92a7de9db3842cb`.
-Reopening reason: The first focused successor at 4a70972a was blocked by both independent reviews: it left manifest and packet locators unresolved, promoted a permitted probe confounder into observed history, contradicted predecessor PASS 3 without superseding it or item 16, and did not prove a poisoned partial stream is disconnected before an already-waiting offline dispatcher acquires the controller lock.
+Revision successor to `978dd9e31290551f343b581953c893cf15200c49` / manifest `45a1fb6a5a58363e2ff846c50dfc4f1c34df321f43e75c821460d97c75fa9502`.
+Reopening reason: The semantic review passed 978dd9e3, but evidence review found the second locator fail-open: frozen ranges and governed hashes were read from mutable packet-checkout files rather than immutable blobs at frozen_product.commit, and frozen paths allowed absolute or parent traversal. Schema v2 adds one safe repository-path grammar, pinned-blob reads, and negative controls for traversal and a self-updated governed hash.
 
 ## Scope
 
@@ -19,6 +19,11 @@ Implementation authorized: `false`.
 
 - AE-P1.2 item 18: executable acceptance for the ruled two-level readiness model
 - A complete chain-edit linearization and hostReady publication-site census
+
+## Review history
+
+- `4a70972ac468d7c1320e95e940b3d4fbcbdd829c`: semantic `BLOCKED`, evidence `BLOCKED`. 978dd9e3 added PASS 3/item 16 supersession, bounded confounder language, stale-offline-waiter coverage, manifest/packet locator resolution, and four new mutations.
+- `978dd9e31290551f343b581953c893cf15200c49`: semantic `PASS`, evidence `BLOCKED`. This schema-v2 successor constrains repository paths, reads frozen evidence from the pinned commit, compares governed hashes to pinned blobs and current packet bytes, and adds two structural mutations.
 
 ## Records
 
@@ -36,7 +41,7 @@ Implementation authorized: `false`.
 - `R-NO-AUTHORIZATION` [ruling / DECIDED]: This successor closes only item 15's planning choice. It cannot authorize product work until item 18 supplies an executable acceptance oracle and the successor inventories every readiness-true and chain-edit publication site.
 - `D-DETERMINISTIC-SEAM` [test_decision / PLANNED]: The implementation test uses a fake staging sender and barriers, not socket-buffer timing: it proves lock ownership and ordering, the superseded guard control, RT try-lock behavior before an offline waiter, exact per-slot staging, stale-plan refusal, and failure withdrawal plus disconnect before a stale offline waiter can dispatch.
 - `CTRL-PACKET` [control / EXECUTABLE]: python3 tools/architecture/ae_p1_2_g2b_item15_check.py verifies identities, governed bytes, resolves frozen/predecessor ranges and manifest/packet locators, checks dependency closure and bounded confounder anchors, and enforces byte-identical generated prose.
-- `CTRL-MUTATIONS` [control / EXECUTABLE]: The same checker self-tests removal of the caller-held ruling, false implementation authorization, omission of the partial-frame case, a broken dependency, a missing manifest pointer, an absent packet path, probe overclaim, and loss of the PASS 3 supersession. Each mutation must be refused.
+- `CTRL-MUTATIONS` [control / EXECUTABLE]: The same checker self-tests removal of the caller-held ruling, false implementation authorization, omission of the partial-frame case, a broken dependency, a missing manifest pointer, an absent packet path, probe overclaim, loss of the PASS 3 supersession, parent and absolute frozen-path traversal, and a self-updated governed hash. Each mutation must be refused.
 
 ## Required future test cases
 

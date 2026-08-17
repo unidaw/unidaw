@@ -21,7 +21,7 @@ TOP_LEVEL_KEYS = {
     "schema", "ticket", "status", "owner", "predecessor", "reopening_reason",
     "revision_predecessor", "program_source", "frozen_product", "scope", "implementation_authorized",
     "blocked_by", "non_goals", "governed_files", "changed_records", "records",
-    "test_cases",
+    "review_history", "test_cases",
 }
 REQUIRED_RECORDS = {
     "G-ITEM15", "DEP-PREDECESSOR", "DEP-FROZEN-BASE", "DEP-ITEM16", "DEP-ITEM18",
@@ -60,17 +60,28 @@ def load_manifest() -> dict:
     return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
 
+def safe_repo_path(path_text: str, authority: str) -> str:
+    refuse(not path_text or "\\" in path_text, f"unsafe {authority} path: {path_text}")
+    relative = Path(path_text)
+    refuse(relative.is_absolute() or ".." in relative.parts or "." in relative.parts,
+           f"unsafe {authority} path: {path_text}")
+    canonical = relative.as_posix()
+    refuse(canonical != path_text, f"non-canonical {authority} path: {path_text}")
+    return canonical
+
+
 def source_lines(manifest: dict, locator: str) -> list[str]:
     match = re.fullmatch(r"(frozen|predecessor):([^:]+):(\d+)-(\d+)", locator)
     refuse(match is None, f"unparseable source locator: {locator}")
-    authority, path, first_text, last_text = match.groups()
+    authority, path_text, first_text, last_text = match.groups()
+    path = safe_repo_path(path_text, authority)
     first, last = int(first_text), int(last_text)
     refuse(first < 1 or last < first, f"invalid source range: {locator}")
     if authority == "frozen":
-        data = (ROOT / path).read_text(encoding="utf-8")
+        commit = manifest["frozen_product"]["commit"]
     else:
         commit = manifest["predecessor"]["packet_commit"]
-        data = git("show", f"{commit}:{path}").decode()
+    data = git("show", f"{commit}:{path}").decode()
     lines = data.splitlines()
     refuse(last > len(lines), f"source range exceeds file: {locator}")
     return lines[first - 1:last]
@@ -96,9 +107,7 @@ def resolve_manifest_pointer(manifest: dict, locator: str) -> object:
 
 def resolve_packet_path(locator: str) -> Path:
     refuse(not locator.startswith("packet:"), f"unparseable packet locator: {locator}")
-    relative = Path(locator[len("packet:"):])
-    refuse(relative.is_absolute() or ".." in relative.parts,
-           f"unsafe packet locator: {locator}")
+    relative = Path(safe_repo_path(locator[len("packet:"):], "packet"))
     resolved = (ROOT / relative).resolve()
     refuse(resolved != ROOT and ROOT.resolve() not in resolved.parents,
            f"packet locator escapes root: {locator}")
@@ -124,6 +133,11 @@ def render(manifest: dict) -> str:
         "", "## Blocked by", "",
     ]
     lines.extend(f"- {item}" for item in manifest["blocked_by"])
+    lines.extend(["", "## Review history", ""])
+    for review in manifest["review_history"]:
+        lines.append(
+            f"- `{review['packet_commit']}`: semantic `{review['semantic']}`, evidence `{review['evidence']}`. {review['resolution']}"
+        )
     lines.extend(["", "## Records", ""])
     for record in manifest["records"]:
         lines.append(
@@ -144,12 +158,26 @@ def render(manifest: dict) -> str:
 
 def validate(manifest: dict, *, verify_files: bool = True, verify_prose: bool = True) -> None:
     refuse(set(manifest) != TOP_LEVEL_KEYS, "top-level manifest shape changed")
-    refuse(manifest["schema"] != "ae-p1.2-g2b-item15-packet/1", "schema changed")
+    refuse(manifest["schema"] != "ae-p1.2-g2b-item15-packet/2", "schema changed")
     refuse(manifest["ticket"] != "AE-P1.2-G2B-ITEM15", "ticket changed")
     refuse(manifest["status"] != "REVIEW_CANDIDATE", "packet is not a review candidate")
     refuse(manifest["implementation_authorized"] is not False,
            "item 15 packet must not authorize implementation")
     refuse(len(manifest["blocked_by"]) != 2, "implementation blockers changed")
+    refuse(manifest["review_history"] != [
+        {
+            "packet_commit": "4a70972ac468d7c1320e95e940b3d4fbcbdd829c",
+            "semantic": "BLOCKED",
+            "evidence": "BLOCKED",
+            "resolution": "978dd9e3 added PASS 3/item 16 supersession, bounded confounder language, stale-offline-waiter coverage, manifest/packet locator resolution, and four new mutations.",
+        },
+        {
+            "packet_commit": "978dd9e31290551f343b581953c893cf15200c49",
+            "semantic": "PASS",
+            "evidence": "BLOCKED",
+            "resolution": "This schema-v2 successor constrains repository paths, reads frozen evidence from the pinned commit, compares governed hashes to pinned blobs and current packet bytes, and adds two structural mutations.",
+        },
+    ], "review history changed")
 
     records = manifest["records"]
     ids = [record.get("id") for record in records]
@@ -239,10 +267,14 @@ def validate(manifest: dict, *, verify_files: bool = True, verify_prose: bool = 
         refuse(paths != sorted(paths) or len(paths) != len(set(paths)),
                "governed file paths must be sorted and unique")
         for entry in manifest["governed_files"]:
-            path = ROOT / entry["path"]
+            governed_path = safe_repo_path(entry["path"], "governed")
+            path = ROOT / governed_path
             refuse(not path.is_file(), f"missing governed file: {entry['path']}")
+            frozen_bytes = git("show", f"{frozen['commit']}:{governed_path}")
+            refuse(sha256(frozen_bytes) != entry["sha256"],
+                   f"governed frozen-blob mismatch: {entry['path']}")
             refuse(sha256(path.read_bytes()) != entry["sha256"],
-                   f"governed file drift: {entry['path']}")
+                   f"governed packet-checkout drift: {entry['path']}")
 
         produce = "\n".join(source_lines(
             manifest, "frozen:apps/engine_produce_block.cpp:1072-1100"))
@@ -308,9 +340,25 @@ def self_test(manifest: dict) -> None:
         "hookEntryHostReady must be TRUE."
     cases.append(("PASS 3 supersession lost", old_pass3))
 
-    for name, candidate in cases:
+    traversal = copy.deepcopy(manifest)
+    next(r for r in traversal["records"] if r["id"] == "E-PROBE-CONFOUNDER")["source_span"][0] = \
+        "frozen:../outside:1-1"
+    cases.append(("frozen path traversal", traversal))
+
+    absolute = copy.deepcopy(manifest)
+    next(r for r in absolute["records"] if r["id"] == "E-PROBE-CONFOUNDER")["source_span"][0] = \
+        "frozen:/etc/passwd:1-1"
+    cases.append(("absolute frozen path", absolute))
+
+    self_updated_hash = copy.deepcopy(manifest)
+    self_updated_hash["governed_files"][0]["sha256"] = "0" * 64
+    cases.append(("self-updated governed hash", self_updated_hash, True))
+
+    for case in cases:
+        name, candidate = case[0], case[1]
+        verify_files = bool(case[2]) if len(case) == 3 else False
         try:
-            validate(candidate, verify_files=False, verify_prose=False)
+            validate(candidate, verify_files=verify_files, verify_prose=False)
         except Refused:
             continue
         raise Refused(f"mutation was accepted: {name}")
@@ -326,7 +374,7 @@ def main() -> int:
     print("AE-P1.2 G2-B item 15 packet: PASS")
     print(f"  records: {len(manifest['records'])}")
     print(f"  governed files: {len(manifest['governed_files'])}")
-    print(f"  mutation controls: 8/8 refused")
+    print(f"  mutation controls: 11/11 refused")
     print("  implementation authorized: false")
     return 0
 

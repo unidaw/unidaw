@@ -1,19 +1,33 @@
 {
-  "schema": "ae-p1.2-g2b-item15-packet/1",
+  "schema": "ae-p1.2-g2b-item15-packet/2",
   "ticket": "AE-P1.2-G2B-ITEM15",
   "status": "REVIEW_CANDIDATE",
   "owner": "backend",
   "revision_predecessor": {
-    "packet_commit": "4a70972ac468d7c1320e95e940b3d4fbcbdd829c",
-    "packet_tree": "d5df33ca95f49a5cafb00b3e67aa6d267ef08e7f",
-    "manifest_sha256": "2c31f168c841f6a81c8f091283092108f9bec7fac1e80b05a92a7de9db3842cb"
+    "packet_commit": "978dd9e31290551f343b581953c893cf15200c49",
+    "packet_tree": "27effb8771b055645236aaca9aacad471b52c2c2",
+    "manifest_sha256": "45a1fb6a5a58363e2ff846c50dfc4f1c34df321f43e75c821460d97c75fa9502"
   },
   "predecessor": {
     "packet_commit": "2b5f0747f1b7dde79ae788af3826c49c78df5d2a",
     "packet_tree": "7c75beb7b941c06a6099292fbf4dac6ade503a6a",
     "manifest_sha256": "c321130b860fda73991f04d1035bea7af03faf6e030fce5565664c1657ce093e"
   },
-  "reopening_reason": "The first focused successor at 4a70972a was blocked by both independent reviews: it left manifest and packet locators unresolved, promoted a permitted probe confounder into observed history, contradicted predecessor PASS 3 without superseding it or item 16, and did not prove a poisoned partial stream is disconnected before an already-waiting offline dispatcher acquires the controller lock.",
+  "reopening_reason": "The semantic review passed 978dd9e3, but evidence review found the second locator fail-open: frozen ranges and governed hashes were read from mutable packet-checkout files rather than immutable blobs at frozen_product.commit, and frozen paths allowed absolute or parent traversal. Schema v2 adds one safe repository-path grammar, pinned-blob reads, and negative controls for traversal and a self-updated governed hash.",
+  "review_history": [
+    {
+      "packet_commit": "4a70972ac468d7c1320e95e940b3d4fbcbdd829c",
+      "semantic": "BLOCKED",
+      "evidence": "BLOCKED",
+      "resolution": "978dd9e3 added PASS 3/item 16 supersession, bounded confounder language, stale-offline-waiter coverage, manifest/packet locator resolution, and four new mutations."
+    },
+    {
+      "packet_commit": "978dd9e31290551f343b581953c893cf15200c49",
+      "semantic": "PASS",
+      "evidence": "BLOCKED",
+      "resolution": "This schema-v2 successor constrains repository paths, reads frozen evidence from the pinned commit, compares governed hashes to pinned blobs and current packet bytes, and adds two structural mutations."
+    }
+  ],
   "program_source": {
     "commit": "02e984f578d1e08ff0773c354ce87aa7826f7f06",
     "tree": "b7965c847d40ec8e4ef5b19359782ac28e49e4c7"
@@ -212,7 +226,7 @@
       "dependencies": ["CTRL-PACKET"],
       "source_span": "packet:tools/architecture/ae_p1_2_g2b_item15_check.py",
       "control": "CTRL-PACKET",
-      "statement": "The same checker self-tests removal of the caller-held ruling, false implementation authorization, omission of the partial-frame case, a broken dependency, a missing manifest pointer, an absent packet path, probe overclaim, and loss of the PASS 3 supersession. Each mutation must be refused."
+      "statement": "The same checker self-tests removal of the caller-held ruling, false implementation authorization, omission of the partial-frame case, a broken dependency, a missing manifest pointer, an absent packet path, probe overclaim, loss of the PASS 3 supersession, parent and absolute frozen-path traversal, and a self-updated governed hash. Each mutation must be refused."
     }
   ],
   "test_cases": [
