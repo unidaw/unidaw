@@ -1,19 +1,19 @@
 {
-  "schema": "ae-p1.2-g2b-item15-packet/2",
+  "schema": "ae-p1.2-g2b-item15-packet/3",
   "ticket": "AE-P1.2-G2B-ITEM15",
   "status": "REVIEW_CANDIDATE",
   "owner": "backend",
   "revision_predecessor": {
-    "packet_commit": "978dd9e31290551f343b581953c893cf15200c49",
-    "packet_tree": "27effb8771b055645236aaca9aacad471b52c2c2",
-    "manifest_sha256": "45a1fb6a5a58363e2ff846c50dfc4f1c34df321f43e75c821460d97c75fa9502"
+    "packet_commit": "1f86e0015f83c666bb2f925eaeb6105a6011b622",
+    "packet_tree": "0ab82ede010e3681ac4e17e97c5dd6c7e4acc39e",
+    "manifest_sha256": "0c37a0f222d27292218c26e00cdaa0f34884d270105bed109b038073c13317c4"
   },
   "predecessor": {
     "packet_commit": "2b5f0747f1b7dde79ae788af3826c49c78df5d2a",
     "packet_tree": "7c75beb7b941c06a6099292fbf4dac6ade503a6a",
     "manifest_sha256": "c321130b860fda73991f04d1035bea7af03faf6e030fce5565664c1657ce093e"
   },
-  "reopening_reason": "The semantic review passed 978dd9e3, but evidence review found the second locator fail-open: frozen ranges and governed hashes were read from mutable packet-checkout files rather than immutable blobs at frozen_product.commit, and frozen paths allowed absolute or parent traversal. Schema v2 adds one safe repository-path grammar, pinned-blob reads, and negative controls for traversal and a self-updated governed hash.",
+  "reopening_reason": "The semantic review passed 1f86e001, but evidence review found that governed-file membership and per-record source-span membership could still shrink or substitute. The owner also found external commit fields were verified only against their self-declared trees, not the intended identities. This third consecutive locator/binding failure triggers the structural-fix rule: schema v3 hardcodes every external identity, the exact governed population, and every record's non-empty locator set, with removal and valid-substitution controls.",
   "review_history": [
     {
       "packet_commit": "4a70972ac468d7c1320e95e940b3d4fbcbdd829c",
@@ -26,6 +26,12 @@
       "semantic": "PASS",
       "evidence": "BLOCKED",
       "resolution": "This schema-v2 successor constrains repository paths, reads frozen evidence from the pinned commit, compares governed hashes to pinned blobs and current packet bytes, and adds two structural mutations."
+    },
+    {
+      "packet_commit": "1f86e0015f83c666bb2f925eaeb6105a6011b622",
+      "semantic": "PASS",
+      "evidence": "BLOCKED",
+      "resolution": "This schema-v3 successor binds the intended external identities, exact governed population, and exact non-empty locator set for every record, with removal and valid-substitution mutations."
     }
   ],
   "program_source": {
@@ -70,6 +76,7 @@
     "DEP-PREDECESSOR",
     "E-PROBE-CONFOUNDER",
     "G-ITEM15",
+    "P-GOVERNED-FILES",
     "R-AUTHORED-PLAN",
     "R-CALLER-HELD",
     "R-FAILURE-WITHDRAWS",
@@ -83,7 +90,7 @@
       "kind": "gate",
       "owner": "backend",
       "status": "READY_FOR_REVIEW",
-      "dependencies": ["DEP-PREDECESSOR", "DEP-FROZEN-BASE", "DEP-ITEM16", "E-PROBE-CONFOUNDER", "R-CALLER-HELD", "R-AUTHORED-PLAN", "R-SUPERSEDE-PASS3", "R-RESTART-ORDER", "R-FAILURE-WITHDRAWS", "R-NO-AUTHORIZATION", "D-DETERMINISTIC-SEAM", "CTRL-PACKET", "CTRL-MUTATIONS"],
+      "dependencies": ["DEP-PREDECESSOR", "DEP-FROZEN-BASE", "P-GOVERNED-FILES", "DEP-ITEM16", "E-PROBE-CONFOUNDER", "R-CALLER-HELD", "R-AUTHORED-PLAN", "R-SUPERSEDE-PASS3", "R-RESTART-ORDER", "R-FAILURE-WITHDRAWS", "R-NO-AUTHORIZATION", "D-DETERMINISTIC-SEAM", "CTRL-PACKET", "CTRL-MUTATIONS"],
       "source_span": ["predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:965-984", "predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:2553-2565"],
       "control": "CTRL-PACKET",
       "statement": "Item 15 is decided for planning: bypass staging never reacquires controllerMutex; the caller supplies and retains the controller lifetime lock through staging. This packet does not authorize the product change."
@@ -107,6 +114,16 @@
       "source_span": "frozen:apps/daw_engine_main.cpp:1058-1077",
       "control": "CTRL-PACKET",
       "statement": "The packet describes exactly the frozen product commit, tree, and governed file bytes."
+    },
+    {
+      "id": "P-GOVERNED-FILES",
+      "kind": "population",
+      "owner": "backend",
+      "status": "PINNED",
+      "dependencies": ["DEP-FROZEN-BASE"],
+      "source_span": "manifest:/governed_files",
+      "control": "CTRL-PACKET",
+      "statement": "The governed population is exactly the ten sorted paths in governed_files; each declared digest must match both the immutable frozen-product blob and the packet checkout byte-for-byte."
     },
     {
       "id": "DEP-ITEM16",
@@ -226,7 +243,7 @@
       "dependencies": ["CTRL-PACKET"],
       "source_span": "packet:tools/architecture/ae_p1_2_g2b_item15_check.py",
       "control": "CTRL-PACKET",
-      "statement": "The same checker self-tests removal of the caller-held ruling, false implementation authorization, omission of the partial-frame case, a broken dependency, a missing manifest pointer, an absent packet path, probe overclaim, loss of the PASS 3 supersession, parent and absolute frozen-path traversal, and a self-updated governed hash. Each mutation must be refused."
+      "statement": "The checker self-tests semantic controls plus external-identity drift, parent/absolute traversal, self-updated hashes, governed-population removal/substitution, and locator deletion/valid-substitution. All sixteen mutations must be refused."
     }
   ],
   "test_cases": [

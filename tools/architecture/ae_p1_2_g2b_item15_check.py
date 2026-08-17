@@ -25,13 +25,78 @@ TOP_LEVEL_KEYS = {
 }
 REQUIRED_RECORDS = {
     "G-ITEM15", "DEP-PREDECESSOR", "DEP-FROZEN-BASE", "DEP-ITEM16", "DEP-ITEM18",
-    "E-PROBE-CONFOUNDER", "R-CALLER-HELD", "R-AUTHORED-PLAN",
+    "P-GOVERNED-FILES", "E-PROBE-CONFOUNDER", "R-CALLER-HELD", "R-AUTHORED-PLAN",
     "R-SUPERSEDE-PASS3", "R-RESTART-ORDER", "R-FAILURE-WITHDRAWS", "R-NO-AUTHORIZATION",
     "D-DETERMINISTIC-SEAM", "CTRL-PACKET", "CTRL-MUTATIONS",
 }
 REQUIRED_TESTS = {
     "T-LOCK-CAPABILITY", "T-RT-BEFORE-OFFLINE", "T-EXACT-SLOTS",
     "T-STALE-PLAN", "T-SEND-FAILURE", "T-ORDER-CONTROL", "T-OLD-GUARD-CONTROL",
+}
+EXPECTED_FROZEN = {
+    "commit": "92dfdfe23cc7ff93f2ce14894a35d089e3d9e2b8",
+    "tree": "238ac970b5d61fe16055ede4c43a2978ddb11da7",
+}
+EXPECTED_PROGRAM = {
+    "commit": "02e984f578d1e08ff0773c354ce87aa7826f7f06",
+    "tree": "b7965c847d40ec8e4ef5b19359782ac28e49e4c7",
+}
+EXPECTED_PREDECESSOR = {
+    "packet_commit": "2b5f0747f1b7dde79ae788af3826c49c78df5d2a",
+    "packet_tree": "7c75beb7b941c06a6099292fbf4dac6ade503a6a",
+    "manifest_sha256": "c321130b860fda73991f04d1035bea7af03faf6e030fce5565664c1657ce093e",
+}
+EXPECTED_REVISION_PREDECESSOR = {
+    "packet_commit": "1f86e0015f83c666bb2f925eaeb6105a6011b622",
+    "packet_tree": "0ab82ede010e3681ac4e17e97c5dd6c7e4acc39e",
+    "manifest_sha256": "0c37a0f222d27292218c26e00cdaa0f34884d270105bed109b038073c13317c4",
+}
+EXPECTED_GOVERNED_PATHS = (
+    "apps/daw_engine_main.cpp",
+    "apps/engine_chain_host.cpp",
+    "apps/engine_chain_host.h",
+    "apps/engine_produce_block.cpp",
+    "apps/engine_readiness_tests_main.cpp",
+    "apps/engine_restart_worker.cpp",
+    "apps/engine_restart_worker.h",
+    "apps/host_controller.cpp",
+    "apps/ipc_io.cpp",
+    "tools/bypass_send_probe.sh",
+)
+EXPECTED_SOURCE_SPANS = {
+    "G-ITEM15": [
+        "predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:965-984",
+        "predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:2553-2565",
+    ],
+    "DEP-PREDECESSOR": "predecessor:docs/architecture/tasks/AE-P1.2-manifest.json:1-40",
+    "DEP-FROZEN-BASE": "frozen:apps/daw_engine_main.cpp:1058-1077",
+    "P-GOVERNED-FILES": "manifest:/governed_files",
+    "DEP-ITEM16": "predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:2556-2558",
+    "DEP-ITEM18": "predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:2559-2565",
+    "E-PROBE-CONFOUNDER": [
+        "frozen:tools/bypass_send_probe.sh:2-17",
+        "frozen:tools/bypass_send_probe.sh:92-108",
+        "frozen:apps/engine_produce_block.cpp:1072-1100",
+        "frozen:apps/daw_engine_main.cpp:1058-1061",
+    ],
+    "R-CALLER-HELD": [
+        "frozen:apps/daw_engine_main.cpp:1058-1077",
+        "frozen:apps/engine_restart_worker.cpp:102-144",
+    ],
+    "R-AUTHORED-PLAN": [
+        "frozen:apps/daw_engine_main.cpp:1062-1068",
+        "frozen:apps/engine_chain_host.cpp:142-272",
+    ],
+    "R-SUPERSEDE-PASS3": "predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:965-984",
+    "R-RESTART-ORDER": "frozen:apps/engine_restart_worker.cpp:102-165",
+    "R-FAILURE-WITHDRAWS": [
+        "frozen:apps/host_controller.cpp:624-654",
+        "frozen:apps/ipc_io.cpp:89-155",
+    ],
+    "R-NO-AUTHORIZATION": "manifest:/implementation_authorized",
+    "D-DETERMINISTIC-SEAM": "manifest:/test_cases",
+    "CTRL-PACKET": "packet:tools/architecture/ae_p1_2_g2b_item15_check.py",
+    "CTRL-MUTATIONS": "packet:tools/architecture/ae_p1_2_g2b_item15_check.py",
 }
 
 
@@ -158,12 +223,18 @@ def render(manifest: dict) -> str:
 
 def validate(manifest: dict, *, verify_files: bool = True, verify_prose: bool = True) -> None:
     refuse(set(manifest) != TOP_LEVEL_KEYS, "top-level manifest shape changed")
-    refuse(manifest["schema"] != "ae-p1.2-g2b-item15-packet/2", "schema changed")
+    refuse(manifest["schema"] != "ae-p1.2-g2b-item15-packet/3", "schema changed")
     refuse(manifest["ticket"] != "AE-P1.2-G2B-ITEM15", "ticket changed")
     refuse(manifest["status"] != "REVIEW_CANDIDATE", "packet is not a review candidate")
     refuse(manifest["implementation_authorized"] is not False,
            "item 15 packet must not authorize implementation")
     refuse(len(manifest["blocked_by"]) != 2, "implementation blockers changed")
+    refuse(manifest["frozen_product"] != EXPECTED_FROZEN, "frozen product identity changed")
+    refuse(manifest["program_source"] != EXPECTED_PROGRAM, "program source identity changed")
+    refuse(manifest["predecessor"] != EXPECTED_PREDECESSOR,
+           "settled predecessor identity changed")
+    refuse(manifest["revision_predecessor"] != EXPECTED_REVISION_PREDECESSOR,
+           "revision predecessor identity changed")
     refuse(manifest["review_history"] != [
         {
             "packet_commit": "4a70972ac468d7c1320e95e940b3d4fbcbdd829c",
@@ -176,6 +247,12 @@ def validate(manifest: dict, *, verify_files: bool = True, verify_prose: bool = 
             "semantic": "PASS",
             "evidence": "BLOCKED",
             "resolution": "This schema-v2 successor constrains repository paths, reads frozen evidence from the pinned commit, compares governed hashes to pinned blobs and current packet bytes, and adds two structural mutations.",
+        },
+        {
+            "packet_commit": "1f86e0015f83c666bb2f925eaeb6105a6011b622",
+            "semantic": "PASS",
+            "evidence": "BLOCKED",
+            "resolution": "This schema-v3 successor binds the intended external identities, exact governed population, and exact non-empty locator set for every record, with removal and valid-substitution mutations.",
         },
     ], "review history changed")
 
@@ -196,7 +273,11 @@ def validate(manifest: dict, *, verify_files: bool = True, verify_prose: bool = 
                f"unknown control: {record['id']}")
         for dep in record["dependencies"]:
             refuse(dep not in by_id, f"unknown dependency {dep} from {record['id']}")
+        refuse(record["source_span"] != EXPECTED_SOURCE_SPANS[record["id"]],
+               f"source locator set changed: {record['id']}")
         spans = record["source_span"] if isinstance(record["source_span"], list) else [record["source_span"]]
+        refuse(not spans or any(not isinstance(span, str) or not span for span in spans),
+               f"empty source locator set: {record['id']}")
         for span in spans:
             if span.startswith("manifest:/"):
                 resolve_manifest_pointer(manifest, span)
@@ -245,6 +326,17 @@ def validate(manifest: dict, *, verify_files: bool = True, verify_prose: bool = 
     refuse("does not authorize" not in by_id["G-ITEM15"]["statement"],
            "gate overstates authorization")
 
+    governed = manifest["governed_files"]
+    refuse(not isinstance(governed, list), "governed_files is not a list")
+    for entry in governed:
+        refuse(not isinstance(entry, dict) or set(entry) != {"path", "sha256"},
+               "governed file entry shape changed")
+        refuse(not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"]),
+               f"invalid governed digest: {entry.get('path')}")
+    paths = [entry["path"] for entry in governed]
+    refuse(tuple(paths) != EXPECTED_GOVERNED_PATHS,
+           "governed file population changed")
+
     if verify_files:
         frozen = manifest["frozen_product"]
         refuse(object_tree(frozen["commit"]) != frozen["tree"], "frozen product tree mismatch")
@@ -263,10 +355,7 @@ def validate(manifest: dict, *, verify_files: bool = True, verify_prose: bool = 
         refuse(sha256(revision_bytes) != revision["manifest_sha256"],
                "revision predecessor manifest digest mismatch")
 
-        paths = [entry["path"] for entry in manifest["governed_files"]]
-        refuse(paths != sorted(paths) or len(paths) != len(set(paths)),
-               "governed file paths must be sorted and unique")
-        for entry in manifest["governed_files"]:
+        for entry in governed:
             governed_path = safe_repo_path(entry["path"], "governed")
             path = ROOT / governed_path
             refuse(not path.is_file(), f"missing governed file: {entry['path']}")
@@ -354,6 +443,27 @@ def self_test(manifest: dict) -> None:
     self_updated_hash["governed_files"][0]["sha256"] = "0" * 64
     cases.append(("self-updated governed hash", self_updated_hash, True))
 
+    moved_frozen = copy.deepcopy(manifest)
+    moved_frozen["frozen_product"] = copy.deepcopy(EXPECTED_PROGRAM)
+    cases.append(("moved frozen identity", moved_frozen))
+
+    removed_governed = copy.deepcopy(manifest)
+    removed_governed["governed_files"].pop()
+    cases.append(("governed population removal", removed_governed))
+
+    substituted_governed = copy.deepcopy(manifest)
+    substituted_governed["governed_files"][0]["path"] = "apps/device_chain.cpp"
+    cases.append(("governed population substitution", substituted_governed))
+
+    empty_locators = copy.deepcopy(manifest)
+    next(r for r in empty_locators["records"] if r["id"] == "E-PROBE-CONFOUNDER")["source_span"] = []
+    cases.append(("source locator deletion", empty_locators))
+
+    substituted_locator = copy.deepcopy(manifest)
+    next(r for r in substituted_locator["records"] if r["id"] == "R-NO-AUTHORIZATION")["source_span"] = \
+        "manifest:/scope"
+    cases.append(("valid source locator substitution", substituted_locator))
+
     for case in cases:
         name, candidate = case[0], case[1]
         verify_files = bool(case[2]) if len(case) == 3 else False
@@ -374,7 +484,7 @@ def main() -> int:
     print("AE-P1.2 G2-B item 15 packet: PASS")
     print(f"  records: {len(manifest['records'])}")
     print(f"  governed files: {len(manifest['governed_files'])}")
-    print(f"  mutation controls: 11/11 refused")
+    print(f"  mutation controls: 16/16 refused")
     print("  implementation authorized: false")
     return 0
 
