@@ -103,7 +103,8 @@ watcher:  none (required for Codex)
 | `AE-P0.2 implementation` | `COMPLETE` | packet `6287ffd` approved + AE-P0.1 integration | codex-worker-2 | claude-worker-2 | `/Users/jak/src/daw-ae-p0-2-lane0` | product main `75c6f06`; final corrective candidate independently approved |
 | `AE-P0.3` | `CAPTURE TAKEN` | decision 4 ruled 2026-08-14; credentialed line OBSERVED and byte-matched | `lead` | unassigned | none | attestation now rests on an observation, not a transcription |
 | `AE-P1.1` | `FROZEN` | `AE-P0` | claude-worker-2 | codex-worker-1 | `/Users/jak/src/daw-ae-p1-1-packet` | `ba88bcb4657b62bdfc752d338d877e139e212ca6`; independent PASS; successor-only |
-| `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; of the 8 open PRODUCT items: 7, 14, 16, 26, 28, 35, 36 CLOSED; item 28 closed by AE-RING-02's SHM v41 exact-outcome broadcast at product `e1b9b055`; 15 hardened but NOT demonstrated. G4 not decidable |
+| `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; of the 8 open PRODUCT items: 7, 14, 16, 26, 28, 35, 36 CLOSED; item 15's planning choice is CLOSED by focused successor `8ee5b3cd`, but product implementation is NOT authorized until item 18 supplies its acceptance oracle and the readiness/chain-publication census is complete. G4 not decidable |
+| `AE-P1.2 G2-B item 15` | `PLANNING CLOSED; IMPLEMENTATION BLOCKED` | item 18 + publication census | `backend` | independent subagent x2 | `/Users/jak/src/daw-ae-p1-2-g2b-item15-packet` | packet `8ee5b3cd` / manifest `a9583a4c`; caller-held `unique_lock` capability, immutable authored plan, PASS 3 superseded, partial-stream disconnect; final semantic and evidence reviews PASS; no product edit authorized |
 | `AE-P1.3` | `FIXED, REVIEWED` | the `AE-P1.2` dependency was phase ordering, re-derived 2026-08-14 | `backend` | independent subagent x2 | `/Users/jak/src/daw-ae-p1-3-nonoverlap-packet` | packet `a4f7abc5` / manifest `da0204dd`; product `542d8838`, evidence `92dfdfe2`; 25 regions + reserved header validated before publication, cached geometry only; both final reviews PASS |
 | `AE-P1.4` | `GATE MET` | the `AE-P0` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent | none | 5 plain writes fixed; watchdog use-after-free fixed; TSan evidence DELIVERED — `tsan_command_hammer.sh` 108 commands landed / 0 races, and `tsan_render.sh` 1 race -> 0 after the RenderPool fix |
 | `RenderPool race` | `FIXED, REVIEWED` | found by `AE-P1.4`'s instrument | `lead` | independent subagent | none | straggler read `m_fn`/`m_count` unlocked across a batch handover: null deref, out-of-range item, and an `m_remaining` underflow that HANGS the producer; generation packed into the claim counter; review returned SAFE-TO-MERGE with 3 defects (store order, a 2^32 count re-opening the hang, a wrong wrap figure) — all fixed at `a4345f33` |
@@ -6140,3 +6141,51 @@ The machine-readable source of truth is
 `docs/architecture/evidence/AE-P1.3-nonoverlap-542d8838.json` at product progress commit
 `92dfdfe2`. It binds the frozen product, converged packet and manifest, authorization commit,
 implementation tree, review rounds, invariant counts, and controls. AE-P1.3 is `FIXED, REVIEWED`.
+
+## AE-P1.2 G2-B item 15 planning closed; implementation remains blocked (2026-08-17)
+
+The old live probe remains non-evidence. It starts `ProcessBlock` traffic, freezes a host, waits five
+seconds, and only then sends bypass. Product code permits a failed `ProcessBlock` to withdraw
+`hostReady`, which lets the later bypass hook return at its guard; the restart worker may also
+republish readiness during the delay. Those are concrete false-green paths, not proof that either
+historical 142/146 ms run took one. The packet therefore records the probe as
+`E-PROBE-CONFOUNDER`, not as a reproduction.
+
+Focused successor `8ee5b3cdd34ef6c5538fac19074b4f442c0a8514` (tree
+`44ce562e2463ba0b6fcc291077b38fc7d87c07a1`, manifest SHA-256
+`a9583a4cb8a8fd45d1dc2ccfb683cf06f8758c55407bfdf6f3d5a424eea4465f`) settles the missing
+planning choice:
+
+- bypass staging receives an owning `std::unique_lock<std::mutex>&` for the exact
+  `controllerMutex`, verifies the capability, and never reacquires that mutex internally;
+- one restart lock interval covers launch, generation publication, watchdog installation, bypass
+  staging, and the later item-18-authorized readiness publication;
+- bypass values come from one immutable authored plan captured before the controller lock, with
+  identity/revision validation so a changed plan cannot publish stale readiness;
+- predecessor PASS 3 is superseded: hook-entry readiness must be false, exact per-slot staging
+  witnesses prove recovery ran, and restoring the old readiness guard deletes those witnesses;
+- a failed bounded send withdraws readiness and disconnects the potentially partial
+  `SOCK_STREAM` frame under the same controller lock, before an already-waiting offline dispatcher
+  can acquire and attempt another frame.
+
+The predecessor's item 16 had already been closed in PRODUCT by the all-host-send readiness
+ratchet at `2b36a140`. The focused successor does not reopen that shipped ticket; its
+`DEP-ITEM16` record supersedes the older G2-B fixture's guard/swap acceptance statement, which was
+still live in the predecessor packet and contradicted the new correct hook-entry ordering.
+
+Review convergence was structural. `4a70972a` was blocked by both reviewers for unresolved
+locators, historical overclaim, missing PASS-3/item-16 supersession, and an incomplete stale
+offline-waiter control. `978dd9e3` received semantic PASS and evidence BLOCKED because frozen
+sources were still read from the mutable checkout. `1f86e001` received semantic PASS and evidence
+BLOCKED because governed-file and source-locator populations could still shrink or substitute.
+After the same binding class failed repeatedly, schema v3 hardcoded every external identity, the
+exact ten-file governed population, and every record's exact non-empty locator set; frozen excerpts
+and hashes are read from the pinned product commit, while current packet bytes must also match.
+Sixteen deletion, substitution, traversal, identity, transport, and ordering mutations are refused.
+
+Independent semantic and evidence reviewers both returned PASS on exact SHA `8ee5b3cd`. The packet
+self-check reports 16 records, 10 governed files, and 16/16 mutation controls refused. No product
+source was edited, built, or run under this packet. `implementation_authorized` remains false:
+item 18 must supply an executable replacement for withdrawn G2-B PASS 4, and a successor must
+inventory every readiness-true and chain-edit publication site and define their linearization before
+an implementation ticket can be generated.
