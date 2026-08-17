@@ -19,19 +19,19 @@ PREDECESSOR_MANIFEST = "docs/architecture/tasks/AE-P1.2-manifest.json"
 
 TOP_LEVEL_KEYS = {
     "schema", "ticket", "status", "owner", "predecessor", "reopening_reason",
-    "program_source", "frozen_product", "scope", "implementation_authorized",
+    "revision_predecessor", "program_source", "frozen_product", "scope", "implementation_authorized",
     "blocked_by", "non_goals", "governed_files", "changed_records", "records",
     "test_cases",
 }
 REQUIRED_RECORDS = {
-    "G-ITEM15", "DEP-PREDECESSOR", "DEP-FROZEN-BASE", "DEP-ITEM18",
-    "E-PROBE-CAUSALITY", "R-CALLER-HELD", "R-AUTHORED-PLAN",
-    "R-RESTART-ORDER", "R-FAILURE-WITHDRAWS", "R-NO-AUTHORIZATION",
+    "G-ITEM15", "DEP-PREDECESSOR", "DEP-FROZEN-BASE", "DEP-ITEM16", "DEP-ITEM18",
+    "E-PROBE-CONFOUNDER", "R-CALLER-HELD", "R-AUTHORED-PLAN",
+    "R-SUPERSEDE-PASS3", "R-RESTART-ORDER", "R-FAILURE-WITHDRAWS", "R-NO-AUTHORIZATION",
     "D-DETERMINISTIC-SEAM", "CTRL-PACKET", "CTRL-MUTATIONS",
 }
 REQUIRED_TESTS = {
     "T-LOCK-CAPABILITY", "T-RT-BEFORE-OFFLINE", "T-EXACT-SLOTS",
-    "T-STALE-PLAN", "T-SEND-FAILURE", "T-ORDER-CONTROL",
+    "T-STALE-PLAN", "T-SEND-FAILURE", "T-ORDER-CONTROL", "T-OLD-GUARD-CONTROL",
 }
 
 
@@ -76,6 +76,36 @@ def source_lines(manifest: dict, locator: str) -> list[str]:
     return lines[first - 1:last]
 
 
+def resolve_manifest_pointer(manifest: dict, locator: str) -> object:
+    refuse(not locator.startswith("manifest:/"), f"unparseable manifest locator: {locator}")
+    value: object = manifest
+    for raw_token in locator[len("manifest:/"):].split("/"):
+        token = raw_token.replace("~1", "/").replace("~0", "~")
+        if isinstance(value, dict):
+            refuse(token not in value, f"missing manifest pointer target: {locator}")
+            value = value[token]
+        elif isinstance(value, list):
+            refuse(not token.isdigit(), f"non-numeric manifest array index: {locator}")
+            index = int(token)
+            refuse(index >= len(value), f"manifest array index out of range: {locator}")
+            value = value[index]
+        else:
+            raise Refused(f"manifest pointer traverses a scalar: {locator}")
+    return value
+
+
+def resolve_packet_path(locator: str) -> Path:
+    refuse(not locator.startswith("packet:"), f"unparseable packet locator: {locator}")
+    relative = Path(locator[len("packet:"):])
+    refuse(relative.is_absolute() or ".." in relative.parts,
+           f"unsafe packet locator: {locator}")
+    resolved = (ROOT / relative).resolve()
+    refuse(resolved != ROOT and ROOT.resolve() not in resolved.parents,
+           f"packet locator escapes root: {locator}")
+    refuse(not resolved.is_file(), f"missing packet locator target: {locator}")
+    return resolved
+
+
 def render(manifest: dict) -> str:
     lines = [
         "# AE-P1.2 G2-B — item 15 lock-contract successor",
@@ -86,6 +116,7 @@ def render(manifest: dict) -> str:
         f"Frozen product: `{manifest['frozen_product']['commit']}` (tree `{manifest['frozen_product']['tree']}`).",
         f"Program source: `{manifest['program_source']['commit']}` (tree `{manifest['program_source']['tree']}`).",
         f"Successor to packet `{manifest['predecessor']['packet_commit']}` / manifest `{manifest['predecessor']['manifest_sha256']}`.",
+        f"Revision successor to `{manifest['revision_predecessor']['packet_commit']}` / manifest `{manifest['revision_predecessor']['manifest_sha256']}`.",
         f"Reopening reason: {manifest['reopening_reason']}",
         "",
         "## Scope", "", manifest["scope"], "",
@@ -139,7 +170,11 @@ def validate(manifest: dict, *, verify_files: bool = True, verify_prose: bool = 
             refuse(dep not in by_id, f"unknown dependency {dep} from {record['id']}")
         spans = record["source_span"] if isinstance(record["source_span"], list) else [record["source_span"]]
         for span in spans:
-            if span.startswith("manifest:/") or span.startswith("packet:"):
+            if span.startswith("manifest:/"):
+                resolve_manifest_pointer(manifest, span)
+                continue
+            if span.startswith("packet:"):
+                resolve_packet_path(span)
                 continue
             source_lines(manifest, span)
 
@@ -161,14 +196,24 @@ def validate(manifest: dict, *, verify_files: bool = True, verify_prose: bool = 
     refuse(len(test_ids) != len(set(test_ids)), "duplicate test id")
     refuse(set(test_ids) != REQUIRED_TESTS, "test case set changed")
     failure_case = next(case for case in manifest["test_cases"] if case["id"] == "T-SEND-FAILURE")
-    refuse("stream unusable until disconnect/relaunch" not in failure_case["statement"],
-           "partial-frame transport poison is not tested")
+    refuse("waiter acquires but sends no ProcessBlock before relaunch" not in failure_case["statement"],
+           "stale offline waiter after partial-frame failure is not tested")
 
     caller = by_id["R-CALLER-HELD"]["statement"]
     refuse("unique_lock" not in caller or "never locks controllerMutex internally" not in caller,
            "caller-held lock contract weakened")
     refuse("partial SOCK_STREAM frame" not in by_id["R-FAILURE-WITHDRAWS"]["statement"],
            "partial frame failure semantics omitted")
+    refuse("disconnects the transport-poisoned controller under the same controller lock" not in
+           by_id["R-FAILURE-WITHDRAWS"]["statement"],
+           "transport poison is not disconnected before lock release")
+    confounder = by_id["E-PROBE-CONFOUNDER"]["statement"]
+    refuse("This identifies confounders; it does not establish which path either historical run executed." not in confounder,
+           "probe confounder was promoted into observed history")
+    supersession = by_id["R-SUPERSEDE-PASS3"]["statement"]
+    refuse("Predecessor PASS 3 is superseded." not in supersession or
+           "hookEntryHostReady must be FALSE" not in supersession,
+           "PASS 3/item 16 supersession weakened")
     refuse("does not authorize" not in by_id["G-ITEM15"]["statement"],
            "gate overstates authorization")
 
@@ -183,6 +228,12 @@ def validate(manifest: dict, *, verify_files: bool = True, verify_prose: bool = 
         predecessor_bytes = git("show", f"{predecessor['packet_commit']}:{PREDECESSOR_MANIFEST}")
         refuse(sha256(predecessor_bytes) != predecessor["manifest_sha256"],
                "predecessor manifest digest mismatch")
+        revision = manifest["revision_predecessor"]
+        refuse(object_tree(revision["packet_commit"]) != revision["packet_tree"],
+               "revision predecessor packet tree mismatch")
+        revision_bytes = git("show", f"{revision['packet_commit']}:{MANIFEST_PATH.relative_to(ROOT)}")
+        refuse(sha256(revision_bytes) != revision["manifest_sha256"],
+               "revision predecessor manifest digest mismatch")
 
         paths = [entry["path"] for entry in manifest["governed_files"]]
         refuse(paths != sorted(paths) or len(paths) != len(set(paths)),
@@ -193,15 +244,24 @@ def validate(manifest: dict, *, verify_files: bool = True, verify_prose: bool = 
             refuse(sha256(path.read_bytes()) != entry["sha256"],
                    f"governed file drift: {entry['path']}")
 
-        produce = (ROOT / "apps/engine_produce_block.cpp").read_text(encoding="utf-8")
-        refuse(not re.search(r"if \(!sentOk\).*?hostReady\.store\(false", produce, re.S),
-               "ProcessBlock failure no longer proves hostReady withdrawal")
-        apply = (ROOT / "apps/daw_engine_main.cpp").read_text(encoding="utf-8")
-        refuse(not re.search(r"applyHostBypassStates.*?if \(!runtime\.hostReady.*?return;.*?controllerMutex", apply, re.S),
-               "bypass guard/lock causal path changed")
-        probe = (ROOT / "tools/bypass_send_probe.sh").read_text(encoding="utf-8")
-        refuse(not re.search(r"do play.*?kill -STOP.*?sleep 5.*?do set-bypass", probe, re.S),
-               "probe no longer fills ProcessBlock traffic before bypass")
+        produce = "\n".join(source_lines(
+            manifest, "frozen:apps/engine_produce_block.cpp:1072-1100"))
+        refuse("if (!sentOk) {" not in produce or
+               "runtime->hostReady.store(false, std::memory_order_release);" not in produce or
+               "runtime->needsRestart.store(true, std::memory_order_release);" not in produce,
+               "bounded ProcessBlock failure excerpt no longer withdraws readiness")
+        apply = "\n".join(source_lines(
+            manifest, "frozen:apps/daw_engine_main.cpp:1058-1061"))
+        refuse("auto applyHostBypassStates" not in apply or
+               "if (!runtime.hostReady.load(std::memory_order_acquire))" not in apply or
+               "return;" not in apply,
+               "bounded bypass guard excerpt changed")
+        probe = "\n".join(source_lines(
+            manifest, "frozen:tools/bypass_send_probe.sh:92-108"))
+        positions = [probe.find(token) for token in
+                     ("do play", "kill -STOP", "sleep 5", "do set-bypass")]
+        refuse(any(position < 0 for position in positions) or positions != sorted(positions),
+               "probe no longer orders ProcessBlock traffic and delay before bypass")
 
     if verify_prose:
         refuse(PROSE_PATH.read_text(encoding="utf-8") != render(manifest),
@@ -228,6 +288,26 @@ def self_test(manifest: dict) -> None:
     next(r for r in broken_dep["records"] if r["id"] == "G-ITEM15")["dependencies"].append("NO-SUCH-RECORD")
     cases.append(("broken dependency", broken_dep))
 
+    bad_pointer = copy.deepcopy(manifest)
+    next(r for r in bad_pointer["records"] if r["id"] == "R-NO-AUTHORIZATION")["source_span"] = \
+        "manifest:/does_not_exist"
+    cases.append(("missing manifest pointer", bad_pointer))
+
+    bad_packet_path = copy.deepcopy(manifest)
+    next(r for r in bad_packet_path["records"] if r["id"] == "CTRL-PACKET")["source_span"] = \
+        "packet:tools/architecture/absent_item15_checker.py"
+    cases.append(("absent packet path", bad_packet_path))
+
+    overclaim = copy.deepcopy(manifest)
+    next(r for r in overclaim["records"] if r["id"] == "E-PROBE-CONFOUNDER")["statement"] = \
+        "Both historical variants executed the same non-send path."
+    cases.append(("probe overclaim", overclaim))
+
+    old_pass3 = copy.deepcopy(manifest)
+    next(r for r in old_pass3["records"] if r["id"] == "R-SUPERSEDE-PASS3")["statement"] = \
+        "hookEntryHostReady must be TRUE."
+    cases.append(("PASS 3 supersession lost", old_pass3))
+
     for name, candidate in cases:
         try:
             validate(candidate, verify_files=False, verify_prose=False)
@@ -246,7 +326,7 @@ def main() -> int:
     print("AE-P1.2 G2-B item 15 packet: PASS")
     print(f"  records: {len(manifest['records'])}")
     print(f"  governed files: {len(manifest['governed_files'])}")
-    print(f"  mutation controls: 4/4 refused")
+    print(f"  mutation controls: 8/8 refused")
     print("  implementation authorized: false")
     return 0
 

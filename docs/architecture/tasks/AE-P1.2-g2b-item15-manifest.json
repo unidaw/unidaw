@@ -3,12 +3,17 @@
   "ticket": "AE-P1.2-G2B-ITEM15",
   "status": "REVIEW_CANDIDATE",
   "owner": "backend",
+  "revision_predecessor": {
+    "packet_commit": "4a70972ac468d7c1320e95e940b3d4fbcbdd829c",
+    "packet_tree": "d5df33ca95f49a5cafb00b3e67aa6d267ef08e7f",
+    "manifest_sha256": "2c31f168c841f6a81c8f091283092108f9bec7fac1e80b05a92a7de9db3842cb"
+  },
   "predecessor": {
     "packet_commit": "2b5f0747f1b7dde79ae788af3826c49c78df5d2a",
     "packet_tree": "7c75beb7b941c06a6099292fbf4dac6ade503a6a",
     "manifest_sha256": "c321130b860fda73991f04d1035bea7af03faf6e030fce5565664c1657ce093e"
   },
-  "reopening_reason": "The settled predecessor identifies the self-deadlock but leaves G2-B planning unknown because it does not choose a lock contract. The later bounded-send probe is non-discriminating: ProcessBlock can fail first and withdraw hostReady before the bypass command reaches its send.",
+  "reopening_reason": "The first focused successor at 4a70972a was blocked by both independent reviews: it left manifest and packet locators unresolved, promoted a permitted probe confounder into observed history, contradicted predecessor PASS 3 without superseding it or item 16, and did not prove a poisoned partial stream is disconnected before an already-waiting offline dispatcher acquires the controller lock.",
   "program_source": {
     "commit": "02e984f578d1e08ff0773c354ce87aa7826f7f06",
     "tree": "b7965c847d40ec8e4ef5b19359782ac28e49e4c7"
@@ -46,15 +51,17 @@
     "CTRL-PACKET",
     "D-DETERMINISTIC-SEAM",
     "DEP-FROZEN-BASE",
+    "DEP-ITEM16",
     "DEP-ITEM18",
     "DEP-PREDECESSOR",
-    "E-PROBE-CAUSALITY",
+    "E-PROBE-CONFOUNDER",
     "G-ITEM15",
     "R-AUTHORED-PLAN",
     "R-CALLER-HELD",
     "R-FAILURE-WITHDRAWS",
     "R-NO-AUTHORIZATION",
-    "R-RESTART-ORDER"
+    "R-RESTART-ORDER",
+    "R-SUPERSEDE-PASS3"
   ],
   "records": [
     {
@@ -62,8 +69,8 @@
       "kind": "gate",
       "owner": "backend",
       "status": "READY_FOR_REVIEW",
-      "dependencies": ["DEP-PREDECESSOR", "DEP-FROZEN-BASE", "E-PROBE-CAUSALITY", "R-CALLER-HELD", "R-AUTHORED-PLAN", "R-RESTART-ORDER", "R-FAILURE-WITHDRAWS", "R-NO-AUTHORIZATION", "D-DETERMINISTIC-SEAM", "CTRL-PACKET", "CTRL-MUTATIONS"],
-      "source_span": "predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:2553-2565",
+      "dependencies": ["DEP-PREDECESSOR", "DEP-FROZEN-BASE", "DEP-ITEM16", "E-PROBE-CONFOUNDER", "R-CALLER-HELD", "R-AUTHORED-PLAN", "R-SUPERSEDE-PASS3", "R-RESTART-ORDER", "R-FAILURE-WITHDRAWS", "R-NO-AUTHORIZATION", "D-DETERMINISTIC-SEAM", "CTRL-PACKET", "CTRL-MUTATIONS"],
+      "source_span": ["predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:965-984", "predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:2553-2565"],
       "control": "CTRL-PACKET",
       "statement": "Item 15 is decided for planning: bypass staging never reacquires controllerMutex; the caller supplies and retains the controller lifetime lock through staging. This packet does not authorize the product change."
     },
@@ -88,6 +95,16 @@
       "statement": "The packet describes exactly the frozen product commit, tree, and governed file bytes."
     },
     {
+      "id": "DEP-ITEM16",
+      "kind": "dependency",
+      "owner": "backend",
+      "status": "SUPERSEDED_HERE",
+      "dependencies": ["DEP-PREDECESSOR"],
+      "source_span": "predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:2556-2558",
+      "control": "CTRL-PACKET",
+      "statement": "Item 16 owns the old guard/swap trap. This successor necessarily resolves it with item 15: the hook enters while readiness is withdrawn, contains no hostReady early return, and is witnessed by exact staging attempts."
+    },
+    {
       "id": "DEP-ITEM18",
       "kind": "dependency",
       "owner": "backend",
@@ -98,21 +115,21 @@
       "statement": "Item 18 still lacks an executable PASS replacement for the ruled readiness model; item 15 can be decided without pretending that implementation is authorized."
     },
     {
-      "id": "E-PROBE-CAUSALITY",
+      "id": "E-PROBE-CONFOUNDER",
       "kind": "evidence",
       "owner": "backend",
-      "status": "DERIVED",
+      "status": "DERIVED_CONFOUNDER",
       "dependencies": ["DEP-FROZEN-BASE"],
-      "source_span": ["frozen:tools/bypass_send_probe.sh:92-108", "frozen:apps/engine_produce_block.cpp:1072-1100", "frozen:apps/daw_engine_main.cpp:1058-1061"],
+      "source_span": ["frozen:tools/bypass_send_probe.sh:2-17", "frozen:tools/bypass_send_probe.sh:92-108", "frozen:apps/engine_produce_block.cpp:1072-1100", "frozen:apps/daw_engine_main.cpp:1058-1061"],
       "control": "CTRL-PACKET",
-      "statement": "The probe deliberately runs ProcessBlock traffic for five seconds against a stopped host. A failed ProcessBlock clears hostReady, so the later bypass handler can return at its guard without calling sendSetBypass. The blocking and bounded variants therefore measure the same non-send path."
+      "statement": "The probe runs ProcessBlock traffic for five seconds against a stopped host before issuing bypass. Product code permits a failed ProcessBlock to clear hostReady, after which the later bypass handler can return at its guard without calling sendSetBypass; the restart worker can also republish readiness during that delay. These are permitted false-green paths, so the historical timings do not discriminate the sender. This identifies confounders; it does not establish which path either historical run executed."
     },
     {
       "id": "R-CALLER-HELD",
       "kind": "ruling",
       "owner": "backend",
       "status": "DECIDED",
-      "dependencies": ["E-PROBE-CAUSALITY"],
+      "dependencies": ["E-PROBE-CONFOUNDER"],
       "source_span": ["frozen:apps/daw_engine_main.cpp:1058-1077", "frozen:apps/engine_restart_worker.cpp:102-144"],
       "control": "CTRL-MUTATIONS",
       "statement": "The later staging helper takes an owning std::unique_lock<std::mutex>& capability for runtime.controllerMutex, verifies owns_lock() and mutex() identity, and never locks controllerMutex internally. A bool saying the lock is held is forbidden."
@@ -128,14 +145,24 @@
       "statement": "Bypass values come from one immutable authored plan with an identity or monotonic revision. The plan is captured before controllerMutex is acquired; staging never takes trackMutex under controllerMutex. A changed plan cannot publish readiness for the stale one. Item 18 must choose the publication representation and chain-edit linearization."
     },
     {
+      "id": "R-SUPERSEDE-PASS3",
+      "kind": "ruling",
+      "owner": "backend",
+      "status": "DECIDED",
+      "dependencies": ["DEP-ITEM16", "R-CALLER-HELD", "R-AUTHORED-PLAN"],
+      "source_span": "predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:965-984",
+      "control": "CTRL-MUTATIONS",
+      "statement": "Predecessor PASS 3 is superseded. hookEntryHostReady must be FALSE: readiness stays withdrawn until bypass staging succeeds. Recovery is proved to execute by exact per-slot staging witnesses, and restoring the old if-not-hostReady early return makes those witnesses absent and fails the control."
+    },
+    {
       "id": "R-RESTART-ORDER",
       "kind": "ruling",
       "owner": "backend",
       "status": "DECIDED",
-      "dependencies": ["R-CALLER-HELD", "R-AUTHORED-PLAN"],
+      "dependencies": ["R-CALLER-HELD", "R-AUTHORED-PLAN", "R-SUPERSEDE-PASS3"],
       "source_span": "frozen:apps/engine_restart_worker.cpp:102-165",
       "control": "CTRL-MUTATIONS",
-      "statement": "On restart, one controller lock ownership interval covers launch, host-generation publication, watchdog installation, bypass staging, and the readiness publication authorized by item 18. The helper is called inside that interval, so reacquiring the mutex would self-deadlock."
+      "statement": "On restart, one controller lock ownership interval covers launch, host-generation publication, watchdog installation, bypass staging, and the readiness publication authorized by item 18. Readiness remains withdrawn at hook entry and until staging succeeds. The helper is called inside that interval, so reacquiring the mutex would self-deadlock."
     },
     {
       "id": "R-FAILURE-WITHDRAWS",
@@ -145,7 +172,7 @@
       "dependencies": ["R-RESTART-ORDER"],
       "source_span": ["frozen:apps/host_controller.cpp:624-654", "frozen:apps/ipc_io.cpp:89-155"],
       "control": "CTRL-MUTATIONS",
-      "statement": "Every sendSetBypass result is consumed. False leaves readiness withdrawn and requests recovery. Because sendMessageNonBlocking can return false after a partial SOCK_STREAM frame, that controller connection is transport-poisoned and must not carry a later frame before disconnect/relaunch."
+      "statement": "Every sendSetBypass result is consumed. False leaves readiness withdrawn, requests recovery, and disconnects the transport-poisoned controller under the same controller lock before any waiter can acquire it. Because sendMessageNonBlocking can return false after a partial SOCK_STREAM frame, no later frame may use that connection before relaunch."
     },
     {
       "id": "R-NO-AUTHORIZATION",
@@ -165,7 +192,7 @@
       "dependencies": ["R-CALLER-HELD", "R-AUTHORED-PLAN", "R-RESTART-ORDER", "R-FAILURE-WITHDRAWS"],
       "source_span": "manifest:/test_cases",
       "control": "CTRL-MUTATIONS",
-      "statement": "The implementation test uses a fake staging sender and barriers, not socket-buffer timing: it proves lock ownership and ordering, RT try-lock behavior before an offline waiter, exact per-slot staging, stale-plan refusal, and failure withdrawal/transport poison."
+      "statement": "The implementation test uses a fake staging sender and barriers, not socket-buffer timing: it proves lock ownership and ordering, the superseded guard control, RT try-lock behavior before an offline waiter, exact per-slot staging, stale-plan refusal, and failure withdrawal plus disconnect before a stale offline waiter can dispatch."
     },
     {
       "id": "CTRL-PACKET",
@@ -175,7 +202,7 @@
       "dependencies": [],
       "source_span": "packet:tools/architecture/ae_p1_2_g2b_item15_check.py",
       "control": "CTRL-PACKET",
-      "statement": "python3 tools/architecture/ae_p1_2_g2b_item15_check.py verifies identities, governed bytes, source locators, dependency closure, causal anchors, and byte-identical generated prose."
+      "statement": "python3 tools/architecture/ae_p1_2_g2b_item15_check.py verifies identities, governed bytes, resolves frozen/predecessor ranges and manifest/packet locators, checks dependency closure and bounded confounder anchors, and enforces byte-identical generated prose."
     },
     {
       "id": "CTRL-MUTATIONS",
@@ -185,7 +212,7 @@
       "dependencies": ["CTRL-PACKET"],
       "source_span": "packet:tools/architecture/ae_p1_2_g2b_item15_check.py",
       "control": "CTRL-PACKET",
-      "statement": "The same checker self-tests removal of the caller-held ruling, false implementation authorization, omission of the partial-frame case, and a broken dependency. Each mutation must be refused."
+      "statement": "The same checker self-tests removal of the caller-held ruling, false implementation authorization, omission of the partial-frame case, a broken dependency, a missing manifest pointer, an absent packet path, probe overclaim, and loss of the PASS 3 supersession. Each mutation must be refused."
     }
   ],
   "test_cases": [
@@ -193,7 +220,8 @@
     {"id":"T-RT-BEFORE-OFFLINE","statement":"While staging is parked, a realtime try_lock probe reports failure promptly before an offline blocking waiter is allowed to acquire after release."},
     {"id":"T-EXACT-SLOTS","statement":"A multi-slot authored plan produces exactly one ordered SetBypass attempt per hosted VST slot and no attempt for non-host devices."},
     {"id":"T-STALE-PLAN","statement":"Changing the authored plan identity while staging is parked prevents readiness publication for the stale plan."},
-    {"id":"T-SEND-FAILURE","statement":"A forced SetBypass false result leaves readiness withdrawn, marks recovery needed, and marks the stream unusable until disconnect/relaunch."},
-    {"id":"T-ORDER-CONTROL","statement":"Moving readiness publication before staging makes the deterministic ordering assertion fail."}
+    {"id":"T-SEND-FAILURE","statement":"An offline dispatcher reads ready and parks on controllerMutex; staging then forces a partial-frame SetBypass failure, withdraws readiness, requests recovery, and disconnects under that same lock. After release the waiter acquires but sends no ProcessBlock before relaunch."},
+    {"id":"T-ORDER-CONTROL","statement":"hookEntryHostReady is false, exact staging witnesses occur, and readiness publishes only after them; moving publication before staging fails the ordering assertion."},
+    {"id":"T-OLD-GUARD-CONTROL","statement":"Restoring the old if-not-hostReady early return removes every exact staging witness at hook entry and fails, proving the superseded swap trap cannot silently delete recovery."}
   ]
 }
