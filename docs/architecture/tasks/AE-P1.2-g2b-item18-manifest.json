@@ -1,12 +1,12 @@
 {
-  "schema": "ae-p1.2-g2b-item18-packet/4",
+  "schema": "ae-p1.2-g2b-item18-packet/5",
   "ticket": "AE-P1.2-G2B-ITEM18",
   "status": "REVIEW_CANDIDATE",
   "owner": "backend",
   "revision_predecessor": {
-    "packet_commit": "3042fdb5bffde1a0b83f192b02a63b7707d8748d",
-    "packet_tree": "587af01fc781ff67330096de9615d725ff4e295b",
-    "manifest_sha256": "aba7014eb49cbc69d6d41c5286c169fa49aa125672da0f96909970445c067bb5"
+    "packet_commit": "bfdeb56f17546069953efb33a1a2e129cfa9467d",
+    "packet_tree": "45c682b3bb1401dfce036c8328d7c93327316e81",
+    "manifest_sha256": "f1928c4cd555fdf842637bc3ee3a4de3010b87b1d2c4216faa4c183516b41243"
   },
   "review_history": [
     {
@@ -26,6 +26,12 @@
       "semantic": "BLOCKED",
       "evidence": "BLOCKED",
       "resolution": "Schema v4 adds derived routing, mirror, device-id, replay-order, offline, and alias-aware mutation populations. It makes routing part of the exact session revision, gives device ids a persisted non-reusing watermark and reserved-value validation, keys mirrors by device instance plus parameter uid, disables unknowable legacy compact targets, and binds the real offline call and receiver priority authority."
+    },
+    {
+      "packet_commit": "bfdeb56f17546069953efb33a1a2e129cfa9467d",
+      "semantic": "BLOCKED",
+      "evidence": "BLOCKED",
+      "resolution": "Schema v5 bounds stable ids to the exact 15-bit carrier domain and inventories every narrowing edge; gives the mirror state machine unambiguous Unprimed/AwaitingAck stages; completes master and producer identities; rules routing-to-master semantics; replaces drain retries with whole-block transactional staging; and adds identifier-independent mutation parsing, replay-lifecycle derivation, and an exact mutation-control count."
     }
   ],
   "predecessor": {
@@ -46,7 +52,7 @@
     "commit": "92dfdfe23cc7ff93f2ce14894a35d089e3d9e2b8",
     "tree": "238ac970b5d61fe16055ede4c43a2978ddb11da7"
   },
-  "scope": "Close AE-P1.2 G2-B item 18 with one session-level immutable ExecutionSnapshot, complete routing/execution/dispatch populations, non-reusing stable device and mirror identities, a production sender/receiver primer oracle, correlated replay acknowledgement, deterministic capacity failure, and track/master/offline output gates bound to the item-15 lock contract.",
+  "scope": "Close AE-P1.2 G2-B item 18 with one session-level immutable ExecutionSnapshot, complete routing/execution/dispatch/carrier populations, bounded non-reusing stable device and mirror identities, whole-block transactional event staging, a production sender/receiver primer oracle, correlated replay acknowledgement, deterministic capacity failure, and track/master/offline output gates bound to the item-15 lock contract.",
   "implementation_authorization": {
     "before_dual_pass": false,
     "after_same_sha_semantic_and_evidence_pass": true,
@@ -60,7 +66,9 @@
     "Compact host indexes, pooled patcher node ids, and owner aliases are plan-local derived values and are not persisted as authored identities.",
     "The ReplayComplete payload and mailbox acknowledgement meaning change without moving bytes, so kControlVersion advances 14 to 15 and kShmVersion advances 41 to 42 in C++, Rust, and SHM_LAYOUT.md.",
     "Non-execution TrackStateSnapshot fields remain outside this packet; chainDevices and routing are removed rather than retained as second execution authorities.",
-    "Schema 1-4 concrete target_plugin_index values are not guessed from the current machine; only the all-target sentinel is losslessly migratable and concrete legacy lanes are disabled with diagnostics."
+    "Schema 1-4 concrete target_plugin_index values are not guessed from the current machine; only the all-target sentinel is losslessly migratable and concrete legacy lanes are disabled with diagnostics.",
+    "Existing narrow device-id carriers do not widen: the exact 0x7FFF stable-id ceiling makes every 15-bit and 16-bit carrier lossless, and every narrowing boundary validates before conversion without masking or wrapping.",
+    "Transient event-ring occupancy never authorizes a drain ProcessBlock; only an already-issued exactly correlated in-flight request may complete before the identical staged block is retried."
   ],
   "governed_files": [
     {
@@ -134,6 +142,10 @@
     {
       "path": "apps/engine_emit_notes.h",
       "sha256": "e2629fb82a4cdfb813dc3ae4deb42c3b5a3743518ad37de84363d69db8d5a8cb"
+    },
+    {
+      "path": "apps/engine_handle_ui_entry.cpp",
+      "sha256": "69d61fbe75c758c70636c4565ecab6935d7af2547f28507c4dd2ee8e3ef2daf9"
     },
     {
       "path": "apps/engine_load_patcher_pool.cpp",
@@ -340,6 +352,10 @@
       "sha256": "fc09fe967ae4c1d78bc10c7bc9677a9dd2bfe478cb09fad5dd9fc23f35b055bc"
     },
     {
+      "path": "apps/patcher_graph.h",
+      "sha256": "283157aaffe4ee4ce3ec1dd72f2bf4c9ff5ae4e473cc128379b8e9b6a45e30c6"
+    },
+    {
       "path": "apps/project_file.cpp",
       "sha256": "3f6b616c3ee4d82f46873f8b207a388d610c91aa8665b76e8fe6e2ccbdd11fda"
     },
@@ -364,8 +380,24 @@
       "sha256": "8cb75c99e277fb185f966890a678ac29b749ffc885ba854e05985de630ef4b61"
     },
     {
+      "path": "ui/daw-agent/src/tools.rs",
+      "sha256": "02d0b45443497e8ac23ed9254901f539100553a757f79e5c8a89d501b3a68194"
+    },
+    {
+      "path": "ui/daw-bridge/src/control.rs",
+      "sha256": "52175583e5279b0a70192f1225af7cbec799ee2e64c4a80c2fb34e2fbf03df69"
+    },
+    {
       "path": "ui/daw-bridge/src/layout.rs",
       "sha256": "6df8bd15c297df240b61891f87e88f155879e18e93bcb89d25ad4678b64ebe36"
+    },
+    {
+      "path": "ui/daw-cli/src/main.rs",
+      "sha256": "883da9d9813f6978d88f01cfdb9362e7720cac2e435b1a7b28e0d454a640ef8c"
+    },
+    {
+      "path": "ui/daw-sidecar/src/main.rs",
+      "sha256": "71819f52df427175c7935abdcdd813c18070bb6acf734e8994e6a6049d3660bf"
     }
   ],
   "populations": {
@@ -649,237 +681,312 @@
       {
         "path": "apps/daw_engine_main.cpp",
         "line": 1099,
-        "classification": "hostless_aux_prepublication"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/daw_engine_main.cpp",
         "line": 1209,
-        "classification": "live_execution_plan_alias"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/daw_engine_main.cpp",
         "line": 1217,
-        "classification": "live_execution_plan_mutation"
+        "classification": "structural_mutation_alias_or_sink"
+      },
+      {
+        "path": "apps/daw_lint_main.cpp",
+        "line": 307,
+        "classification": "structural_mutation_alias_or_sink"
+      },
+      {
+        "path": "apps/device_chain.cpp",
+        "line": 133,
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_bulk_edit.cpp",
         "line": 91,
-        "classification": "live_sampler_internal"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_bulk_edit.cpp",
         "line": 240,
-        "classification": "live_sampler_internal"
+        "classification": "structural_mutation_alias_or_sink"
+      },
+      {
+        "path": "apps/engine_chain_commands.cpp",
+        "line": 61,
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_chain_commands.cpp",
         "line": 100,
-        "classification": "live_execution_plan_mutation"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_chain_commands.cpp",
         "line": 108,
-        "classification": "live_execution_plan_mutation"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_chain_commands.cpp",
         "line": 115,
-        "classification": "live_execution_plan_mutation"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_chain_commands.cpp",
         "line": 125,
-        "classification": "live_execution_plan_mutation"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_chain_commands.cpp",
         "line": 130,
-        "classification": "live_execution_plan_mutation"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_chain_commands.cpp",
         "line": 135,
-        "classification": "live_execution_plan_mutation"
+        "classification": "structural_mutation_alias_or_sink"
+      },
+      {
+        "path": "apps/engine_chain_host.cpp",
+        "line": 78,
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_chain_host.cpp",
         "line": 159,
-        "classification": "read_only_false_positive"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_consumer.cpp",
         "line": 573,
-        "classification": "hostless_aux_restore"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_load_patcher_pool.cpp",
         "line": 76,
-        "classification": "comment_false_positive"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_load_patcher_pool.cpp",
         "line": 88,
-        "classification": "document_transform"
+        "classification": "structural_mutation_alias_or_sink"
+      },
+      {
+        "path": "apps/engine_load_patcher_pool.cpp",
+        "line": 90,
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_load_patcher_pool.cpp",
         "line": 101,
-        "classification": "live_execution_plan_mutation"
+        "classification": "structural_mutation_alias_or_sink"
+      },
+      {
+        "path": "apps/engine_load_patcher_pool.cpp",
+        "line": 103,
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_load_project.cpp",
         "line": 105,
-        "classification": "document_transform"
+        "classification": "structural_mutation_alias_or_sink"
+      },
+      {
+        "path": "apps/engine_load_project.cpp",
+        "line": 106,
+        "classification": "structural_mutation_alias_or_sink"
+      },
+      {
+        "path": "apps/engine_load_project.cpp",
+        "line": 110,
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_load_project.cpp",
         "line": 498,
-        "classification": "live_execution_plan_mutation"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_load_project.cpp",
         "line": 617,
-        "classification": "live_execution_plan_helper_call"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_load_track.cpp",
         "line": 86,
-        "classification": "live_execution_plan_mutation"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_patcher_assemble.cpp",
         "line": 88,
-        "classification": "live_execution_plan_mutation"
+        "classification": "structural_mutation_alias_or_sink"
+      },
+      {
+        "path": "apps/engine_patcher_assemble.cpp",
+        "line": 90,
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_patcher_commands.cpp",
         "line": 135,
-        "classification": "live_patcher_internal"
+        "classification": "structural_mutation_alias_or_sink"
+      },
+      {
+        "path": "apps/engine_patcher_commands.cpp",
+        "line": 191,
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_patcher_commands.cpp",
         "line": 407,
-        "classification": "live_patcher_internal"
+        "classification": "structural_mutation_alias_or_sink"
+      },
+      {
+        "path": "apps/engine_patcher_commands.cpp",
+        "line": 420,
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_rt_helpers.cpp",
         "line": 75,
-        "classification": "execution_plan_helper_declaration"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_rt_helpers.cpp",
         "line": 76,
-        "classification": "live_execution_plan_mutation"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_sampler_commands.cpp",
         "line": 206,
-        "classification": "live_sampler_internal"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_sampler_commands.cpp",
         "line": 724,
-        "classification": "live_sampler_internal"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_sampler_commands.cpp",
         "line": 924,
-        "classification": "live_sampler_internal"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_sampler_commands.cpp",
         "line": 1032,
-        "classification": "live_sampler_internal"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_sampler_commands.cpp",
         "line": 1124,
-        "classification": "live_sampler_internal"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_sampler_commands.cpp",
         "line": 1199,
-        "classification": "live_sampler_internal"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_sampler_commands.cpp",
         "line": 1307,
-        "classification": "live_sampler_internal"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_sampler_commands.cpp",
         "line": 1429,
-        "classification": "live_sampler_internal"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_save_project.cpp",
         "line": 249,
-        "classification": "save_copy_transform"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_save_project.cpp",
         "line": 380,
-        "classification": "save_copy_transform"
+        "classification": "structural_mutation_alias_or_sink"
+      },
+      {
+        "path": "apps/engine_save_project.cpp",
+        "line": 386,
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_save_project.cpp",
         "line": 404,
-        "classification": "save_copy_chain_alias"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_save_project.cpp",
         "line": 416,
-        "classification": "save_copy_alias_sink"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_track_commands.cpp",
         "line": 174,
-        "classification": "live_euclidean_internal"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_track_commands.cpp",
         "line": 233,
-        "classification": "live_execution_plan_helper_call"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_track_commands.cpp",
         "line": 344,
-        "classification": "live_execution_plan_mutation"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_track_setup.cpp",
         "line": 69,
-        "classification": "live_execution_plan_mutation"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_track_setup.cpp",
         "line": 75,
-        "classification": "live_execution_plan_mutation"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_track_setup.cpp",
         "line": 79,
-        "classification": "live_execution_plan_mutation"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/engine_track_setup.cpp",
         "line": 268,
-        "classification": "live_execution_plan_helper_call"
+        "classification": "structural_mutation_alias_or_sink"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1108,
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/project_file.cpp",
         "line": 1193,
-        "classification": "document_parser_direct_chain_mutation"
+        "classification": "structural_mutation_alias_or_sink"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1312,
+        "classification": "structural_mutation_alias_or_sink"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1314,
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/project_file.cpp",
         "line": 1315,
-        "classification": "document_parser_transform"
+        "classification": "structural_mutation_alias_or_sink"
       },
       {
         "path": "apps/project_file.cpp",
         "line": 1437,
-        "classification": "document_parser_transform"
+        "classification": "structural_mutation_alias_or_sink"
       }
     ],
     "execution_authority_lexical_scan": [
@@ -1170,185 +1277,981 @@
       }
     ],
     "routing_authority_lexical_scan": [
-      {"path":"apps/daw_engine_main.cpp","line":324,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/daw_lint_main.cpp","line":279,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/daw_lint_main.cpp","line":280,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/daw_lint_main.cpp","line":281,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/daw_lint_main.cpp","line":282,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/daw_lint_main.cpp","line":283,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_audio_callback.h","line":65,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_audio_callback.h","line":177,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_chain_host.cpp","line":158,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_consumer.cpp","line":572,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_consumer.cpp","line":671,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_load_track.cpp","line":92,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_load_track.cpp","line":93,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_load_track.cpp","line":94,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_produce_block.cpp","line":519,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_produce_block.cpp","line":1201,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_rt_helpers.cpp","line":82,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_rt_helpers.cpp","line":91,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_rt_helpers.cpp","line":94,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_save_project.cpp","line":58,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_track_commands.cpp","line":75,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_track_commands.cpp","line":77,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_track_commands.cpp","line":79,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_track_commands.cpp","line":81,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_track_commands.cpp","line":83,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_track_commands.cpp","line":84,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_track_commands.cpp","line":85,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_track_commands.cpp","line":86,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_track_commands.cpp","line":87,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_track_commands.cpp","line":88,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_track_commands.cpp","line":90,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_track_commands.cpp","line":91,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_track_commands.cpp","line":92,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_track_setup.cpp","line":84,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_track_setup.cpp","line":85,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_track_setup.cpp","line":86,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_track_setup.cpp","line":277,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_types.h","line":250,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/engine_ui_publish.cpp","line":319,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/project_file.cpp","line":697,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/project_file.cpp","line":698,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/project_file.cpp","line":699,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/project_file.cpp","line":700,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/project_file.cpp","line":701,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/project_file.cpp","line":702,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/project_file.cpp","line":1045,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/project_file.cpp","line":1048,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/project_file.cpp","line":1051,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/project_file.cpp","line":1054,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/project_file.cpp","line":1057,"classification":"routing_authority_or_document_site"},
-      {"path":"apps/project_file.cpp","line":1059,"classification":"routing_authority_or_document_site"}
+      {
+        "path": "apps/daw_engine_main.cpp",
+        "line": 324,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/daw_lint_main.cpp",
+        "line": 279,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/daw_lint_main.cpp",
+        "line": 280,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/daw_lint_main.cpp",
+        "line": 281,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/daw_lint_main.cpp",
+        "line": 282,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/daw_lint_main.cpp",
+        "line": 283,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 65,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 177,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_chain_host.cpp",
+        "line": 158,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_consumer.cpp",
+        "line": 572,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_consumer.cpp",
+        "line": 671,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_load_track.cpp",
+        "line": 92,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_load_track.cpp",
+        "line": 93,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_load_track.cpp",
+        "line": 94,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_produce_block.cpp",
+        "line": 519,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_produce_block.cpp",
+        "line": 1201,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_rt_helpers.cpp",
+        "line": 82,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_rt_helpers.cpp",
+        "line": 91,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_rt_helpers.cpp",
+        "line": 94,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_save_project.cpp",
+        "line": 58,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_track_commands.cpp",
+        "line": 75,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_track_commands.cpp",
+        "line": 77,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_track_commands.cpp",
+        "line": 79,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_track_commands.cpp",
+        "line": 81,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_track_commands.cpp",
+        "line": 83,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_track_commands.cpp",
+        "line": 84,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_track_commands.cpp",
+        "line": 85,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_track_commands.cpp",
+        "line": 86,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_track_commands.cpp",
+        "line": 87,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_track_commands.cpp",
+        "line": 88,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_track_commands.cpp",
+        "line": 90,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_track_commands.cpp",
+        "line": 91,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_track_commands.cpp",
+        "line": 92,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 84,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 85,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 86,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 277,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_types.h",
+        "line": 250,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/engine_ui_publish.cpp",
+        "line": 319,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 697,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 698,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 699,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 700,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 701,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 702,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1045,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1048,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1051,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1054,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1057,
+        "classification": "routing_authority_or_document_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1059,
+        "classification": "routing_authority_or_document_site"
+      }
     ],
     "mirror_identity_lexical_scan": [
-      {"path":"apps/engine_device_commands.cpp","line":207,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_device_commands.cpp","line":227,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_emit_notes.cpp","line":279,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_emit_notes.cpp","line":280,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_emit_notes.cpp","line":281,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_render_track.cpp","line":527,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_render_track.cpp","line":528,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_render_track.cpp","line":621,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_render_track.cpp","line":622,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_render_track.cpp","line":623,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_render_track.cpp","line":655,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_render_track.cpp","line":656,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_restart_worker.cpp","line":146,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_restart_worker.cpp","line":147,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_track_setup.cpp","line":408,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_track_setup.cpp","line":409,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_track_setup.cpp","line":433,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_track_setup.cpp","line":434,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_track_setup.cpp","line":437,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_types.h","line":161,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_types.h","line":168,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_types.h","line":383,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_types.h","line":384,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_ui_publish.cpp","line":273,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_ui_publish.cpp","line":276,"classification":"mirror_identity_site"},
-      {"path":"apps/engine_ui_publish.cpp","line":278,"classification":"mirror_identity_site"}
+      {
+        "path": "apps/engine_device_commands.cpp",
+        "line": 207,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_device_commands.cpp",
+        "line": 227,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_emit_notes.cpp",
+        "line": 279,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_emit_notes.cpp",
+        "line": 280,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_emit_notes.cpp",
+        "line": 281,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 527,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 528,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 621,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 622,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 623,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 655,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 656,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_restart_worker.cpp",
+        "line": 146,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_restart_worker.cpp",
+        "line": 147,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 408,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 409,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 433,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 434,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 437,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_types.h",
+        "line": 161,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_types.h",
+        "line": 168,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_types.h",
+        "line": 383,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_types.h",
+        "line": 384,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_ui_publish.cpp",
+        "line": 273,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_ui_publish.cpp",
+        "line": 276,
+        "classification": "mirror_identity_site"
+      },
+      {
+        "path": "apps/engine_ui_publish.cpp",
+        "line": 278,
+        "classification": "mirror_identity_site"
+      }
     ],
     "device_identity_lexical_scan": [
-      {"path":"apps/device_chain.cpp","line":57,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/device_chain.cpp","line":60,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/device_chain.cpp","line":67,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/device_chain.cpp","line":73,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/device_chain.cpp","line":74,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/device_chain.cpp","line":77,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/device_chain.cpp","line":85,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/device_chain.cpp","line":109,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/device_chain.cpp","line":201,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/device_chain.h","line":27,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/device_chain.h","line":123,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/engine_chain_commands.cpp","line":59,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/project_file.cpp","line":708,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/project_file.cpp","line":808,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/project_file.cpp","line":813,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/project_file.cpp","line":1064,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/project_file.cpp","line":1066,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/project_file.cpp","line":1067,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/project_file.cpp","line":1072,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/project_file.cpp","line":1090,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/project_file.cpp","line":1091,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/project_file.cpp","line":1154,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/project_file.cpp","line":1224,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/project_file.cpp","line":1230,"classification":"device_identity_allocator_or_persistence_site"},
-      {"path":"apps/project_file.cpp","line":1307,"classification":"device_identity_allocator_or_persistence_site"}
+      {
+        "path": "apps/device_chain.cpp",
+        "line": 57,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/device_chain.cpp",
+        "line": 60,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/device_chain.cpp",
+        "line": 67,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/device_chain.cpp",
+        "line": 73,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/device_chain.cpp",
+        "line": 74,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/device_chain.cpp",
+        "line": 77,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/device_chain.cpp",
+        "line": 85,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/device_chain.cpp",
+        "line": 109,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/device_chain.cpp",
+        "line": 201,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/device_chain.h",
+        "line": 27,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/device_chain.h",
+        "line": 123,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/engine_chain_commands.cpp",
+        "line": 59,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 708,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 808,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 813,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1064,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1066,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1067,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1072,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1090,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1091,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1154,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1224,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1230,
+        "classification": "device_identity_allocator_or_persistence_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1307,
+        "classification": "device_identity_allocator_or_persistence_site"
+      }
+    ],
+    "stable_device_carrier_sites": [
+      {
+        "path": "apps/engine_consumer.cpp",
+        "line": 346,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "apps/engine_consumer.cpp",
+        "line": 354,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "apps/engine_patcher_commands.cpp",
+        "line": 110,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "apps/engine_patcher_commands.cpp",
+        "line": 383,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "apps/engine_request_commands.cpp",
+        "line": 311,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "apps/event_payloads.h",
+        "line": 723,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "apps/event_payloads.h",
+        "line": 2202,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "apps/shared_memory.h",
+        "line": 784,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "apps/shared_memory.h",
+        "line": 1351,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "apps/shared_memory.h",
+        "line": 1352,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "ui/daw-agent/src/tools.rs",
+        "line": 2010,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "ui/daw-agent/src/tools.rs",
+        "line": 2093,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "ui/daw-agent/src/tools.rs",
+        "line": 2136,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "ui/daw-agent/src/tools.rs",
+        "line": 2139,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "ui/daw-bridge/src/layout.rs",
+        "line": 482,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "ui/daw-bridge/src/layout.rs",
+        "line": 675,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "ui/daw-bridge/src/layout.rs",
+        "line": 1471,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "ui/daw-cli/src/main.rs",
+        "line": 687,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "ui/daw-cli/src/main.rs",
+        "line": 3548,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "ui/daw-sidecar/src/main.rs",
+        "line": 99,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "ui/daw-sidecar/src/main.rs",
+        "line": 112,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      },
+      {
+        "path": "ui/daw-sidecar/src/main.rs",
+        "line": 5832,
+        "classification": "stable_device_narrow_carrier_or_guard"
+      }
     ],
     "target_identity_lexical_scan": [
-      {"path":"apps/automation_clip.h","line":26,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/automation_clip.h","line":29,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/automation_clip.h","line":169,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/automation_clip.h","line":170,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/automation_clip.h","line":186,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/automation_clip.h","line":192,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_automation_commands.cpp","line":44,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_automation_commands.cpp","line":222,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_consumer.cpp","line":192,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_emit_notes.cpp","line":276,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_emit_notes.cpp","line":281,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_render_track.cpp","line":385,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_render_track.cpp","line":501,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_render_track.cpp","line":502,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_render_track.cpp","line":524,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_render_track.cpp","line":616,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_render_track.cpp","line":617,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_render_track.cpp","line":625,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_render_track.cpp","line":626,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_render_track.cpp","line":652,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_render_track.cpp","line":750,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_render_track.cpp","line":753,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_render_track.cpp","line":754,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_rt_helpers.cpp","line":453,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_types.h","line":170,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_ui_publish.cpp","line":262,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_ui_publish.cpp","line":269,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_ui_publish.cpp","line":287,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_ui_publish.cpp","line":288,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/engine_ui_publish.cpp","line":289,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/event_payloads.h","line":14,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/event_payloads.h","line":31,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/event_payloads.h","line":1128,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/event_payloads.h","line":1149,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/event_payloads.h","line":1758,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/juce_host_process_main.cpp","line":787,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/juce_host_process_main.cpp","line":788,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/project_file.cpp","line":789,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/project_file.cpp","line":1206,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/project_file.cpp","line":1207,"classification":"compact_or_durable_target_identity_site"},
-      {"path":"apps/shared_memory.h","line":1000,"classification":"compact_or_durable_target_identity_site"}
+      {
+        "path": "apps/automation_clip.h",
+        "line": 26,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/automation_clip.h",
+        "line": 29,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/automation_clip.h",
+        "line": 169,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/automation_clip.h",
+        "line": 170,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/automation_clip.h",
+        "line": 186,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/automation_clip.h",
+        "line": 192,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_automation_commands.cpp",
+        "line": 44,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_automation_commands.cpp",
+        "line": 222,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_consumer.cpp",
+        "line": 192,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_emit_notes.cpp",
+        "line": 276,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_emit_notes.cpp",
+        "line": 281,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 385,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 501,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 502,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 524,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 616,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 617,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 625,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 626,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 652,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 750,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 753,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 754,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_rt_helpers.cpp",
+        "line": 453,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_types.h",
+        "line": 170,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_ui_publish.cpp",
+        "line": 262,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_ui_publish.cpp",
+        "line": 269,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_ui_publish.cpp",
+        "line": 287,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_ui_publish.cpp",
+        "line": 288,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/engine_ui_publish.cpp",
+        "line": 289,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/event_payloads.h",
+        "line": 14,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/event_payloads.h",
+        "line": 31,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/event_payloads.h",
+        "line": 1128,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/event_payloads.h",
+        "line": 1149,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/event_payloads.h",
+        "line": 1758,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/juce_host_process_main.cpp",
+        "line": 787,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/juce_host_process_main.cpp",
+        "line": 788,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 789,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1206,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1207,
+        "classification": "compact_or_durable_target_identity_site"
+      },
+      {
+        "path": "apps/shared_memory.h",
+        "line": 1000,
+        "classification": "compact_or_durable_target_identity_site"
+      }
     ],
     "host_config_lexical_scan": [
-      {"path":"apps/daw_engine_main.cpp","line":423,"classification":"host_config_execution_site"},
-      {"path":"apps/daw_engine_main.cpp","line":424,"classification":"host_config_execution_site"},
-      {"path":"apps/daw_engine_main.cpp","line":1042,"classification":"host_config_execution_site"},
-      {"path":"apps/daw_engine_main.cpp","line":1050,"classification":"host_config_execution_site"},
-      {"path":"apps/daw_engine_main.cpp","line":1051,"classification":"host_config_execution_site"},
-      {"path":"apps/engine_chain_host.cpp","line":207,"classification":"host_config_execution_site"},
-      {"path":"apps/engine_chain_host.cpp","line":208,"classification":"host_config_execution_site"},
-      {"path":"apps/engine_chain_host.cpp","line":214,"classification":"host_config_execution_site"},
-      {"path":"apps/engine_chain_host.cpp","line":215,"classification":"host_config_execution_site"},
-      {"path":"apps/engine_device_commands.cpp","line":181,"classification":"host_config_execution_site"},
-      {"path":"apps/engine_load_project.cpp","line":596,"classification":"host_config_execution_site"},
-      {"path":"apps/engine_load_project.cpp","line":597,"classification":"host_config_execution_site"},
-      {"path":"apps/engine_save_project.cpp","line":257,"classification":"host_config_execution_site"},
-      {"path":"apps/engine_save_project.cpp","line":258,"classification":"host_config_execution_site"},
-      {"path":"apps/engine_track_commands.cpp","line":336,"classification":"host_config_execution_site"},
-      {"path":"apps/engine_track_commands.cpp","line":337,"classification":"host_config_execution_site"},
-      {"path":"apps/engine_track_setup.cpp","line":34,"classification":"host_config_execution_site"},
-      {"path":"apps/engine_track_setup.cpp","line":35,"classification":"host_config_execution_site"},
-      {"path":"apps/engine_track_setup.cpp","line":348,"classification":"host_config_execution_site"},
-      {"path":"apps/engine_track_setup.cpp","line":412,"classification":"host_config_execution_site"},
-      {"path":"apps/engine_track_setup.cpp","line":415,"classification":"host_config_execution_site"},
-      {"path":"apps/host_controller.cpp","line":70,"classification":"host_config_execution_site"},
-      {"path":"apps/host_controller.cpp","line":118,"classification":"host_config_execution_site"},
-      {"path":"apps/host_controller.cpp","line":134,"classification":"host_config_execution_site"},
-      {"path":"apps/host_controller.cpp","line":135,"classification":"host_config_execution_site"},
-      {"path":"apps/host_controller.cpp","line":143,"classification":"host_config_execution_site"},
-      {"path":"apps/host_controller.cpp","line":145,"classification":"host_config_execution_site"},
-      {"path":"apps/host_controller.cpp","line":160,"classification":"host_config_execution_site"}
+      {
+        "path": "apps/daw_engine_main.cpp",
+        "line": 423,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/daw_engine_main.cpp",
+        "line": 424,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/daw_engine_main.cpp",
+        "line": 1042,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/daw_engine_main.cpp",
+        "line": 1050,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/daw_engine_main.cpp",
+        "line": 1051,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/engine_chain_host.cpp",
+        "line": 207,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/engine_chain_host.cpp",
+        "line": 208,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/engine_chain_host.cpp",
+        "line": 214,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/engine_chain_host.cpp",
+        "line": 215,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/engine_device_commands.cpp",
+        "line": 181,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/engine_load_project.cpp",
+        "line": 596,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/engine_load_project.cpp",
+        "line": 597,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/engine_save_project.cpp",
+        "line": 257,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/engine_save_project.cpp",
+        "line": 258,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/engine_track_commands.cpp",
+        "line": 336,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/engine_track_commands.cpp",
+        "line": 337,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 34,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 35,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 348,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 412,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 415,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/host_controller.cpp",
+        "line": 70,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/host_controller.cpp",
+        "line": 118,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/host_controller.cpp",
+        "line": 134,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/host_controller.cpp",
+        "line": 135,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/host_controller.cpp",
+        "line": 143,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/host_controller.cpp",
+        "line": 145,
+        "classification": "host_config_execution_site"
+      },
+      {
+        "path": "apps/host_controller.cpp",
+        "line": 160,
+        "classification": "host_config_execution_site"
+      }
     ],
     "execution_authority_consumers": [
       {
@@ -1826,6 +2729,20 @@
         "symbol": "ParamPayload::targetPluginIndex",
         "authority": "compact target carrier",
         "disposition": "wire_carrier"
+      },
+      {
+        "path": "apps/engine_producer_thread.cpp",
+        "line": 172,
+        "symbol": "runProducerThread transport gate",
+        "authority": "hostReady-only transport advancement",
+        "disposition": "bind_to_dispatch_witness"
+      },
+      {
+        "path": "apps/engine_producer_thread.cpp",
+        "line": 237,
+        "symbol": "runProducerThread backpressure gate",
+        "authority": "hostReady-only completedBlockId admission",
+        "disposition": "bind_to_dispatch_witness"
       }
     ],
     "authored_document_exemptions": [
@@ -1944,6 +2861,18 @@
     ],
     "replay_protocol_sites": [
       {
+        "path": "apps/engine_produce_block.cpp",
+        "line": 513,
+        "symbol": "produceBlock/processTrack",
+        "role": "prime_publication"
+      },
+      {
+        "path": "apps/engine_producer_thread.cpp",
+        "line": 214,
+        "symbol": "runProducerThread",
+        "role": "ack_reader"
+      },
+      {
         "path": "apps/engine_ui_publish.cpp",
         "line": 292,
         "symbol": "writeMirrorParams",
@@ -1956,10 +2885,10 @@
         "role": "gate_sender"
       },
       {
-        "path": "apps/engine_produce_block.cpp",
-        "line": 513,
-        "symbol": "produceBlock/processTrack",
-        "role": "prime_publication"
+        "path": "apps/juce_host_process_main.cpp",
+        "line": 547,
+        "symbol": "initializeSharedMemory",
+        "role": "ack_reset"
       },
       {
         "path": "apps/juce_host_process_main.cpp",
@@ -1980,26 +2909,100 @@
         "role": "ack_publisher"
       },
       {
-        "path": "apps/engine_producer_thread.cpp",
-        "line": 214,
-        "symbol": "runProducerThread",
-        "role": "ack_reader"
-      },
-      {
         "path": "apps/shared_memory.h",
         "line": 618,
         "symbol": "BlockMailbox",
         "role": "ack_word"
       }
     ],
+    "replay_lifecycle_lexical_scan": [
+      {
+        "path": "apps/engine_producer_thread.cpp",
+        "line": 214,
+        "classification": "replay_ack_lifecycle_site"
+      },
+      {
+        "path": "apps/engine_ui_publish.cpp",
+        "line": 299,
+        "classification": "replay_ack_lifecycle_site"
+      },
+      {
+        "path": "apps/engine_ui_publish.cpp",
+        "line": 304,
+        "classification": "replay_ack_lifecycle_site"
+      },
+      {
+        "path": "apps/juce_host_process_main.cpp",
+        "line": 124,
+        "classification": "replay_ack_lifecycle_site"
+      },
+      {
+        "path": "apps/juce_host_process_main.cpp",
+        "line": 547,
+        "classification": "replay_ack_lifecycle_site"
+      },
+      {
+        "path": "apps/juce_host_process_main.cpp",
+        "line": 777,
+        "classification": "replay_ack_lifecycle_site"
+      },
+      {
+        "path": "apps/juce_host_process_main.cpp",
+        "line": 1097,
+        "classification": "replay_ack_lifecycle_site"
+      },
+      {
+        "path": "apps/juce_host_process_main.cpp",
+        "line": 1099,
+        "classification": "replay_ack_lifecycle_site"
+      },
+      {
+        "path": "apps/shared_memory.h",
+        "line": 597,
+        "classification": "replay_ack_lifecycle_site"
+      },
+      {
+        "path": "apps/shared_memory.h",
+        "line": 618,
+        "classification": "replay_ack_lifecycle_site"
+      }
+    ],
     "replay_receiver_order_sites": [
-      {"path":"apps/juce_host_process_main.cpp","line":117,"classification":"priority_function"},
-      {"path":"apps/juce_host_process_main.cpp","line":121,"classification":"parameter_priority"},
-      {"path":"apps/juce_host_process_main.cpp","line":124,"classification":"replay_priority"},
-      {"path":"apps/juce_host_process_main.cpp","line":760,"classification":"priority_application_a"},
-      {"path":"apps/juce_host_process_main.cpp","line":761,"classification":"priority_application_b"},
-      {"path":"apps/juce_host_process_main.cpp","line":777,"classification":"replay_consumption"},
-      {"path":"apps/juce_host_process_main.cpp","line":781,"classification":"parameter_consumption"}
+      {
+        "path": "apps/juce_host_process_main.cpp",
+        "line": 117,
+        "classification": "priority_function"
+      },
+      {
+        "path": "apps/juce_host_process_main.cpp",
+        "line": 121,
+        "classification": "parameter_priority"
+      },
+      {
+        "path": "apps/juce_host_process_main.cpp",
+        "line": 124,
+        "classification": "replay_priority"
+      },
+      {
+        "path": "apps/juce_host_process_main.cpp",
+        "line": 760,
+        "classification": "priority_application_a"
+      },
+      {
+        "path": "apps/juce_host_process_main.cpp",
+        "line": 761,
+        "classification": "priority_application_b"
+      },
+      {
+        "path": "apps/juce_host_process_main.cpp",
+        "line": 777,
+        "classification": "replay_consumption"
+      },
+      {
+        "path": "apps/juce_host_process_main.cpp",
+        "line": 781,
+        "classification": "parameter_consumption"
+      }
     ],
     "offline_coordinator_sites": [
       {
@@ -2135,6 +3138,18 @@
         "line": 270,
         "symbol": "active publication",
         "state": "pre_mirror_complete"
+      },
+      {
+        "path": "apps/engine_producer_thread.cpp",
+        "line": 172,
+        "symbol": "transport advancement gate",
+        "state": "hostReady_only"
+      },
+      {
+        "path": "apps/engine_producer_thread.cpp",
+        "line": 237,
+        "symbol": "backpressure mapping admission",
+        "state": "hostReady_only"
       }
     ],
     "capacity_contract_sites": [
@@ -2202,7 +3217,8 @@
     "R-R13-RECONCILIATION",
     "R-REVIEW-GATED-AUTH",
     "R-ROUTING-AUTHORITY",
-    "R-STABLE-DEVICE-TARGETS"
+    "R-STABLE-DEVICE-TARGETS",
+    "R-TRANSACTIONAL-EVENT-BATCH"
   ],
   "records": [
     {
@@ -2229,6 +3245,7 @@
         "R-DISPATCH-TICKET",
         "R-MIRROR-EPOCH",
         "R-CORRELATED-REPLAY-ACK",
+        "R-TRANSACTIONAL-EVENT-BATCH",
         "R-ATOMIC-PRIMER-CAPACITY",
         "R-PASS4-REPLACEMENT",
         "R-MASTER-CORRELATION",
@@ -2247,7 +3264,7 @@
         "predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:2559-2569"
       ],
       "control": "CTRL-PACKET",
-      "statement": "Item 18 is acceptance-decidable: one session ExecutionSnapshot is the sole execution authority for routing, devices, targets, patcher ownership, track and master execution; stable ids cannot reuse or collide; every sender, receiver, mapping, master, and offline surface is inventoried; and PASS 4 is a production-bound correlated primer/ack/re-arm oracle with deterministic capacity failure."
+      "statement": "Item 18 is acceptance-decidable: one session ExecutionSnapshot is the sole execution authority for routing, devices, targets, patcher ownership, track and master execution; bounded stable ids cannot reuse, collide, or narrow; every sender, receiver, mapping, carrier, master, and offline surface is inventoried; and PASS 4 is a production-bound correlated primer/ack/re-arm oracle with whole-block event transactions and deterministic capacity failure."
     },
     {
       "id": "DEP-PREDECESSOR",
@@ -2318,7 +3335,7 @@
         "manifest:/populations/chain_mutation_scan"
       ],
       "control": "CTRL-PACKET",
-      "statement": "The authored execution inputs have nineteen semantic input/mutation roots and four internal-state families cross-checked against the mechanically reproduced 47-line frozen-source mutation scan, including direct project parsing and alias-laundered save-copy writes. Every live mutation commits through the one session ExecutionSnapshot transaction or remains explicitly document-only."
+      "statement": "The authored execution inputs have nineteen semantic input/mutation roots and four internal-state families cross-checked against the mechanically reproduced 62-line frozen-source mutation scan. The scan recognizes chain aliases and patcher/patcherNodeId sinks by syntax independent of identifier spelling, including both live device->patcher writes, direct project parsing, and alias-laundered save-copy writes. Every live mutation commits through the one session ExecutionSnapshot transaction or remains explicitly document-only."
     },
     {
       "id": "R-BYPASS-STAGED",
@@ -2369,7 +3386,7 @@
         "frozen:apps/engine_restart_worker.cpp:102-165"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "One nonzero uint64 dispatch ticket binds the current mapping, host generation, exact ExecutionSnapshot revision and track/master plan identity, and successful bypass staging. Zero is withdrawn. Track and master senders acquire controllerMutex, reload the session snapshot and ticket, and refuse stale plans; TrackInfo and master handoffs snapshot the ticket with their mapping. Tickets never wrap: exhaustion stays withdrawn and reports terminal refusal."
+      "statement": "One nonzero uint64 dispatch ticket binds the current mapping, host generation, exact ExecutionSnapshot revision and track/master plan identity, and successful bypass staging. Zero is withdrawn. Track and master senders acquire controllerMutex, reload the session snapshot and ticket, and refuse stale plans; TrackInfo and master handoffs snapshot the ticket with their mapping. Producer transport advancement and completedBlockId backpressure admission compare that same mapping/generation/ticket/revision plus mirror stage before using a host. Tickets never wrap: exhaustion stays withdrawn and reports terminal refusal."
     },
     {
       "id": "R-MIRROR-EPOCH",
@@ -2388,7 +3405,7 @@
         "frozen:apps/engine_producer_thread.cpp:199-229"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "Mirror readiness is one controllerMutex-guarded witness {dispatchTicket, mirrorEpoch, replayGate, causes, stage}, where stage is Pending, Primed, Complete, or FailedPermanent. Arm, atomic-batch prime, acknowledgement, re-arm, and failure transition that tuple under the owning lock; no loose atomic pair is a transaction. Epochs and gates are monotonic nonzero uint64 values and never wrap; exhaustion withdraws the ticket."
+      "statement": "Mirror readiness is one controllerMutex-guarded witness {dispatchTicket, mirrorEpoch, replayGate, causes, stage}, where stage is Unprimed, AwaitingAck, Complete, or FailedPermanent. Arm/re-arm enters Unprimed; one successful atomic mirror batch plus primer ProcessBlock enters AwaitingAck; only the exact correlated acknowledgement enters Complete. AwaitingAck never re-primes and there is no separate primed flag. Every transition updates the tuple under the owning lock; epochs and gates are monotonic nonzero uint64 values and never wrap, and exhaustion withdraws the ticket."
     },
     {
       "id": "R-R13-RECONCILIATION",
@@ -2410,11 +3427,12 @@
       "dependencies": [
         "R-R13-RECONCILIATION",
         "R-CORRELATED-REPLAY-ACK",
+        "R-TRANSACTIONAL-EVENT-BATCH",
         "R-ATOMIC-PRIMER-CAPACITY"
       ],
       "source_span": "manifest:/test_cases",
       "control": "CTRL-MUTATIONS",
-      "statement": "PASS 4 is replaced: the shared production dispatch helper permits only a control-only primer while Pending/Primed and refuses ordinary MIDI, automation, render work, active publication, mapping/output mixing, and master processed-output publication until the exact witness is Complete. Primer and drain output are discarded; unrelated ready tracks continue. Atomic batch reservation publishes all mirror params plus ReplayComplete or none. Transient occupancy sends only a drain block and retries; a mirror larger than C-2 for capacity C enters FailedPermanent, withdraws the ticket, and makes offline rendering fail without output."
+      "statement": "PASS 4 is replaced: the shared production dispatch helper permits only one control-only primer while Unprimed, sends no second primer while AwaitingAck, and refuses ordinary MIDI, automation, render work, active publication, transport advancement, backpressure admission, mapping/output mixing, and master processed-output publication until the exact witness is Complete. Primer output is discarded; unrelated ready tracks continue. Atomic batch reservation publishes all mirror params plus ReplayComplete or none. Transient occupancy sends no drain ProcessBlock and follows the exact in-flight wait/retry rule; a mirror larger than C-2 for capacity C enters FailedPermanent, withdraws the ticket, and makes offline rendering fail without output."
     },
     {
       "id": "R-OFFLINE-PRIMER",
@@ -2433,7 +3451,7 @@
         "frozen:apps/engine_master_render.cpp:1-150"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "The production offline coordinator has explicit MappingReady, ControlPreroll, ResetAcknowledged, Playing, and CountedOutput phases. It completes track and master primers while transport is stopped, rejects stale mappings in both preflight readers, then resets timeline and arms playback; no primer consumes block id, advances transport, reaches capture, or increments rendered. Each counted block waits for matching track and master ticket/generation/block output, and write failure or permanent mirror failure sets renderFailed with no partial-success claim."
+      "statement": "The production offline coordinator has explicit MappingReady, ControlPreroll, ResetAcknowledged, Playing, and CountedOutput phases. It completes track and master primers while transport is stopped, rejects stale mappings in both preflight readers, then resets timeline and arms playback; no primer consumes block id, advances transport, reaches capture, or increments rendered. Each counted block transaction waits for matching track and master generation, ticket, ExecutionSnapshot revision, mirror epoch/stage, and block output; event-batch, write, or permanent mirror failure sets renderFailed with no partial-success claim."
     },
     {
       "id": "R-G4-WITNESS",
@@ -2446,7 +3464,7 @@
       ],
       "source_span": "predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:1167-1174",
       "control": "CTRL-MUTATIONS",
-      "statement": "Future G4 dispatch identity is {hostGeneration, dispatchTicket, ExecutionSnapshot revision, mirrorEpoch, mirrorStage}. TrackInfo and master handoffs compare all fields against live state before readiness, waits, mixing, metering, or output publication; aux children inherit the parent's exact identity. Any differing field compares unequal."
+      "statement": "Future G4 dispatch identity is {hostGeneration, dispatchTicket, ExecutionSnapshot revision, mirrorEpoch, mirrorStage}. TrackInfo and master handoffs carry and compare all fields against live state before producer transport/backpressure decisions, readiness, waits, mixing, metering, or output publication; aux children inherit the parent's exact identity. Any differing field compares unequal."
     },
     {
       "id": "D-PRODUCTION-FIXTURE",
@@ -2460,7 +3478,7 @@
       ],
       "source_span": "manifest:/test_cases",
       "control": "CTRL-MUTATIONS",
-      "statement": "One clock-free fixture drives the exact shared production dispatch helper used by both track call branches and the master branch. Fake controller/mailbox barriers expose plan, ticket, slot, batch capacity, primer, active, disconnect, generation, block, and output witnesses; stale track mappings and stale master handoffs are rejected. A separate coordinator fixture drives the real offline state-machine seam through timeline-zero and counted output."
+      "statement": "One clock-free fixture drives the exact shared production dispatch helper used by both track call branches and the master branch. Fake controller/mailbox barriers expose plan, ticket, slot, whole ordinary and primer batches, capacity, exact in-flight request, active, disconnect, generation, mirror witness, block, transport, and output witnesses; stale track mappings and stale master handoffs are rejected. A separate coordinator fixture drives the real offline state-machine seam through timeline-zero and counted output."
     },
     {
       "id": "R-REVIEW-GATED-AUTH",
@@ -2492,7 +3510,7 @@
       "dependencies": [],
       "source_span": "packet:tools/architecture/ae_p1_2_g2b_item18_check.py",
       "control": "CTRL-MUTATIONS",
-      "statement": "The checker self-tests semantic and lexical population deletion/substitution, stale-plan omission, loose mirror publication, counter wrap, premature readiness, bypass overclaim, primed-is-complete, partial primer publication, stale ack, lost regression, global gating, offline leakage, authorization drift, locator substitution, and governed-byte drift."
+      "statement": "The checker self-tests exact semantic and lexical population deletion/substitution, identifier-renamed mutation aliases, replay-lifecycle and carrier derivation, stale-plan omission, loose mirror publication, counter wrap, premature readiness, bypass overclaim, AwaitingAck-is-complete, partial ordinary/primer publication, drain leakage, stale ack, lost regression, global gating, producer-gate omission, offline leakage, authorization drift, locator substitution, and governed-byte drift."
     },
     {
       "id": "P-EXECUTION-AUTHORITY-CONSUMERS",
@@ -2508,13 +3526,14 @@
         "manifest:/populations/routing_authority_lexical_scan",
         "manifest:/populations/mirror_identity_lexical_scan",
         "manifest:/populations/device_identity_lexical_scan",
+        "manifest:/populations/stable_device_carrier_sites",
         "manifest:/populations/target_identity_lexical_scan",
         "manifest:/populations/host_config_lexical_scan",
         "manifest:/populations/execution_authority_consumers",
         "manifest:/populations/authored_document_exemptions"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "The bounded authority population contains fifty-seven direct chain/path hits, fifty-one routing hits, twenty-six mirror-identity hits, twenty-five device-id allocator/persistence hits, forty-one compact/durable target hits, twenty-eight HostConfig/launch hits, sixty-eight semantic execution/carrier consumers, and thirteen document-only exemptions. The implementation removes chainDevices and routing from TrackStateSnapshot, removes routesToMaster as a mixer authority, prevents execution targets from including authored chain APIs, and uses validated stable device ids at durable boundaries."
+      "statement": "The bounded authority population contains fifty-seven direct chain/path hits, fifty-one routing hits, twenty-six mirror-identity hits, twenty-five device-id allocator/persistence hits, twenty-two stable-device narrow-carrier/guard hits, forty-one compact/durable target hits, twenty-eight HostConfig/launch hits, seventy semantic execution/carrier consumers, and thirteen document-only exemptions. The implementation removes chainDevices and routing from TrackStateSnapshot, removes routesToMaster as a mixer authority, prevents execution targets from including authored chain APIs, and uses validated stable device ids at durable boundaries."
     },
     {
       "id": "P-DISPATCH-PROTOCOL-SURFACES",
@@ -2528,12 +3547,13 @@
         "manifest:/populations/process_block_senders",
         "manifest:/populations/process_block_receiver",
         "manifest:/populations/replay_protocol_sites",
+        "manifest:/populations/replay_lifecycle_lexical_scan",
         "manifest:/populations/replay_receiver_order_sites",
         "manifest:/populations/mapping_and_output_gates",
         "manifest:/populations/capacity_contract_sites"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "The production surface is exactly three sendProcessBlock expressions in two semantic families, one receiver reached by one dispatch edge, eight replay protocol sites plus the exact seven-site parameter/replay priority-and-consumption chain, ten mapping/output gates, and five capacity roots. Additions, deletions, substitutions, or unclassified missing gates fail the checker."
+      "statement": "The production surface is exactly three sendProcessBlock expressions in two semantic families, one receiver reached by one dispatch edge, nine classified replay sites backed by a mechanically derived ten-site ReplayComplete/ack lifecycle and the exact seven-site parameter/replay priority-and-consumption chain, twelve mapping/output/producer gates, and five capacity roots. Additions, deletions, substitutions, or unclassified missing gates fail the checker."
     },
     {
       "id": "P-OFFLINE-OUTPUT-SURFACES",
@@ -2583,7 +3603,7 @@
         "frozen:apps/engine_consumer.cpp:636-675"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "Complete MIDI input/output, audio input/output, sidechain, aux-child, and pre-fader routing is compiled into each track plan in the one session ExecutionSnapshot revision. A routing command mutates only a candidate document and atomically publishes the compiled session; producer routing, TrackInfo handoff, mixer inclusion, waits, and aux inheritance consume that exact revision. TrackStateSnapshot.routing and the routesToMaster atomic are removed as execution authorities, so no old/new route combination can mix."
+      "statement": "Complete MIDI input/output, audio input/output, sidechain, aux-child, and pre-fader routing is compiled into each track plan in the one session ExecutionSnapshot revision. Audio output has one exhaustive truth table: None reaches neither master nor a destination; Master reaches master only; Track(target) reaches that destination only and has no direct master path; ExternalInput is invalid as output and candidate compilation fails. A sidechain Track send is additive key input and does not change source audioOut. preFaderSend selects the pre- or post-fader signal for a Track destination without duplicating it to master. A routing command mutates only a candidate document and atomically publishes the compiled session; producer routing, TrackInfo handoff, mixer inclusion, waits, and aux inheritance consume that exact revision. TrackStateSnapshot.routing and the routesToMaster atomic are removed as execution authorities, so no old/new route combination can mix."
     },
     {
       "id": "R-DEVICE-ID-LIFETIME",
@@ -2599,10 +3619,11 @@
         "frozen:apps/device_chain.cpp:42-90",
         "frozen:apps/engine_chain_commands.cpp:52-66",
         "frozen:apps/project_file.cpp:1062-1095",
-        "frozen:apps/event_payloads.h:12-17"
+        "frozen:apps/event_payloads.h:12-17",
+        "manifest:/populations/stable_device_carrier_sites"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "A stable device id is in [1, UINT32_MAX-1]; zero and kDeviceIdAuto/kParamTargetAll are never device identities. Each track document carries a schema-5 next_device_id watermark that increases under the command-writer lock, never decreases, is persisted across save/load, and never reuses a deleted id. Allocation fails closed at exhaustion. Candidate compilation rejects duplicate, zero, sentinel, out-of-watermark, or dangling device references before publication. Schema 1-4 may seed the watermark as max(valid unique ids)+1 only after the same validation; ambiguous legacy ids fail project load rather than being repaired or rebound."
+      "statement": "A stable device id is in [1, kStableDeviceIdMax], where kStableDeviceIdMax is exactly 0x7FFF, the narrowest lossless carrier bound; zero, kDeviceIdAuto, and kParamTargetAll are never device identities. Every producer and consumer of a 15-bit, uint16, sampler-address, patcher-flag, or UI/control carrier validates before conversion and never masks, wraps, or silently narrows. Each track document carries a schema-5 next_device_id watermark that increases under the command-writer lock, never decreases, is persisted across save/load, and never reuses a deleted id; max+1 is 0x8000 and means exhausted. Candidate compilation rejects duplicate, zero, greater-than-max, sentinel, out-of-watermark, or dangling device references before publication. Schema 1-4 may seed the watermark as max(valid unique ids)+1 only after the same validation; ambiguous legacy ids fail project load rather than being repaired or rebound."
     },
     {
       "id": "R-MIRROR-INSTANCE-IDENTITY",
@@ -2641,12 +3662,31 @@
       "statement": "ReplayComplete keeps scheduling sampleTime in the block window and carries a ReplayCompletePayload containing a monotonic replayGate token. Under controllerMutex the engine allocates gate = max(lastIssuedGate, liveAck)+1, binds it to the current ticket/epoch, and fails closed at UINT64_MAX. The host publishes the maximum consumed payload gate. Therefore a retained prior acknowledgement greater than or equal to an old gate is still strictly below every newly issued gate and cannot promote a re-armed epoch."
     },
     {
+      "id": "R-TRANSACTIONAL-EVENT-BATCH",
+      "kind": "ruling",
+      "owner": "backend",
+      "status": "DECIDED",
+      "dependencies": [
+        "R-DISPATCH-TICKET",
+        "P-DISPATCH-PROTOCOL-SURFACES"
+      ],
+      "source_span": [
+        "frozen:apps/event_ring.cpp:72-91",
+        "frozen:apps/engine_produce_block.cpp:318-516",
+        "frozen:apps/engine_producer_thread.cpp:172-250",
+        "manifest:/populations/capacity_contract_sites"
+      ],
+      "control": "CTRL-MUTATIONS",
+      "statement": "Every host-bound ordinary or primer block is fully assembled as one immutable batch before any ring mutation and uses the same production ringWriteBatch. An ordinary batch contains every MIDI, parameter, and control event for one exact mapping, generation, dispatch ticket, ExecutionSnapshot revision, mirror witness, and block id; it commits whole or not at all. A batch larger than usable capacity C-1 is a permanent dispatch failure that withdraws the ticket, and no prefix or ProcessBlock is sent. On transient occupancy, the producer sends no ProcessBlock, advances neither block id nor transport, and may wait only for an already-issued in-flight request with the exact same identity and preceding block; no such request makes the transport poisoned and enters disconnect/recovery. After matching completion it retries the identical staged batch and block. Thus discarded or deferred audio cannot leave hidden ordinary MIDI or parameter state in the host."
+    },
+    {
       "id": "R-ATOMIC-PRIMER-CAPACITY",
       "kind": "ruling",
       "owner": "backend",
       "status": "DECIDED",
       "dependencies": [
-        "R-CORRELATED-REPLAY-ACK"
+        "R-CORRELATED-REPLAY-ACK",
+        "R-TRANSACTIONAL-EVENT-BATCH"
       ],
       "source_span": [
         "frozen:apps/event_ring.cpp:72-91",
@@ -2654,7 +3694,7 @@
         "frozen:apps/engine_types.h:383-384"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "A production ringWriteBatch reserves N mirror entries plus one gate with one CAS, writes every reserved slot with ready=0, publishes later slots first, and publishes the first reserved ready flag last; the consumer therefore observes the whole batch or none. For power-of-two capacity C, usable=C-1 and the permanent mirror maximum is C-2 parameters: N=C-2 succeeds on an empty ring, N>=C-1 enters FailedPermanent without a ProcessBlock retry, while lesser N with transient occupancy drains and retries. Every batch result is consumed."
+      "statement": "The production ringWriteBatch used by every ordinary and primer block reserves the complete event batch with one CAS, writes every reserved slot with ready=0, publishes later slots first, and publishes the first reserved ready flag last; the consumer therefore observes the whole batch or none. A primer batch is N mirror entries plus one ReplayComplete gate. For power-of-two capacity C, usable=C-1 and the permanent mirror maximum is C-2 parameters: N=C-2 succeeds on an empty ring and N>=C-1 enters FailedPermanent without ProcessBlock. Lesser N with transient occupancy follows R-TRANSACTIONAL-EVENT-BATCH's exact in-flight wait/retry rule and sends no drain. Every batch result is consumed."
     },
     {
       "id": "R-MASTER-CORRELATION",
@@ -2671,7 +3711,7 @@
         "frozen:apps/engine_audio_callback.h:688-738"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "Master FX uses the same dispatch/primer helper and witness as tracks. Its handoff is {hostGeneration, dispatchTicket, ExecutionSnapshot revision, blockId, sampleStart, audio}; restart or re-arm invalidates pending and cached output, and the callback publishes processed master audio only when the entire identity matches live state. Boolean hostReady/masterFxActive cannot authorize master output."
+      "statement": "Master FX uses the same dispatch/primer helper and witness as tracks. Its handoff is {hostGeneration, dispatchTicket, ExecutionSnapshot revision, mirrorEpoch, mirrorStage, blockId, sampleStart, audio}; restart or re-arm invalidates pending and cached output, and the callback publishes processed master audio only when every identity field matches live state. Boolean hostReady/masterFxActive cannot authorize master output."
     },
     {
       "id": "R-PROTOCOL-VERSION",
@@ -2688,7 +3728,7 @@
         "frozen:SHM_LAYOUT.md:217-233"
       ],
       "control": "CTRL-PACKET",
-      "statement": "ReplayComplete gains a payload gate and BlockMailbox.replayAckSampleTime becomes replayAckGate. Bytes and offsets do not move, but meaning changes: kControlVersion is 15 and kShmVersion is 42 in C++, Rust, and SHM_LAYOUT.md, with existing size/offset assertions retained."
+      "statement": "ReplayComplete gains a payload gate and BlockMailbox.replayAckSampleTime becomes replayAckGate. Bytes and offsets do not move, but meaning changes: kControlVersion is 15 and kShmVersion is 42 in C++, Rust, and SHM_LAYOUT.md, with existing size/offset assertions retained. Device-id carrier widths also remain unchanged; the exact 0x7FFF stable-id ceiling and checked conversions make every existing carrier lossless."
     },
     {
       "id": "D-PRODUCTION-RECEIVER",
@@ -2708,7 +3748,7 @@
         "frozen:apps/juce_host_process_main.cpp:1200-1205"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "The host receiver extracts a no-JUCE production replay-consumer seam used by handleProcessBlock. The same seam owns the production eventPriority ordering in which Param precedes ReplayComplete. An in-memory ring/mailbox test drives the real sender batch through that exact receiver, proves that ordering and actual application before acknowledgement, retained high ack cannot answer a new gate, and runControlLoop still dispatches ProcessBlock to the seam."
+      "statement": "The host receiver extracts a no-JUCE production replay-consumer seam used by handleProcessBlock. The same seam owns the production eventPriority ordering in which Param precedes ReplayComplete. Fresh-mailbox initialization explicitly resets replayAckGate, while restart/re-arm correctness remains independent of retained values because new gates are greater. An in-memory ring/mailbox test drives the real sender batch through that exact receiver, proves ordering and actual application before acknowledgement, retained high ack cannot answer a new gate, and runControlLoop still dispatches ProcessBlock to the seam."
     },
     {
       "id": "R-PROJECT-TARGET-MIGRATION",
@@ -2753,27 +3793,27 @@
     },
     {
       "id": "T-LOWER-PRIMER",
-      "statement": "With a non-empty mirror and ack parked below the payload gate, the actual shared production sender emits one atomic control-only primer batch plus ProcessBlock while ordinary work, active, track output, and master processed output remain absent; primer output is discarded."
+      "statement": "With a non-empty mirror and ack parked below the payload gate, the actual shared production sender atomically moves Unprimed to AwaitingAck by emitting one control-only parameter-plus-gate batch and its primer ProcessBlock while ordinary work, active, track output, and master processed output remain absent; primer output is discarded."
     },
     {
       "id": "T-PRIMED-NOT-COMPLETE",
-      "statement": "A second producer step with mirror primed and ack still below gate remains Pending and emits no ordinary sentinel."
+      "statement": "A second producer step in AwaitingAck with ack still below gate remains AwaitingAck, emits neither a second primer nor an ordinary sentinel, and has no hidden primed flag."
     },
     {
       "id": "T-PRIMER-CAPACITY",
-      "statement": "For capacity C, ringWriteBatch accepts exactly C-2 mirror parameters plus ReplayComplete on an empty ring; with transient occupancy it reserves none, sends only a drain ProcessBlock and retries; every result is consumed and no prefix is visible before the first reserved ready flag publishes last."
+      "statement": "For capacity C, ringWriteBatch accepts exactly C-2 mirror parameters plus ReplayComplete on an empty ring; with transient occupancy it reserves none, sends no ProcessBlock, waits only for the exact already-issued in-flight request, and retries the identical batch and block after matching completion. Every result is consumed and no prefix is visible before the first reserved ready flag publishes last."
     },
     {
       "id": "T-ACK-BOUNDARY",
-      "statement": "A retained prior ack at or above the old gate remains below the newly allocated payload gate; gate-minus-one stays Pending, the exact gate transitions the same ticket/epoch under controllerMutex, and only the next dispatch may carry the ordinary sentinel."
+      "statement": "A retained prior ack at or above the old gate remains below the newly allocated payload gate; gate-minus-one stays AwaitingAck, the exact gate transitions the same ticket/epoch to Complete under controllerMutex, and only the next dispatch may carry the ordinary sentinel."
     },
     {
       "id": "T-REARM-REGRESSES",
-      "statement": "Overflow re-arm advances the epoch, returns readiness to Pending, refuses the sentinel again, and cannot be completed by the prior epoch's ack."
+      "statement": "Overflow re-arm advances the epoch, returns readiness to Unprimed, refuses the sentinel again, and cannot be completed by the prior epoch's ack."
     },
     {
       "id": "T-TRACK-LOCAL",
-      "statement": "A parked Pending primer on track A never suppresses ordinary dispatch and output for ready track B."
+      "statement": "A parked AwaitingAck primer on track A never suppresses ordinary dispatch and output for Complete track B."
     },
     {
       "id": "T-OFFLINE-NO-LEAK",
@@ -2793,11 +3833,11 @@
     },
     {
       "id": "T-ROUTING-ATOMICITY",
-      "statement": "A routing mutation parked between candidate compilation and publication changes no producer or mixer behavior; one session publication switches MIDI/audio/sidechain/aux routing and master inclusion together, and every stale TrackInfo revision is refused."
+      "statement": "A routing mutation parked between candidate compilation and publication changes no producer or mixer behavior; one session publication switches MIDI/audio/sidechain/aux routing and master inclusion together, and every stale TrackInfo revision is refused. The exhaustive audioOut table proves None has no sink, Master is master-only, Track(target) is destination-only, ExternalInput is rejected, sidechain Track is additive without changing audioOut, and preFaderSend selects the Track-send signal without a master duplicate."
     },
     {
       "id": "T-DEVICE-ID-LIFETIME",
-      "statement": "Add-delete-add never reuses a device id, schema 5 round-trips next_device_id, and duplicate, zero, auto-sentinel, out-of-watermark, dangling-reference, and exhausted candidates all fail before publication without changing the prior snapshot."
+      "statement": "Add-delete-add never reuses a device id, schema 5 round-trips next_device_id, and duplicate, zero, auto-sentinel, greater-than-0x7FFF, out-of-watermark, dangling-reference, and exhausted candidates all fail before publication without changing the prior snapshot. Device id 0x7FFF round-trips losslessly through every 15-bit, uint16, sampler-address, patcher-flag, UI, and control carrier; 0x8000 is rejected at every boundary, and a 0x8000 watermark means exhausted."
     },
     {
       "id": "T-DUPLICATE-PLUGIN-MIRRORS",
@@ -2813,7 +3853,7 @@
     },
     {
       "id": "T-MASTER-CORRELATION",
-      "statement": "Restart between master processing and publication changes generation/ticket and rejects the old handoff; matching current identity publishes exactly one processed block, and Pending/Failed mirror stages pass no processed master output."
+      "statement": "Restart or mirror re-arm between master processing and publication changes generation/ticket or mirrorEpoch/mirrorStage and rejects the old handoff; matching current identity publishes exactly one processed block, and Unprimed/AwaitingAck/FailedPermanent stages pass no processed master output."
     },
     {
       "id": "T-OFFLINE-PHASES",
@@ -2825,11 +3865,23 @@
     },
     {
       "id": "T-PROTOCOL-VERSIONS",
-      "statement": "C++ engine/host handshake uses kControlVersion 15; C++ and Rust SHM versions are 42; ReplayCompletePayload and BlockMailbox sizes/offsets remain asserted and old semantic versions are rejected."
+      "statement": "C++ engine/host handshake uses kControlVersion 15; C++ and Rust SHM versions are 42; ReplayCompletePayload, BlockMailbox, and device-id carrier sizes/offsets remain asserted, the 0x7FFF boundary is lossless, and old semantic versions are rejected."
     },
     {
       "id": "T-BATCH-VISIBILITY",
-      "statement": "After a successful wrapped or contiguous reservation, a consumer racing every producer publication observes no batch entry until all later slots are ready and the first reserved ready flag publishes last; it then consumes the complete ordered parameter-plus-gate batch."
+      "statement": "After a successful wrapped or contiguous reservation, a consumer racing every producer publication observes no batch entry until all later slots are ready and the first reserved ready flag publishes last; it then consumes the complete ordered ordinary-event or parameter-plus-gate batch."
+    },
+    {
+      "id": "T-ORDINARY-BATCH-ATOMIC",
+      "statement": "An ordinary MIDI/parameter/control batch commits whole or not at all: a batch larger than C-1 withdraws the ticket without any prefix or ProcessBlock, while transient occupancy publishes no prefix and a successful retry uses the identical identity, block id, and bytes."
+    },
+    {
+      "id": "T-NO-DRAIN-LEAK",
+      "statement": "Transient occupancy never emits a drain ProcessBlock. Only an exact preceding in-flight request may complete before retry; a mismatched request or occupancy without one poisons transport and disconnects, so deferred or discarded audio leaves no hidden MIDI or parameter state."
+    },
+    {
+      "id": "T-PRODUCER-GATES",
+      "statement": "The producer transport gate and completedBlockId backpressure gate both compare mapping, host generation, dispatch ticket, ExecutionSnapshot revision, mirror epoch, and mirror stage; changing any field prevents transport advancement, backpressure admission, and ProcessBlock dispatch."
     },
     {
       "id": "T-PROJECT-TARGET-MIGRATION",
