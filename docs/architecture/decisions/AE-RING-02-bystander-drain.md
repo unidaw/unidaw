@@ -1,8 +1,8 @@
 # AE-RING-02 — a bystander peeking the UI-out ring loses its diff to whoever drains it
 
-**Read-only finding. No product fix implemented; the attempted extension was reverted.** Every
-claim below is either read from the current checkout or measured with a reverted-vs-not A/B test;
-nothing here is inferred from a stack trace or a comment.
+**Confirmed production defect. No product fix implemented; the attempted extension was reverted.**
+Every claim below is either read from the current checkout or measured against a saved-document
+or journal oracle; nothing here is inferred from a stack trace or a comment.
 
 ## THE INVARIANT THAT WAS TRUE, AND STOPPED BEING TRUE
 
@@ -45,9 +45,10 @@ attached, whether or not any browser page is connected — forwarding to a conne
 `daw-cli`) must observe its target entry inside `[read_index, write_index)` before the sidecar's
 drain thread advances `read_index` past it. Once `read_index` moves past a slot, that slot is gone
 for every future peek from every process, not just the one that happened to be draining. This is
-not a corruption or a crash — the ring stays internally consistent — it is a **false negative**:
-the bystander's own command succeeded, but the bystander cannot see the diff that would tell it so,
-and times out into whatever "unknown" or "refused" state its caller reports for silence.
+not a corruption or a crash — the ring stays internally consistent — but either kind of outcome
+can disappear. Lose an applied diff and the caller times out even though its command landed: a
+false-negative acknowledgement. Lose a refusal diff and a caller that treats silence as success
+reports an unapplied command as applied: a false-success result and silent edit loss.
 
 ## MEASURED, NOT THEORIZED
 
@@ -66,19 +67,57 @@ negative: the write landed and the polling daw-cli process never saw its own con
 Reverting the three changed files (`git checkout --`) restored 5/5 with no other change. That is
 the A/B measurement; the mechanism above is what explains it.
 
-## THE SAME EXPOSURE FOR ALREADY-SHIPPED CODE — CONFIRMED MECHANISM, UNPROVEN IN PRACTICE
+## THE SAME EXPOSURE FOR ALREADY-SHIPPED CODE — `DO NOTE` CONFIRMED IN PRACTICE
 
 `await_clip_outcome` (`ui/daw-cli/src/main.rs`), used by `do note`, `do delete-note`, and
 `do chord`, polls the identical ring the identical way (`peek_ui_diffs_correlated` in a
 120-iteration, 5ms-sleep loop — the same order of magnitude as harmony's 750ms window) and is
-exposed to the identical drain thread by construction. **No existing test proves this broken for
-clip/chord.** `ui-web/test/cli-verbs.mjs` exercises `do note`/`do delete-note` against a live
-`startStack()` stack and passes (187/187), but it sends commands serially with no concurrent-load
-shape resembling `cli-harmony-rapid.mjs`'s four-back-to-back stress — which is exactly the
-shape that caught this for harmony. No CLI-driven `do chord` test against a live stack exists at
-all (only browser/DOM chord tests in `e2e.mjs`, which do not share this process's polling path).
-So clip/chord's exposure is **PLAUSIBLE, not CONFIRMED** — ruled neither in nor out by anything in
-the current suite.
+exposed to the identical drain thread by construction.
+
+`ui-web/test/cli-note-rapid.mjs` now drives the already-shipped `do note` path against a private
+live engine. It starts four separate daw-cli processes back to back, targeting four distinct ticks
+and pitches in the one auto-created clip. The process launches themselves are synchronous — this
+is not four simultaneous senders. The positive arm starts daw-sidecar only after the engine has
+published SHM and waits for its existing `event drain attached` diagnostic before sending; each
+CLI peek loop can therefore contend with the unconditional 50ms drain. The negative arm changes
+only the sidecar's presence. The saved document is the exact state oracle; CLI exit 0 and
+`"sent"` are deliberately not treated as evidence.
+
+The corrected probe and load-status observability are pinned at `9e1f5722`. Relative to behavior
+base `2aa0b919`, the two probe commits change only `ui-web/test/` and add `load_seq` / `load_ok` to
+`daw-cli get transport`; `await_clip_outcome` and the sidecar drain are unchanged. Before starting
+the measured interval, the probe snapshots `load_seq`, issues `do new`, and requires a changed
+sequence plus `load_ok == 1`. The engine publishes those fields only after `loadProjectFromPath`
+returns, so project-load command-thread delay is not an alternative explanation for the timeout.
+
+Ten trials per arm produced the causal A/B: **sidecar ON lost a note in 3/10 trials; sidecar OFF
+lost a note in 0/10**. Every failing trial lost exactly one of the four requested
+`(nanotick, pitch)` pairs. Every daw-cli process exited 0 and printed `"sent":"note"`. In each
+failure, `history.jsonl` records the exact missing write in an adjacent
+`received` / `rejected:version` pair, with no later successful retry for that pair. The sidecar-OFF
+arm still generated stale-base refusals, but daw-cli observed each correlated refusal, printed
+`base N was stale; retried at N+1`, and all four exact pairs reached the document in all ten
+trials. Removing the only other process that advances `read_index` therefore removed the
+silent-loss outcome from this ten-trial sample under the same command shape.
+
+The machine-readable evidence record is
+`docs/architecture/evidence/AE-RING-02-note-ab-9e1f5722.json`; it pins the commands, preconditions,
+trial numbers, exact missing pairs, outcome oracles, and both SHAs behind these counts.
+
+The failure has the complete shipped shape: the engine refused a stale-base write, daw-cli failed
+to observe the correlated refusal after the sidecar drained the shared cursor, `Unknown` was
+treated as success, and the requested note was absent from the saved document.
+
+The probe is deliberately excluded from the default `all.mjs` sweep because the known defect is
+timing-dependent: a green trial would certify nothing and a red trial is expected until an
+owner-approved fix lands. Run the positive arm with
+`node ui-web/test/cli-note-rapid.mjs` and the negative control with
+`node ui-web/test/cli-note-rapid.mjs --without-sidecar`, using the same trial count for each.
+
+This directly confirms `do note`. `do delete-note` and `do chord` call the same
+`await_clip_outcome` mechanism and retain the same exposure by construction, but neither verb was
+directly reproduced here. `cli-verbs.mjs`'s serial coverage still passes, and no CLI-driven live
+test directly exercises `do chord`.
 
 ## WHAT THIS TICKET DOES NOT DO
 

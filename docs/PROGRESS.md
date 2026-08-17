@@ -11,10 +11,10 @@ in a chat log so it survives the session that produced it.
      HEAD has drifted more than a dozen commits past it.
      Run `bash tools/progress_check.sh` and it prints the values to paste. -->
 
-- as-of-commit: fb8ded2a
+- as-of-commit: 9e1f5722
 - main-cpp-lines: 2151
 - main-function-lines: 1944
-- ctest-entries: 229
+- ctest-entries: 232
 - main-function-ceiling: 1944
 
 ## Why this file cannot quietly go stale

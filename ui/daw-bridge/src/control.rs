@@ -1615,13 +1615,17 @@ impl EngineHandle {
     ///
     /// MEASURED, not theoretical: extending the P2-CMD-00 pattern to a new channel
     /// (AE-P1.2 item 28, harmony) reproduced this as a real false negative under
-    /// `cli-harmony-rapid.mjs`'s concurrent load, with a live sidecar attached — reverting
-    /// the change made the failure disappear. The existing clip/note path
-    /// (`await_clip_outcome`) shares the identical exposure by construction; it is
-    /// UNTESTED under concurrent load against a live sidecar (the one test that shares
-    /// its shape, `cli-verbs.mjs`, sends commands serially and passes, which does not
-    /// rule out the race, only that this particular test does not apply enough pressure
-    /// to hit it). See `docs/architecture/decisions/AE-RING-02-bystander-drain.md`.
+    /// `cli-harmony-rapid.mjs`'s live contention, with a sidecar attached — reverting the
+    /// change made the failure disappear. The already-shipped note path has now reproduced
+    /// too: at corrected probe SHA `9e1f5722`, after a successful post-load sequence change,
+    /// `cli-note-rapid.mjs` lost one note in 3 of 10 trials with an explicitly attached
+    /// sidecar drain and lost none in 10 trials without the sidecar. In each failure the
+    /// journal records the exact write as
+    /// `rejected:version`, no retry follows, every daw-cli process exits 0 and reports sent,
+    /// and the note is absent from the saved document. `do delete-note` and `do chord` share
+    /// `await_clip_outcome` and therefore the same exposure by construction, but were not
+    /// directly reproduced by that probe. See the full A/B and scope boundary in
+    /// `docs/architecture/decisions/AE-RING-02-bystander-drain.md`.
     ///
     /// Returns the number drained. An empty ring is the normal case and costs
     /// two atomic loads.
