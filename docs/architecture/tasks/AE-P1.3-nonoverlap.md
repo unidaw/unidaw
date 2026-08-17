@@ -4,6 +4,9 @@
 
 Status: `REVIEW_CANDIDATE`. Owner: `backend`.
 Frozen product: `0d943c262393101d88e98cb94aff14783b9aa2be` (tree `27eaec16a10cae793f48cb074c07467130e471a3`).
+Program source: `22eba6fe82cead0e1442fb3db6d0165edb7f5d91` (tree `642a1a2c43deb5e8f1ce5360563fc5bdec88582d`).
+Successor to packet `6e65b838b590e9d1318d8267776144381f13613e` / manifest `c043367445422d9adbacc4d07e4c3b2f006edafca55b5ed76b6aa9d52b832f9a`.
+Reopening reason: Both independent reviews found unresolvable source locators; semantic review also found a disconnected gate graph, and evidence review found incomplete size/ring negative controls.
 
 ## Scope
 
@@ -23,7 +26,7 @@ Complete AE-P1.3's UI shared-memory residue by refusing any non-empty typed regi
 | `ring_ctrl` | `ringCtrlOffset` | `ring_ctrl_offset` | `inactive_ring` | aligned RingHeader; capacity == 0 and entry_size == 0 |
 | `ring_ui` | `ringUiOffset` | `ring_ui_offset` | `event_ring` | checked aligned RingHeader + capacity * size_of::<EventEntry>() |
 | `ring_ui_out` | `ringUiOutOffset` | `ring_ui_out_offset` | `event_ring` | checked aligned RingHeader + capacity * size_of::<EventEntry>() |
-| `ring_ui_edit` | `ringUiEditOffset` | `ring_ui_edit_offset` | `edit_ring` | checked aligned RingHeader + capacity * size_of::<UiEditBatchEntry>() |
+| `ring_ui_edit` | `ringUiEditOffset` | `ring_ui_edit_offset` | `edit_ring` | capacity == K_UI_EDIT_BATCH_CAPACITY; entry_size == size_of::<UiEditBatchEntry>(); checked aligned RingHeader + capacity * entry_size |
 | `mailbox` | `mailboxOffset` | `mailbox_offset` | `fixed` | size_of::<BlockMailbox>() |
 | `ui_clip` | `uiClipOffset` | `ui_clip_offset` | `declared_exact` | ui_clip_bytes == size_of::<UiClipWindowSnapshot>() |
 | `ui_harmony` | `uiHarmonyOffset` | `ui_harmony_offset` | `declared_exact` | ui_harmony_bytes == size_of::<UiHarmonySnapshot>() |
@@ -65,15 +68,15 @@ Complete AE-P1.3's UI shared-memory residue by refusing any non-empty typed regi
 - `D-ATTACH-TRANSACTION` [READY], dependencies `R-FAIL-CLOSED`: Copy geometry into an untrusted descriptor after magic/version, validate the complete layout, cache the validated offsets/sizes, then construct EngineHandle's typed pointers from that cache. Dynamic header fields remain live; geometry does not.
 - `D-NO-WIRE-CHANGE` [READY], dependencies `DEP-FROZEN-BASE`: The implementation changes validation only: K_SHM_VERSION remains 41 and both wire structs remain byte-identical.
 - `D-OFFSET-ASSERTS` [READY], dependencies `D-NO-WIRE-CHANGE`: Add the six missing Rust offset assertions for audio_in, audio_out, ui_automation, ui_automation_slot, ui_sampler_kit, and ui_sampler_envelope; size/alignment equality alone does not prove field order.
-- `D-TEST-MATRIX` [READY], dependencies `R-FAIL-CLOSED`: Add deterministic positive layout, zero-offset, 8-but-not-64-aligned offset, header-alias, fixed/fixed alias, ring/variable alias, accepted zero-length audio aliases, the same audio alias made non-zero and refused, adjacency, arithmetic-overflow, wrong-bytes, post-validation header mutation, and missing-descriptor controls.
+- `D-TEST-MATRIX` [READY], dependencies `R-FAIL-CLOSED`: Add a correct-layout control plus deterministic zero-offset, 8-but-not-64-aligned, header-alias, fixed/fixed alias, ring/variable alias, zero-sized audio aliases accepted, the same audio alias made non-zero and refused, adjacency, audio-arithmetic-overflow, aligned-out-of-bounds, post-validation header mutation, and missing-descriptor controls. Table-drive wrong-byte mutations over every declared_exact region. Separately mutate inactive-ring nonzero geometry, event-ring zero/non-power-of-two/wrong-entry geometry, edit-ring wrong-capacity/wrong-entry geometry, and a truncated ring header.
 
 ## Controls
 
-- `CTRL-BASE` [EXECUTABLE], dependencies `DEP-FROZEN-BASE`: python3 tools/architecture/ae_p1_3_packet_check.py verifies frozen commit/tree and that governed product paths match the pin.
-- `CTRL-CENSUS` [EXECUTABLE], dependencies `P-PRODUCER-OFFSETS`, `P-RUST-OFFSETS`, `P-VALIDATED-REGIONS`: python3 tools/architecture/ae_p1_3_packet_check.py derives all three populations and refuses additions, removals, duplicates, or renames.
-- `CTRL-PACKET` [EXECUTABLE], dependencies none: python3 tools/architecture/ae_p1_3_packet_check.py validates record shape, dependency closure, counts, source pins, and byte-identical generated prose.
-- `CTRL-MUTATIONS` [PLANNED], dependencies `D-TEST-MATRIX`: cargo test -p daw-bridge layout_non_overlap exercises each named positive and corrupt-header mutation after implementation, including zero-sized audio aliases accepted, the same offsets refused once either audio span is non-zero, and cached geometry unaffected by a post-validation header mutation.
-- `CTRL-STATIC` [PLANNED], dependencies `D-ATTACH-TRANSACTION`, `D-NO-WIRE-CHANGE`, `D-OFFSET-ASSERTS`: A static ratchet derives the 25 producer assignments, 25 Rust fields, and 25 validator entries; it proves every typed accessor uses cached validated geometry and that attach validates before publication. Complete SHM offset assertions prove no wire change.
+- `CTRL-BASE` [EXECUTABLE], dependencies `DEP-FROZEN-BASE`: python3 tools/architecture/ae_p1_3_packet_check.py verifies program and frozen commit/tree identities and that every cited governed product path matches the pin.
+- `CTRL-CENSUS` [EXECUTABLE], dependencies `P-PRODUCER-OFFSETS`, `P-RUST-OFFSETS`, `P-VALIDATED-REGIONS`: python3 tools/architecture/ae_p1_3_packet_check.py derives all three populations and refuses additions, removals, duplicates, renames, and specifically omission of ui_command_outcome.
+- `CTRL-PACKET` [EXECUTABLE], dependencies none: python3 tools/architecture/ae_p1_3_packet_check.py parses every source locator, validates complete gate dependency closure, checks counts and source pins, and enforces byte-identical generated prose.
+- `CTRL-MUTATIONS` [PLANNED], dependencies `D-TEST-MATRIX`: cargo test -p daw-bridge layout_non_overlap executes every named positive and corrupt-header mutation after implementation, including a table-driven mutation for each declared_exact region and the distinct inactive/event/edit ring classes.
+- `CTRL-STATIC` [PLANNED], dependencies `D-ATTACH-TRANSACTION`, `D-NO-WIRE-CHANGE`, `D-OFFSET-ASSERTS`: tools/ui_shm_layout_check.py derives the 25 producer assignments, 25 Rust fields, and 25 validator entries; it proves every typed accessor uses cached validated geometry and that attach validates before publication. Complete SHM offset assertions prove no wire change.
 
 ## Non-goals
 
