@@ -130,6 +130,13 @@ bool HarmonyTimeline::requireMatchingHarmonyVersion(uint32_t baseVersion,
     diffPayload.correlationLo = static_cast<uint32_t>(commandId & 0xFFFFFFFFu);
     diffPayload.correlationHi = static_cast<uint32_t>(commandId >> 32);
     emitHarmonyDiff(diffPayload);
+    publishCommandOutcome(commandType,
+                          daw::UiCommandOutcomeKind::Refused,
+                          daw::UiCommandOutcomeReason::StaleBase,
+                          /*scope=*/0,
+                          baseVersion,
+                          /*currentVersionValid=*/true,
+                          current);
     DAW_EVENT("harmony.version_mismatch")
         .field("base", baseVersion)
         .field("current", current)

@@ -14,17 +14,47 @@
 
 namespace daw::engine {
 
+namespace {
+
+void publishClipCompleted(NoteCommandDeps& deps,
+                          daw::UiCommandType commandType,
+                          uint32_t trackId,
+                          uint32_t sentBase) {
+  uint32_t currentVersion = 0;
+  const bool currentValid = currentClipVersionFor(
+      deps.clipEditDeps, commandType, trackId, currentVersion);
+  deps.publishCommandOutcome(commandType,
+                             daw::UiCommandOutcomeKind::Completed,
+                             daw::UiCommandOutcomeReason::None,
+                             trackId,
+                             sentBase,
+                             currentValid,
+                             currentVersion);
+}
+
+void publishHarmonyCompleted(NoteCommandDeps& deps,
+                             daw::UiCommandType commandType,
+                             uint32_t sentBase) {
+  deps.publishCommandOutcome(commandType,
+                             daw::UiCommandOutcomeKind::Completed,
+                             daw::UiCommandOutcomeReason::None,
+                             /*scope=*/0,
+                             sentBase,
+                             /*currentVersionValid=*/true,
+                             deps.harmonyTimeline.harmonyVersion.load(std::memory_order_acquire));
+}
+
+}  // namespace
+
 void handleWriteNote(NoteCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
   const auto& applyAddNote = deps.applyAddNote;
   const auto& applyLocalNoteEdit = deps.applyLocalNoteEdit;
   const auto& editIsLocalScope = deps.editIsLocalScope;
-  const auto& requireMatchingClipVersion = deps.requireMatchingClipVersion;
   {
-  if (!requireMatchingClipVersion(payload.baseVersion,
-                                  daw::UiCommandType::WriteNote,
-                                  payload.trackId)) {
+  if (!requireMatchingClipVersion(deps.clipEditDeps, payload.baseVersion,
+                                  daw::UiCommandType::WriteNote, payload.trackId)) {
     return;
   }
   const uint64_t noteNanotick =
@@ -51,6 +81,8 @@ void handleWriteNote(NoteCommandDeps& deps,
                  // default arguments across the dispatch boundary.
                  /*noteIdOverride=*/std::nullopt, /*sound=*/0, /*soundOffset=*/0);
   }
+  publishClipCompleted(deps, daw::UiCommandType::WriteNote, payload.trackId,
+                       payload.baseVersion);
   }
 }
 
@@ -60,11 +92,9 @@ void handleDeleteNote(NoteCommandDeps& deps,
   const auto& applyLocalNoteEdit = deps.applyLocalNoteEdit;
   const auto& editIsLocalScope = deps.editIsLocalScope;
   const auto& applyRemoveNote = deps.applyRemoveNote;
-  const auto& requireMatchingClipVersion = deps.requireMatchingClipVersion;
   {
-  if (!requireMatchingClipVersion(payload.baseVersion,
-                                  daw::UiCommandType::DeleteNote,
-                                  payload.trackId)) {
+  if (!requireMatchingClipVersion(deps.clipEditDeps, payload.baseVersion,
+                                  daw::UiCommandType::DeleteNote, payload.trackId)) {
     return;
   }
   const uint64_t noteNanotick =
@@ -81,6 +111,8 @@ void handleDeleteNote(NoteCommandDeps& deps,
   } else {
     applyRemoveNote(payload.trackId, noteNanotick, pitch, flags, true);
   }
+  publishClipCompleted(deps, daw::UiCommandType::DeleteNote, payload.trackId,
+                       payload.baseVersion);
   }
 }
 
@@ -88,10 +120,9 @@ void handleWriteHarmony(NoteCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
   const auto& addOrUpdateHarmony = deps.addOrUpdateHarmony;
-  const auto& requireMatchingHarmonyVersion = deps.requireMatchingHarmonyVersion;
   {
-  if (!requireMatchingHarmonyVersion(payload.baseVersion,
-                                     daw::UiCommandType::WriteHarmony)) {
+  if (!deps.harmonyTimeline.requireMatchingHarmonyVersion(
+          payload.baseVersion, daw::UiCommandType::WriteHarmony)) {
     return;
   }
   const uint64_t nanotick =
@@ -100,6 +131,8 @@ void handleWriteHarmony(NoteCommandDeps& deps,
   const uint32_t root = payload.notePitch % 12;
   const uint32_t scaleId = payload.value0;
   addOrUpdateHarmony(nanotick, root, scaleId, true);
+  publishHarmonyCompleted(deps, daw::UiCommandType::WriteHarmony,
+                          payload.baseVersion);
   }
 }
 
@@ -107,10 +140,9 @@ void handleDeleteHarmony(NoteCommandDeps& deps,
             const daw::EventEntry& entry,
             const daw::UiCommandPayload& payload) {
   const auto& removeHarmony = deps.removeHarmony;
-  const auto& requireMatchingHarmonyVersion = deps.requireMatchingHarmonyVersion;
   {
-  if (!requireMatchingHarmonyVersion(payload.baseVersion,
-                                     daw::UiCommandType::DeleteHarmony)) {
+  if (!deps.harmonyTimeline.requireMatchingHarmonyVersion(
+          payload.baseVersion, daw::UiCommandType::DeleteHarmony)) {
     return;
   }
   const uint64_t nanotick =
@@ -120,6 +152,8 @@ void handleDeleteHarmony(NoteCommandDeps& deps,
     daw::LogLine() << "UI: DeleteHarmony - event not found at nanotick "
               << nanotick << std::endl;
   }
+  publishHarmonyCompleted(deps, daw::UiCommandType::DeleteHarmony,
+                          payload.baseVersion);
   }
 }
 
@@ -129,7 +163,6 @@ void handleWriteChord(NoteCommandDeps& deps,
   const auto& applyAddChord = deps.applyAddChord;
   const auto& applyRemoveChord = deps.applyRemoveChord;
   const auto& applyRemoveChordAt = deps.applyRemoveChordAt;
-  const auto& requireMatchingClipVersion = deps.requireMatchingClipVersion;
   {
   daw::UiChordCommandPayload chordPayload{};
   std::memcpy(&chordPayload, entry.payload, sizeof(chordPayload));
@@ -137,9 +170,8 @@ void handleWriteChord(NoteCommandDeps& deps,
       static_cast<uint16_t>(daw::UiCommandType::WriteChord)
           ? daw::UiCommandType::WriteChord
           : daw::UiCommandType::DeleteChord;
-  if (!requireMatchingClipVersion(chordPayload.baseVersion,
-                                  commandType,
-                                  chordPayload.trackId)) {
+  if (!requireMatchingClipVersion(deps.clipEditDeps, chordPayload.baseVersion,
+                                  commandType, chordPayload.trackId)) {
     return;
   }
   const uint64_t nanotick =
@@ -174,6 +206,8 @@ void handleWriteChord(NoteCommandDeps& deps,
       applyRemoveChord(chordPayload.trackId, chordId, true);
     }
   }
+  publishClipCompleted(deps, commandType, chordPayload.trackId,
+                       chordPayload.baseVersion);
   }
 }
 

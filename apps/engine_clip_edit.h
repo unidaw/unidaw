@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "engine_track_table.h"
+#include "engine_command_outcome.h"
 #include "engine_transport_state.h"
 #include "engine_types.h"
 #include "event_payloads.h"
@@ -66,6 +67,7 @@ struct ClipEditDeps {
                            daw::UiCommandType)> emitClipReject;
   std::function<void(const char*, const char*, uint32_t, uint32_t,
                            const std::string&)> historyAppend;
+  CommandOutcomePublisher publishCommandOutcome;
 };
 
 EditTarget locateEditTarget(LocateTargetDeps& deps, TrackRuntime& rt, uint64_t absTick,

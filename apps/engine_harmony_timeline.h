@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "clip_edit.h"
+#include "engine_command_outcome.h"
 #include "event_payloads.h"
 #include "harmony_timeline.h"
 #include "scale_library.h"
@@ -44,10 +45,12 @@ class HarmonyTimeline {
  public:
   HarmonyTimeline(const daw::ScaleRegistry& scaleRegistry,
                   std::function<void(const daw::UiHarmonyDiffPayload&)> emitHarmonyDiff,
-                  std::function<void(const daw::UndoEntry&)> pushHarmonyUndo)
+                  std::function<void(const daw::UndoEntry&)> pushHarmonyUndo,
+                  CommandOutcomePublisher publishCommandOutcome)
       : scaleRegistry(scaleRegistry),
         emitHarmonyDiff(std::move(emitHarmonyDiff)),
-        pushHarmonyUndo(std::move(pushHarmonyUndo)) {}
+        pushHarmonyUndo(std::move(pushHarmonyUndo)),
+        publishCommandOutcome(std::move(publishCommandOutcome)) {}
 
   // PUBLIC because the render and publish paths read them directly and always have. Making them
   // private would mean an accessor per member and a diff that is no longer verbatim — the point of
@@ -73,6 +76,7 @@ class HarmonyTimeline {
   const daw::ScaleRegistry& scaleRegistry;
   std::function<void(const daw::UiHarmonyDiffPayload&)> emitHarmonyDiff;
   std::function<void(const daw::UndoEntry&)> pushHarmonyUndo;
+  CommandOutcomePublisher publishCommandOutcome;
 };
 
 }  // namespace daw::engine

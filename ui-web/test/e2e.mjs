@@ -1610,13 +1610,13 @@ const proposed = await page.evaluate(() => window.__uni.propose(
   [{ type: 'note', track: 0, pitch: 64, tick: 0, dur: 960000, vel: 100 }], 'e2e'));
 ok(proposed.status === 'pending' && /1 note/.test(proposed.summary),
    'a proposal summarises itself from its ops', proposed.meta);
-// Apply must send BEFORE it commits. It used to flip to applied first, so with no
-// engine the batch was gone and the card claimed a hand-off that reached nothing.
+// Apply must send BEFORE it completes. It used to release the card at socket enqueue, so with no
+// exact engine terminal the batch was gone and the card claimed a hand-off that might have failed.
 const cvBefore = (await E()).clipVersion;
 await page.evaluate(() => document.querySelector('.pd-apply').click());
 await page.waitForTimeout(1500);
 const applied = await page.evaluate(() => window.__uni.pendingProbe());
-ok(applied.status === 'applied', 'applying it commits only once the send went out',
+ok(applied.status === 'completed', 'applying it completes only after the exact engine terminal',
    applied.status + ' — ' + applied.reason);
 ok((await E()).clipVersion > cvBefore, 'and the edit actually reached the engine',
    `${cvBefore} -> ${(await E()).clipVersion}`);

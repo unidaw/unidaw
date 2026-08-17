@@ -46,6 +46,130 @@ import { buildChainModel, createChainBuffer, paramKey, createParamEdits, findPar
          EDIT_HOLD_MS, meterScale, meterDb, METER_SILENT } from '../src/chainmodel.js';
 import { createCommands, checkArgs, runCommand, parseHelpArgs } from '../src/dock.js';
 import { unpackClipGrid } from '../src/wire.js';
+import { batchTerminalMode } from '../src/engine.js';
+import { COMPLETED, INDETERMINATE, PARTIAL, PENDING, createPending, propose,
+         applyPending, discardPending, indeterminatePending, nextPendingBatchId, settlePending,
+         settlePendingReply } from '../src/pendingmodel.js';
+
+test('a batch has one terminal mode before optimistic state is released', () => {
+  assert.equal(batchTerminalMode([{ type: 'note' }, { type: 'delete' }]), 'tracked');
+  assert.equal(batchTerminalMode([{ type: 'play' }, { type: 'mixer' }]), 'untracked');
+  assert.equal(batchTerminalMode([{ type: 'note' }, { type: 'mixer' }]), 'mixed');
+});
+
+test('a pending proposal settles only on its correlated exact batch reply', () => {
+  const state = createPending();
+  propose(state, { ops: [{ type: 'note', track: 0 }], label: 'one note' });
+  const id = nextPendingBatchId(state);
+  settlePending(state, true, '', id);
+  assert.equal(state.status, PENDING, 'WebSocket enqueue is not success');
+  assert.equal(state.actionable, false, 'an in-flight proposal cannot be submitted twice');
+  assert.throws(
+    () => propose(state, { ops: [{ type: 'delete' }] }),
+    /awaiting an exact outcome/,
+    'an in-flight proposal cannot be replaced before its reply arrives',
+  );
+  assert.throws(() => applyPending(state), /already awaiting/);
+  assert.throws(() => discardPending(state), /in-flight/);
+  const success = {
+    ok: true, submitted: 1, completed: 1, untracked: 0, laterSubmitted: false,
+  };
+  assert.equal(settlePendingReply(state, id + 1, success), false,
+               'an unrelated reply cannot settle this proposal');
+  assert.equal(state.status, PENDING);
+  assert.equal(settlePendingReply(state, id, success), true);
+  assert.equal(state.status, COMPLETED);
+});
+
+test('pending batch refusal is retryable, but partial and indeterminate outcomes are not', () => {
+  const refused = createPending();
+  propose(refused, { ops: [{ type: 'note' }] });
+  const refusedId = nextPendingBatchId(refused);
+  settlePending(refused, true, '', refusedId);
+  settlePendingReply(refused, refusedId, {
+    ok: false, submitted: 1, completed: 0, untracked: 0, failedIndex: 0,
+    laterSubmitted: false, failureKind: 'refused', error: 'stale base',
+  });
+  assert.equal(refused.status, PENDING);
+  assert.equal(refused.actionable, true);
+  const retryId = nextPendingBatchId(refused);
+  assert.notEqual(retryId, refusedId, 'a retry gets a new correlation identity');
+  settlePending(refused, true, '', retryId);
+  assert.equal(indeterminatePending(refused, refusedId, 'the first attempt timer fired'), false,
+               'an old attempt timer cannot make the retry indeterminate');
+  assert.equal(refused.inFlight, retryId);
+
+  const partial = createPending();
+  propose(partial, { ops: [{ type: 'note' }, { type: 'note' }] });
+  const partialId = nextPendingBatchId(partial);
+  settlePending(partial, true, '', partialId);
+  settlePendingReply(partial, partialId, {
+    ok: false, submitted: 2, completed: 1, untracked: 0, failedIndex: 1,
+    laterSubmitted: false, failureKind: 'refused', error: 'second stale',
+  });
+  assert.equal(partial.status, PARTIAL);
+  assert.equal(partial.actionable, false);
+
+  const submitPartial = createPending();
+  propose(submitPartial, { ops: [{ type: 'note' }, { type: 'note' }] });
+  const submitId = nextPendingBatchId(submitPartial);
+  settlePending(submitPartial, true, '', submitId);
+  settlePendingReply(submitPartial, submitId, {
+    ok: false, submitted: 1, completed: 1, untracked: 0, failedIndex: 1,
+    laterSubmitted: false, failureKind: 'submit', error: 'second send failed',
+  });
+  assert.equal(submitPartial.status, PARTIAL);
+  assert.equal(submitPartial.actionable, false);
+
+  const unknown = createPending();
+  propose(unknown, { ops: [{ type: 'note' }] });
+  const unknownId = nextPendingBatchId(unknown);
+  settlePending(unknown, true, '', unknownId);
+  settlePendingReply(unknown, unknownId, {
+    ok: false, submitted: 1, completed: 0, untracked: 0, failedIndex: 0,
+    laterSubmitted: false, failureKind: 'indeterminate', error: 'timeout',
+  });
+  assert.equal(unknown.status, INDETERMINATE);
+  assert.equal(unknown.actionable, false);
+
+  const malformed = createPending();
+  propose(malformed, { ops: [{ type: 'note' }] });
+  const malformedId = nextPendingBatchId(malformed);
+  settlePending(malformed, true, '', malformedId);
+  settlePendingReply(malformed, malformedId, { ok: true, completed: 1 });
+  assert.equal(malformed.status, INDETERMINATE,
+               'a success without exact batch counts cannot release optimistic state');
+
+  for (const impossible of [
+    { ok: true, submitted: 1, completed: -1, untracked: 2, laterSubmitted: false },
+    {
+      ok: false, submitted: 1, completed: 0, untracked: 0, failedIndex: 0,
+      laterSubmitted: false, failureKind: 'validation', error: 'not actually prevalidated',
+    },
+    {
+      submitted: 1, completed: 0, untracked: 0, failedIndex: 0,
+      laterSubmitted: false, failureKind: 'refused', error: 'missing explicit failure status',
+    },
+  ]) {
+    const state = createPending();
+    propose(state, { ops: [{ type: 'note' }] });
+    const id = nextPendingBatchId(state);
+    settlePending(state, true, '', id);
+    settlePendingReply(state, id, impossible);
+    assert.equal(state.status, INDETERMINATE,
+                 'impossible reply arithmetic must never authorize completion or retry');
+    assert.equal(state.actionable, false);
+  }
+
+  const disconnected = createPending();
+  propose(disconnected, { ops: [{ type: 'note' }] });
+  const disconnectedId = nextPendingBatchId(disconnected);
+  settlePending(disconnected, true, '', disconnectedId);
+  assert.equal(indeterminatePending(disconnected, disconnectedId + 1, 'wrong socket'), false);
+  assert.equal(indeterminatePending(disconnected, disconnectedId, 'socket closed'), true);
+  assert.equal(disconnected.status, INDETERMINATE);
+  assert.equal(disconnected.actionable, false);
+});
 
 test('lcmGrid finds a grid every lane lands on', () => {
   assert.equal(lcmGrid([4, 4, 4]), 4);
@@ -5040,14 +5164,15 @@ test('CONTROL: a REAL template skeleton with invented variable content IS caught
     }));
 
   // BLINDNESS FLOOR. Every assertion below is "for each template", so an extraction matching
-  // nothing satisfies all of them. 561 qualified when this was written; FEWER means the pattern
+  // nothing satisfies all of them. 604 qualify in the current reviewed tool-script corpus; FEWER
+  // means the pattern
   // stopped matching, not that the scripts got safer.
   // The floor is the COUNT, not a round number below it. `>= 500` permitted 61 templates to vanish
   // in silence, which is the same slack that lets a population shrink without anyone deciding to.
   // EXACT, not a floor. `>=` cannot see templates being ADDED either, and a population that may
   // only grow is as unpinned as one that may only shrink.
-  assert.equal(templates.length, 561,
-    `${templates.length} interpolating templates found; 561 qualified when this was written. `
+  assert.equal(templates.length, 604,
+    `${templates.length} interpolating templates found; 604 qualified at the reviewed pin. `
     + 'Fewer means the extraction stopped matching; more means the corpus grew. Either way a '
     + 'person decides and moves this number deliberately.');
 

@@ -18,7 +18,7 @@ fn main() {
     let mut last_version = h.clip_version();
     for i in 0..count {
         // One WriteNote, base_version = current clip version (optimistic).
-        let base = h.clip_version();
+        let base = h.clip_version_for_track(0);
         let nanotick = (i as u64) * (q / 4);
         let payload = UiCommandPayload {
             command_type: UiCommandType::WriteNote as u16,
@@ -33,9 +33,13 @@ fn main() {
             note_duration_hi: 0,
             base_version: base,
         };
-        if let Err(e) = h.send_command(payload) {
-            println!("send failed at note {i}: {e}");
-            return;
+        if let Err(e) = h.complete_tracked_command(
+            payload,
+            /*retry_stale=*/ true,
+            std::time::Duration::from_secs(2),
+        ) {
+            eprintln!("command failed at note {i}: {e:?}");
+            std::process::exit(1);
         }
         std::thread::sleep(std::time::Duration::from_millis(delay_ms));
         let v = h.clip_version();
@@ -45,8 +49,10 @@ fn main() {
             std::thread::sleep(std::time::Duration::from_millis(500));
             let v2 = h.clip_version();
             if v2 == last_version {
-                println!("ENGINE STOPPED PUBLISHING after {i} commands (clipVersion stuck at {v2})");
-                return;
+                println!(
+                    "ENGINE STOPPED PUBLISHING after {i} commands (clipVersion stuck at {v2})"
+                );
+                std::process::exit(2);
             }
         }
         last_version = v;

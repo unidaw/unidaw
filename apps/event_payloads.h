@@ -1435,6 +1435,20 @@ inline bool uiCommandIsGlobalScope(UiCommandType t) {
   }
 }
 
+inline bool uiCommandHasTrackedOutcome(UiCommandType t) {
+  switch (t) {
+    case UiCommandType::WriteNote:
+    case UiCommandType::DeleteNote:
+    case UiCommandType::WriteHarmony:
+    case UiCommandType::DeleteHarmony:
+    case UiCommandType::WriteChord:
+    case UiCommandType::DeleteChord:
+      return true;
+    default:
+      return false;
+  }
+}
+
 // PreviewNote flags: bit0 set = note-on, clear = note-off for (trackId, notePitch).
 constexpr uint16_t kPreviewNoteFlagOn = 1u << 0;
 

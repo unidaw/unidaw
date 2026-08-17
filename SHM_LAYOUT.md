@@ -98,8 +98,12 @@ Offsets within `ShmHeader` (aligned to 64 bytes overall):
   - `uiLoadSeq`: 552 (bumps per LoadProject attempt), `uiLoadOk`: 556 (1=loaded, 0=rejected)
   - Also: `uiTrackPeakRms[]` (v-early field @184) is now actually populated —
     per-track post-fader peak, measured on the audio thread each block.
+- v41 exact command outcomes (fit the current header's alignment tail — header size unchanged):
+  - `uiCommandOutcomeOffset`: 6160
+  - `uiCommandOutcomeBytes`: 6168
+  - points to one `UiCommandOutcomeRegion`, described below.
 
-`sizeof(ShmHeader)` = 576 bytes (aligned to 64; region offsets are computed from
+`sizeof(ShmHeader)` = 6208 bytes (aligned to 64; region offsets are computed from
 `sizeof(ShmHeader)`, so growing it shifts the rings/regions automatically).
 
 ## UI Version Gating (Seqlock)
@@ -132,6 +136,57 @@ said "each ring is an SPSC ring" without qualification, which stopped being true
   `UiChordDiffPayload`, `EventType::UiHarmonyDiff` / `EventType::UiChordDiff`)
 - UI Edit Batch Ring: UI -> engine clip edits (`UiEditBatchEntry`, batch of
   `EventEntry` ops with `EventType::UiCommand` payloads)
+
+### Exact guarded-command outcomes (v41)
+
+The UI-out ring remains diagnostic and single-consumer. A command sender must not infer its own
+result from that ring or from a version counter: another process may drain the ring, and another
+author may move the counter. The six optimistic document commands instead publish terminal records
+to `UiCommandOutcomeRegion`:
+
+- `WriteNote`, `DeleteNote`
+- `WriteChord`, `DeleteChord`
+- `WriteHarmony`, `DeleteHarmony`
+
+The region is a 64-byte header followed by 256 sequence-addressed 64-byte entries. It has no
+consumer cursor. Each sender records `publishedSequence` immediately before submission and scans
+the bounded sequence interval after that mark for its exact tuple:
+
+`(commandId, commandType, scope, sentBase)`
+
+The region header contains atomic `publishedSequence`, atomic `nextCommandId`, atomic `status`, and
+`capacity`. `nextCommandId` is the shared allocator for every writable client. Zero is reserved;
+IDs and publication sequences never wrap. Exhaustion changes `status` to `SequenceExhausted`, and
+clients refuse or report an indeterminate outcome until the engine restarts.
+
+Each entry contains eight atomic u64 words:
+
+- `sequence`
+- `commandId`
+- `metadata0`: command type, outcome kind, refusal reason, current-version-valid bit
+- `metadata1`: scope and sent base version
+- `metadata2`: authoritative current version when valid
+- three reserved zero words
+
+The single engine writer invalidates a slot by exchanging its sequence to zero, writes every
+payload word, publishes the new slot sequence, and then publishes the head. Every operation in
+that slot transaction is sequentially consistent, and readers load every slot word the same way.
+This is required at wraparound: acquire/release on the sequence alone can otherwise pair a stale
+sequence/command ID with replacement metadata from independent atomics. The second sequence check
+must be globally ordered after any replacement word it observed. This is control-plane work, not
+audio-callback work. Missing, torn/overwritten, duplicate, malformed, timed-out, exhausted, or
+overrun observations are `Indeterminate`; they are never silently retried because the command may
+already have completed.
+
+`Completed` means the version guard accepted and the handler returned. It is not a claim that the
+musical document changed: a valid no-op may keep the same version. `Refused/StaleBase` carries a
+valid authoritative current version. `Refused/UnknownTrack` deliberately carries no current
+version.
+
+Auto-based callers may retry one exact stale-base refusal once, using a fresh command ID and the
+returned version. Explicitly pinned bases are not retried unless that surface exposes a separate
+opt-in. Batches submit serially, derive each next base from the preceding `Completed` record, and
+stop without submitting later items on any refusal or indeterminate outcome.
 
 ### UI Command Payload
 

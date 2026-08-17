@@ -21,6 +21,9 @@
 #include <vector>
 
 #include "apps/engine_pure.h"
+#include "apps/engine_command_outcome.h"
+#include "apps/engine_clip_edit.h"
+#include "apps/engine_harmony_timeline.h"
 #include "apps/engine_types.h"
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
@@ -41,8 +44,9 @@ struct NoteCommandDeps {
   std::function<bool(uint32_t, uint64_t, uint8_t, bool)> applyRemoveChordAt;
   std::function<bool(uint64_t, uint32_t, uint32_t, bool)> addOrUpdateHarmony;
   std::function<bool(uint64_t, bool)> removeHarmony;
-  std::function<bool(uint32_t, daw::UiCommandType, uint32_t)> requireMatchingClipVersion;
-  std::function<bool(uint32_t, daw::UiCommandType)> requireMatchingHarmonyVersion;
+  ClipEditDeps& clipEditDeps;
+  HarmonyTimeline& harmonyTimeline;
+  CommandOutcomePublisher publishCommandOutcome;
 };
 
 void handleWriteNote(NoteCommandDeps& deps,

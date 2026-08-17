@@ -27,8 +27,10 @@
 
 export const IDLE = 'idle';
 export const PENDING = 'pending';
-export const APPLIED = 'applied';
+export const COMPLETED = 'completed';
 export const DISCARDED = 'discarded';
+export const PARTIAL = 'partial';
+export const INDETERMINATE = 'indeterminate';
 
 /** The card's name, fixed. Written once at construction by the renderer. */
 export const TITLE = 'pending diff';
@@ -109,6 +111,10 @@ export function createPending() {
     seq: 0,
     /** Whether the buttons mean anything right now. */
     actionable: false,
+    /** Proposal identity awaiting one exact sidecar batch reply; zero means no send in flight. */
+    inFlight: 0,
+    /** Monotone submission-attempt identity. Retries must not reuse an armed timer's batch id. */
+    attemptSeq: 0,
   };
 }
 
@@ -122,6 +128,9 @@ export function createPending() {
  *          previewed?:boolean}} p
  */
 export function propose(state, p) {
+  if (state.inFlight) {
+    throw new Error('the current proposal is awaiting an exact outcome and cannot be replaced');
+  }
   const ops = p && p.ops;
   // Refused out loud, not absorbed: a card offering to apply nothing is a
   // control that silently does nothing, and the console's catch turns this into
@@ -150,12 +159,13 @@ export function propose(state, p) {
   state.previewed = !!p.previewed;
   state.reason = p.reason ? String(p.reason) : (state.previewed ? GHOSTS : HELD);
   state.version = typeof p.version === 'number' && p.version >= 0 ? p.version : -1;
-  // "composed against v2141", not "will land as v2141". The sidecar re-bases
-  // every op in a batch onto the version the previous one produced, so the
-  // number on the button names where the proposal came FROM — which is the part
-  // that decides whether it still makes sense.
+  // "composed against v2141", not "will land as v2141". For an exact-terminal
+  // batch the sidecar chains each handler's current version into the next ticket;
+  // fire-and-reconcile batches need no such chain, and mixed modes are refused
+  // before send. The button names where the proposal came FROM.
   state.applyLabel = state.version >= 0 ? 'Apply · v' + state.version : 'Apply';
   state.actionable = true;
+  state.inFlight = 0;
   return state;
 }
 
@@ -168,33 +178,153 @@ export function propose(state, p) {
  * to keep the ops past the next proposal has to copy them itself.
  */
 export function applyPending(state) {
-  if (state.status !== PENDING) throw new Error('nothing pending to apply');
+  if (state.status !== PENDING || !state.actionable) {
+    throw new Error(state.inFlight ? 'the proposal is already awaiting its exact outcome'
+                                   : 'nothing pending to apply');
+  }
   return state.ops;
+}
+
+/** Mint the id the next successful socket enqueue will own, without arming it yet. */
+export function nextPendingBatchId(state) {
+  if (state.status !== PENDING || !state.actionable || state.inFlight) {
+    throw new Error('nothing pending is ready for a new submission attempt');
+  }
+  if (!Number.isSafeInteger(state.attemptSeq) || state.attemptSeq >= Number.MAX_SAFE_INTEGER) {
+    throw new Error('pending batch identity is exhausted; reload the page before sending');
+  }
+  return state.attemptSeq + 1;
 }
 
 /**
  * Record what happened to a batch the caller just tried to send.
  *
- * SEPARATE FROM applyPending on purpose. It used to flip to APPLIED and write
+ * SEPARATE FROM applyPending on purpose. It used to claim the proposal was applied and write
  * "handed N ops to the caller" before the caller had tried the socket — so with
  * no engine the send failed, the batch was already gone, and the card stood as a
  * permanent record of a hand-off that reached nothing. Every other write path in
  * this app checks sendBatch's return BEFORE committing local state, and an API
  * that makes that order impossible is the wrong API.
  */
-export function settlePending(state, sent) {
+export function settlePending(state, sent, refusal = '', batchId = 0) {
   if (state.status !== PENDING) return state;
+  if (state.inFlight) return state;
   if (!sent) {
     // Still pending, so it can be tried again. The card says why rather than
     // pretending the click did nothing.
-    state.reason = 'nothing was sent — no engine. The batch is still here.';
+    state.reason = refusal || 'nothing was sent — no engine. The batch is still here.';
     return state;
   }
-  state.status = APPLIED;
+  // Socket enqueue is not a command outcome. Keep the proposal and its identity until the
+  // sidecar echoes a batchId with either exact terminals or a refusal/indeterminate result.
+  const id = batchId || nextPendingBatchId(state);
+  if (!Number.isSafeInteger(id) || id <= state.attemptSeq) {
+    throw new Error('a submission attempt needs a fresh positive batch identity');
+  }
+  state.attemptSeq = id;
   state.actionable = false;
-  state.reason = 'sent ' + state.opCount + ' op' + (state.opCount === 1 ? '' : 's')
-               + ' — whether the engine took them shows up as a clipVersion';
+  state.inFlight = id;
+  state.reason = 'awaiting exact outcome for ' + state.opCount + ' op'
+               + (state.opCount === 1 ? '' : 's');
   return state;
+}
+
+/**
+ * Settle an in-flight proposal from the sidecar's correlated BATCH reply.
+ *
+ * A first-command refusal or pre-submit/validation failure is safe to retry because completed is
+ * zero and the sidecar guarantees no later command was submitted. A partial batch or an
+ * indeterminate outcome is deliberately non-actionable: retrying the whole proposal could apply
+ * an already-completed prefix twice.
+ */
+export function settlePendingReply(state, batchId, reply) {
+  if (state.status !== PENDING || state.inFlight !== batchId) return false;
+  state.inFlight = 0;
+  const isCount = value => Number.isSafeInteger(value) && value >= 0;
+  const completed = reply && reply.completed;
+  if (reply && reply.ok === true) {
+    const submitted = reply.submitted;
+    const untracked = reply.untracked;
+    if (!isCount(submitted) || !isCount(completed) || !isCount(untracked)
+        || submitted !== state.opCount || completed !== state.opCount || untracked !== 0
+        || reply.laterSubmitted !== false || reply.failedIndex !== undefined
+        || reply.failureKind !== undefined) {
+      state.status = INDETERMINATE;
+      state.actionable = false;
+      state.reason = 'malformed success counts — do not retry the batch';
+      return true;
+    }
+    // "Completed" is the engine contract: the version guard accepted and the handler returned.
+    // It does not overclaim that the handler necessarily changed the persisted document.
+    state.status = COMPLETED;
+    state.actionable = false;
+    state.reason = (reply.completed > 0 ? 'completed ' : 'submitted ')
+                 + state.opCount + ' op' + (state.opCount === 1 ? '' : 's');
+    return true;
+  }
+
+  const why = reply && typeof reply.error === 'string' && reply.error
+    ? reply.error : 'the batch reply was malformed';
+  const submitted = reply && reply.submitted;
+  const untracked = reply && reply.untracked;
+  const failedIndex = reply && reply.failedIndex;
+  const failureKind = reply && reply.failureKind;
+  const knownKind = ['refused', 'submit', 'validation', 'indeterminate'].includes(failureKind);
+  if (!reply || reply.ok !== false || !isCount(completed) || !isCount(submitted)
+      || !isCount(untracked) || untracked !== 0 || completed > submitted
+      || submitted > state.opCount || !Number.isSafeInteger(failedIndex) || failedIndex < 0
+      || failedIndex >= state.opCount || reply.laterSubmitted !== false || !knownKind
+      || typeof reply.error !== 'string' || !reply.error) {
+    state.status = INDETERMINATE;
+    state.actionable = false;
+    state.reason = 'malformed failure counts — do not retry the batch: ' + why;
+    return true;
+  }
+
+  // The sidecar validates the whole frame, then executes a tracked prefix serially and stops at
+  // failedIndex. These kind-specific equations make that protocol executable here: impossible
+  // arithmetic can never turn a partial mutation into a retryable proposal.
+  const serialShape = failureKind === 'validation'
+    ? submitted === 0 && completed === 0
+    : failureKind === 'submit'
+      ? submitted === completed && failedIndex === completed
+      : submitted === completed + 1 && failedIndex === completed;
+  if (!serialShape) {
+    state.status = INDETERMINATE;
+    state.actionable = false;
+    state.reason = 'impossible failure sequence — do not retry the batch: ' + why;
+    return true;
+  }
+
+  if (failureKind === 'indeterminate') {
+    state.status = INDETERMINATE;
+    state.actionable = false;
+    state.reason = 'outcome indeterminate — do not retry: ' + why;
+  } else if (completed > 0) {
+    state.status = PARTIAL;
+    state.actionable = false;
+    state.reason = 'partial batch (' + completed
+                 + ' completed) — do not retry whole proposal: ' + why;
+  } else if (['refused', 'submit', 'validation'].includes(failureKind)) {
+    state.status = PENDING;
+    state.actionable = true;
+    state.reason = why + ' — nothing completed; the batch is still here';
+  } else {
+    state.status = INDETERMINATE;
+    state.actionable = false;
+    state.reason = 'unclassified batch reply — do not retry: ' + why;
+  }
+  return true;
+}
+
+/** End an in-flight proposal when its exact reply can no longer arrive or be trusted. */
+export function indeterminatePending(state, batchId, reason) {
+  if (state.status !== PENDING || state.inFlight !== batchId) return false;
+  state.inFlight = 0;
+  state.status = INDETERMINATE;
+  state.actionable = false;
+  state.reason = 'outcome indeterminate — do not retry: ' + reason;
+  return true;
 }
 
 /**
@@ -212,11 +342,15 @@ export function isStale(state, currentVersion) {
 
 /** Drop the batch. Nothing was ever sent, so there is nothing to undo. */
 export function discardPending(state) {
-  if (state.status !== PENDING) throw new Error('nothing pending to discard');
+  if (state.status !== PENDING || !state.actionable) {
+    throw new Error(state.inFlight ? 'an in-flight proposal cannot be discarded'
+                                   : 'nothing pending to discard');
+  }
   state.ops.length = 0;
   state.opCount = 0;
   state.status = DISCARDED;
   state.actionable = false;
+  state.inFlight = 0;
   state.reason = 'discarded — nothing was sent';
   return state;
 }
@@ -232,5 +366,6 @@ export function resetPending(state) {
   state.applyLabel = 'Apply';
   state.previewed = false;
   state.actionable = false;
+  state.inFlight = 0;
   return state;
 }

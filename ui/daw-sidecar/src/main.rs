@@ -24,38 +24,33 @@
 // because it is the only part of this binary that talks to the network.
 mod ask;
 
+use std::collections::{HashMap, VecDeque};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use daw_bridge::control::{default_shm_name, EngineHandle};
-use daw_bridge::layout::{UiSetRowOpsPayload, UiSamplerLoadPayload, UiSamplerSlicePayload,
-                         UiSamplerFilterPayload, UiSamplerEnvelopePayload,
-                         UiSamplerSetSlotPayload, UiSamplerSetDevicePayload,
-                         UiSamplerVintagePayload, UiSetClipGridPayload,
-                         UiAudioClipFieldPayload,
-                         UiSamplerEmitRowsPayload, UiSamplerSlotNameHeader,
-                         EventEntry, UiChainCommandPayload, UiChordCommandPayload,
-                         UiMarkerCommandPayload, UiArrangeTimeCommandPayload,
-                         UiClipTextHeader, CLIP_TEXT_FIELD_NAME, CLIP_TEXT_FIELD_SOURCE_PATH,
-                         UiSamplerEnvelopeRequestPayload, SAMPLER_ENV_BY_TARGET,
-                         UI_TIME_SIG_FLATTEN, UiModLinkCommandPayload,
-                         UiModLinkUid16Payload, UiModSourceValuePayload,
-                         UiAutomationLaneRequestPayload, UiAutomationPointPayload,
-                         MOD_SOURCE_MACRO, MOD_SOURCE_LFO, MOD_SOURCE_ENVELOPE,
-                         MOD_SOURCE_PATCHER_NODE_OUTPUT, MOD_TARGET_VST_PARAM,
-                         MOD_TARGET_PATCHER_PARAM, MOD_TARGET_PATCHER_MACRO,
-                         MOD_RATE_BLOCK, MOD_RATE_SAMPLE, MOD_LINK_ID_AUTO,
-                        UiCommandPayload, UiCommandType,
-                        UiDiffType, UiPatcherGraphCommandPayload, UiPatcherNodeConfigPayload,
-                        UiPatcherPresetCommandPayload, UiSetParamPayload,
-                        UiTrackRoutingPayload,
-                        UiWaveformRequestPayload, K_UI_WAVEFORM_SLOTS, K_CHAIN_DEVICE_ID_AUTO,
-                        K_CHAIN_TRACK_ALL, K_HOST_SLOT_DIRECT};
+use daw_bridge::control::{
+    command_has_tracked_outcome, default_shm_name, EngineHandle, TrackedCommandFailure,
+};
 use daw_bridge::grid::{aggregate_rows, LaneGrid};
+use daw_bridge::layout::{
+    EventEntry, UiArrangeTimeCommandPayload, UiAudioClipFieldPayload,
+    UiAutomationLaneRequestPayload, UiAutomationPointPayload, UiChainCommandPayload,
+    UiChordCommandPayload, UiClipTextHeader, UiCommandPayload, UiCommandType, UiDiffType,
+    UiMarkerCommandPayload, UiModLinkCommandPayload, UiModLinkUid16Payload,
+    UiModSourceValuePayload, UiPatcherGraphCommandPayload, UiPatcherNodeConfigPayload,
+    UiPatcherPresetCommandPayload, UiSamplerEmitRowsPayload, UiSamplerEnvelopePayload,
+    UiSamplerEnvelopeRequestPayload, UiSamplerFilterPayload, UiSamplerLoadPayload,
+    UiSamplerSetDevicePayload, UiSamplerSetSlotPayload, UiSamplerSlicePayload,
+    UiSamplerSlotNameHeader, UiSamplerVintagePayload, UiSetClipGridPayload, UiSetParamPayload,
+    UiSetRowOpsPayload, UiTrackRoutingPayload, UiWaveformRequestPayload, CLIP_TEXT_FIELD_NAME,
+    CLIP_TEXT_FIELD_SOURCE_PATH, K_CHAIN_DEVICE_ID_AUTO, K_CHAIN_TRACK_ALL, K_HOST_SLOT_DIRECT,
+    K_UI_WAVEFORM_SLOTS, MOD_LINK_ID_AUTO, MOD_RATE_BLOCK, MOD_RATE_SAMPLE, MOD_SOURCE_ENVELOPE,
+    MOD_SOURCE_LFO, MOD_SOURCE_MACRO, MOD_SOURCE_PATCHER_NODE_OUTPUT, MOD_TARGET_PATCHER_MACRO,
+    MOD_TARGET_PATCHER_PARAM, MOD_TARGET_VST_PARAM, SAMPLER_ENV_BY_TARGET, UI_TIME_SIG_FLATTEN,
+};
 
 /// Wire format, little-endian. The frontend decodes with a DataView.
 /// Bump `WIRE_VERSION` here and in `ui-web/src/wire.js` together.
@@ -3229,57 +3224,50 @@ fn is_harmony_scope(command_type: u16) -> bool {
         || command_type == UiCommandType::DeleteHarmony as u16
 }
 
-/// Send an arbitrated harmony command AND WAIT FOR THE ENGINE TO TAKE IT.
-///
-/// READING THE COUNTER FRESH IS NOT ENOUGH, which is the part that took a log line to see.
-/// `resolve_base` reads the live header, so four rapid writes each get a genuinely current
-/// read — and all four read the SAME value, because the engine had not processed the first
-/// one yet. The engine took one and refused three, every refusal saying `base:1 current:2`
-/// within the same millisecond.
-///
-/// Optimistic concurrency assumes the base you quote is the state your edit was composed
-/// against. A sender that fires again before its previous edit lands is quoting a version it
-/// has already invalidated itself. No amount of reading harder fixes that: the only cure is to
-/// not send the second edit until the first has been taken.
-///
-/// So this WAITS for the counter to move past the base that was quoted, and returns the failure
-/// when it does not. That is also the honest answer to "did that work" — the console used to
-/// report success on the SEND, which is why three refusals in a row looked like silence.
-///
-/// BOUNDED, because an unbounded wait on another process's progress is a hang. The timeout is
-/// generous relative to a command-thread pass and is reported as a failure rather than assumed
-/// to be a success, since a write that may or may not have landed is the one outcome a caller
-/// can do nothing with.
-fn send_harmony_and_await(handle: &EngineHandle, p: UiCommandPayload) -> Result<(), String> {
-    /*
-     * THE VERSION NOW, NOT THE BASE THE CALLER QUOTED — and the difference is the whole
-     * correctness of this function.
-     *
-     * This first compared against `p.base_version`. For a base this side RESOLVED that is the
-     * same number, so it looked right and passed every test written against it. For an EXPLICIT
-     * base it is not: a caller quoting a stale 999999 makes `harmony_version() != quoted` true
-     * on the very first read, so the wait returned Ok instantly and reported SUCCESS for a write
-     * the engine was about to refuse. The one case this function exists to catch was the one
-     * case it could not see.
-     *
-     * Caught by harmony-refusal-visible.mjs, which forces a refusal with a bogus base and then
-     * asks whether a person is told. It was not.
-     */
-    let before = handle.harmony_version();
-    handle.send_command(p)?;
-    let deadline = Instant::now() + Duration::from_millis(750);
-    while Instant::now() < deadline {
-        // Any move off the pre-send value means the engine has been through it. Comparing for
-        // "before + 1" would be wrong the moment a second writer exists.
-        if handle.harmony_version() != before { return Ok(()); }
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    Err("the harmony write was refused — it was composed against a version the engine has \
-         already moved past, and nothing was written".into())
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BaseOrigin {
+    Auto,
+    Explicit(u32),
 }
 
-fn resolve_base(handle: &EngineHandle, track_id: u32, sent: u32, command_type: u16) -> u32 {
-    if sent != 0 { return sent; }
+impl BaseOrigin {
+    fn is_auto(self) -> bool {
+        self == BaseOrigin::Auto
+    }
+}
+
+/// Parse an explicitly supplied optimistic-concurrency base without coercion.
+///
+/// The rest of this sidecar's legacy field extraction is intentionally permissive after this
+/// boundary, but the document itself and its base are authority: malformed JSON, escaped key
+/// spellings, negative/fractional values, or wider-than-u32 input must never silently become an
+/// automatic base. Parsing every command here also makes whole-batch prevalidation real.
+fn base_origin(body: &str) -> Result<BaseOrigin, String> {
+    let value: serde_json::Value = serde_json::from_str(body)
+        .map_err(|error| format!("command is not valid JSON: {error}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "command JSON must be an object".to_string())?;
+    let Some(raw) = object.get("base") else {
+        return Ok(BaseOrigin::Auto);
+    };
+    let number = raw
+        .as_u64()
+        .ok_or_else(|| "base must be an unsigned integer in 0..4294967295".to_string())?;
+    let base =
+        u32::try_from(number).map_err(|_| format!("base must be 0..{}, got {number}", u32::MAX))?;
+    Ok(BaseOrigin::Explicit(base))
+}
+
+fn resolve_base(
+    handle: &EngineHandle,
+    track_id: u32,
+    command_type: u16,
+    origin: BaseOrigin,
+) -> u32 {
+    if let BaseOrigin::Explicit(base) = origin {
+        return base;
+    }
     // The HEADER's counter, not `harmony_region_version()`. The header is bumped on the
     // command thread as the edit is taken; the region is refilled later by the consumer and
     // therefore LAGS. Basing on the lagging one would quote a version the engine has already
@@ -3290,6 +3278,137 @@ fn resolve_base(handle: &EngineHandle, track_id: u32, sent: u32, command_type: u
     // the same failure this function exists to fix, one counter over.
     if is_global_scope(command_type) { return handle.clip_version(); }
     handle.clip_version_for_track(track_id)
+}
+
+#[derive(Clone, Copy)]
+enum BatchCommand {
+    Chord(UiChordCommandPayload),
+    Generic(UiCommandPayload),
+}
+
+impl BatchCommand {
+    fn is_tracked(self) -> bool {
+        match self {
+            BatchCommand::Chord(_) => true,
+            BatchCommand::Generic(command) => command_has_tracked_outcome(command.command_type),
+        }
+    }
+}
+
+/// Parse and validate a complete batch line before any line in the frame is sent.
+fn build_batch_line(line: &str) -> Result<(BatchCommand, BaseOrigin), String> {
+    let origin = base_origin(line)?;
+    if let Some(command) = build_chord(line) {
+        return Ok((BatchCommand::Chord(command), origin));
+    }
+    build_command(line)
+        .map(|command| (BatchCommand::Generic(command), origin))
+        .map_err(str::to_string)
+}
+
+fn batch_tracked_count(items: &[(BatchCommand, BaseOrigin)]) -> usize {
+    items
+        .iter()
+        .filter(|(command, _)| command.is_tracked())
+        .count()
+}
+
+/// Validate the terminal contract before a batch can submit its first command.
+///
+/// A correlated frame owns optimistic UI state, so every item in it must produce an exact engine
+/// terminal. Legacy uncorrelated frames may still carry only fire-and-reconcile commands. Empty
+/// correlated frames are invalid too: there is no engine terminal that could settle them.
+fn batch_terminal_error(
+    batch_id: Option<u64>,
+    item_count: usize,
+    tracked_count: usize,
+) -> Option<&'static str> {
+    if tracked_count != 0 && tracked_count != item_count {
+        return Some(
+            "a BATCH cannot mix exact-terminal edits with fire-and-reconcile commands; split it into two frames",
+        );
+    }
+    if batch_id.is_some() && (item_count == 0 || tracked_count != item_count) {
+        return Some(
+            "a correlated BATCH requires one or more exact-terminal note, chord, or harmony edits",
+        );
+    }
+    None
+}
+
+/// Decode the batch envelope without relying on WebSocket reply order. Legacy callers use
+/// `BATCH\n`; browser proposals use `BATCH <id>\n`, and the sidecar echoes that id in exactly one
+/// reply. The id lets optimistic UI state settle only for the proposal whose terminal arrived,
+/// even when unrelated command acknowledgements share the same socket.
+fn batch_frame(body: &str) -> Option<Result<(Option<u64>, &str), String>> {
+    if let Some(rest) = body.strip_prefix("BATCH\n") {
+        return Some(Ok((None, rest)));
+    }
+    let rest = body.strip_prefix("BATCH ")?;
+    let Some((raw_id, lines)) = rest.split_once('\n') else {
+        return Some(Err(
+            "a correlated BATCH needs a newline after its id".to_string()
+        ));
+    };
+    if raw_id.is_empty() || !raw_id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Some(Err(
+            "a BATCH id must be an unsigned decimal integer".to_string()
+        ));
+    }
+    let id = raw_id
+        .parse::<u64>()
+        .map_err(|_| "a BATCH id must fit in an unsigned 64-bit integer".to_string());
+    Some(id.map(|id| (Some(id), lines)))
+}
+
+fn batch_reply(batch_id: Option<u64>, reply: String) -> String {
+    let Some(batch_id) = batch_id else {
+        return reply;
+    };
+    let Some(fields) = reply.strip_prefix('{') else {
+        return reply;
+    };
+    format!("{{\"batchId\":{batch_id},{fields}")
+}
+
+fn tracked_failure_message(failure: TrackedCommandFailure) -> String {
+    match failure {
+        TrackedCommandFailure::Submit {
+            error,
+            sent_base,
+            retried,
+        } => {
+            format!(
+                "could not submit the command with base {sent_base} (retried: {retried}): {error}"
+            )
+        }
+        TrackedCommandFailure::Refused {
+            reason,
+            current_version,
+            sent_base,
+            retried,
+        } => format!(
+            "the engine refused the command: reason {reason:?}, presented base {sent_base}, \
+             current version {current_version:?}, retried {retried}. The command did not complete"
+        ),
+        TrackedCommandFailure::Indeterminate {
+            reason,
+            sent_base,
+            retried,
+        } => format!(
+            "the command outcome is indeterminate ({reason:?}); it may or may not have \
+             completed. Last presented base {sent_base}, retried {retried}; it was not retried \
+             after becoming indeterminate"
+        ),
+    }
+}
+
+fn tracked_failure_kind(failure: &TrackedCommandFailure) -> &'static str {
+    match failure {
+        TrackedCommandFailure::Submit { .. } => "submit",
+        TrackedCommandFailure::Refused { .. } => "refused",
+        TrackedCommandFailure::Indeterminate { .. } => "indeterminate",
+    }
 }
 
 /// A MODULATION link command, or None if this message is not one.
@@ -3792,15 +3911,24 @@ fn build_set_param(body: &str) -> Option<Result<UiSetParamPayload, String>> {
 /// the case hand-testing had skipped. A project called `list`, `plugins`,
 /// `settempo` or `setparam` would have done the same thing.
 ///
-/// Matching the type FIELD closes it for every verb that goes through here. No
-/// whitespace tolerance is needed: every client of this socket builds its
-/// messages with JSON.stringify, which emits none.
+/// Matching the parsed root field closes it for every verb that goes through here, including
+/// whitespace, escaped key spellings, and nested objects. A BATCH envelope is deliberately not a
+/// JSON object, so no command nested inside it can run before whole-frame validation.
 fn is_type(body: &str, verb: &str) -> bool {
-    let mut needle = String::with_capacity(verb.len() + 10);
-    needle.push_str("\"type\":\"");
-    needle.push_str(verb);
-    needle.push('"');
-    body.contains(&needle)
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("type")?.as_str().map(|value| value == verb))
+        .unwrap_or(false)
+}
+
+/// Does a valid root JSON object carry this field? Used for the viewport message, whose legacy
+/// shape has no `type`. Parsing the root prevents a BATCH line containing `linesPerBeat` from being
+/// consumed before the batch validator sees the complete frame.
+fn has_root_field(body: &str, field: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.as_object().map(|object| object.contains_key(field)))
+        .unwrap_or(false)
 }
 
 /// A process-wide request counter for waveform queries.
@@ -3967,9 +4095,9 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
     p.note_nanotick_hi = (tick >> 32) as u32;
     p.track_id = parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32;
 
-    if body.contains("\"play\"") {
+    if is_type(body, "play") {
         p.command_type = UiCommandType::TogglePlay as u16;
-    } else if body.contains("\"panic\"") {
+    } else if is_type(body, "panic") {
         /*
          * PANIC. All notes off, everywhere, now.
          *
@@ -3979,16 +4107,16 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
          * and the room would stay full of sound.
          */
         p.command_type = UiCommandType::Panic as u16;
-    } else if body.contains("\"stop\"") {
+    } else if is_type(body, "stop") {
         // A real Stop now: halt AND rewind. TogglePlay is pause-in-place.
         p.command_type = UiCommandType::Stop as u16;
-    } else if body.contains("\"seek\"") {
+    } else if is_type(body, "seek") {
         // Target nanotick rides in note_nanotick_lo/hi, already set above from
         // "tick". Seeking while playing is audible about an ahead-buffer later
         // (~100ms) but the published playhead moves on the next block, so the
         // UI is honest immediately.
         p.command_type = UiCommandType::SetPosition as u16;
-    } else if body.contains("\"reqparams\"") {
+    } else if is_type(body, "reqparams") {
         // Ask the engine to query a device's HOST for its parameters. The answer
         // lands in a region, not on the wire — the engine bumps its version and
         // the publish loop below notices.
@@ -4030,7 +4158,7 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
             }
             _ => p.flags = 1,
         }
-    } else if body.contains("\"loop\"") {
+    } else if is_type(body, "loop") {
         // Start and end, not tick and dur: the engine reads the end as an
         // absolute nanotick out of the duration field, and calling the second
         // one "dur" in the wire message would invite someone to send a length.
@@ -4064,8 +4192,12 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
         p.value0 = parse_num(body, "\"vel\"").unwrap_or(100).clamp(0, 127) as u32;
         // Anything but an explicit 0 is a note-on: a keyup that lost its field
         // should not silently become a stuck voice.
-        p.flags = if parse_num(body, "\"on\"").unwrap_or(1) != 0 { 1 } else { 0 };
-    } else if body.contains("\"note\"") {
+        p.flags = if parse_num(body, "\"on\"").unwrap_or(1) != 0 {
+            1
+        } else {
+            0
+        };
+    } else if is_type(body, "note") {
         let dur = parse_num(body, "\"dur\"").unwrap_or(960_000).max(1) as u64;
         p.command_type = UiCommandType::WriteNote as u16;
         p.note_pitch = parse_num(body, "\"pitch\"").unwrap_or(60).clamp(0, 127) as u32;
@@ -4079,12 +4211,12 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
         // same row REPLACED the first instead of sitting beside it. build_chord
         // three hundred lines up has always sent it; notes never did.
         p.flags = note_column(body);
-    } else if body.contains("\"delete\"") {
+    } else if is_type(body, "delete") {
         p.command_type = UiCommandType::DeleteNote as u16;
         // Same byte, same reason: with more than one note column, deleting by
         // (track, tick) alone removes whichever the engine matches first.
         p.flags = note_column(body);
-    } else if body.contains("\"mixer\"") {
+    } else if is_type(body, "mixer") {
         // Gain is signed millibels and pan signed thousandths, but the payload
         // fields are u32 — bit-cast rather than clamp, since the engine reads
         // them back as i32 and a saturating cast would silently mean full left.
@@ -4092,7 +4224,7 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
         p.value0 = (parse_num(body, "\"gain\"").unwrap_or(0).clamp(-9600, 1200) as i32) as u32;
         p.plugin_index = (parse_num(body, "\"pan\"").unwrap_or(0).clamp(-1000, 1000) as i32) as u32;
         p.flags = parse_num(body, "\"flags\"").unwrap_or(0).clamp(0, 3) as u16;
-    } else if body.contains("\"reqchain\"") {
+    } else if is_type(body, "reqchain") {
         // Ask the engine to re-emit a chain. The UI needs this because chains
         // arrive only as diffs: a page opened after the last device edit has
         // nothing to read back and would show an empty chain for ever.
@@ -4167,9 +4299,9 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
             _ => return Err("scratch op must be fork, swap or keep"),
         };
         p.value0 = parse_num(body, "\"placement\"").unwrap_or(-1).max(0) as u32;
-    } else if body.contains("\"undo\"") {
+    } else if is_type(body, "undo") {
         p.command_type = UiCommandType::Undo as u16;
-    } else if body.contains("\"redo\"") {
+    } else if is_type(body, "redo") {
         p.command_type = UiCommandType::Redo as u16;
     } else {
         return Err("unknown command");
@@ -4979,7 +5111,7 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;
                         }
-                        if t.contains("\"linesPerBeat\"") {
+                        if has_root_field(&t, "linesPerBeat") {
                             let mut vp = viewport.load();
                             parse_viewport(&t, &mut vp);
                             viewport.store(vp);
@@ -4989,66 +5121,240 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;
                         }
-                        // A batch: one frame, several edits, applied in order.
+                        // A batch: one frame, several commands, handled in order.
                         //
                         // Each edit must be composed against the version the
                         // PREVIOUS one produced. The engine arbitrates by
                         // base_version, so a client that stamps every op in a
-                        // transpose with the same base gets the first applied and
-                        // the rest rejected — which looks exactly like a partly
+                        // transpose with the same base gets one handler completion
+                        // and stale refusals after it — which looks exactly like a partly
                         // working transpose, and is how this was found.
-                        if let Some(rest) = t.strip_prefix("BATCH\n") {
-                            let (mut ok, mut failed) = (0u32, 0u32);
-                            for line in rest.lines().filter(|l| !l.trim().is_empty()) {
-                                // The GLOBAL counter, kept only to wait on below: it
-                                // moves on any accepted edit, so it is still the
-                                // "did that land" signal even though it is no longer
-                                // the base anything is arbitrated against.
-                                // Read per OP, from the op's OWN track: a batch can
-                                // span tracks (a transpose across a selection does),
-                                // and the counters diverge, so one base for the whole
-                                // frame is right for at most one of them.
-                                //
-                                // THE WAIT MUST READ THE COUNTER THE BASE CAME FROM, and it
-                                // did not: the base was per-track and the wait polled the
-                                // GLOBAL version. That is the identical crossing already
-                                // fixed once for the agent's add_notes — the global is
-                                // "bumped whenever any track's clip state changes", so the
-                                // wait is satisfied by activity on ANOTHER track, this op
-                                // returns before its own write lands, and the next op in the
-                                // batch reads a base that is already stale and is refused.
-                                // A batch spanning two tracks satisfies its own waits from
-                                // the wrong track, which is why a multi-track transpose was
-                                // the case most likely to lose edits.
-                                let (sent, track, before) = if let Some(c) = build_chord(line) {
-                                    let mut c = c;
-                                    let before = handle.clip_version_for_track(c.track_id);
-                                    c.base_version = before;
-                                    (handle.send_chord_command(c).is_ok(), c.track_id, before)
-                                } else {
-                                    match build_command(line) {
-                                        Ok(mut p) => {
-                                            p.base_version = resolve_base(
-                                                &handle, p.track_id, 0, p.command_type);
-                                            // resolve_base decides per command type, so the
-                                            // wait's baseline is read back from the SAME
-                                            // helper rather than assumed equal to it.
-                                            (handle.send_command(p).is_ok(), p.track_id,
-                                             p.base_version)
-                                        }
-                                        Err(_) => (false, 0, 0),
+                        if let Some(frame) = batch_frame(&t) {
+                            let (batch_id, rest) = match frame {
+                                Ok(frame) => frame,
+                                Err(error) => {
+                                    let reply = format!(
+                                        "{{\"ok\":false,\"submitted\":0,\"completed\":0,\
+                                         \"laterSubmitted\":false,\"failureKind\":\"validation\",\
+                                         \"error\":\"{}\"}}",
+                                        error.replace('"', "'")
+                                    );
+                                    if ws.send(tungstenite::Message::Text(reply)).is_err() {
+                                        break;
                                     }
-                                };
-                                if !sent { failed += 1; continue; }
-                                // Wait for the engine to actually apply it. Without
-                                // this the next op re-reads the same version and we
-                                // are back to the race we are fixing.
-                                if handle.wait_for_track_clip_version(
-                                    track, before, before.wrapping_add(1),
-                                    Duration::from_millis(250)) { ok += 1; } else { failed += 1; }
+                                    continue;
+                                }
+                            };
+                            // Parse the entire frame before its first mutation. This prevents a
+                            // malformed later line from producing an accidental partial batch.
+                            let mut items = Vec::new();
+                            let mut parse_failure = None;
+                            for (index, line) in rest
+                                .lines()
+                                .filter(|line| !line.trim().is_empty())
+                                .enumerate()
+                            {
+                                match build_batch_line(line) {
+                                    Ok(item) => items.push(item),
+                                    Err(error) => {
+                                        parse_failure = Some((index, error));
+                                        break;
+                                    }
+                                }
                             }
-                            let reply = format!("{{\"ok\":true,\"applied\":{ok},\"failed\":{failed}}}");
-                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            if let Some((index, error)) = parse_failure {
+                                let reply = format!(
+                                    "{{\"ok\":false,\"submitted\":0,\"completed\":0,\
+                                     \"untracked\":0,\"failedIndex\":{index},\"laterSubmitted\":false,\
+                                     \"failureKind\":\"validation\",\
+                                     \"error\":\"{}\"}}",
+                                    error.replace('"', "'")
+                                );
+                                if ws
+                                    .send(tungstenite::Message::Text(batch_reply(batch_id, reply)))
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                                continue;
+                            }
+
+                            // Exact-terminal commands and fire-and-reconcile commands have
+                            // different sequencing guarantees. Mixing them would make the base of
+                            // a later tracked edit unknowable, so reject the frame before sending
+                            // any line. Pure untracked batches retain the arbitrary-op surface;
+                            // pure tracked batches get exact serial terminals.
+                            let tracked_items = batch_tracked_count(&items);
+                            if let Some(error) =
+                                batch_terminal_error(batch_id, items.len(), tracked_items)
+                            {
+                                let reply = format!(
+                                    "{{\"ok\":false,\"submitted\":0,\"completed\":0,\
+                                     \"untracked\":0,\"failedIndex\":0,\"laterSubmitted\":false,\
+                                     \"failureKind\":\"validation\",\
+                                     \"error\":\"{error}\"}}"
+                                );
+                                if ws
+                                    .send(tungstenite::Message::Text(batch_reply(batch_id, reply)))
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                                continue;
+                            }
+
+                            if tracked_items == 0 {
+                                let mut submitted = 0usize;
+                                let mut failed = None;
+                                for (index, (command, origin)) in items.into_iter().enumerate() {
+                                    let BatchCommand::Generic(mut command) = command else {
+                                        unreachable!("all chord commands have tracked outcomes");
+                                    };
+                                    command.base_version = resolve_base(
+                                        &handle,
+                                        command.track_id,
+                                        command.command_type,
+                                        origin,
+                                    );
+                                    match handle.send_command(command) {
+                                        Ok(()) => submitted += 1,
+                                        Err(error) => {
+                                            failed = Some((index, error));
+                                            break;
+                                        }
+                                    }
+                                }
+                                let reply = match failed {
+                                    Some((index, error)) => format!(
+                                        "{{\"ok\":false,\"submitted\":{submitted},\
+                                         \"completed\":0,\"untracked\":{submitted},\
+                                         \"failedIndex\":{index},\"laterSubmitted\":false,\
+                                         \"failureKind\":\"submit\",\
+                                         \"error\":\"{}\"}}",
+                                        error.replace('"', "'")
+                                    ),
+                                    None => format!(
+                                        "{{\"ok\":true,\"submitted\":{submitted},\
+                                         \"completed\":0,\"untracked\":{submitted},\
+                                         \"laterSubmitted\":false}}"
+                                    ),
+                                };
+                                if ws
+                                    .send(tungstenite::Message::Text(batch_reply(batch_id, reply)))
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                                continue;
+                            }
+
+                            let mut submitted = 0usize;
+                            let mut completed = 0usize;
+                            let mut failed = None;
+                            // The next base comes from each exact Completed record, not from a UI
+                            // snapshot that may not have published the handler's new version yet.
+                            // A batch may span tracks and the harmony document, so keep one chain
+                            // per arbitration scope.
+                            let mut next_bases: HashMap<(bool, u32), u32> = HashMap::new();
+                            for (index, (command, origin)) in items.into_iter().enumerate() {
+                                let (terminal, scope) =
+                                    if let BatchCommand::Chord(mut chord) = command {
+                                        let scope = (false, chord.track_id);
+                                        chord.base_version = if origin.is_auto() {
+                                            next_bases.get(&scope).copied().unwrap_or_else(|| {
+                                                resolve_base(
+                                                    &handle,
+                                                    chord.track_id,
+                                                    chord.command_type,
+                                                    origin,
+                                                )
+                                            })
+                                        } else {
+                                            resolve_base(
+                                                &handle,
+                                                chord.track_id,
+                                                chord.command_type,
+                                                origin,
+                                            )
+                                        };
+                                        (
+                                            handle.complete_tracked_chord_command(
+                                                chord,
+                                                origin.is_auto(),
+                                                Duration::from_secs(2),
+                                            ),
+                                            scope,
+                                        )
+                                    } else {
+                                        let BatchCommand::Generic(mut command) = command else {
+                                            unreachable!();
+                                        };
+                                        let harmony = is_harmony_scope(command.command_type);
+                                        let scope =
+                                            (harmony, if harmony { 0 } else { command.track_id });
+                                        command.base_version = if origin.is_auto() {
+                                            next_bases.get(&scope).copied().unwrap_or_else(|| {
+                                                resolve_base(
+                                                    &handle,
+                                                    command.track_id,
+                                                    command.command_type,
+                                                    origin,
+                                                )
+                                            })
+                                        } else {
+                                            resolve_base(
+                                                &handle,
+                                                command.track_id,
+                                                command.command_type,
+                                                origin,
+                                            )
+                                        };
+                                        (
+                                            handle.complete_tracked_command(
+                                                command,
+                                                origin.is_auto(),
+                                                Duration::from_secs(2),
+                                            ),
+                                            scope,
+                                        )
+                                    };
+                                match terminal {
+                                    Ok(completion) => {
+                                        submitted += 1;
+                                        completed += 1;
+                                        next_bases.insert(scope, completion.current_version);
+                                    }
+                                    Err(error) => {
+                                        if !matches!(&error, TrackedCommandFailure::Submit { .. }) {
+                                            submitted += 1;
+                                        }
+                                        let kind = tracked_failure_kind(&error);
+                                        failed =
+                                            Some((index, kind, tracked_failure_message(error)));
+                                        break;
+                                    }
+                                }
+                            }
+                            let reply = match failed {
+                                Some((index, kind, error)) => format!(
+                                    "{{\"ok\":false,\"submitted\":{submitted},\"completed\":{completed},\
+                                     \"untracked\":0,\"failedIndex\":{index},\
+                                     \"laterSubmitted\":false,\"failureKind\":\"{kind}\",\
+                                     \"error\":\"{}\"}}",
+                                    error.replace('"', "'")
+                                ),
+                                None => format!(
+                                    "{{\"ok\":true,\"submitted\":{completed},\
+                                     \"completed\":{completed},\"untracked\":0,\
+                                     \"laterSubmitted\":false}}"
+                                ),
+                            };
+                            if ws
+                                .send(tungstenite::Message::Text(batch_reply(batch_id, reply)))
+                                .is_err()
+                            {
+                                break;
+                            }
                             continue;
                         }
 
@@ -5247,14 +5553,18 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                             };
                             let text = parse_str_value(&t, "\"text\"").unwrap_or("");
                             let bytes = text.as_bytes();
-                            let reply = if field.is_none() {
-                                "{\"error\":\"cliptext needs field: name or source\"}".to_string()
-                            } else if field == Some(CLIP_TEXT_FIELD_NAME)
-                                      && bytes.len() >= CLIP_NAME_BYTES {
-                                format!(
+                            let reply = match base_origin(&t) {
+                                Err(error) => format!(
+                                    "{{\"ok\":false,\"error\":\"{}\"}}",
+                                    error.replace('"', "'")
+                                ),
+                                Ok(_) if field.is_none() =>
+                                    "{\"error\":\"cliptext needs field: name or source\"}".to_string(),
+                                Ok(_) if field == Some(CLIP_TEXT_FIELD_NAME)
+                                         && bytes.len() >= CLIP_NAME_BYTES => format!(
                                     "{{\"error\":\"a clip name must be under {CLIP_NAME_BYTES} bytes                                       and this is {} — the engine refuses rather than shortening,                                       so a longer one would change nothing\"}}",
-                                    bytes.len())
-                            } else {
+                                    bytes.len()),
+                                Ok(origin) => {
                                 let track_id =
                                     parse_num(&t, "\"track\"").unwrap_or(0).max(0) as u32;
                                 let header = UiClipTextHeader {
@@ -5277,8 +5587,8 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                     // wrong in the same way, just less often.
                                     base_version: resolve_base(
                                         &handle, track_id,
-                                        parse_num(&t, "\"base\"").unwrap_or(0).max(0) as u32,
-                                        UiCommandType::SetClipText as u16),
+                                        UiCommandType::SetClipText as u16,
+                                        origin),
                                 };
                                 let mut buf = Vec::with_capacity(20 + bytes.len());
                                 buf.extend_from_slice(unsafe {
@@ -5293,6 +5603,7 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                         "{{\"ok\":true,\"cliptext\":{},\"bytes\":{}}}",
                                         header.clip_id, bytes.len()),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                }
                                 }
                             };
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
@@ -5635,33 +5946,76 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                         // Chords take a different payload, so they cannot go
                         // through build_command's return type.
                         if let Some(c) = build_chord(&t) {
-                            let mut c = c;
-                            c.base_version = resolve_base(&handle, c.track_id,
-                                                          c.base_version, c.command_type);
-                            let reply = match handle.send_chord_command(c) {
-                                Ok(()) => format!("{{\"ok\":true,\"type\":{},\"degree\":{}}}",
-                                                  c.command_type, c.degree),
-                                Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                            let reply = match base_origin(&t) {
+                                Err(error) => format!(
+                                    "{{\"ok\":false,\"error\":\"{}\"}}",
+                                    error.replace('"', "'")
+                                ),
+                                Ok(origin) => {
+                                    let mut c = c;
+                                    c.base_version =
+                                        resolve_base(&handle, c.track_id, c.command_type, origin);
+                                    match handle.complete_tracked_chord_command(
+                                        c, origin.is_auto(), Duration::from_secs(2)) {
+                                        Ok(completed) => format!(
+                                            "{{\"ok\":true,\"completed\":true,\"type\":{},\
+                                             \"degree\":{},\"baseVersion\":{},\"currentVersion\":{},\
+                                             \"retried\":{}}}",
+                                            c.command_type, c.degree, completed.sent_base,
+                                            completed.current_version, completed.retried),
+                                        Err(error) => format!(
+                                            "{{\"ok\":false,\"error\":\"{}\"}}",
+                                            tracked_failure_message(error).replace('"', "'")),
+                                    }
+                                }
                             };
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;
                         }
                         let reply = match build_command(&t) {
                             Err(why) => format!("{{\"error\":\"{why}\"}}"),
-                            Ok(mut p) => {
-                                p.base_version = resolve_base(&handle, p.track_id,
-                                                              p.base_version, p.command_type);
-                                // Harmony waits for its own apply; see send_harmony_and_await.
-                                // Everything else keeps the fire-and-forget path it had.
-                                let sent = if is_harmony_scope(p.command_type) {
-                                    send_harmony_and_await(&handle, p)
-                                } else {
-                                    handle.send_command(p)
-                                };
-                                match sent {
-                                Ok(()) => format!("{{\"ok\":true,\"type\":{}}}", p.command_type),
-                                Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
-                            }},
+                            Ok(mut p) => match base_origin(&t) {
+                                Err(error) => format!(
+                                    "{{\"ok\":false,\"error\":\"{}\"}}",
+                                    error.replace('"', "'")
+                                ),
+                                Ok(origin) => {
+                                    p.base_version =
+                                        resolve_base(&handle, p.track_id, p.command_type, origin);
+                                    if command_has_tracked_outcome(p.command_type) {
+                                        match handle.complete_tracked_command(
+                                            p,
+                                            origin.is_auto(),
+                                            Duration::from_secs(2),
+                                        ) {
+                                            Ok(completed) => format!(
+                                                "{{\"ok\":true,\"completed\":true,\"type\":{},\
+                                                     \"baseVersion\":{},\"currentVersion\":{},\
+                                                     \"retried\":{}}}",
+                                                p.command_type,
+                                                completed.sent_base,
+                                                completed.current_version,
+                                                completed.retried
+                                            ),
+                                            Err(error) => format!(
+                                                "{{\"ok\":false,\"error\":\"{}\"}}",
+                                                tracked_failure_message(error).replace('"', "'")
+                                            ),
+                                        }
+                                    } else {
+                                        match handle.send_command(p) {
+                                            Ok(()) => format!(
+                                                "{{\"ok\":true,\"sent\":true,\"type\":{}}}",
+                                                p.command_type
+                                            ),
+                                            Err(error) => format!(
+                                                "{{\"error\":\"{}\"}}",
+                                                error.replace('"', "'")
+                                            ),
+                                        }
+                                    }
+                                }
+                            },
                         };
                         if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                     }
@@ -7247,6 +7601,89 @@ mod tests {
         assert_eq!(ty(r#"{"type":"removetrack","track":2}"#),
                    Some(UiCommandType::RemoveTrack as u16));
         assert_eq!(ty(r#"{"type":"nonsense"}"#), None);
+        assert_eq!(
+            ty(r#"{"type":"note","label":"play"}"#),
+            Some(UiCommandType::WriteNote as u16),
+            "command dispatch must come from type, never another field's value"
+        );
+    }
+
+    #[test]
+    fn explicit_bases_are_exact_u32_values() {
+        assert_eq!(base_origin(r#"{"type":"note"}"#).unwrap(), BaseOrigin::Auto);
+        assert_eq!(
+            base_origin(r#"{"type":"note","base":0}"#).unwrap(),
+            BaseOrigin::Explicit(0)
+        );
+        assert_eq!(
+            base_origin(r#"{"type":"note","base":4294967295}"#).unwrap(),
+            BaseOrigin::Explicit(u32::MAX)
+        );
+        assert_eq!(
+            base_origin(r#"{"type":"note","\u0062ase":7}"#).unwrap(),
+            BaseOrigin::Explicit(7),
+            "JSON escape spelling must not turn an explicit base into auto"
+        );
+        for body in [
+            r#"{"type":"note","base":-1}"#,
+            r#"{"type":"note","base":1.5}"#,
+            r#"{"type":"note","base":"7"}"#,
+            r#"{"type":"note","base":4294967296}"#,
+            r#"{"type":"note","base":nope}"#,
+        ] {
+            assert!(
+                base_origin(body).is_err(),
+                "accepted invalid base in {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn batches_keep_the_arbitrary_untracked_surface_but_do_not_mix_terminal_modes() {
+        let ordinary = build_batch_line(r#"{"type":"play"}"#).expect("ordinary command");
+        assert!(!ordinary.0.is_tracked());
+
+        let tracked = build_batch_line(r#"{"type":"note","track":0,"pitch":60,"tick":0}"#)
+            .expect("tracked command");
+        assert!(tracked.0.is_tracked());
+
+        assert_eq!(batch_tracked_count(&[ordinary]), 0);
+        assert_eq!(batch_tracked_count(&[tracked]), 1);
+        assert_eq!(batch_tracked_count(&[ordinary, tracked]), 1);
+
+        assert_eq!(batch_terminal_error(None, 1, 0), None);
+        assert!(batch_terminal_error(None, 2, 1)
+            .unwrap()
+            .contains("cannot mix"));
+        assert!(batch_terminal_error(Some(7), 1, 0)
+            .unwrap()
+            .contains("requires one or more exact-terminal"));
+        assert!(batch_terminal_error(Some(7), 0, 0).is_some());
+        assert_eq!(batch_terminal_error(Some(7), 1, 1), None);
+
+        assert!(
+            build_batch_line(r#"{"type":"note""#).is_err(),
+            "an unterminated line must fail whole-batch prevalidation"
+        );
+    }
+
+    #[test]
+    fn correlated_batch_envelopes_round_trip_their_identity() {
+        assert_eq!(
+            batch_frame("BATCH\n{\"type\":\"play\"}").unwrap().unwrap(),
+            (None, "{\"type\":\"play\"}")
+        );
+        assert_eq!(
+            batch_frame("BATCH 42\n{\"type\":\"note\"}")
+                .unwrap()
+                .unwrap(),
+            (Some(42), "{\"type\":\"note\"}")
+        );
+        assert!(batch_frame("BATCH nope\n{}").unwrap().is_err());
+        assert_eq!(
+            batch_reply(Some(42), "{\"ok\":true}".to_string()),
+            "{\"batchId\":42,\"ok\":true}"
+        );
     }
 
     /// The engine reads the note column off the low byte of `flags`
@@ -8371,6 +8808,23 @@ mod tests {
         // The positive direction, so the check is not vacuously satisfied by
         // is_type never matching anything.
         assert!(is_type(r#"{"type":"waveform","source":1}"#, "waveform"));
+        assert!(is_type(
+            r#"{ "\u0074ype" : "waveform", "source": 1 }"#,
+            "waveform"
+        ));
+        assert!(!is_type(
+            r#"{"type":"note","metadata":{"type":"new"}}"#,
+            "new"
+        ));
+        assert!(!is_type(
+            "BATCH 9\n{\"type\":\"note\",\"metadata\":{\"type\":\"new\"}}",
+            "new"
+        ));
+        assert!(!has_root_field(
+            "BATCH 9\n{\"type\":\"note\",\"linesPerBeat\":4}",
+            "linesPerBeat"
+        ));
+        assert!(has_root_field(r#"{"linesPerBeat":4}"#, "linesPerBeat"));
         assert!(build_waveform_request(r#"{"type":"waveform","source":1,"decim":1,"cols":4}"#)
                 .is_some(), "a real waveform request is still recognised");
     }

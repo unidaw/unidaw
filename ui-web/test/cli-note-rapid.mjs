@@ -1,31 +1,15 @@
 #!/usr/bin/env node
 /**
- * FOUR NOTE WRITES, FOUR daw-cli PROCESSES, BACK TO BACK — does await_clip_outcome survive it?
+ * FOUR NOTE WRITES, FOUR daw-cli PROCESSES, BACK TO BACK — does exact outcome tracking survive it?
  *
- * `cli-harmony-rapid.mjs` asked this question for harmony and found the answer changes with the
- * mechanism: a bare `harmony_version()` counter poll survives rapid-fire fine (5/5), but the
- * id-correlated ring peek (`peek_ui_diffs_correlated`, the same one `await_clip_outcome` already
- * uses for `do note` / `do delete-note` / `do chord`) does not — it broke 3/5 when tried for
- * harmony, root-caused to AE-RING-02 (docs/architecture/decisions/AE-RING-02-bystander-drain.md):
- * daw-sidecar's `drain_engine_events` thread ticks every 50ms and TRUE-DRAINS the same
- * single-consumer ring a bystander CLI process only PEEKS, so a diff a bystander has not yet
- * observed can vanish out from under it — reported as `ClipOutcome::Unknown`, which `await_clip_outcome`
- * silently buckets with `Applied` (prints "sent", exits 0, does not retry).
+ * This is the AE-RING-02 regression. The former id-correlated event-ring peek raced the
+ * sidecar's true drain and could report success after losing a version refusal. SHM v41 replaces
+ * that inference with an append-only broadcast outcome region keyed by command id, opcode, scope,
+ * and sent base version. Each CLI process now waits for its exact terminal outcome and performs
+ * the one permitted fresh-ticket retry after an automatically based stale refusal.
  *
- * `await_clip_outcome` is ALREADY SHIPPED — this is not a proposed change, it is the mechanism
- * `do note`/`do delete-note`/`do chord` have used since P2-CMD-00. AE-RING-02 rated its exposure
- * "PLAUSIBLE, not CONFIRMED": the identical ring, the identical peek pattern, the identical live
- * sidecar drain thread, but no test drives it under the rapid-fire shape that caught harmony.
- * `cli-verbs.mjs` exercises `do note`/`do delete-note` against the same live drain thread and
- * passes, but its commands are distributed through a much longer serial suite rather than sent
- * four back to back.
- *
- * This file is that missing probe. It is deliberately NOT in the default all.mjs sweep: the
- * shipped defect is timing-dependent, so a green run proves nothing and a red run is expected
- * until AE-RING-02 has an owner-approved fix. Run it repeatedly and read the saved document plus
- * the journal evidence it prints. A pass here does not clear AE-RING-02 in general — it answers
- * one question: whether the SAME race that broke harmony's attempted fix also breaks the shipped
- * `do note` member of the clip/chord outcome mechanism.
+ * The suite remains a causal A/B: this arm runs the sidecar's drain thread, while
+ * cli-note-rapid-control.mjs omits only the sidecar. Both are discovered by all.mjs.
  *
  * Run the causal pair with the same trial count:
  *   node ui-web/test/cli-note-rapid.mjs
@@ -104,10 +88,9 @@ const loadStatus = () => {
   } catch { return null; }
 };
 
-/** The notes track 0 actually holds in the saved document — the oracle, since exit 0 proves
- *  nothing here (`await_clip_outcome`'s Unknown branch prints "sent" too). Follows placements to
- *  clips rather than assuming clip id 1, since `locateEditTarget(..., create=true)` mints
- *  whatever clip id the engine chooses. */
+/** The notes track 0 actually holds in the saved document — the mutation oracle. Exact terminal
+ *  outcomes prove that the guard accepted and the handler returned, not that the requested note
+ *  is present in the persisted document. Follows placements rather than assuming clip id 1. */
 const savedNotes = async (tag) => {
   const save = cli('do', 'save', tag);
   if (!save.ok) return { save, notes: null };
@@ -151,8 +134,9 @@ try {
 
 /*
  * Each spawn is synchronous, exactly like cli-harmony-rapid.mjs: process N+1 starts immediately
- * after process N exits, with no extra settle. With the sidecar ON, each process's peek loop can
- * race the sidecar's unconditional drain thread; OFF is the negative control. Four distinct
+ * after process N exits, with no extra settle. The sidecar's drain remains active, but SHM v41's
+ * outcome broadcast has no consumer cursor for it to steal; the control suite omits that bystander.
+ * Four distinct
  * quarter-note ticks in bar 0 all target the ONE clip `locateEditTarget` auto-creates for that
  * bar, and four distinct pitches make a partial write visible as a missing pair, not just a count.
  */
@@ -204,9 +188,8 @@ try {
   }
   check(got && JSON.stringify(got) === JSON.stringify(expected),
         'THE DOCUMENT CONTAINS EXACTLY THE FOUR REQUESTED NOTES',
-        `${JSON.stringify(got)} — when the journal check above passes, await_clip_outcome failed `
-        + 'to observe the engine\'s version-refusal diff and daw-cli reported success without '
-        + 'retrying (AE-RING-02)');
+        `${JSON.stringify(got)} — exact command terminals completed, but the persisted mutation `
+        + 'does not match the request (AE-RING-02 regression)');
 } finally {
   await stack.stop();
 }

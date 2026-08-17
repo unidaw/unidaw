@@ -1286,6 +1286,8 @@ int main(int argc, char** argv) {
     sendUiDiff(ringUiOut, daw::EventType::UiChordDiff, diffPayload);
   };
 
+  auto publishCommandOutcome = daw::engine::makeCommandOutcomePublisher(uiShm);
+
   auto pushUndo = [&](EngineUndoEntry entry) { undoStacks.push(std::move(entry)); };
 
   // Harmony edits keep their absolute-tick undo, wrapped as a non-structural entry
@@ -1303,7 +1305,7 @@ int main(int argc, char** argv) {
   // main() and are still spelled the same, so every reader below is unchanged — the bindings are
   // what keep this commit a move rather than a rewrite. The *Deps structs that carry them
   // individually (17 members across six structs) can collapse to one HarmonyTimeline& each next.
-  daw::engine::HarmonyTimeline harmonyTimeline{scaleRegistry, emitHarmonyDiff, pushHarmonyUndo};
+  daw::engine::HarmonyTimeline harmonyTimeline{scaleRegistry, emitHarmonyDiff, pushHarmonyUndo, publishCommandOutcome};
   // NO ALIASES INTO HarmonyTimeline REMAIN. harmonyDirty, harmonyMutex, harmonyEvents and
   // harmonyVersion each had a binding here purely so older code could keep spelling them. Their
   // last readers in main() were the song-store functions and the version guard, and both moved to
@@ -1646,7 +1648,7 @@ int main(int argc, char** argv) {
      engineState, barEndTick, clipDirty, clipVersion, nextPlacementId, commitStructuralEdit,
       emitChordDiff, emitUiDiff, locateEditTarget, nextChordId, nextClipId, patternTicks,
       pushStructuralUndo, rebuildFlatAndPublish, snapshotTrackStore, emitClipReject,
-      historyAppend
+      historyAppend, publishCommandOutcome
   };
   // Six helpers that used to be lambdas here are functions in engine_clip_edit now — three of
   // them were MEMBERS of the struct above, so it lost three std::functions and gained one
@@ -1705,12 +1707,6 @@ int main(int argc, char** argv) {
   // because someone typed on track 1 — the collision that made `daw-cli do` need --force
   // and made two authors impossible. Falls back to the global counter when the track is
   // unknown, which keeps non-track-scoped edits behaving exactly as before.
-  auto requireMatchingHarmonyVersion = [&](uint32_t baseVersion,
-                                          daw::UiCommandType commandType) {
-    return harmonyTimeline.requireMatchingHarmonyVersion(baseVersion, commandType);
-  };
-
-
   auto requireMatchingClipVersion = [&](uint32_t baseVersion, daw::UiCommandType commandType, uint32_t trackId) {
     return daw::engine::requireMatchingClipVersion(clipEditDeps, baseVersion, commandType, trackId);
   };
@@ -1963,7 +1959,7 @@ int main(int argc, char** argv) {
   daw::engine::NoteCommandDeps noteCommandDeps{
       applyAddNoteFn, applyLocalNoteEdit, editIsLocalScope, applyRemoveNoteFn,
       applyAddChord, applyRemoveChordFn, applyRemoveChordAtFn, addOrUpdateHarmony,
-      removeHarmony, requireMatchingClipVersion, requireMatchingHarmonyVersion};
+      removeHarmony, clipEditDeps, harmonyTimeline, publishCommandOutcome};
 
   auto applyDocument = [&](daw::ProjectDocument& doc) {
     std::string err;

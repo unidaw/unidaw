@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 40;
+pub const K_SHM_VERSION: u16 = 41;
 
 /// SetLaneQuantize carries swing through an unsigned field; this is the bias.
 pub const LANE_QUANTIZE_SWING_BIAS: u32 = 500;
@@ -43,6 +43,7 @@ pub const K_UI_WAVEFORM_SLOTS: usize = 4;
 pub const K_UI_WAVEFORM_MAX_PAIRS: usize = 24576;
 pub const K_UI_EDIT_BATCH_MAX_OPS: usize = 32;
 pub const K_UI_EDIT_BATCH_CAPACITY: usize = 64;
+pub const K_UI_COMMAND_OUTCOME_CAPACITY: usize = 256;
 pub const K_CHAIN_DEVICE_ID_AUTO: u32 = 0xFFFF_FFFF;
 /// `trackId` on a chain command meaning EVERY track. The same bit pattern as
 /// `K_CHAIN_DEVICE_ID_AUTO` and deliberately not the same constant: one names a
@@ -198,6 +199,39 @@ pub struct ShmHeader {
     /// field keeps its offset; only sizeof(ShmHeader) grew, which is what bumps K_SHM_VERSION.
     pub ui_sampler_envelope_offset: u64,
     pub ui_sampler_envelope_bytes: u64,
+    /// v41: broadcast exact terminal outcomes for guarded note/chord/harmony commands.
+    pub ui_command_outcome_offset: u64,
+    pub ui_command_outcome_bytes: u64,
+}
+
+pub const UI_COMMAND_OUTCOME_NONE: u8 = 0;
+pub const UI_COMMAND_OUTCOME_COMPLETED: u8 = 1;
+pub const UI_COMMAND_OUTCOME_REFUSED: u8 = 2;
+pub const UI_COMMAND_OUTCOME_REASON_NONE: u8 = 0;
+pub const UI_COMMAND_OUTCOME_REASON_STALE_BASE: u8 = 1;
+pub const UI_COMMAND_OUTCOME_REASON_UNKNOWN_TRACK: u8 = 2;
+pub const UI_COMMAND_OUTCOME_STATUS_NORMAL: u64 = 0;
+pub const UI_COMMAND_OUTCOME_STATUS_SEQUENCE_EXHAUSTED: u64 = 1;
+
+#[repr(C, align(64))]
+pub struct UiCommandOutcomeEntry {
+    pub sequence: AtomicU64,
+    pub command_id: AtomicU64,
+    pub metadata0: AtomicU64,
+    pub metadata1: AtomicU64,
+    pub metadata2: AtomicU64,
+    pub reserved: [AtomicU64; 3],
+}
+
+#[repr(C, align(64))]
+pub struct UiCommandOutcomeRegion {
+    pub published_sequence: AtomicU64,
+    pub next_command_id: AtomicU64,
+    pub status: AtomicU64,
+    pub capacity: u32,
+    pub reserved0: u32,
+    pub reserved: [u64; 4],
+    pub entries: [UiCommandOutcomeEntry; K_UI_COMMAND_OUTCOME_CAPACITY],
 }
 
 /// uiTrackFlags bits (Movement 4).
@@ -2388,6 +2422,8 @@ mod tests {
             };
         }
         same!(ShmHeader, sys::daw_ShmHeader);
+        same!(UiCommandOutcomeEntry, sys::daw_UiCommandOutcomeEntry);
+        same!(UiCommandOutcomeRegion, sys::daw_UiCommandOutcomeRegion);
         same!(RingHeader, sys::daw_RingHeader);
         same!(EventEntry, sys::daw_EventEntry);
         same!(UiEditBatchEntry, sys::daw_UiEditBatchEntry);
@@ -2542,6 +2578,26 @@ mod tests {
         // v37: + uiSamplerEnvelopeOffset/Bytes, appended at the END so no existing
         // field moved — only the total grew, which is what bumps kShmVersion.
         const_assert_eq!(size_of::<ShmHeader>(), 6208);
+        const_assert_eq!(size_of::<UiCommandOutcomeEntry>(), 64);
+        const_assert_eq!(align_of::<UiCommandOutcomeEntry>(), 64);
+        const_assert_eq!(offset_of!(UiCommandOutcomeEntry, sequence), 0);
+        const_assert_eq!(offset_of!(UiCommandOutcomeEntry, command_id), 8);
+        const_assert_eq!(offset_of!(UiCommandOutcomeEntry, metadata0), 16);
+        const_assert_eq!(offset_of!(UiCommandOutcomeEntry, metadata1), 24);
+        const_assert_eq!(offset_of!(UiCommandOutcomeEntry, metadata2), 32);
+        const_assert_eq!(offset_of!(UiCommandOutcomeEntry, reserved), 40);
+        const_assert_eq!(
+            size_of::<UiCommandOutcomeRegion>(),
+            64 + K_UI_COMMAND_OUTCOME_CAPACITY * 64
+        );
+        const_assert_eq!(align_of::<UiCommandOutcomeRegion>(), 64);
+        const_assert_eq!(offset_of!(UiCommandOutcomeRegion, published_sequence), 0);
+        const_assert_eq!(offset_of!(UiCommandOutcomeRegion, next_command_id), 8);
+        const_assert_eq!(offset_of!(UiCommandOutcomeRegion, status), 16);
+        const_assert_eq!(offset_of!(UiCommandOutcomeRegion, capacity), 24);
+        const_assert_eq!(offset_of!(UiCommandOutcomeRegion, reserved0), 28);
+        const_assert_eq!(offset_of!(UiCommandOutcomeRegion, reserved), 32);
+        const_assert_eq!(offset_of!(UiCommandOutcomeRegion, entries), 64);
         const_assert_eq!(size_of::<UiDeviceMeter>(), 12);
         const_assert_eq!(size_of::<UiDeviceMeterRegion>(), 12352);
         const_assert_eq!(align_of::<ShmHeader>(), 64);
@@ -2598,6 +2654,8 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ui_quantize_version), 6000);
         assert_eq!(offset_of!(ShmHeader, ui_arrange_offset), 6008); // v27
         assert_eq!(offset_of!(ShmHeader, ui_arrange_bytes), 6016);
+        assert_eq!(offset_of!(ShmHeader, ui_command_outcome_offset), 6160);
+        assert_eq!(offset_of!(ShmHeader, ui_command_outcome_bytes), 6168);
         // The scale + device-param region structs (v16/v17) are now generated from
         // the C++ header; bindgen's own layout_tests pin them, so no hand offsets.
         const_assert_eq!(size_of::<UiPatcherNode>(), 40);

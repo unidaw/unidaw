@@ -963,6 +963,7 @@ bool requireMatchingClipVersion(ClipEditDeps& deps, uint32_t baseVersion, daw::U
   auto& emitClipReject = deps.emitClipReject;
   auto& emitUiDiff = deps.emitUiDiff;
   auto& historyAppend = deps.historyAppend;
+  auto& publishCommandOutcome = deps.publishCommandOutcome;
 
     uint32_t current = 0;
     {
@@ -980,6 +981,15 @@ bool requireMatchingClipVersion(ClipEditDeps& deps, uint32_t baseVersion, daw::U
             .field("action", "rejected");
         emitClipReject(daw::UiClipRejectReason::UnknownTrack, trackId, baseVersion,
                        current, commandType);
+        if (daw::uiCommandHasTrackedOutcome(commandType)) {
+          publishCommandOutcome(commandType,
+                                daw::UiCommandOutcomeKind::Refused,
+                                daw::UiCommandOutcomeReason::UnknownTrack,
+                                trackId,
+                                baseVersion,
+                                /*currentVersionValid=*/false,
+                                0);
+        }
         return false;
       }
     }
@@ -1001,6 +1011,15 @@ bool requireMatchingClipVersion(ClipEditDeps& deps, uint32_t baseVersion, daw::U
     // stamps the wrong base sees only "nothing happened", on every edit, forever.
     emitClipReject(daw::UiClipRejectReason::StaleBase, scopeTrack, baseVersion, current,
                    commandType);
+    if (daw::uiCommandHasTrackedOutcome(commandType)) {
+      publishCommandOutcome(commandType,
+                            daw::UiCommandOutcomeKind::Refused,
+                            daw::UiCommandOutcomeReason::StaleBase,
+                            scopeTrack,
+                            baseVersion,
+                            /*currentVersionValid=*/true,
+                            current);
+    }
     historyAppend(daw::uiCommandTypeName(commandType), "rejected:version", trackId,
                   baseVersion, "");
     DAW_EVENT("clip.version_mismatch")

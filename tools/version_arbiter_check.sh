@@ -166,18 +166,19 @@ done
 # There is no clean syntactic test for "consults resolve_base": the payload built in
 # `build_command` is resolved by its CALLERS, several frames away, so proximity gives false
 # positives and a whole-file grep gives false negatives. So this does the honest thing instead —
-# it pins the number of send paths. All 10 below were read by hand on 2026-08-07:
+# it pins the number of send paths. All 11 below were re-read by hand on 2026-08-17:
 #
-#   3251 send_harmony_and_await   resolved (harmony counter)
-#   4192 Stop, last client gone   not arbitrated
-#   4205 Quit, last client gone   not arbitrated
-#   4948 LoadProject              not arbitrated
-#   4996 chord, batch             resolved per track
-#   5002 build_command, batch     resolved
-#   5179 SamplerSetSlotName       not arbitrated, carries no base
-#   5256 cliptext                 resolved  <- the one that was missed
-#   5606 chord, single            resolved
-#   5624 build_command, single    resolved
+#   4249 Stop, last client gone           not arbitrated
+#   4262 Quit, last client gone           not arbitrated
+#   5005 LoadProject                      not arbitrated
+#   5096 generic, untracked batch         resolved before ordinary submission
+#   5151 chord, tracked batch             resolved per track, exact terminal
+#   5182 generic, tracked batch           resolved, exact terminal
+#   5381 SamplerSetSlotName               not arbitrated, carries no base
+#   5462 cliptext                         resolved  <- the one that was missed
+#   5819 chord, tracked single            resolved, exact terminal
+#   5848 generic, tracked single          resolved, exact terminal
+#   5864 generic, untracked single        resolved before ordinary submission
 #
 # THE RECEIVER IS NOT ALWAYS CALLED `handle`. This first counted `handle.send_*`, reported 8, and
 # its own negative control — a send appended through a binding named `h` — did not trip it. The two
@@ -190,15 +191,15 @@ done
 # (audit whether its command is arbitrated, and route it through `resolve_base` if so), or one was
 # removed (drop it from the list above). Adjusting the number without doing that is how the next
 # one gets missed.
-SEND_SITES=$(grep -cE '\.send_command\(|\.send_bulk\(|\.send_chord_command\(' "$RUST")
-if [ "$SEND_SITES" -ne 10 ]; then
+SEND_SITES=$(grep -cE '\.(send_command|send_bulk|send_chord_command|complete_tracked_command|complete_tracked_chord_command)\(' "$RUST")
+if [ "$SEND_SITES" -ne 11 ]; then
   fail=1
-  note "FAIL  the sidecar has $SEND_SITES engine-send paths; 10 were audited when this was written."
+  note "FAIL  the sidecar has $SEND_SITES engine-send paths; 11 were audited when this was written."
   note "      A send path that builds its own payload can bypass resolve_base entirely — that is"
   note "      exactly how SetClipText stayed broken while its classification was correct."
   note "      Audit the new one, then update the count and the list in this file."
 else
-  note "PASS  10 engine-send paths, the number audited"
+  note "PASS  11 engine-send paths, the number audited"
 fi
 
 if [ "$fail" -ne 0 ]; then

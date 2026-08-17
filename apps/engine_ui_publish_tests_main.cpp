@@ -17,6 +17,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -343,6 +344,75 @@ void testSamplerRejectJournals() {
   CHECK(entry.size == sizeof(daw::UiDiffPayload));
 }
 
+struct alignas(64) CommandOutcomeMemory {
+  daw::ShmHeader header{};
+  daw::UiCommandOutcomeRegion region{};
+};
+
+struct CommandOutcomeFixture {
+  CommandOutcomeMemory memory;
+  UiShmState state;
+
+  CommandOutcomeFixture() {
+    memory.header.uiCommandOutcomeOffset = offsetof(CommandOutcomeMemory, region);
+    memory.header.uiCommandOutcomeBytes = sizeof(memory.region);
+    memory.region.capacity = daw::kUiCommandOutcomeCapacity;
+    memory.region.status.store(
+        static_cast<uint64_t>(daw::UiCommandOutcomeStatus::Normal));
+    state.base = &memory;
+    state.size = sizeof(memory);
+    state.header = &memory.header;
+  }
+};
+
+void testCommandOutcomePublishesExactTerminal() {
+  CommandOutcomeFixture f;
+  {
+    ScopedCommandId command(0x123456789ABCDEF0ull);
+    publishCommandOutcome(f.state, daw::UiCommandType::WriteNote,
+                          daw::UiCommandOutcomeKind::Completed,
+                          daw::UiCommandOutcomeReason::None, 7, 11, true, 12);
+  }
+
+  CHECK(f.memory.region.publishedSequence.load(std::memory_order_acquire) == 1u);
+  const auto& entry = f.memory.region.entries[0];
+  CHECK(entry.sequence.load(std::memory_order_acquire) == 1u);
+  CHECK(entry.commandId.load() == 0x123456789ABCDEF0ull);
+  const uint64_t metadata0 = entry.metadata0.load();
+  const uint64_t metadata1 = entry.metadata1.load();
+  CHECK(static_cast<uint16_t>(metadata0) ==
+        static_cast<uint16_t>(daw::UiCommandType::WriteNote));
+  CHECK(((metadata0 >> 16) & 0xffu) ==
+        static_cast<uint8_t>(daw::UiCommandOutcomeKind::Completed));
+  CHECK(((metadata0 >> 24) & 0xffu) ==
+        static_cast<uint8_t>(daw::UiCommandOutcomeReason::None));
+  CHECK(((metadata0 >> 32) & 1u) == 1u);
+  CHECK(static_cast<uint32_t>(metadata1) == 7u);
+  CHECK(static_cast<uint32_t>(metadata1 >> 32) == 11u);
+  CHECK(entry.metadata2.load() == 12u);
+}
+
+void testCommandOutcomeRequiresIdentityAndStopsAtSequenceLimit() {
+  CommandOutcomeFixture f;
+
+  // An untracked legacy command has the reserved zero id and must publish nothing.
+  publishCommandOutcome(f.state, daw::UiCommandType::DeleteHarmony,
+                        daw::UiCommandOutcomeKind::Refused,
+                        daw::UiCommandOutcomeReason::StaleBase, 0, 3, true, 4);
+  CHECK(f.memory.region.publishedSequence.load() == 0u);
+
+  f.memory.region.publishedSequence.store(std::numeric_limits<uint64_t>::max());
+  {
+    ScopedCommandId command(9);
+    publishCommandOutcome(f.state, daw::UiCommandType::DeleteHarmony,
+                          daw::UiCommandOutcomeKind::Refused,
+                          daw::UiCommandOutcomeReason::StaleBase, 0, 3, true, 4);
+  }
+  CHECK(f.memory.region.publishedSequence.load() == std::numeric_limits<uint64_t>::max());
+  CHECK(f.memory.region.status.load(std::memory_order_acquire) ==
+        static_cast<uint64_t>(daw::UiCommandOutcomeStatus::SequenceExhausted));
+}
+
 }  // namespace
 
 int main() {
@@ -356,6 +426,8 @@ int main() {
   testClipRejectCarriesTheCommandId();
   testModAndRoutingErrorsJournal();
   testSamplerRejectJournals();
+  testCommandOutcomePublishesExactTerminal();
+  testCommandOutcomeRequiresIdentityAndStopsAtSequenceLimit();
 
   if (g_fail != 0) {
     std::printf("engine_ui_publish_tests: FAIL (%d)\n", g_fail);

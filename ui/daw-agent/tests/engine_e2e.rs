@@ -143,7 +143,7 @@ fn segments_live_edits_into_clips() {
         args: json!({"track":0,"pitches":[60,62,64],"start":0,"step":Q,"duration":Q}),
     });
     assert!(a.ok, "cluster A failed: {a:?}");
-    // add_notes waits for its batch to land, so B reads a settled version.
+    // add_notes waits for exact handler completions, so B receives the current base directly.
     let b = session.execute(&ToolCall {
         tool: "add_notes".into(),
         args: json!({"track":0,"pitches":[67,69],"start":four_bars,"step":Q,"duration":Q}),
@@ -151,8 +151,8 @@ fn segments_live_edits_into_clips() {
     assert!(b.ok, "cluster B failed: {b:?}");
     assert_eq!(
         b.output["first_base_version"].as_u64(),
-        Some(3),
-        "B should base on A's applied version (no stale-version race): {b:?}"
+        a.output["current_version"].as_u64(),
+        "B should base on A's terminal current version (no stale-version race): {b:?}"
     );
 
     let save = session.execute(&ToolCall {
@@ -559,7 +559,11 @@ fn add_chords_writes_a_progression_with_a_strum() {
         }),
     });
     assert!(r.ok, "add_chords failed: {r:?}");
-    assert_eq!(r.output["sent"].as_u64(), Some(4), "should have sent four chords: {r:?}");
+    assert_eq!(
+        r.output["commands_completed"].as_u64(),
+        Some(4),
+        "all four chord handlers should have completed: {r:?}"
+    );
 
     assert!(session.execute(&ToolCall { tool: "save".into(), args: json!({"name":"chordprog"}) }).ok);
     let doc = read_project(&engine.proj, "chordprog");
@@ -2824,10 +2828,12 @@ fn consecutive_harmony_writes_all_land() {
             args: json!({ "tick": tick, "root": root, "scale": scale }),
         });
         assert!(r.ok, "set_harmony {i} failed: {r:?}");
-        // The tool now reports whether the engine actually took it, rather than assuming.
-        assert_eq!(r.output["applied"].as_bool(), Some(true),
-                   "set_harmony {i} was sent but never applied — this is the exact shape of the \
-                    live report: the call succeeds and the point is not there. {r:?}");
+        // The tool reports an exact handler completion; persistence is checked below.
+        assert_eq!(
+            r.output["completed"].as_bool(),
+            Some(true),
+            "set_harmony {i} did not receive an exact terminal completion: {r:?}"
+        );
     }
 
     let deadline = Instant::now() + Duration::from_secs(6);
@@ -3133,11 +3139,11 @@ fn deleting_a_note_works_when_another_track_has_been_edited() {
         tool: "delete_note".into(), args: json!({ "track": 1, "tick": Q * 2 }),
     });
     assert!(gone.ok, "delete_note errored: {gone:?}");
-    // `applied` is the tool's own report, and it was FALSE for every call in the live log while
-    // the tool still returned ok. Asserting it separately names the failure the model saw.
-    assert_eq!(gone.output["applied"].as_bool(), Some(true),
-               "delete_note reported applied:false — the engine refused it against the wrong \
-                counter, and a model reading this reply concludes the note is gone: {gone:?}");
+    assert_eq!(
+        gone.output["completed"].as_bool(),
+        Some(true),
+        "delete_note did not receive an exact terminal completion: {gone:?}"
+    );
 
     let deadline = Instant::now() + Duration::from_secs(8);
     loop {
@@ -4308,9 +4314,15 @@ fn cut_takes_the_notes_and_keeps_them_on_the_clipboard() {
         tool: "copy_notes".into(), args: json!({"track":0,"from":0,"to":Q*3,"cut":true}),
     });
     assert!(cut.ok, "cut failed: {cut:?}");
-    assert_eq!(cut.output["deleted"], json!(3), "all three removed: {cut:?}");
-    assert!(read_notes(&session, &engine, "agcut_b").is_empty(),
-            "cut must leave the range empty");
+    assert_eq!(
+        cut.output["cut_commands_completed"],
+        json!(3),
+        "all three delete handlers completed: {cut:?}"
+    );
+    assert!(
+        read_notes(&session, &engine, "agcut_b").is_empty(),
+        "cut must leave the range empty"
+    );
 
     // AND THE CLIPBOARD SURVIVED THE DELETION — a cut that loses what it cut is a delete.
     let back = session.execute(&ToolCall {

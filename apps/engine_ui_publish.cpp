@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <functional>
+#include <limits>
 #include <thread>
 
 namespace daw::engine {
@@ -81,6 +82,78 @@ void reportUiDiffForeignWriter() {
   DAW_EVENT("ui_diff.foreign_writer")
       .field("thread",
              static_cast<uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id())));
+}
+
+void publishCommandOutcome(UiShmState& uiShm,
+                           daw::UiCommandType commandType,
+                           daw::UiCommandOutcomeKind kind,
+                           daw::UiCommandOutcomeReason reason,
+                           uint32_t scope,
+                           uint32_t sentBase,
+                           bool currentVersionValid,
+                           uint32_t currentVersion) {
+  const uint64_t commandId = currentCommandId();
+  if (commandId == 0 || uiShm.header == nullptr || uiShm.base == nullptr ||
+      uiShm.header->uiCommandOutcomeOffset == 0 ||
+      uiShm.header->uiCommandOutcomeBytes < sizeof(daw::UiCommandOutcomeRegion)) {
+    return;
+  }
+
+  auto* region = reinterpret_cast<daw::UiCommandOutcomeRegion*>(
+      reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiCommandOutcomeOffset);
+  if (region->capacity != daw::kUiCommandOutcomeCapacity ||
+      region->status.load(std::memory_order_acquire) !=
+          static_cast<uint64_t>(daw::UiCommandOutcomeStatus::Normal)) {
+    return;
+  }
+
+  const uint64_t head = region->publishedSequence.load(std::memory_order_seq_cst);
+  if (head == std::numeric_limits<uint64_t>::max()) {
+    region->status.store(
+        static_cast<uint64_t>(daw::UiCommandOutcomeStatus::SequenceExhausted),
+        std::memory_order_seq_cst);
+    DAW_EVENT("command_outcome.sequence_exhausted");
+    return;
+  }
+
+  const uint64_t sequence = head + 1;
+  auto& slot = region->entries[(sequence - 1) & (daw::kUiCommandOutcomeCapacity - 1)];
+
+  // Invalidate before replacing the payload. All slot words are sequentially consistent, not
+  // merely race-free: on wraparound a reader must not observe the OLD sequence/command id with
+  // replacement metadata. The global SC order makes either sequence check observe this zero (or
+  // the final new sequence) if any replacement payload word was observed. This is control-plane
+  // publication, never the audio callback.
+  slot.sequence.exchange(0, std::memory_order_seq_cst);
+  slot.commandId.store(commandId, std::memory_order_seq_cst);
+  const uint64_t metadata0 =
+      static_cast<uint64_t>(static_cast<uint16_t>(commandType)) |
+      (static_cast<uint64_t>(static_cast<uint8_t>(kind)) << 16) |
+      (static_cast<uint64_t>(static_cast<uint8_t>(reason)) << 24) |
+      (static_cast<uint64_t>(currentVersionValid ? 1u : 0u) << 32);
+  const uint64_t metadata1 = static_cast<uint64_t>(scope) |
+                             (static_cast<uint64_t>(sentBase) << 32);
+  slot.metadata0.store(metadata0, std::memory_order_seq_cst);
+  slot.metadata1.store(metadata1, std::memory_order_seq_cst);
+  slot.metadata2.store(currentVersion, std::memory_order_seq_cst);
+  for (auto& word : slot.reserved) {
+    word.store(0, std::memory_order_seq_cst);
+  }
+  slot.sequence.store(sequence, std::memory_order_seq_cst);
+  region->publishedSequence.store(sequence, std::memory_order_seq_cst);
+}
+
+CommandOutcomePublisher makeCommandOutcomePublisher(UiShmState& uiShm) {
+  return [&uiShm](daw::UiCommandType commandType,
+                  daw::UiCommandOutcomeKind kind,
+                  daw::UiCommandOutcomeReason reason,
+                  uint32_t scope,
+                  uint32_t sentBase,
+                  bool currentVersionValid,
+                  uint32_t currentVersion) {
+    publishCommandOutcome(uiShm, commandType, kind, reason, scope, sentBase,
+                          currentVersionValid, currentVersion);
+  };
 }
 
 // EVERY WRITE TO THE UI-OUT RING GOES THROUGH sendUiDiff, including this one's three. The bytes are

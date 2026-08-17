@@ -37,6 +37,7 @@
 #include <string>
 
 #include "engine_types.h"
+#include "engine_command_outcome.h"
 #include "event_ring.h"
 
 namespace daw::engine {
@@ -147,6 +148,24 @@ bool uiDiffWriterIsOwner();
 
 // Says, at most once per process, that a thread other than the owner wrote the ring.
 void reportUiDiffForeignWriter();
+
+// Publish one terminal result into the v41 broadcast region. `Completed` means the optimistic
+// version guard accepted and the handler returned; it deliberately does not claim that a no-op
+// changed musical state. `currentVersionValid` is false only when the addressed track does not
+// exist. The command id comes from ScopedCommandId, so legacy/untracked sends (id 0) publish no
+// record and cannot accidentally match a tracked waiter.
+void publishCommandOutcome(UiShmState& uiShm,
+                           daw::UiCommandType commandType,
+                           daw::UiCommandOutcomeKind kind,
+                           daw::UiCommandOutcomeReason reason,
+                           uint32_t scope,
+                           uint32_t sentBase,
+                           bool currentVersionValid,
+                           uint32_t currentVersion);
+
+// Bind the one SHM state once, outside main(). The guards and handlers share this callable so
+// refusal and completion records cannot drift onto different transports.
+CommandOutcomePublisher makeCommandOutcomePublisher(UiShmState& uiShm);
 
 // Pushes one diff into the ring the UI drains, or counts a drop. Never blocks — the writer is on
 // the command thread and must never wait on a UI that is not draining.

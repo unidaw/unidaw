@@ -39,8 +39,9 @@ pub fn clipboard_path(project_dir: &str) -> PathBuf {
     Path::new(project_dir).join(".clipboard.json")
 }
 
-/// Serialise. Hand-written rather than pulled through serde because this crate has no serde
-/// dependency and the shape is six integers — a dependency for that is not a trade worth making.
+/// Serialise the fixed clipboard schema. Decoding uses a real JSON parser because clipboard files
+/// cross process and version boundaries; accepting a numeric prefix or an unterminated final
+/// object would turn malformed external data into a different, valid edit.
 pub fn encode(notes: &[ClipboardNote]) -> String {
     let mut out = String::from("{\"schema\":1,\"notes\":[");
     for (i, n) in notes.iter().enumerate() {
@@ -55,34 +56,51 @@ pub fn encode(notes: &[ClipboardNote]) -> String {
     out
 }
 
-/// Parse what `encode` wrote. Field-by-field on each object, so a file from a newer version with
-/// extra keys still reads rather than failing — and a MISSING key is an error rather than a zero,
-/// because a silent 0 for `pitch` is a note nobody copied.
+/// Parse what `encode` wrote. Extra object keys remain forward-compatible, while JSON syntax,
+/// integer types, required fields, and destination widths are exact. In particular, `60.5` is not
+/// pitch 60 and a truncated final object is not an instruction to paste the preceding prefix.
 pub fn decode(text: &str) -> Result<Vec<ClipboardNote>, String> {
-    let mut out = Vec::new();
-    let body = match text.find("\"notes\":[") {
-        Some(i) => &text[i + 9..],
-        None => return Err("clipboard file has no notes array".into()),
-    };
-    for chunk in body.split('{').skip(1) {
-        let obj = match chunk.find('}') {
-            Some(i) => &chunk[..i],
-            None => continue,
+    let root: serde_json::Value = serde_json::from_str(text)
+        .map_err(|error| format!("clipboard is not valid JSON: {error}"))?;
+    let object = root
+        .as_object()
+        .ok_or_else(|| "clipboard root is not an object".to_string())?;
+    match object.get("schema").and_then(serde_json::Value::as_u64) {
+        Some(1) => {}
+        Some(schema) => return Err(format!("unsupported clipboard schema {schema}")),
+        None => return Err("clipboard file has no integer schema".into()),
+    }
+    let notes = object
+        .get("notes")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "clipboard file has no notes array".to_string())?;
+
+    let mut out = Vec::with_capacity(notes.len());
+    for (index, value) in notes.iter().enumerate() {
+        let note = value
+            .as_object()
+            .ok_or_else(|| format!("clipboard note {index} is not an object"))?;
+        let field = |key: &str| -> Result<u64, String> {
+            note.get(key)
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| format!("clipboard note {index} has no unsigned integer {key}"))
         };
-        let field = |k: &str| -> Result<u64, String> {
-            let needle = format!("\"{k}\":");
-            let at = obj.find(&needle).ok_or_else(|| format!("clipboard note has no {k}"))?;
-            let rest = &obj[at + needle.len()..];
-            let end = rest.find(|c: char| !c.is_ascii_digit() && c != '-').unwrap_or(rest.len());
-            rest[..end].trim().parse::<u64>().map_err(|_| format!("clipboard {k} is not a number"))
+        let bounded = |key: &str, maximum: u64| -> Result<u64, String> {
+            let value = field(key)?;
+            if value > maximum {
+                return Err(format!(
+                    "clipboard note {index} {key} must be 0..{maximum}, got {value}"
+                ));
+            }
+            Ok(value)
         };
         out.push(ClipboardNote {
             dt: field("dt")?,
             duration: field("duration")?,
-            pitch: field("pitch")?.min(127) as u8,
-            velocity: field("velocity")?.min(127) as u8,
-            column: field("column")?.min(255) as u8,
-            d_track: field("d_track")? as u32,
+            pitch: bounded("pitch", 127)? as u8,
+            velocity: bounded("velocity", 127)? as u8,
+            column: bounded("column", 255)? as u8,
+            d_track: bounded("d_track", u64::from(u32::MAX))? as u32,
         });
     }
     Ok(out)
@@ -141,6 +159,40 @@ mod tests {
     #[test]
     fn a_file_that_is_not_a_clipboard_is_refused() {
         assert!(decode("{\"hello\":true}").is_err());
+    }
+
+    #[test]
+    fn out_of_range_fields_are_refused_instead_of_changed() {
+        let valid = "{\"schema\":1,\"notes\":[{\"dt\":0,\"duration\":480,\
+                     \"pitch\":60,\"velocity\":100,\"column\":0,\"d_track\":0}]}";
+        for (from, to) in [
+            ("\"pitch\":60", "\"pitch\":128".to_string()),
+            ("\"velocity\":100", "\"velocity\":128".to_string()),
+            ("\"column\":0", "\"column\":256".to_string()),
+            (
+                "\"d_track\":0",
+                format!("\"d_track\":{}", u64::from(u32::MAX) + 1),
+            ),
+        ] {
+            assert!(decode(&valid.replace(from, &to)).is_err());
+        }
+    }
+
+    #[test]
+    fn malformed_or_fractional_notes_are_not_accepted_as_a_valid_prefix() {
+        let fractional = "{\"schema\":1,\"notes\":[{\"dt\":0,\"duration\":480,\
+                          \"pitch\":60.5,\"velocity\":100,\"column\":0,\"d_track\":0}]}";
+        assert!(
+            decode(fractional).is_err(),
+            "fractional pitch must not truncate to 60"
+        );
+
+        let truncated = "{\"schema\":1,\"notes\":[{\"dt\":0,\"duration\":480,\
+                         \"pitch\":60,\"velocity\":100,\"column\":0,\"d_track\":0}";
+        assert!(
+            decode(truncated).is_err(),
+            "unterminated JSON must not paste its prefix"
+        );
     }
 
     #[test]

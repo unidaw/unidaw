@@ -11,6 +11,19 @@
 
 import { createStore, decode, decodeWaveform, createWaveform } from './wire.js';
 
+const EXACT_BATCH_TYPES = new Set([
+  'note', 'delete', 'harmony', 'delharmony', 'chord', 'delchord',
+]);
+
+/** The terminal contract a batch requires, before optimistic state is released. */
+export function batchTerminalMode(objs) {
+  let exact = 0;
+  for (const obj of objs || []) if (EXACT_BATCH_TYPES.has(obj && obj.type)) exact++;
+  if (exact === 0) return 'untracked';
+  if (exact === objs.length) return 'tracked';
+  return 'mixed';
+}
+
 /**
  * A connection that connects to nothing.
  *
@@ -36,7 +49,8 @@ export function noEngine() {
 }
 
 export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.0.0.1:8175',
-                                onChange, onStatus, onAck, onEngineEvent, onChains, onScales,
+                                onChange, onStatus, onCommandStatus, onAck, onEngineEvent,
+                                onChains, onScales,
                                 onDeviceParams, onWaveform, onAudioSources } = {}) {
   const store = createStore();
   let ws = null;
@@ -143,7 +157,11 @@ export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.
     // the renderer wants as a typed array. Without this the frames arrive as Blob
     // and every reader has to go async to look at them.
     cmdWs.binaryType = 'arraybuffer';
-    cmdWs.onopen = () => { cmdBackoff = 250; if (lastVp) cmdWs.send(lastVp); };
+    cmdWs.onopen = () => {
+      cmdBackoff = 250;
+      onCommandStatus && onCommandStatus('connected');
+      if (lastVp) cmdWs.send(lastVp);
+    };
     cmdWs.onmessage = (ev) => {
       if (ev.data instanceof ArrayBuffer) {
         // Decoded HERE, like the state frame, so the page never sees a raw
@@ -156,6 +174,7 @@ export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.
     };
     cmdWs.onclose = () => {
       if (closed) return;
+      onCommandStatus && onCommandStatus('disconnected');
       setTimeout(openCmd, cmdBackoff);
       cmdBackoff = Math.min(cmdBackoff * 2, 4000);
     };
@@ -199,17 +218,27 @@ export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.
       return true;
     },
     /**
-     * Several edits as one frame, applied in order by the sidecar.
+     * Several commands as one frame, handled in order by the sidecar.
      *
      * Not a convenience: the engine arbitrates by base_version, so a client that
-     * stamps every op of a transpose with the same version gets the first applied
-     * and the rest rejected. The sidecar re-bases each op on the version the
-     * previous one produced, which is the only place that can be done — it is the
-     * side that can wait for the engine to acknowledge.
+     * stamps every op of a transpose with the same version gets one handler
+     * completion and stale refusals after it. The sidecar chains exact terminal
+     * records. Fire-and-reconcile commands have no such terminal, so mixing the
+     * two modes is refused synchronously here and defensively by the sidecar.
      */
-    sendBatch(objs) {
+    sendBatch(objs, batchId = null) {
       if (!cmdWs || cmdWs.readyState !== 1 || !objs.length) return false;
-      let msg = 'BATCH';
+      const terminalMode = batchTerminalMode(objs);
+      if (terminalMode === 'mixed') return false;
+      // A correlated id means the caller owns optimistic state that may be released only by exact
+      // terminals. Fire-and-reconcile batches remain available to ordinary internal callers, but
+      // can never masquerade as a correlated proposal.
+      if (batchId !== null && terminalMode !== 'tracked') return false;
+      if (batchId !== null && (!Number.isSafeInteger(batchId) || batchId <= 0)) return false;
+      // Correlated proposals use an envelope id that the sidecar echoes in its one batch reply.
+      // Ordinary internal batches keep the legacy envelope; they reconcile from engine state and
+      // do not own optimistic proposal state that needs an exact terminal.
+      let msg = batchId === null ? 'BATCH' : 'BATCH ' + batchId;
       for (const o of objs) msg += '\n' + JSON.stringify(o);
       cmdWs.send(msg);
       return true;

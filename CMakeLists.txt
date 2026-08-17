@@ -1060,10 +1060,10 @@ add_test(NAME render_pool_race
 )
 set_tests_properties(render_pool_race PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR} TIMEOUT 600)
 
-# P2-CMD-00 END TO END, against a live engine. refusal_identity_check is the static half and pins
-# which payloads carry the id; this one proves the loop CLOSES — minted by the sender, carried in
-# EventEntry::sampleTime, echoed at payload offset 32, matched by await_clip_outcome. A broken echo
-# does not surface as an error but as SUCCESS for a refused edit, which is what it asserts against.
+# SHM v41 exact outcome correlation, against a live engine. The sender allocates an id in the
+# broadcast region, the command carries it in EventEntry::sampleTime, and the engine publishes a
+# terminal keyed by the full ticket. This forces a stale base and requires the exact Refused record;
+# missing or malformed evidence is Indeterminate, never inferred success.
 add_test(NAME refusal_correlation
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/refusal_correlation_check.sh
 )

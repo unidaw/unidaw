@@ -5,7 +5,7 @@
 //! row-op schema follows. Model-agnostic: an LLM harness maps its tool-call
 //! format onto `ToolCall`/`execute`; nothing here talks to a model or a network.
 
-use daw_bridge::control::EngineHandle;
+use daw_bridge::control::{EngineHandle, TrackedCommandFailure};
 use daw_bridge::grid::NANOTICKS_PER_QUARTER;
 use daw_bridge::layout::{clip_appearances, UI_CLIP_EXTENT_HAS_ALTERNATE,
                         UiChainCommandPayload, UiChordCommandPayload,
@@ -95,6 +95,73 @@ impl ToolResult {
     fn err(msg: impl Into<String>) -> Self {
         Self { ok: false, output: Value::Null, error: Some(msg.into()) }
     }
+}
+
+fn tracked_failure_message(label: &str, failure: TrackedCommandFailure) -> String {
+    match failure {
+        TrackedCommandFailure::Submit {
+            error,
+            sent_base,
+            retried,
+        } => {
+            format!(
+                "{label} could not be submitted to the engine with base {sent_base} \
+                 (retried: {retried}): {error}"
+            )
+        }
+        TrackedCommandFailure::Refused {
+            reason,
+            current_version,
+            sent_base,
+            retried,
+        } => format!(
+            "the engine refused {label}: reason {reason:?}, presented base {sent_base}, current \
+             version {current_version:?}, retried {retried}. The command did not complete"
+        ),
+        TrackedCommandFailure::Indeterminate {
+            reason,
+            sent_base,
+            retried,
+        } => format!(
+            "{label} outcome is indeterminate ({reason:?}); the command may or may not have \
+             completed. Last presented base {sent_base}, retried {retried}; it was not retried \
+             after becoming indeterminate"
+        ),
+    }
+}
+
+fn tracked_batch_failure(
+    label: &str,
+    failed_index: usize,
+    completed: usize,
+    failure: TrackedCommandFailure,
+) -> ToolResult {
+    ToolResult::err(format!(
+        "{label} stopped at index {failed_index} after {completed} command(s) completed; no later \
+         item was submitted. {}",
+        tracked_failure_message(label, failure)
+    ))
+}
+
+fn wait_for_track_projection(
+    handle: &EngineHandle,
+    label: &str,
+    track: u32,
+    first_base: u32,
+    current_version: u32,
+) -> Result<(), ToolResult> {
+    if handle.wait_for_track_clip_version(
+        track,
+        first_base,
+        current_version,
+        std::time::Duration::from_secs(2),
+    ) {
+        return Ok(());
+    }
+    Err(ToolResult::err(format!(
+        "{label} commands completed through version {current_version}, but track {track}'s \
+         published projection did not catch up. Do not retry: the edits may already be present"
+    )))
 }
 
 /// The full capability surface. Kept in sync with `execute` by construction —
@@ -2763,13 +2830,19 @@ fn delete_chord(handle: &EngineHandle, args: &Value) -> ToolResult {
         // Read as the chord id on this command type. 0 means "the chord at this tick and column".
         spread_nanoticks: 0,
     };
-    match handle.send_chord_command(p) {
-        Ok(()) => {
-            let applied = handle.wait_for_track_clip_version(
-                track as u32, base, base.wrapping_add(1), std::time::Duration::from_secs(2));
-            ToolResult::ok(json!({ "deleted": { "track": track, "tick": tick }, "applied": applied }))
-        }
-        Err(e) => ToolResult::err(e),
+    match handle.complete_tracked_chord_command(
+        p,
+        /*retry_stale=*/ true,
+        std::time::Duration::from_secs(2),
+    ) {
+        Ok(completed) => ToolResult::ok(json!({
+            "delete": { "track": track, "tick": tick, "column": column },
+            "completed": true,
+            "base_version": completed.sent_base,
+            "current_version": completed.current_version,
+            "retried": completed.retried,
+        })),
+        Err(failure) => ToolResult::err(tracked_failure_message("delete_chord", failure)),
     }
 }
 
@@ -2801,13 +2874,20 @@ fn delete_harmony(handle: &EngineHandle, args: &Value) -> ToolResult {
      */
     let base = handle.harmony_version();
     p.base_version = base;
-    if let Err(e) = handle.send_command(p) {
-        return ToolResult::err(e);
+    match handle.complete_tracked_command(
+        p,
+        /*retry_stale=*/ true,
+        std::time::Duration::from_secs(2),
+    ) {
+        Ok(completed) => ToolResult::ok(json!({
+            "delete_harmony_at": tick,
+            "completed": true,
+            "base_version": completed.sent_base,
+            "current_version": completed.current_version,
+            "retried": completed.retried,
+        })),
+        Err(failure) => ToolResult::err(tracked_failure_message("delete_harmony", failure)),
     }
-    // Waited on for the same reason as set_harmony: the counter this read is what the NEXT
-    // harmony edit will compose against.
-    let applied = handle.wait_for_harmony_version(base, std::time::Duration::from_secs(2));
-    ToolResult::ok(json!({ "deleted_harmony_at": tick, "base": base, "applied": applied }))
 }
 
 /// Save the current patcher graph as a named preset.
@@ -3796,9 +3876,8 @@ fn copy_notes(handle: &EngineHandle, args: &Value, project_dir: &str) -> ToolRes
 
     let mut deleted = 0usize;
     if cutting {
-        let first = handle.clip_version_for_track(track);
-        let mut base = first;
-        for x in &picked {
+        let mut base = handle.clip_version_for_track(track);
+        for (index, x) in picked.iter().enumerate() {
             let column = match daw_bridge::layout::edit_column(u64::from(x.column)) {
                 Ok(c) => c,
                 Err(e) => return ToolResult::err(e),
@@ -3809,15 +3888,23 @@ fn copy_notes(handle: &EngineHandle, args: &Value, project_dir: &str) -> ToolRes
             p.note_nanotick_lo = (x.t_on & 0xffff_ffff) as u32;
             p.note_nanotick_hi = (x.t_on >> 32) as u32;
             p.base_version = base;
-            if handle.send_command(p).is_err() { break }
-            deleted += 1;
-            base = base.wrapping_add(1);
+            match handle.complete_tracked_command(
+                p,
+                /*retry_stale=*/ true,
+                std::time::Duration::from_secs(2),
+            ) {
+                Ok(completed) => {
+                    deleted += 1;
+                    base = completed.current_version;
+                }
+                Err(failure) => {
+                    return tracked_batch_failure("copy_notes cut", index, deleted, failure);
+                }
+            }
         }
-        handle.wait_for_track_clip_version(
-            track, first, first.wrapping_add(deleted as u32), std::time::Duration::from_secs(2));
     }
     ToolResult::ok(json!({
-        "copied": notes.len(), "deleted": deleted, "track": track,
+        "copied": notes.len(), "cut_commands_completed": deleted, "track": track,
         "clipboard": path.to_string_lossy(),
     }))
 }
@@ -3844,10 +3931,10 @@ fn paste_notes(handle: &EngineHandle, args: &Value, project_dir: &str) -> ToolRe
         // apart so this can say which.
         return ToolResult::err("the clipboard is empty — call copy_notes first");
     }
-    let first = handle.clip_version_for_track(track);
-    let mut base = first;
-    let mut sent = 0usize;
-    for m in &notes {
+    let first_base = handle.clip_version_for_track(track);
+    let mut base = first_base;
+    let mut completed_count = 0usize;
+    for (index, m) in notes.iter().enumerate() {
         let column = match daw_bridge::layout::edit_column(u64::from(m.column)) {
             Ok(c) => c,
             Err(e) => return ToolResult::err(e),
@@ -3863,13 +3950,25 @@ fn paste_notes(handle: &EngineHandle, args: &Value, project_dir: &str) -> ToolRe
         p.note_duration_lo = (m.duration & 0xffff_ffff) as u32;
         p.note_duration_hi = (m.duration >> 32) as u32;
         p.base_version = base;
-        if handle.send_command(p).is_err() { break }
-        sent += 1;
-        base = base.wrapping_add(1);
+        match handle.complete_tracked_command(
+            p,
+            /*retry_stale=*/ true,
+            std::time::Duration::from_secs(2),
+        ) {
+            Ok(completed) => {
+                completed_count += 1;
+                base = completed.current_version;
+            }
+            Err(failure) => {
+                return tracked_batch_failure("paste_notes", index, completed_count, failure);
+            }
+        }
     }
-    let applied = handle.wait_for_track_clip_version(
-        track, first, first.wrapping_add(sent as u32), std::time::Duration::from_secs(2));
-    ToolResult::ok(json!({ "pasted": sent, "track": track, "at": at, "applied": applied }))
+    ToolResult::ok(json!({
+        "requested": notes.len(), "commands_completed": completed_count,
+        "track": track, "at": at, "first_base_version": first_base,
+        "current_version": base,
+    }))
 }
 
 /// MOVE NOTES THAT ALREADY EXIST, in place.
@@ -3966,8 +4065,8 @@ fn transpose(handle: &EngineHandle, args: &Value) -> ToolResult {
     // this track's counter by one, so the next base is the previous plus one.
     let first_base = handle.clip_version_for_track(track);
     let mut base = first_base;
-    let mut sent = 0usize;
-    for m in &plan.moved {
+    let mut completed_count = 0usize;
+    for (index, m) in plan.moved.iter().enumerate() {
         let payload = UiCommandPayload {
             command_type: UiCommandType::WriteNote as u16,
             // THE NOTE'S OWN COLUMN. A transpose is a rewrite of the same cell with a different
@@ -3987,21 +4086,28 @@ fn transpose(handle: &EngineHandle, args: &Value) -> ToolResult {
             note_duration_hi: (m.duration >> 32) as u32,
             base_version: base,
         };
-        if let Err(e) = handle.send_command(payload) {
-            return ToolResult::err(format!("{e} after {sent} notes"));
+        match handle.complete_tracked_command(
+            payload,
+            /*retry_stale=*/ true,
+            std::time::Duration::from_secs(2),
+        ) {
+            Ok(completed) => {
+                completed_count += 1;
+                base = completed.current_version;
+            }
+            Err(failure) => {
+                return tracked_batch_failure("transpose", index, completed_count, failure);
+            }
         }
-        sent += 1;
-        base = base.wrapping_add(1);
     }
-    let applied = handle.wait_for_track_clip_version(
-        track, first_base, first_base.wrapping_add(sent as u32),
-        std::time::Duration::from_secs(2));
     ToolResult::ok(json!({
-        "transposed": sent,
+        "requested": plan.moved.len(),
+        "commands_completed": completed_count,
         "skipped": plan.skipped,
         "semitones": semitones,
         "track": track,
-        "applied": applied,
+        "first_base_version": first_base,
+        "current_version": base,
         // The span actually acted on, always — not only when it differs from what was asked.
         "from": win_from,
         "to": win_to,
@@ -4049,7 +4155,7 @@ fn add_notes(handle: &EngineHandle, args: &Value) -> ToolResult {
     // which is the "agent works on track 4 while you type on track 1" case itself.
     let mut base = handle.clip_version_for_track(track);
     let first_base = base;
-    let mut sent = 0usize;
+    let mut completed_count = 0usize;
     for (index, pitch) in pitches.iter().enumerate() {
         let nanotick = start + step * index as u64;
         let payload = UiCommandPayload {
@@ -4065,66 +4171,36 @@ fn add_notes(handle: &EngineHandle, args: &Value) -> ToolResult {
             note_duration_hi: (duration >> 32) as u32,
             base_version: base,
         };
-        if let Err(e) = handle.send_command(payload) {
-            return ToolResult::err(format!("{e} after {sent} notes"));
+        match handle.complete_tracked_command(
+            payload,
+            /*retry_stale=*/ true,
+            std::time::Duration::from_secs(2),
+        ) {
+            Ok(completed) => {
+                completed_count += 1;
+                base = completed.current_version;
+            }
+            Err(failure) => {
+                return tracked_batch_failure("add_notes", index, completed_count, failure);
+            }
         }
-        sent += 1;
-        base = base.wrapping_add(1);
     }
-    // Wait for the engine to apply this batch before returning, so a following tool call reads a
-    // settled version and does not race the ring — no fixed delay between calls.
-    //
-    // PER TRACK, matching the base above. This waited on the GLOBAL counter while taking its base
-    // from the per-track one, so it returned as soon as anything anywhere moved — including an
-    // edit to a different track — and the next call to this same track could read a version that
-    // had not caught up. add_notes' own comment on the base says reading the global is "exactly
-    // the failure the per-track counters were introduced to end"; the wait was doing it.
-    let applied = handle.wait_for_track_clip_version(
+    if let Err(result) = wait_for_track_projection(
+        handle,
+        "add_notes",
         track,
         first_base,
-        first_base.wrapping_add(sent as u32),
-        std::time::Duration::from_secs(2),
-    );
-    report_batch(handle, "notes", track, first_base, sent, applied)
-}
-
-/// The shared tail of add_notes and add_chords: say what actually landed.
-///
-/// A REFUSED BATCH MUST NOT REPORT SUCCESS. These commands carry an optimistic base version and
-/// the engine drops any whose base is stale, so a whole batch can be thrown away while every send
-/// returns Ok — the ring accepted the bytes, the engine discarded the edit. Observed in a demo
-/// rehearsal: "kick on every beat, snare on 2 and 4" wrote sixteen kicks, had all eight snares
-/// refused, and the model told the user it had added both. The engine said so
-/// (`clip.version_mismatch ... action=resync_requested`) and nothing on this side was listening.
-///
-/// NOTHING LANDED IS AN ERROR, so the model retries and gets it right. A PARTIAL landing is
-/// reported but not an error: a retry would duplicate whatever did land, and a duplicated note is
-/// a worse outcome than a reported shortfall.
-fn report_batch(handle: &EngineHandle, what: &str, track: u32, first_base: u32,
-                sent: usize, applied: bool) -> ToolResult {
-    let now = handle.clip_version_for_track(track);
-    let landed = now.wrapping_sub(first_base) as usize;
-    if !applied && landed == 0 {
-        return ToolResult::err(format!(
-            "the engine refused all {sent} {what} on track {track} as stale (its clip version is \
-             still {now}, the batch was written against {first_base}). Nothing was added. Send \
-             them again — the version will have settled."));
+        base,
+    ) {
+        return result;
     }
-    let mut out = json!({
-        "sent": sent,
-        "landed": landed.min(sent),
+    ToolResult::ok(json!({
+        "requested": pitches.len(),
+        "commands_completed": completed_count,
         "first_base_version": first_base,
-        "applied": applied,
+        "current_version": base,
         "track": track,
-    });
-    if landed < sent {
-        if let Value::Object(ref mut m) = out {
-            m.insert("warning".into(), json!(format!(
-                "only {landed} of {sent} {what} were applied; the rest were refused as stale. \
-                 Read the track back before assuming what is there.")));
-        }
-    }
-    ToolResult::ok(out)
+    }))
 }
 
 // CHORDS ARE DEGREES, WHICH IS THE WHOLE POINT OF HAVING THEM SEPARATE FROM NOTES.
@@ -4201,7 +4277,7 @@ fn add_chords(handle: &EngineHandle, args: &Value) -> ToolResult {
     // elsewhere.
     let mut base = handle.clip_version_for_track(track);
     let first_base = base;
-    let mut sent = 0usize;
+    let mut completed_count = 0usize;
     for (index, degree) in degrees.iter().enumerate() {
         let nanotick = start + step * index as u64;
         let payload = UiChordCommandPayload {
@@ -4222,19 +4298,27 @@ fn add_chords(handle: &EngineHandle, args: &Value) -> ToolResult {
             reserved: 0,
             spread_nanoticks: spread,
         };
-        if let Err(e) = handle.send_chord_command(payload) {
-            return ToolResult::err(format!("{e} after {sent} chords"));
+        match handle.complete_tracked_chord_command(
+            payload,
+            /*retry_stale=*/ true,
+            std::time::Duration::from_secs(2),
+        ) {
+            Ok(completed) => {
+                completed_count += 1;
+                base = completed.current_version;
+            }
+            Err(failure) => {
+                return tracked_batch_failure("add_chords", index, completed_count, failure);
+            }
         }
-        sent += 1;
-        base = base.wrapping_add(1);
     }
-    let applied = handle.wait_for_track_clip_version(
-        track,
-        first_base,
-        first_base.wrapping_add(sent as u32),
-        std::time::Duration::from_secs(2),
-    );
-    report_batch(handle, "chords", track, first_base, sent, applied)
+    ToolResult::ok(json!({
+        "requested": degrees.len(),
+        "commands_completed": completed_count,
+        "first_base_version": first_base,
+        "current_version": base,
+        "track": track,
+    }))
 }
 
 // Undo or redo the last structural (note/chord) edit. The engine keeps the undo
@@ -4308,6 +4392,33 @@ fn send_edit(handle: &EngineHandle, mut p: UiCommandPayload, out: Value) -> Tool
     ToolResult::ok(v)
 }
 
+/// Send one of the six version-guarded document edits and wait for its exact terminal outcome.
+fn send_tracked_clip_edit(
+    handle: &EngineHandle,
+    mut p: UiCommandPayload,
+    out: Value,
+) -> ToolResult {
+    let base = handle.clip_version_for_track(p.track_id);
+    p.base_version = base;
+    match handle.complete_tracked_command(
+        p,
+        /*retry_stale=*/ true,
+        std::time::Duration::from_secs(2),
+    ) {
+        Ok(completed) => {
+            let mut value = out;
+            if let Value::Object(ref mut fields) = value {
+                fields.insert("completed".into(), json!(true));
+                fields.insert("base_version".into(), json!(completed.sent_base));
+                fields.insert("current_version".into(), json!(completed.current_version));
+                fields.insert("retried".into(), json!(completed.retried));
+            }
+            ToolResult::ok(value)
+        }
+        Err(failure) => ToolResult::err(tracked_failure_message("clip edit", failure)),
+    }
+}
+
 /// A payload with everything zeroed but the command. The struct has twelve fields
 /// and most tools set three of them.
 fn blank(cmd: UiCommandType) -> UiCommandPayload {
@@ -4372,7 +4483,11 @@ fn delete_note(handle: &EngineHandle, args: &Value) -> ToolResult {
     p.track_id = track as u32;
     p.note_nanotick_lo = (tick & 0xffff_ffff) as u32;
     p.note_nanotick_hi = (tick >> 32) as u32;
-    send_edit(handle, p, json!({ "deleted": { "track": track, "tick": tick, "column": column } }))
+    send_tracked_clip_edit(
+        handle,
+        p,
+        json!({ "delete": { "track": track, "tick": tick, "column": column } }),
+    )
 }
 
 /// Append a track. No arguments: v1 of AddTrack always appends, because
@@ -4621,25 +4736,22 @@ fn set_harmony(handle: &EngineHandle, args: &Value) -> ToolResult {
      */
     let base = handle.harmony_version();
     p.base_version = base;
-    if let Err(e) = handle.send_command(p) {
-        return ToolResult::err(e);
+    match handle.complete_tracked_command(
+        p,
+        /*retry_stale=*/ true,
+        std::time::Duration::from_secs(2),
+    ) {
+        Ok(completed) => ToolResult::ok(json!({
+            "root": root,
+            "scale": scale,
+            "tick": tick,
+            "completed": true,
+            "base_version": completed.sent_base,
+            "current_version": completed.current_version,
+            "retried": completed.retried,
+        })),
+        Err(failure) => ToolResult::err(tracked_failure_message("set_harmony", failure)),
     }
-    /*
-     * WAIT FOR IT TO LAND, because the next call reads this counter.
-     *
-     * `requireMatchingHarmonyVersion` demands an EXACT match. Returning as soon as the command is
-     * queued means a caller writing a key change per bar composes bars 2, 3 and 4 against a
-     * version the engine has not reached, and each is refused into a resync diff no tool reads.
-     * Reported from live use: four bars asked for, two landed, several "refused an edit composed
-     * against version" in between.
-     *
-     * add_notes and add_chords already solve this by tracking the base across their own run. This
-     * tool sends ONE command, so the equivalent is to wait for it — which also makes `applied`
-     * honest rather than assumed.
-     */
-    let applied = handle.wait_for_harmony_version(base, std::time::Duration::from_secs(2));
-    ToolResult::ok(json!({
-        "root": root, "scale": scale, "tick": tick, "base": base, "applied": applied }))
 }
 
 fn set_tempo(handle: &EngineHandle, args: &Value) -> ToolResult {

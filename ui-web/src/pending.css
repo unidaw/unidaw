@@ -30,10 +30,12 @@
 
 /* Dashed and washed means PROVISIONAL. Every other state is a record of a
    decision already taken, so it steps back to a quiet solid edge — otherwise
-   "applied" keeps asking for attention it no longer needs, and an empty card
+   "completed" keeps asking for attention it no longer needs, and an empty card
    looks like it is holding something. */
 .pd-card.idle,
-.pd-card.applied,
+.pd-card.completed,
+.pd-card.partial,
+.pd-card.indeterminate,
 .pd-card.discarded {
   border-style: solid;
   border-color: var(--uni-rule-track);
@@ -52,7 +54,9 @@
   color: var(--base-accent-ramp-300);
 }
 .pd-card.idle .pd-title,
-.pd-card.applied .pd-title,
+.pd-card.completed .pd-title,
+.pd-card.partial .pd-title,
+.pd-card.indeterminate .pd-title,
 .pd-card.discarded .pd-title { color: var(--base-neutral-600); }
 
 /* Wraps rather than ellipsises, unlike the design's single clipped line. The

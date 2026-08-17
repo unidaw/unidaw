@@ -9,8 +9,9 @@
 # rather than merely wrong.
 #
 # ITEM 28 IS EXPLICIT THAT THIS CHECK COULD NOT BE WRITTEN FIRST: "no check over that extraction can
-# be written until the extraction has a predicate, a command and a member list". So all three are
-# here, and the member list is DERIVED by the command rather than typed in.
+# be written until the extraction has a predicate, a command and a member list". AE-RING-02
+# replaced the original three with exact command-id terminal outcomes. Zero is now the monotone
+# target, and the member list remains DERIVED by the command rather than typed in.
 #
 # THE PREDICATE. A counter-only outcome decision is a site that
 #   (a) compares a *version* accessor against a saved "before" binding, and
@@ -61,7 +62,7 @@ EXEMPT = [
      'a wait primitive returning whether the counter moved, not a verdict about a command'),
 ]
 
-EXPECTED_MEMBERS = 3
+EXPECTED_MEMBERS = 0
 
 found, exempt_seen = [], []
 for r in ROOTS:

@@ -96,6 +96,9 @@ int setUpUiShm(UiShmState& uiShm,
     header.uiSamplerEnvelopeOffset = offset;  // v37: one modulator's envelope shape, on request
     header.uiSamplerEnvelopeBytes = sizeof(daw::UiSamplerEnvelopeRegion);
     offset += daw::alignUp(header.uiSamplerEnvelopeBytes, 64);
+    header.uiCommandOutcomeOffset = offset;  // v41: broadcast exact guarded-command outcomes
+    header.uiCommandOutcomeBytes = sizeof(daw::UiCommandOutcomeRegion);
+    offset += daw::alignUp(header.uiCommandOutcomeBytes, 64);
     uiShm.size = daw::alignUp(offset, 64);
 
     if (::ftruncate(uiShm.fd, static_cast<off_t>(uiShm.size)) != 0) {
@@ -118,6 +121,14 @@ int setUpUiShm(UiShmState& uiShm,
     uiShm.header->uiVersion.store(0, std::memory_order_release);
     uiShm.header->uiClipVersion = 0;
     uiShm.header->uiHarmonyVersion = 0;
+    auto* commandOutcomes = reinterpret_cast<daw::UiCommandOutcomeRegion*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiCommandOutcomeOffset);
+    commandOutcomes->publishedSequence.store(0, std::memory_order_relaxed);
+    commandOutcomes->nextCommandId.store(1, std::memory_order_relaxed);
+    commandOutcomes->status.store(
+        static_cast<uint64_t>(daw::UiCommandOutcomeStatus::Normal),
+        std::memory_order_relaxed);
+    commandOutcomes->capacity = daw::kUiCommandOutcomeCapacity;
 
     // v16: publish the scale registry once — it is static, so the harmony + tuning
     // UI reads it after attach and never needs an update. Cents in milli-cents.

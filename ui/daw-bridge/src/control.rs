@@ -24,6 +24,7 @@ use std::ffi::CString;
 use std::fs::File;
 use std::os::fd::FromRawFd;
 use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 
 use memmap2::{Mmap, MmapMut, MmapOptions};
 
@@ -31,18 +32,21 @@ use std::sync::atomic::fence;
 use std::sync::atomic::AtomicU32;
 
 use crate::layout::{
-    EventEntry, EventType, RingHeader, ShmHeader, UiChainCommandPayload, UiChordCommandPayload,
-    UiClipExtent, UiClipExtentRegion, UiClipWindowCommandPayload, UiClipWindowSnapshot,
-    UiCommandPayload, UiHarmonyEvent, UiHarmonySnapshot, UiPatcherEdge, UiPatcherNode,
-    UiDeviceParamsRegion, UiPatcherGraphCommandPayload, UiPatcherNodeConfigPayload,
-    UiPatcherRegion, UiScaleRegion, K_SHM_MAGIC, K_SHM_VERSION, K_UI_MAX_CLIP_EXTENTS,
-    K_UI_MAX_DEVICE_PARAMS, K_UI_MAX_HARMONY_EVENTS,
-    K_UI_MAX_PATCHER_EDGES, K_UI_MAX_PATCHER_NODES, K_UI_MAX_SCALES, K_UI_MAX_SCALE_STEPS,
-    K_UI_MAX_TRACKS, UiAudioSourceRegion, UiWaveformRegion, UiWaveformRequestPayload,
-    K_UI_MAX_AUDIO_CLIPS, K_UI_MAX_AUDIO_SOURCES, K_UI_WAVEFORM_MAX_PAIRS, K_UI_WAVEFORM_SLOTS,
-    UiAutomationLaneRegion, UiAutomationLaneRequestPayload, UiAutomationSlotRegion,
-    K_UI_AUTOMATION_SLOTS, K_UI_MAX_AUTOMATION_LANES, K_UI_MAX_AUTOMATION_POINTS,
-    UI_AUTOMATION_FLAG_DISCRETE,
+    EventEntry, EventType, RingHeader, ShmHeader, UiAudioSourceRegion, UiAutomationLaneRegion,
+    UiAutomationLaneRequestPayload, UiAutomationSlotRegion, UiChordCommandPayload, UiClipExtent,
+    UiClipExtentRegion, UiClipWindowCommandPayload, UiClipWindowSnapshot, UiCommandOutcomeRegion,
+    UiCommandPayload, UiCommandType, UiDeviceParamsRegion, UiHarmonyEvent, UiHarmonySnapshot,
+    UiPatcherEdge, UiPatcherGraphCommandPayload, UiPatcherNode, UiPatcherNodeConfigPayload,
+    UiPatcherRegion, UiScaleRegion, UiWaveformRegion, UiWaveformRequestPayload, K_SHM_MAGIC,
+    K_SHM_VERSION, K_UI_AUTOMATION_SLOTS, K_UI_COMMAND_OUTCOME_CAPACITY, K_UI_MAX_AUDIO_CLIPS,
+    K_UI_MAX_AUDIO_SOURCES, K_UI_MAX_AUTOMATION_LANES, K_UI_MAX_AUTOMATION_POINTS,
+    K_UI_MAX_CLIP_EXTENTS, K_UI_MAX_DEVICE_PARAMS, K_UI_MAX_HARMONY_EVENTS, K_UI_MAX_PATCHER_EDGES,
+    K_UI_MAX_PATCHER_NODES, K_UI_MAX_SCALES, K_UI_MAX_SCALE_STEPS, K_UI_MAX_TRACKS,
+    K_UI_WAVEFORM_MAX_PAIRS, K_UI_WAVEFORM_SLOTS, UI_AUTOMATION_FLAG_DISCRETE,
+    UI_COMMAND_OUTCOME_COMPLETED, UI_COMMAND_OUTCOME_REASON_NONE,
+    UI_COMMAND_OUTCOME_REASON_STALE_BASE, UI_COMMAND_OUTCOME_REASON_UNKNOWN_TRACK,
+    UI_COMMAND_OUTCOME_REFUSED, UI_COMMAND_OUTCOME_STATUS_NORMAL,
+    UI_COMMAND_OUTCOME_STATUS_SEQUENCE_EXHAUSTED,
 };
 use crate::reader::{SeqlockReader, UiSnapshot};
 
@@ -57,6 +61,138 @@ pub struct TrackMixer {
     /// v34: the widest op run on any note in the track — how many glyphs the collapsed ops cell
     /// must draw. 0 = the track uses no ops, so the column need not be drawn at all.
     pub ops_width: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommandTicket {
+    pub command_id: u64,
+    pub mark: u64,
+    pub command_type: u16,
+    pub scope: u32,
+    pub sent_base: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandOutcomeReason {
+    StaleBase,
+    UnknownTrack,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandOutcomeIndeterminate {
+    RegionUnavailable,
+    SequenceExhausted,
+    Overrun,
+    TornOrOverwritten,
+    Duplicate,
+    Malformed,
+    Timeout,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandOutcome {
+    Completed {
+        current_version: u32,
+    },
+    Refused {
+        reason: CommandOutcomeReason,
+        current_version: Option<u32>,
+    },
+    Indeterminate(CommandOutcomeIndeterminate),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TrackedCommandCompletion {
+    pub sent_base: u32,
+    pub current_version: u32,
+    pub retried: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TrackedCommandFailure {
+    Submit {
+        error: String,
+        sent_base: u32,
+        retried: bool,
+    },
+    Refused {
+        reason: CommandOutcomeReason,
+        current_version: Option<u32>,
+        sent_base: u32,
+        retried: bool,
+    },
+    Indeterminate {
+        reason: CommandOutcomeIndeterminate,
+        sent_base: u32,
+        retried: bool,
+    },
+}
+
+enum CommandOutcomePoll {
+    Pending,
+    Terminal(CommandOutcome),
+}
+
+/// Whether this opcode participates in the exact command-outcome protocol.
+pub fn command_has_tracked_outcome(command_type: u16) -> bool {
+    command_uses_generic_tracked_payload(command_type)
+        || command_uses_chord_tracked_payload(command_type)
+}
+
+fn command_uses_generic_tracked_payload(command_type: u16) -> bool {
+    matches!(
+        command_type,
+        x if x == UiCommandType::WriteNote as u16
+            || x == UiCommandType::DeleteNote as u16
+            || x == UiCommandType::WriteHarmony as u16
+            || x == UiCommandType::DeleteHarmony as u16
+    )
+}
+
+fn command_uses_chord_tracked_payload(command_type: u16) -> bool {
+    matches!(
+        command_type,
+        x if x == UiCommandType::WriteChord as u16
+            || x == UiCommandType::DeleteChord as u16
+    )
+}
+
+fn tracked_scope(command_type: u16, track_id: u32) -> u32 {
+    if command_type == UiCommandType::WriteHarmony as u16
+        || command_type == UiCommandType::DeleteHarmony as u16
+    {
+        0
+    } else {
+        track_id
+    }
+}
+
+fn allocate_shared_command_id(region: &UiCommandOutcomeRegion) -> Result<u64, String> {
+    let mut current = region.next_command_id.load(Ordering::Acquire);
+    loop {
+        if current == 0 {
+            return Err("command id allocator contains the reserved zero value".to_string());
+        }
+        if current == u64::MAX {
+            // Allocation exhaustion is global shared state, not a private error in one client.
+            // Publishing it makes every other writer stop before submission and makes all
+            // outstanding readers resolve Indeterminate instead of timing out.
+            region.status.store(
+                UI_COMMAND_OUTCOME_STATUS_SEQUENCE_EXHAUSTED,
+                Ordering::Release,
+            );
+            return Err("command id allocator is exhausted; restart the engine".to_string());
+        }
+        match region.next_command_id.compare_exchange_weak(
+            current,
+            current + 1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return Ok(current),
+            Err(actual) => current = actual,
+        }
+    }
 }
 
 /// The published patcher graph: nodes + edges, plus the version to cache-key on
@@ -331,6 +467,7 @@ pub struct EngineHandle {
     size: usize,
     ring_ui: Option<RingView>,
     ring_ui_out: Option<RingView>,
+    command_outcomes: Option<*const UiCommandOutcomeRegion>,
 }
 
 impl EngineHandle {
@@ -409,12 +546,34 @@ impl EngineHandle {
             unsafe { (*header).ring_ui_out_offset },
             size as usize,
         );
+        let command_outcomes = {
+            let offset = unsafe { (*header).ui_command_outcome_offset };
+            let bytes = unsafe { (*header).ui_command_outcome_bytes };
+            if bytes != std::mem::size_of::<UiCommandOutcomeRegion>() as u64 {
+                None
+            } else {
+                let offset = usize::try_from(offset).ok();
+                offset.and_then(|offset| {
+                    if region_fits(
+                        offset,
+                        std::mem::size_of::<UiCommandOutcomeRegion>(),
+                        std::mem::align_of::<UiCommandOutcomeRegion>(),
+                        size as usize,
+                    ) {
+                        Some(unsafe { mmap.as_ptr().add(offset) as *const UiCommandOutcomeRegion })
+                    } else {
+                        None
+                    }
+                })
+            }
+        };
         Ok(Self {
             _mmap: mmap,
             header,
             size: size as usize,
             ring_ui,
             ring_ui_out,
+            command_outcomes,
         })
     }
 
@@ -1570,6 +1729,7 @@ impl EngineHandle {
         &self,
         payload: UiChordCommandPayload,
     ) -> Result<u64, String> {
+        Self::refuse_legacy_guarded(payload.command_type, "send_chord_command_correlated")?;
         self.write_entry(
             &payload as *const UiChordCommandPayload as *const u8,
             std::mem::size_of::<UiChordCommandPayload>(),
@@ -1577,10 +1737,30 @@ impl EngineHandle {
     }
 
     pub fn send_chord_command(&self, payload: UiChordCommandPayload) -> Result<(), String> {
+        Self::refuse_legacy_guarded(payload.command_type, "send_chord_command")?;
         self.write_entry(
             &payload as *const UiChordCommandPayload as *const u8,
             std::mem::size_of::<UiChordCommandPayload>(),
         ).map(|_| ())
+    }
+
+    pub fn send_tracked_chord_command(
+        &self,
+        payload: UiChordCommandPayload,
+    ) -> Result<CommandTicket, String> {
+        if !command_uses_chord_tracked_payload(payload.command_type) {
+            return Err(format!(
+                "tracked chord API refuses non-chord command {}",
+                payload.command_type
+            ));
+        }
+        self.send_tracked_entry(
+            payload.command_type,
+            payload.track_id,
+            payload.base_version,
+            &payload as *const UiChordCommandPayload as *const u8,
+            std::mem::size_of::<UiChordCommandPayload>(),
+        )
     }
 
     pub fn send_clip_window_request(
@@ -1599,33 +1779,17 @@ impl EngineHandle {
     /// thread in one process may call it for a given segment — whatever drains
     /// it takes the messages away from everyone else.
     ///
-    /// THAT SENTENCE USED TO END "nothing else consumes this ring on the UI segment
-    /// today... which is why it is safe to start", true when written and FALSE now.
-    /// P2-CMD-00 (AE-P1.2 decisions 7+9) gave `peek_ui_diffs`/`peek_ui_diffs_correlated`
-    /// a real job: a daw-cli process, in a SEPARATE OS process from whichever sidecar
-    /// calls this function, polls the same ring to correlate its own command's outcome
-    /// by id. Those calls never advance `read_index` (true peeks), so they cannot break
-    /// THIS function's exclusivity — but the reverse is not true. Whoever calls
-    /// `drain_ui_out` (normally the sidecar's `drain_engine_events`, ticking every 50ms
-    /// UNCONDITIONALLY, not gated on a connected browser page) can advance `read_index`
-    /// past an entry a bystander peeker has not yet observed, making that entry
-    /// permanently invisible to it — the peek window is `[read_index, write_index)` and
-    /// once `read_index` moves past a slot, that slot is gone for every future peek, not
-    /// just this one.
+    /// COMMAND OUTCOMES DO NOT USE THIS RING. The old correlated-peek design let a
+    /// bystander CLI scan `[read_index, write_index)` while the sidecar advanced the
+    /// same `read_index`; the sidecar could therefore erase a refusal before its sender
+    /// observed it. That shipped false success was measured by AE-RING-02.
     ///
-    /// MEASURED, not theoretical: extending the P2-CMD-00 pattern to a new channel
-    /// (AE-P1.2 item 28, harmony) reproduced this as a real false negative under
-    /// `cli-harmony-rapid.mjs`'s live contention, with a sidecar attached — reverting the
-    /// change made the failure disappear. The already-shipped note path has now reproduced
-    /// too: at corrected probe SHA `9e1f5722`, after a successful post-load sequence change,
-    /// `cli-note-rapid.mjs` lost one note in 3 of 10 trials with an explicitly attached
-    /// sidecar drain and lost none in 10 trials without the sidecar. In each failure the
-    /// journal records the exact write as
-    /// `rejected:version`, no retry follows, every daw-cli process exits 0 and reports sent,
-    /// and the note is absent from the saved document. `do delete-note` and `do chord` share
-    /// `await_clip_outcome` and therefore the same exposure by construction, but were not
-    /// directly reproduced by that probe. See the full A/B and scope boundary in
-    /// `docs/architecture/decisions/AE-RING-02-bystander-drain.md`.
+    /// SHM v41 moved exact command terminals to `UiCommandOutcomeRegion`, an
+    /// append-only broadcast window with no consumer cursor. CLI, agent, and sidecar
+    /// readers scan that region by `(command id, opcode, scope, sent base)` and never
+    /// call either UI-diff peek to decide success. This ring remains diagnostic UI
+    /// traffic with one real consumer. Reintroducing command completion here would
+    /// recreate the bystander-drain race by construction.
     ///
     /// Returns the number drained. An empty ring is the normal case and costs
     /// two atomic loads.
@@ -1658,6 +1822,7 @@ impl EngineHandle {
     /// two-line improvement into a 33-file edit for callers that never look at the value. A
     /// correlating caller opts in; everyone else is untouched.
     pub fn send_command_correlated(&self, payload: UiCommandPayload) -> Result<u64, String> {
+        Self::refuse_legacy_guarded(payload.command_type, "send_command_correlated")?;
         self.write_entry(
             &payload as *const UiCommandPayload as *const u8,
             std::mem::size_of::<UiCommandPayload>(),
@@ -1665,10 +1830,27 @@ impl EngineHandle {
     }
 
     pub fn send_command(&self, payload: UiCommandPayload) -> Result<(), String> {
+        Self::refuse_legacy_guarded(payload.command_type, "send_command")?;
         self.write_entry(
             &payload as *const UiCommandPayload as *const u8,
             std::mem::size_of::<UiCommandPayload>(),
         ).map(|_| ())
+    }
+
+    pub fn send_tracked_command(&self, payload: UiCommandPayload) -> Result<CommandTicket, String> {
+        if !command_uses_generic_tracked_payload(payload.command_type) {
+            return Err(format!(
+                "tracked generic API refuses command {} with a non-generic payload family",
+                payload.command_type
+            ));
+        }
+        self.send_tracked_entry(
+            payload.command_type,
+            payload.track_id,
+            payload.base_version,
+            &payload as *const UiCommandPayload as *const u8,
+            std::mem::size_of::<UiCommandPayload>(),
+        )
     }
 
     /// Send a device-chain edit (AddDevice/RemoveDevice/MoveDevice/UpdateDevice). Same
@@ -1850,6 +2032,8 @@ impl EngineHandle {
         if payload.len() < 2 {
             return Err("bulk payload must carry a commandType".to_string());
         }
+        let logical_command = u16::from_le_bytes([payload[0], payload[1]]);
+        Self::refuse_legacy_guarded(logical_command, "send_bulk")?;
         let chunks = payload.len().div_ceil(crate::layout::BULK_CHUNK_BYTES);
         if chunks == 0 || chunks > 512 {
             return Err(format!("bulk payload needs {chunks} chunks, max 512"));
@@ -2080,6 +2264,213 @@ impl EngineHandle {
         ).map(|_| ())
     }
 
+    fn refuse_legacy_guarded(command_type: u16, api: &str) -> Result<(), String> {
+        if command_has_tracked_outcome(command_type) {
+            return Err(format!(
+                "{api} refuses guarded command {command_type}; use the tracked outcome API"
+            ));
+        }
+        Ok(())
+    }
+
+    fn command_outcome_region(&self) -> Result<&UiCommandOutcomeRegion, String> {
+        let Some(ptr) = self.command_outcomes else {
+            return Err("v41 command outcome region is unavailable".to_string());
+        };
+        let region = unsafe { &*ptr };
+        if region.capacity as usize != K_UI_COMMAND_OUTCOME_CAPACITY {
+            return Err(format!(
+                "command outcome capacity {} does not match {}",
+                region.capacity, K_UI_COMMAND_OUTCOME_CAPACITY
+            ));
+        }
+        Ok(region)
+    }
+
+    fn require_writable(&self) -> Result<(), String> {
+        if self.ring_ui.is_none() {
+            return Err("handle was not opened for writing".to_string());
+        }
+        Ok(())
+    }
+
+    fn allocate_command_id(&self) -> Result<u64, String> {
+        self.require_writable()?;
+        let region = self.command_outcome_region()?;
+        allocate_shared_command_id(region)
+    }
+
+    fn send_tracked_entry(
+        &self,
+        command_type: u16,
+        track_id: u32,
+        sent_base: u32,
+        payload: *const u8,
+        size: usize,
+    ) -> Result<CommandTicket, String> {
+        self.require_writable()?;
+        if !command_has_tracked_outcome(command_type) {
+            return Err(format!(
+                "command {command_type} has no tracked terminal-outcome contract"
+            ));
+        }
+        let region = self.command_outcome_region()?;
+        if region.status.load(Ordering::Acquire) != UI_COMMAND_OUTCOME_STATUS_NORMAL {
+            return Err("command outcome sequence is exhausted; restart the engine".to_string());
+        }
+        // The mark belongs immediately before this send. Unrelated outcomes may appear after it;
+        // the exact command id/opcode/scope/base tuple filters them without consuming anything.
+        let mark = region.published_sequence.load(Ordering::Acquire);
+        let command_id = self.allocate_command_id()?;
+        self.write_entry_with_id(payload, size, command_id)?;
+        Ok(CommandTicket {
+            command_id,
+            mark,
+            command_type,
+            scope: tracked_scope(command_type, track_id),
+            sent_base,
+        })
+    }
+
+    pub fn await_command_outcome(
+        &self,
+        ticket: CommandTicket,
+        timeout: Duration,
+    ) -> CommandOutcome {
+        let deadline = Instant::now() + timeout;
+        loop {
+            match self.poll_command_outcome(ticket) {
+                CommandOutcomePoll::Terminal(outcome) => return outcome,
+                CommandOutcomePoll::Pending if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                CommandOutcomePoll::Pending => {
+                    return CommandOutcome::Indeterminate(CommandOutcomeIndeterminate::Timeout);
+                }
+            }
+        }
+    }
+
+    /// Submit a guarded generic command, wait for its exact terminal record, and optionally retry
+    /// one stale-base refusal against the authoritative version returned by the engine. A retry
+    /// always receives a fresh command id and outcome ticket. Indeterminate outcomes are never
+    /// retried because the first command may already have completed.
+    pub fn complete_tracked_command(
+        &self,
+        mut payload: UiCommandPayload,
+        retry_stale: bool,
+        timeout: Duration,
+    ) -> Result<TrackedCommandCompletion, TrackedCommandFailure> {
+        for attempt in 0..=1 {
+            let sent_base = payload.base_version;
+            let retried = attempt != 0;
+            let ticket = self.send_tracked_command(payload).map_err(|error| {
+                TrackedCommandFailure::Submit {
+                    error,
+                    sent_base,
+                    retried,
+                }
+            })?;
+            match self.await_command_outcome(ticket, timeout) {
+                CommandOutcome::Completed { current_version } => {
+                    return Ok(TrackedCommandCompletion {
+                        sent_base,
+                        current_version,
+                        retried,
+                    });
+                }
+                CommandOutcome::Refused {
+                    reason: CommandOutcomeReason::StaleBase,
+                    current_version: Some(current),
+                } if retry_stale && attempt == 0 => {
+                    payload.base_version = current;
+                }
+                CommandOutcome::Refused {
+                    reason,
+                    current_version,
+                } => {
+                    return Err(TrackedCommandFailure::Refused {
+                        reason,
+                        current_version,
+                        sent_base,
+                        retried,
+                    });
+                }
+                CommandOutcome::Indeterminate(reason) => {
+                    return Err(TrackedCommandFailure::Indeterminate {
+                        reason,
+                        sent_base,
+                        retried,
+                    });
+                }
+            }
+        }
+        unreachable!("tracked command loop returns after its one permitted retry")
+    }
+
+    /// Chord-payload counterpart of `complete_tracked_command`.
+    pub fn complete_tracked_chord_command(
+        &self,
+        mut payload: UiChordCommandPayload,
+        retry_stale: bool,
+        timeout: Duration,
+    ) -> Result<TrackedCommandCompletion, TrackedCommandFailure> {
+        for attempt in 0..=1 {
+            let sent_base = payload.base_version;
+            let retried = attempt != 0;
+            let ticket = self.send_tracked_chord_command(payload).map_err(|error| {
+                TrackedCommandFailure::Submit {
+                    error,
+                    sent_base,
+                    retried,
+                }
+            })?;
+            match self.await_command_outcome(ticket, timeout) {
+                CommandOutcome::Completed { current_version } => {
+                    return Ok(TrackedCommandCompletion {
+                        sent_base,
+                        current_version,
+                        retried,
+                    });
+                }
+                CommandOutcome::Refused {
+                    reason: CommandOutcomeReason::StaleBase,
+                    current_version: Some(current),
+                } if retry_stale && attempt == 0 => {
+                    payload.base_version = current;
+                }
+                CommandOutcome::Refused {
+                    reason,
+                    current_version,
+                } => {
+                    return Err(TrackedCommandFailure::Refused {
+                        reason,
+                        current_version,
+                        sent_base,
+                        retried,
+                    });
+                }
+                CommandOutcome::Indeterminate(reason) => {
+                    return Err(TrackedCommandFailure::Indeterminate {
+                        reason,
+                        sent_base,
+                        retried,
+                    });
+                }
+            }
+        }
+        unreachable!("tracked chord command loop returns after its one permitted retry")
+    }
+
+    fn poll_command_outcome(&self, ticket: CommandTicket) -> CommandOutcomePoll {
+        let Ok(region) = self.command_outcome_region() else {
+            return CommandOutcomePoll::Terminal(CommandOutcome::Indeterminate(
+                CommandOutcomeIndeterminate::RegionUnavailable,
+            ));
+        };
+        poll_command_outcome_region(region, ticket)
+    }
+
     /// The engine dispatches on the entry's payload size, so every command
     /// shape shares one ring-write path.
     /// Writes one command into the UI ring and returns the ID IT MINTED for it.
@@ -2089,15 +2480,27 @@ impl EngineHandle {
     /// stamped. Returning it is what turns "every refusal carries an identity" into "a caller can
     /// tell whether this refusal is ITS OWN" — the difference AE-P1.2 item 27 is about.
     fn write_entry(&self, payload: *const u8, size: usize) -> Result<u64, String> {
+        if size < std::mem::size_of::<u16>() {
+            return Err(format!("payload of {size} bytes has no command type"));
+        }
+        // Every typed payload starts with command_type. Enforce the guarded-opcode boundary here,
+        // below every public fire-and-reconcile sender, so a caller cannot smuggle WriteNote in a
+        // same-sized chain/routing/sampler struct and have the engine reinterpret its bytes as a
+        // UiCommandPayload. Tracked senders deliberately bypass this method after minting a ticket.
+        let command_type = unsafe { std::ptr::read_unaligned(payload.cast::<u16>()) };
+        Self::refuse_legacy_guarded(command_type, "untracked payload sender")?;
+        self.require_writable()?;
+        let id = self.allocate_command_id()?;
+        self.write_entry_with_id(payload, size, id)
+    }
+
+    fn write_entry_with_id(&self, payload: *const u8, size: usize, id: u64) -> Result<u64, String> {
         let Some(ring) = self.ring_ui.as_ref() else {
             return Err("handle was not opened for writing".to_string());
         };
         if size > 40 {
             return Err(format!("payload of {size} bytes does not fit an EventEntry"));
         }
-        // Minted before the entry so the same value can be written AND returned; minting twice
-        // would give the caller an id the engine never saw.
-        let id = command_id_next();
         let mut entry = EventEntry {
             // P2-CMD-00: the command's identity rides here. sampleTime is unused on a UI
             // command entry — it names an audio position and a command has none — so these eight
@@ -2163,47 +2566,510 @@ impl EngineHandle {
     }
 }
 
-/// The identity this process stamps on the commands it sends, per P2-CMD-00 §3.
-///
-/// `hi` is a 32-bit nonce drawn ONCE for this process; `lo` is a counter within it starting at 1.
-/// Together they are the 64-bit id the engine echoes back on a refusal, so a caller can tell which
-/// of its commands was refused rather than adopting the outcome of somebody else's.
-///
-/// WHY A NONCE AND NOT A CLAIMED ID. The rings are MULTI-PRODUCER since M2.18 — a producer
-/// CAS-reserves a slot, fills it, then sets `ready` — so an id must be unique across concurrent
-/// producers AND across producer lifetimes, because the outbound ring is peeked rather than drained
-/// and a restarted process's refusals are still visible. A counter alone fails the second test. The
-/// exact alternative is a claim array in shared memory with CAS acquisition, which buys exactness
-/// at the price of a wire change, an allocation authority and a stale-claim reclamation rule; the
-/// nonce needs none of those. Ruled by the owner 2026-08-13.
-///
-/// THE BOUND, STATED RATHER THAN CALLED UNIQUE. Collision is birthday-on-2^32 across producer
-/// LIFETIMES, not across commands: about 1e-6 at 100 lifetimes in a session and 1e-4 at 1000. When
-/// it does collide, one client adopts another's refusal once and self-corrects on the next read.
-///
-/// The nonce comes from `RandomState`, which the standard library seeds randomly per process — no
-/// dependency, and the value is stable for this process because it is drawn once.
-fn command_id_next() -> u64 {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-    use std::sync::atomic::{AtomicU32, Ordering};
+fn poll_command_outcome_region(
+    region: &UiCommandOutcomeRegion,
+    ticket: CommandTicket,
+) -> CommandOutcomePoll {
+    match region.status.load(Ordering::Acquire) {
+        UI_COMMAND_OUTCOME_STATUS_NORMAL => {}
+        UI_COMMAND_OUTCOME_STATUS_SEQUENCE_EXHAUSTED => {
+            return CommandOutcomePoll::Terminal(CommandOutcome::Indeterminate(
+                CommandOutcomeIndeterminate::SequenceExhausted,
+            ));
+        }
+        _ => {
+            return CommandOutcomePoll::Terminal(CommandOutcome::Indeterminate(
+                CommandOutcomeIndeterminate::Malformed,
+            ));
+        }
+    }
 
-    static NONCE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let head = region.published_sequence.load(Ordering::SeqCst);
+    if head <= ticket.mark {
+        return CommandOutcomePoll::Pending;
+    }
+    if head - ticket.mark > K_UI_COMMAND_OUTCOME_CAPACITY as u64 {
+        return CommandOutcomePoll::Terminal(CommandOutcome::Indeterminate(
+            CommandOutcomeIndeterminate::Overrun,
+        ));
+    }
 
-    let hi = *NONCE.get_or_init(|| {
-        let mut h = RandomState::new().build_hasher();
-        h.write_u64(std::process::id() as u64);
-        let n = (h.finish() >> 32) as u32;
-        // 0 is the "no id" sentinel for the WHOLE id, and hi == 0 with lo == 0 would collide with
-        // it. Any non-zero lo keeps the id distinguishable, but borrowing 1 costs nothing and keeps
-        // the invariant local to the nonce rather than spread across two fields.
-        if n == 0 { 1 } else { n }
-    });
-    // Starts at 1: fetch_add returns the PREVIOUS value, so the first id has lo == 1 and an
-    // all-zero id can only mean "this sender does not mint one".
-    let lo = COUNTER.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
-    ((hi as u64) << 32) | (lo as u64)
+    let mut matched = None;
+    for sequence in (ticket.mark + 1)..=head {
+        let slot =
+            &region.entries[((sequence - 1) & (K_UI_COMMAND_OUTCOME_CAPACITY as u64 - 1)) as usize];
+        // Every slot word participates in one sequentially-consistent publication transaction.
+        // If this scan observes any replacement payload word during wraparound, its second
+        // sequence load must occur after the writer's SC invalidation and cannot still return the
+        // old generation. Acquire/release alone allowed that mixed-generation snapshot.
+        let first = slot.sequence.load(Ordering::SeqCst);
+        if first != sequence {
+            return CommandOutcomePoll::Terminal(CommandOutcome::Indeterminate(
+                CommandOutcomeIndeterminate::TornOrOverwritten,
+            ));
+        }
+        let command_id = slot.command_id.load(Ordering::SeqCst);
+        let metadata0 = slot.metadata0.load(Ordering::SeqCst);
+        let metadata1 = slot.metadata1.load(Ordering::SeqCst);
+        let metadata2 = slot.metadata2.load(Ordering::SeqCst);
+        let reserved = slot
+            .reserved
+            .each_ref()
+            .map(|word| word.load(Ordering::SeqCst));
+        if slot.sequence.load(Ordering::SeqCst) != sequence {
+            return CommandOutcomePoll::Terminal(CommandOutcome::Indeterminate(
+                CommandOutcomeIndeterminate::TornOrOverwritten,
+            ));
+        }
+        if command_id != ticket.command_id {
+            continue;
+        }
+
+        let command_type = metadata0 as u16;
+        let kind = ((metadata0 >> 16) & 0xff) as u8;
+        let reason = ((metadata0 >> 24) & 0xff) as u8;
+        let current_valid = ((metadata0 >> 32) & 1) != 0;
+        let scope = metadata1 as u32;
+        let sent_base = (metadata1 >> 32) as u32;
+        let current_version = metadata2 as u32;
+        if command_type != ticket.command_type
+            || scope != ticket.scope
+            || sent_base != ticket.sent_base
+            || metadata0 >> 33 != 0
+            || metadata2 >> 32 != 0
+            || reserved.iter().any(|word| *word != 0)
+        {
+            return CommandOutcomePoll::Terminal(CommandOutcome::Indeterminate(
+                CommandOutcomeIndeterminate::Malformed,
+            ));
+        }
+
+        let outcome = match (kind, reason, current_valid) {
+            (UI_COMMAND_OUTCOME_COMPLETED, UI_COMMAND_OUTCOME_REASON_NONE, true) => {
+                CommandOutcome::Completed { current_version }
+            }
+            (UI_COMMAND_OUTCOME_REFUSED, UI_COMMAND_OUTCOME_REASON_STALE_BASE, true) => {
+                CommandOutcome::Refused {
+                    reason: CommandOutcomeReason::StaleBase,
+                    current_version: Some(current_version),
+                }
+            }
+            (UI_COMMAND_OUTCOME_REFUSED, UI_COMMAND_OUTCOME_REASON_UNKNOWN_TRACK, false) => {
+                CommandOutcome::Refused {
+                    reason: CommandOutcomeReason::UnknownTrack,
+                    current_version: None,
+                }
+            }
+            _ => {
+                return CommandOutcomePoll::Terminal(CommandOutcome::Indeterminate(
+                    CommandOutcomeIndeterminate::Malformed,
+                ));
+            }
+        };
+        if matched.replace(outcome).is_some() {
+            return CommandOutcomePoll::Terminal(CommandOutcome::Indeterminate(
+                CommandOutcomeIndeterminate::Duplicate,
+            ));
+        }
+    }
+
+    match matched {
+        Some(outcome) => CommandOutcomePoll::Terminal(outcome),
+        None => CommandOutcomePoll::Pending,
+    }
+}
+
+#[cfg(test)]
+mod command_outcome_tests {
+    use super::*;
+    use std::fs::OpenOptions;
+    use std::mem::MaybeUninit;
+    use std::sync::{Arc, Barrier};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn new_region() -> Box<UiCommandOutcomeRegion> {
+        // Every field in this C-layout region is an integer or atomic integer, and zero is a valid
+        // initial bit pattern for both. Box it because the 16 KiB entry array need not live on the
+        // test thread's stack.
+        let mut out =
+            Box::new(unsafe { MaybeUninit::<UiCommandOutcomeRegion>::zeroed().assume_init() });
+        out.capacity = K_UI_COMMAND_OUTCOME_CAPACITY as u32;
+        out.next_command_id.store(1, Ordering::Relaxed);
+        out.status
+            .store(UI_COMMAND_OUTCOME_STATUS_NORMAL, Ordering::Relaxed);
+        out
+    }
+
+    fn ticket(mark: u64) -> CommandTicket {
+        CommandTicket {
+            command_id: 77,
+            mark,
+            command_type: UiCommandType::WriteNote as u16,
+            scope: 3,
+            sent_base: 9,
+        }
+    }
+
+    fn publish(
+        region: &UiCommandOutcomeRegion,
+        sequence: u64,
+        command_id: u64,
+        kind: u8,
+        reason: u8,
+        current_valid: bool,
+        current_version: u32,
+    ) {
+        let slot =
+            &region.entries[((sequence - 1) & (K_UI_COMMAND_OUTCOME_CAPACITY as u64 - 1)) as usize];
+        slot.command_id.store(command_id, Ordering::SeqCst);
+        slot.metadata0.store(
+            UiCommandType::WriteNote as u64
+                | (kind as u64) << 16
+                | (reason as u64) << 24
+                | (u64::from(current_valid)) << 32,
+            Ordering::SeqCst,
+        );
+        slot.metadata1.store(3 | (9u64 << 32), Ordering::SeqCst);
+        slot.metadata2
+            .store(current_version as u64, Ordering::SeqCst);
+        slot.sequence.store(sequence, Ordering::SeqCst);
+        region.published_sequence.store(sequence, Ordering::SeqCst);
+    }
+
+    fn terminal(region: &UiCommandOutcomeRegion, ticket: CommandTicket) -> CommandOutcome {
+        match poll_command_outcome_region(region, ticket) {
+            CommandOutcomePoll::Terminal(outcome) => outcome,
+            CommandOutcomePoll::Pending => panic!("expected terminal outcome"),
+        }
+    }
+
+    fn generic(command_type: UiCommandType) -> UiCommandPayload {
+        UiCommandPayload {
+            command_type: command_type as u16,
+            flags: 0,
+            track_id: 0,
+            plugin_index: 0,
+            note_pitch: 60,
+            value0: 100,
+            note_nanotick_lo: 0,
+            note_nanotick_hi: 0,
+            note_duration_lo: 1,
+            note_duration_hi: 0,
+            base_version: 1,
+        }
+    }
+
+    fn chord(command_type: UiCommandType) -> UiChordCommandPayload {
+        UiChordCommandPayload {
+            command_type: command_type as u16,
+            flags: 0,
+            track_id: 0,
+            base_version: 1,
+            nanotick_lo: 0,
+            nanotick_hi: 0,
+            duration_lo: 1,
+            duration_hi: 0,
+            degree: 1,
+            quality: 1,
+            inversion: 0,
+            base_octave: 4,
+            humanize_timing: 0,
+            humanize_velocity: 0,
+            reserved: 0,
+            spread_nanoticks: 0,
+        }
+    }
+
+    fn read_only_handle() -> (EngineHandle, std::path::PathBuf) {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "daw-command-outcome-readonly-{}-{nonce}",
+            std::process::id()
+        ));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .expect("create fixture mapping");
+        let outcome_offset = std::mem::size_of::<ShmHeader>();
+        let size = outcome_offset + std::mem::size_of::<UiCommandOutcomeRegion>();
+        file.set_len(size as u64).expect("size fixture mapping");
+        {
+            let mut writable = unsafe { MmapOptions::new().map_mut(&file).expect("map writable") };
+            let region = unsafe {
+                &mut *(writable.as_mut_ptr().add(outcome_offset) as *mut UiCommandOutcomeRegion)
+            };
+            region.capacity = K_UI_COMMAND_OUTCOME_CAPACITY as u32;
+            region.next_command_id.store(1, Ordering::Relaxed);
+            region
+                .status
+                .store(UI_COMMAND_OUTCOME_STATUS_NORMAL, Ordering::Relaxed);
+            writable.flush().expect("flush fixture mapping");
+        }
+        let readonly = unsafe { MmapOptions::new().map(&file).expect("map read only") };
+        let header = readonly.as_ptr() as *const ShmHeader;
+        let outcomes =
+            unsafe { readonly.as_ptr().add(outcome_offset) as *const UiCommandOutcomeRegion };
+        (
+            EngineHandle {
+                _mmap: Mapping::ReadOnly(readonly),
+                header,
+                size,
+                ring_ui: None,
+                ring_ui_out: None,
+                command_outcomes: Some(outcomes),
+            },
+            path,
+        )
+    }
+
+    #[test]
+    fn exact_completed_record_survives_unrelated_broadcast_entries() {
+        let region = new_region();
+        publish(
+            &region,
+            1,
+            55,
+            UI_COMMAND_OUTCOME_COMPLETED,
+            UI_COMMAND_OUTCOME_REASON_NONE,
+            true,
+            4,
+        );
+        publish(
+            &region,
+            2,
+            77,
+            UI_COMMAND_OUTCOME_COMPLETED,
+            UI_COMMAND_OUTCOME_REASON_NONE,
+            true,
+            10,
+        );
+        assert_eq!(
+            terminal(&region, ticket(0)),
+            CommandOutcome::Completed {
+                current_version: 10
+            }
+        );
+    }
+
+    #[test]
+    fn both_refusal_shapes_preserve_current_version_validity() {
+        let region = new_region();
+        publish(
+            &region,
+            1,
+            77,
+            UI_COMMAND_OUTCOME_REFUSED,
+            UI_COMMAND_OUTCOME_REASON_STALE_BASE,
+            true,
+            12,
+        );
+        assert_eq!(
+            terminal(&region, ticket(0)),
+            CommandOutcome::Refused {
+                reason: CommandOutcomeReason::StaleBase,
+                current_version: Some(12),
+            }
+        );
+
+        let region = new_region();
+        publish(
+            &region,
+            1,
+            77,
+            UI_COMMAND_OUTCOME_REFUSED,
+            UI_COMMAND_OUTCOME_REASON_UNKNOWN_TRACK,
+            false,
+            0,
+        );
+        assert_eq!(
+            terminal(&region, ticket(0)),
+            CommandOutcome::Refused {
+                reason: CommandOutcomeReason::UnknownTrack,
+                current_version: None,
+            }
+        );
+    }
+
+    #[test]
+    fn overrun_torn_duplicate_malformed_and_exhausted_are_indeterminate() {
+        let region = new_region();
+        region
+            .published_sequence
+            .store(K_UI_COMMAND_OUTCOME_CAPACITY as u64 + 1, Ordering::Release);
+        assert_eq!(
+            terminal(&region, ticket(0)),
+            CommandOutcome::Indeterminate(CommandOutcomeIndeterminate::Overrun)
+        );
+
+        let region = new_region();
+        region.published_sequence.store(1, Ordering::Release);
+        assert_eq!(
+            terminal(&region, ticket(0)),
+            CommandOutcome::Indeterminate(CommandOutcomeIndeterminate::TornOrOverwritten)
+        );
+
+        let region = new_region();
+        publish(
+            &region,
+            1,
+            77,
+            UI_COMMAND_OUTCOME_COMPLETED,
+            UI_COMMAND_OUTCOME_REASON_NONE,
+            true,
+            10,
+        );
+        publish(
+            &region,
+            2,
+            77,
+            UI_COMMAND_OUTCOME_COMPLETED,
+            UI_COMMAND_OUTCOME_REASON_NONE,
+            true,
+            10,
+        );
+        assert_eq!(
+            terminal(&region, ticket(0)),
+            CommandOutcome::Indeterminate(CommandOutcomeIndeterminate::Duplicate)
+        );
+
+        let region = new_region();
+        publish(
+            &region,
+            1,
+            77,
+            UI_COMMAND_OUTCOME_COMPLETED,
+            UI_COMMAND_OUTCOME_REASON_STALE_BASE,
+            true,
+            10,
+        );
+        assert_eq!(
+            terminal(&region, ticket(0)),
+            CommandOutcome::Indeterminate(CommandOutcomeIndeterminate::Malformed)
+        );
+
+        let region = new_region();
+        region.status.store(
+            UI_COMMAND_OUTCOME_STATUS_SEQUENCE_EXHAUSTED,
+            Ordering::Release,
+        );
+        assert_eq!(
+            terminal(&region, ticket(0)),
+            CommandOutcome::Indeterminate(CommandOutcomeIndeterminate::SequenceExhausted)
+        );
+    }
+
+    #[test]
+    fn tracked_apis_reject_the_wrong_payload_family() {
+        let (handle, path) = read_only_handle();
+        let generic_error = handle
+            .send_tracked_command(generic(UiCommandType::WriteChord))
+            .expect_err("a chord opcode in a generic payload must be refused");
+        assert!(generic_error.contains("non-generic payload family"));
+        let chord_error = handle
+            .send_tracked_chord_command(chord(UiCommandType::WriteNote))
+            .expect_err("a note opcode in a chord payload must be refused");
+        assert!(chord_error.contains("non-chord command"));
+
+        let mut forged_chain = crate::layout::UiChainCommandPayload::default();
+        forged_chain.command_type = UiCommandType::WriteNote as u16;
+        let forged_error = handle
+            .send_chain_command(forged_chain)
+            .expect_err("a guarded opcode in any untracked payload shape must be refused");
+        assert!(forged_error.contains("guarded command"));
+        drop(handle);
+        std::fs::remove_file(path).expect("remove fixture mapping");
+    }
+
+    #[test]
+    fn command_id_exhaustion_publishes_the_shared_terminal_status() {
+        let region = new_region();
+        region.next_command_id.store(u64::MAX, Ordering::Release);
+        let error = allocate_shared_command_id(&region)
+            .expect_err("the reserved wrap point must refuse allocation");
+        assert!(error.contains("exhausted"));
+        assert_eq!(
+            region.status.load(Ordering::Acquire),
+            UI_COMMAND_OUTCOME_STATUS_SEQUENCE_EXHAUSTED,
+        );
+    }
+
+    #[test]
+    fn active_wraparound_overwrite_is_never_returned_as_the_old_ticket() {
+        let region: Arc<UiCommandOutcomeRegion> = Arc::from(new_region());
+        publish(
+            &region,
+            1,
+            77,
+            UI_COMMAND_OUTCOME_COMPLETED,
+            UI_COMMAND_OUTCOME_REASON_NONE,
+            true,
+            10,
+        );
+
+        let replacement_visible = Arc::new(Barrier::new(2));
+        let reader_finished = Arc::new(Barrier::new(2));
+        let writer_region = Arc::clone(&region);
+        let writer_visible = Arc::clone(&replacement_visible);
+        let writer_finished = Arc::clone(&reader_finished);
+        let writer = std::thread::spawn(move || {
+            let slot = &writer_region.entries[0];
+            slot.sequence.store(0, Ordering::SeqCst);
+            // The dangerous mixed generation: old command id 77, replacement current version.
+            slot.metadata2.store(99, Ordering::SeqCst);
+            writer_visible.wait();
+            writer_finished.wait();
+            slot.command_id.store(88, Ordering::SeqCst);
+            slot.sequence.store(257, Ordering::SeqCst);
+            writer_region
+                .published_sequence
+                .store(257, Ordering::SeqCst);
+        });
+
+        replacement_visible.wait();
+        assert_eq!(
+            terminal(&region, ticket(0)),
+            CommandOutcome::Indeterminate(CommandOutcomeIndeterminate::TornOrOverwritten),
+            "replacement metadata must never complete the old command ticket"
+        );
+        reader_finished.wait();
+        writer.join().expect("writer joins");
+    }
+
+    #[test]
+    fn read_only_sends_fail_before_the_shared_id_allocator_is_touched() {
+        let (handle, path) = read_only_handle();
+        let before = handle
+            .command_outcome_region()
+            .expect("fixture outcome region")
+            .next_command_id
+            .load(Ordering::Acquire);
+
+        let ordinary = handle
+            .send_command(generic(UiCommandType::TogglePlay))
+            .expect_err("ordinary write through a read-only map must be refused");
+        assert!(ordinary.contains("not opened for writing"));
+        let tracked = handle
+            .send_tracked_command(generic(UiCommandType::WriteNote))
+            .expect_err("tracked write through a read-only map must be refused");
+        assert!(tracked.contains("not opened for writing"));
+
+        let after = handle
+            .command_outcome_region()
+            .expect("fixture outcome region")
+            .next_command_id
+            .load(Ordering::Acquire);
+        assert_eq!(
+            after, before,
+            "a refused read-only send must not allocate an id"
+        );
+        drop(handle);
+        std::fs::remove_file(path).expect("remove fixture mapping");
+    }
 }
 
 /// Does a `size`-byte region of alignment `align` fit at `offset` in a mapping of `mapped` bytes?
@@ -2624,38 +3490,5 @@ mod region_fits_property_tests {
             "only {accepted} inputs were accepted; the test proved nothing about a predicate that \
              refuses everything"
         );
-    }
-}
-
-#[cfg(test)]
-mod command_id_tests {
-    use super::command_id_next;
-
-    // P2-CMD-00 §3. The id is a per-process nonce in the high word and a counter in the low word.
-    // These pin the three properties a correlator depends on; the collision BOUND is stated in the
-    // function's own comment and is not testable here, because it is a property of many processes.
-    #[test]
-    fn ids_are_distinct_non_zero_and_share_one_nonce() {
-        let a = command_id_next();
-        let b = command_id_next();
-        let c = command_id_next();
-
-        // NON-ZERO IS LOAD-BEARING: all-zero is the documented "no id" sentinel, so a minted id
-        // colliding with it would report as un-correlated and never match.
-        assert_ne!(a, 0);
-        assert_ne!(b, 0);
-
-        // Distinct, and monotonic within the process — the low word is what separates two commands
-        // from the same sender.
-        assert_ne!(a, b);
-        assert_ne!(b, c);
-        assert_eq!((b & 0xFFFF_FFFF) , (a & 0xFFFF_FFFF) + 1);
-
-        // ONE NONCE FOR THE PROCESS. If the high word moved per call it would still be unique, and
-        // it would stop identifying the SENDER — which is the half that survives a restart, and the
-        // reason a bare counter was refused.
-        assert_eq!(a >> 32, b >> 32);
-        assert_eq!(b >> 32, c >> 32);
-        assert_ne!(a >> 32, 0, "a zero nonce would make the first id collide with the sentinel");
     }
 }

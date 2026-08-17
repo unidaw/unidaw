@@ -100,13 +100,15 @@ import { opsText, parseOps, OP_MASK, opMaskOf, oneOpEdit, opsPresent, opTokenAt,
  */
 import { ticksPerBar, ticksPerBeat } from './src/meter.js';
 import M from './design/out/tokens.js';
-import { connectEngine, noEngine } from './src/engine.js';
+import { batchTerminalMode, connectEngine, noEngine } from './src/engine.js';
 import { Chain } from './src/chain.js';
 import { Harmony } from './src/harmony.js';
 import { Minimap } from './src/minimap.js';
 import { buildMinimapModel, createMinimapBuffer } from './src/minimapmodel.js';
 import { Pending } from './src/pending.js';
-import { createPending, propose, applyPending, settlePending,
+import { COMPLETED, createPending, propose, applyPending, nextPendingBatchId,
+         settlePending, settlePendingReply,
+         indeterminatePending,
          discardPending } from './src/pendingmodel.js';
 import { buildHarmonyModel, createHarmonyBuffer, harmonyAtTick, nameChord } from './src/harmonymodel.js';
 import { Inspect } from './src/inspect.js';
@@ -2873,12 +2875,33 @@ const pendingCard = new Pending(pendingHost, {
     // to commit before the send was known, so with no engine the batch was gone
     // and the card claimed a hand-off that reached nothing.
     let sent = false;
+    let refusal = '';
+    let batchId = 0;
+    let timeoutMs = 0;
     try {
       const ops = applyPending(pendingState);
-      sent = !!(conn && conn.sendBatch(ops));
-    } catch (e) { state.reject = e.message; }
-    settlePending(pendingState, sent);
-    if (!sent) state.reject = 'no engine — the batch is still pending';
+      const terminalMode = batchTerminalMode(ops);
+      if (terminalMode === 'mixed') {
+        refusal = 'nothing was sent — split exact-terminal edits and fire-and-reconcile commands. The batch is still here.';
+      } else if (terminalMode === 'untracked') {
+        refusal = 'nothing was sent — pending proposals require exact-terminal note, chord, or harmony edits. Use the ordinary control for fire-and-reconcile commands.';
+      } else {
+        batchId = nextPendingBatchId(pendingState);
+        // Each serial command may make two bounded two-second waits: one auto-base attempt and one
+        // stale-base retry. Budget both before declaring an answer indeterminate; one final margin
+        // covers framing and scheduling without leaving a lost reply hidden forever.
+        timeoutMs = ops.length * 4000 + 1000;
+        sent = !!(conn && conn.sendBatch(ops, batchId));
+      }
+    } catch (e) { refusal = e.message; state.reject = e.message; }
+    settlePending(pendingState, sent, refusal, batchId);
+    if (!sent) state.reject = refusal || 'no engine — the batch is still pending';
+    if (sent) window.setTimeout(() => {
+      if (indeterminatePending(pendingState, batchId, 'the exact batch reply timed out')) {
+        state.reject = pendingState.reason;
+        schedule();
+      }
+    }, timeoutMs);
     schedule();
   },
   onDiscard: () => { discardPending(pendingState); schedule(); },
@@ -8734,6 +8757,17 @@ conn = WANTS_ENGINE ? connectEngine({
   url: WS_STATE_URL,
   cmdUrl: WS_CMD_URL,
   onStatus: (s, d) => { state.link = s + (d ? ': ' + d : ''); schedule(); },
+  onCommandStatus: (s) => {
+    if (s === 'disconnected' && pendingState.inFlight
+        && indeterminatePending(
+          pendingState,
+          pendingState.inFlight,
+          'the command socket disconnected before its exact batch reply',
+        )) {
+      state.reject = pendingState.reason;
+      schedule();
+    }
+  },
   /**
    * The engine's own refusals, drained from its outbound ring by the sidecar.
    *
@@ -8886,6 +8920,22 @@ conn = WANTS_ENGINE ? connectEngine({
     schedule();
   },
   onAck: (msg) => {
+    /*
+     * A CORRELATED PROPOSAL TERMINAL. Socket enqueue is not success: exact tracked batches can be
+     * refused or become indeterminate after enqueue, and releasing the pending diff there loses
+     * the only retry/review surface. The sidecar echoes the proposal seq as batchId, so unrelated
+     * acknowledgements on this shared socket cannot settle it.
+     */
+    if (typeof msg === 'string' && msg.indexOf('"batchId"') >= 0) {
+      let batch = null;
+      try { batch = JSON.parse(msg); } catch (e) { /* malformed is not safe to correlate */ }
+      if (batch && Number.isSafeInteger(batch.batchId)
+          && settlePendingReply(pendingState, batch.batchId, batch)) {
+        state.reject = pendingState.status === COMPLETED ? null : pendingState.reason;
+        schedule();
+        return;
+      }
+    }
     /**
      * The agent talks on this channel too.
      *

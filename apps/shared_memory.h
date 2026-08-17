@@ -180,7 +180,11 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //    Nothing moved and no field grew — sampleTime was zero on those entries and is now a
 //    per-process nonce plus a counter. That is exactly the repurposing the rule above governs,
 //    and this bump is the rule being applied to its first case rather than argued about.
-constexpr uint16_t kShmVersion = 40;
+// v41: a broadcast command-outcome region. UI-out is a single-consumer ring, so a sidecar that
+//      drains it can hide a refusal from the CLI that sent the command. Outcomes instead live in
+//      a bounded sequence-addressed region with no consumer cursor: every observer scans from its
+//      own mark and either finds its exact command id or reports a precise indeterminate state.
+constexpr uint16_t kShmVersion = 41;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -214,6 +218,9 @@ constexpr uint32_t kUiMaxTimeSigPoints = 32;
 constexpr uint32_t kUiMaxHarmonyEvents = 512;
 constexpr uint32_t kUiEditBatchMaxOps = 32;
 constexpr uint32_t kUiEditBatchCapacity = 64;
+constexpr uint32_t kUiCommandOutcomeCapacity = 256;
+static_assert((kUiCommandOutcomeCapacity & (kUiCommandOutcomeCapacity - 1)) == 0,
+              "command outcome capacity must be a power of two");
 
 struct alignas(64) ShmHeader {
   uint32_t magic = kShmMagic;
@@ -414,7 +421,74 @@ struct alignas(64) ShmHeader {
   // version still bumps, because the header's SIZE changes and therefore every region shifts.
   uint64_t uiSamplerEnvelopeOffset = 0;
   uint64_t uiSamplerEnvelopeBytes = 0;
+  // v41: exact terminal outcomes for optimistic note/chord/harmony commands. APPENDED: no
+  // existing field moves, and the two words fit the header's existing alignment tail.
+  uint64_t uiCommandOutcomeOffset = 0;
+  uint64_t uiCommandOutcomeBytes = 0;
 };
+
+enum class UiCommandOutcomeKind : uint8_t {
+  None = 0,
+  Completed = 1,
+  Refused = 2,
+};
+
+enum class UiCommandOutcomeReason : uint8_t {
+  None = 0,
+  StaleBase = 1,
+  UnknownTrack = 2,
+};
+
+enum class UiCommandOutcomeStatus : uint64_t {
+  Normal = 0,
+  SequenceExhausted = 1,
+};
+
+// Every concurrently accessed word is atomic. A volatile/plain struct copy would still race the
+// writer under the C++ and Rust memory models even if a sequence recheck detected the tear later.
+struct alignas(64) UiCommandOutcomeEntry {
+  ShmAtomicU64 sequence{0};
+  ShmAtomicU64 commandId{0};
+  ShmAtomicU64 metadata0{0};  // opcode[0:15], kind[16:23], reason[24:31], current-valid[32]
+  ShmAtomicU64 metadata1{0};  // scope[0:31], sent-base[32:63]
+  ShmAtomicU64 metadata2{0};  // current-version[0:31] when current-valid is set
+  ShmAtomicU64 reserved[3]{};
+};
+
+struct alignas(64) UiCommandOutcomeRegion {
+  ShmAtomicU64 publishedSequence{0};
+  ShmAtomicU64 nextCommandId{1};
+  ShmAtomicU64 status{static_cast<uint64_t>(UiCommandOutcomeStatus::Normal)};
+  uint32_t capacity = kUiCommandOutcomeCapacity;
+  uint32_t reserved0 = 0;
+  uint64_t reserved[4]{};
+  UiCommandOutcomeEntry entries[kUiCommandOutcomeCapacity]{};
+};
+
+#ifndef SHM_BINDGEN
+static_assert(std::atomic<uint64_t>::is_always_lock_free,
+              "command outcomes require lock-free shared u64 atomics");
+static_assert(sizeof(ShmAtomicU64) == sizeof(uint64_t));
+static_assert(alignof(ShmAtomicU64) == alignof(uint64_t));
+#endif
+static_assert(sizeof(UiCommandOutcomeEntry) == 64);
+static_assert(alignof(UiCommandOutcomeEntry) == 64);
+static_assert(offsetof(UiCommandOutcomeEntry, sequence) == 0);
+static_assert(offsetof(UiCommandOutcomeEntry, commandId) == 8);
+static_assert(offsetof(UiCommandOutcomeEntry, metadata0) == 16);
+static_assert(offsetof(UiCommandOutcomeEntry, metadata1) == 24);
+static_assert(offsetof(UiCommandOutcomeEntry, metadata2) == 32);
+static_assert(offsetof(UiCommandOutcomeEntry, reserved) == 40);
+static_assert(sizeof(UiCommandOutcomeRegion) ==
+              64 + kUiCommandOutcomeCapacity * sizeof(UiCommandOutcomeEntry));
+static_assert(alignof(UiCommandOutcomeRegion) == 64);
+static_assert(offsetof(UiCommandOutcomeRegion, publishedSequence) == 0);
+static_assert(offsetof(UiCommandOutcomeRegion, nextCommandId) == 8);
+static_assert(offsetof(UiCommandOutcomeRegion, status) == 16);
+static_assert(offsetof(UiCommandOutcomeRegion, capacity) == 24);
+static_assert(offsetof(UiCommandOutcomeRegion, reserved0) == 28);
+static_assert(offsetof(UiCommandOutcomeRegion, reserved) == 32);
+static_assert(offsetof(UiCommandOutcomeRegion, entries) == 64);
 
 // uiTrackFlags bits.
 constexpr uint32_t kUiTrackFlagCollapsed = 1u << 0;

@@ -15,7 +15,7 @@ use daw_bridge::journal::{history_path, journal_mark, journal_scope, refusal_sen
 use std::thread;
 use std::time::{Duration, Instant};
 
-use daw_bridge::control::{default_shm_name, EngineHandle};
+use daw_bridge::control::{default_shm_name, EngineHandle, TrackedCommandFailure};
 use daw_bridge::layout::{
     clip_appearances, UI_CLIP_EXTENT_HAS_ALTERNATE,
     UiChainCommandPayload, UiChordCommandPayload, UiClipWindowCommandPayload, UiCommandPayload,
@@ -273,6 +273,37 @@ fn flag_u64(args: &[String], key: &str, default: Option<u64>) -> Result<u64, Str
             .map_err(|_| format!("{key} expects a number, got {raw:?}")),
         None => default.ok_or_else(|| format!("{key} is required")),
     }
+}
+
+/// Reads an optional `u32` flag without losing the distinction between absent
+/// and explicitly malformed input.
+///
+/// That distinction is part of the optimistic-concurrency contract: an absent
+/// base opts into automatic basing and one stale retry, while an explicit base
+/// is pinned. Falling back after a parse or range error would silently turn a
+/// caller's pinned write into an automatic one.
+fn optional_u32_flag(args: &[String], key: &str) -> Result<Option<u32>, String> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        let raw = if arg == key {
+            Some(
+                iter.next()
+                    .ok_or_else(|| format!("{key} expects a number"))?
+                    .as_str(),
+            )
+        } else {
+            arg.strip_prefix(&format!("{key}="))
+        };
+        if let Some(raw) = raw {
+            let parsed = raw
+                .parse::<u64>()
+                .map_err(|_| format!("{key} expects a number, got {raw:?}"))?;
+            let value = u32::try_from(parsed)
+                .map_err(|_| format!("{key} must be 0..{}, got {parsed}", u32::MAX))?;
+            return Ok(Some(value));
+        }
+    }
+    Ok(None)
 }
 
 /// Builds a note command. `base_version` must equal the engine's current clip
@@ -953,10 +984,11 @@ fn write_notes(handle: &EngineHandle, args: &[String]) -> i32 {
         Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
     };
 
-    // M2.17: the base is this TRACK's version. Each note consumes one, so the run
-    // numbers itself from there — and because acceptance is per track, a phrase written
-    // here is no longer invalidated by someone editing a different track mid-run.
+    // Serial terminals, not predicted versions. A no-op may keep the same version and another
+    // author may move it by more than one; the engine's Completed record is the only exact base
+    // for the next note in this batch.
     let mut base = handle.clip_version_for_track(track);
+    let first_base = base;
     let mut sent = 0usize;
     for (index, pitch) in pitches.iter().enumerate() {
         let nanotick = start + step * index as u64;
@@ -973,14 +1005,28 @@ fn write_notes(handle: &EngineHandle, args: &[String]) -> i32 {
             note_duration_hi: (duration >> 32) as u32,
             base_version: base,
         };
-        if let Err(err) = handle.send_command(payload) {
-            eprintln!("daw-cli: {err} after {sent} notes");
-            return 1;
+        match handle.complete_tracked_command(
+            payload,
+            /*retry_stale=*/ true,
+            Duration::from_secs(2),
+        ) {
+            Ok(completed) => {
+                sent += 1;
+                base = completed.current_version;
+            }
+            Err(failure) => {
+                eprintln!(
+                    "daw-cli: notes stopped at index {index}; {sent} commands completed and no \
+                     later note was submitted"
+                );
+                return tracked_failure("notes", failure);
+            }
         }
-        sent += 1;
-        base = base.wrapping_add(1);
     }
-    println!("{{ \"sent\": {sent}, \"first_base_version\": {} }}", base - sent as u32);
+    println!(
+        "{{ \"sent\": {sent}, \"completed\": {sent}, \"first_base_version\": {first_base}, \
+         \"current_version\": {base} }}"
+    );
     0
 }
 
@@ -1137,143 +1183,45 @@ fn mixer_command(args: &[String]) -> Result<UiCommandPayload, String> {
     })
 }
 
-/// WHAT THE ENGINE DID WITH THE COMMAND WE JUST SENT.
-///
-/// A clip edit carries the base version the caller read. If the engine has moved on, the edit is
-/// REFUSED and a `ClipRejected` diff comes back carrying `currentBase` — which the payload's own
-/// comment calls "the value to retry with". Nothing on this side read it, so a refused edit
-/// printed `{"sent": ...}` and exited 0: the edit was lost and the caller was told it worked.
-///
-/// ONLY DIFFS NEWER THAN OUR SEND ARE CONSIDERED. The ring is PEEKED, not drained — the real UI
-/// is its consumer and a tool that drained here would steal diffs from the app it is observing —
-/// so refusals from earlier commands stay visible indefinitely. Matching on (track, command,
-/// sentBase) alone therefore matches somebody else's refusal, and the first version of this did:
-/// it re-sent an edit that had already been applied, and `override` failed with a redo that
-/// restored nothing. `before_len` is the ring's length at send time; anything at or past it is
-/// ours.
-///
-/// ACCEPTANCE HAS A POSITIVE SIGNAL, so the common path does not pay the timeout. The engine
-/// advances the track's clip version on every applied edit, so a version that has moved is an
-/// acknowledgement. Without that, every successful command waited out the full poll window —
-/// which is not just slow, it changes the timing of anything driving several edits in sequence.
-enum ClipOutcome {
-    Applied,
-    Refused { reason: u16, current: u32 },
-    /// Neither signal arrived in time. Treated as applied, which is what this tool did for its
-    /// whole life before the refusal was readable at all — reporting a refusal we did not observe
-    /// would be worse than the silence it replaces.
-    Unknown,
-}
-
-fn await_clip_outcome(
-    handle: &EngineHandle,
-    command_id: u64,
-    track: u32,
-    command_type: u16,
-    sent_base: u32,
-    before_len: usize,
-    version_before: u32,
-) -> ClipOutcome {
-    for _ in 0..120 {
-        let diffs = handle.peek_ui_diffs_correlated();
-        // THE REFUSAL IS LOOKED FOR FIRST, ACROSS ALL NEW DIFFS, and only then the success. One
-        // command can produce more than one diff, so "the first diff carrying my id" does not
-        // decide anything; the KIND does. Preferring the refusal is also the safe direction — a
-        // wrongly reported refusal is visible and re-triable, a wrongly reported success is not.
-        let mut applied = false;
-        for (event_type, diff_type, correlation, payload) in diffs.iter().skip(before_len) {
-            // A CHORD SUCCESS ARRIVES ON A DIFFERENT CHANNEL. `EventType::UiChordDiff` carries a
-            // `UiChordDiffType`, whose AddChord/RemoveChord/UpdateChord are 1/2/3 — the SAME
-            // numbers as UiDiffType's AddNote/RemoveNote/UpdateNote. The event type is what tells
-            // them apart, so it is matched before the diff type is trusted.
-            if *event_type == daw_bridge::layout::EventType::UiChordDiff as u16 {
-                let is_chord_applied = *diff_type
-                    == daw_bridge::layout::UiChordDiffType::AddChord as u16
-                    || *diff_type == daw_bridge::layout::UiChordDiffType::RemoveChord as u16
-                    || *diff_type == daw_bridge::layout::UiChordDiffType::UpdateChord as u16;
-                if command_id != 0 && *correlation == command_id && is_chord_applied {
-                    applied = true;
-                }
-                continue;
-            }
-            if *diff_type != daw_bridge::layout::UiDiffType::ClipRejected as u16 {
-                // THE SUCCESS SIGNAL, CORRELATED — and it must name the diff types that MEAN a
-                // clip edit was applied, not merely "not a refusal".
-                //
-                // "Any other diff carrying my id" was my first attempt and it was deterministically
-                // wrong: `UiDiffType`'s own documentation says of ClipRejected that "ResyncNeeded
-                // (4) is still emitted alongside, unchanged". A refusal therefore emits TWO diffs,
-                // and now that every outbound diff carries the ambient command id, the companion
-                // matched and reported the refusal as a success. It went from 3 of 6 runs failing
-                // to 6 of 6 — the probe caught it before it shipped, which is the only reason this
-                // reads as a comment rather than as a bug.
-                let is_clip_applied = *diff_type == daw_bridge::layout::UiDiffType::AddNote as u16
-                    || *diff_type == daw_bridge::layout::UiDiffType::RemoveNote as u16
-                    || *diff_type == daw_bridge::layout::UiDiffType::UpdateNote as u16;
-                if command_id != 0 && *correlation == command_id && is_clip_applied {
-                    applied = true;
-                }
-                continue;
-            }
-            let u16at = |o: usize| u16::from_le_bytes([payload[o], payload[o + 1]]);
-            let u32at = |o: usize| {
-                u32::from_le_bytes([payload[o], payload[o + 1], payload[o + 2], payload[o + 3]])
-            };
-            // MATCH ON THE ID THIS SENDER MINTED (P2-CMD-00), not on (track, commandType,
-            // sentBase). That triple names a KIND of command on a track, so two concurrent writers
-            // — or one writer and a retry — are indistinguishable by it, and for SetRowOps the
-            // third key is inert because UiSetRowOpsPayload carries no base version at all. That
-            // inert key is AE-P1.2 item 29's remaining half, and matching on the id makes it
-            // irrelevant rather than needing a value invented for it.
-            //
-            // The reader rule is normative and this follows it: dispatch on the diff type FIRST
-            // (done above), require the payload to be long enough that offset 32 lies inside what
-            // the publisher wrote, and treat all-zero as NO ID — never a match. A ReplayComplete
-            // gate publishes size 0 with a zeroed payload, which is byte-identical to a legacy
-            // id at offset 32; only the dispatch separates them.
-            let refusal_id = if payload.len() >= 40 {
-                ((u32at(36) as u64) << 32) | (u32at(32) as u64)
-            } else {
-                0
-            };
-            if command_id != 0 && refusal_id == command_id {
-                return ClipOutcome::Refused { reason: u16at(2), current: u32at(12) };
-            }
-            // FALLBACK while a sender that does not mint may still be running. Kept deliberately
-            // narrow: only when this caller has no id of its own, so a minted command never
-            // adopts a refusal by the old triple.
-            if command_id == 0
-                && u32at(4) == track && u16at(16) == command_type && u32at(8) == sent_base {
-                return ClipOutcome::Refused { reason: u16at(2), current: u32at(12) };
-            }
+fn tracked_failure(label: &str, failure: TrackedCommandFailure) -> i32 {
+    match failure {
+        TrackedCommandFailure::Submit {
+            error,
+            sent_base,
+            retried,
+        } => {
+            eprintln!(
+                "daw-cli: {label} could not be submitted with base {sent_base} \
+                 (retried: {retried}): {error}"
+            );
+            1
         }
-        // Only after every new diff has been examined for a refusal.
-        if applied {
-            return ClipOutcome::Applied;
+        TrackedCommandFailure::Refused {
+            reason,
+            current_version,
+            sent_base,
+            retried,
+        } => {
+            eprintln!(
+                "daw-cli: the engine REFUSED this {label} — reason {reason:?}, presented base \
+                 {sent_base}, current version {current_version:?}, retried {retried}. The command \
+                 did not complete."
+            );
+            3
         }
-        // THE COUNTER FALLBACK, NOW GUARDED THE SAME WAY THE LEGACY REFUSAL MATCH IS.
-        //
-        // "The version moved, so my edit applied" was the last uncorrelated decision in this
-        // function, and it is strictly weaker than the triple it sits beside: a bare counter names
-        // no command at all. It is also REACHABLE, not theoretical — `load maximal` moves track 0's
-        // clip version 1 -> 2 across about half a second, and a write issued in that window read
-        // the load's bump as its own success and never saw the refusal that was coming. Three of
-        // six runs under concurrent load.
-        //
-        // The consequence is the one this whole ticket exists to remove: the caller is told its
-        // edit landed when the engine threw it away — worst for the caller who pinned `--base`,
-        // i.e. the deliberate concurrent author for whom the refusal is the answer they asked for.
-        //
-        // So it now applies only to a caller that minted no id, exactly like the legacy triple
-        // above. A correlated caller waits for its own diff and, failing that, times out to
-        // `Unknown` — which is reported as applied, unchanged, because claiming a refusal we did
-        // not observe would be worse than the silence it replaces.
-        if command_id == 0 && handle.clip_version_for_track(track) != version_before {
-            return ClipOutcome::Applied;
+        TrackedCommandFailure::Indeterminate {
+            reason,
+            sent_base,
+            retried,
+        } => {
+            eprintln!(
+                "daw-cli: {label} outcome is indeterminate ({reason:?}); the command may or may \
+                 not have completed. Last presented base {sent_base}, retried {retried}; it was \
+                 not retried after becoming indeterminate."
+            );
+            4
         }
-        std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    ClipOutcome::Unknown
 }
 
 
@@ -2827,12 +2775,15 @@ fn main() {
                         Ok(path) => {
                             let mut deleted = 0usize;
                             if cutting {
-                                let first = handle.clip_version_for_track(track);
-                                let mut base = first;
-                                for x in &picked {
-                                    let column = match daw_bridge::layout::edit_column(
-                                        u64::from(x.column)) { Ok(c) => c, Err(_) => 0 };
-                                    let mut p = UiCommandPayload {
+                                let mut base = handle.clip_version_for_track(track);
+                                for (index, x) in picked.iter().enumerate() {
+                                    let column = match daw_bridge::layout::edit_column(u64::from(
+                                        x.column,
+                                    )) {
+                                        Ok(c) => c,
+                                        Err(_) => 0,
+                                    };
+                                    let p = UiCommandPayload {
                                         command_type: UiCommandType::DeleteNote as u16,
                                         flags: column, track_id: track, plugin_index: 0,
                                         note_pitch: 0, value0: 0,
@@ -2841,16 +2792,26 @@ fn main() {
                                         note_duration_lo: 0, note_duration_hi: 0,
                                         base_version: base,
                                     };
-                                    p.base_version = base;
-                                    if handle.send_command(p).is_err() { break }
-                                    deleted += 1;
-                                    base = base.wrapping_add(1);
+                                    match handle.complete_tracked_command(
+                                        p,
+                                        true,
+                                        Duration::from_secs(2),
+                                    ) {
+                                        Ok(completed) => {
+                                            deleted += 1;
+                                            base = completed.current_version;
+                                        }
+                                        Err(failure) => {
+                                            eprintln!(
+                                                "daw-cli: cut stopped at index {index}; {deleted} \
+                                                 deletes completed and no later delete was submitted"
+                                            );
+                                            std::process::exit(tracked_failure("cut", failure));
+                                        }
+                                    }
                                 }
-                                handle.wait_for_track_clip_version(
-                                    track, first, first.wrapping_add(deleted as u32),
-                                    Duration::from_secs(2));
                             }
-                            println!("{{ \"{}\": {}, \"deleted\": {deleted}, \"track\": {track}, \"clipboard\": \"{}\" }}",
+                            println!("{{ \"{}\": {}, \"deleted\": {deleted}, \"completed\": true, \"track\": {track}, \"clipboard\": \"{}\" }}",
                                      if cutting { "cut" } else { "copied" }, notes.len(),
                                      escape(&path.to_string_lossy()));
                             0
@@ -2871,14 +2832,23 @@ fn main() {
                         eprintln!("daw-cli: the clipboard is empty — copy something first");
                         std::process::exit(1);
                     }
-                    let first = handle.clip_version_for_track(track);
-                    let mut base = first;
+                    // Validate the complete clipboard before the first mutation. A malformed
+                    // later item must not turn paste into a partially applied batch followed by
+                    // a successful `completed:true` reply.
+                    let columns: Vec<u16> = match notes
+                        .iter()
+                        .map(|note| daw_bridge::layout::edit_column(u64::from(note.column)))
+                        .collect::<Result<Vec<_>, _>>()
+                    {
+                        Ok(columns) => columns,
+                        Err(error) => {
+                            eprintln!("daw-cli: clipboard is not pasteable: {error}");
+                            std::process::exit(2);
+                        }
+                    };
+                    let mut base = handle.clip_version_for_track(track);
                     let mut sent = 0usize;
-                    for m in &notes {
-                        let column = match daw_bridge::layout::edit_column(u64::from(m.column)) {
-                            Ok(c) => c,
-                            Err(e) => { eprintln!("daw-cli: {e}"); break }
-                        };
+                    for (index, (m, column)) in notes.iter().zip(columns).enumerate() {
                         let tick = at.saturating_add(m.dt);
                         let p = UiCommandPayload {
                             command_type: UiCommandType::WriteNote as u16,
@@ -2890,14 +2860,22 @@ fn main() {
                             note_duration_hi: (m.duration >> 32) as u32,
                             base_version: base,
                         };
-                        if handle.send_command(p).is_err() { break }
-                        sent += 1;
-                        base = base.wrapping_add(1);
+                        match handle.complete_tracked_command(p, true, Duration::from_secs(2)) {
+                            Ok(completed) => {
+                                sent += 1;
+                                base = completed.current_version;
+                            }
+                            Err(failure) => {
+                                eprintln!(
+                                    "daw-cli: paste stopped at index {index}; {sent} notes \
+                                     completed and no later note was submitted"
+                                );
+                                std::process::exit(tracked_failure("paste", failure));
+                            }
+                        }
                     }
-                    let applied = handle.wait_for_track_clip_version(
-                        track, first, first.wrapping_add(sent as u32), Duration::from_secs(2));
-                    println!("{{ \"pasted\": {sent}, \"track\": {track}, \"at\": {at}, \"applied\": {applied} }}");
-                    if sent == notes.len() { 0 } else { 1 }
+                    println!("{{ \"pasted\": {sent}, \"track\": {track}, \"at\": {at}, \"completed\": true, \"current_version\": {base} }}");
+                    0
                 }
                 Some(&"transpose") => {
                     let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
@@ -2944,8 +2922,7 @@ fn main() {
                                   plan.skipped);
                         std::process::exit(1);
                     }
-                    let first_base = handle.clip_version_for_track(track);
-                    let mut base = first_base;
+                    let mut base = handle.clip_version_for_track(track);
                     let mut sent = 0usize;
                     let mut failed = None;
                     for m in &plan.moved {
@@ -2966,18 +2943,26 @@ fn main() {
                             note_duration_hi: (m.duration >> 32) as u32,
                             base_version: base,
                         };
-                        if let Err(e) = handle.send_command(payload) { failed = Some(e); break }
-                        sent += 1;
-                        base = base.wrapping_add(1);
+                        match handle.complete_tracked_command(payload, true, Duration::from_secs(2))
+                        {
+                            Ok(completed) => {
+                                sent += 1;
+                                base = completed.current_version;
+                            }
+                            Err(failure) => {
+                                eprintln!(
+                                    "daw-cli: transpose stopped after {sent} notes; no later note \
+                                     was submitted"
+                                );
+                                std::process::exit(tracked_failure("transpose", failure));
+                            }
+                        }
                     }
                     if let Some(e) = failed {
                         eprintln!("daw-cli: {e} after {sent} notes");
                         1
                     } else {
-                        let applied = handle.wait_for_track_clip_version(
-                            track, first_base, first_base.wrapping_add(sent as u32),
-                            Duration::from_secs(2));
-                        println!("{{ \"transposed\": {sent}, \"skipped\": {}, \"semitones\": {semitones}, \"track\": {track}, \"applied\": {applied}, \"from\": {win_from}, \"to\": {win_to}, \"clipped_to_window\": {}, \"shared_appearances_folded\": {} }}",
+                        println!("{{ \"transposed\": {sent}, \"skipped\": {}, \"semitones\": {semitones}, \"track\": {track}, \"completed\": true, \"current_version\": {base}, \"from\": {win_from}, \"to\": {win_to}, \"clipped_to_window\": {}, \"shared_appearances_folded\": {} }}",
                                  plan.skipped, win_from != from || win_to != to, folded);
                         0
                     }
@@ -3052,10 +3037,15 @@ fn main() {
                     // a real concurrent author does: read, think, then write). Without
                     // it every invocation re-reads immediately before sending and can
                     // never exercise staleness at all.
-                    let base = match flag_u64(&args, "--base", Some(u64::MAX)) {
-                        Ok(v) if v != u64::MAX => v as u32,
-                        _ => handle.clip_version_for_track(track),
+                    let explicit_base = match optional_u32_flag(&args, "--base") {
+                        Ok(base) => base,
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            std::process::exit(2);
+                        }
                     };
+                    let base =
+                        explicit_base.unwrap_or_else(|| handle.clip_version_for_track(track));
                     // RETRY UNLESS THE CALLER PINNED A BASE, and that distinction is the whole
                     // policy. Passing --base means "I read this version earlier and I am writing
                     // against it" — a concurrent author, deliberately testing staleness — so a
@@ -3064,57 +3054,36 @@ fn main() {
                     // version, so a stale-base refusal is pure noise from a publish that had not
                     // caught up, and retrying against the version the engine handed back is
                     // exactly what it asked for with resync_requested.
-                    let pinned_base = matches!(flag_u64(&args, "--base", Some(u64::MAX)),
-                                               Ok(v) if v != u64::MAX);
+                    let pinned_base = explicit_base.is_some();
                     let retry_stale = !pinned_base || args.iter().any(|a| *a == "--retry-stale");
-                    let before_len = handle.peek_ui_diffs().len();
-                    let ver_before = handle.clip_version_for_track(track);
                     match note_command(command, &args, base) {
-                        Ok(payload) => match handle.send_command_correlated(payload) {
-                            Ok(sent_id) => {
-                                let label = if is_write { "note" } else { "delete-note" };
-                                let cmd = command as u16;
-                                match await_clip_outcome(&handle, sent_id, track, cmd, base, before_len, ver_before) {
-                                    ClipOutcome::Applied | ClipOutcome::Unknown => {
-                                        println!(
-                                            "{{ \"sent\": \"{label}\", \"base_version\": {base} }}"
+                        Ok(payload) => {
+                            let label = if is_write { "note" } else { "delete-note" };
+                            match handle.complete_tracked_command(
+                                payload,
+                                retry_stale,
+                                Duration::from_secs(2),
+                            ) {
+                                Ok(completed) => {
+                                    if completed.retried {
+                                        eprintln!(
+                                            "daw-cli: base {base} was stale; retried at {}",
+                                            completed.sent_base
                                         );
-                                        0
                                     }
-                                    ClipOutcome::Refused { reason, current } if retry_stale
-                                        && reason == daw_bridge::layout::UiClipRejectReason::StaleBase as u16 => {
-                                        match note_command(command, &args, current) {
-                                            Ok(again) => match handle.send_command_correlated(again) {
-                                                Ok(retry_id) => match await_clip_outcome(&handle, retry_id, track, cmd, current, handle.peek_ui_diffs().len(), handle.clip_version_for_track(track)) {
-                                                    ClipOutcome::Applied | ClipOutcome::Unknown => {
-                                                        eprintln!("daw-cli: base {base} was stale; retried at {current}");
-                                                        println!("{{ \"sent\": \"{label}\", \"base_version\": {current}, \"retried\": true }}");
-                                                        0
-                                                    }
-                                                    ClipOutcome::Refused { reason: r2, current: c2 } => {
-                                                        eprintln!("daw-cli: {label} REFUSED again after retry (reason {r2}, engine now at {c2})");
-                                                        3
-                                                    }
-                                                },
-                                                Err(err) => { eprintln!("daw-cli: {err}"); 1 }
-                                            },
-                                            Err(err) => { eprintln!("daw-cli: {err}"); 2 }
-                                        }
-                                    }
-                                    ClipOutcome::Refused { reason, current } => {
-                                        eprintln!("daw-cli: the engine REFUSED this {label} — reason {reason}, \
-                                                   presented base {base}, engine holds {current}. \
-                                                   The edit was NOT applied. Re-read the clip version \
-                                                   and send again, or pass --retry-stale.");
-                                        3
-                                    }
+                                    println!(
+                                        "{{ \"sent\": \"{label}\", \"completed\": true, \
+                                         \"base_version\": {}, \"current_version\": {}, \
+                                         \"retried\": {} }}",
+                                        completed.sent_base,
+                                        completed.current_version,
+                                        completed.retried
+                                    );
+                                    0
                                 }
+                                Err(failure) => tracked_failure(label, failure),
                             }
-                            Err(err) => {
-                                eprintln!("daw-cli: {err}");
-                                1
-                            }
-                        },
+                        }
                         Err(err) => {
                             eprintln!("daw-cli: {err}");
                             2
@@ -5492,61 +5461,34 @@ removed is the whole command");
                     // from a publish that had not caught up, and retrying against the version the
                     // engine handed back is what resync_requested asks for. The refusal is still
                     // reported if the RETRY is refused too, which is the case that means something.
-                    let retry_stale = true;
-                    let base = handle.clip_version_for_track(track);  // M2.17: per track
-                    // Sampled BEFORE the send, so the outcome check can tell our own refusal from
-                    // one already sitting in the peeked ring, and can recognise acceptance by the
-                    // version moving.
-                    let before_len = handle.peek_ui_diffs().len();
-                    let ver_before = handle.clip_version_for_track(track);
+                    let base = handle.clip_version_for_track(track); // M2.17: per track
                     match chord_command(&args, base) {
-                        Ok(payload) => match handle.send_chord_command_correlated(payload) {
-                            Ok(sent_id) => {
-                                let cmd = payload.command_type;
-                                match await_clip_outcome(&handle, sent_id, track, cmd, base, before_len, ver_before) {
-                                    ClipOutcome::Applied | ClipOutcome::Unknown => {
-                                        println!("{{ \"sent\": \"chord\", \"base_version\": {base} }}");
-                                        0
+                        Ok(payload) => {
+                            match handle.complete_tracked_chord_command(
+                                payload,
+                                true,
+                                Duration::from_secs(2),
+                            ) {
+                                Ok(completed) => {
+                                    if completed.retried {
+                                        eprintln!(
+                                            "daw-cli: base {base} was stale; retried at {}",
+                                            completed.sent_base
+                                        );
                                     }
-                                    ClipOutcome::Refused { reason, current } if retry_stale
-                                        && reason == daw_bridge::layout::UiClipRejectReason::StaleBase as u16 => {
-                                        // Rebuilt against the version the engine handed back,
-                                        // rather than re-sending the payload with a patched field:
-                                        // the base is not the only thing derived from it.
-                                        match chord_command(&args, current) {
-                                            Ok(again) => match handle.send_chord_command_correlated(again) {
-                                                Ok(retry_id) => match await_clip_outcome(&handle, retry_id, track, cmd, current, handle.peek_ui_diffs().len(), handle.clip_version_for_track(track)) {
-                                                    ClipOutcome::Applied | ClipOutcome::Unknown => {
-                                                        eprintln!("daw-cli: base {base} was stale; retried at {current}");
-                                                        println!("{{ \"sent\": \"chord\", \"base_version\": {current}, \"retried\": true }}");
-                                                        0
-                                                    }
-                                                    ClipOutcome::Refused { reason: r2, current: c2 } => {
-                                                        eprintln!("daw-cli: chord REFUSED again after retry (reason {r2}, engine now at {c2}). The version is moving faster than a retry can follow.");
-                                                        3
-                                                    }
-                                                },
-                                                Err(err) => { eprintln!("daw-cli: {err}"); 1 }
-                                            },
-                                            Err(err) => { eprintln!("daw-cli: {err}"); 2 }
-                                        }
-                                    }
-                                    ClipOutcome::Refused { reason, current } => {
-                                        // LOUD, AND NON-ZERO. This used to print "sent" and exit
-                                        // 0 on an edit the engine had thrown away.
-                                        eprintln!("daw-cli: the engine REFUSED this chord — reason {reason}, \
-                                                   presented base {base}, engine holds {current}. \
-                                                   The edit was NOT applied. Re-read the clip version \
-                                                   and send again, or pass --retry-stale.");
-                                        3
-                                    }
+                                    println!(
+                                        "{{ \"sent\": \"chord\", \"completed\": true, \
+                                         \"base_version\": {}, \"current_version\": {}, \
+                                         \"retried\": {} }}",
+                                        completed.sent_base,
+                                        completed.current_version,
+                                        completed.retried
+                                    );
+                                    0
                                 }
+                                Err(failure) => tracked_failure("chord", failure),
                             }
-                            Err(err) => {
-                                eprintln!("daw-cli: {err}");
-                                1
-                            }
-                        },
+                        }
                         Err(err) => {
                             eprintln!("daw-cli: {err}");
                             2
@@ -5557,57 +5499,26 @@ removed is the whole command");
                     // Harmony has its own version counter, not the clip one.
                     let base = handle.harmony_version();
                     match harmony_command(&args, base) {
-                        Ok(payload) => match handle.send_command_correlated(payload) {
-                            Ok(sent_id) => {
-                                /*
-                                 * WAIT FOR THE ENGINE TO TAKE IT, and say so — this used to print
-                                 * "sent" and exit 0 the instant the command was queued.
-                                 *
-                                 * A PROCESS BOUNDARY IS NOT A SYNCHRONISATION PRIMITIVE, which is
-                                 * the assumption that made this look safe. Each invocation spawns,
-                                 * attaches, reads the counter and sends — milliseconds of real
-                                 * work — so it seemed impossible for two of them to quote the same
-                                 * base. Measured (ui-web/test/cli-harmony-rapid.mjs), four
-                                 * back-to-back processes quoted `1,1,1,2` and TWO of the four key
-                                 * changes reached the document. The engine refused the losers in
-                                 * silence and every process exited 0.
-                                 *
-                                 * Same defect the page had and the sidecar had, third surface.
-                                 * Optimistic concurrency needs the base you quote to be the state
-                                 * your edit was composed against; a writer that fires again before
-                                 * its previous edit lands has invalidated its own base, and no
-                                 * amount of reading harder fixes that.
-                                 *
-                                 * BOUNDED, and a timeout is reported as FAILURE rather than
-                                 * assumed to be success: a write that may or may not have landed
-                                 * is the one outcome a script can do nothing with.
-                                 */
-                                let deadline = Instant::now() + Duration::from_millis(750);
-                                let mut applied = false;
-                                while Instant::now() < deadline {
-                                    // Any move off the quoted value means the engine went through
-                                    // it. Testing for `base + 1` would be wrong as soon as a
-                                    // second writer exists.
-                                    if handle.harmony_version() != base { applied = true; break; }
-                                    std::thread::sleep(Duration::from_millis(1));
-                                }
-                                if applied {
+                        Ok(payload) => {
+                            match handle.complete_tracked_command(
+                                payload,
+                                true,
+                                Duration::from_secs(2),
+                            ) {
+                                Ok(completed) => {
                                     println!(
-                                        "{{ \"applied\": true, \"harmony\": true, \"base_version\": {base} }}");
+                                        "{{ \"completed\": true, \"harmony\": true, \
+                                         \"base_version\": {}, \"current_version\": {}, \
+                                         \"retried\": {} }}",
+                                        completed.sent_base,
+                                        completed.current_version,
+                                        completed.retried
+                                    );
                                     0
-                                } else {
-                                    eprintln!(
-                                        "daw-cli: the harmony write was not acknowledged — the \
-                                         engine's harmony version is still {base}. It was most \
-                                         likely refused for a stale base; nothing was written.");
-                                    1
                                 }
+                                Err(failure) => tracked_failure("harmony", failure),
                             }
-                            Err(err) => {
-                                eprintln!("daw-cli: {err}");
-                                1
-                            }
-                        },
+                        }
                         Err(err) => {
                             eprintln!("daw-cli: {err}");
                             2
@@ -5633,4 +5544,41 @@ removed is the whole command");
         }
     };
     std::process::exit(code);
+}
+
+#[cfg(test)]
+mod optional_u32_flag_tests {
+    use super::optional_u32_flag;
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn absent_is_distinct_from_zero() {
+        assert_eq!(optional_u32_flag(&args(&[]), "--base"), Ok(None));
+        assert_eq!(
+            optional_u32_flag(&args(&["--base", "0"]), "--base"),
+            Ok(Some(0))
+        );
+    }
+
+    #[test]
+    fn separate_and_equals_forms_parse() {
+        assert_eq!(
+            optional_u32_flag(&args(&["--base", "17"]), "--base"),
+            Ok(Some(17))
+        );
+        assert_eq!(
+            optional_u32_flag(&args(&["--base=23"]), "--base"),
+            Ok(Some(23))
+        );
+    }
+
+    #[test]
+    fn malformed_missing_and_out_of_range_values_are_errors() {
+        assert!(optional_u32_flag(&args(&["--base", "nope"]), "--base").is_err());
+        assert!(optional_u32_flag(&args(&["--base"]), "--base").is_err());
+        assert!(optional_u32_flag(&args(&["--base=4294967296"]), "--base").is_err());
+    }
 }
