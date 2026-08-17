@@ -103,7 +103,7 @@ watcher:  none (required for Codex)
 | `AE-P0.2 implementation` | `COMPLETE` | packet `6287ffd` approved + AE-P0.1 integration | codex-worker-2 | claude-worker-2 | `/Users/jak/src/daw-ae-p0-2-lane0` | product main `75c6f06`; final corrective candidate independently approved |
 | `AE-P0.3` | `CAPTURE TAKEN` | decision 4 ruled 2026-08-14; credentialed line OBSERVED and byte-matched | `lead` | unassigned | none | attestation now rests on an observation, not a transcription |
 | `AE-P1.1` | `FROZEN` | `AE-P0` | claude-worker-2 | codex-worker-1 | `/Users/jak/src/daw-ae-p1-1-packet` | `ba88bcb4657b62bdfc752d338d877e139e212ca6`; independent PASS; successor-only |
-| `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; of the 8 open PRODUCT items: 7, 14, 16, 26, 35, 36 CLOSED; 28 STILL OPEN (clip/chord half closed by decisions 7+9, harmony half reverted, blocked on `AE-RING-02`); 15 hardened but NOT demonstrated. G4 not decidable |
+| `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; of the 8 open PRODUCT items: 7, 14, 16, 26, 35, 36 CLOSED; 28 STILL OPEN (clip/chord id correlation implemented by decisions 7+9, but shipped `do note` correctness is now confirmed broken by `AE-RING-02`; harmony half reverted and blocked on the same ticket); 15 hardened but NOT demonstrated. G4 not decidable |
 | `AE-P1.3` | `GATE MET` | the `AE-P1.2` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent x2 | none | both attach paths ordered; 19 region accessors + ring cursors bounded; contract property test; non-overlap is the residue |
 | `AE-P1.4` | `GATE MET` | the `AE-P0` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent | none | 5 plain writes fixed; watchdog use-after-free fixed; TSan evidence DELIVERED — `tsan_command_hammer.sh` 108 commands landed / 0 races, and `tsan_render.sh` 1 race -> 0 after the RenderPool fix |
 | `RenderPool race` | `FIXED, REVIEWED` | found by `AE-P1.4`'s instrument | `lead` | independent subagent | none | straggler read `m_fn`/`m_count` unlocked across a batch handover: null deref, out-of-range item, and an `m_remaining` underflow that HANGS the producer; generation packed into the claim counter; review returned SAFE-TO-MERGE with 3 defects (store order, a 2^32 count re-opening the hang, a wrong wrap figure) — all fixed at `a4345f33` |
@@ -116,7 +116,7 @@ watcher:  none (required for Codex)
 | `T3` (ABI mirror coverage) | `MERGED` | seven independent reviews | `lead` | independent subagent | merged from `ae/impl-engine-t3a-probe` | product main `d0e0ad0a`; follow-up `54f3d460` |
 | `P2-CMD-00` step 1 | `LANDED, GATE HALF-MET` | design `P2-CMD-00-revised.md` + owner rulings 1-2 | `lead` | independent subagent | product main | `45626d44`; blockers closed `7b7b7b24`, `ba4f1b1c` |
 | `P2-CMD-00` step 2 | `COMPLETE` | decision 5 ruled 2026-08-14 | `lead` | — | none | carrier is `EventEntry::sampleTime`; sender mints, engine echoes, `kShmVersion` 39 |
-| `AE-RING-02` (bystander drain race) | `TICKETED, NOT FIXED` | found extending decisions 7+9 to harmony (item 28) | `lead` | independent subagent | none | a bystander peeking the UI-out ring (e.g. `await_clip_outcome`) can lose its diff to `daw-sidecar`'s unconditional 50ms `drain_engine_events` thread, which genuinely advances the ring's one shared `read_index`. MEASURED via A/B revert on `cli-harmony-rapid.mjs` (5/5 -> 3/5 -> 5/5). Clip/chord shares the exposure by construction, unconfirmed by any existing test. `docs/architecture/decisions/AE-RING-02-bystander-drain.md`, `2aa0b919`. No direction chosen; gates item 28's harmony half |
+| `AE-RING-02` (bystander drain race) | `CONFIRMED, NOT FIXED` | found extending decisions 7+9 to harmony (item 28) | `lead` | independent subagent x2 | none | shipped `do note` silently loses a version-refused edit when the sidecar drains its correlated refusal: corrected exact-SHA A/B at `9e1f5722`, sidecar ON 3/10 failures versus OFF 0/10 after confirmed load completion; exact document + adjacent journal oracles. Evidence `docs/architecture/evidence/AE-RING-02-note-ab-9e1f5722.json`; product record `d59030e0`. Delete-note/chord share exposure but were not directly reproduced. No direction chosen; owner call required; gates item 28's harmony half |
 | `doc_citation` (stale probe self-citation) | `FIXED` | found in the resumed full sweep | `lead` | independent subagent | none | `tools/bypass_send_probe.sh:40` cited its pre-rename filename; corrected to match, `f8101910` |
 | `AE-P3.*` | `BLOCKED` | Phase 1/2 contracts | unassigned | unassigned | none | none |
 | `AE-P4.*` | `BLOCKED` | Phase 2 transactions | unassigned | unassigned | none | none |
@@ -5919,3 +5919,88 @@ already wrong in production."
 `AE-P1.3` non-overlap validator and item 15's reproduction remain open, unchanged from the prior
 session's note. Nothing is blocked on an owner decision except AE-RING-02's direction, and that
 decision only gates item 28's harmony half — every other open item is free to proceed.
+
+## AE-RING-02 re-derived: shipped `do note` silently loses a refused edit (2026-08-17)
+
+The preceding session record is historical: its **PLAUSIBLE, not CONFIRMED** ruling was the exact
+open question this session tested. It is not the current state. The Ticket state table above and
+this entry supersede that ruling.
+
+### The first reproduction was not accepted as evidence
+
+`ui-web/test/cli-note-rapid.mjs` began as the four-back-to-back shape named in the prior stopping
+point. A current release rebuild reproduced one missing note, then a five-trial batch reproduced
+2/5. That established a live symptom, not its cause. Independent review found three load-bearing
+holes before anything was committed:
+
+1. the saved-document checks did not require exact `(nanotick, pitch)` equality and the save
+   process result was ignored;
+2. the probe had no sidecar-OFF control, so publication, attachment, or correlation defects were
+   still alternative explanations for a missing refusal;
+3. its load-readiness marker was the generic `load_project/received` journal entry, which is
+   written before command dispatch. A CLI timeout could therefore have been command-thread delay
+   behind `loadProjectFromPath`, not a refusal diff eaten by the drain.
+
+Those preliminary counts are deliberately not the ruling below.
+
+### The corrected probe has an exact source SHA and a causal negative control
+
+`6f45d3ac` committed the probe plus two test-harness controls without changing default stack
+behavior: the positive arm starts the sidecar after engine SHM exists and waits for the existing
+`event drain attached` diagnostic; the negative arm runs the same engine and CLI sequence with no
+sidecar. The probe is excluded from the default sweep because the known defect is intermittent;
+it remains explicitly runnable.
+
+Review then found the premature load marker above. `9e1f5722` exposes the engine's already-existing
+post-load `(load_seq, load_ok)` in `daw-cli get transport`. The probe snapshots the sequence before
+`do new` and starts its measured interval only after the sequence changes with `ok == 1`.
+`engine_project_commands.cpp` publishes that result after `loadProjectFromPath` returns, closing
+the command-thread-delay alternative. This changes observability, not `await_clip_outcome`, the
+sidecar drain, or any note outcome behavior.
+
+At exact corrected probe SHA `9e1f5722`, with current release binaries, ten trials per arm gave:
+
+| Arm | Result | What the failures contained |
+|---|---:|---|
+| sidecar ON, drain attachment observed before commands | **3/10 failed** | trials 4, 5, 9 each lost one exact requested pair; every CLI exited 0 and reported sent; each missing pair had adjacent `received` / `rejected:version` journal records and no successful retry |
+| sidecar OFF | **0/10 failed** | stale-base refusals still occurred, every one was observed and retried, and all four exact pairs reached all ten saved documents |
+
+The machine-readable source of truth is
+`docs/architecture/evidence/AE-RING-02-note-ab-9e1f5722.json`. It records the SHAs, commands,
+preconditions, trial numbers, missing pairs, and both oracles. The decision record and bridge
+hazard comment consume that result at product commit `d59030e0`.
+
+This is a **false-success edit loss**, distinct from the harmony experiment's false-negative
+acknowledgement: the engine refuses a stale-base note write, the sidecar advances the shared
+`read_index` past the correlated refusal before daw-cli sees it, `await_clip_outcome` falls through
+to `Unknown`, and its caller treats `Unknown` as success without retrying. The document is missing
+the note while the CLI says it was sent.
+
+Direct scope remains narrow. `do note` is confirmed broken. `do delete-note` and `do chord` call
+the same `await_clip_outcome` and share the exposure by construction, but neither was directly
+reproduced. Item 28 remains open: clip/chord id correlation exists but now has a confirmed delivery
+defect, and the harmony half remains reverted behind this ticket.
+
+### Review and verification
+
+Two independent subagents reviewed the work. Their blockers caused the exact-oracle/save checks,
+partial-JSONL handling, guaranteed cleanup, sidecar ON/OFF control, explicit drain attachment,
+adjacent-sequence journal pairing, post-load acknowledgement, exact provenance, and persisted
+evidence record. Both the corrected code and final evidence returned PASS; no blocker was waived.
+
+Verification on `main` through `d59030e0`:
+
+- `cmake --build build` — PASS.
+- `cargo build --release --manifest-path ui/Cargo.toml` — PASS; existing warnings remain.
+- `rust_tests_check` — PASS (85.19 s before the final load-status correction; 86.24 s after it).
+- `op_registry`, `doc_citation`, `progress_doc`, `check_registry` — PASS.
+- `cli-harmony-rapid.mjs` — 5/5 PASS through the unchanged default stack path.
+- `node --test ui-web/test/unit.mjs` — **156/159, not green**: two machine/plugin-resolution
+  failures and one already-stale global template-population pin (606 actual vs 561 expected).
+- `new-song-save.mjs` was not runnable because this checkout has no `playwright` package; no result
+  is claimed for it.
+
+No product fix direction was selected. The existing candidates remain unranked: per-client
+cursors, journal-backed outcome correlation, or protecting in-flight ids from the drain. Because
+shipped note entry is now confirmed wrong rather than merely exposed by construction, an owner
+direction call is required before implementation; item 28's harmony half remains gated on it.
