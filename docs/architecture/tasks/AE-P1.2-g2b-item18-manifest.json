@@ -1,0 +1,343 @@
+{
+  "schema": "ae-p1.2-g2b-item18-packet/1",
+  "ticket": "AE-P1.2-G2B-ITEM18",
+  "status": "REVIEW_CANDIDATE",
+  "owner": "backend",
+  "predecessor": {
+    "packet_commit": "2b5f0747f1b7dde79ae788af3826c49c78df5d2a",
+    "packet_tree": "7c75beb7b941c06a6099292fbf4dac6ade503a6a",
+    "manifest_sha256": "c321130b860fda73991f04d1035bea7af03faf6e030fce5565664c1657ce093e"
+  },
+  "item15": {
+    "packet_commit": "8ee5b3cdd34ef6c5538fac19074b4f442c0a8514",
+    "packet_tree": "44ce562e2463ba0b6fcc291077b38fc7d87c07a1",
+    "manifest_sha256": "a9583a4cb8a8fd45d1dc2ccfb683cf06f8758c55407bfdf6f3d5a424eea4465f"
+  },
+  "program_source": {
+    "commit": "4f343790562c5c9e6b43e07cacf647789856d2f4",
+    "tree": "4ff89dbca12d20a6ce46f8099a0db8b059b3af21"
+  },
+  "frozen_product": {
+    "commit": "92dfdfe23cc7ff93f2ce14894a35d089e3d9e2b8",
+    "tree": "238ac970b5d61fe16055ede4c43a2978ddb11da7"
+  },
+  "scope": "Close AE-P1.2 G2-B item 18 by replacing withdrawn PASS 4 with an executable production-bound oracle, defining a re-entrant mirror-complete observation, and binding every hosted VST plan mutation and readiness publication to the item-15 lock and failure contract.",
+  "implementation_authorization": {
+    "before_dual_pass": false,
+    "after_same_sha_semantic_and_evidence_pass": true,
+    "scope": "Only the item-15 and item-18 host-plan, readiness, bypass-staging, primer, and mirror-replay changes described by this packet."
+  },
+  "non_goals": [
+    "No product source is changed by this packet.",
+    "No SetBypass host-applied acknowledgement is added; successful full-frame transmission on the ordered control stream is the defined staging boundary.",
+    "No global mirrorOnly gate may silence unrelated tracks.",
+    "Sampler document internals and patcher graph internals do not belong to the hosted execution plan, but their mutation families remain explicitly classified; chain topology and patcherNodeId do belong because they determine VST segment boundaries and post-segment audio nodes.",
+    "The general lost-update problem among non-host TrackStateSnapshot publishers is recorded but is not solved by using that snapshot as a second host-plan authority.",
+    "No SHM or wire-layout change is required for item 18; G4 may later carry the readiness witness in its dispatch identity."
+  ],
+  "governed_files": [
+    {"path": "apps/daw_engine_main.cpp", "sha256": "d0fba26cf41f2888cea989c4d5d89b8ee68ea2208dc11e76df9ef4627e085d01"},
+    {"path": "apps/device_chain.cpp", "sha256": "10e33241456abba319cbceb329cfd2fbcd53542a8dec245821f307cf736af2cb"},
+    {"path": "apps/engine_arrangetime_commands.cpp", "sha256": "c057ac38869693389551e0ab3730449af42a687ea6a1768e0ccac918e7669129"},
+    {"path": "apps/engine_audio_callback.h", "sha256": "56c9de6934744d85c0b9ddc56e9371dde29504f4434036096d51e845c6a06ef3"},
+    {"path": "apps/engine_automation_commands.cpp", "sha256": "eb2aac2707ea2b3a49009072fd4814b06ac4a29cc8d3ff33ff51f51d30bc4e3f"},
+    {"path": "apps/engine_bulk_edit.cpp", "sha256": "8b13fb2c53bb20aa3c43e0b88e272856633aa27baba81e4bb64c038d1dce5c33"},
+    {"path": "apps/engine_chain_commands.cpp", "sha256": "9b0ba55b3bca79d9fb9cc230888179cfe5779913efac131f08c9479fd32c713c"},
+    {"path": "apps/engine_chain_host.cpp", "sha256": "75bf2d3121ba4be2f81c03b2ba5ec09e99be61c56eb60c89ddc845f93d1d52fe"},
+    {"path": "apps/engine_consumer.cpp", "sha256": "6afb4be04b3fa7cc18baa9d0600cbdd814148186c6b81310c7b68a9995e4ecbc"},
+    {"path": "apps/engine_load_patcher_pool.cpp", "sha256": "9d7ea10f49daca10224c698e6ae044c13eeddd3bbe590dc864ec11890527b532"},
+    {"path": "apps/engine_load_project.cpp", "sha256": "a7e7bee61031657c256a7ea286ad57683db44482b5dbeb4d38785c5d13d49a15"},
+    {"path": "apps/engine_load_track.cpp", "sha256": "ba1a671a82fbc81a1fd3da7edf95a82965e8b69d61bdacf5d91daf91e67f9726"},
+    {"path": "apps/engine_master_render.cpp", "sha256": "39de8ab43c58d376dbcf651a550d5513789d09c4856471ae858b381b0b5790e5"},
+    {"path": "apps/engine_mirror_replay.h", "sha256": "08a14fa5a899666aa1f4a3410ff91c916661900e442a53acd28045819819e5c4"},
+    {"path": "apps/engine_modlink_commands.cpp", "sha256": "43c6b35a9524dc3b1648d53ef458d885c7c7dbead3b87a4e6b05fbc08cfc4af0"},
+    {"path": "apps/engine_patcher_assemble.cpp", "sha256": "29f4828444eb11e7797115551a096dc9281faf58c0cd38b1bf713b7c55d4f913"},
+    {"path": "apps/engine_patcher_commands.cpp", "sha256": "233b687ff0e38c08746ac8182c1cc62620fee2dbea08bbb47e412478786cc767"},
+    {"path": "apps/engine_produce_block.cpp", "sha256": "1a23dc37dbe062c6d0b4c3cc4846e9544f2ad6969a053ef476b69400d404b6f5"},
+    {"path": "apps/engine_producer_thread.cpp", "sha256": "0b62556a81bdba5050afd73953f128e63cd2ceef4f35a80179ae370838034077"},
+    {"path": "apps/engine_readiness_level.h", "sha256": "c5b725ae129e6951929554313f58e8897d40468919e4673fbe32de20133376e0"},
+    {"path": "apps/engine_readiness_tests_main.cpp", "sha256": "182d3ad792d59d59b4661287f2c6339a854710f21e1e3341e427b69f97245249"},
+    {"path": "apps/engine_restart_worker.cpp", "sha256": "053a09d70f1d707b00805635b89ea08103c5b114ebc31e8b2c7a4c2dc07c3293"},
+    {"path": "apps/engine_rt_helpers.cpp", "sha256": "1625883fc0ce28060547839072369633df0b89e2a4a33a0eb4b4a8d7b03e7c17"},
+    {"path": "apps/engine_sampler_commands.cpp", "sha256": "d19679a74c1069a1e2b752ce3526894c7b8df7b90992a4dd1afa6a068cdaa935"},
+    {"path": "apps/engine_song_store.cpp", "sha256": "b9350b92a3c77a12b27a017428872c7ccd0cdfbfb0fa43065e3a0652fcc72854"},
+    {"path": "apps/engine_track_commands.cpp", "sha256": "2c4d8ce1a5bba50d6e3c1faaeacec971424a914970966a8d8d3c0395dbb84bc0"},
+    {"path": "apps/engine_track_setup.cpp", "sha256": "74d0f9ee21864116e386bbd87f750b7e359c020fd6d720081512c64e0289606e"},
+    {"path": "apps/engine_trackprops_commands.cpp", "sha256": "aaa382f1529d67122eeec1ccd93eca9574ff6473a9e0059d461d54a1b4b1d449"},
+    {"path": "apps/engine_types.h", "sha256": "e5023f9e4aa7e39174c692c1952db71fe1889d9055efba444ba5ce5fa9eab7e2"},
+    {"path": "apps/engine_ui_publish.cpp", "sha256": "c86d969174553f80af0517834a54d1c3a630f660ea486c81453c780bd8070d3c"},
+    {"path": "apps/host_controller.cpp", "sha256": "a79f7df8136414f8f19bdc1dbcad4bbab0c26f6cfe1839962ebf0c9c5d2d90a4"},
+    {"path": "apps/ipc_io.cpp", "sha256": "5576603cd2355d97863e473ad89191e11ff700ecc52d4b54d2bc0eb593339402"}
+  ],
+  "populations": {
+    "host_ready_true_sites": [
+      {"path": "apps/engine_track_setup.cpp", "line": 64, "symbol": "setupTrackRuntime", "classification": "prepublication object; publishes before the chain is constructed"},
+      {"path": "apps/engine_track_setup.cpp", "line": 429, "symbol": "restartTrackHost", "classification": "published runtime under controllerMutex; no bypass staging"},
+      {"path": "apps/engine_restart_worker.cpp", "line": 143, "symbol": "runRestartWorker", "classification": "published runtime; store occurs after controller unlock and before bypass staging"}
+    ],
+    "track_snapshot_publications": [
+      {"path": "apps/daw_engine_main.cpp", "line": 414, "kind": "plain_prepublication"},
+      {"path": "apps/daw_engine_main.cpp", "line": 1100, "kind": "plain_prepublication"},
+      {"path": "apps/engine_arrangetime_commands.cpp", "line": 380, "kind": "atomic"},
+      {"path": "apps/engine_automation_commands.cpp", "line": 56, "kind": "atomic"},
+      {"path": "apps/engine_automation_commands.cpp", "line": 237, "kind": "atomic"},
+      {"path": "apps/engine_automation_commands.cpp", "line": 333, "kind": "atomic"},
+      {"path": "apps/engine_chain_commands.cpp", "line": 168, "kind": "atomic"},
+      {"path": "apps/engine_consumer.cpp", "line": 592, "kind": "atomic"},
+      {"path": "apps/engine_load_project.cpp", "line": 392, "kind": "atomic"},
+      {"path": "apps/engine_load_project.cpp", "line": 504, "kind": "atomic"},
+      {"path": "apps/engine_load_track.cpp", "line": 139, "kind": "atomic"},
+      {"path": "apps/engine_modlink_commands.cpp", "line": 100, "kind": "atomic"},
+      {"path": "apps/engine_modlink_commands.cpp", "line": 231, "kind": "atomic"},
+      {"path": "apps/engine_modlink_commands.cpp", "line": 283, "kind": "atomic"},
+      {"path": "apps/engine_patcher_commands.cpp", "line": 192, "kind": "atomic"},
+      {"path": "apps/engine_patcher_commands.cpp", "line": 421, "kind": "atomic"},
+      {"path": "apps/engine_song_store.cpp", "line": 117, "kind": "atomic"},
+      {"path": "apps/engine_track_commands.cpp", "line": 95, "kind": "atomic"},
+      {"path": "apps/engine_track_commands.cpp", "line": 184, "kind": "atomic"},
+      {"path": "apps/engine_track_commands.cpp", "line": 238, "kind": "atomic"},
+      {"path": "apps/engine_track_setup.cpp", "line": 100, "kind": "plain_prepublication"},
+      {"path": "apps/engine_track_setup.cpp", "line": 281, "kind": "atomic"},
+      {"path": "apps/engine_trackprops_commands.cpp", "line": 70, "kind": "atomic_unlocked_build"},
+      {"path": "apps/engine_trackprops_commands.cpp", "line": 99, "kind": "atomic_unlocked_build"}
+    ],
+    "host_plan_mutation_roots": [
+      {"path": "apps/engine_track_setup.cpp", "line": 69, "symbol": "setupTrackRuntime", "classification": "host_plan"},
+      {"path": "apps/engine_chain_commands.cpp", "line": 100, "symbol": "handleAddDevice/addDevice", "classification": "execution_plan_topology"},
+      {"path": "apps/engine_chain_commands.cpp", "line": 108, "symbol": "handleAddDevice/removeDeviceById", "classification": "execution_plan_topology"},
+      {"path": "apps/engine_chain_commands.cpp", "line": 115, "symbol": "handleAddDevice/moveDeviceById", "classification": "execution_plan_topology"},
+      {"path": "apps/engine_chain_commands.cpp", "line": 125, "symbol": "handleAddDevice/setDeviceBypass", "classification": "execution_plan_vst_or_patcher_audio"},
+      {"path": "apps/engine_chain_commands.cpp", "line": 135, "symbol": "handleAddDevice/setDeviceHostSlotIndex", "classification": "host_plan_when_vst"},
+      {"path": "apps/daw_engine_main.cpp", "line": 1209, "symbol": "updateTrackChainForInstrument", "classification": "host_plan_missing_snapshot_publication"},
+      {"path": "apps/engine_load_track.cpp", "line": 86, "symbol": "loadTrackFromDocument", "classification": "host_plan"},
+      {"path": "apps/engine_load_project.cpp", "line": 498, "symbol": "applyDocument/master", "classification": "host_plan"},
+      {"path": "apps/engine_rt_helpers.cpp", "line": 76, "symbol": "resetTrackContent", "classification": "host_plan_missing_snapshot_on_leftover_clear"},
+      {"path": "apps/engine_track_commands.cpp", "line": 344, "symbol": "handleRemoveTrack", "classification": "host_plan_missing_snapshot_publication"},
+      {"path": "apps/engine_patcher_assemble.cpp", "line": 90, "symbol": "reassemblePatcherFromDevices", "classification": "execution_plan_patcher_node_missing_publication"},
+      {"path": "apps/engine_load_patcher_pool.cpp", "line": 103, "symbol": "loadPatcherPool/runtime repoint", "classification": "execution_plan_patcher_node_missing_publication"},
+      {"path": "apps/engine_consumer.cpp", "line": 573, "symbol": "reconcileChildTracks/restore", "classification": "hostless_aux_explicit_exclusion"},
+      {"path": "apps/daw_engine_main.cpp", "line": 1099, "symbol": "makeAuxChild", "classification": "hostless_aux_prepublication_explicit_exclusion"}
+    ],
+    "classified_non_host_chain_mutations": [
+      {"path": "apps/engine_sampler_commands.cpp", "classification": "sampler document internals; samplerSnapshot authority"},
+      {"path": "apps/engine_bulk_edit.cpp", "classification": "sampler document internals"},
+      {"path": "apps/engine_patcher_commands.cpp", "classification": "patcher graph/config internals; resulting patcherNodeId repoint is included separately"}
+    ]
+  },
+  "changed_records": [
+    "CTRL-MUTATIONS",
+    "CTRL-PACKET",
+    "D-PRODUCTION-FIXTURE",
+    "DEP-FROZEN-BASE",
+    "DEP-ITEM15",
+    "DEP-PREDECESSOR",
+    "G-ITEM18",
+    "P-HOST-PLAN-MUTATIONS",
+    "P-READINESS-PUBLISHERS",
+    "P-SNAPSHOT-PUBLISHERS",
+    "R-BYPASS-STAGED",
+    "R-DISPATCH-TICKET",
+    "R-G4-WITNESS",
+    "R-HOST-PLAN-AUTHORITY",
+    "R-MIRROR-EPOCH",
+    "R-OFFLINE-PRIMER",
+    "R-PASS4-REPLACEMENT",
+    "R-REVIEW-GATED-AUTH"
+  ],
+  "records": [
+    {
+      "id": "G-ITEM18",
+      "kind": "gate",
+      "owner": "backend",
+      "status": "READY_FOR_REVIEW",
+      "dependencies": ["DEP-PREDECESSOR", "DEP-ITEM15", "DEP-FROZEN-BASE", "P-READINESS-PUBLISHERS", "P-SNAPSHOT-PUBLISHERS", "P-HOST-PLAN-MUTATIONS", "R-BYPASS-STAGED", "R-HOST-PLAN-AUTHORITY", "R-DISPATCH-TICKET", "R-MIRROR-EPOCH", "R-PASS4-REPLACEMENT", "R-OFFLINE-PRIMER", "R-G4-WITNESS", "D-PRODUCTION-FIXTURE", "CTRL-PACKET", "CTRL-MUTATIONS"],
+      "source_span": ["predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:965-984", "predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:1876-1890", "predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:2559-2569"],
+      "control": "CTRL-PACKET",
+      "statement": "Item 18 is acceptance-decidable: PASS 4 is replaced by a clock-free production-bound primer/ack/re-arm oracle, and every readiness publisher plus hosted VST plan mutation is bound to the item-15 staging contract."
+    },
+    {
+      "id": "DEP-PREDECESSOR",
+      "kind": "dependency",
+      "owner": "backend",
+      "status": "PINNED",
+      "dependencies": [],
+      "source_span": "predecessor:docs/architecture/tasks/AE-P1.2-manifest.json:1-40",
+      "control": "CTRL-PACKET",
+      "statement": "The original AE-P1.2 packet and its withdrawn PASS 4 are immutable inputs."
+    },
+    {
+      "id": "DEP-ITEM15",
+      "kind": "dependency",
+      "owner": "backend",
+      "status": "DUAL_PASS_PINNED",
+      "dependencies": [],
+      "source_span": "item15:docs/architecture/tasks/AE-P1.2-g2b-item15-manifest.json:1-40",
+      "control": "CTRL-PACKET",
+      "statement": "The dual-PASS item-15 lock, plan-capture, bypass-failure, poisoned-transport, and stale-waiter rulings are mandatory implementation inputs."
+    },
+    {
+      "id": "DEP-FROZEN-BASE",
+      "kind": "dependency",
+      "owner": "backend",
+      "status": "PINNED",
+      "dependencies": [],
+      "source_span": "frozen:apps/engine_readiness_level.h:1-105",
+      "control": "CTRL-PACKET",
+      "statement": "The census and acceptance design describe exactly frozen product 92dfdfe2 and its governed blobs."
+    },
+    {
+      "id": "P-READINESS-PUBLISHERS",
+      "kind": "population",
+      "owner": "backend",
+      "status": "EXACT_3",
+      "dependencies": ["DEP-FROZEN-BASE"],
+      "source_span": "manifest:/populations/host_ready_true_sites",
+      "control": "CTRL-PACKET",
+      "statement": "Exactly three production hostReady true stores exist; none proves mapping plus successful bypass staging for a published runtime."
+    },
+    {
+      "id": "P-SNAPSHOT-PUBLISHERS",
+      "kind": "population",
+      "owner": "backend",
+      "status": "EXACT_24",
+      "dependencies": ["DEP-FROZEN-BASE"],
+      "source_span": "manifest:/populations/track_snapshot_publications",
+      "control": "CTRL-PACKET",
+      "statement": "Exactly twenty-four production TrackStateSnapshot publications exist: three prepublication assignments and twenty-one atomic stores; this packet does not silently treat them as a coherent host-plan authority."
+    },
+    {
+      "id": "P-HOST-PLAN-MUTATIONS",
+      "kind": "population",
+      "owner": "backend",
+      "status": "EXACT_CLASSIFIED_ROOTS",
+      "dependencies": ["DEP-FROZEN-BASE", "P-SNAPSHOT-PUBLISHERS"],
+      "source_span": ["manifest:/populations/host_plan_mutation_roots", "manifest:/populations/classified_non_host_chain_mutations"],
+      "control": "CTRL-PACKET",
+      "statement": "The hosted execution plan is the full ordered device topology needed to derive VST segments, including resolvable VST identity/slot/bypass and PatcherAudio bypass/node identity. Fifteen live mutation roots and three classified internal-state families form the bounded population; hostless aux and internal sampler/patcher mutations remain explicit."
+    },
+    {
+      "id": "R-BYPASS-STAGED",
+      "kind": "ruling",
+      "owner": "backend",
+      "status": "DECIDED",
+      "dependencies": ["DEP-ITEM15"],
+      "source_span": ["frozen:apps/host_controller.cpp:624-654", "frozen:apps/ipc_io.cpp:89-155"],
+      "control": "CTRL-MUTATIONS",
+      "statement": "The lower stage is MappedAndBypassStaged, not a claim that the plugin acknowledged application. It is reached only after every ordered SetBypass frame was transmitted completely; stream order places those frames before ProcessBlock. Any false result withdraws readiness and disconnects the possibly partial-frame-poisoned stream under controllerMutex."
+    },
+    {
+      "id": "R-HOST-PLAN-AUTHORITY",
+      "kind": "ruling",
+      "owner": "backend",
+      "status": "DECIDED",
+      "dependencies": ["P-HOST-PLAN-MUTATIONS", "DEP-ITEM15"],
+      "source_span": ["frozen:apps/daw_engine_main.cpp:319-329", "frozen:apps/engine_produce_block.cpp:361-398", "frozen:apps/engine_chain_host.cpp:142-272"],
+      "control": "CTRL-MUTATIONS",
+      "statement": "A dedicated immutable AuthoredHostExecutionPlan is the sole hosted-segmentation authority. It carries a monotonic nonzero uint64 revision and the exact full ordered topology, resolved VST slots/bypass, and PatcherAudio node identities. Every included mutation publishes a new plan before reconciliation. The producer loads it, acquires controllerMutex, reloads the current plan, and refuses unless both identities and the staged revision still match; TrackStateSnapshot.chainDevices is no longer an authority for hosted segmentation."
+    },
+    {
+      "id": "R-DISPATCH-TICKET",
+      "kind": "ruling",
+      "owner": "backend",
+      "status": "DECIDED",
+      "dependencies": ["R-HOST-PLAN-AUTHORITY", "R-BYPASS-STAGED"],
+      "source_span": ["frozen:apps/engine_audio_callback.h:34-56", "frozen:apps/engine_consumer.cpp:636-665", "frozen:apps/engine_restart_worker.cpp:102-165"],
+      "control": "CTRL-MUTATIONS",
+      "statement": "One nonzero uint64 dispatch ticket binds the current mapping, exact staged host-plan revision, and successful bypass staging. Zero is withdrawn. Publication occurs under controllerMutex after the mirror decision; producer dispatch rechecks it after acquiring that mutex. TrackInfo snapshots the ticket with the mapping and compares it to the live ticket, so a stale offline waiter or audio mapping cannot retain authorization across withdrawal or relaunch."
+    },
+    {
+      "id": "R-MIRROR-EPOCH",
+      "kind": "ruling",
+      "owner": "backend",
+      "status": "DECIDED",
+      "dependencies": ["R-DISPATCH-TICKET"],
+      "source_span": ["frozen:apps/engine_rt_helpers.cpp:33-56", "frozen:apps/engine_produce_block.cpp:334-343", "frozen:apps/engine_produce_block.cpp:508-516", "frozen:apps/engine_producer_thread.cpp:199-229"],
+      "control": "CTRL-MUTATIONS",
+      "statement": "Mirror readiness is a re-entrant generation, not a monotonic startup enum. An atomic mirror witness contains a nonzero uint64 epoch and Pending or Complete stage. Every relaunch decision or overflow re-arm advances the epoch to Pending; priming records that exact epoch and cause set; only ack >= the exact nonzero gate may compare-exchange the same dispatch-ticket/epoch to Complete. A later re-arm therefore demotes readiness and a stale ack cannot promote it."
+    },
+    {
+      "id": "R-PASS4-REPLACEMENT",
+      "kind": "ruling",
+      "owner": "backend",
+      "status": "DECIDED",
+      "dependencies": ["R-MIRROR-EPOCH"],
+      "source_span": "manifest:/test_cases",
+      "control": "CTRL-MUTATIONS",
+      "statement": "PASS 4 is replaced: a valid lower-stage ticket permits only a control-only primer ProcessBlock for the affected host while mirror Pending; ordinary MIDI, automation, and render work for that host remain refused until the exact gate ack publishes Complete. Ack at gate-minus-one stays Pending, ack at gate completes, and Overflow re-arm returns to Pending. Unrelated tracks continue throughout."
+    },
+    {
+      "id": "R-OFFLINE-PRIMER",
+      "kind": "ruling",
+      "owner": "backend",
+      "status": "DECIDED",
+      "dependencies": ["R-PASS4-REPLACEMENT"],
+      "source_span": ["frozen:apps/engine_audio_callback.h:900-980", "frozen:apps/engine_master_render.cpp:1-150"],
+      "control": "CTRL-MUTATIONS",
+      "statement": "Offline rendering performs the same production primer exchange before timeline block zero. Primer blocks do not advance musical transport, consume a rendered block id, or enter output; the first counted/output block is the first ordinary block after Complete. Realtime primers are per-host and never stop unrelated tracks."
+    },
+    {
+      "id": "R-G4-WITNESS",
+      "kind": "ruling",
+      "owner": "backend",
+      "status": "DECIDED_FOR_SUCCESSOR",
+      "dependencies": ["R-DISPATCH-TICKET", "R-MIRROR-EPOCH"],
+      "source_span": "predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:1167-1174",
+      "control": "CTRL-MUTATIONS",
+      "statement": "For later G4 work, readiness is a witness value, not a startup-only ordinal: {dispatchTicket, mirrorEpoch, mirrorStage}. The G4 dispatch identity must carry that witness, so Pending and Complete dispatches at the same block and segment cannot share an acknowledgement identity."
+    },
+    {
+      "id": "D-PRODUCTION-FIXTURE",
+      "kind": "test_decision",
+      "owner": "backend",
+      "status": "PLANNED",
+      "dependencies": ["R-PASS4-REPLACEMENT", "R-OFFLINE-PRIMER", "P-READINESS-PUBLISHERS", "P-HOST-PLAN-MUTATIONS"],
+      "source_span": "manifest:/test_cases",
+      "control": "CTRL-MUTATIONS",
+      "statement": "One clock-free fixture drives the production branch that calls sendProcessBlock with fake controller/mailbox barriers. It is parameterized for realtime and offline, covers all three old readiness publishers and every included plan-mutation class, and emits exact stage, plan, slot, primer, ack, ordinary-event, dispatch, disconnect, and output witnesses."
+    },
+    {
+      "id": "R-REVIEW-GATED-AUTH",
+      "kind": "authorization",
+      "owner": "backend",
+      "status": "CONDITIONAL",
+      "dependencies": ["G-ITEM18"],
+      "source_span": "manifest:/implementation_authorization",
+      "control": "CTRL-PACKET",
+      "statement": "Product implementation is unauthorized before independent semantic and evidence PASS results name this same immutable packet SHA and frozen product. Those two PASS results authorize only the declared item-15 plus item-18 scope."
+    },
+    {
+      "id": "CTRL-PACKET",
+      "kind": "control",
+      "owner": "backend",
+      "status": "EXECUTABLE",
+      "dependencies": [],
+      "source_span": "packet:tools/architecture/ae_p1_2_g2b_item18_check.py",
+      "control": "CTRL-PACKET",
+      "statement": "The checker binds external identities, all governed blobs, exact populations, source locators, dependency closure, authorization semantics, and generated prose."
+    },
+    {
+      "id": "CTRL-MUTATIONS",
+      "kind": "control",
+      "owner": "backend",
+      "status": "EXECUTABLE",
+      "dependencies": [],
+      "source_span": "packet:tools/architecture/ae_p1_2_g2b_item18_check.py",
+      "control": "CTRL-MUTATIONS",
+      "statement": "The checker self-tests population deletion/substitution, stale-plan omission, premature readiness, bypass overclaim, primed-is-complete, stale ack, lost regression, global gating, offline leakage, authorization drift, locator substitution, and governed-byte drift."
+    }
+  ],
+  "test_cases": [
+    {"id": "T-COLD-REFUSES", "statement": "A zero dispatch ticket refuses every ProcessBlock and every audio mapping read."},
+    {"id": "T-ALL-PUBLISHERS", "statement": "Each of the three old hostReady true paths reaches the one staged publication helper; deleting any path from the fixture population fails."},
+    {"id": "T-PLAN-RACE", "statement": "An offline dispatcher that loaded plan N and parked on controllerMutex refuses after plan N+1 is published or staged; only an exact post-lock plan identity and staged revision can dispatch."},
+    {"id": "T-EXACT-SLOTS", "statement": "Every included multi-slot execution plan produces exactly one ordered SetBypass attempt per resolvable VST slot before the ticket publishes; non-VST topology affects segmentation but produces no SetBypass, and hostless aux produces neither host dispatch nor bypass."},
+    {"id": "T-BYPASS-FAILURE", "statement": "A forced partial-frame SetBypass failure leaves the ticket zero, requests recovery, disconnects under controllerMutex, and a stale waiter sends no ProcessBlock after acquiring."},
+    {"id": "T-LOWER-PRIMER", "statement": "With a non-empty mirror and ack parked below gate, the actual production sender emits a control-only ProcessBlock carrying all mirror params plus ReplayComplete while ordinary work for that host is absent."},
+    {"id": "T-PRIMED-NOT-COMPLETE", "statement": "A second producer step with mirror primed and ack still below gate remains Pending and emits no ordinary sentinel."},
+    {"id": "T-ACK-BOUNDARY", "statement": "Ack equal to gate-minus-one remains Pending; ack equal to the exact nonzero gate compare-exchanges the same ticket and epoch to Complete; only the next dispatch may carry the ordinary sentinel."},
+    {"id": "T-REARM-REGRESSES", "statement": "Overflow re-arm advances the epoch, returns readiness to Pending, refuses the sentinel again, and cannot be completed by the prior epoch's ack."},
+    {"id": "T-TRACK-LOCAL", "statement": "A parked Pending primer on track A never suppresses ordinary dispatch and output for ready track B."},
+    {"id": "T-OFFLINE-NO-LEAK", "statement": "Offline primers occur before timeline block zero and do not change transport, rendered-block count, first output block, or captured output."},
+    {"id": "T-G4-WITNESS", "statement": "Two otherwise equal dispatch identities with different mirror epoch or stage compare unequal, while identical readiness witnesses compare equal."}
+  ]
+}
