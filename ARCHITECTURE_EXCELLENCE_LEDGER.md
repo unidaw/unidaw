@@ -104,7 +104,7 @@ watcher:  none (required for Codex)
 | `AE-P0.3` | `CAPTURE TAKEN` | decision 4 ruled 2026-08-14; credentialed line OBSERVED and byte-matched | `lead` | unassigned | none | attestation now rests on an observation, not a transcription |
 | `AE-P1.1` | `FROZEN` | `AE-P0` | claude-worker-2 | codex-worker-1 | `/Users/jak/src/daw-ae-p1-1-packet` | `ba88bcb4657b62bdfc752d338d877e139e212ca6`; independent PASS; successor-only |
 | `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; of the 8 open PRODUCT items: 7, 14, 16, 26, 28, 35, 36 CLOSED; item 28 closed by AE-RING-02's SHM v41 exact-outcome broadcast at product `e1b9b055`; 15 hardened but NOT demonstrated. G4 not decidable |
-| `AE-P1.3` | `ACTIVE` | the `AE-P1.2` dependency was phase ordering, re-derived 2026-08-14 | `backend` | independent subagent x2 | `/Users/jak/src/daw-ae-p1-3-nonoverlap-packet` | non-overlap packet `a4f7abc5` / manifest `da0204dd` has semantic + evidence PASS; implementation ticket authorized |
+| `AE-P1.3` | `FIXED, REVIEWED` | the `AE-P1.2` dependency was phase ordering, re-derived 2026-08-14 | `backend` | independent subagent x2 | `/Users/jak/src/daw-ae-p1-3-nonoverlap-packet` | packet `a4f7abc5` / manifest `da0204dd`; product `542d8838`, evidence `92dfdfe2`; 25 regions + reserved header validated before publication, cached geometry only; both final reviews PASS |
 | `AE-P1.4` | `GATE MET` | the `AE-P0` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent | none | 5 plain writes fixed; watchdog use-after-free fixed; TSan evidence DELIVERED — `tsan_command_hammer.sh` 108 commands landed / 0 races, and `tsan_render.sh` 1 race -> 0 after the RenderPool fix |
 | `RenderPool race` | `FIXED, REVIEWED` | found by `AE-P1.4`'s instrument | `lead` | independent subagent | none | straggler read `m_fn`/`m_count` unlocked across a batch handover: null deref, out-of-range item, and an `m_remaining` underflow that HANGS the producer; generation packed into the claim counter; review returned SAFE-TO-MERGE with 3 defects (store order, a 2^32 count re-opening the hang, a wrong wrap figure) — all fixed at `a4345f33` |
 | `Success signal uncorrelated` | `RESOLVED` | ruled 2026-08-14, implemented as decisions 7+9 | `lead` | independent subagent | none | `await_clip_outcome` no longer infers Applied from a bare version counter; matches the minted id + diff type instead, counter fallback guarded to `command_id == 0` |
@@ -6090,3 +6090,53 @@ from the gate, matched 25/25/25 producer/Rust/validator populations, and confirm
 nine-region exact-bytes and inactive/event/edit-ring controls. The manifest-derived implementation
 ticket is `docs/architecture/tasks/AE-P1.3-nonoverlap-implementation.json`; product implementation is
 now authorized, with a fresh independent code review still required before integration.
+
+## AE-P1.3 closed: complete UI-SHM validation before typed publication (2026-08-17)
+
+This entry supersedes the authorization entry's open stopping point. Product `542d8838` implements
+the exact converged packet without changing SHM v41 or either wire layout. Attach copies all 38
+geometry fields after magic/version, validates the complete untrusted descriptor, and only then
+constructs `EngineHandle` and its typed ring/region views. The compared population is all 25 v41
+offset regions plus the reserved mapping header.
+
+Every span has a checked half-open end, a non-zero 64-byte-aligned start, and a size derived from
+its packet-authorized source. The nine declared-byte regions must equal their Rust type-derived
+sizes. Inactive, event, and edit rings have distinct shape rules, and each ring header fits before
+its fields are read. Zero-length audio planes remain valid empty intervals and may alias; the same
+alias is refused as soon as the plane is non-empty. Sorting and comparing the 26 spans rejects a
+header alias or any other non-empty overlap. Validated offsets, sizes, ring capacities, and masks
+are cached; typed accessors never reread mutable geometry from shared memory.
+
+The static residue is executable, not prose. `tools/ui_shm_layout_check.py` derives and equates the
+25 producer, Rust, and validator populations; proves all 38 descriptor destinations read their
+identically named header fields; requires the reserved header and half-open overlap predicate;
+pins attach ordering; verifies all 25 Rust offset assertions; and rejects geometry selectors in
+`EngineHandle`. The existing SHM access ratchet still proves all 19 typed accessor sites enter the
+mapping through bounds-checked helpers. Six previously missing Rust field-offset assertions now
+pin `audio_in`, `audio_out`, automation lane/slot, sampler kit, and sampler envelope. The new
+checker is registered as CTest `ui_shm_layout`.
+
+Independent review changed the implementation before integration. The memory-safety reviewer
+passed the first candidate. The controls reviewer blocked it because descriptor-copy field wiring
+was not proved and cached-geometry enforcement recognized only one literal dereference syntax.
+The successor checker added exact 38-field source/destination wiring and receiver-agnostic
+production geometry-selector enforcement. Both reviewers then returned PASS on the successor;
+no blocker was waived.
+
+Verification at exact implementation commit `542d8838a4168f5bc7248295669e25cc6d5f6804`:
+
+- immutable packet self-check — PASS: 25 offset regions, 26 compared spans, 26 records;
+- `ui_shm_layout_check.py` and `shm_access_check.sh` — PASS;
+- focused malformed-layout matrix — 9/9 PASS, including all nine exact-byte mutations and all
+  three ring classes;
+- complete `daw-bridge` suite — 102/102 PASS;
+- configure and full build — PASS;
+- exact-commit CTest — 232 passed, zero failed, one expected `audio_stability` design skip out of
+  233 entries;
+- release sidecar/CLI build and Playwright `new-song-save.mjs` — 5/5 PASS against the changed
+  bridge. Playwright was available and used.
+
+The machine-readable source of truth is
+`docs/architecture/evidence/AE-P1.3-nonoverlap-542d8838.json` at product progress commit
+`92dfdfe2`. It binds the frozen product, converged packet and manifest, authorization commit,
+implementation tree, review rounds, invariant counts, and controls. AE-P1.3 is `FIXED, REVIEWED`.
