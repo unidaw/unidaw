@@ -1,12 +1,12 @@
 {
-  "schema": "ae-p1.2-g2b-item18-packet/8",
+  "schema": "ae-p1.2-g2b-item18-packet/9",
   "ticket": "AE-P1.2-G2B-ITEM18",
   "status": "REVIEW_CANDIDATE",
   "owner": "backend",
   "revision_predecessor": {
-    "packet_commit": "d82a0c659368a88fbcbd3b75c70bf9d6e05fc4e0",
-    "packet_tree": "2eea956549791022766b9681927c5edc67fea627",
-    "manifest_sha256": "b6ca34cae82261a966d84500b9b047969d7339cf8cc850d562eeb400259419b4"
+    "packet_commit": "e3dbe2a37cb7dbf6e267a9066db33aea41e56306",
+    "packet_tree": "4d5393fe9c91f85da9c7889c8222dac81fec56db",
+    "manifest_sha256": "1dd5ce18c66c576ffce3404647bdced7bab34435856045ba79ad1c838ed4e0dc"
   },
   "review_history": [
     {
@@ -50,6 +50,12 @@
       "semantic": "BLOCKED",
       "evidence": "BLOCKED",
       "resolution": "Schema v8 adds a machine-checked 20-row routing lane-by-kind matrix and conflict normalizer, a four-row optional-artifact presence matrix with explicit corruption/save/package outcomes, the omitted package allowlist boundary, argument-independent applyDocument matching, and receiver/local-name-independent readiness-output dataflow derivation."
+    },
+    {
+      "packet_commit": "e3dbe2a37cb7dbf6e267a9066db33aea41e56306",
+      "semantic": "BLOCKED",
+      "evidence": "PASS",
+      "resolution": "Schema v9 replaces filename-presence packaging with a document-referenced immutable artifact generation and exact digest inventory. Legacy absence is explicit provenance, live capture falls back only to retained inventory bytes, save publishes the generation before the document reference, and modules consume only verified indexed entries; stale canonical-looking files are unreachable."
     }
   ],
   "predecessor": {
@@ -254,37 +260,54 @@
         "state_blob": false,
         "parameter_manifest": false,
         "load_outcome": "success_with_plugin_default_state_and_no_parameter_metadata",
-        "retained_for_save": "nothing",
-        "module_entries": "none"
+        "retained_for_save": "explicit_absent_for_both_sides",
+        "module_entries": "inventory_has_no_entry_for_either_side"
       },
       {
         "state_blob": true,
         "parameter_manifest": false,
         "load_outcome": "restore_nonempty_opaque_blob_and_report_manifest_absent",
-        "retained_for_save": "blob_under_canonical_key",
-        "module_entries": "canonical_blob_only"
+        "retained_for_save": "present_blob_bytes_and_explicit_absent_manifest",
+        "module_entries": "inventory_has_verified_blob_entry_only"
       },
       {
         "state_blob": false,
         "parameter_manifest": true,
         "load_outcome": "keep_plugin_default_state_parse_manifest_and_rewrite_embedded_track_device_key",
-        "retained_for_save": "canonicalized_manifest_with_parameter_entries_preserved",
-        "module_entries": "canonical_manifest_only"
+        "retained_for_save": "explicit_absent_blob_and_canonicalized_manifest_entries",
+        "module_entries": "inventory_has_verified_manifest_entry_only"
       },
       {
         "state_blob": true,
         "parameter_manifest": true,
         "load_outcome": "restore_blob_and_parse_manifest_independently",
-        "retained_for_save": "canonical_blob_and_canonicalized_manifest",
-        "module_entries": "both_canonical_entries"
+        "retained_for_save": "present_blob_bytes_and_canonicalized_manifest_entries",
+        "module_entries": "inventory_has_both_verified_entries"
       }
     ],
-    "present_file_rules": "Each file is optional, but an existing non-regular or unreadable path, an empty blob, malformed manifest JSON, or manifest whose embedded track/device differs from its LegacyArtifactKey fails load before document or ExecutionSnapshot publication.",
-    "legacy_precedence": "For schema 1-5, each present old {trackId,oldDeviceId} file is the sole source for that artifact; when the old and newly allocated filenames differ, a pre-existing file at the new name is stale, ignored, and cannot override the old-key source.",
-    "save_rules": "Blob and manifest capture are independent optional outcomes. Unavailable capture emits a structured absence diagnostic; a retained loaded artifact supplies that side when live capture is unavailable. Every available side is staged and atomically renamed under its canonical {trackId,newGlobalDeviceId} filename, with manifest embedded ids rewritten; a failed available-artifact write returns an artifact error rather than full save success.",
-    "package_rules": "Module assembly derives an allowlist from the current ProjectDocument hosted devices crossed with pluginStateFileName and pluginParamsFileName, sorts it, packs each present readable canonical regular file, permits either side to be absent, refuses an unreadable allowlisted file, and ignores every non-allowlisted stale alias or unrelated state-directory file."
+    "present_file_rules": "Each file is optional, but an existing non-regular or unreadable path, an empty blob, malformed manifest JSON, or manifest whose embedded track/device differs from the expected source key (LegacyArtifactKey for schema 1-5, indexed global key for schema 6) fails load before document or ExecutionSnapshot publication.",
+    "legacy_precedence": "For schema 1-5, each side is classified Present only by reading its old {trackId,oldDeviceId} path and otherwise ExplicitAbsent; when the old and newly allocated filenames differ, the importer never probes the new path, so a pre-existing canonical-looking file has no provenance and cannot enter the inventory.",
+    "save_rules": "Blob and manifest capture are independent optional outcomes. Present live capture replaces that side; unavailable capture emits a structured diagnostic and selects retained Present bytes or ExplicitAbsent, never ambient path existence. Every Present side is staged in one immutable generation under its canonical leaf with manifest embedded ids rewritten; a failed available-artifact write returns an artifact error and the ProjectDocument reference is not replaced.",
+    "package_rules": "Module assembly consumes only the artifact_generation and artifact_entries referenced by the exact ProjectDocument, verifies every listed path, size, digest, hosted-device identity, kind, and canonical leaf, permits either side to have no entry, and never enumerates or admits an ambient state-directory filename.",
+    "inventory_contract": {
+      "schema6_document_fields": [
+        "artifact_generation",
+        "artifact_entries"
+      ],
+      "entry_shape": "{trackId,globalDeviceId,kind,leafName,size,sha256}",
+      "entry_identity": "Exactly zero or one entry exists for each current hosted {globalDeviceId,kind}; trackId must own that globally unique device, kind is state_blob or parameter_manifest, and leafName must equal the corresponding filename helper.",
+      "entry_order": "Entries are sorted by {trackId,globalDeviceId,kind}; duplicate, unknown-device, wrong-track, wrong-kind, noncanonical-leaf, size, or digest mismatch fails before publication.",
+      "transient_provenance": "The in-memory side state is ExplicitAbsent or Present{bytes,source}; source is LegacyOldKey, Schema6Generation, or LiveCapture and is never inferred from an unindexed canonical-looking path.",
+      "generation_id": "artifact_generation is lowercase SHA-256 of canonical sorted artifact_entries whose per-entry SHA-256 commits the bytes; the empty inventory uses the canonical empty-list digest.",
+      "generation_path": "Present files live only at pluginStateDirFor(project)/generations/<artifact_generation>/<canonical leafName>; root-level and other-generation files are never identity candidates.",
+      "save_commit_order": "Build the complete inventory, write and verify a fresh temporary generation directory, atomically rename it to the immutable generation path (or byte-verify an existing identical generation), then atomically replace the ProjectDocument carrying that generation and exact entries. Failure before the document rename leaves the prior document/generation authoritative; an unreferenced generation is harmless.",
+      "schema6_load": "Require both document fields, resolve only listed entries below the referenced generation, verify the complete index and bytes, and classify every missing side ExplicitAbsent without probing any other path.",
+      "legacy_import": "Read only each LegacyArtifactKey old path, retain explicit absence independently for blob and manifest, rewrite manifest embedded ids in memory, and never inspect a different newly allocated canonical path.",
+      "module_consumption": "Package project.json plus exactly the verified referenced entries at moduleStatePrefix()/generations/<artifact_generation>/<leafName>; directory iteration is removed and unreferenced files/generations are unreachable.",
+      "orphan_policy": "Unreferenced generations and root-level legacy/stale files may be garbage-collected after commit but are ignored before deletion and can never affect load, save fallback, or module contents."
+    }
   },
-  "scope": "Close AE-P1.2 G2-B item 18 with one session-level immutable ExecutionSnapshot, machine-checked routing and optional-artifact matrices, complete execution/dispatch/carrier/document/artifact/package populations, project-global bounded non-reusing stable device and mirror identities, deterministic one-block Track routing, session-wide two-phase block transactions over every host event writer, a production sender/receiver primer oracle, correlated replay acknowledgement, lossless disabled legacy automation, terminal capacity failure, and track/master/offline output gates bound to the item-15 lock contract.",
+  "scope": "Close AE-P1.2 G2-B item 18 with one session-level immutable ExecutionSnapshot, machine-checked routing and optional-artifact matrices, a document-referenced immutable artifact generation, complete execution/dispatch/carrier/document/artifact/package populations, project-global bounded non-reusing stable device and mirror identities, deterministic one-block Track routing, session-wide two-phase block transactions over every host event writer, a production sender/receiver primer oracle, correlated replay acknowledgement, lossless disabled legacy automation, terminal capacity failure, and track/master/offline output gates bound to the item-15 lock contract.",
   "implementation_authorization": {
     "before_dual_pass": false,
     "after_same_sha_semantic_and_evidence_pass": true,
@@ -304,7 +327,7 @@
     "Device ids are globally unique within a project, not merely within a track; schema-6 persists one project watermark and legacy migration rewrites every track-scoped reference through an explicit {trackId, oldDeviceId} map.",
     "A post-reservation control-frame failure is not retried as partial success: it poisons the session dispatch, accepts no output or transport advance, and quarantines every participant before future playback.",
     "Every Track routing edge has exactly one block of delay; cycles are legal delayed feedback, and fan-in is reduced in ascending source track id, source bus, and channel order.",
-    "Legacy state blobs and parameter manifests are independent optional artifacts read through the same {trackId, oldDeviceId} migration map as the document; present corrupt files fail closed, saves use only canonical schema-6 global-id names, and modules ignore every filename outside the current-document allowlist."
+    "Legacy state blobs and parameter manifests are independent optional artifacts read through the same {trackId, oldDeviceId} migration map as the document; present corrupt files fail closed, schema-6 documents reference an immutable digest inventory, and loads/modules never infer provenance from ambient canonical-looking filenames."
   ],
   "governed_files": [
     {
@@ -4401,7 +4424,7 @@
         "predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:2559-2569"
       ],
       "control": "CTRL-PACKET",
-      "statement": "Item 18 is acceptance-decidable: one session ExecutionSnapshot is the sole execution authority for deterministic one-block routing, globally unique devices, targets, patcher ownership, track and master execution; the exact 20-row routing matrix and four-row optional-artifact matrix decide every kind/presence case; bounded stable ids and their external state artifacts cannot reuse, collide, narrow, detach, or leak through package enumeration; every document restore, sender, ring writer, receiver, replay stage, readiness/output dataflow candidate, carrier, master, and offline surface is mechanically inventoried; and PASS 4 is a production-bound correlated primer/ack/re-arm oracle with session-wide two-phase ordinary-block transactions and terminal capacity failure."
+      "statement": "Item 18 is acceptance-decidable: one session ExecutionSnapshot is the sole execution authority for deterministic one-block routing, globally unique devices, targets, patcher ownership, track and master execution; the exact 20-row routing matrix and four-row optional-artifact matrix decide every kind/presence case, while a document-referenced immutable digest generation decides artifact provenance; bounded stable ids and their external state artifacts cannot reuse, collide, narrow, detach, or leak through package enumeration; every document restore, sender, ring writer, receiver, replay stage, readiness/output dataflow candidate, carrier, master, and offline surface is mechanically inventoried; and PASS 4 is a production-bound correlated primer/ack/re-arm oracle with session-wide two-phase ordinary-block transactions and terminal capacity failure."
     },
     {
       "id": "DEP-PREDECESSOR",
@@ -4618,7 +4641,7 @@
       ],
       "source_span": "manifest:/test_cases",
       "control": "CTRL-MUTATIONS",
-      "statement": "One clock-free fixture drives the exact shared production dispatch helper used by both track call branches and the master branch. Fake controller/mailbox barriers expose a two-host routed SessionBlockPlan, canonical lock order, preflight, ring reservations, whole ordinary and primer batches, transient and permanent capacity, exact in-flight request, partial control-frame failure, participant quarantine, active, disconnect, generation, mirror witness, candidate/committed block and transport, and output witnesses; stale track mappings and stale master handoffs are rejected. A routing fixture executes all 20 matrix rows and conflict rules while permuting worker/storage order over acyclic, cyclic, and diamond graphs. An artifact fixture executes all four presence rows, corruption cases, canonical rewrites, and package allowlisting. A separate coordinator fixture drives the real offline state-machine seam through timeline-zero and counted output."
+      "statement": "One clock-free fixture drives the exact shared production dispatch helper used by both track call branches and the master branch. Fake controller/mailbox barriers expose a two-host routed SessionBlockPlan, canonical lock order, preflight, ring reservations, whole ordinary and primer batches, transient and permanent capacity, exact in-flight request, partial control-frame failure, participant quarantine, active, disconnect, generation, mirror witness, candidate/committed block and transport, and output witnesses; stale track mappings and stale master handoffs are rejected. A routing fixture executes all 20 matrix rows and conflict rules while permuting worker/storage order over acyclic, cyclic, and diamond graphs. An artifact fixture executes all four presence rows, corruption cases, generation commit order, retained fallback, and module inventory consumption; for both blob and manifest it proves absent old key plus stale new-name file plus unavailable capture stays ExplicitAbsent and unpackaged. A separate coordinator fixture drives the real offline state-machine seam through timeline-zero and counted output."
     },
     {
       "id": "R-REVIEW-GATED-AUTH",
@@ -4650,7 +4673,7 @@
       "dependencies": [],
       "source_span": "packet:tools/architecture/ae_p1_2_g2b_item18_check.py",
       "control": "CTRL-MUTATIONS",
-      "statement": "The checker counts every synthetic scanner fixture in the same exact control total as manifest mutations and self-tests matrix-row deletion/substitution, population deletion/substitution, receiver-renamed chain mutations, all ring writers, type/member-based narrow producer/consumer carriers, complete replay state, argument-renamed applyDocument plus undo/redo/document visitors, receiver/local-renamed readiness-output aliases, package enumeration, state-artifact identity, stale-plan omission, loose mirror publication, counter wrap, premature readiness, bypass overclaim, AwaitingAck-is-complete, split-host and partial ordinary/primer publication, drain leakage, stale ack, lost regression, global gating, offline leakage, authorization drift, locator substitution, and governed-byte drift."
+      "statement": "The checker counts every synthetic scanner fixture in the same exact control total as manifest mutations and self-tests matrix-row/inventory-contract deletion or substitution, population deletion/substitution, receiver-renamed chain mutations, all ring writers, type/member-based narrow producer/consumer carriers, complete replay state, argument-renamed applyDocument plus undo/redo/document visitors, receiver/local-renamed readiness-output aliases, package enumeration, state-artifact identity, stale-plan omission, loose mirror publication, counter wrap, premature readiness, bypass overclaim, AwaitingAck-is-complete, split-host and partial ordinary/primer publication, drain leakage, stale ack, lost regression, global gating, offline leakage, authorization drift, locator substitution, and governed-byte drift."
     },
     {
       "id": "P-EXECUTION-AUTHORITY-CONSUMERS",
@@ -4772,7 +4795,7 @@
         "manifest:/populations/state_artifact_identity_sites"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "A stable device id is project-global and in [1, kStableDeviceIdMax], where kStableDeviceIdMax is exactly 0x7FFF, the narrowest lossless carrier bound; zero, kDeviceIdAuto, and kParamTargetAll are never device identities. Every narrowing producer and consumer of a 15-bit, uint16, sampler-address, patcher-flag, or UI/control carrier validates before conversion and never masks, wraps, or silently narrows. The schema-6 ProjectDocument carries one next_device_id high-water mark allocated under the command-writer lock; it never decreases on load or undo/redo, is persisted across save/load, and never reuses a deleted id, while max+1 is 0x8000 and means exhausted. Candidate compilation rejects globally duplicate, zero, greater-than-max, sentinel, id-at-or-above-watermark, or dangling device references before publication. Schema 1-5 migration first validates uniqueness within each track, reserves all valid old ids, then walks tracks and devices in document order: the first occurrence may keep its id, each cross-track collision receives the lowest free global id, and one explicit {trackId, oldDeviceId}->newDeviceId map rewrites every device, stable automation target, modulation source/target, sampler reference, and derived patcher owner before compilation. The same map retains a LegacyArtifactKey{trackId, oldDeviceId} for each migrated hosted device. The machine-readable artifact_presence_matrix decides all four independent optional .bin/.params.json combinations: absence is successful and explicit, each present old artifact is read through pluginStateFileName or pluginParamsFileName before publication, a present unreadable/empty blob or malformed/key-mismatched manifest fails load, and the manifest's embedded ids are rewritten while parameter entries are preserved. Schema-6 save stages every available or retained side under {trackId,newGlobalDeviceId}; unavailable capture is an explicit nonfatal absence, but a failed write of available bytes reports artifact error rather than full success. Module assembly derives its allowlist from current hosted devices crossed with both filename helpers, packs only present readable canonical files, permits either side to be absent, and ignores every stale alias or unrelated directory entry. Stale legacy aliases are ignored, never rebound or packaged. Exhaustion or any ambiguous/dangling track-scoped reference fails load rather than rebinding."
+      "statement": "A stable device id is project-global and in [1, kStableDeviceIdMax], where kStableDeviceIdMax is exactly 0x7FFF, the narrowest lossless carrier bound; zero, kDeviceIdAuto, and kParamTargetAll are never device identities. Every narrowing producer and consumer of a 15-bit, uint16, sampler-address, patcher-flag, or UI/control carrier validates before conversion and never masks, wraps, or silently narrows. The schema-6 ProjectDocument carries one next_device_id high-water mark allocated under the command-writer lock; it never decreases on load or undo/redo, is persisted across save/load, and never reuses a deleted id, while max+1 is 0x8000 and means exhausted. Candidate compilation rejects globally duplicate, zero, greater-than-max, sentinel, id-at-or-above-watermark, or dangling device references before publication. Schema 1-5 migration first validates uniqueness within each track, reserves all valid old ids, then walks tracks and devices in document order: the first occurrence may keep its id, each cross-track collision receives the lowest free global id, and one explicit {trackId, oldDeviceId}->newDeviceId map rewrites every device, stable automation target, modulation source/target, sampler reference, and derived patcher owner before compilation. The same map retains a LegacyArtifactKey{trackId, oldDeviceId} for each migrated hosted device. The machine-readable artifact_presence_matrix decides all four independent optional .bin/.params.json combinations: absence is successful and explicit, each present old artifact is read only through pluginStateFileName or pluginParamsFileName at its old key before publication, a present unreadable/empty blob or malformed/key-mismatched manifest fails load, and the manifest's embedded ids are rewritten while parameter entries are preserved. Each side's transient provenance is ExplicitAbsent or Present from LegacyOldKey, Schema6Generation, or LiveCapture; it is never inferred from ambient path existence. Schema-6 ProjectDocument contains artifact_generation plus sorted artifact_entries committing current global device/kind, canonical leaf, size, and SHA-256. Save selects live capture, retained Present, or ExplicitAbsent independently, writes and verifies a fresh immutable generation, then atomically replaces the document reference; failed staging leaves the prior document/generation authoritative. Schema-6 load and module assembly resolve only that exact generation and inventory, validate every byte and current hosted-device identity, permit either side to have no entry, and never enumerate the state directory. Therefore absent old blob or manifest plus a stale newly allocated canonical-looking file plus unavailable capture remains ExplicitAbsent for that side and is never loaded, retained, or packaged. Unreferenced generations and root files are unreachable and may be collected later. Exhaustion or any ambiguous/dangling track-scoped reference fails load rather than rebinding."
     },
     {
       "id": "R-MIRROR-INSTANCE-IDENTITY",
@@ -4878,7 +4901,7 @@
         "frozen:SHM_LAYOUT.md:217-233"
       ],
       "control": "CTRL-PACKET",
-      "statement": "ReplayComplete gains a payload gate and BlockMailbox.replayAckSampleTime becomes replayAckGate. Bytes and offsets do not move, but meaning changes: kControlVersion is 15 and kShmVersion is 42 in C++, Rust, and SHM_LAYOUT.md, with existing size/offset assertions retained. Device-id carrier widths also remain unchanged; project-global uniqueness, the exact 0x7FFF ceiling, and checked conversions make every existing owner carrier lossless and unambiguous. Project format independently advances to schema 6."
+      "statement": "ReplayComplete gains a payload gate and BlockMailbox.replayAckSampleTime becomes replayAckGate. Bytes and offsets do not move, but meaning changes: kControlVersion is 15 and kShmVersion is 42 in C++, Rust, and SHM_LAYOUT.md, with existing size/offset assertions retained. Device-id carrier widths also remain unchanged; project-global uniqueness, the exact 0x7FFF ceiling, and checked conversions make every existing owner carrier lossless and unambiguous. Project format independently advances to schema 6 with next_device_id, tagged automation targets, artifact_generation, and artifact_entries."
     },
     {
       "id": "D-PRODUCTION-RECEIVER",
@@ -4918,7 +4941,7 @@
         "frozen:apps/project_file.h:298-305"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "Project schema advances 4 to 6 and writes one top-level next_device_id plus a tagged automation target: All, StableDevice{target_device_id}, or DisabledLegacyCompact{legacy_target_plugin_index, disabled_reason}. AutomationClip carries that tag and the disabled metadata beside its unchanged lane events; snapshot compilation and dispatch exclude DisabledLegacyCompact and emit a stable diagnostic naming the lane and reason. For schema 1-5, kParamTargetAll becomes All, an existing target_device_id becomes StableDevice after global-id migration, and every concrete legacy target_plugin_index is unknowable without the historical resolution set and becomes DisabledLegacyCompact with diagnostic reason legacy_compact_unresolvable and the exact original number; it is never mapped through the current machine's compaction. Schema 6 rejects untagged target_plugin_index, validates global StableDevice ids and the project watermark before publication, and round-trips every target tag, disabled reason, legacy number, and lane event exactly."
+      "statement": "Project schema advances 4 to 6 and writes top-level next_device_id, artifact_generation, artifact_entries, plus a tagged automation target: All, StableDevice{target_device_id}, or DisabledLegacyCompact{legacy_target_plugin_index, disabled_reason}; artifact fields obey R-DEVICE-ID-LIFETIME's provenance contract. AutomationClip carries that tag and the disabled metadata beside its unchanged lane events; snapshot compilation and dispatch exclude DisabledLegacyCompact and emit a stable diagnostic naming the lane and reason. For schema 1-5, kParamTargetAll becomes All, an existing target_device_id becomes StableDevice after global-id migration, and every concrete legacy target_plugin_index is unknowable without the historical resolution set and becomes DisabledLegacyCompact with diagnostic reason legacy_compact_unresolvable and the exact original number; it is never mapped through the current machine's compaction. Schema 6 rejects untagged target_plugin_index, validates global StableDevice ids, artifact inventory, and the project watermark before publication, and round-trips every target tag, disabled reason, legacy number, and lane event exactly."
     }
   ],
   "test_cases": [
@@ -5016,7 +5039,7 @@
     },
     {
       "id": "T-PROTOCOL-VERSIONS",
-      "statement": "C++ engine/host handshake uses kControlVersion 15; C++ and Rust SHM versions are 42; project schema is 6; ReplayCompletePayload, BlockMailbox, and device-id carrier sizes/offsets remain asserted, globally unique id 0x7FFF is lossless, and old protocol semantic versions are rejected."
+      "statement": "C++ engine/host handshake uses kControlVersion 15; C++ and Rust SHM versions are 42; project schema is 6 with next_device_id, tagged targets, artifact_generation, and artifact_entries; ReplayCompletePayload, BlockMailbox, and device-id carrier sizes/offsets remain asserted, globally unique id 0x7FFF is lossless, and old protocol semantic versions are rejected."
     },
     {
       "id": "T-BATCH-VISIBILITY",
@@ -5052,7 +5075,7 @@
     },
     {
       "id": "T-STATE-ARTIFACT-MIGRATION",
-      "statement": "When legacy {trackId, deviceId} maps to a new global id, each present .bin blob and .params.json manifest is read independently through the retained old artifact key before document publication; schema-6 save writes canonical global-id filenames, rewrites manifest embedded ids while preserving parameter entries, and old-load/new-save/new-load restores byte-identical opaque state plus equivalent canonical manifest data."
+      "statement": "When legacy {trackId, deviceId} maps to a new global id, each present .bin blob and .params.json manifest is read independently through the retained old artifact key before document publication; schema-6 save commits canonical leaves inside an immutable digest generation referenced by the document, rewrites manifest embedded ids while preserving parameter entries, and old-load/new-save/new-load restores byte-identical opaque state plus equivalent canonical manifest data."
     },
     {
       "id": "T-ROUTING-BLOCK-DETERMINISM",
@@ -5064,7 +5087,11 @@
     },
     {
       "id": "T-ARTIFACT-PRESENCE-MATRIX",
-      "statement": "The implementation executes all four artifact_presence_matrix rows for legacy and schema-6 projects, separately tests absent, non-regular, unreadable, empty-blob, malformed-manifest, and embedded-key-mismatch outcomes, proves retained fallback and canonical atomic writes, and proves module assembly packs only the current-document allowlist while ignoring stale aliases."
+      "statement": "The implementation executes all four artifact_presence_matrix rows for legacy and schema-6 projects, separately tests absent, non-regular, unreadable, empty-blob, malformed-manifest, and embedded-key-mismatch outcomes, proves retained fallback and generation-before-document commit order, and proves module assembly consumes only verified artifact_entries without directory enumeration."
+    },
+    {
+      "id": "T-ARTIFACT-PROVENANCE",
+      "statement": "For blob and manifest independently, a legacy old-key absence plus arbitrary bytes at the newly allocated canonical-looking root or another generation plus unavailable live capture yields ExplicitAbsent, an empty current inventory entry set for that side, and no module entry. Present old-key bytes win over every stale new-name file; schema-6 load and packaging reject an entry with wrong device, track, kind, leaf, size, digest, generation, duplicate key, or traversal."
     },
     {
       "id": "T-ORDINARY-CAPACITY-PERMANENT",
@@ -5072,7 +5099,7 @@
     },
     {
       "id": "T-PROJECT-TARGET-MIGRATION",
-      "statement": "Schema 6 round-trips one project next_device_id and tagged All, StableDevice, and DisabledLegacyCompact automation targets; every schema 1-5 concrete target_plugin_index becomes disabled with its original number and reason under same-machine, reordered, unresolved-now-resolved, and resolved-now-unresolved fixtures, all-target remains All, existing stable targets follow global-id migration, and untagged schema-6 target_plugin_index is refused."
+      "statement": "Schema 6 round-trips one project next_device_id, artifact_generation, artifact_entries, and tagged All, StableDevice, and DisabledLegacyCompact automation targets; every schema 1-5 concrete target_plugin_index becomes disabled with its original number and reason under same-machine, reordered, unresolved-now-resolved, and resolved-now-unresolved fixtures, all-target remains All, existing stable targets follow global-id migration, and untagged schema-6 target_plugin_index is refused."
     }
   ]
 }

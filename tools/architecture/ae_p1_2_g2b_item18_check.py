@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Structural and exact-evidence checker for AE-P1.2 G2-B item-18 schema v8."""
+"""Structural and exact-evidence checker for AE-P1.2 G2-B item-18 schema v9."""
 
 from __future__ import annotations
 
@@ -27,9 +27,9 @@ TOP_LEVEL_KEYS = {
 
 EXPECTED_EXTERNAL = {
     "revision_predecessor": {
-        "packet_commit": "d82a0c659368a88fbcbd3b75c70bf9d6e05fc4e0",
-        "packet_tree": "2eea956549791022766b9681927c5edc67fea627",
-        "manifest_sha256": "b6ca34cae82261a966d84500b9b047969d7339cf8cc850d562eeb400259419b4",
+        "packet_commit": "e3dbe2a37cb7dbf6e267a9066db33aea41e56306",
+        "packet_tree": "4d5393fe9c91f85da9c7889c8222dac81fec56db",
+        "manifest_sha256": "1dd5ce18c66c576ffce3404647bdced7bab34435856045ba79ad1c838ed4e0dc",
     },
     "predecessor": {
         "packet_commit": "2b5f0747f1b7dde79ae788af3826c49c78df5d2a",
@@ -55,32 +55,32 @@ EXPECTED_EXTERNAL = {
 # manifest immutable without copying 2,000 lines of JSON into the checker. Self-tests mutate
 # the parsed manifest while these constants remain fixed, so a declaration cannot bless itself.
 EXPECTED_SECTION_DIGESTS = {
-    "schema": "633aaec5c6af8bc76ba2cac9524add677c879e03f500952ade5c72315c3e0e36",
+    "schema": "932fe6664c3414facfdbc0e0568550666d1eeff7cdd086da7d20f2fc93b08ae4",
     "ticket": "51fc055b4f8c131bfb5f08b4d03e9141b5667cc3f398ef763016462cf9fd1380",
     "status": "a9214bd949881802e074114cc9ffc50cbf88f003ee4a269801e41dd13fdecf5c",
     "owner": "74a80ba7942f31913df8aed6e77553465be5b3c80bc5666036f42a54a94c828a",
-    "revision_predecessor": "72b8438bc29197417ba42b3da28aa9820b4ffc14998b397c71be0c6688e500a7",
-    "review_history": "c9f4ad6485c4ed91b9a9ec530e7c3749f1453ce2199d7c3ce5a49b8d2a2e7d12",
+    "revision_predecessor": "b020c02bec1c9106522d1020e40fa0915e8339148a92b573a2699d31f0ab24a1",
+    "review_history": "97de41c4152898f1a65441968bf2078bcaf4c7ced7606a0170f1096a07de9a80",
     "predecessor": "a87219ba250bdbb90663db22afac5052bc7379e485789cc40e10abc21e8f5959",
     "item15": "0bb1bb2ed7ab992ab7607c8fb4517a26b6bdc7698e8836b8ba3e57bc33884c32",
     "program_source": "2cbd44acb7ae764d5b84e8bcb76cc3f34dd435e4d734104809d199fbb76fa212",
     "frozen_product": "4dcff51b0d360b6c2ebafb0ab2b44f94ada495a53144f15cf6ad5e220ae856de",
     "routing_matrix": "67876cfdb7be392f00c1d132fef2ec4291e4ea23f2b260b4f9d7a5f745e9011d",
-    "artifact_presence_matrix": "749bf03591b21eaa63e25af34e70d9786232c00888e31247e47f9258a70264b2",
-    "scope": "0dbfe78af0b6676a164a73c4b880d35743c842513515bc62ac9e88de2f92887e",
+    "artifact_presence_matrix": "0796298e026a8803032234ceeb4be8cdb3e2f78cd995724b54d06646518582e9",
+    "scope": "2322538f20c98ad469414f890b8010fbbc67b48c2af0907c1e9044900e654090",
     "implementation_authorization": "8a02dbbd39a3134fcc3256b264bd617e2c162bc950cc72cf89ebd2a960eeaa8e",
-    "non_goals": "3ef11901053c950f3992d89eb2b7bdd1db62232d8b4db5c898ffa7ce57dc036e",
+    "non_goals": "29742d1034c4651dde966d23e504d5193edc68175a8a54692a43e4b6b9cdc546",
     "governed_files": "6ea1f98092b8f8ba1dc55cac0dbdc21f2354ae0172a1f89acfd9782021d609f0",
     "populations": "ba32eae4e2b2ba9c6f648c866ca169c202ba7bc76500c80a85b994bbde0b34ed",
     "changed_records": "2dce85a326c8f654eeae78ff4501f6855bca6eb708211892c256fc63283cc5d1",
-    "records": "2332fbf2ae33f005369733e28442ef6c826b55aa891cea7ff64cf934add10c02",
-    "test_cases": "6a53cdfbbe69c3b3792a5dc59c8429f7a633114cda18459b813c3d391f039e6e",
+    "records": "000948105c51538976acf7e916bac5f939d0f6a00a20d439a3e83d7e55792335",
+    "test_cases": "6b5d67bb46fe2b1973897db948e5c648c3b2a65a2afaf60d243927ae0d50ebe3",
 }
 
 EXPECTED_COUNTS = {
     "governed_files": 89,
     "records": 33,
-    "test_cases": 38,
+    "test_cases": 39,
     "host_ready_true_sites": 3,
     "track_snapshot_publications": 24,
     "host_plan_mutation_roots": 21,
@@ -138,9 +138,10 @@ EXPECTED_TEST_IDS = {
     "T-STATE-ARTIFACT-MIGRATION", "T-ROUTING-BLOCK-DETERMINISM",
     "T-ORDINARY-CAPACITY-PERMANENT",
     "T-ROUTING-MATRIX", "T-ARTIFACT-PRESENCE-MATRIX",
+    "T-ARTIFACT-PROVENANCE",
 }
 
-EXPECTED_MUTATION_CONTROLS = 116
+EXPECTED_MUTATION_CONTROLS = 118
 
 MUTATION_SCAN_RE = re.compile(
     r"(?:addDevice|removeDeviceById|moveDeviceById|setDevice[A-Za-z]+)\([^;]*(?:->|\.)chain"
@@ -587,6 +588,31 @@ def validate_decision_matrices(manifest: dict) -> None:
                not row["module_entries"], "artifact row is undecidable")
     for key in ("present_file_rules", "legacy_precedence", "save_rules", "package_rules"):
         refuse(not artifacts.get(key), f"artifact decision rule missing: {key}")
+    inventory = artifacts.get("inventory_contract")
+    inventory_keys = {
+        "schema6_document_fields", "entry_shape", "entry_identity", "entry_order",
+        "transient_provenance", "generation_id", "generation_path", "save_commit_order",
+        "schema6_load", "legacy_import", "module_consumption", "orphan_policy",
+    }
+    refuse(not isinstance(inventory, dict) or set(inventory) != inventory_keys,
+           "artifact inventory contract shape changed")
+    refuse(inventory["schema6_document_fields"] !=
+           ["artifact_generation", "artifact_entries"],
+           "schema-6 artifact document fields changed")
+    for key in inventory_keys - {"schema6_document_fields"}:
+        refuse(not isinstance(inventory[key], str) or not inventory[key],
+               f"artifact inventory rule missing: {key}")
+    for token in ("ExplicitAbsent", "LegacyOldKey", "Schema6Generation", "LiveCapture"):
+        refuse(token not in inventory["transient_provenance"],
+               f"artifact provenance state missing: {token}")
+    refuse("SHA-256" not in inventory["generation_id"] or
+           "empty inventory" not in inventory["generation_id"],
+           "artifact generation identity weakened")
+    refuse("atomically replace the ProjectDocument" not in inventory["save_commit_order"] or
+           "prior document/generation authoritative" not in inventory["save_commit_order"],
+           "artifact save commit order weakened")
+    refuse("directory iteration is removed" not in inventory["module_consumption"],
+           "artifact module provenance weakened")
 
 
 def validate_graph_and_semantics(manifest: dict) -> None:
@@ -598,7 +624,7 @@ def validate_graph_and_semantics(manifest: dict) -> None:
     refuse(len(ids) != len(set(ids)) or set(ids) != EXPECTED_RECORD_IDS,
            "record id population changed")
     refuse(set(manifest["changed_records"]) != EXPECTED_RECORD_IDS,
-           "schema-v8 changed-record closure is incomplete")
+           "schema-v9 changed-record closure is incomplete")
     refuse(len(test_ids) != len(set(test_ids)) or set(test_ids) != EXPECTED_TEST_IDS,
            "test id population changed")
     by_id = {record["id"]: record for record in records}
@@ -680,10 +706,14 @@ def validate_graph_and_semantics(manifest: dict) -> None:
                   "all four independent optional", "absence is successful",
                   "present unreadable/empty blob", "malformed/key-mismatched manifest",
                   "manifest's embedded ids are rewritten",
-                  "unavailable capture is an explicit nonfatal absence",
-                  "failed write of available bytes reports artifact error",
-                  "allowlist from current hosted devices", "ignores every stale alias",
-                  "Stale legacy aliases are ignored",
+                  "transient provenance is ExplicitAbsent or Present",
+                  "artifact_generation plus sorted artifact_entries",
+                  "writes and verifies a fresh immutable generation",
+                  "atomically replaces the document reference",
+                  "resolve only that exact generation and inventory",
+                  "never enumerate the state directory",
+                  "absent old blob or manifest", "stale newly allocated canonical-looking file",
+                  "never loaded, retained, or packaged", "Unreferenced generations",
                   "Exhaustion", "fails load"):
         refuse(token not in device_ids, f"device-id lifetime weakened: missing {token}")
     mirror = by_id["R-MIRROR-INSTANCE-IDENTITY"]["statement"]
@@ -724,7 +754,8 @@ def validate_graph_and_semantics(manifest: dict) -> None:
                   "commits no ring until all can reserve", "renderFailed"):
         refuse(token not in offline, f"offline phase closure weakened: missing {token}")
     project = by_id["R-PROJECT-TARGET-MIGRATION"]["statement"]
-    for token in ("schema advances 4 to 6", "top-level next_device_id", "tagged automation target",
+    for token in ("schema advances 4 to 6", "top-level next_device_id",
+                  "artifact_generation", "artifact_entries", "tagged automation target",
                   "DisabledLegacyCompact", "legacy_target_plugin_index", "disabled_reason",
                   "unchanged lane events", "snapshot compilation and dispatch exclude",
                   "schema 1-5", "never mapped through the current machine", "Schema 6 rejects",
@@ -947,7 +978,7 @@ def validate(
     validate_exact_sections(manifest)
     for key, identity in EXPECTED_EXTERNAL.items():
         refuse(manifest[key] != identity, f"external identity changed: {key}")
-    refuse(manifest["schema"] != "ae-p1.2-g2b-item18-packet/8", "schema is not v8")
+    refuse(manifest["schema"] != "ae-p1.2-g2b-item18-packet/9", "schema is not v9")
     refuse(len(manifest["records"]) != EXPECTED_COUNTS["records"], "record count changed")
     refuse(len(manifest["test_cases"]) != EXPECTED_COUNTS["test_cases"], "test count changed")
     validate_graph_and_semantics(manifest)
@@ -1084,6 +1115,9 @@ archive.name = stem + leaf;
     candidate = copy.deepcopy(manifest)
     candidate["artifact_presence_matrix"]["package_rules"] = ""
     add("artifact package rule deletion", candidate)
+    candidate = copy.deepcopy(manifest)
+    candidate["artifact_presence_matrix"]["inventory_contract"].pop("module_consumption")
+    add("artifact inventory provenance deletion", candidate)
 
     for population in sorted(manifest["populations"]):
         candidate = copy.deepcopy(manifest)
@@ -1115,6 +1149,7 @@ archive.name = stem + leaf;
         "T-ALL-EVENT-WRITERS", "T-STATE-ARTIFACT-MIGRATION",
         "T-ROUTING-BLOCK-DETERMINISM", "T-ORDINARY-CAPACITY-PERMANENT",
         "T-ROUTING-MATRIX", "T-ARTIFACT-PRESENCE-MATRIX",
+        "T-ARTIFACT-PROVENANCE",
     ):
         candidate = copy.deepcopy(manifest)
         next(case for case in candidate["test_cases"] if case["id"] == test_id)[
@@ -1148,7 +1183,7 @@ def main() -> int:
     validate(manifest)
     controls = self_test(manifest)
     p = manifest["populations"]
-    print("AE-P1.2 G2-B item 18 schema-v8 packet: PASS")
+    print("AE-P1.2 G2-B item 18 schema-v9 packet: PASS")
     print(f"  records: {len(manifest['records'])}")
     print(f"  tests: {len(manifest['test_cases'])}")
     print(f"  routing decision rows: {len(manifest['routing_matrix']['rows'])}")
