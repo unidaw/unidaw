@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Structural and exact-evidence checker for AE-P1.2 G2-B item-18 schema v5."""
+"""Structural and exact-evidence checker for AE-P1.2 G2-B item-18 schema v6."""
 
 from __future__ import annotations
 
@@ -27,9 +27,9 @@ TOP_LEVEL_KEYS = {
 
 EXPECTED_EXTERNAL = {
     "revision_predecessor": {
-        "packet_commit": "bfdeb56f17546069953efb33a1a2e129cfa9467d",
-        "packet_tree": "45c682b3bb1401dfce036c8328d7c93327316e81",
-        "manifest_sha256": "f1928c4cd555fdf842637bc3ee3a4de3010b87b1d2c4216faa4c183516b41243",
+        "packet_commit": "ce7db30f6bbce9a1c85746b9cc19a2493b25a720",
+        "packet_tree": "551829b73d10add8483bf38002d3047384c77343",
+        "manifest_sha256": "569859a53467b4f281f27dfbd75ec3274047eb4a8419c38634407fc996bd02b8",
     },
     "predecessor": {
         "packet_commit": "2b5f0747f1b7dde79ae788af3826c49c78df5d2a",
@@ -55,52 +55,54 @@ EXPECTED_EXTERNAL = {
 # manifest immutable without copying 2,000 lines of JSON into the checker. Self-tests mutate
 # the parsed manifest while these constants remain fixed, so a declaration cannot bless itself.
 EXPECTED_SECTION_DIGESTS = {
-    "schema": "d4c7f55ce232709f5e9aa6dd6be7efb84a5519f964ae0e2443de238174082371",
+    "schema": "2952d0f57ab858240058b064173999ac0bff92d9f479e1913255eb874ca0f6d3",
     "ticket": "51fc055b4f8c131bfb5f08b4d03e9141b5667cc3f398ef763016462cf9fd1380",
     "status": "a9214bd949881802e074114cc9ffc50cbf88f003ee4a269801e41dd13fdecf5c",
     "owner": "74a80ba7942f31913df8aed6e77553465be5b3c80bc5666036f42a54a94c828a",
-    "revision_predecessor": "20bd916aef3cf7929149ba58487aaee05a0c7aa65f427f41868fc068df93a555",
-    "review_history": "8ffa97de3b82b1150b4a98c540171d0e168f4559d6c328983907c97f775853b5",
+    "revision_predecessor": "442cefe3c4289221ec0f0ee2f717c57f8c98412be2540ef395040a6be8abad93",
+    "review_history": "fba67f0166c0d4f243b211944d2c61b5a83172934a44368660fd6b07899fb813",
     "predecessor": "a87219ba250bdbb90663db22afac5052bc7379e485789cc40e10abc21e8f5959",
     "item15": "0bb1bb2ed7ab992ab7607c8fb4517a26b6bdc7698e8836b8ba3e57bc33884c32",
     "program_source": "2cbd44acb7ae764d5b84e8bcb76cc3f34dd435e4d734104809d199fbb76fa212",
     "frozen_product": "4dcff51b0d360b6c2ebafb0ab2b44f94ada495a53144f15cf6ad5e220ae856de",
-    "scope": "43f6782e37744307f9e969c2a78c44217bca4e266c20c17423e11d77cc267de1",
-    "implementation_authorization": "cc6acf10b06637ab80da6f07ee7875c334d96c200c9d4c1fec3930a3c38adb9a",
-    "non_goals": "d6abc123c73a9413cd2d5a5f50699a8691c67dc4cb86f931c1b7960a25706f4a",
-    "governed_files": "188e08931b5115ec711b112cba4a9bc1adc6bbfc49de6dfef3edd35d09cb1156",
-    "populations": "7f985f4205ea17370c396aebf053a65dd7743eae67732160719001ee8c97dda1",
+    "scope": "3c5a172cfebe8fe6a89e02dcc0cef38fa1ee5e7f89aca459a5be2bdcfc43d77d",
+    "implementation_authorization": "bdc52f13a8674198d3e31a52c4a7b82e89730941e15a79d268c1f849bdda7c51",
+    "non_goals": "9fdd950b5f980507a7b22d2cbfb17d1676fc580eeddb9ccd39fb1c1591a75ad2",
+    "governed_files": "a68013853756158add7ae38dc25954e67ebb6e47117901e04853db795da5ad6f",
+    "populations": "5a3e26f80f17410c2f4768e27de78895c25cea04beed4597373dd0f51360dc10",
     "changed_records": "2dce85a326c8f654eeae78ff4501f6855bca6eb708211892c256fc63283cc5d1",
-    "records": "5382ed4df06b4319b8c4619303e2cab38478ab7ab35b015938cbfbc107958bde",
-    "test_cases": "b0799de6a3c53b867d0d0495b40054439d76f0aacc73a75b30259d065375b489",
+    "records": "84c963f29e184440b1824aae45453c2a4789066f3700f6e6eb0c0d21de9e195b",
+    "test_cases": "60375f5577f070ec216472722d90a03447bf7a1b3da6f2bbb9d9dd2689ab8c00",
 }
 
 EXPECTED_COUNTS = {
-    "governed_files": 82,
+    "governed_files": 85,
     "records": 33,
-    "test_cases": 29,
+    "test_cases": 33,
     "host_ready_true_sites": 3,
     "track_snapshot_publications": 24,
-    "host_plan_mutation_roots": 19,
+    "host_plan_mutation_roots": 21,
     "classified_non_host_chain_mutations": 4,
-    "chain_mutation_scan": 62,
+    "chain_mutation_scan": 67,
     "execution_authority_lexical_scan": 57,
     "routing_authority_lexical_scan": 51,
     "mirror_identity_lexical_scan": 26,
     "device_identity_lexical_scan": 25,
-    "stable_device_carrier_sites": 22,
+    "stable_device_carrier_sites": 25,
     "target_identity_lexical_scan": 41,
     "host_config_lexical_scan": 28,
-    "execution_authority_consumers": 70,
+    "execution_authority_consumers": 81,
     "authored_document_exemptions": 13,
     "process_block_senders": 3,
     "process_block_receiver": 2,
     "replay_protocol_sites": 9,
-    "replay_lifecycle_lexical_scan": 10,
+    "replay_lifecycle_lexical_scan": 36,
     "replay_receiver_order_sites": 7,
     "offline_coordinator_sites": 12,
     "mapping_and_output_gates": 12,
     "capacity_contract_sites": 5,
+    "event_ring_write_sites": 8,
+    "document_restore_and_identity_sites": 11,
 }
 
 EXPECTED_RECORD_IDS = {
@@ -128,20 +130,22 @@ EXPECTED_TEST_IDS = {
     "T-MASTER-CORRELATION", "T-OFFLINE-PHASES", "T-MAPPING-PREFLIGHT",
     "T-PROTOCOL-VERSIONS", "T-BATCH-VISIBILITY", "T-PROJECT-TARGET-MIGRATION",
     "T-ORDINARY-BATCH-ATOMIC", "T-NO-DRAIN-LEAK", "T-PRODUCER-GATES",
+    "T-GLOBAL-DEVICE-IDENTITY", "T-SESSION-BLOCK-ATOMIC",
+    "T-LEGACY-DISABLED-ROUNDTRIP", "T-ALL-EVENT-WRITERS",
 }
 
-EXPECTED_MUTATION_CONTROLS = 75
+EXPECTED_MUTATION_CONTROLS = 97
 
 MUTATION_SCAN_RE = re.compile(
-    r"(?:addDevice|removeDeviceById|moveDeviceById|setDevice[A-Za-z]+)\([^;]*track\.chain"
-    r"|track\.chain\s*="
+    r"(?:addDevice|removeDeviceById|moveDeviceById|setDevice[A-Za-z]+)\([^;]*(?:->|\.)chain"
+    r"|(?:->|\.)chain\s*="
     r"|resetTrackContent\("
-    r"|for \(auto& [^:]+:\s*[^)]*track\.chain\.devices"
-    r"|auto&\s+\w+\s*=\s*[^;]*track\.chain\.devices"
-    r"|track\.chain\.devices\.push_back\("
+    r"|for \(auto& [^:]+:\s*[^)]*(?:->|\.)chain\.devices"
     r"|auto&\s+\w+\s*=\s*[^;]*chain\.devices"
+    r"|(?:->|\.)chain\.devices\.push_back\("
     r"|\w+(?:->|\.)patcher\s*="
     r"|\w+(?:->|\.)patcherNodeId\s*="
+    r"|\b\w+\.applyDocument\s*&&\s*\w+\.applyDocument\("
 )
 AUTHORITY_SCAN_RE = re.compile(r"chainDevices|resolveDevicePluginPath")
 ROUTING_SCAN_RE = re.compile(r"(?:\.|->)routing\b|routesToMaster")
@@ -156,7 +160,14 @@ HOST_CONFIG_SCAN_RE = re.compile(
 )
 PROCESS_BLOCK_SEND_RE = re.compile(r"(?:->|\.)controller\.sendProcessBlock\(")
 REPLAY_ORDER_RE = re.compile(r"eventPriority|EventType::Param|EventType::ReplayComplete")
-REPLAY_LIFECYCLE_RE = re.compile(r"ReplayComplete|replayAckSampleTime")
+REPLAY_LIFECYCLE_RE = re.compile(
+    r"mirror(?:Pending|Primed|GateSampleTime|Causes)|ReplayComplete|replayAckSampleTime"
+)
+EVENT_RING_WRITE_RE = re.compile(r"\bdaw::ringWrite\s*\(")
+DOCUMENT_IDENTITY_RE = re.compile(
+    r"history\.(?:undo|redo)\(|applyDocument\(doc\)"
+    r"|visit\.field\(\"(?:device_id|routing|chain|mod_links|devices)\"|uint32_t deviceId"
+)
 OFFLINE_ENTRYPOINT_RE = re.compile(r"\brunOfflinePump\s*\(")
 
 CARRIER_SCAN_RE = re.compile(
@@ -165,14 +176,19 @@ CARRIER_SCAN_RE = re.compile(
     r"|packSamplerAddr|static_cast<uint16_t>\(n.ownerDeviceId\)"
     r"|ownerDeviceId\s*>\s*0xFFFF|deviceId\s*&\s*0xffff"
     r"|owner\s*&\s*0x7FFF|device\s*>\s*0x7FFF|\b(?:device|owner|id)\s+as\s+u16"
+    r"|device_id\s*:[^\n]*as\s+u16|UiSamplerSlotNameHeader\s+h\{\}"
 )
 
 CARRIER_SCAN_PATHS = {
     "apps/event_payloads.h", "apps/shared_memory.h", "apps/engine_consumer.cpp",
     "apps/engine_patcher_commands.cpp", "apps/engine_request_commands.cpp",
-    "apps/patcher_graph.h", "ui/daw-agent/src/tools.rs",
+    "apps/patcher_graph.h", "apps/engine_bulk_edit.cpp", "ui/daw-agent/src/tools.rs",
     "ui/daw-bridge/src/layout.rs", "ui/daw-cli/src/main.rs",
     "ui/daw-sidecar/src/main.rs",
+}
+
+DOCUMENT_IDENTITY_PATHS = {
+    "apps/engine_undo_commands.cpp", "apps/document_visitor_fields.h", "apps/modulation.h",
 }
 
 DEVICE_ID_SCAN_PATHS = {
@@ -268,7 +284,9 @@ def derive_named_paths_scan(
 
 def derive_mutation_scan(commit: str) -> tuple[tuple[str, int], ...]:
     cpp_paths = {path for path in production_sources(commit) if path.endswith(".cpp")}
-    return derive_line_scan(commit, MUTATION_SCAN_RE, only_paths=cpp_paths)
+    return derive_line_scan(
+        commit, MUTATION_SCAN_RE, only_paths=cpp_paths, skip_line_comments=True
+    )
 
 
 def population_pairs(manifest: dict, name: str) -> list[tuple[str, int]]:
@@ -369,10 +387,13 @@ def render(manifest: dict) -> str:
         f"- Semantic execution consumers: {len(p['execution_authority_consumers'])}.",
         f"- Document-only exemptions: {len(p['authored_document_exemptions'])}.",
         f"- ProcessBlock send expressions: {len(p['process_block_senders'])}.",
+        f"- Event-ring write expressions: {len(p['event_ring_write_sites'])}.",
         f"- Replay protocol sites: {len(p['replay_protocol_sites'])}; "
         f"lifecycle lexical sites: {len(p['replay_lifecycle_lexical_scan'])}; "
         f"receiver-order sites: {len(p['replay_receiver_order_sites'])}.",
         f"- Offline coordinator sites: {len(p['offline_coordinator_sites'])}.",
+        f"- Document restore/identity sites: "
+        f"{len(p['document_restore_and_identity_sites'])}.",
         "",
         "## Review history",
         "",
@@ -411,7 +432,7 @@ def validate_graph_and_semantics(manifest: dict) -> None:
     refuse(len(ids) != len(set(ids)) or set(ids) != EXPECTED_RECORD_IDS,
            "record id population changed")
     refuse(set(manifest["changed_records"]) != EXPECTED_RECORD_IDS,
-           "schema-v5 changed-record closure is incomplete")
+           "schema-v6 changed-record closure is incomplete")
     refuse(len(test_ids) != len(set(test_ids)) or set(test_ids) != EXPECTED_TEST_IDS,
            "test id population changed")
     by_id = {record["id"]: record for record in records}
@@ -461,7 +482,7 @@ def validate_graph_and_semantics(manifest: dict) -> None:
     for token in (
         "session ExecutionSnapshot", "one atomic snapshot publication", "HostConfig plugin vectors",
         "TrackStateSnapshot.chainDevices", "TrackStateSnapshot.routing", "routesToMaster",
-        "revision exhaustion",
+        "project-global nextDeviceId", "undo/redo document", "revision exhaustion",
     ):
         refuse(token not in authority, f"session authority weakened: missing {token}")
     routing = by_id["R-ROUTING-AUTHORITY"]["statement"]
@@ -472,13 +493,15 @@ def validate_graph_and_semantics(manifest: dict) -> None:
                   "no old/new route combination"):
         refuse(token not in routing, f"routing authority weakened: missing {token}")
     device_ids = by_id["R-DEVICE-ID-LIFETIME"]["statement"]
-    for token in ("[1, kStableDeviceIdMax]", "exactly 0x7FFF", "validates before conversion",
-                  "never masks, wraps", "next_device_id", "never reuses", "0x8000",
-                  "exhausted", "greater-than-max", "fail project load"):
+    for token in ("project-global", "[1, kStableDeviceIdMax]", "exactly 0x7FFF",
+                  "validates before conversion", "never masks, wraps", "next_device_id",
+                  "never reuses", "undo/redo", "0x8000", "globally duplicate",
+                  "{trackId, oldDeviceId}->newDeviceId", "rewrites every device",
+                  "Exhaustion", "fails load"):
         refuse(token not in device_ids, f"device-id lifetime weakened: missing {token}")
     mirror = by_id["R-MIRROR-INSTANCE-IDENTITY"]["statement"]
-    for token in ("{stableDeviceId, parameterUid16}", "all-target", "one mirror entry per concrete",
-                  "distinct compact index"):
+    for token in ("{projectGlobalStableDeviceId, parameterUid16}", "all-target",
+                  "one mirror entry per concrete", "distinct track plan"):
         refuse(token not in mirror, f"mirror instance identity weakened: missing {token}")
     ack = by_id["R-CORRELATED-REPLAY-ACK"]["statement"]
     for token in ("ReplayCompletePayload", "max(lastIssuedGate, liveAck)+1", "UINT64_MAX",
@@ -489,27 +512,32 @@ def validate_graph_and_semantics(manifest: dict) -> None:
                   "AwaitingAck never re-primes", "no separate primed flag"):
         refuse(token not in mirror_epoch, f"mirror state machine weakened: missing {token}")
     transactional = by_id["R-TRANSACTIONAL-EVENT-BATCH"]["statement"]
-    for token in ("one immutable batch", "ringWriteBatch", "commits whole or not at all",
-                  "larger than usable capacity C-1", "sends no ProcessBlock",
-                  "advances neither block id nor transport", "already-issued in-flight request",
-                  "transport poisoned", "identical staged batch"):
+    for token in ("All six frozen host-event ring writers", "SessionBlockPlan",
+                  "sessionBlockTicket", "Phase 1", "canonical stable host order",
+                  "preflights every ring", "before reserving any", "no participant reserves",
+                  "Phase 2", "partial/full control-frame failure", "quarantined",
+                  "realtime playback stops", "offline rendering fails",
+                  "No partially successful session block"):
         refuse(token not in transactional, f"transactional batch weakened: missing {token}")
     capacity = by_id["R-ATOMIC-PRIMER-CAPACITY"]["statement"]
     for token in ("ringWriteBatch", "one CAS", "ready=0", "first reserved ready flag last",
-                  "C-2", "N>=C-1", "Every batch result is consumed"):
+                  "phase 1", "C-2", "N>=C-1", "Every preflight and batch result is consumed"):
         refuse(token not in capacity, f"capacity boundary weakened: missing {token}")
     master = by_id["R-MASTER-CORRELATION"]["statement"]
-    for token in ("hostGeneration", "dispatchTicket", "mirrorEpoch", "mirrorStage", "blockId",
+    for token in ("hostGeneration", "dispatchTicket", "sessionBlockTicket", "mirrorEpoch",
+                  "mirrorStage", "blockId", "same ordinary SessionBlockPlan",
                   "Boolean hostReady/masterFxActive cannot authorize"):
         refuse(token not in master, f"master correlation weakened: missing {token}")
     offline = by_id["R-OFFLINE-PRIMER"]["statement"]
-    for token in ("ControlPreroll", "transport is stopped", "matching track and master",
-                  "renderFailed"):
+    for token in ("ControlPreroll", "transport is stopped", "SessionBlockPlan",
+                  "commits no ring until all can reserve", "renderFailed"):
         refuse(token not in offline, f"offline phase closure weakened: missing {token}")
     project = by_id["R-PROJECT-TARGET-MIGRATION"]["statement"]
-    for token in ("schema advances 4 to 5", "target_device_id", "next_device_id",
-                  "every concrete legacy", "unknowable", "disables the lane",
-                  "never mapped through the current machine", "Schema 5 rejects"):
+    for token in ("schema advances 4 to 6", "top-level next_device_id", "tagged automation target",
+                  "DisabledLegacyCompact", "legacy_target_plugin_index", "disabled_reason",
+                  "unchanged lane events", "snapshot compilation and dispatch exclude",
+                  "schema 1-5", "never mapped through the current machine", "Schema 6 rejects",
+                  "round-trips every target tag"):
         refuse(token not in project, f"project migration weakened: missing {token}")
     receiver = by_id["D-PRODUCTION-RECEIVER"]["statement"]
     for token in ("used by handleProcessBlock", "eventPriority", "Param precedes ReplayComplete",
@@ -573,6 +601,20 @@ def validate_population_lines(manifest: dict, governed_paths: set[str]) -> None:
         line = frozen_text(entry["path"]).splitlines()[entry["line"] - 1]
         token = replay_tokens[entry["role"]]
         refuse(token not in line, f"replay role locator does not name {token}: {entry}")
+
+    writer_classes = {
+        "ordinary_host_event_writer": 4,
+        "mirror_host_event_writer": 2,
+        "ui_diff_non_host_writer": 1,
+        "host_key_non_dispatch_writer": 1,
+    }
+    observed_classes: dict[str, int] = {}
+    for entry in manifest["populations"]["event_ring_write_sites"]:
+        line = frozen_text(entry["path"]).splitlines()[entry["line"] - 1]
+        refuse("daw::ringWrite" not in line, f"event writer locator is not a writer: {entry}")
+        classification = entry.get("classification")
+        observed_classes[classification] = observed_classes.get(classification, 0) + 1
+    refuse(observed_classes != writer_classes, "event writer classifications changed")
 
 
 def validate_frozen_evidence(manifest: dict) -> None:
@@ -672,7 +714,14 @@ def validate_frozen_evidence(manifest: dict) -> None:
             only_paths={"apps/juce_host_process_main.cpp"},
         ),
         "replay_lifecycle_lexical_scan": derive_line_scan(
-            frozen["commit"], REPLAY_LIFECYCLE_RE,
+            frozen["commit"], REPLAY_LIFECYCLE_RE, skip_line_comments=True,
+        ),
+        "event_ring_write_sites": derive_line_scan(
+            frozen["commit"], EVENT_RING_WRITE_RE,
+        ),
+        "document_restore_and_identity_sites": derive_named_paths_scan(
+            frozen["commit"], DOCUMENT_IDENTITY_RE, DOCUMENT_IDENTITY_PATHS,
+            skip_line_comments=True,
         ),
     }
     for name, observed in derived_scans.items():
@@ -697,7 +746,7 @@ def validate(
     validate_exact_sections(manifest)
     for key, identity in EXPECTED_EXTERNAL.items():
         refuse(manifest[key] != identity, f"external identity changed: {key}")
-    refuse(manifest["schema"] != "ae-p1.2-g2b-item18-packet/5", "schema is not v5")
+    refuse(manifest["schema"] != "ae-p1.2-g2b-item18-packet/6", "schema is not v6")
     refuse(len(manifest["records"]) != EXPECTED_COUNTS["records"], "record count changed")
     refuse(len(manifest["test_cases"]) != EXPECTED_COUNTS["test_cases"], "test count changed")
     validate_graph_and_semantics(manifest)
@@ -721,10 +770,10 @@ def validate(
 
 
 def self_test(manifest: dict) -> int:
-    # Scanner controls are synthetic so identifier renaming and the schema-v4 census omissions
-    # cannot regress while the frozen product remains unchanged.
+    # Scanner controls are synthetic and count in the same exact total as manifest mutations, so
+    # deleting a fixture cannot preserve a misleading N/N report.
     scanner_fixtures = {
-        "direct project chain mutation": (MUTATION_SCAN_RE, "track.chain.devices.push_back(device);"),
+        "renamed project chain mutation": (MUTATION_SCAN_RE, "lane.chain.devices.push_back(device);"),
         "chain alias declaration": (
             MUTATION_SCAN_RE, "auto& devs = document.tracks.front().chain.devices;"
         ),
@@ -739,8 +788,15 @@ def self_test(manifest: dict) -> int:
         "device watermark input": (DEVICE_ID_SCAN_RE, "uint32_t nextDeviceId = 1;"),
         "durable target identity": (TARGET_ID_SCAN_RE, "clip.targetPluginIndex();"),
         "host config consumer": (HOST_CONFIG_SCAN_RE, "runtime.config.pluginPaths = paths;"),
-        "stable carrier": (CARRIER_SCAN_RE, "const auto owner = id as u16;"),
-        "replay lifecycle": (REPLAY_LIFECYCLE_RE, "mailbox.replayAckSampleTime.store(0);"),
+        "stable carrier producer": (
+            CARRIER_SCAN_RE, "device_id: opaque(args, \"device\") as u16,"
+        ),
+        "stable carrier consumer": (
+            CARRIER_SCAN_RE, "daw::UiSamplerSlotNameHeader h{};"
+        ),
+        "replay stage lifecycle": (REPLAY_LIFECYCLE_RE, "runtime.mirrorPending.store(true);"),
+        "event ring writer": (EVENT_RING_WRITE_RE, "daw::ringWrite(events, entry);"),
+        "document restore": (DOCUMENT_IDENTITY_RE, "deps.applyDocument(doc);"),
         "receiver priority": (REPLAY_ORDER_RE, "return EventType::Param;"),
         "offline call": (OFFLINE_ENTRYPOINT_RE, "daw::engine::runOfflinePump(deps);"),
     }
@@ -791,7 +847,9 @@ def self_test(manifest: dict) -> int:
         "T-RECEIVER-BOUND", "T-MASTER-CORRELATION", "T-OFFLINE-PHASES",
         "T-MAPPING-PREFLIGHT", "T-PROTOCOL-VERSIONS", "T-BATCH-VISIBILITY",
         "T-PROJECT-TARGET-MIGRATION", "T-ORDINARY-BATCH-ATOMIC",
-        "T-NO-DRAIN-LEAK", "T-PRODUCER-GATES",
+        "T-NO-DRAIN-LEAK", "T-PRODUCER-GATES", "T-GLOBAL-DEVICE-IDENTITY",
+        "T-SESSION-BLOCK-ATOMIC", "T-LEGACY-DISABLED-ROUNDTRIP",
+        "T-ALL-EVENT-WRITERS",
     ):
         candidate = copy.deepcopy(manifest)
         next(case for case in candidate["test_cases"] if case["id"] == test_id)[
@@ -807,11 +865,14 @@ def self_test(manifest: dict) -> int:
             refused += 1
         else:
             raise Refused(f"mutation was accepted: {name}")
-    refuse(len(cases) != EXPECTED_MUTATION_CONTROLS,
-           f"mutation-control population changed: {len(cases)}")
-    refuse(refused != EXPECTED_MUTATION_CONTROLS,
-           f"mutation controls did not all refuse: {refused}/{EXPECTED_MUTATION_CONTROLS}")
-    return refused
+    controls = len(scanner_fixtures) + len(cases)
+    refused_controls = len(scanner_fixtures) + refused
+    refuse(controls != EXPECTED_MUTATION_CONTROLS,
+           f"mutation-control population changed: {controls}")
+    refuse(refused_controls != EXPECTED_MUTATION_CONTROLS,
+           f"mutation controls did not all refuse: "
+           f"{refused_controls}/{EXPECTED_MUTATION_CONTROLS}")
+    return refused_controls
 
 
 def main() -> int:
@@ -822,7 +883,7 @@ def main() -> int:
     validate(manifest)
     controls = self_test(manifest)
     p = manifest["populations"]
-    print("AE-P1.2 G2-B item 18 schema-v5 packet: PASS")
+    print("AE-P1.2 G2-B item 18 schema-v6 packet: PASS")
     print(f"  records: {len(manifest['records'])}")
     print(f"  tests: {len(manifest['test_cases'])}")
     print(f"  governed files: {len(manifest['governed_files'])}")
@@ -838,6 +899,9 @@ def main() -> int:
     print(f"  host-config candidates: {len(p['host_config_lexical_scan'])}")
     print(f"  semantic consumers: {len(p['execution_authority_consumers'])}")
     print(f"  ProcessBlock senders: {len(p['process_block_senders'])}")
+    print(f"  event-ring writers: {len(p['event_ring_write_sites'])}")
+    print(f"  replay lifecycle sites: {len(p['replay_lifecycle_lexical_scan'])}")
+    print(f"  document restore/identity sites: {len(p['document_restore_and_identity_sites'])}")
     print(f"  mutation controls: {controls}/{EXPECTED_MUTATION_CONTROLS} refused")
     print("  implementation before dual PASS: false")
     print("  implementation after same-SHA dual PASS: true")
