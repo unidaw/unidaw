@@ -1,12 +1,12 @@
 {
-  "schema": "ae-p1.2-g2b-item18-packet/3",
+  "schema": "ae-p1.2-g2b-item18-packet/4",
   "ticket": "AE-P1.2-G2B-ITEM18",
   "status": "REVIEW_CANDIDATE",
   "owner": "backend",
   "revision_predecessor": {
-    "packet_commit": "076fa9e8eb2161f3849473b4e7267fe59755baf4",
-    "packet_tree": "8d23e1ca83f06fb1f782f4b179eaee5df7435bb0",
-    "manifest_sha256": "cf450caa54dc102aada3fb0d681a1a24b85ba382411777ccd144088d52f84314"
+    "packet_commit": "3042fdb5bffde1a0b83f192b02a63b7707d8748d",
+    "packet_tree": "587af01fc781ff67330096de9615d725ff4e295b",
+    "manifest_sha256": "aba7014eb49cbc69d6d41c5286c169fa49aa125672da0f96909970445c067bb5"
   },
   "review_history": [
     {
@@ -20,6 +20,12 @@
       "semantic": "BLOCKED",
       "evidence": "BLOCKED",
       "resolution": "Schema v3 replaces the per-track segmentation-only authority with one session ExecutionSnapshot, adds machine-readable execution-consumer, sender/receiver, mapping, offline, and capacity populations, correlates ReplayComplete with a monotonic payload token, requires atomic ring batch reservation and permanent over-capacity failure, and binds track plus master dispatch to the same production gate."
+    },
+    {
+      "packet_commit": "3042fdb5bffde1a0b83f192b02a63b7707d8748d",
+      "semantic": "BLOCKED",
+      "evidence": "BLOCKED",
+      "resolution": "Schema v4 adds derived routing, mirror, device-id, replay-order, offline, and alias-aware mutation populations. It makes routing part of the exact session revision, gives device ids a persisted non-reusing watermark and reserved-value validation, keys mirrors by device instance plus parameter uid, disables unknowable legacy compact targets, and binds the real offline call and receiver priority authority."
     }
   ],
   "predecessor": {
@@ -40,11 +46,11 @@
     "commit": "92dfdfe23cc7ff93f2ce14894a35d089e3d9e2b8",
     "tree": "238ac970b5d61fe16055ede4c43a2978ddb11da7"
   },
-  "scope": "Close AE-P1.2 G2-B item 18 with one session-level immutable ExecutionSnapshot, complete execution-consumer and dispatch-protocol populations, a production sender/receiver primer oracle, correlated replay acknowledgement, deterministic capacity failure, and track/master/offline output gates bound to the item-15 lock contract.",
+  "scope": "Close AE-P1.2 G2-B item 18 with one session-level immutable ExecutionSnapshot, complete routing/execution/dispatch populations, non-reusing stable device and mirror identities, a production sender/receiver primer oracle, correlated replay acknowledgement, deterministic capacity failure, and track/master/offline output gates bound to the item-15 lock contract.",
   "implementation_authorization": {
     "before_dual_pass": false,
     "after_same_sha_semantic_and_evidence_pass": true,
-    "scope": "Only the item-15 staging change and the item-18 ExecutionSnapshot, stable-target, replay protocol, track/master dispatch, and offline-coordinator changes declared by this packet."
+    "scope": "Only the item-15 staging change and the item-18 ExecutionSnapshot, routing, stable device/mirror identity, project migration, replay protocol, track/master dispatch, and offline-coordinator changes declared by this packet."
   },
   "non_goals": [
     "No product source is changed by this packet.",
@@ -53,7 +59,8 @@
     "Authored TrackChain and Device values remain the document/UI authority; execution modules may not consume them after migration.",
     "Compact host indexes, pooled patcher node ids, and owner aliases are plan-local derived values and are not persisted as authored identities.",
     "The ReplayComplete payload and mailbox acknowledgement meaning change without moving bytes, so kControlVersion advances 14 to 15 and kShmVersion advances 41 to 42 in C++, Rust, and SHM_LAYOUT.md.",
-    "Unrelated non-chain TrackStateSnapshot fields remain outside this packet; chainDevices is removed rather than retained as a second execution authority."
+    "Non-execution TrackStateSnapshot fields remain outside this packet; chainDevices and routing are removed rather than retained as second execution authorities.",
+    "Schema 1-4 concrete target_plugin_index values are not guessed from the current machine; only the all-target sentinel is losslessly migratable and concrete legacy lanes are disabled with diagnostics."
   ],
   "governed_files": [
     {
@@ -71,6 +78,10 @@
     {
       "path": "apps/device_chain.cpp",
       "sha256": "10e33241456abba319cbceb329cfd2fbcd53542a8dec245821f307cf736af2cb"
+    },
+    {
+      "path": "apps/device_chain.h",
+      "sha256": "66aa047018e4b43695153fe7e9a03303e9b140f7a6dde1a5a59d6b67a495b4ac"
     },
     {
       "path": "apps/engine_arrangetime_commands.cpp",
@@ -341,6 +352,10 @@
       "sha256": "765bde1d7a98db962c07fff7f91ccdcab79d50dc57b40de4311787e9b876dd69"
     },
     {
+      "path": "apps/track_routing.h",
+      "sha256": "c4f845f92d64dd9e12e529771365f32fa87efe90b0b7d8ed87e98baff1710435"
+    },
+    {
       "path": "CMakeLists.txt",
       "sha256": "c3c1447eb12dde676be48d39d6e1c68be22de138417768e71c429e09983f9a58"
     },
@@ -502,6 +517,24 @@
         "line": 69,
         "symbol": "setupTrackRuntime",
         "classification": "host_plan"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 348,
+        "symbol": "ensureTrack",
+        "classification": "mutable_host_config_comparison"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 393,
+        "symbol": "restartTrackHost",
+        "classification": "mutable_host_config_install_and_launch"
+      },
+      {
+        "path": "apps/engine_track_commands.cpp",
+        "line": 75,
+        "symbol": "handleTrackRouting",
+        "classification": "execution_plan_routing_and_split_mixer_alias"
       },
       {
         "path": "apps/engine_chain_commands.cpp",
@@ -789,6 +822,16 @@
         "classification": "save_copy_transform"
       },
       {
+        "path": "apps/engine_save_project.cpp",
+        "line": 404,
+        "classification": "save_copy_chain_alias"
+      },
+      {
+        "path": "apps/engine_save_project.cpp",
+        "line": 416,
+        "classification": "save_copy_alias_sink"
+      },
+      {
         "path": "apps/engine_track_commands.cpp",
         "line": 174,
         "classification": "live_euclidean_internal"
@@ -822,6 +865,11 @@
         "path": "apps/engine_track_setup.cpp",
         "line": 268,
         "classification": "live_execution_plan_helper_call"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1193,
+        "classification": "document_parser_direct_chain_mutation"
       },
       {
         "path": "apps/project_file.cpp",
@@ -1121,7 +1169,279 @@
         "classification": "interface_dependency"
       }
     ],
+    "routing_authority_lexical_scan": [
+      {"path":"apps/daw_engine_main.cpp","line":324,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/daw_lint_main.cpp","line":279,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/daw_lint_main.cpp","line":280,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/daw_lint_main.cpp","line":281,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/daw_lint_main.cpp","line":282,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/daw_lint_main.cpp","line":283,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_audio_callback.h","line":65,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_audio_callback.h","line":177,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_chain_host.cpp","line":158,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_consumer.cpp","line":572,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_consumer.cpp","line":671,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_load_track.cpp","line":92,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_load_track.cpp","line":93,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_load_track.cpp","line":94,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_produce_block.cpp","line":519,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_produce_block.cpp","line":1201,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_rt_helpers.cpp","line":82,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_rt_helpers.cpp","line":91,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_rt_helpers.cpp","line":94,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_save_project.cpp","line":58,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_track_commands.cpp","line":75,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_track_commands.cpp","line":77,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_track_commands.cpp","line":79,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_track_commands.cpp","line":81,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_track_commands.cpp","line":83,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_track_commands.cpp","line":84,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_track_commands.cpp","line":85,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_track_commands.cpp","line":86,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_track_commands.cpp","line":87,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_track_commands.cpp","line":88,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_track_commands.cpp","line":90,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_track_commands.cpp","line":91,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_track_commands.cpp","line":92,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_track_setup.cpp","line":84,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_track_setup.cpp","line":85,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_track_setup.cpp","line":86,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_track_setup.cpp","line":277,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_types.h","line":250,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/engine_ui_publish.cpp","line":319,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/project_file.cpp","line":697,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/project_file.cpp","line":698,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/project_file.cpp","line":699,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/project_file.cpp","line":700,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/project_file.cpp","line":701,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/project_file.cpp","line":702,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/project_file.cpp","line":1045,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/project_file.cpp","line":1048,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/project_file.cpp","line":1051,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/project_file.cpp","line":1054,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/project_file.cpp","line":1057,"classification":"routing_authority_or_document_site"},
+      {"path":"apps/project_file.cpp","line":1059,"classification":"routing_authority_or_document_site"}
+    ],
+    "mirror_identity_lexical_scan": [
+      {"path":"apps/engine_device_commands.cpp","line":207,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_device_commands.cpp","line":227,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_emit_notes.cpp","line":279,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_emit_notes.cpp","line":280,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_emit_notes.cpp","line":281,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_render_track.cpp","line":527,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_render_track.cpp","line":528,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_render_track.cpp","line":621,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_render_track.cpp","line":622,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_render_track.cpp","line":623,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_render_track.cpp","line":655,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_render_track.cpp","line":656,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_restart_worker.cpp","line":146,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_restart_worker.cpp","line":147,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_track_setup.cpp","line":408,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_track_setup.cpp","line":409,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_track_setup.cpp","line":433,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_track_setup.cpp","line":434,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_track_setup.cpp","line":437,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_types.h","line":161,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_types.h","line":168,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_types.h","line":383,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_types.h","line":384,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_ui_publish.cpp","line":273,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_ui_publish.cpp","line":276,"classification":"mirror_identity_site"},
+      {"path":"apps/engine_ui_publish.cpp","line":278,"classification":"mirror_identity_site"}
+    ],
+    "device_identity_lexical_scan": [
+      {"path":"apps/device_chain.cpp","line":57,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/device_chain.cpp","line":60,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/device_chain.cpp","line":67,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/device_chain.cpp","line":73,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/device_chain.cpp","line":74,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/device_chain.cpp","line":77,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/device_chain.cpp","line":85,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/device_chain.cpp","line":109,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/device_chain.cpp","line":201,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/device_chain.h","line":27,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/device_chain.h","line":123,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/engine_chain_commands.cpp","line":59,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/project_file.cpp","line":708,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/project_file.cpp","line":808,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/project_file.cpp","line":813,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/project_file.cpp","line":1064,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/project_file.cpp","line":1066,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/project_file.cpp","line":1067,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/project_file.cpp","line":1072,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/project_file.cpp","line":1090,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/project_file.cpp","line":1091,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/project_file.cpp","line":1154,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/project_file.cpp","line":1224,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/project_file.cpp","line":1230,"classification":"device_identity_allocator_or_persistence_site"},
+      {"path":"apps/project_file.cpp","line":1307,"classification":"device_identity_allocator_or_persistence_site"}
+    ],
+    "target_identity_lexical_scan": [
+      {"path":"apps/automation_clip.h","line":26,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/automation_clip.h","line":29,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/automation_clip.h","line":169,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/automation_clip.h","line":170,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/automation_clip.h","line":186,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/automation_clip.h","line":192,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_automation_commands.cpp","line":44,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_automation_commands.cpp","line":222,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_consumer.cpp","line":192,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_emit_notes.cpp","line":276,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_emit_notes.cpp","line":281,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_render_track.cpp","line":385,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_render_track.cpp","line":501,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_render_track.cpp","line":502,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_render_track.cpp","line":524,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_render_track.cpp","line":616,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_render_track.cpp","line":617,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_render_track.cpp","line":625,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_render_track.cpp","line":626,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_render_track.cpp","line":652,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_render_track.cpp","line":750,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_render_track.cpp","line":753,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_render_track.cpp","line":754,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_rt_helpers.cpp","line":453,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_types.h","line":170,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_ui_publish.cpp","line":262,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_ui_publish.cpp","line":269,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_ui_publish.cpp","line":287,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_ui_publish.cpp","line":288,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/engine_ui_publish.cpp","line":289,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/event_payloads.h","line":14,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/event_payloads.h","line":31,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/event_payloads.h","line":1128,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/event_payloads.h","line":1149,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/event_payloads.h","line":1758,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/juce_host_process_main.cpp","line":787,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/juce_host_process_main.cpp","line":788,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/project_file.cpp","line":789,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/project_file.cpp","line":1206,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/project_file.cpp","line":1207,"classification":"compact_or_durable_target_identity_site"},
+      {"path":"apps/shared_memory.h","line":1000,"classification":"compact_or_durable_target_identity_site"}
+    ],
+    "host_config_lexical_scan": [
+      {"path":"apps/daw_engine_main.cpp","line":423,"classification":"host_config_execution_site"},
+      {"path":"apps/daw_engine_main.cpp","line":424,"classification":"host_config_execution_site"},
+      {"path":"apps/daw_engine_main.cpp","line":1042,"classification":"host_config_execution_site"},
+      {"path":"apps/daw_engine_main.cpp","line":1050,"classification":"host_config_execution_site"},
+      {"path":"apps/daw_engine_main.cpp","line":1051,"classification":"host_config_execution_site"},
+      {"path":"apps/engine_chain_host.cpp","line":207,"classification":"host_config_execution_site"},
+      {"path":"apps/engine_chain_host.cpp","line":208,"classification":"host_config_execution_site"},
+      {"path":"apps/engine_chain_host.cpp","line":214,"classification":"host_config_execution_site"},
+      {"path":"apps/engine_chain_host.cpp","line":215,"classification":"host_config_execution_site"},
+      {"path":"apps/engine_device_commands.cpp","line":181,"classification":"host_config_execution_site"},
+      {"path":"apps/engine_load_project.cpp","line":596,"classification":"host_config_execution_site"},
+      {"path":"apps/engine_load_project.cpp","line":597,"classification":"host_config_execution_site"},
+      {"path":"apps/engine_save_project.cpp","line":257,"classification":"host_config_execution_site"},
+      {"path":"apps/engine_save_project.cpp","line":258,"classification":"host_config_execution_site"},
+      {"path":"apps/engine_track_commands.cpp","line":336,"classification":"host_config_execution_site"},
+      {"path":"apps/engine_track_commands.cpp","line":337,"classification":"host_config_execution_site"},
+      {"path":"apps/engine_track_setup.cpp","line":34,"classification":"host_config_execution_site"},
+      {"path":"apps/engine_track_setup.cpp","line":35,"classification":"host_config_execution_site"},
+      {"path":"apps/engine_track_setup.cpp","line":348,"classification":"host_config_execution_site"},
+      {"path":"apps/engine_track_setup.cpp","line":412,"classification":"host_config_execution_site"},
+      {"path":"apps/engine_track_setup.cpp","line":415,"classification":"host_config_execution_site"},
+      {"path":"apps/host_controller.cpp","line":70,"classification":"host_config_execution_site"},
+      {"path":"apps/host_controller.cpp","line":118,"classification":"host_config_execution_site"},
+      {"path":"apps/host_controller.cpp","line":134,"classification":"host_config_execution_site"},
+      {"path":"apps/host_controller.cpp","line":135,"classification":"host_config_execution_site"},
+      {"path":"apps/host_controller.cpp","line":143,"classification":"host_config_execution_site"},
+      {"path":"apps/host_controller.cpp","line":145,"classification":"host_config_execution_site"},
+      {"path":"apps/host_controller.cpp","line":160,"classification":"host_config_execution_site"}
+    ],
     "execution_authority_consumers": [
+      {
+        "path": "apps/engine_track_commands.cpp",
+        "line": 64,
+        "symbol": "handleTrackRouting",
+        "authority": "split authored routing and mixer alias mutation",
+        "disposition": "compile_and_publish_session_snapshot"
+      },
+      {
+        "path": "apps/engine_produce_block.cpp",
+        "line": 519,
+        "symbol": "produceBlock routing input",
+        "authority": "TrackStateSnapshot routing execution",
+        "disposition": "migrate_to_execution_snapshot"
+      },
+      {
+        "path": "apps/engine_produce_block.cpp",
+        "line": 1196,
+        "symbol": "produceBlock routing output",
+        "authority": "TrackStateSnapshot routing execution",
+        "disposition": "migrate_to_execution_snapshot"
+      },
+      {
+        "path": "apps/engine_audio_callback.h",
+        "line": 168,
+        "symbol": "EngineAudioCallback::mixTrack",
+        "authority": "routesToMaster split mixer gate",
+        "disposition": "migrate_to_execution_snapshot"
+      },
+      {
+        "path": "apps/engine_consumer.cpp",
+        "line": 671,
+        "symbol": "TrackInfo routing publication",
+        "authority": "routesToMaster alias handoff",
+        "disposition": "migrate_to_execution_snapshot"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 333,
+        "symbol": "ensureTrack",
+        "authority": "mutable HostConfig comparison",
+        "disposition": "migrate_to_execution_snapshot"
+      },
+      {
+        "path": "apps/engine_track_setup.cpp",
+        "line": 393,
+        "symbol": "restartTrackHost",
+        "authority": "mutable HostConfig install and launch",
+        "disposition": "migrate_to_execution_snapshot"
+      },
+      {
+        "path": "apps/host_controller.cpp",
+        "line": 70,
+        "symbol": "HostController::launch",
+        "authority": "host plan launch boundary",
+        "disposition": "migrate_to_execution_snapshot"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 527,
+        "symbol": "renderTrack automation mirror writer",
+        "authority": "parameter uid-only mirror key",
+        "disposition": "key_by_stable_device_and_parameter"
+      },
+      {
+        "path": "apps/engine_render_track.cpp",
+        "line": 621,
+        "symbol": "renderTrack mirror reader",
+        "authority": "parameter uid-only mirror lookup",
+        "disposition": "key_by_stable_device_and_parameter"
+      },
+      {
+        "path": "apps/engine_emit_notes.cpp",
+        "line": 279,
+        "symbol": "emitNotesInRange mirror writer",
+        "authority": "parameter uid-only mirror key",
+        "disposition": "key_by_stable_device_and_parameter"
+      },
+      {
+        "path": "apps/device_chain.cpp",
+        "line": 57,
+        "symbol": "nextDeviceId/addDevice",
+        "authority": "reusable maximum-plus-one device allocation",
+        "disposition": "persisted_monotonic_watermark"
+      },
+      {
+        "path": "apps/project_file.cpp",
+        "line": 1062,
+        "symbol": "readProject device chain",
+        "authority": "unvalidated device id population",
+        "disposition": "candidate_validation_before_publication"
+      },
       {
         "path": "apps/daw_engine_main.cpp",
         "line": 319,
@@ -1370,8 +1690,8 @@
       {
         "path": "apps/host_controller.cpp",
         "line": 118,
-        "symbol": "HostController::launch",
-        "authority": "host compact plugin vector",
+        "symbol": "HostController::spawnHostProcess",
+        "authority": "host compact plugin vector argv",
         "disposition": "migrate_to_execution_snapshot"
       },
       {
@@ -1672,12 +1992,33 @@
         "role": "ack_word"
       }
     ],
+    "replay_receiver_order_sites": [
+      {"path":"apps/juce_host_process_main.cpp","line":117,"classification":"priority_function"},
+      {"path":"apps/juce_host_process_main.cpp","line":121,"classification":"parameter_priority"},
+      {"path":"apps/juce_host_process_main.cpp","line":124,"classification":"replay_priority"},
+      {"path":"apps/juce_host_process_main.cpp","line":760,"classification":"priority_application_a"},
+      {"path":"apps/juce_host_process_main.cpp","line":761,"classification":"priority_application_b"},
+      {"path":"apps/juce_host_process_main.cpp","line":777,"classification":"replay_consumption"},
+      {"path":"apps/juce_host_process_main.cpp","line":781,"classification":"parameter_consumption"}
+    ],
     "offline_coordinator_sites": [
       {
         "path": "apps/daw_engine_main.cpp",
-        "line": 2115,
+        "line": 2127,
         "symbol": "main",
         "role": "coordinator_invocation"
+      },
+      {
+        "path": "apps/engine_offline_render.cpp",
+        "line": 63,
+        "symbol": "runOfflinePump",
+        "role": "coordinator_definition"
+      },
+      {
+        "path": "apps/engine_offline_render.h",
+        "line": 58,
+        "symbol": "runOfflinePump",
+        "role": "coordinator_declaration"
       },
       {
         "path": "apps/engine_offline_render.cpp",
@@ -1723,7 +2064,7 @@
       },
       {
         "path": "apps/engine_offline_render.cpp",
-        "line": 198,
+        "line": 199,
         "symbol": "runOfflinePump",
         "role": "output_writer"
       },
@@ -1848,16 +2189,19 @@
     "R-BYPASS-STAGED",
     "R-CORRELATED-REPLAY-ACK",
     "R-DISPATCH-TICKET",
+    "R-DEVICE-ID-LIFETIME",
     "R-G4-WITNESS",
     "R-HOST-PLAN-AUTHORITY",
     "R-MASTER-CORRELATION",
     "R-MIRROR-EPOCH",
+    "R-MIRROR-INSTANCE-IDENTITY",
     "R-OFFLINE-PRIMER",
     "R-PASS4-REPLACEMENT",
     "R-PROJECT-TARGET-MIGRATION",
     "R-PROTOCOL-VERSION",
     "R-R13-RECONCILIATION",
     "R-REVIEW-GATED-AUTH",
+    "R-ROUTING-AUTHORITY",
     "R-STABLE-DEVICE-TARGETS"
   ],
   "records": [
@@ -1878,7 +2222,10 @@
         "P-OFFLINE-OUTPUT-SURFACES",
         "R-BYPASS-STAGED",
         "R-HOST-PLAN-AUTHORITY",
+        "R-ROUTING-AUTHORITY",
+        "R-DEVICE-ID-LIFETIME",
         "R-STABLE-DEVICE-TARGETS",
+        "R-MIRROR-INSTANCE-IDENTITY",
         "R-DISPATCH-TICKET",
         "R-MIRROR-EPOCH",
         "R-CORRELATED-REPLAY-ACK",
@@ -1900,7 +2247,7 @@
         "predecessor:docs/architecture/tasks/AE-P1.2-shm-contract.md:2559-2569"
       ],
       "control": "CTRL-PACKET",
-      "statement": "Item 18 is acceptance-decidable: one session ExecutionSnapshot is the sole execution authority; every sender, receiver, mapping, master, and offline surface is inventoried; and PASS 4 is a production-bound correlated primer/ack/re-arm oracle with deterministic capacity failure."
+      "statement": "Item 18 is acceptance-decidable: one session ExecutionSnapshot is the sole execution authority for routing, devices, targets, patcher ownership, track and master execution; stable ids cannot reuse or collide; every sender, receiver, mapping, master, and offline surface is inventoried; and PASS 4 is a production-bound correlated primer/ack/re-arm oracle with deterministic capacity failure."
     },
     {
       "id": "DEP-PREDECESSOR",
@@ -1971,7 +2318,7 @@
         "manifest:/populations/chain_mutation_scan"
       ],
       "control": "CTRL-PACKET",
-      "statement": "The authored execution inputs have sixteen semantic mutation roots and four internal-state families cross-checked against the mechanically reproduced 44-line frozen-source mutation scan. Every mutation commits through the one session ExecutionSnapshot transaction or remains explicitly document-only."
+      "statement": "The authored execution inputs have nineteen semantic input/mutation roots and four internal-state families cross-checked against the mechanically reproduced 47-line frozen-source mutation scan, including direct project parsing and alias-laundered save-copy writes. Every live mutation commits through the one session ExecutionSnapshot transaction or remains explicitly document-only."
     },
     {
       "id": "R-BYPASS-STAGED",
@@ -2004,7 +2351,7 @@
         "frozen:apps/engine_chain_host.cpp:142-272"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "One immutable session ExecutionSnapshot is the sole execution authority and contains one nonzero monotonic revision, the global patcher graph and owner map, and every track/master plan: ordered stable device ids, resolved VST path/name and compact index, bypass, host segments, aux/sidechain bindings, sampler identity, stable automation/mirror targets, and PatcherEvent/PatcherInstrument/PatcherAudio local-to-pooled node mappings. Under the command-thread writer lock, an authored mutation is applied to a candidate document, the whole affected snapshot is compiled and validated, and one atomic snapshot publication commits both; failure or revision exhaustion leaves the prior document and snapshot authoritative. TrackStateSnapshot.chainDevices and separately published graph/alias authorities are removed."
+      "statement": "One immutable session ExecutionSnapshot is the sole execution authority and contains one nonzero monotonic revision, the global patcher graph and owner map, and every track/master plan: ordered stable device ids, resolved VST path/name and compact index, bypass, host segments, complete MIDI/audio/sidechain/aux routing, sampler identity, stable automation/mirror targets, and PatcherEvent/PatcherInstrument/PatcherAudio local-to-pooled node mappings. HostConfig plugin vectors are launch carriers compiled from that exact plan, never a second authority. Under the command-thread writer lock, an authored mutation is applied to a candidate document, the whole affected snapshot is compiled and validated, and one atomic snapshot publication commits both; failure or revision exhaustion leaves the prior document and snapshot authoritative. TrackStateSnapshot.chainDevices, TrackStateSnapshot.routing, routesToMaster, and separately published graph/alias authorities are removed."
     },
     {
       "id": "R-DISPATCH-TICKET",
@@ -2031,6 +2378,7 @@
       "status": "DECIDED",
       "dependencies": [
         "R-DISPATCH-TICKET",
+        "R-MIRROR-INSTANCE-IDENTITY",
         "P-DISPATCH-PROTOCOL-SURFACES"
       ],
       "source_span": [
@@ -2079,6 +2427,8 @@
         "P-OFFLINE-OUTPUT-SURFACES"
       ],
       "source_span": [
+        "frozen:apps/daw_engine_main.cpp:2121-2127",
+        "frozen:apps/engine_offline_render.cpp:63-216",
         "frozen:apps/engine_audio_callback.h:900-980",
         "frozen:apps/engine_master_render.cpp:1-150"
       ],
@@ -2155,11 +2505,16 @@
       ],
       "source_span": [
         "manifest:/populations/execution_authority_lexical_scan",
+        "manifest:/populations/routing_authority_lexical_scan",
+        "manifest:/populations/mirror_identity_lexical_scan",
+        "manifest:/populations/device_identity_lexical_scan",
+        "manifest:/populations/target_identity_lexical_scan",
+        "manifest:/populations/host_config_lexical_scan",
         "manifest:/populations/execution_authority_consumers",
         "manifest:/populations/authored_document_exemptions"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "Fifty-seven direct chainDevices/resolveDevicePluginPath lexical hits, fifty-five semantic execution/carrier consumers, and thirteen document-only exemptions form the bounded authority population. The implementation removes chainDevices from TrackStateSnapshot, prevents execution targets from including authored chain APIs, and uses stable device ids at durable boundaries."
+      "statement": "The bounded authority population contains fifty-seven direct chain/path hits, fifty-one routing hits, twenty-six mirror-identity hits, twenty-five device-id allocator/persistence hits, forty-one compact/durable target hits, twenty-eight HostConfig/launch hits, sixty-eight semantic execution/carrier consumers, and thirteen document-only exemptions. The implementation removes chainDevices and routing from TrackStateSnapshot, removes routesToMaster as a mixer authority, prevents execution targets from including authored chain APIs, and uses validated stable device ids at durable boundaries."
     },
     {
       "id": "P-DISPATCH-PROTOCOL-SURFACES",
@@ -2173,11 +2528,12 @@
         "manifest:/populations/process_block_senders",
         "manifest:/populations/process_block_receiver",
         "manifest:/populations/replay_protocol_sites",
+        "manifest:/populations/replay_receiver_order_sites",
         "manifest:/populations/mapping_and_output_gates",
         "manifest:/populations/capacity_contract_sites"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "The production surface is exactly three sendProcessBlock expressions in two semantic families, one receiver reached by one dispatch edge, eight replay protocol sites, ten mapping/output gates, and five capacity roots. Additions, deletions, substitutions, or unclassified missing gates fail the checker."
+      "statement": "The production surface is exactly three sendProcessBlock expressions in two semantic families, one receiver reached by one dispatch edge, eight replay protocol sites plus the exact seven-site parameter/replay priority-and-consumption chain, ten mapping/output gates, and five capacity roots. Additions, deletions, substitutions, or unclassified missing gates fail the checker."
     },
     {
       "id": "P-OFFLINE-OUTPUT-SURFACES",
@@ -2189,7 +2545,7 @@
       ],
       "source_span": "manifest:/populations/offline_coordinator_sites",
       "control": "CTRL-MUTATIONS",
-      "statement": "Ten exact sites bind the real runOfflinePump invocation, mapping preflight, reset/arm ordering, counted wait/mix/increment, output writer, and producer arm observer."
+      "statement": "Twelve exact sites bind the declaration, definition, and real runOfflinePump invocation at daw_engine_main.cpp:2127, mapping preflight, reset/arm ordering, counted wait/mix/increment, output writer, and producer arm observer; the checker independently derives all three entrypoint edges."
     },
     {
       "id": "R-STABLE-DEVICE-TARGETS",
@@ -2198,7 +2554,8 @@
       "status": "DECIDED",
       "dependencies": [
         "R-HOST-PLAN-AUTHORITY",
-        "P-EXECUTION-AUTHORITY-CONSUMERS"
+        "P-EXECUTION-AUTHORITY-CONSUMERS",
+        "R-DEVICE-ID-LIFETIME"
       ],
       "source_span": [
         "frozen:apps/automation_clip.h:169-192",
@@ -2206,7 +2563,66 @@
         "frozen:apps/engine_device_commands.cpp:126-228"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "Automation, mirrors, editor/parameter requests, state capture, save/load, meters, modulation, sampler and patcher ownership cross durable boundaries by stable device id. Compact host indexes and pooled node ids are resolved only from the current ExecutionSnapshot after controllerMutex and ticket revalidation; they are never persisted or cached as authored identity."
+      "statement": "Automation, mirrors, editor/parameter requests, state capture, save/load, meters, modulation, sampler and patcher ownership cross durable boundaries by a validated stable device id. Compact host indexes and pooled node ids are resolved only from the current ExecutionSnapshot after controllerMutex and ticket revalidation; they are never persisted or cached as authored identity."
+    },
+    {
+      "id": "R-ROUTING-AUTHORITY",
+      "kind": "ruling",
+      "owner": "backend",
+      "status": "DECIDED",
+      "dependencies": [
+        "R-HOST-PLAN-AUTHORITY",
+        "P-EXECUTION-AUTHORITY-CONSUMERS"
+      ],
+      "source_span": [
+        "frozen:apps/engine_track_commands.cpp:64-97",
+        "frozen:apps/engine_produce_block.cpp:508-522",
+        "frozen:apps/engine_produce_block.cpp:1195-1209",
+        "frozen:apps/engine_audio_callback.h:63-65",
+        "frozen:apps/engine_audio_callback.h:168-178",
+        "frozen:apps/engine_consumer.cpp:636-675"
+      ],
+      "control": "CTRL-MUTATIONS",
+      "statement": "Complete MIDI input/output, audio input/output, sidechain, aux-child, and pre-fader routing is compiled into each track plan in the one session ExecutionSnapshot revision. A routing command mutates only a candidate document and atomically publishes the compiled session; producer routing, TrackInfo handoff, mixer inclusion, waits, and aux inheritance consume that exact revision. TrackStateSnapshot.routing and the routesToMaster atomic are removed as execution authorities, so no old/new route combination can mix."
+    },
+    {
+      "id": "R-DEVICE-ID-LIFETIME",
+      "kind": "ruling",
+      "owner": "backend",
+      "status": "DECIDED",
+      "dependencies": [
+        "R-HOST-PLAN-AUTHORITY",
+        "P-EXECUTION-AUTHORITY-CONSUMERS"
+      ],
+      "source_span": [
+        "frozen:apps/device_chain.h:27-40",
+        "frozen:apps/device_chain.cpp:42-90",
+        "frozen:apps/engine_chain_commands.cpp:52-66",
+        "frozen:apps/project_file.cpp:1062-1095",
+        "frozen:apps/event_payloads.h:12-17"
+      ],
+      "control": "CTRL-MUTATIONS",
+      "statement": "A stable device id is in [1, UINT32_MAX-1]; zero and kDeviceIdAuto/kParamTargetAll are never device identities. Each track document carries a schema-5 next_device_id watermark that increases under the command-writer lock, never decreases, is persisted across save/load, and never reuses a deleted id. Allocation fails closed at exhaustion. Candidate compilation rejects duplicate, zero, sentinel, out-of-watermark, or dangling device references before publication. Schema 1-4 may seed the watermark as max(valid unique ids)+1 only after the same validation; ambiguous legacy ids fail project load rather than being repaired or rebound."
+    },
+    {
+      "id": "R-MIRROR-INSTANCE-IDENTITY",
+      "kind": "ruling",
+      "owner": "backend",
+      "status": "DECIDED",
+      "dependencies": [
+        "R-STABLE-DEVICE-TARGETS",
+        "R-DEVICE-ID-LIFETIME"
+      ],
+      "source_span": [
+        "frozen:apps/engine_types.h:161-170",
+        "frozen:apps/engine_types.h:383-384",
+        "frozen:apps/engine_device_commands.cpp:205-228",
+        "frozen:apps/engine_render_track.cpp:520-532",
+        "frozen:apps/engine_emit_notes.cpp:275-284",
+        "frozen:apps/engine_ui_publish.cpp:273-292"
+      ],
+      "control": "CTRL-MUTATIONS",
+      "statement": "The mirror key is {stableDeviceId, parameterUid16}; value storage carries no compact plugin index. A concrete parameter command updates exactly that device instance. An all-target command expands under the current ExecutionSnapshot into one mirror entry per concrete hosted stable device, so identical plugin instances with the same parameter uid remain independent. Primer compilation resolves each key to the correct distinct compact index in the exact plan and refuses missing or duplicate targets before atomic batch reservation."
     },
     {
       "id": "R-CORRELATED-REPLAY-ACK",
@@ -2285,12 +2701,14 @@
         "P-DISPATCH-PROTOCOL-SURFACES"
       ],
       "source_span": [
+        "frozen:apps/juce_host_process_main.cpp:117-125",
         "frozen:apps/juce_host_process_main.cpp:735-780",
+        "frozen:apps/juce_host_process_main.cpp:755-765",
         "frozen:apps/juce_host_process_main.cpp:1073-1099",
         "frozen:apps/juce_host_process_main.cpp:1200-1205"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "The host receiver extracts a no-JUCE production replay-consumer seam used by handleProcessBlock. An in-memory ring/mailbox test drives the real sender batch through that exact receiver, proves Param precedes ReplayComplete, ack changes only after actual consumption, retained high ack cannot answer a new gate, and runControlLoop still dispatches ProcessBlock to the seam."
+      "statement": "The host receiver extracts a no-JUCE production replay-consumer seam used by handleProcessBlock. The same seam owns the production eventPriority ordering in which Param precedes ReplayComplete. An in-memory ring/mailbox test drives the real sender batch through that exact receiver, proves that ordering and actual application before acknowledgement, retained high ack cannot answer a new gate, and runControlLoop still dispatches ProcessBlock to the seam."
     },
     {
       "id": "R-PROJECT-TARGET-MIGRATION",
@@ -2298,7 +2716,8 @@
       "owner": "backend",
       "status": "DECIDED",
       "dependencies": [
-        "R-STABLE-DEVICE-TARGETS"
+        "R-STABLE-DEVICE-TARGETS",
+        "R-DEVICE-ID-LIFETIME"
       ],
       "source_span": [
         "frozen:apps/project_file.cpp:24-24",
@@ -2308,7 +2727,7 @@
         "frozen:apps/project_file.h:298-305"
       ],
       "control": "CTRL-MUTATIONS",
-      "statement": "Project schema advances 4 to 5 and writes automation target_device_id, never compact target_plugin_index. Loading schema 1-4 resolves each legacy compact index once against that track's candidate ExecutionSnapshot compaction before publication; kParamTargetAll remains all, and an unresolved or out-of-range legacy target emits a load diagnostic and disables the lane rather than silently retargeting it. Schema 5 rejects target_plugin_index."
+      "statement": "Project schema advances 4 to 5 and writes automation target_device_id plus the per-track next_device_id watermark, never compact target_plugin_index. For schema 1-4, kParamTargetAll remains all, but every concrete legacy target_plugin_index is unknowable without the historical resolution set and therefore emits a load diagnostic and disables the lane; it is never mapped through the current machine's compaction. Schema 5 rejects target_plugin_index, validates target_device_id and the watermark before publication, and round-trips both exactly."
     }
   ],
   "test_cases": [
@@ -2322,7 +2741,7 @@
     },
     {
       "id": "T-PLAN-RACE",
-      "statement": "An offline or realtime dispatcher that loaded ExecutionSnapshot N and parks on controllerMutex refuses after snapshot N+1 commits; authored mutation without publication leaves every execution consumer on N, and one publication switches host map, bypass, segments, patcher graph/ownership, meters, sampler, modulation, and master together."
+      "statement": "An offline or realtime dispatcher that loaded ExecutionSnapshot N and parks on controllerMutex refuses after snapshot N+1 commits; authored mutation without publication leaves every execution consumer on N, and one publication switches host map, bypass, segments, complete routing/mixer inclusion, patcher graph/ownership, meters, sampler, modulation, and master together."
     },
     {
       "id": "T-EXACT-SLOTS",
@@ -2366,11 +2785,23 @@
     },
     {
       "id": "T-STALE-SNAPSHOT-AUTHORITY",
-      "statement": "Execution modules cannot name TrackStateSnapshot.chainDevices, authored Device/TrackChain, runtime.config plugin vectors, compact persisted targets, pooled authored node ids, or masterFxActive as authority; direct and alias-laundered negative fixtures fail the scanner."
+      "statement": "Execution modules cannot name TrackStateSnapshot.chainDevices/routing, routesToMaster, authored Device/TrackChain, runtime.config plugin vectors, compact persisted targets, pooled authored node ids, or masterFxActive as authority; direct and alias-laundered negative fixtures fail the scanner."
     },
     {
       "id": "T-STABLE-DEVICE-TARGETS",
       "statement": "Reorder, unresolved VST insertion, and patcher reassembly preserve automation, mirror, editor, state, meter, modulation, sampler and patcher targets by stable device id while plan-local compact indexes change."
+    },
+    {
+      "id": "T-ROUTING-ATOMICITY",
+      "statement": "A routing mutation parked between candidate compilation and publication changes no producer or mixer behavior; one session publication switches MIDI/audio/sidechain/aux routing and master inclusion together, and every stale TrackInfo revision is refused."
+    },
+    {
+      "id": "T-DEVICE-ID-LIFETIME",
+      "statement": "Add-delete-add never reuses a device id, schema 5 round-trips next_device_id, and duplicate, zero, auto-sentinel, out-of-watermark, dangling-reference, and exhausted candidates all fail before publication without changing the prior snapshot."
+    },
+    {
+      "id": "T-DUPLICATE-PLUGIN-MIRRORS",
+      "statement": "Two instances of the same plugin with the same parameter uid retain independent {deviceId, uid16} mirror entries; a concrete update primes only its instance, an all-target update expands to both, and each batch entry resolves to the correct distinct compact index."
     },
     {
       "id": "T-CAPACITY-PERMANENT",
@@ -2402,7 +2833,7 @@
     },
     {
       "id": "T-PROJECT-TARGET-MIGRATION",
-      "statement": "Schema 5 round-trips target_device_id; schema 4 compact indexes migrate through the candidate plan under reorder/unresolved-device fixtures, all-target remains all, invalid legacy targets disable with a diagnostic, and schema 5 target_plugin_index is refused."
+      "statement": "Schema 5 round-trips target_device_id and next_device_id; every schema 1-4 concrete target_plugin_index is disabled with a diagnostic under same-machine, reordered, unresolved-now-resolved, and resolved-now-unresolved fixtures, all-target remains all, and schema 5 target_plugin_index is refused."
     }
   ]
 }
