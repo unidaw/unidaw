@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "ticket": "AE-RING-02",
+  "recorded_date": "2026-08-17",
+  "status": "fixed",
+  "historical_reproduction": {
+    "record": "docs/architecture/evidence/AE-RING-02-note-ab-9e1f5722.json",
+    "probe_sha": "9e1f5722",
+    "sidecar_on_failures": 3,
+    "sidecar_on_trials": 10,
+    "sidecar_off_failures": 0,
+    "sidecar_off_trials": 10
+  },
+  "product": {
+    "repository": "/Users/jak/src/daw",
+    "branch": "main",
+    "implementation_sha": "e1b9b05548e3132d3d1d70c1f09819a7412e4d4f",
+    "progress_sha": "0d943c26",
+    "remote_ref": "origin/main",
+    "remote_ref_verified_after_push": true,
+    "shm_version": 41
+  },
+  "selected_design": {
+    "name": "dedicated append-only command-outcome broadcast",
+    "capacity": 256,
+    "entry_bytes": 64,
+    "consumer_cursor": false,
+    "shared_nonzero_command_id_allocator": true,
+    "non_wrapping_sequence_and_ids": true,
+    "exhaustion_is_shared_terminal_state": true,
+    "exact_ticket_fields": [
+      "command_id",
+      "command_type",
+      "scope",
+      "sent_base"
+    ],
+    "tracked_families": [
+      "WriteNote",
+      "DeleteNote",
+      "WriteChord",
+      "DeleteChord",
+      "WriteHarmony",
+      "DeleteHarmony"
+    ],
+    "terminal_kinds": [
+      "Completed",
+      "Refused"
+    ],
+    "indeterminate_classes": [
+      "missing",
+      "torn_or_overwritten",
+      "duplicate",
+      "malformed",
+      "overrun",
+      "timeout",
+      "sequence_exhausted"
+    ],
+    "retry_policy": {
+      "automatic_base": "one exact stale-base refusal retry with a fresh ticket",
+      "explicit_base": "no automatic retry",
+      "indeterminate": "never retry automatically"
+    },
+    "batch_policy": {
+      "whole_frame_prevalidated": true,
+      "tracked_commands_serial": true,
+      "next_base_from_exact_completion": true,
+      "stop_before_later_items_on_failure": true,
+      "browser_correlated_batches_tracked_only": true,
+      "partial_or_indeterminate_whole_batch_retry": false
+    },
+    "memory_model": {
+      "slot_invalidation_payload_sequence_and_head": "sequentially consistent",
+      "reader_slot_words_and_sequence_recheck": "sequentially consistent",
+      "audio_callback_path": false
+    }
+  },
+  "verification": [
+    {
+      "gate": "cmake build",
+      "command": "cmake --build build",
+      "result": "PASS"
+    },
+    {
+      "gate": "full CTest candidate sweep",
+      "command": "ctest --test-dir build",
+      "result": "100% tests passed, 0 failed across 232 entries; audio_stability intentionally skipped"
+    },
+    {
+      "gate": "post-memory-model focused CTest",
+      "command": "ctest --test-dir build --output-on-failure -R '^(engine_ui_publish|counter_only_outcome|contract_layout|refusal_correlation|refusal_identity_check|version_arbiter)$'",
+      "result": "6/6 PASS"
+    },
+    {
+      "gate": "contract freshness",
+      "command": "ctest --test-dir build --output-on-failure -R '^contract_freshness$'",
+      "result": "1/1 PASS after rebuilding the debug CLI"
+    },
+    {
+      "gate": "Rust bridge, sidecar, and CLI units",
+      "command": "cargo test -p daw-bridge -p daw-sidecar -p daw-cli",
+      "result": "93/93 bridge, 80/80 sidecar, 3/3 CLI PASS"
+    },
+    {
+      "gate": "Rust all-target compile",
+      "command": "cargo check -p daw-bridge -p daw-cli -p daw-agent -p daw-sidecar --all-targets",
+      "result": "PASS with existing warnings"
+    },
+    {
+      "gate": "agent engine e2e",
+      "command": "cd ui/daw-agent && cargo test",
+      "result": "8/8 unit, 64/64 engine e2e with 2 fixture tests ignored, 1/1 observation-size PASS"
+    },
+    {
+      "gate": "optimized client build",
+      "command": "cargo build --release -p daw-cli -p daw-agent -p daw-sidecar",
+      "result": "PASS with existing warnings"
+    },
+    {
+      "gate": "live exact-outcome suites",
+      "command": "node ui-web/test/all.mjs --only cli-note-rapid,cli-note-rapid-control,cli-harmony-rapid,harmony-refusal-visible",
+      "result": "4/4 suites PASS; 28/28 checks"
+    },
+    {
+      "gate": "Playwright new-song/save workflow",
+      "command": "node ui-web/test/new-song-save.mjs",
+      "result": "5/5 PASS"
+    },
+    {
+      "gate": "web unit and closure controls",
+      "command": "node ui-web/test/unit.mjs",
+      "result": "160/162; every AE-RING-02 and closure control PASS",
+      "non_ticket_failures": [
+        "two Zebralette references cannot resolve on this machine",
+        "no installed multi-product plugin bundle exists for the resolver control"
+      ]
+    },
+    {
+      "gate": "full browser e2e",
+      "command": "node ui-web/test/e2e.mjs",
+      "result": "the correlated pending proposal completed exactly and advanced clipVersion; suite reported 1 of 424 failed",
+      "non_ticket_failure": "stopped insert meter sampled 0 before the silent sentinel",
+      "blocked_fixture_checks": 2
+    },
+    {
+      "gate": "checked progress metrics",
+      "command": "bash tools/progress_check.sh",
+      "result": "PASS at implementation SHA e1b9b055"
+    },
+    {
+      "gate": "whitespace",
+      "command": "git diff --check",
+      "result": "PASS"
+    }
+  ],
+  "independent_reviews": [
+    {
+      "scope": "SHM transport, memory model, exact ticket correlation, exhaustion, sender enforcement, CLI and agent semantics",
+      "final_result": "PASS",
+      "waived_findings": 0
+    },
+    {
+      "scope": "sidecar and browser batch validation, correlation, causal pending state, retries, timeouts, and visible failures",
+      "final_result": "PASS",
+      "waived_findings": 0
+    }
+  ],
+  "review_blocker_classes_fixed": [
+    "wraparound slot coherence",
+    "escaped explicit-base bypass",
+    "malformed whole-batch acceptance",
+    "clipboard prefix acceptance",
+    "tracked opcode through untracked typed sender",
+    "premature optimistic completion at socket enqueue",
+    "spam process success on failure",
+    "failure identity lost after retry",
+    "command-id exhaustion not shared",
+    "substring command dispatch",
+    "correlated untracked batch terminal",
+    "impossible reply-count arithmetic",
+    "timeout shorter than one stale retry",
+    "duplicate or overwritten in-flight proposal",
+    "old attempt timer settling a retry",
+    "stale e2e applied-status expectation"
+  ],
+  "ruling": "AE-RING-02 is fixed. Guarded note, chord, and harmony command outcomes no longer depend on the single-consumer UI-out cursor; ambiguous evidence cannot be reported as success or retried automatically. AE-P1.2 item 28 is closed."
+}

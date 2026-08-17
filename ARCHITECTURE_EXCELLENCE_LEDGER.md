@@ -103,7 +103,7 @@ watcher:  none (required for Codex)
 | `AE-P0.2 implementation` | `COMPLETE` | packet `6287ffd` approved + AE-P0.1 integration | codex-worker-2 | claude-worker-2 | `/Users/jak/src/daw-ae-p0-2-lane0` | product main `75c6f06`; final corrective candidate independently approved |
 | `AE-P0.3` | `CAPTURE TAKEN` | decision 4 ruled 2026-08-14; credentialed line OBSERVED and byte-matched | `lead` | unassigned | none | attestation now rests on an observation, not a transcription |
 | `AE-P1.1` | `FROZEN` | `AE-P0` | claude-worker-2 | codex-worker-1 | `/Users/jak/src/daw-ae-p1-1-packet` | `ba88bcb4657b62bdfc752d338d877e139e212ca6`; independent PASS; successor-only |
-| `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; of the 8 open PRODUCT items: 7, 14, 16, 26, 35, 36 CLOSED; 28 STILL OPEN (clip/chord id correlation implemented by decisions 7+9, but shipped `do note` correctness is now confirmed broken by `AE-RING-02`; harmony half reverted and blocked on the same ticket); 15 hardened but NOT demonstrated. G4 not decidable |
+| `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; of the 8 open PRODUCT items: 7, 14, 16, 26, 28, 35, 36 CLOSED; item 28 closed by AE-RING-02's SHM v41 exact-outcome broadcast at product `e1b9b055`; 15 hardened but NOT demonstrated. G4 not decidable |
 | `AE-P1.3` | `GATE MET` | the `AE-P1.2` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent x2 | none | both attach paths ordered; 19 region accessors + ring cursors bounded; contract property test; non-overlap is the residue |
 | `AE-P1.4` | `GATE MET` | the `AE-P0` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent | none | 5 plain writes fixed; watchdog use-after-free fixed; TSan evidence DELIVERED — `tsan_command_hammer.sh` 108 commands landed / 0 races, and `tsan_render.sh` 1 race -> 0 after the RenderPool fix |
 | `RenderPool race` | `FIXED, REVIEWED` | found by `AE-P1.4`'s instrument | `lead` | independent subagent | none | straggler read `m_fn`/`m_count` unlocked across a batch handover: null deref, out-of-range item, and an `m_remaining` underflow that HANGS the producer; generation packed into the claim counter; review returned SAFE-TO-MERGE with 3 defects (store order, a 2^32 count re-opening the hang, a wrong wrap figure) — all fixed at `a4345f33` |
@@ -116,7 +116,7 @@ watcher:  none (required for Codex)
 | `T3` (ABI mirror coverage) | `MERGED` | seven independent reviews | `lead` | independent subagent | merged from `ae/impl-engine-t3a-probe` | product main `d0e0ad0a`; follow-up `54f3d460` |
 | `P2-CMD-00` step 1 | `LANDED, GATE HALF-MET` | design `P2-CMD-00-revised.md` + owner rulings 1-2 | `lead` | independent subagent | product main | `45626d44`; blockers closed `7b7b7b24`, `ba4f1b1c` |
 | `P2-CMD-00` step 2 | `COMPLETE` | decision 5 ruled 2026-08-14 | `lead` | — | none | carrier is `EventEntry::sampleTime`; sender mints, engine echoes, `kShmVersion` 39 |
-| `AE-RING-02` (bystander drain race) | `CONFIRMED, NOT FIXED` | found extending decisions 7+9 to harmony (item 28) | `lead` | independent subagent x2 | none | shipped `do note` silently loses a version-refused edit when the sidecar drains its correlated refusal: corrected exact-SHA A/B at `9e1f5722`, sidecar ON 3/10 failures versus OFF 0/10 after confirmed load completion; exact document + adjacent journal oracles. Evidence `docs/architecture/evidence/AE-RING-02-note-ab-9e1f5722.json`; product record `d59030e0`. Delete-note/chord share exposure but were not directly reproduced. No direction chosen; owner call required; gates item 28's harmony half |
+| `AE-RING-02` (bystander drain race) | `FIXED, REVIEWED` | found extending decisions 7+9 to harmony (item 28) | `lead` | independent subagent x2 | product main | SHM v41 appends a 256-entry exact command-outcome broadcast with no consumer cursor; full ticket `(id, opcode, scope, sent base)`, conservative indeterminate states, one safe stale retry, serial tracked batches, and causal browser terminals. Product `e1b9b055`, progress `0d943c26`; both final independent reviews PASS. Historical A/B `docs/architecture/evidence/AE-RING-02-note-ab-9e1f5722.json`; fix evidence `docs/architecture/evidence/AE-RING-02-v41-e1b9b055.json`. Item 28 CLOSED |
 | `doc_citation` (stale probe self-citation) | `FIXED` | found in the resumed full sweep | `lead` | independent subagent | none | `tools/bypass_send_probe.sh:40` cited its pre-rename filename; corrected to match, `f8101910` |
 | `AE-P3.*` | `BLOCKED` | Phase 1/2 contracts | unassigned | unassigned | none | none |
 | `AE-P4.*` | `BLOCKED` | Phase 2 transactions | unassigned | unassigned | none | none |
@@ -5997,10 +5997,70 @@ Verification on `main` through `d59030e0`:
 - `cli-harmony-rapid.mjs` — 5/5 PASS through the unchanged default stack path.
 - `node --test ui-web/test/unit.mjs` — **156/159, not green**: two machine/plugin-resolution
   failures and one already-stale global template-population pin (606 actual vs 561 expected).
-- `new-song-save.mjs` was not runnable because this checkout has no `playwright` package; no result
-  is claimed for it.
+- The first `new-song-save.mjs` attempt found this worktree's dependencies uninstalled. After the
+  locked `npm ci`, the suite ran and passed all 5 checks; Playwright was available as declared.
 
 No product fix direction was selected. The existing candidates remain unranked: per-client
 cursors, journal-backed outcome correlation, or protecting in-flight ids from the drain. Because
 shipped note entry is now confirmed wrong rather than merely exposed by construction, an owner
 direction call is required before implementation; item 28's harmony half remains gated on it.
+
+## AE-RING-02 closed: SHM v41 exact guarded-command outcomes (2026-08-17)
+
+This entry supersedes the immediately preceding stopping point's current-state conclusion. The
+reproduction and 3/10 versus 0/10 A/B remain the causal history; the direction is now selected,
+implemented, reviewed, verified, and pushed.
+
+Product `e1b9b055` adds a dedicated append-only `UiCommandOutcomeRegion` and moves correctness off
+the single-consumer UI-out ring. The region has a shared non-zero id allocator, a non-wrapping
+publication sequence, 256 sequence-addressed entries, and no consumer cursor. The closed tracked
+population is note/chord/harmony write and delete. Senders match the exact tuple `(command id,
+opcode, scope, sent base)` after a pre-send mark; the engine publishes `Completed` or `Refused`
+after the guard and handler. Missing, torn/overwritten, duplicate, malformed, overrun, exhausted,
+or timed-out evidence is `Indeterminate`, never success.
+
+The final memory-model review found that acquire/release on the sequence alone did not make a
+wrapped slot snapshot coherent across independent atomic payload words. The writer and reader now
+use a sequentially consistent slot transaction, and an active overwrite test proves replacement
+metadata cannot complete the old ticket. This is control-plane work, outside the audio callback.
+
+All call surfaces share one policy: an automatic base may retry one exact stale refusal once with a
+fresh id; explicit bases and indeterminate outcomes are not silently retried. Tracked batches are
+whole-frame prevalidated, serial, derive the next base from the preceding exact completion, and
+stop before later submission on failure. Correlated browser proposals must be non-empty and fully
+tracked. Their card remains in flight after socket enqueue and settles only from its own reply;
+partial and indeterminate results are non-actionable, and every retry mints a fresh batch id so an
+old timer cannot settle it.
+
+Independent review was part of implementation, not an afterthought. Earlier review rounds found
+and caused fixes for wraparound coherence, escaped-base coercion, malformed/prefix parsing,
+tracked-op sender bypass, premature UI completion, retry identity, shared id exhaustion, substring
+dispatch, impossible count arithmetic, correlated untracked batches, under-budgeted timeouts, and
+stale retry timers. After those changes, a fresh transport reviewer and a fresh browser/sidecar
+reviewer both returned PASS on the same source tree. No blocker was waived.
+
+Verification for the fixed tree:
+
+- `cmake --build build` — PASS; the complete candidate CTest sweep reported 0 failures across 232
+  entries, and the post-memory-model focused CTest was 6/6 PASS.
+- Bridge/sidecar/CLI units — 93/93, 80/80, 3/3 PASS. `cargo check --all-targets` and optimized
+  CLI/agent/sidecar builds PASS with existing warnings.
+- Agent suite — 8/8 units, 64/64 engine e2e with 2 fixture tests ignored, and 1/1 observation-size
+  PASS.
+- Live exact-outcome suites — 4/4 suites, 28/28 checks PASS.
+- Playwright `new-song-save.mjs` — 5/5 PASS. Playwright was available; the earlier unavailability
+  claim was a missing-install diagnosis and is corrected above.
+- Web unit/closure suite — 160/162. Every AE-RING-02 and closure control passes; the two failures
+  are machine plugin fixtures (unresolved Zebralette references and no installed multi-product
+  bundle).
+- Full browser e2e passed the exact pending-proposal terminal and version advance. It reported one
+  unrelated stopped-meter timing failure out of 424 checks and two pre-existing plugin-fixture
+  blocks; no green claim is made for that whole suite.
+- `progress_check` and `git diff --check` — PASS. Checked progress commit `0d943c26`; both product
+  commits are pushed to `origin/main`.
+
+The machine-readable source of truth is
+`docs/architecture/evidence/AE-RING-02-v41-e1b9b055.json`. It records the exact SHA, contract,
+tracked population, tests, review rulings, known non-ticket failures, and final ruling. AE-RING-02
+is `FIXED, REVIEWED`; AE-P1.2 item 28 is CLOSED. The diagnostic UI-out ring remains
+single-consumer, but no guarded command verdict depends on it now.

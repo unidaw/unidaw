@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "ticket": "AE-RING-02",
+  "recorded_date": "2026-08-17",
+  "probe_sha": "9e1f5722",
+  "behavior_base_sha": "2aa0b919",
+  "changes_since_behavior_base": [
+    "ui-web/test/all.mjs",
+    "ui-web/test/cli-note-rapid.mjs",
+    "ui-web/test/stack.mjs",
+    "ui/daw-cli/src/main.rs:get_transport load_seq/load_ok observability"
+  ],
+  "outcome_mechanism_changed_since_behavior_base": false,
+  "common_preconditions": {
+    "release_cli_rebuilt": true,
+    "new_project_load_gate": "load_seq changed from the pre-command value and load_ok == 1",
+    "requested_pairs": [
+      [0, 60],
+      [960000, 64],
+      [1920000, 67],
+      [2880000, 71]
+    ],
+    "document_oracle": "saved pairs must equal requested_pairs exactly",
+    "journal_oracle": "a missing pair must have adjacent received/rejected:version records and no successful retry"
+  },
+  "arms": [
+    {
+      "name": "sidecar_on",
+      "command": "node ui-web/test/cli-note-rapid.mjs",
+      "sidecar_started_after_engine_shm": true,
+      "sidecar_drain_attachment_observed_before_commands": true,
+      "trials": 10,
+      "failed_trials": [4, 5, 9],
+      "failure_count": 3,
+      "failures": [
+        {
+          "trial": 4,
+          "missing_pair": [2880000, 71],
+          "journal_refusal_without_retry": true,
+          "all_cli_exit_zero": true,
+          "all_cli_reported_sent": true
+        },
+        {
+          "trial": 5,
+          "missing_pair": [960000, 64],
+          "journal_refusal_without_retry": true,
+          "all_cli_exit_zero": true,
+          "all_cli_reported_sent": true
+        },
+        {
+          "trial": 9,
+          "missing_pair": [1920000, 67],
+          "journal_refusal_without_retry": true,
+          "all_cli_exit_zero": true,
+          "all_cli_reported_sent": true
+        }
+      ]
+    },
+    {
+      "name": "sidecar_off",
+      "command": "node ui-web/test/cli-note-rapid.mjs --without-sidecar",
+      "trials": 10,
+      "failed_trials": [],
+      "failure_count": 0,
+      "stale_base_refusals_observed": true,
+      "all_refusals_retried": true,
+      "all_documents_exact": true
+    }
+  ],
+  "ruling": "The shipped do-note path can report success and silently lose a version-refused edit when the sidecar drains the shared UI-out cursor before daw-cli observes its correlated refusal."
+}
