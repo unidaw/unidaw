@@ -94,6 +94,16 @@ const historySince = (offset) => {
   return { entries, errors };
 };
 
+const loadStatus = () => {
+  const result = cli('get', 'transport');
+  if (!result.ok) return null;
+  try {
+    const value = JSON.parse(result.stdout);
+    return Number.isInteger(value.load_seq) && Number.isInteger(value.load_ok)
+      ? { seq: value.load_seq, ok: value.load_ok } : null;
+  } catch { return null; }
+};
+
 /** The notes track 0 actually holds in the saved document — the oracle, since exit 0 proves
  *  nothing here (`await_clip_outcome`'s Unknown branch prints "sent" too). Follows placements to
  *  clips rather than assuming clip id 1, since `locateEditTarget(..., create=true)` mints
@@ -128,11 +138,15 @@ try {
       && readFileSync(sidecarLog, 'utf8').includes(`event drain attached to ${stack.shm}`),
     'the sidecar event drain to attach');
   }
-  const beforeNew = historyOffset();
+  const loadBefore = loadStatus();
+  check(loadBefore !== null, 'the pre-load acknowledgement is readable', String(loadBefore));
+  if (loadBefore === null) throw new Error('cannot read the pre-load acknowledgement');
   const made = cli('do', 'new', 'clinoterapid');
   check(made.ok, 'a project to write into', made.out.trim().slice(0, 120));
-  await until(() => historySince(beforeNew).entries.some((entry) =>
-    entry.op === 'load_project' && entry.outcome === 'received'), 'the new project load');
+  await until(() => {
+    const status = loadStatus();
+    return status !== null && status.seq !== loadBefore.seq && status.ok === 1;
+  }, 'the engine post-load acknowledgement');
   const journalStart = historyOffset();
 
 /*

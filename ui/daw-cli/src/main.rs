@@ -341,6 +341,13 @@ fn get_transport(handle: &EngineHandle) -> i32 {
     let (loop_start, loop_end) = handle.loop_range();
     println!("  \"loop_start\": {loop_start},");
     println!("  \"loop_end\": {loop_end},");
+    // A load command is not complete when it enters the journal. Expose the engine's existing
+    // post-load acknowledgement so scripts can wait on the operation rather than on a fixed delay
+    // or a pre-dispatch "received" line. `seq` moves after loadProjectFromPath returns; `ok` is the
+    // result published immediately before it.
+    let (load_seq, load_ok) = handle.load_status();
+    println!("  \"load_seq\": {load_seq},");
+    println!("  \"load_ok\": {load_ok},");
     println!("  \"clip_version\": {}", handle.clip_version());
     println!("}}");
     0
