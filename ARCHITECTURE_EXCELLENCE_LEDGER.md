@@ -104,7 +104,7 @@ watcher:  none (required for Codex)
 | `AE-P0.3` | `CAPTURE TAKEN` | decision 4 ruled 2026-08-14; credentialed line OBSERVED and byte-matched | `lead` | unassigned | none | attestation now rests on an observation, not a transcription |
 | `AE-P1.1` | `FROZEN` | `AE-P0` | claude-worker-2 | codex-worker-1 | `/Users/jak/src/daw-ae-p1-1-packet` | `ba88bcb4657b62bdfc752d338d877e139e212ca6`; independent PASS; successor-only |
 | `AE-P1.2` | `ACTIVE` | `AE-P1.1` | `lead` | independent subagent | `/Users/jak/src/daw-ae-p1-2-packet` | settled packet `78a1394eb2bd5c46b3ca064331bb91a67c294d96`; of the 8 open PRODUCT items: 7, 14, 16, 26, 28, 35, 36 CLOSED; item 28 closed by AE-RING-02's SHM v41 exact-outcome broadcast at product `e1b9b055`; 15 hardened but NOT demonstrated. G4 not decidable |
-| `AE-P1.3` | `GATE MET` | the `AE-P1.2` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent x2 | none | both attach paths ordered; 19 region accessors + ring cursors bounded; contract property test; non-overlap is the residue |
+| `AE-P1.3` | `ACTIVE` | the `AE-P1.2` dependency was phase ordering, re-derived 2026-08-14 | `backend` | independent subagent x2 | `/Users/jak/src/daw-ae-p1-3-nonoverlap-packet` | non-overlap packet `a4f7abc5` / manifest `da0204dd` has semantic + evidence PASS; implementation ticket authorized |
 | `AE-P1.4` | `GATE MET` | the `AE-P0` dependency was phase ordering, re-derived 2026-08-14 | `lead` | independent subagent | none | 5 plain writes fixed; watchdog use-after-free fixed; TSan evidence DELIVERED — `tsan_command_hammer.sh` 108 commands landed / 0 races, and `tsan_render.sh` 1 race -> 0 after the RenderPool fix |
 | `RenderPool race` | `FIXED, REVIEWED` | found by `AE-P1.4`'s instrument | `lead` | independent subagent | none | straggler read `m_fn`/`m_count` unlocked across a batch handover: null deref, out-of-range item, and an `m_remaining` underflow that HANGS the producer; generation packed into the claim counter; review returned SAFE-TO-MERGE with 3 defects (store order, a 2^32 count re-opening the hang, a wrong wrap figure) — all fixed at `a4345f33` |
 | `Success signal uncorrelated` | `RESOLVED` | ruled 2026-08-14, implemented as decisions 7+9 | `lead` | independent subagent | none | `await_clip_outcome` no longer infers Applied from a bare version counter; matches the minted id + diff type instead, counter fallback guarded to `command_id == 0` |
@@ -6064,3 +6064,29 @@ The machine-readable source of truth is
 tracked population, tests, review rulings, known non-ticket failures, and final ruling. AE-RING-02
 is `FIXED, REVIEWED`; AE-P1.2 item 28 is CLOSED. The diagnostic UI-out ring remains
 single-consumer, but no guarded command verdict depends on it now.
+
+## AE-P1.3 non-overlap packet converged; implementation authorized (2026-08-17)
+
+The old residue design's 24-region count had decayed after SHM v41. A fresh census at product
+`0d943c26` found 25 producer offset assignments and 25 Rust header fields. It also found two
+requirements absent from the old note: the mapping header must be a reserved compared span, and
+typed accessors must consume cached validated geometry rather than rereading mutable offsets after
+attach. The resulting packet therefore governs 25 offset regions and 26 compared spans.
+
+The first immutable packet `6e65b838` was blocked by both independent reviewers. Its source locators
+were not mechanically resolvable, its gate dependency graph did not reach the requirements it
+claimed to gate, and its negative controls did not cover the distinct ring classes or every exact
+bytes companion. No product edit or build was made under that packet.
+
+Structural successor `a4f7abc5e96b1770c13ed2aba92d3bb2dedd0a14` (tree
+`37c9a71790bb4a5fd688ee2c7e64fb827317dd9e`, manifest SHA-256
+`da0204dd037e2a0be8c46a20e08c28b09697a4826441b659b3989fb34704794d`) adds a parsed source-locator
+grammar, acyclic full gate-closure check, exact predecessor binding, and the complete mutation
+matrix. Its self-check reports 25 offset regions, 26 compared spans, and 26 records.
+
+Independent semantic and evidence reviews both returned PASS on that exact packet SHA and frozen
+product tree. The evidence review resolved all 27 source locators, reached all 25 non-gate records
+from the gate, matched 25/25/25 producer/Rust/validator populations, and confirmed the table-driven
+nine-region exact-bytes and inactive/event/edit-ring controls. The manifest-derived implementation
+ticket is `docs/architecture/tasks/AE-P1.3-nonoverlap-implementation.json`; product implementation is
+now authorized, with a fresh independent code review still required before integration.

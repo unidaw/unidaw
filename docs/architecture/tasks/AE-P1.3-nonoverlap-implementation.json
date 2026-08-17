@@ -1,0 +1,70 @@
+{
+  "schema": "ae-implementation-ticket/1",
+  "ticket": "AE-P1.3-NONOVERLAP-IMPL",
+  "status": "AUTHORIZED",
+  "owner": "backend",
+  "packet": {
+    "commit": "a4f7abc5e96b1770c13ed2aba92d3bb2dedd0a14",
+    "tree": "37c9a71790bb4a5fd688ee2c7e64fb827317dd9e",
+    "manifest_sha256": "da0204dd037e2a0be8c46a20e08c28b09697a4826441b659b3989fb34704794d"
+  },
+  "frozen_product": {
+    "commit": "0d943c262393101d88e98cb94aff14783b9aa2be",
+    "tree": "27eaec16a10cae793f48cb074c07467130e471a3"
+  },
+  "reviews": [
+    {
+      "role": "semantic",
+      "ruling": "PASS",
+      "packet_commit": "a4f7abc5e96b1770c13ed2aba92d3bb2dedd0a14"
+    },
+    {
+      "role": "evidence",
+      "ruling": "PASS",
+      "packet_commit": "a4f7abc5e96b1770c13ed2aba92d3bb2dedd0a14",
+      "source_locators_resolved": 27,
+      "gate_closure_records": 25,
+      "producer_regions": 25,
+      "rust_regions": 25,
+      "validator_regions": 25,
+      "compared_spans": 26
+    }
+  ],
+  "manifest_records": [
+    "G-NONOVERLAP",
+    "R-HEADER-RESERVED",
+    "R-ZERO-LENGTH",
+    "R-OFFSET-PRESENCE",
+    "R-ALIGNMENT",
+    "R-SIZE-SOURCES",
+    "R-RING-ORDER",
+    "R-INTERVAL-ALGORITHM",
+    "R-CACHED-GEOMETRY",
+    "R-FAIL-CLOSED",
+    "D-ATTACH-TRANSACTION",
+    "D-NO-WIRE-CHANGE",
+    "D-OFFSET-ASSERTS",
+    "D-TEST-MATRIX",
+    "CTRL-MUTATIONS",
+    "CTRL-STATIC"
+  ],
+  "write_set": [
+    "ui/daw-bridge/src/control.rs",
+    "ui/daw-bridge/src/layout.rs",
+    "tools/ui_shm_layout_check.py",
+    "CMakeLists.txt"
+  ],
+  "required_controls": [
+    "python3 tools/ui_shm_layout_check.py",
+    "cargo test -p daw-bridge layout_non_overlap",
+    "cargo test -p daw-bridge",
+    "cmake --build build",
+    "ctest --test-dir build --output-on-failure"
+  ],
+  "integration_conditions": [
+    "The governed product paths must still match the frozen base before the first edit.",
+    "K_SHM_VERSION remains 41 and the C++ and Rust wire layouts remain byte-identical.",
+    "Every typed accessor consumes cached validated geometry.",
+    "Fresh independent code review must return PASS after implementation and before integration."
+  ]
+}
